@@ -80,7 +80,14 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
         Ok(shares) => shares,
         Err(refusal) => return refusal,
     };
-    let board = match dashboard(state.ledger.db(), now).await {
+    let board = match dashboard(
+        state.ledger.db(),
+        now,
+        &state.pricing.revisions(),
+        &state.tables,
+    )
+    .await
+    {
         Ok(board) => board,
         Err(e) => return ledger_failure(e),
     };

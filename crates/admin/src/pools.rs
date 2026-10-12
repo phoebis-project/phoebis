@@ -1123,10 +1123,15 @@ pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, Stor
     let registry = state.store.load_registry()?;
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
+    let to = phoebis_ledger::hour_ceil(now);
+    let prices = state.pricing.revisions();
+    let tables = state.tables.clone();
     let day = state
         .ledger
         .db()
-        .read(move |c| phoebis_ledger::request_totals(c, "pool_id", hour - 24 * 3_600))
+        .read(move |c| {
+            phoebis_ledger::request_totals(c, "pool_id", hour - 24 * 3_600, to, &prices, &tables)
+        })
         .await
         .unwrap_or_default();
     Ok(PoolContext {
@@ -1186,6 +1191,8 @@ pub(crate) async fn pool_json_from(
         hour - 24 * 3_600,
         hour + 3_600,
         3_600,
+        &state.pricing.revisions(),
+        &state.tables,
     )
     .await
     .unwrap_or_default();
@@ -1374,6 +1381,8 @@ pub(crate) async fn traffic(
         phoebis_ledger::hour_of(from),
         phoebis_ledger::hour_ceil(to),
         bucket,
+        &state.pricing.revisions(),
+        &state.tables,
     )
     .await
     {

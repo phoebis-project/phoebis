@@ -23,7 +23,7 @@
         "effective_body_capture_hours": 24,
         "auto_mode_server": null,
         "effective_auto_mode_server": true,
-        "prefix": "8GvMBC1L",
+        "prefix": "iMQkX5sG",
         "created_at": 1791721000000,
         "updated_at": 1791721000000,
         "revision": 6189767511104,
@@ -34,7 +34,7 @@
         "usage_7d": {
           "cost_usd": 0.02135,
           "requests": 5,
-          "tokens": 9000
+          "tokens": 10800
         },
         "lifetime": {
           "cost_usd": 0.02135,

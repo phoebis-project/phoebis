@@ -7,7 +7,32 @@ use std::time::Duration;
 use common::*;
 use fake_upstream::Respond;
 use phoebis_keepalive::{Event, KeepalivePolicy, Reason};
-use phoebis_ledger::{hour_of, read_rollups, RollupRow, RollupSelect};
+use phoebis_ledger::{hour_of, read_rollups, LiveKeys, RollupRow, RollupSelect};
+use phoebis_routing::PinUsage;
+
+/// The five counts summed.
+fn tokens(usage: PinUsage) -> u64 {
+    usage.input + usage.cache_read + usage.write_5m + usage.write_1h + usage.output
+}
+
+/// The probe dollars and the wasted dollars a reader answers over `rows`, each row's counts priced on the rig's
+/// list: a probe's cost is its own request row's counts, and a settlement's waste the probe's counts it carries.
+fn read_dollars(r: &Rig, rows: &[RollupRow]) -> (f64, f64) {
+    phoebis_ledger::breakdown(
+        rows,
+        "all",
+        true,
+        &LiveKeys::default(),
+        &[],
+        None,
+        &r.pricing,
+        &r.tables,
+    )
+    .first()
+    .map_or((0.0, 0.0), |group| {
+        (group.probe_cost_usd, group.wasted_probe_usd)
+    })
+}
 
 /// Every rollup row the rig wrote, once the writer has landed what the test waits for. The whole table
 /// rather than the rig's own hour: a test that crosses into the next hour writes past it.
@@ -24,7 +49,9 @@ async fn rollups(r: &Rig, want: impl Fn(&[RollupRow]) -> bool) -> Vec<RollupRow>
 }
 
 fn probe_rows(rows: &[RollupRow]) -> RollupRow {
-    let mut sum = RollupRow::key(0, "", 0, "", "", "", "probe", "", "", "", "", "", "");
+    let mut sum = RollupRow::key(
+        0, "", 0, "", "", "", "probe", "", "", "", "", "", "", "", "",
+    );
     for row in rows.iter().filter(|r| r.kind == "probe") {
         sum.add(row);
     }
@@ -32,7 +59,23 @@ fn probe_rows(rows: &[RollupRow]) -> RollupRow {
 }
 
 fn inference_rows(rows: &[RollupRow]) -> RollupRow {
-    let mut sum = RollupRow::key(0, "", 0, "", "", "", "inference", "", "", "", "", "", "");
+    let mut sum = RollupRow::key(
+        0,
+        "",
+        0,
+        "",
+        "",
+        "",
+        "inference",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+    );
     for row in rows.iter().filter(|r| r.kind == "inference") {
         sum.add(row);
     }
@@ -84,17 +127,19 @@ async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
     // Past the five-minute TTL of the first request, a real request reads the cache the probe kept.
     r.advance(60_000);
     let second = r.observe_with("main", &body).await;
-    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    let rows = rollups(&r, |rows| {
+        inference_rows(rows).kept_warm_requests == 1 && tokens(probe_rows(rows).usage()) > 0
+    })
+    .await;
     let credit = inference_rows(&rows);
     assert_eq!(
         (credit.kept_warm_requests, credit.kept_warm_tokens),
         (1, 2_000)
     );
-    assert_eq!(
-        credit.saved_usd_gross, 0.0,
-        "the credit counts the request and its tokens and prices no saving"
+    assert!(
+        read_dollars(&r, &rows).0 > 0.0,
+        "the probe's own request row prices its cost"
     );
-    assert!(probe_rows(&rows).probe_cost_usd > 0.0);
     assert!(row(&r, &second).await.kept_warm);
     // The same gap without a probe credits nothing. A probe that read nothing and rewrote the prefix covers from its
     // own write, so the request that reads the entry it wrote is credited under it.
@@ -376,9 +421,14 @@ async fn a_migrated_probe_is_priced_and_the_next_request_counts_as_kept_warm() {
         (1, 0, Some(other_id), 1),
         "{status:?}"
     );
-    let rows = rollups(&r, |rows| probe_rows(rows).probe_migrated == 1).await;
-    let cost = probe_rows(&rows).probe_cost_usd;
-    assert!(cost > 0.0, "a migrated probe is priced from its usage");
+    let rows = rollups(&r, |rows| {
+        probe_rows(rows).probe_migrated == 1 && tokens(probe_rows(rows).usage()) > 0
+    })
+    .await;
+    assert!(
+        read_dollars(&r, &rows).0 > 0.0,
+        "a migrated probe is priced from its usage"
+    );
     r.advance(60_000);
     let second = r.observe_with("main", &body).await;
     assert_eq!(
@@ -429,7 +479,7 @@ async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
     let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 3).await;
     let probe = probe_rows(&rows);
     assert!(
-        (probe.wasted_probe_usd - probe.probe_cost_usd).abs() < 1e-12,
+        probe.wasted_usage() == probe.usage(),
         "every probe since the last real request"
     );
     assert_eq!(
@@ -501,8 +551,7 @@ async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
         Some(1)
     );
     assert!(
-        probe.wasted_probe_usd > 0.0
-            && (probe.wasted_probe_usd - probe.probe_cost_usd).abs() < 1e-12,
+        tokens(probe.wasted_usage()) > 0 && probe.wasted_usage() == probe.usage(),
         "{probe:?}"
     );
 }
@@ -542,8 +591,7 @@ async fn a_request_that_reads_no_cache_after_a_covering_probe_settles_the_probe_
         BTreeMap::from([("cold_return".to_string(), 1)])
     );
     assert!(
-        probe.wasted_probe_usd > 0.0
-            && (probe.wasted_probe_usd - probe.probe_cost_usd).abs() < 1e-12,
+        tokens(probe.wasted_usage()) > 0 && probe.wasted_usage() == probe.usage(),
         "{probe:?}"
     );
     assert_eq!(r.status("main").unanswered, 0);
@@ -899,15 +947,16 @@ async fn a_cache_read_on_another_model_settles_the_probes_kept_on_the_first_as_a
         "the read on the other model answered nothing the first model's probe paid for"
     );
     assert!(
-        probe.wasted_probe_usd > 0.0
-            && (probe.wasted_probe_usd - probe.probe_cost_usd).abs() < 1e-12,
+        tokens(probe.wasted_usage()) > 0 && probe.wasted_usage() == probe.usage(),
         "{probe:?}"
     );
 }
 
 /// The probe rows of one speed, summed.
 fn probe_rows_at(rows: &[RollupRow], fast: bool) -> RollupRow {
-    let mut sum = RollupRow::key(0, "", 0, "", "", "", "probe", "", "", "", "", "", "");
+    let mut sum = RollupRow::key(
+        0, "", 0, "", "", "", "probe", "", "", "", "", "", "", "", "",
+    );
     for row in rows
         .iter()
         .filter(|r| r.kind == "probe" && (r.speed == "fast") == fast)
@@ -977,8 +1026,7 @@ async fn a_credit_on_the_standard_lane_leaves_the_fast_probe_kept_beside_it_to_s
         "the credit answered the standard probe and nothing on the fast lane"
     );
     assert!(
-        fast_probes.wasted_probe_usd > 0.0
-            && (fast_probes.wasted_probe_usd - fast_probes.probe_cost_usd).abs() < 1e-12,
+        tokens(fast_probes.wasted_usage()) > 0 && fast_probes.wasted_usage() == fast_probes.usage(),
         "{fast_probes:?}"
     );
 }
@@ -1056,15 +1104,14 @@ async fn a_kept_warm_credit_needs_the_covering_entry_alive_when_the_request_arri
             "arrived {arrived} ms in"
         );
         assert!(
-            fast_probes.wasted_probe_usd > 0.0
-                && (fast_probes.wasted_probe_usd - fast_probes.probe_cost_usd).abs() < 1e-12,
+            tokens(fast_probes.wasted_usage()) > 0
+                && fast_probes.wasted_usage() == fast_probes.usage(),
             "arrived {arrived} ms in: {fast_probes:?}"
         );
         if credited == 0 {
             assert!(
-                standard_probes.wasted_probe_usd > 0.0
-                    && (standard_probes.wasted_probe_usd - standard_probes.probe_cost_usd).abs()
-                        < 1e-12,
+                tokens(standard_probes.wasted_usage()) > 0
+                    && standard_probes.wasted_usage() == standard_probes.usage(),
                 "arrived {arrived} ms in: {standard_probes:?}"
             );
         }
@@ -1362,7 +1409,7 @@ async fn probe_row_fundings(in_overage: bool, head_flag: &str) -> Vec<(&'static 
             .filter(|row| row.kind == "probe" && row.account_id == "o")
             .map(|row| {
                 (
-                    if row.probe_cost_usd > 0.0 {
+                    if row.requests == 0 {
                         "credit"
                     } else {
                         "request"
@@ -1465,12 +1512,12 @@ async fn a_plan_probe_and_an_overage_probe_both_wasted_file_one_row_per_funding_
     })
     .unwrap();
     let rows = final_rollups(&r).await;
-    let mut by_funding: BTreeMap<String, (u64, f64, f64)> = BTreeMap::new();
+    let mut by_funding: BTreeMap<String, (u64, u64, u64)> = BTreeMap::new();
     for row in rows.iter().filter(|row| row.kind == "probe") {
         let sum = by_funding.entry(row.funding.clone()).or_default();
         sum.0 += row.wasted_probes;
-        sum.1 += row.wasted_probe_usd;
-        sum.2 += row.probe_cost_usd;
+        sum.1 += tokens(row.wasted_usage());
+        sum.2 += tokens(row.usage());
     }
     let mut settled: Vec<(String, u64)> = rows
         .iter()
@@ -1483,10 +1530,10 @@ async fn a_plan_probe_and_an_overage_probe_both_wasted_file_one_row_per_funding_
         [("overage".to_string(), 1), ("plan".to_string(), 1)],
         "one settlement row per funding: {rows:?}"
     );
-    for (funding, (_, wasted, cost)) in by_funding.iter().filter(|(_, sum)| sum.0 > 0) {
+    for (funding, (_, wasted, used)) in by_funding.iter().filter(|(_, sum)| sum.0 > 0) {
         assert!(
-            *cost > 0.0 && (wasted / cost - 1.0).abs() < 1e-9,
-            "{funding}: the waste reads against its own probe dollars at a ratio of one, {wasted} of {cost}"
+            *used > 0 && wasted == used,
+            "{funding}: the waste carries its own probe's counts, {wasted} of {used}"
         );
     }
 }
@@ -1621,8 +1668,7 @@ async fn a_read_arriving_as_the_kept_entry_expires_settles_its_probes_as_expired
         "the read arrived as the probe's entry expired"
     );
     assert!(
-        probe.wasted_probe_usd > 0.0
-            && (probe.wasted_probe_usd - probe.probe_cost_usd).abs() < 1e-12,
+        tokens(probe.wasted_usage()) > 0 && probe.wasted_usage() == probe.usage(),
         "{probe:?}"
     );
 }
@@ -1825,14 +1871,14 @@ async fn final_rollups(r: &Rig) -> Vec<RollupRow> {
 /// The fixture of the per-probe settlement cases: a request at 0 s writes a five-minute entry, the first probe reads
 /// it back 270 s in and keeps its own entry to 570 s, and the second, due 540 s in inside that entry, reads nothing
 /// and rewrites the prefix, keeping its own entry to 840 s. Both stay unanswered for the request each case sends.
-/// Answers the first probe's cost, read off the rollup before the second probe runs.
-async fn a_covering_probe_then_a_rewrite(r: &mut Rig) -> f64 {
+/// Answers the first probe's counts, read off the rollup before the second probe runs.
+async fn a_covering_probe_then_a_rewrite(r: &mut Rig) -> PinUsage {
     open_request(r, "first", 0, 2_000);
     r.engine.observe(completed(r, "first", 0));
     r.advance_attended(270_000);
     r.step().await;
     let first_cost =
-        probe_rows(&rollups(r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await).probe_cost_usd;
+        probe_rows(&rollups(r, |rows| tokens(probe_rows(rows).usage()) > 0).await).usage();
     r.up.push_credential_rule(A, "/v1/messages", probe_answer(0, 2_000));
     r.advance_attended(270_000);
     r.step().await;
@@ -1876,8 +1922,8 @@ async fn a_covering_probe_whose_entry_lapsed_settles_expired_while_the_rewrite_a
         "the rewrite kept the entry the request read, and the first probe's had lapsed"
     );
     assert!(
-        (probe.wasted_probe_usd - first_cost).abs() < 1e-12,
-        "the first probe is the wasted one: {first_cost} against {probe:?}"
+        probe.wasted_usage() == first_cost,
+        "the first probe is the wasted one: {first_cost:?} against {probe:?}"
     );
 }
 
@@ -1906,10 +1952,7 @@ async fn a_request_past_both_entries_settles_both_probes_expired_and_earns_no_cr
         (0, 2, BTreeMap::from([("expired".to_string(), 2)])),
         "the request arrived 900 s in, past 570 s and 840 s"
     );
-    assert!(
-        (probe.wasted_probe_usd - probe.probe_cost_usd).abs() < 1e-12,
-        "{probe:?}"
-    );
+    assert!(probe.wasted_usage() == probe.usage(), "{probe:?}");
 }
 
 /// A request inside both probes' entries that reads nothing kept no prefix either probe paid for: both settle as cold
@@ -1997,7 +2040,7 @@ async fn an_expiry_swept_by_an_observation_settles_from_that_observation() {
         Some(1)
     );
     assert!(
-        probe.wasted_probe_usd > 0.0,
+        tokens(probe.wasted_usage()) > 0,
         "the probe the lapsed session paid for: {probe:?}"
     );
 }
@@ -2037,7 +2080,7 @@ async fn an_expiry_swept_by_a_reader_settles_from_that_call() {
             Some(1),
             "{sweep}: {probe:?}"
         );
-        assert!(probe.wasted_probe_usd > 0.0, "{sweep}: {probe:?}");
+        assert!(tokens(probe.wasted_usage()) > 0, "{sweep}: {probe:?}");
     }
 }
 
@@ -2111,17 +2154,17 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
                 .unwrap();
             let probe = probe_rows(&rows);
             assert_eq!(
-                (probe.wasted_probes, probe.probe_cost_usd),
-                (0, 0.0),
+                (probe.wasted_probes, tokens(probe.usage())),
+                (0, 0),
                 "{action}: {probe:?}"
             );
             continue;
         }
-        // The upstream served it, so it is paid for whatever the fence said: the probe row carries its cost,
+        // The upstream served it, so it is paid for whatever the fence said: the probe row carries its counts,
         // and a result whose recipe had stopped settles as one wasted probe under that stop.
-        let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
+        let rows = rollups(&r, |rows| tokens(probe_rows(rows).usage()) > 0).await;
         let probe = probe_rows(&rows);
-        assert!(probe.probe_cost_usd > 0.0, "{action}");
+        assert!(read_dollars(&r, &rows).0 > 0.0, "{action}");
         match action {
             "expire" => assert_eq!(
                 probe.wasted_probe_reasons.get("session_ended").copied(),
@@ -2166,7 +2209,23 @@ async fn a_fast_probe_keeps_a_fast_request_warm_and_a_switch_of_speed_earns_noth
     r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
     let kept = r.observe_with("main", &fast).await;
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
-    let mut on_fast = RollupRow::key(0, "", 0, "", "", "", "inference", "", "", "", "", "", "");
+    let mut on_fast = RollupRow::key(
+        0,
+        "",
+        0,
+        "",
+        "",
+        "",
+        "inference",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+    );
     for row in rows
         .iter()
         .filter(|row| row.kind == "inference" && row.speed == "fast")
@@ -2244,16 +2303,16 @@ async fn the_canonical_model_prices_a_probe_whatever_the_caller_spelled() {
             .contains(r#""model":"claude-sonnet-5""#),
         "the relay's edit resolved the served id"
     );
-    let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
+    let rows = rollups(&r, |rows| tokens(probe_rows(rows).usage()) > 0).await;
     let row = rows.iter().find(|row| row.kind == "probe").unwrap();
     assert_eq!(row.canonical_model, "claude-sonnet-5");
     let expected = 2_000.0
         * rig_cells("claude-sonnet-5", phoebis_ledger::Speed::Standard).cache_read
         / 1_000_000.0;
+    let (cost, _) = read_dollars(&r, &rows);
     assert!(
-        (row.probe_cost_usd - expected).abs() < 1e-12,
-        "priced as the canonical model: {}",
-        row.probe_cost_usd
+        (cost - expected).abs() < 1e-12,
+        "priced as the canonical model: {cost}"
     );
 }
 
@@ -2302,10 +2361,10 @@ async fn an_unpriced_model_costs_the_dearest_cells_and_still_lands_a_probe_row()
     r.advance(270_000);
     r.step().await;
     let rows = rollups(&r, |rows| probe_rows(rows).requests == 1).await;
+    let (cost, _) = read_dollars(&r, &rows);
     assert!(
-        (probe_rows(&rows).probe_cost_usd - dearest_read_2000()).abs() < 1e-12,
-        "claude-sonnet-4-5 is not in the shipped table, so its probe row prices at the dearest cells: {}",
-        probe_rows(&rows).probe_cost_usd
+        (cost - dearest_read_2000()).abs() < 1e-12,
+        "claude-sonnet-4-5 is not in the shipped table, so its probe row prices at the dearest cells: {cost}"
     );
     assert_eq!(r.status("main").unanswered, 1);
 }
@@ -2367,16 +2426,15 @@ async fn a_key_moved_to_another_pool_is_charged_there() {
         Some("warm".to_string()),
         "the recipe moved with its key, without another request"
     );
-    // The probe's own request row reaches the rollups through the assembler with no cost on it, ahead of the
-    // engine's keepalive delta, so the wait has to name the charge rather than the row.
+    // The probe's own request row carries the counts its charge prices from.
     let rows = rollups(&r, |rows| {
         rows.iter()
-            .any(|row| row.kind == "probe" && row.pool_id == "warm" && row.probe_cost_usd > 0.0)
+            .any(|row| row.kind == "probe" && row.pool_id == "warm" && tokens(row.usage()) > 0)
     })
     .await;
     assert!(rows
         .iter()
-        .any(|row| row.pool_id == "warm" && row.probe_cost_usd > 0.0));
+        .any(|row| row.pool_id == "warm" && tokens(row.usage()) > 0));
 }
 
 /// A probe the upstream served and charged for is on the recipe's own books before any branch that pauses
@@ -2397,8 +2455,8 @@ async fn a_probe_answered_with_output_is_settled_as_wasted() {
         (Reason::UnexpectedOutput, 1),
         "{status:?}"
     );
-    let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
-    let cost = probe_rows(&rows).probe_cost_usd;
+    let rows = rollups(&r, |rows| tokens(probe_rows(rows).usage()) > 0).await;
+    let cost = probe_rows(&rows).usage();
     r.state("main", "released");
     let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
     let probe = probe_rows(&rows);
@@ -2408,8 +2466,8 @@ async fn a_probe_answered_with_output_is_settled_as_wasted() {
         "{probe:?}"
     );
     assert!(
-        (probe.wasted_probe_usd - cost).abs() < 1e-12,
-        "settled as wasted at what it cost: {probe:?}"
+        probe.wasted_usage() == cost,
+        "settled as wasted at what it used: {probe:?}"
     );
 }
 
@@ -2507,12 +2565,9 @@ async fn an_aggregate_only_cache_write_is_charged_as_a_five_minute_write() {
     // Sonnet 5: 2,000 read at its cache read and 500 written at its five-minute write.
     let cells = rig_cells(PRICED, phoebis_ledger::Speed::Standard);
     let expected = (2_000.0 * cells.cache_read + 500.0 * cells.cache_write_5m) / 1_000_000.0;
-    let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
-    let probe = probe_rows(&rows);
-    assert!(
-        (probe.probe_cost_usd - expected).abs() < 1e-12,
-        "{probe:?} against {expected}"
-    );
+    let rows = rollups(&r, |rows| tokens(probe_rows(rows).usage()) > 0).await;
+    let (cost, _) = read_dollars(&r, &rows);
+    assert!((cost - expected).abs() < 1e-12, "{cost} against {expected}");
 }
 
 /// A title or a summary reads the cache but never re-armed the recipe, so it earns nothing; the next request
@@ -2601,6 +2656,68 @@ fn body_on(model: &str) -> String {
     BODY.replace("claude-sonnet-4-5", model)
 }
 
+/// A settlement keys the probe's own exchange: a Haiku 5.5 probe over the first entry's threshold, exchanged on
+/// January 31 and settled wasted after midnight, when the second entry raises the threshold above its prompt, files
+/// its wasted counts in the January hour under `long` and the tier it ran under, so they price at the January
+/// long-context cells.
+#[tokio::test]
+async fn a_long_context_probe_settled_wasted_the_next_day_files_under_its_own_hour_band_and_revision(
+) {
+    const OAUTH: &str = "sk-ant-oat01-OOOO";
+    let mut r = rig(RigSpec {
+        accounts: vec![oauth("o", OAUTH, 0)],
+        pricing: phoebis_ledger::test_tables::api_prices(),
+        tier: Some("default_claude_max_20x"),
+        ..RigSpec::default()
+    })
+    .await;
+    // 2026-01-31 at 23:50 UTC, the session started again past the jump.
+    let late_january = 1_769_903_400_000;
+    r.advance(late_january - r.now());
+    r.event(Event {
+        event: "session_start".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let body = BODY.replace("claude-sonnet-4-5", "claude-haiku-5-5");
+    r.up.push_credential_rule(OAUTH, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 1);
+    let exchanged = r.now();
+    let prices = r.pricing.clone();
+    let february = phoebis_ledger::effective_instant("2026-02-01").expect("a date");
+    assert!(exchanged < february, "the probe ran on January 31");
+    r.advance_attended(600_000);
+    assert!(r.now() >= february, "the settlement runs on February 1");
+    r.state("main", "released");
+    let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
+    let settled: Vec<&RollupRow> = rows.iter().filter(|row| row.wasted_probes > 0).collect();
+    assert_eq!(
+        settled
+            .iter()
+            .map(|row| (row.hour, row.band.as_str(), row.tier.as_str()))
+            .collect::<Vec<_>>(),
+        [(hour_of(exchanged), "long", "default_claude_max_20x")],
+        "the probe's hour, band and tier"
+    );
+    let long = prices.in_force(exchanged).models["claude-haiku-5-5"]
+        .long_context
+        .as_ref()
+        .expect("the test list prices Haiku 5.5 by prompt length")
+        .clone();
+    assert!(
+        2_000 > long.over,
+        "the probe read back more than January's threshold"
+    );
+    let (_, wasted) = read_dollars(&r, &rows);
+    assert!(
+        (wasted - 2_000.0 * long.cells.cache_read / 1_000_000.0).abs() < 1e-12,
+        "the January long-context cache read: {wasted}"
+    );
+}
+
 /// A probe costs at the cells its own prompt selects: on a row priced by prompt length, a probe whose answer reads
 /// back more than the threshold costs at the long-context cache read.
 #[tokio::test]
@@ -2616,8 +2733,8 @@ async fn a_probe_on_a_model_priced_by_prompt_length_costs_at_the_cells_its_own_p
     r.advance(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
-    let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
-    let cost = probe_rows(&rows).probe_cost_usd;
+    let rows = rollups(&r, |rows| tokens(probe_rows(rows).usage()) > 0).await;
+    let (cost, _) = read_dollars(&r, &rows);
     // The test price table's Haiku 5.5 row, per million tokens: cache read 0.1 up to 1,000 prompt tokens and 0.5
     // over them. The probe read the standing 2,000 tokens back, so its own prompt is over the threshold.
     let over = 2_000.0 * 0.5 / 1_000_000.0;

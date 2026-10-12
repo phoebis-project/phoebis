@@ -285,6 +285,8 @@ pub(crate) async fn series(
         bucket,
         &group_by,
         pricing,
+        &state.pricing.revisions(),
+        &state.tables,
     )
     .await
     {
@@ -351,6 +353,8 @@ pub(crate) async fn breakdown(
         to,
         &group_by,
         pricing,
+        &state.pricing.revisions(),
+        &state.tables,
     )
     .await
     {
@@ -853,8 +857,8 @@ pub(crate) async fn burn(
         bucket_seconds: bucket,
         ..Default::default()
     };
+    let prices = state.pricing.revisions();
     let read = if group_by == "session" {
-        let prices = state.pricing.revisions();
         state
             .ledger
             .db()
@@ -863,7 +867,15 @@ pub(crate) async fn burn(
     } else {
         // One paged read for every group: each row is priced into its own group's buckets as its page arrives,
         // rather than the range read again per group under the reader lock.
-        burn_groups_paged(state.ledger.db(), &tables, &tiers, &filter, &group_by).await
+        burn_groups_paged(
+            state.ledger.db(),
+            &tables,
+            &prices,
+            &tiers,
+            &filter,
+            &group_by,
+        )
+        .await
     };
     let series = match read {
         Ok(s) => s,

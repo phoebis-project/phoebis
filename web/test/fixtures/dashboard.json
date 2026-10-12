@@ -2,8 +2,8 @@
   "route": "GET /admin/dashboard",
   "body": {
     "requests_24h": 6,
-    "tokens_24h": 10800,
-    "tokens_cached_24h": 3000,
+    "tokens_24h": 12600,
+    "tokens_cached_24h": 3500,
     "cost_24h": 0.0249,
     "error_rate_24h": 0.3333333333333333,
     "top_error_code": "upstream_error",
@@ -167,7 +167,7 @@
         "cost": 0.0142,
         "errors": 1,
         "requests": 3,
-        "tokens": 5400
+        "tokens": 7200
       },
       {
         "at": 1791720000000,

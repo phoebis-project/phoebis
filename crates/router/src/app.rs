@@ -230,6 +230,19 @@ pub async fn run_until(
             "stamped key generations onto rollup rows written before the column existed"
         );
     }
+    let refolded = phoebis_ledger::refold_bands(
+        &ledger_db,
+        &pricing.revisions(),
+        config.stats.retention_days,
+        clock(),
+    )
+    .context("re-folding the rollup rows whose prompt-length band moved")?;
+    if refolded > 0 {
+        tracing::info!(
+            requests = refolded,
+            "re-folded the requests whose prompt-length band moved"
+        );
+    }
     let metrics = Arc::new(Metrics::new());
     let ledger = phoebis_ledger::spawn(
         ledger_db.clone(),
@@ -400,7 +413,7 @@ pub async fn run_until(
         ledger: ledger.clone(),
         metrics: metrics.clone(),
         pricing: pricing.clone(),
-        tables,
+        tables: tables.clone(),
         settings: Arc::new(settings_view(&config, profile)),
         // Cloned rather than moved: the local binding still serves the companion router and the shutdown
         // sequence below.
@@ -532,6 +545,8 @@ pub async fn run_until(
             ledger_db.clone(),
             router_task.clone(),
             clock.clone(),
+            pricing.clone(),
+            tables.clone(),
         )),
         proxy_stop,
         ListenLimits {

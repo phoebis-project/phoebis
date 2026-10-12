@@ -323,10 +323,12 @@ pub struct ExtraUsageSampleRecord {
     pub source: String,
 }
 
-/// What the keepalive engine adds to one rollup row: the credit of a kept-warm request, the cost of a probe, or
+/// What the keepalive engine adds to one rollup row: the credit of a kept-warm request, a probe's migration mark, or
 /// the settlement of a stopped recipe. Never a request counter: those come from the request rows alone.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct KeepaliveDelta {
+    /// The row's instant. On a settlement it is the probe's exchange instant rather than the settlement's clock, so
+    /// the row and its price keys are the probe's.
     pub at: i64,
     pub key_id: String,
     pub key_generation: i64,
@@ -338,13 +340,21 @@ pub struct KeepaliveDelta {
     pub kept_warm_request_id: Option<String>,
     pub kept_warm_requests: u64,
     pub kept_warm_tokens: u64,
-    pub saved_usd_gross: f64,
-    pub probe_cost_usd: f64,
     pub probe_migrated: u64,
     pub probes_skipped: u64,
     pub wasted_probes: u64,
-    pub wasted_probe_usd: f64,
+    /// The wasted probe's five token counts, what `wasted_probe_usd` priced, priced when read.
+    pub wasted_input_tokens: u64,
+    pub wasted_cache_read_tokens: u64,
+    pub wasted_cache_write_5m_tokens: u64,
+    pub wasted_cache_write_1h_tokens: u64,
+    pub wasted_output_tokens: u64,
     pub wasted_probe_reasons: std::collections::BTreeMap<String, u64>,
+    /// The account tier the settlement read, which keys the credit row. `None` files under `-`.
+    pub tier: Option<String>,
+    /// A settled probe's prompt-length band, read at its exchange against the revision in force then, so its wasted
+    /// counts price at the cells the probe ran at. `None` (standard) for a credit, a probe row or a skip.
+    pub band: Option<crate::pricing::Band>,
     /// The serving account's kind as the engine read it once the probe's answer landed, which files an api_key
     /// account's credit under `billed` beside its request row. `None` for a kept-warm credit, a skip or a
     /// settlement, and for a probe whose account left the registry before its answer landed.

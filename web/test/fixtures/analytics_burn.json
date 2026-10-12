@@ -266,9 +266,9 @@
         "usd": 0.0071,
         "five_hour_share": 0.00003525,
         "seven_day_share": 5.875e-6,
-        "cached_tokens": 1500,
-        "tokens": 5400,
-        "uncached_tokens": 3000
+        "cached_tokens": 2000,
+        "tokens": 7200,
+        "uncached_tokens": 4000
       },
       {
         "at": 1791720000000,

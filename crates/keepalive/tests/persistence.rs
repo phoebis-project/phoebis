@@ -932,11 +932,18 @@ async fn a_subagent_past_the_agent_limit_is_disposed_alone_and_its_unanswered_pr
     );
 }
 
-/// The credit after a restart reads the newest unanswered probe's coverage, entry, unit and model, so a probe nobody
-/// answered before the flush comes back with all four.
+/// The credit after a restart reads the newest unanswered probe's coverage, entry, unit and model, and its settlement
+/// its usage, its account tier, its exchange instant and its band, so a probe nobody answered before the flush comes
+/// back with all eight.
 #[tokio::test]
-async fn a_restart_restores_an_unanswered_probe_with_its_coverage_entry_unit_and_model() {
-    let mut r = rig(on_disk()).await;
+async fn a_restart_restores_an_unanswered_probe_with_what_its_credit_and_its_settlement_read() {
+    const OAUTH: &str = "sk-ant-oat01-OOOO";
+    let mut r = rig(RigSpec {
+        accounts: vec![oauth("o", OAUTH, 0)],
+        tier: Some("default_claude_max_20x"),
+        ..on_disk()
+    })
+    .await;
     r.observe("main").await;
     r.advance_attended(270_000);
     r.step().await;
@@ -966,6 +973,21 @@ async fn a_restart_restores_an_unanswered_probe_with_its_coverage_entry_unit_and
             Some(NOW + 270_000 + 300_000),
             true,
             Some("claude-sonnet-4-5")
+        ),
+        "{probe}"
+    );
+    assert_eq!(
+        (
+            probe["usage"]["read"].as_u64(),
+            probe["tier"].as_str(),
+            probe["at"].as_i64(),
+            probe["band"].as_str(),
+        ),
+        (
+            Some(2_000),
+            Some("default_claude_max_20x"),
+            Some(NOW + 270_000),
+            Some("standard")
         ),
         "{probe}"
     );
@@ -1055,6 +1077,17 @@ async fn a_restart_restores_a_pending_probe_with_its_funding_coverage_unit_and_l
         ),
         "{kept}"
     );
+    // A probe in overage settles in dollars, so the settlement read no account tier.
+    assert_eq!(
+        (
+            kept["usage"]["read"].as_u64(),
+            kept["tier"].is_null(),
+            kept["at"].as_i64(),
+            kept["band"].as_str(),
+        ),
+        (Some(2_000), true, Some(NOW + 270_000), Some("standard")),
+        "{kept}"
+    );
 }
 
 /// A saved session of an older record version carries probes with no funding to settle under, so the load drops it
@@ -1063,12 +1096,7 @@ async fn a_restart_restores_a_pending_probe_with_its_funding_coverage_unit_and_l
 #[tokio::test]
 async fn a_saved_session_of_record_version_one_is_dropped_at_the_load_with_one_line() {
     let r = rig(on_disk()).await;
-    // The rig's session as a save writes it, its main agent holding no recipe, rewritten to version 1 with one kept
-    // probe in that version's shape.
-    let (mut sessions, mut agents) = r.engine.persist_rows();
-    assert_eq!((sessions.len(), agents.len()), (1, 1));
-    let mut payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
-    payload["kept"] = serde_json::json!([{
+    let kept = serde_json::json!({
         "key_generation": r.generation("desktop"),
         "pool_id": "main",
         "canonical_model": "claude-sonnet-4-5",
@@ -1076,10 +1104,43 @@ async fn a_saved_session_of_record_version_one_is_dropped_at_the_load_with_one_l
         "fast": false,
         "cost": "0.0006",
         "entry_expires": NOW + 570_000,
-    }]);
+    });
+    dropped_at_the_load_with_one_line(r, 1, kept).await;
+}
+
+/// A saved session of record version 2 carries a probe's dollars in place of its usage, its account tier, its
+/// instant and its band, so nothing would settle its waste under the cells and the revision the probe ran at: the
+/// load drops it whole as it drops version 1.
+#[tokio::test]
+async fn a_saved_session_of_record_version_two_is_dropped_at_the_load_with_one_line() {
+    let r = rig(on_disk()).await;
+    let kept = serde_json::json!({
+        "key_generation": r.generation("desktop"),
+        "pool_id": "main",
+        "canonical_model": "claude-sonnet-4-5",
+        "account": "a",
+        "fast": false,
+        "cost": "0.0006",
+        "entry_expires": NOW + 570_000,
+        "kind": "oauth",
+        "in_overage": false,
+        "covered": false,
+        "unit": "usd",
+        "pending": null,
+    });
+    dropped_at_the_load_with_one_line(r, 2, kept).await;
+}
+
+/// The rig's session as a save writes it, its main agent holding no recipe, rewritten to `version` with `kept` as
+/// its one kept probe, then loaded by a restart: nothing comes back, nothing settles, and one warn line names it.
+async fn dropped_at_the_load_with_one_line(r: Rig, version: u32, kept: serde_json::Value) {
+    let (mut sessions, mut agents) = r.engine.persist_rows();
+    assert_eq!((sessions.len(), agents.len()), (1, 1));
+    let mut payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    payload["kept"] = serde_json::json!([kept]);
     agents[0].payload = payload.to_string();
-    sessions[0].record_version = 1;
-    agents[0].record_version = 1;
+    sessions[0].record_version = version;
+    agents[0].record_version = version;
     r.h.store
         .save_keepalive(&KeepaliveBatch {
             sessions,

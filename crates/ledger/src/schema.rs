@@ -288,6 +288,13 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// force when the request arrived, so the five dollar columns and the stamp of the table that priced them leave. The
 /// attempt records the serving account's tier as the registry held it at the landing. SQLite drops a column in place,
 /// so the table is not rebuilt. No backfill: a row from before reads a NULL tier.
+///
+/// Version 34: an hourly rollup row keeps counts and no dollar figure, since a reader prices the counts at the
+/// revision in force at the row's hour, so the eight dollar columns leave and a wasted probe keeps its five token
+/// counts in place of its dollars. The prompt-length band the row's attempts priced at and the serving account's tier
+/// join the primary key after the funding, so a row's counts price at the cells and the windows its key names. The
+/// table is rebuilt as version 24 rebuilt it. No backfill: a row from before files under `standard` and `-` with no
+/// wasted count and prices from its own counts.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -893,5 +900,35 @@ CREATE INDEX events_request ON events (request_id);",
          ALTER TABLE attempts DROP COLUMN cache_read_usd; ALTER TABLE attempts DROP COLUMN cache_write_usd; \
          ALTER TABLE attempts DROP COLUMN output_usd; ALTER TABLE attempts DROP COLUMN pricing_version; \
          ALTER TABLE attempts ADD COLUMN tier TEXT;",
+    ),
+    (
+        34,
+        "CREATE TABLE rollups_hourly_next (
+  hour INTEGER NOT NULL, key_id TEXT NOT NULL, key_generation INTEGER NOT NULL DEFAULT 0, pool_id TEXT NOT NULL,
+  account_id TEXT NOT NULL, canonical_model TEXT NOT NULL, kind TEXT NOT NULL, user_agent TEXT NOT NULL,
+  client TEXT NOT NULL DEFAULT '-', effort TEXT NOT NULL DEFAULT 'none', request_class TEXT NOT NULL DEFAULT '-',
+  speed TEXT NOT NULL DEFAULT 'standard', funding TEXT NOT NULL DEFAULT 'plan',
+  band TEXT NOT NULL DEFAULT 'standard', tier TEXT NOT NULL DEFAULT '-',
+  requests INTEGER NOT NULL, succeeded INTEGER NOT NULL, rate_limited INTEGER NOT NULL, failed INTEGER NOT NULL,
+  exhausted INTEGER NOT NULL, rejected INTEGER NOT NULL, attempts INTEGER NOT NULL, failovers INTEGER NOT NULL,
+  cache_hits INTEGER NOT NULL, cache_misses INTEGER NOT NULL, uncached_requests INTEGER NOT NULL,
+  input_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL, cache_write_5m_tokens INTEGER NOT NULL,
+  cache_write_1h_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, thinking_tokens INTEGER NOT NULL DEFAULT 0,
+  web_search_requests INTEGER NOT NULL DEFAULT 0, web_fetch_requests INTEGER NOT NULL DEFAULT 0,
+  kept_warm_requests INTEGER NOT NULL, kept_warm_tokens INTEGER NOT NULL, probe_migrated INTEGER NOT NULL,
+  wasted_probes INTEGER NOT NULL, wasted_probe_reasons_json TEXT NOT NULL, probes_skipped INTEGER NOT NULL DEFAULT 0,
+  wasted_input_tokens INTEGER NOT NULL DEFAULT 0, wasted_cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+  wasted_cache_write_5m_tokens INTEGER NOT NULL DEFAULT 0, wasted_cache_write_1h_tokens INTEGER NOT NULL DEFAULT 0,
+  wasted_output_tokens INTEGER NOT NULL DEFAULT 0,
+  ttfb_hist BLOB NOT NULL, ttfc_hist BLOB NOT NULL, duration_hist BLOB NOT NULL, output_tps_hist BLOB NOT NULL,
+  errors_json TEXT NOT NULL, cache_miss_reasons_json TEXT NOT NULL, incomplete INTEGER NOT NULL DEFAULT 0,
+  probes_held INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier)
+);
+INSERT INTO rollups_hourly_next (hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held) SELECT hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, 'standard', '-', requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, 0, 0, 0, 0, 0, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held FROM rollups_hourly;
+DROP TABLE rollups_hourly;
+ALTER TABLE rollups_hourly_next RENAME TO rollups_hourly;
+CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_generation, hour);
+CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, account_id, hour);",
     ),
 ];

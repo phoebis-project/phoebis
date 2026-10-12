@@ -1816,6 +1816,9 @@ pub(crate) struct AccountContext {
 pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
+    let to = phoebis_ledger::hour_ceil(now);
+    let prices = state.pricing.revisions();
+    let tables = state.tables.clone();
     let ledger = state
         .ledger
         .db()
@@ -1823,10 +1826,24 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
             Ok((
                 phoebis_ledger::latest_quota(c, now)?,
                 phoebis_ledger::latest_extra_usage(c, now)?,
-                phoebis_ledger::request_totals(c, "account_id", hour - 24 * 3_600)?,
-                phoebis_ledger::request_totals(c, "account_id", hour - 7 * 24 * 3_600)?,
+                phoebis_ledger::request_totals(
+                    c,
+                    "account_id",
+                    hour - 24 * 3_600,
+                    to,
+                    &prices,
+                    &tables,
+                )?,
+                phoebis_ledger::request_totals(
+                    c,
+                    "account_id",
+                    hour - 7 * 24 * 3_600,
+                    to,
+                    &prices,
+                    &tables,
+                )?,
                 // Lifetime: `i64::MIN` sits at or below the earliest hour the rollups can hold, so every row clears it.
-                phoebis_ledger::request_totals(c, "account_id", i64::MIN)?,
+                phoebis_ledger::request_totals(c, "account_id", i64::MIN, to, &prices, &tables)?,
             ))
         })
         .await;

@@ -11,7 +11,7 @@ use phoebis_bus::{
     spawn_subscriber, AccountSelected, Bus, Delivery, Event as BusEvent, Outcome, Phase,
     RequestComplete, RequestObserved, ResponseChunk, ResponseHead,
 };
-use phoebis_ledger::{Ledger, Metrics, PlanTables, Pricing};
+use phoebis_ledger::{Band, Ledger, Metrics, PlanTables, Pricing};
 use phoebis_oauth::Clock;
 use phoebis_relay::{CacheTtlPolicy, Relay};
 use phoebis_routing::{budget_deadline, listing, MemberSpend, RegistrySnapshot, RouterHandle};
@@ -844,8 +844,14 @@ pub(crate) struct Settlement {
     pub canonical_model: String,
     pub account: Option<String>,
     pub label: Wasted,
-    /// One probe's cost: a settlement is one wasted probe, so the rollup files it under its own funding.
-    pub cost: f64,
+    /// The probe's own usage, which the rollup carries as the wasted counts and prices when read.
+    pub usage: ProbeUsage,
+    /// The account tier the settlement read, so the credit row keys the tier the probe ran under.
+    pub tier: Option<String>,
+    /// The probe's exchange instant and band, off its `ProbeRecord`, so a settlement filed a day later keys the
+    /// probe's hour and prices its counts at the cells and the revision the probe ran at.
+    pub at: i64,
+    pub band: Band,
     /// The stopped recipe carried `speed: "fast"`, so the settlement files under speed `fast`.
     pub fast: bool,
     /// The kind the probe was served under and whether its answer reported overage, as the probe's own cost row
@@ -886,14 +892,21 @@ impl Skipped {
     }
 }
 
-/// One probe the next real request has not answered yet: what it cost and the unit it settled in, the lineage a
+/// One probe the next real request has not answered yet: what it used and the unit it settled in, the lineage a
 /// request has to match to be read as its answer, and the end of the entry it wrote, which settles it on its own.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct UnansweredProbe {
     /// The relay's request id of the probe's exchange, which the probe's own ledger request row carries, so a
     /// settlement of this probe can be told from a repeat of it.
     pub id: String,
-    pub cost: f64,
+    /// The probe's own usage, which the rollup carries as the wasted counts and prices when read.
+    pub usage: ProbeUsage,
+    /// The account tier the settlement read, so the credit row keys the tier the probe ran under.
+    pub tier: Option<String>,
+    /// The probe's exchange instant and band, off its `ProbeRecord`, so a settlement filed a day later keys the
+    /// probe's hour and prices its counts at the cells and the revision the probe ran at.
+    pub at: i64,
+    pub band: Band,
     pub unit: Option<SavingsUnit>,
     pub account: Option<String>,
     pub fast: bool,
@@ -920,7 +933,14 @@ pub(crate) struct Kept {
     pub canonical_model: String,
     pub account: Option<String>,
     pub fast: bool,
-    pub cost: f64,
+    /// The probe's own usage, which the rollup carries as the wasted counts and prices when read.
+    pub usage: ProbeUsage,
+    /// The account tier the settlement read, so the credit row keys the tier the probe ran under.
+    pub tier: Option<String>,
+    /// The probe's exchange instant and band, off its `ProbeRecord`, so a settlement filed a day later keys the
+    /// probe's hour and prices its counts at the cells and the revision the probe ran at.
+    pub at: i64,
+    pub band: Band,
     /// When the entry this probe wrote expires: a read arriving at or past it found the entry gone.
     pub entry_expires: i64,
     pub kind: Option<AccountKind>,
@@ -944,7 +964,10 @@ impl Kept {
             canonical_model: probe.model.clone(),
             account: probe.account.clone(),
             fast: probe.fast,
-            cost: probe.cost,
+            usage: probe.usage,
+            tier: probe.tier.clone(),
+            at: probe.at,
+            band: probe.band,
             entry_expires: probe.expires,
             kind: probe.kind,
             in_overage: probe.in_overage,
@@ -962,7 +985,10 @@ impl Kept {
             canonical_model: self.canonical_model,
             account: self.account,
             label,
-            cost: self.cost,
+            usage: self.usage,
+            tier: self.tier,
+            at: self.at,
+            band: self.band,
             fast: self.fast,
             kind: self.kind,
             in_overage: self.in_overage,

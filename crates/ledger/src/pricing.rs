@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
-use crate::rollup::CostSplit;
+use crate::rollup::{CostSplit, LONG_BAND, STANDARD_BAND};
 use crate::LedgerError;
 
 const SHIPPED_API_PRICES: &str = include_str!("../api_prices.yaml");
@@ -50,18 +50,18 @@ pub enum Band {
 }
 
 impl Band {
-    /// The rollup key word: `standard` or `long`.
+    /// The rollup key word: `STANDARD_BAND` or `LONG_BAND`.
     pub fn as_str(self) -> &'static str {
         match self {
-            Band::Standard => "standard",
-            Band::LongContext => "long",
+            Band::Standard => STANDARD_BAND,
+            Band::LongContext => LONG_BAND,
         }
     }
 
-    /// `long` reads `LongContext`, any other word `Standard`.
+    /// `LONG_BAND` reads `LongContext`, any other word `Standard`.
     pub fn of_rollup(word: &str) -> Band {
         match word {
-            "long" => Band::LongContext,
+            LONG_BAND => Band::LongContext,
             _ => Band::Standard,
         }
     }
@@ -368,13 +368,6 @@ impl PriceTable {
             output_usd: per_m(counts.output, p.output),
         };
         Some((split.total(), split))
-    }
-
-    /// Whether the row `entry` finds for `canonical_model` carries a `long_context` set: such a model's attempts
-    /// cannot be re-priced from a period's token sums, which carry no per-attempt prompt.
-    pub fn priced_by_prompt_length(&self, canonical_model: &str) -> bool {
-        self.entry(canonical_model)
-            .is_some_and(|(_, row)| row.long_context.is_some())
     }
 
     /// The metrics label: a priced model reads as the table key that priced it, everything else is one bucket,
@@ -1389,16 +1382,5 @@ mod tests {
             matches!(behind_a_locked_parent, Err(LedgerError::Io(_))),
             "a file whose parent grants no search permission"
         );
-    }
-
-    /// A dated id reads its undated row, so it answers as that row does.
-    #[test]
-    fn a_model_is_priced_by_prompt_length_when_its_row_carries_the_block() {
-        let revisions = crate::test_tables::api_prices();
-        let table = revisions.in_force(JANUARY_2026);
-        assert!(table.priced_by_prompt_length("claude-haiku-5-5"));
-        assert!(table.priced_by_prompt_length("claude-haiku-5-5-20260101"));
-        assert!(!table.priced_by_prompt_length("claude-sonnet-5-5"));
-        assert!(!table.priced_by_prompt_length("gpt-5"));
     }
 }

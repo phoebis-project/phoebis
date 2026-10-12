@@ -807,7 +807,7 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   assert.equal(desktop.histograms.ttfbMs.length, 64);
   assert.equal(typeof desktop.percentiles.ttfbMs.p50, 'number');
   assert.equal(desktop.cacheMissReasons.none, 5);
-  assert.equal(desktop.tokens.thinking, 200);
+  assert.equal(desktop.tokens.thinking, 240);
   assert.equal(desktop.wastedProbeReasons.idle_limit, 0);
   assert.equal('savings' in desktop, false, 'the group carries the probe figures and no savings member');
   assert.equal(desktop.errors.upstream_error, 1);

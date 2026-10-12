@@ -10,7 +10,7 @@ use axum::body::Body;
 use axum::http::{header, Request};
 use bytes::{Bytes, BytesMut};
 use http_body_util::BodyExt;
-use phoebis_ledger::{PlanTables, PriceTable};
+use phoebis_ledger::{prompt_tokens, Band, PlanTables, PriceTable};
 use phoebis_relay::RelayOutcome;
 use phoebis_routing::BUDGET_WINDOW;
 use phoebis_store::AccountKind;
@@ -22,7 +22,7 @@ use crate::engine::{
     UnansweredProbe, Verdict, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
-use crate::savings::{probe_cost, probe_dollars, settlement_unit, unpriced_reason};
+use crate::savings::{probe_cost, probe_dollars, settlement_unit, typed, unpriced_reason};
 use crate::usage::{ProbeUsage, MAX_USAGE_BYTES};
 
 /// The engine's own bound on one exchange. A probe with `max_tokens = 0` answers in seconds; the relay's idle
@@ -163,6 +163,15 @@ pub struct ProbeRecord {
     pub outcome: ProbeOutcome,
     pub pool_id: String,
     pub usage: ProbeUsage,
+    /// The exchange's instant: the row the settlement files and the revision it prices at are the probe's.
+    pub at: i64,
+    /// The probe's prompt-length band, `table.band_of(model, prompt_tokens(input, read, write_5m, write_1h))` on the
+    /// revision in force at the exchange.
+    pub band: Band,
+    /// The account tier the settlement read at the exchange, which a probe settling in the window share reads from
+    /// the store: its settlement's credit row keys the tier the probe ran under. `None` for a probe that settles in
+    /// dollars and for an account whose tier could not be read.
+    pub tier: Option<String>,
 }
 
 /// What the fenced half did with the result.
@@ -311,7 +320,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
     let tables = engine.parts.tables.clone();
     let (record, applied) = {
         let mut inner = engine.lock();
-        let record = inner.probe_record(&job, &exchange, table);
+        let mut record = inner.probe_record(&job, &exchange, table, now);
         // The serving account's kind decides the unit this probe's cost settles in. It rides the relay's answer, so
         // a registry write mid-exchange never changes which account this probe is charged against, and an answer the
         // relay never built names no account: its probe settles in dollars and the credit path never matches it.
@@ -343,6 +352,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             })
             .flatten()
             .and_then(|s| s.tier);
+        record.tier = tier.clone();
         let unit = settled_unit(
             default_unit,
             table,
@@ -385,6 +395,7 @@ impl Inner {
         job: &ProbeJob,
         exchange: &Exchange,
         table: &PriceTable,
+        now: i64,
     ) -> ProbeRecord {
         let mut record = ProbeRecord {
             account: job.account.clone().unwrap_or_else(|| "-".to_string()),
@@ -399,6 +410,9 @@ impl Inner {
             outcome: ProbeOutcome::Failed,
             pool_id: job.pool_id.clone(),
             usage: ProbeUsage::default(),
+            at: now,
+            band: Band::Standard,
+            tier: None,
         };
         let result = match exchange {
             Exchange::Cancelled => {
@@ -422,10 +436,19 @@ impl Inner {
         }
         if let Some(usage) = result.body.as_deref().and_then(ProbeUsage::parse) {
             record.usage = usage;
-            // The ledger's probe-cost column is dollars whatever funded the account, so this always prices
-            // through the price table, at the cells the answer's own `usage.speed` selects. The funding unit is
-            // decided once the serving account's kind is known, back in `run_job`. Dollars read neither a tier nor
-            // the settlement instant.
+            let counts = typed(usage);
+            record.band = table.band_of(
+                &job.canonical_model,
+                prompt_tokens(
+                    counts.input,
+                    counts.cache_read,
+                    counts.write_5m,
+                    counts.write_1h,
+                ),
+            );
+            // The record's dollars price through the price table whatever funded the account, at the cells the
+            // answer's own `usage.speed` selects. The funding unit is decided once the serving account's kind is
+            // known, back in `run_job`. Dollars read neither a tier nor the settlement instant.
             record.cost_usd = probe_dollars(table, &job.canonical_model, usage);
         }
         if result
@@ -523,7 +546,10 @@ impl Inner {
                             canonical_model: job.canonical_model.clone(),
                             account: Some(record.account.clone()),
                             fast: job.recipe.fast,
-                            cost: record.cost_usd,
+                            usage: record.usage,
+                            tier: record.tier.clone(),
+                            at: record.at,
+                            band: record.band,
                             entry_expires: job.started + ttl,
                             kind: record.kind,
                             in_overage: record.in_overage,
@@ -545,7 +571,10 @@ impl Inner {
                 canonical_model: job.canonical_model.clone(),
                 account: Some(record.account.clone()),
                 label,
-                cost: record.cost_usd,
+                usage: record.usage,
+                tier: record.tier.clone(),
+                at: record.at,
+                band: record.band,
                 fast: job.recipe.fast,
                 kind: record.kind,
                 in_overage: record.in_overage,
@@ -611,7 +640,10 @@ impl Inner {
         let ttl = record.usage.ttl_ms(previous_ms, requested_ms);
         agent.unanswered.push(UnansweredProbe {
             id: result.request_id.clone().unwrap_or_default(),
-            cost: record.cost_usd,
+            usage: record.usage,
+            tier: record.tier.clone(),
+            at: record.at,
+            band: record.band,
             unit: covered_unit,
             account: Some(record.account.clone()),
             fast: job.recipe.fast,
@@ -1068,8 +1100,12 @@ mod tests {
                 }
             }
             let exchange = held_answer();
-            let record =
-                inner.probe_record(&job, &exchange, PriceRevisions::shipped().in_force(2_000));
+            let record = inner.probe_record(
+                &job,
+                &exchange,
+                PriceRevisions::shipped().in_force(2_000),
+                2_000,
+            );
             assert_eq!(record.outcome, ProbeOutcome::Held, "{orphaned_by}");
             let applied = inner.apply_probe(&job, exchange, &record, None, 2_000);
             assert_eq!(applied, Applied::Orphaned, "{orphaned_by}");

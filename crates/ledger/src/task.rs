@@ -1418,7 +1418,7 @@ async fn refresh_member_spends(
     }
     let revisions = pricing.revisions();
     let rows = db
-        .read(move |conn| member_spends(conn, &members, now, revisions.in_force(now)))
+        .read(move |conn| member_spends(conn, &members, now, &revisions))
         .await;
     match rows {
         Ok(rows) => {

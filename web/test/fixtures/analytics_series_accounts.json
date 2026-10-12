@@ -118,12 +118,12 @@
             "uncached": 0,
             "expired_between_turns": 0,
             "tokens": {
-              "cache_read": 1500,
+              "cache_read": 2000,
               "cache_write_1h": 0,
-              "cache_write_5m": 600,
-              "output": 300,
-              "thinking": 120,
-              "uncached_input": 3000,
+              "cache_write_5m": 800,
+              "output": 400,
+              "thinking": 160,
+              "uncached_input": 4000,
               "web_fetch": 0,
               "web_search": 0
             },

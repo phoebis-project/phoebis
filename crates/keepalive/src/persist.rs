@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
-use phoebis_ledger::Speed;
+use phoebis_ledger::{Band, Speed};
 use phoebis_store::keepalive::BodyWrite;
 use phoebis_store::{IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
 use serde::{Deserialize, Serialize};
@@ -23,9 +23,9 @@ use crate::engine::{
 use crate::recipe::Recipe;
 use crate::usage::ProbeUsage;
 
-/// The payloads' shape. A row of an older version is dropped at the load, since its probes carry no funding to
-/// settle under.
-pub(crate) const RECORD_VERSION: u32 = 2;
+/// The payloads' shape. A row of an older version is dropped at the load: version 1 carried no funding and version 2
+/// a dollar in place of the probe's usage, tier, instant and band, so neither settles under this build's rule.
+pub(crate) const RECORD_VERSION: u32 = 3;
 
 /// A session row's key in the store: key id, key generation, session id.
 pub(crate) type PersistKey = (String, i64, String);
@@ -177,8 +177,11 @@ pub(crate) struct PersistedUsage {
 #[derive(Serialize, Deserialize)]
 pub(crate) struct PersistedUnanswered {
     pub id: String,
-    #[serde(with = "exact")]
-    pub cost: f64,
+    pub usage: PersistedUsage,
+    pub tier: Option<String>,
+    pub at: i64,
+    /// `Band::as_str`'s word.
+    pub band: String,
     pub unit: Option<String>,
     pub account: Option<String>,
     pub fast: bool,
@@ -196,8 +199,11 @@ pub(crate) struct PersistedKept {
     pub canonical_model: String,
     pub account: Option<String>,
     pub fast: bool,
-    #[serde(with = "exact")]
-    pub cost: f64,
+    pub usage: PersistedUsage,
+    pub tier: Option<String>,
+    pub at: i64,
+    /// `Band::as_str`'s word.
+    pub band: String,
     pub entry_expires: i64,
     pub kind: Option<String>,
     pub in_overage: bool,
@@ -220,6 +226,36 @@ mod exact {
         String::deserialize(deserializer)?
             .parse()
             .map_err(D::Error::custom)
+    }
+}
+
+fn persisted_usage(usage: &ProbeUsage) -> PersistedUsage {
+    PersistedUsage {
+        read: usage.read,
+        write: usage.write,
+        output: usage.output,
+        five_minutes: usage.five_minutes,
+        one_hour: usage.one_hour,
+        input: usage.input,
+        speed: usage.speed.map(|speed| {
+            match speed {
+                Speed::Fast => "fast",
+                Speed::Standard => "standard",
+            }
+            .to_string()
+        }),
+    }
+}
+
+fn probe_usage(saved: PersistedUsage) -> ProbeUsage {
+    ProbeUsage {
+        read: saved.read,
+        write: saved.write,
+        output: saved.output,
+        five_minutes: saved.five_minutes,
+        one_hour: saved.one_hour,
+        input: saved.input,
+        speed: saved.speed.as_deref().map(|word| Speed::of(Some(word))),
     }
 }
 
@@ -384,27 +420,16 @@ impl PersistedAgent {
             paused: agent.paused,
             probes: agent.probes,
             migrations: agent.migrations,
-            usage: PersistedUsage {
-                read: agent.usage.read,
-                write: agent.usage.write,
-                output: agent.usage.output,
-                five_minutes: agent.usage.five_minutes,
-                one_hour: agent.usage.one_hour,
-                input: agent.usage.input,
-                speed: agent.usage.speed.map(|speed| {
-                    match speed {
-                        Speed::Fast => "fast",
-                        Speed::Standard => "standard",
-                    }
-                    .to_string()
-                }),
-            },
+            usage: persisted_usage(&agent.usage),
             unanswered: agent
                 .unanswered
                 .iter()
                 .map(|probe| PersistedUnanswered {
                     id: probe.id.clone(),
-                    cost: probe.cost,
+                    usage: persisted_usage(&probe.usage),
+                    tier: probe.tier.clone(),
+                    at: probe.at,
+                    band: probe.band.as_str().to_string(),
                     unit: probe.unit.map(unit_word),
                     account: probe.account.clone(),
                     fast: probe.fast,
@@ -424,7 +449,10 @@ impl PersistedAgent {
                     canonical_model: kept.canonical_model.clone(),
                     account: kept.account.clone(),
                     fast: kept.fast,
-                    cost: kept.cost,
+                    usage: persisted_usage(&kept.usage),
+                    tier: kept.tier.clone(),
+                    at: kept.at,
+                    band: kept.band.as_str().to_string(),
                     entry_expires: kept.entry_expires,
                     kind: kept.kind.map(|kind| kind_word(kind).to_string()),
                     in_overage: kept.in_overage,
@@ -490,26 +518,17 @@ impl PersistedAgent {
         agent.paused = self.paused;
         agent.probes = self.probes;
         agent.migrations = self.migrations;
-        agent.usage = ProbeUsage {
-            read: self.usage.read,
-            write: self.usage.write,
-            output: self.usage.output,
-            five_minutes: self.usage.five_minutes,
-            one_hour: self.usage.one_hour,
-            input: self.usage.input,
-            speed: self
-                .usage
-                .speed
-                .as_deref()
-                .map(|word| Speed::of(Some(word))),
-        };
+        agent.usage = probe_usage(self.usage);
         agent.unanswered = self
             .unanswered
             .into_iter()
             .map(|probe| {
                 Some(UnansweredProbe {
                     id: probe.id,
-                    cost: probe.cost,
+                    usage: probe_usage(probe.usage),
+                    tier: probe.tier,
+                    at: probe.at,
+                    band: Band::of_rollup(&probe.band),
                     unit: optional_unit(probe.unit)?,
                     account: probe.account,
                     fast: probe.fast,
@@ -531,7 +550,10 @@ impl PersistedAgent {
                     canonical_model: kept.canonical_model,
                     account: kept.account,
                     fast: kept.fast,
-                    cost: kept.cost,
+                    usage: probe_usage(kept.usage),
+                    tier: kept.tier,
+                    at: kept.at,
+                    band: Band::of_rollup(&kept.band),
                     entry_expires: kept.entry_expires,
                     kind: optional_kind(kept.kind)?,
                     in_overage: kept.in_overage,
@@ -1150,7 +1172,7 @@ impl Inner {
         if dropped > 0 {
             tracing::warn!(
                 dropped,
-                "saved keepalive sessions of an older record version are dropped, since their probes carry no funding"
+                "saved keepalive sessions of an older record version are dropped, since their probes carry no funding or no usage to settle under"
             );
         }
         if by_sessions.sessions > 0 {
@@ -1370,29 +1392,10 @@ mod tests {
     fn a_float_in_the_payload_reads_back_to_the_bits_it_was_saved_with() {
         #[derive(Serialize, Deserialize)]
         struct Jitter(#[serde(with = "exact")] f64);
-        for value in [DRIFTS, -DRIFTS] {
+        for value in [DRIFTS, -DRIFTS, f64::MIN_POSITIVE] {
             let back: Jitter =
                 serde_json::from_str(&serde_json::to_string(&Jitter(value)).unwrap()).unwrap();
             assert_eq!(back.0.to_bits(), value.to_bits());
-        }
-        for cost in [DRIFTS, f64::MIN_POSITIVE] {
-            let kept = PersistedKept {
-                key_generation: 1,
-                pool_id: "main".into(),
-                canonical_model: "m".into(),
-                account: None,
-                fast: false,
-                cost,
-                entry_expires: 0,
-                kind: None,
-                in_overage: false,
-                covered: false,
-                unit: None,
-                pending: None,
-            };
-            let back: PersistedKept =
-                serde_json::from_str(&serde_json::to_string(&kept).unwrap()).unwrap();
-            assert_eq!(back.cost.to_bits(), cost.to_bits());
         }
     }
 }

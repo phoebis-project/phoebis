@@ -17,9 +17,27 @@ use phoebis_ledger::{
     apply_filter, breakdown, list_requests, member_spends, parked_count, parked_summary,
     read_rollups, run_retention, Assembler, AttemptRecord, AttentionGauges, BodyRecord,
     BudgetedMember, CacheMapWrite, DecisionRow, EventRecord, LedgerConfig, LedgerDb, LedgerError,
-    LiveKeys, ParkedSummary, PriceRevisions, Record, Replayed, RequestFilter, RequestRecord,
-    RollupFilter, RollupSelect, Speed, BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH,
+    LiveKeys, ParkedSummary, PlanTables, PriceRevisions, Record, Replayed, RequestFilter,
+    RequestRecord, RollupFilter, RollupRow, RollupSelect, Speed, BATCH_RETRY_DELAYS,
+    BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH, UNATTRIBUTED,
 };
+
+/// A rollup row's dollars, its counts priced through `price_row` at its own key on `prices`.
+fn row_usd(prices: &PriceRevisions, row: &RollupRow) -> f64 {
+    let key = phoebis_ledger::RowKey {
+        model: &row.canonical_model,
+        speed: Speed::of(Some(row.speed.as_str())),
+        band: phoebis_ledger::Band::of_rollup(&row.band),
+        funding: phoebis_ledger::Funding::of_rollup(&row.funding),
+        kind: &row.kind,
+        tier: (row.tier != UNATTRIBUTED).then_some(row.tier.as_str()),
+        at: row.hour * 1_000,
+        band_at: None,
+    };
+    phoebis_ledger::price_row(prices, &PlanTables::shipped(), &key, row.usage())
+        .usd
+        .map_or(0.0, |usd| usd.total())
+}
 use phoebis_profile::fixtures::BodyFixture;
 use phoebis_store::{BudgetPeriod, MemberWrite, StorageKey, Store};
 use tower::ServiceExt;
@@ -2326,6 +2344,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         // keeps the shape the class dimension joins, since a primary-key column cannot be dropped in place and the
         // rebuild names its own columns regardless of what the source table still carries.
         db.write(|c| {
+            c.execute_batch(VERSION_33_ROLLUPS)?;
             c.execute_batch(VERSION_32_ATTEMPTS)?;
             c.execute_batch(
                 "ALTER TABLE attempts DROP COLUMN written_at; \
@@ -2374,7 +2393,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 33);
+    assert_eq!(db.schema_version().await.unwrap(), 34);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -2460,6 +2479,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_33_ROLLUPS)?;
             c.execute_batch(VERSION_32_ATTEMPTS)?;
             c.execute_batch(
                 "ALTER TABLE attempts DROP COLUMN written_at; \
@@ -2487,7 +2507,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 33);
+    assert_eq!(db.schema_version().await.unwrap(), 34);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         (
@@ -2527,6 +2547,51 @@ const VERSION_32_ATTEMPTS: &str = "ALTER TABLE attempts DROP COLUMN tier; \
      ALTER TABLE attempts ADD COLUMN input_usd REAL; ALTER TABLE attempts ADD COLUMN cache_read_usd REAL; \
      ALTER TABLE attempts ADD COLUMN cache_write_usd REAL; ALTER TABLE attempts ADD COLUMN output_usd REAL;";
 
+/// The rollup table as version 33 held it, rebuilt over a file the current schema built: the band, the tier and the
+/// wasted counts out and the eight dollar columns back at zero, so a replay from an earlier version runs the older
+/// rebuilds, which name the dollar columns, and then migration 34 over the table it was written for. SQLite cannot
+/// drop a primary-key column in place, so the table is rebuilt as the migrations rebuild it.
+const VERSION_33_ROLLUPS: &str = "CREATE TABLE rollups_hourly_v33 (hour INTEGER NOT NULL, key_id TEXT NOT NULL, \
+     key_generation INTEGER NOT NULL DEFAULT 0, pool_id TEXT NOT NULL, account_id TEXT NOT NULL, \
+     canonical_model TEXT NOT NULL, kind TEXT NOT NULL, user_agent TEXT NOT NULL, client TEXT NOT NULL DEFAULT '-', \
+     effort TEXT NOT NULL DEFAULT 'none', request_class TEXT NOT NULL DEFAULT '-', \
+     speed TEXT NOT NULL DEFAULT 'standard', funding TEXT NOT NULL DEFAULT 'plan', requests INTEGER NOT NULL, \
+     succeeded INTEGER NOT NULL, rate_limited INTEGER NOT NULL, failed INTEGER NOT NULL, exhausted INTEGER NOT NULL, \
+     rejected INTEGER NOT NULL, attempts INTEGER NOT NULL, failovers INTEGER NOT NULL, cache_hits INTEGER NOT NULL, \
+     cache_misses INTEGER NOT NULL, uncached_requests INTEGER NOT NULL, input_tokens INTEGER NOT NULL, \
+     cache_read_tokens INTEGER NOT NULL, cache_write_5m_tokens INTEGER NOT NULL, \
+     cache_write_1h_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, \
+     thinking_tokens INTEGER NOT NULL DEFAULT 0, web_search_requests INTEGER NOT NULL DEFAULT 0, \
+     web_fetch_requests INTEGER NOT NULL DEFAULT 0, estimated_usd REAL NOT NULL, input_usd REAL NOT NULL, \
+     cache_read_usd REAL NOT NULL, cache_write_usd REAL NOT NULL, output_usd REAL NOT NULL, \
+     kept_warm_requests INTEGER NOT NULL, kept_warm_tokens INTEGER NOT NULL, saved_usd_gross REAL NOT NULL, \
+     probe_cost_usd REAL NOT NULL, probe_migrated INTEGER NOT NULL, wasted_probes INTEGER NOT NULL, \
+     wasted_probe_usd REAL NOT NULL, wasted_probe_reasons_json TEXT NOT NULL, \
+     probes_skipped INTEGER NOT NULL DEFAULT 0, ttfb_hist BLOB NOT NULL, ttfc_hist BLOB NOT NULL, \
+     duration_hist BLOB NOT NULL, output_tps_hist BLOB NOT NULL, errors_json TEXT NOT NULL, \
+     cache_miss_reasons_json TEXT NOT NULL, incomplete INTEGER NOT NULL DEFAULT 0, \
+     probes_held INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (hour, key_id, key_generation, pool_id, account_id, \
+     canonical_model, kind, user_agent, client, effort, request_class, speed, funding)); \
+     INSERT INTO rollups_hourly_v33 (hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, \
+     user_agent, client, effort, request_class, speed, funding, requests, succeeded, rate_limited, failed, exhausted, \
+     rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, \
+     cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, \
+     web_fetch_requests, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, \
+     kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, \
+     wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, \
+     cache_miss_reasons_json, incomplete, probes_held) SELECT hour, key_id, key_generation, pool_id, account_id, \
+     canonical_model, kind, user_agent, client, effort, request_class, speed, funding, requests, succeeded, \
+     rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, \
+     input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, \
+     web_search_requests, web_fetch_requests, 0.0, 0.0, 0.0, 0.0, 0.0, kept_warm_requests, kept_warm_tokens, 0.0, \
+     0.0, probe_migrated, wasted_probes, 0.0, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, \
+     duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held \
+     FROM rollups_hourly; \
+     DROP TABLE rollups_hourly; \
+     ALTER TABLE rollups_hourly_v33 RENAME TO rollups_hourly; \
+     CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_generation, hour); \
+     CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, account_id, hour);";
+
 /// The table migration 23 drops, recreated so a forward replay from version 20 or 21 can drop it again.
 const RECREATE_DROPPED_TABLE: &str = "CREATE TABLE window_reconciliations (account_id TEXT NOT NULL, window TEXT NOT NULL, window_end INTEGER NOT NULL, computed_at INTEGER NOT NULL, PRIMARY KEY (account_id, window, window_end)); -- rollback";
 
@@ -2537,6 +2602,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
     {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_33_ROLLUPS)?;
             c.execute_batch(VERSION_32_ATTEMPTS)?;
             c.execute_batch(&format!(
                 "ALTER TABLE attempts DROP COLUMN written_at; \
@@ -2558,7 +2624,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 33);
+    assert_eq!(db.schema_version().await.unwrap(), 34);
     let columns = db
         .read_blocking(|c| {
             let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -2618,6 +2684,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         // SQLite cannot drop a primary-key column, so the version-21 table is rebuilt from the live one with
         // the speed left out; the indexes go with the table it replaces, and the migration has to add them back.
         db.write(|c| {
+            c.execute_batch(VERSION_33_ROLLUPS)?;
             let columns: String = c.query_row(
                 "SELECT group_concat(name, ', ') FROM pragma_table_info('rollups_hourly') WHERE name != 'speed'",
                 [],
@@ -2645,7 +2712,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 33);
+    assert_eq!(db.schema_version().await.unwrap(), 34);
     let speeds = |ledger: &phoebis_ledger::LedgerDb| {
         ledger
             .read_blocking(|c| {
@@ -2699,6 +2766,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
         // SQLite cannot drop a primary-key column, so the version-23 table is rebuilt from the live one with
         // the funding left out; the indexes go with the table it replaces, and the migration has to add them back.
         db.write(|c| {
+            c.execute_batch(VERSION_33_ROLLUPS)?;
             let columns: String = c.query_row(
                 "SELECT group_concat(name, ', ') FROM pragma_table_info('rollups_hourly') WHERE name != 'funding'",
                 [],
@@ -2726,7 +2794,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 33);
+    assert_eq!(db.schema_version().await.unwrap(), 34);
     let mut rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -2781,6 +2849,7 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_33_ROLLUPS)?;
             c.execute_batch(VERSION_32_ATTEMPTS)?;
             c.execute_batch(
                 "ALTER TABLE attempts DROP COLUMN written_at; \
@@ -2802,7 +2871,7 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 33);
+    assert_eq!(db.schema_version().await.unwrap(), 34);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         row.held, None,
@@ -2844,6 +2913,7 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_33_ROLLUPS)?;
             c.execute_batch(VERSION_32_ATTEMPTS)?;
             c.execute_batch(
                 "ALTER TABLE attempts DROP COLUMN written_at; \
@@ -2864,7 +2934,7 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 33);
+    assert_eq!(db.schema_version().await.unwrap(), 34);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -2904,6 +2974,7 @@ async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_a
         // and a poll of one bucket could each hold a row for one window; the top-level `seven_day_overage_included`
         // and `seven_day_fable` rows stand for a poll key the captured bodies never carried.
         db.write(|c| {
+            c.execute_batch(VERSION_33_ROLLUPS)?;
             c.execute_batch(VERSION_32_ATTEMPTS)?;
             c.execute_batch(
                 "ALTER TABLE attempts DROP COLUMN written_at; \
@@ -2931,7 +3002,7 @@ async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_a
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 33);
+    assert_eq!(db.schema_version().await.unwrap(), 34);
     let rows: Vec<(i64, String, Option<f64>, String)> = db
         .quota_samples("a", 0, i64::MAX)
         .await
@@ -2993,6 +3064,7 @@ async fn a_ledger_below_the_held_column_migrates_and_a_fresh_file_carries_it() {
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_33_ROLLUPS)?;
             c.execute_batch(VERSION_32_ATTEMPTS)?;
             c.execute_batch(
                 "ALTER TABLE attempts DROP COLUMN written_at; \
@@ -3006,7 +3078,7 @@ async fn a_ledger_below_the_held_column_migrates_and_a_fresh_file_carries_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 33);
+    assert_eq!(db.schema_version().await.unwrap(), 34);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -3075,6 +3147,7 @@ async fn a_ledger_below_the_phase_columns_migrates_and_a_fresh_file_carries_them
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_33_ROLLUPS)?;
             c.execute_batch(VERSION_32_ATTEMPTS)?;
             c.execute_batch(
                 "ALTER TABLE attempts DROP COLUMN written_at; \
@@ -3087,7 +3160,7 @@ async fn a_ledger_below_the_phase_columns_migrates_and_a_fresh_file_carries_them
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 33);
+    assert_eq!(db.schema_version().await.unwrap(), 34);
     let (row, attempts) = db
         .read_blocking(|c| phoebis_ledger::request_by_id(c, "r0"))
         .unwrap()
@@ -3158,6 +3231,7 @@ async fn a_requests_diagnostics_source_round_trips_and_a_ledger_at_version_31_re
         db.insert_request(&request("r0", Some("client")), &[], None)
             .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_33_ROLLUPS)?;
             c.execute_batch(VERSION_32_ATTEMPTS)?;
             c.execute_batch(
                 "ALTER TABLE requests DROP COLUMN diagnostics_source; \
@@ -3168,7 +3242,7 @@ async fn a_requests_diagnostics_source_round_trips_and_a_ledger_at_version_31_re
         .unwrap();
     }
     let db = Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 33);
+    assert_eq!(db.schema_version().await.unwrap(), 34);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         row.diagnostics_source, None,
@@ -3199,7 +3273,7 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
     let event_indexes = "SELECT name FROM pragma_index_list('events') ORDER BY name";
     {
         let fresh = Arc::new(LedgerDb::open(&path).unwrap());
-        assert_eq!(fresh.schema_version().await.unwrap(), 33);
+        assert_eq!(fresh.schema_version().await.unwrap(), 34);
         assert_eq!(
             names(
                 &fresh,
@@ -3237,7 +3311,8 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
         // The indexes leave first, since SQLite refuses to drop an indexed column.
         fresh
             .write(|c| {
-                c.execute_batch(VERSION_32_ATTEMPTS)?;
+                c.execute_batch(VERSION_33_ROLLUPS)?;
+            c.execute_batch(VERSION_32_ATTEMPTS)?;
                 c.execute_batch(
                     "ALTER TABLE attempts DROP COLUMN written_at; \
                      ALTER TABLE requests DROP COLUMN diagnostics_source; \
@@ -3259,7 +3334,7 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
         );
     }
     let existing = Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(existing.schema_version().await.unwrap(), 33);
+    assert_eq!(existing.schema_version().await.unwrap(), 34);
     assert_eq!(
         names(&existing, event_columns),
         [
@@ -3632,7 +3707,16 @@ fn an_incomplete_request_counts_in_the_rollups_incomplete_column_and_nowhere_els
         "the answer that ended early is counted once, in its own column"
     );
     let (day, week) = db
-        .read_blocking(|c| phoebis_ledger::key_usage_windows(c, "desktop", 1, 7_200_000))
+        .read_blocking(|c| {
+            phoebis_ledger::key_usage_windows(
+                c,
+                "desktop",
+                1,
+                7_200_000,
+                &PriceRevisions::shipped(),
+                &PlanTables::shipped(),
+            )
+        })
         .unwrap();
     for window in [day, week] {
         assert_eq!(
@@ -3899,11 +3983,17 @@ fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
     let rows = db
         .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
         .unwrap();
-    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.speed.as_str(), r.attempts, r.input_tokens))
+            .collect::<Vec<_>>(),
+        [("fast", 1, input), ("standard", 1, input)],
+        "each attempt folds under its own speed"
+    );
+    let priced: f64 = rows.iter().map(|r| row_usd(&revisions, r)).sum();
     assert!(
-        (rows[0].estimated_usd - (at(fast) + at(&row.standard))).abs() < 1e-9,
-        "the hour's rollup sums the fast attempt at the fast cells and the other at the standard ones: {}",
-        rows[0].estimated_usd
+        (priced - (at(fast) + at(&row.standard))).abs() < 1e-9,
+        "the hour's rows price the fast attempt at the fast cells and the other at the standard ones: {priced}"
     );
 }
 
@@ -4352,7 +4442,7 @@ fn a_member_with_two_budgets_gets_a_spend_row_per_period() {
                 c,
                 &[budgeted(BudgetPeriod::Day), budgeted(BudgetPeriod::Month)],
                 now,
-                PriceRevisions::shipped().in_force(now),
+                &PriceRevisions::shipped(),
             )
         })
         .unwrap();
@@ -4490,7 +4580,7 @@ fn member_spends_sums_the_metered_rows_alone_when_asked() {
                     metered_only,
                 }],
                 ms(2026, 1, 15, 12, 0),
-                PriceRevisions::shipped().in_force(ms(2026, 1, 15, 12, 0)),
+                &PriceRevisions::shipped(),
             )
         })
         .unwrap()[0]
@@ -7392,7 +7482,7 @@ fn a_record_frame_naming_a_size_past_the_reader_s_bound_is_refused_unread() {
 }
 
 /// A retried leg that answered twice carries one estimate per answered attempt, each at the set its own prompt
-/// selects, and the hour's rollup sums both.
+/// selects, and the hour's rollup files each attempt under its own band, whose counts price at that set.
 #[test]
 fn a_request_with_two_answered_attempts_books_each_at_the_set_its_own_prompt_selects() {
     // The test table's Haiku 5.5 row, per million: input 1 and output 5 up to 1,000 prompt tokens, 5 and 25 over.
@@ -7445,6 +7535,18 @@ fn a_request_with_two_answered_attempts_books_each_at_the_set_its_own_prompt_sel
     let rows = db
         .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
         .unwrap();
+    // One row per band, each holding its own attempt's counts, which price at the cells its band names.
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.band.as_str(), r.attempts, r.input_tokens))
+            .collect::<Vec<_>>(),
+        [("long", 1, 1_001), ("standard", 1, 1_000)]
+    );
+    assert!(
+        close(row_usd(&revisions, &rows[0]), over.total())
+            && close(row_usd(&revisions, &rows[1]), under.total()),
+        "{rows:?}"
+    );
     let live = LiveKeys(std::collections::BTreeMap::from([(
         "desktop".to_string(),
         0,
@@ -7456,6 +7558,8 @@ fn a_request_with_two_answered_attempts_books_each_at_the_set_its_own_prompt_sel
         &live,
         &[],
         None,
+        &revisions,
+        &PlanTables::shipped(),
     );
     let group = groups
         .iter()
@@ -7468,7 +7572,7 @@ fn a_request_with_two_answered_attempts_books_each_at_the_set_its_own_prompt_sel
     );
     assert!(
         (group.cost_usd - 9_005e-6).abs() < 1e-12,
-        "the hour's rollup sums both attempts' booked dollars: {}",
+        "the band rows' counts price to both attempts' dollars: {}",
         group.cost_usd
     );
 }

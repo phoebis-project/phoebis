@@ -567,7 +567,7 @@ async fn plant_and_report_spend(r: &Rig, id: &str, usd: f64) {
                     metered_only: false,
                 }],
                 r.now(),
-                PriceRevisions::shipped().in_force(r.now()),
+                &PriceRevisions::shipped(),
             )
         })
         .unwrap();

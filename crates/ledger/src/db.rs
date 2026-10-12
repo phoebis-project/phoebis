@@ -220,8 +220,8 @@ impl LedgerDb {
         self.insert_request_at(request, attempts, bodies, &PriceRevisions::shipped())
     }
 
-    /// Writes the request and its attempts and folds them into the rollups in one transaction, the rollup's dollars
-    /// priced on `prices` at the revision in force at the request's `received_at`.
+    /// Writes the request and its attempts and folds them into the rollups in one transaction, each answered attempt
+    /// under the prompt-length band `prices` selects at the revision in force at the request's `received_at`.
     pub fn insert_request_at(
         &self,
         request: &RequestRecord,
@@ -911,7 +911,7 @@ mod tests {
     async fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap());
-        assert_eq!(db.read_blocking(read_version).unwrap(), 33);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 34);
         let mode: String = db
             .read_blocking(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();
@@ -1002,7 +1002,7 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(worker, caller, "the closure ran on a blocking worker");
-        assert_eq!(version, 33, "and answered what the connection holds");
+        assert_eq!(version, 34, "and answered what the connection holds");
     }
 
     #[tokio::test]
@@ -1017,7 +1017,7 @@ mod tests {
         assert!(matches!(panicked, Err(LedgerError::ReadCancelled)));
         assert_eq!(
             db.read_blocking(read_version).unwrap(),
-            33,
+            34,
             "the poisoned guard recovered rather than turning every later read into ReadCancelled too"
         );
     }
@@ -1058,7 +1058,7 @@ mod tests {
                 refused,
                 LedgerError::SchemaTooNew {
                     found: 99,
-                    supported: 33,
+                    supported: 34,
                     ..
                 }
             ),

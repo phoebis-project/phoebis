@@ -59,7 +59,7 @@ pub(crate) fn probe_dollars(table: &PriceTable, canonical_model: &str, usage: Pr
 /// A probe answer's tokens by type. An answer that reports the aggregate `cache_creation_input_tokens` and no TTL
 /// breakdown is priced as five-minute writes, which is how the relay's own usage parser reads the same answer; the
 /// estimate would otherwise miss a charge the request ledger recognizes.
-fn typed(usage: ProbeUsage) -> PinUsage {
+pub(crate) fn typed(usage: ProbeUsage) -> PinUsage {
     let (write_5m, write_1h) = match (usage.five_minutes, usage.one_hour) {
         (0, 0) => (usage.write, 0),
         split => split,
@@ -137,8 +137,9 @@ fn delta(
 }
 
 impl Engine {
-    /// Every probe the upstream served lands here, landed on its recipe or not: the cost is the pool's whatever
-    /// happened to the recipe while the probe was in flight.
+    /// Every probe the upstream served lands here, landed on its recipe or not: the probe is the pool's whatever
+    /// happened to the recipe while it was in flight. The delta carries no dollar, since the probe's own request row
+    /// carries its counts, which a reader prices.
     pub(crate) fn record_probe(&self, record: &ProbeRecord, _applied: Applied, now: i64) {
         let mut d = delta(
             now,
@@ -150,7 +151,6 @@ impl Engine {
             "probe",
             record.fast,
         );
-        d.probe_cost_usd = record.cost_usd;
         d.account_kind = record.kind;
         d.overage_in_use = Some(record.in_overage);
         if record.outcome == ProbeOutcome::Migrated {
@@ -196,10 +196,12 @@ impl Engine {
     }
 
     /// One wasted probe, filed under the funding its own cost row took: the kind it was served under, its answer's
-    /// overage and its speed.
-    pub(crate) fn record_settlement(&self, at: i64, settlement: Settlement) {
+    /// overage and its speed. The row keys the probe's own exchange (its instant, its band and the account tier it ran
+    /// under) rather than the settlement's clock, so a settlement filed hours or a day later prices its counts at the
+    /// cells and the revision the probe ran at.
+    pub(crate) fn record_settlement(&self, settlement: Settlement) {
         let mut d = delta(
-            at,
+            settlement.at,
             &settlement.key,
             settlement.key_generation,
             &settlement.pool_id,
@@ -208,9 +210,16 @@ impl Engine {
             "probe",
             settlement.fast,
         );
+        let counts = typed(settlement.usage);
         d.wasted_probes = 1;
-        d.wasted_probe_usd = settlement.cost;
+        d.wasted_input_tokens = counts.input;
+        d.wasted_cache_read_tokens = counts.cache_read;
+        d.wasted_cache_write_5m_tokens = counts.write_5m;
+        d.wasted_cache_write_1h_tokens = counts.write_1h;
+        d.wasted_output_tokens = counts.output;
         d.wasted_probe_reasons = BTreeMap::from([(settlement.label.as_str().to_string(), 1)]);
+        d.tier = settlement.tier;
+        d.band = Some(settlement.band);
         d.account_kind = settlement.kind;
         d.overage_in_use = Some(settlement.in_overage);
         self.parts.ledger.record(Record::Keepalive(d));
@@ -248,7 +257,7 @@ impl Engine {
             )
         };
         for settlement in settlements {
-            self.record_settlement(now, settlement);
+            self.record_settlement(settlement);
         }
         for skip in &skipped {
             self.record_skipped(now, skip);

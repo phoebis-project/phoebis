@@ -42,6 +42,25 @@ fn read_evidence(request_id: &str, read: u64) -> phoebis_bus::Event {
 
 /// The cost the ledger's probe rows carry, once the engine's delta has landed: the probe's own request row reaches
 /// the rollups with no cost on it, ahead of that delta, so the wait names the cost rather than the row.
+/// The probe dollars and the wasted dollars a reader answers over `rows`, each row's counts priced on the rig's list:
+/// a probe's cost is its own request row's counts, and a settlement's waste the probe's counts it carries.
+fn read_dollars(r: &Rig, rows: &[phoebis_ledger::RollupRow]) -> (f64, f64) {
+    phoebis_ledger::breakdown(
+        rows,
+        "all",
+        true,
+        &phoebis_ledger::LiveKeys::default(),
+        &[],
+        None,
+        &r.pricing,
+        &r.tables,
+    )
+    .first()
+    .map_or((0.0, 0.0), |group| {
+        (group.probe_cost_usd, group.wasted_probe_usd)
+    })
+}
+
 async fn ledger_probe_cost(r: &Rig) -> f64 {
     wait_for(std::time::Duration::from_secs(5), || {
         let rows =
@@ -54,11 +73,7 @@ async fn ledger_probe_cost(r: &Rig) -> f64 {
                 )
             })
             .unwrap();
-        let cost: f64 = rows
-            .iter()
-            .filter(|row| row.kind == "probe")
-            .map(|row| row.probe_cost_usd)
-            .sum();
+        let (cost, _) = read_dollars(r, &rows);
         (cost > 0.0).then_some(cost)
     })
     .await
@@ -698,10 +713,13 @@ async fn an_orphaned_probe_whose_agent_survives_settles_under_its_stop() {
                 )
             })
             .unwrap();
-        let mut sum = (0, 0.0, std::collections::BTreeMap::new());
+        let mut sum = (
+            0,
+            read_dollars(&r, &rows).1,
+            std::collections::BTreeMap::new(),
+        );
         for row in rows.iter().filter(|row| row.kind == "probe") {
             sum.0 += row.wasted_probes;
-            sum.1 += row.wasted_probe_usd;
             for (reason, n) in &row.wasted_probe_reasons {
                 *sum.2.entry(reason.clone()).or_insert(0) += n;
             }
@@ -808,9 +826,8 @@ async fn a_probe_answered_after_the_idle_limit_stays_pending_until_its_entry_lap
         })
         .unwrap();
     let mut reasons = std::collections::BTreeMap::new();
-    let mut wasted_usd = 0.0;
+    let (_, wasted_usd) = read_dollars(&r, &rows);
     for row in rows.iter().filter(|row| row.kind == "probe") {
-        wasted_usd += row.wasted_probe_usd;
         for (reason, n) in &row.wasted_probe_reasons {
             *reasons.entry(reason.clone()).or_insert(0) += n;
         }

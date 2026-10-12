@@ -16,6 +16,7 @@ mod pricing;
 mod query;
 mod quota;
 mod record;
+mod refold;
 mod rollup;
 mod schema;
 mod task;
@@ -55,13 +56,14 @@ pub use query::{
     latest_extra_usage, latest_quota, list_requests, list_routing_log, literal_like, member_spends,
     moves_by_reason, parked_count, parked_summary, parse_range, pin_migrations_by_reason,
     placements, pool_traffic, recent_events_of_kind, recent_gaps, request_by_id, request_events,
-    request_totals, rewrite_series,
-    series_paged, session_activity, session_burn_series, session_identities, BudgetedMember,
-    BurnPoint, CacheFacts, CacheShare, Dashboard, DecisionListRow, EventListRow, FundingFilter,
-    GroupRow, HourlyWindowSample, LiveKeys, ParkedSummary, PlacementRow, ProbeCounts, ProbeShare,
-    RequestFilter, RollupFilter, RoutingLogCursor, RoutingLogFilter, RoutingLogPage, RoutingLogRow,
-    SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, SharePricing, Tiers, Totals,
-    TrafficBucket, DECISION_KINDS, EVENT_KINDS, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
+    request_totals, revision_spans, rewrite_series,
+    series_paged, session_activity, session_burn_series, session_identities,
+    BudgetedMember, BurnPoint, CacheFacts, CacheShare, Dashboard, DecisionListRow, EventListRow,
+    FundingFilter, GroupRow, HourlyWindowSample, LiveKeys, ParkedSummary, PlacementRow,
+    ProbeCounts, ProbeShare, RequestFilter, RollupFilter, RoutingLogCursor, RoutingLogFilter,
+    RoutingLogPage, RoutingLogRow, SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity,
+    SharePricing, Span, Tiers, Totals, TrafficBucket, DECISION_KINDS, EVENT_KINDS, GROUP_BYS,
+    MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
 };
 pub use quota::{
     lead_over_pace, polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled,
@@ -71,12 +73,13 @@ pub use record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
     KeepaliveDelta, ParkedRecord, QuotaSampleRecord, RequestRecord,
 };
+pub use refold::{refold_bands, PRICE_BANDS_KEY, PRICE_BANDS_REFOLD_KEY};
 pub use rollup::{
-    bucket_of, delta_of, fold_account, fold_effort, fold_event, fold_identifier, fold_keepalive,
+    bucket_of, deltas_of, fold_account, fold_effort, fold_event, fold_identifier, fold_keepalive,
     fold_request, fold_user_agent, hour_of, read_account_rollups, read_rollups, read_rollups_paged,
     AccountRollupRow, CostSplit, KeySelector, RollupRow, RollupSelect, BILLED_FUNDING,
-    DIMENSION_MAX_BYTES, EFFORTS, FAST_FUNDING, KEY_RANGE_PREDICATE, NO_CLASS, OTHER_DIMENSION,
-    OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
+    DIMENSION_MAX_BYTES, EFFORTS, FAST_FUNDING, KEY_RANGE_PREDICATE, LONG_BAND, NO_CLASS,
+    OTHER_DIMENSION, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, STANDARD_BAND, UNATTRIBUTED,
 };
 pub use task::{
     spawn, Admission, Ledger, LedgerConfig, LedgerGone, LedgerStats, Replayed, BATCH_RETRY_DELAYS,
