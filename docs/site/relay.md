@@ -8,10 +8,11 @@ listing are on [The client](client.md), the cooldown tables on
 
 ## The frame
 
-The request the upstream receives is the one Claude Code sent. The router records the client's head off the wire before
-its HTTP parser reads it, so every header leaves in the client's own spelling and order, and it edits the body and the
-head only where the account requires it (the credential, the account's identity, the OAuth claim) or where the operator
-switched an edit on (a pool field or a bootstrap key). Three request kinds pass the same handler: an inference request
+The request the upstream receives is the one Claude Code sent, header order and spelling included
+([Headers and transport](#headers-and-transport)). The router edits the body and the head where the account requires it
+(the credential, the account's identity, the OAuth claim), where the operator switched an edit on (a pool field or a
+bootstrap key), and where it owns the value (the framing headers, the folded model, the restored billing fields). Three
+request kinds pass the same handler: an inference request
 (`POST /v1/messages`), a token count (a path ending in `/count_tokens`) and a probe, the keepalive engine's replay of a
 kept request ([How a probe works](keepalive.md#how-a-probe-works)).
 
@@ -21,7 +22,7 @@ OAuth claim and the auto mode beta drop, and none of the uuid splice, the cache 
 the billing restoration or `x-client-request-id`: its public schema has no `metadata` member for the identity to go in,
 and it is not billed. Fast mode changes no byte: `speed` travels as sent, and a fast request differs in its cache lane
 key and in the fast lane's own cooldown. The models listing is not relayed at all: the router builds it from the
-accounts' catalogs ([The client](client.md)).
+accounts' catalogs ([The models listing](client.md#the-models-listing)).
 
 ## The body edits
 
@@ -67,9 +68,9 @@ written behind to the registry, and is kept for `sessions.memory_retention_days`
 The never-copied set has its reasons: the hop-by-hop headers describe the client's connection rather than the payload,
 cookies and proxy credentials are the client's own secrets, the forwarding headers would disclose the client's network,
 and `x-keepalive-owner-id` is the router's own ownership marker, which the keepalive mod writes and the router reads. A
-client's `Expect: 100-continue` would make the upstream wait for a continue the router never sends, since the body is
-written at once behind the head. `connection` is the router's own because its upstream connection is pooled and
-independent of the client's, which ends at the router.
+client's `Expect: 100-continue` goes for the reason [Headers and transport](#headers-and-transport) gives. `connection`
+is the router's own because its upstream connection is pooled and independent of the client's, which ends at the
+router.
 
 ## The betas
 
@@ -106,12 +107,14 @@ other way restores nothing rather than a guessed one. A raw Messages client is r
 no line to fill, and a probe replays a request as the client sent it.
 
 The previous request id and the prompt id come from the router's session memory, keyed on the client's own session id
-or, for a request without one, on the conversation root the router resolves ([The client](client.md)), and the memory
-survives a restart ([sessions](installation.md#sessions)). The auto mode classifier requests are the client's own and
-keep the attribution block, so the router fills them like any other line and records them as ordinary requests of their
-session ([Auto mode behind the router](#auto-mode-behind-the-router)). Nothing beyond the line's fields and the request
-id is restored: no beta the first-party shape adds, no cache scope on the system block, and never `cc_turn_origin`, who
-started the turn, which closes the client's line and which the router records when the line carries it.
+or, for a request without one, on the conversation root the router resolves ([Clients](routing.md#clients)), and the
+memory survives a restart ([sessions](installation.md#sessions)). The auto mode classifier requests are the client's own
+and keep the attribution block, so the router fills them like any other line and records them as ordinary requests of
+their session ([Auto mode behind the router](#auto-mode-behind-the-router)). Three things are not restored, because the
+router cannot: the `advanced-tool-use-2025-11-20` beta, since the client has to run its tool search
+(`ENABLE_TOOL_SEARCH=true` selects it), the global cache scope on the static system block, and `cc_turn_origin`, who
+started the turn, which closes the client's line and which the router records when the line carries it and never
+writes.
 
 ## Client drift
 
@@ -229,8 +232,8 @@ hair behind.
 | `404` `not_found_error` naming the model sent | `FailOver` | Another account, the model cooled on this one for `routing.model_rejection_seconds` under the window `model_rejection` |
 | A fast request rate limited, with the credits refused or no plan window rejected | `FailOver` | The fast lane cools apart from the account: refused credits until the overage reset the head names, else an hour (a spend cap until the month turns), and a rate limit until the fast bucket's reset, else `Retry-After`, else ten minutes |
 | OAuth `429`, or a `200` whose first event is `rate_limit_error` | `FailOver` | Another account, this one or the model cooled until the rejected window's reset, else `Retry-After`, else `routing.cooldown_fallback_seconds` |
-| API-key `429` naming the spend limit | `FailOver` | Another account, this one cooled until 00:00 UTC on the first day of the next month, reason `spend_cap` |
-| API-key `429` | `FailOver` | Another account, the model cooled from `Retry-After`, or the account for `routing.cooldown_fallback_seconds` without one |
+| API-key `429`, or a `200` whose first event is `rate_limit_error`, naming the spend limit | `FailOver` | Another account, this one cooled until 00:00 UTC on the first day of the next month, reason `spend_cap` |
+| API-key `429`, or a `200` whose first event is `rate_limit_error` | `FailOver` | Another account, the model cooled from `Retry-After`, or the account for `routing.cooldown_fallback_seconds` without one |
 | API-key `400` naming the credit balance | `FailOver` | Another account, this one marked `funding_required` |
 | `401`, or `403` `authentication_error` | `Refresh` for OAuth, `FailOver` for an API key | OAuth: the token is refreshed and the request tried again on the same account. API key: another account, this one marked `reauth_required` |
 | `403` `permission_error` | `FailOver` | Another account, the model cooled on this one for an hour, reason `permission` |
@@ -272,8 +275,8 @@ exists to prevent, so the connection is refused instead.
 
 ## What the router sends on its own
 
-Five kinds of request leave the router with no client behind them. A poll and a fetch have no switch, a probe has the
-pool's.
+The polls, the fetches and the probes leave the router with no client behind them. A poll and a fetch have no switch,
+and neither has the credential refresh that a poll or a fetch draws ahead of the token's expiry. A probe has the pool's.
 
 **The usage poll.** Every 300 seconds the router reads the usage endpoint of every OAuth account that holds a
 credential, a paused account included, because a paused account's quota is still the operator's to watch. The call
@@ -291,11 +294,11 @@ at start with `routing.catalog_refresh_seconds must be between 60 and 604800, no
 has none, and holds a failed read for sixty seconds before the account is read again
 ([routing](installation.md#routing)). No switch: the key sets the interval alone.
 
-**The startup fetch.** Before the proxy listener binds, the router fetches every account's catalog and samples every
-polled account's usage, each bounded by `routing.startup_fetch_seconds` (default 30, 1 to 60, the bootstrap file refused
-at start with `routing.startup_fetch_seconds must be between 1 and 60, not {value}`), so the first request finds the
-dated ids and the samples in place. What is still running at the bound finishes in the background, and the scheduled
-poll's first slots lie one interval from there. The key bounds the wait and nothing turns the fetch off.
+**The startup fetch.** Before the proxy listener binds, the router fetches every enabled account's catalog and samples
+every polled account's usage, each bounded by `routing.startup_fetch_seconds` (default 30, 1 to 60, the bootstrap file
+refused at start with `routing.startup_fetch_seconds must be between 1 and 60, not {value}`), so the first request finds
+the dated ids and the samples in place. What is still running at the bound finishes in the background, and the
+scheduled poll's first slots lie one interval from there. The key bounds the wait and nothing turns the fetch off.
 
 **The keepalive probes.** Under the pool's `keepalive.enabled` the router replays a kept request through the same
 handler as the client's own, as a probe, to keep its prompt cache warm ([Turning it on](keepalive.md#turning-it-on)). A
@@ -317,7 +320,7 @@ agent id is `main`.
 | Event | Fields | What the router does |
 | --- | --- | --- |
 | `session_start` | `owner_id`, and `previous_instance_id` when it takes over from another instance | Registers the session under the key, or takes it back after a lapse or an end, and answers with the agents it holds |
-| `heartbeat` | none | Renews the lease, the one event that does |
+| `heartbeat` | none | Renews the lease, the one event besides a `session_start` that does |
 | `agent_start` | `agent_id`, and `request_generation` when known | Starts the agent `busy`, or restarts a released one under the generation the start names |
 | `activity` | `agent_id`, `kind` (`prompt` or `presence`), and `request_generation` when known | A prompt sets the agent `busy` and resets its idle clock. A presence moves the idle clock alone |
 | `state` | `agent_id`, `state`, `request_generation` when known, and the park fields of a `parked` state | Moves the agent to the state |
@@ -341,11 +344,11 @@ router holds for the session, main included, so the mod reconciles from the answ
 A refusal takes one of two shapes. A missing, malformed, ambiguous or refused key is answered the relay's way, the same
 `401` in Anthropic's error shape that `/v1/messages` answers, with `x-phoebis-error-code` naming an `auth_*` code
 ([refusal codes](client.md#refusal-codes)), so a mod pointed at the wrong port sees the answer the client would, and
-never a `403`. Every other refusal is the route's own JSON, `{"code": "<code>"}`, with no header beyond
-`Cache-Control: no-store`, which every answer of the route carries. An `instance_conflict` adds `instance_id` when the
-instance that holds the session has ended or gone silent, so the mod can take it over, and `stale_request_generation`
-and `agent_released` add the agent's current `request_generation`, so the mod adopts it without a registration. The
-eighteen codes, by status:
+never a `403`. Every other refusal is the route's own JSON, `{"code": "<code>"}`, without the `x-phoebis-error-code`
+header, under `Cache-Control: no-store`, which every answer of the route carries. An `instance_conflict` adds
+`instance_id` when the instance that holds the session has ended or gone silent, so the mod can take it over, and
+`stale_request_generation` and `agent_released` add the agent's current `request_generation`, so the mod adopts it
+without a registration. The eighteen codes, by status:
 
 | Code | Status | When |
 | --- | --- | --- |
@@ -413,9 +416,10 @@ retry in place sleeps the throttle's delay on the same account, with the same cr
 answer's head reaches the client ([Retry in place](routing.md#retry-in-place)).
 
 Beneath these sit Claude Code's own waits. The client cuts a stream that has gone silent for 180 seconds with its
-watchdog on, and gives the first byte of an answer a window of 180 seconds. The two relay waits that meet them differ.
-The head and idle guards sit above the client's window, so a dead upstream stream is the client's cut at 180 seconds,
-and the router's 600 seconds never come into play while the watchdog is on. A retry in place holds the head back for
+watchdog on, and gives the first byte of an answer a window of at least 180 seconds ([The client](client.md)). The two
+relay waits that meet them differ. The head and idle guards sit above the client's window, so a dead upstream stream is
+the client's cut at 180 seconds, and the router's 600 seconds stand behind the client's window while the watchdog is
+on. A retry in place holds the head back for
 the throttle's delay, up to the pool's bound, so a bound above the client's first-byte window makes the client end the
 request and send it again. The operator's choice is to keep the bound at or under the window, or to switch the watchdog
 off for a client whose requests may wait that long ([The client](client.md)).
