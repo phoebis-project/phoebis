@@ -21,7 +21,7 @@ import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { KEYS_CODEC } from '@/lib/address';
-import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, SHARE_NOTE, moveLabel, sizedAccounts } from '@/lib/analytics';
+import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, SHARE_NOTE, moveLabel, nativeFiguresOf, sizedAccounts } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtCompact, fmtDuration, fmtEquivalent, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, shareLabel, shortModel, withEstimate } from '@/lib/format';
@@ -544,7 +544,7 @@ function PoolCost({ pool, accountById }: { accountById: Map<string, Account>; po
   if (sides.equivalent === undefined && sides.billed === undefined) return dash('No request in the last 24 hours');
   const reading = [...(sides.equivalent === undefined ? [] : [`${fmtEquivalent('seven_day', day.equivalent.sevenDay)}, ${fmtEquivalent('five_hour', day.equivalent.fiveHour)}`]), ...(sides.billed === undefined ? [] : [`${fmtUsd(sides.billed)} billed`])];
   return (
-    <dd className="num" title={withEstimate(reading.join(', '), sides.equivalent !== undefined && day.estimated)}>
+    <dd className="num" title={withEstimate(reading.join(', '), nativeFiguresOf('seven_day', sides, day.estimated).marked)}>
       {sumTileOf(unit, day).value}
     </dd>
   );
