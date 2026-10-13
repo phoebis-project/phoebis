@@ -50,10 +50,10 @@ export interface FundedSum {
 /** A dollar position's dollars of a sum: every row's, the billed rows', or the plan rows' at the API price list. */
 export const dollarsUnder = (unit: DollarPosition, s: FundedSum): number => (unit === 'all' ? s.cost : unit === 'usd' ? s.billedUsd : s.cost - s.billedUsd);
 /**
- * A sum's two sides on the 7-day window, each null where it has no rows, so a sum of one funding shows one figure and
- * no "0%" side.
+ * A sum's two sides on the 7-day window, each undefined where it has no rows, so a sum of one funding shows one figure
+ * and no "0%" side.
  */
-export const nativeSidesOf = (s: FundedSum): { billed: number | null; equivalent: number | null } => ({ billed: s.billedUsd > 0 ? s.billedUsd : null, equivalent: s.equivalent.sevenDay > 0 ? s.equivalent.sevenDay : null });
+export const nativeSidesOf = (s: FundedSum): { billed: number | undefined; equivalent: number | undefined } => ({ billed: s.billedUsd > 0 ? s.billedUsd : undefined, equivalent: s.equivalent.sevenDay > 0 ? s.equivalent.sevenDay : undefined });
 /**
  * A tile over a sum under a position. Native stacks the two sides with their words, and an empty sum reads its zero in
  * each unit rather than nothing. The shares are one account's, and these tiles sum every account, so they read a dash.
@@ -73,7 +73,7 @@ function keyFigureOf(unit: UnitPosition, s: FundedSum, empty: string): { text: s
   if (unit === 'share') return { text: '-', title: SHARE_NOTE };
   if (unit !== 'native') return { text: fmtUsd(dollarsUnder(unit, s)) };
   const sides = nativeSidesOf(s);
-  if (sides.equivalent === null && sides.billed === null) return { text: '-', title: empty };
+  if (sides.equivalent === undefined && sides.billed === undefined) return { text: '-', title: empty };
   const { figures, marked } = nativeFiguresOf('seven_day', sides, s.estimated);
   return { text: figures.map((f) => (f.word === 'billed' ? `${f.text} billed` : f.text)).join(', '), title: marked ? ESTIMATED_TITLE : undefined };
 }

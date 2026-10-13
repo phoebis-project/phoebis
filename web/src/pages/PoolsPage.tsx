@@ -541,10 +541,10 @@ function PoolCost({ pool, accountById }: { accountById: Map<string, Account>; po
   }
   if (unit !== 'native') return <dd className="num">{fmtUsd(dollarsUnder(unit, day))}</dd>;
   const sides = nativeSidesOf(day);
-  if (sides.equivalent === null && sides.billed === null) return dash('No request in the last 24 hours');
-  const reading = [...(sides.equivalent === null ? [] : [`${fmtEquivalent('seven_day', day.equivalent.sevenDay)}, ${fmtEquivalent('five_hour', day.equivalent.fiveHour)}`]), ...(sides.billed === null ? [] : [`${fmtUsd(sides.billed)} billed`])];
+  if (sides.equivalent === undefined && sides.billed === undefined) return dash('No request in the last 24 hours');
+  const reading = [...(sides.equivalent === undefined ? [] : [`${fmtEquivalent('seven_day', day.equivalent.sevenDay)}, ${fmtEquivalent('five_hour', day.equivalent.fiveHour)}`]), ...(sides.billed === undefined ? [] : [`${fmtUsd(sides.billed)} billed`])];
   return (
-    <dd className="num" title={withEstimate(reading.join(', '), sides.equivalent !== null && day.estimated)}>
+    <dd className="num" title={withEstimate(reading.join(', '), sides.equivalent !== undefined && day.estimated)}>
       {sumTileOf(unit, day).value}
     </dd>
   );

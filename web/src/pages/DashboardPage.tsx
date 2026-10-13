@@ -60,7 +60,7 @@ function costTileOf(unit: UnitPosition, o: Overview): CostTile {
   if (unit === 'share') return { note: 'shares do not add across accounts', spark: o.hourly.map((h) => h.cost), title: SHARE_NOTE, value: '-' };
   const plan = o.equivalent24h.fiveHour > 0 || o.equivalent24h.sevenDay > 0;
   const billed = o.billed24h > 0;
-  const { figures, marked } = nativeFiguresOf('five_hour', { billed: billed ? o.billed24h : null, equivalent: plan ? o.equivalent24h.fiveHour : null }, o.estimated24h);
+  const { figures, marked } = nativeFiguresOf('five_hour', { billed: billed ? o.billed24h : undefined, equivalent: plan ? o.equivalent24h.fiveHour : undefined }, o.estimated24h);
   return {
     note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${equivalentOrDash('five_hour', o.equivalent24h.fiveHour / 24, marked)} per hour`,
     // In percent: the spark's scale floors at one, a dollar an hour on the dollar positions, and a floor of a whole

@@ -824,6 +824,17 @@ test('native marks an estimated equivalent and leaves out a side with no rows, a
   assert.equal(folded.meta, `${equivalent} and ${billed} in range`);
 });
 
+test('native reads a dash on the subscription side where the route priced its plan rows nothing on the window', () => {
+  // The ledger leaves a window out of the equivalents when a plan row could not be priced there.
+  const g = accountGroup({ costEquivalent: {}, estimated: true });
+  assert.ok(g.planRequests > 0 && g.requests > g.planRequests, 'the captured group holds rows of both fundings');
+  const billed = d.fmtUsd(g.billedUsd);
+  assert.deepEqual(d.sidesOf(g, 'seven_day'), { billed: g.billedUsd, equivalent: null }, 'plan rows with no figure on the window read null');
+  assert.deepEqual(d.sidesOf(accountGroup({ costEquivalent: {}, planRequests: 0 }), 'seven_day'), { billed: g.billedUsd, equivalent: undefined }, 'a sum with no plan row leaves the side out');
+  const unpriced = d.costHeadOf('native', g);
+  assert.deepEqual([unpriced.tile.figures, unpriced.meta, unpriced.estimated], [[{ text: '-', word: 'subscription' }, { text: billed, word: 'billed' }], `- and ${billed} in range`, false], 'the dash carries no mark, since no estimate priced it');
+});
+
 test('a native table cell reads the short 20x form with the billed dollars under it, the full reading and the estimate on its title', () => {
   const g = accountGroup();
   const sevenDay = g.costEquivalent.seven_day;

@@ -12342,6 +12342,41 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         ok: pairsDrawn === 3 && shown.length > 10 && !shown.some((v) => v.startsWith('~')) && titled.length === 0,
         missing: [`${pairsDrawn} pairs`, JSON.stringify(shown.filter((v) => v.startsWith('~')).slice(0, 5)), JSON.stringify(titled.slice(0, 5))],
       });
+      // The route leaves a window out of a group's equivalents when one of its plan rows could not be priced there, a
+      // model of no known tier among them, and the decoder reads the absent split as four zeros. The same day answered
+      // so reads a dash on the subscription side, and the Cost split draws no subscription ring: the billed ring alone
+      // beside billed rows, and a dash with none.
+      const unpricedRead = async (plan) => {
+        api.getAnalyticsBreakdown = async (q) => (await breakdownOf.call(api, q)).map((g) => ({ ...g, cacheEquivalent: {}, costEquivalent: {}, equivalentSplit: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 }, ...(plan ? { planRequests: g.requests } : {}) }));
+        const page = await mount('/analytics#cost', { now: CLOCK_ORIGIN });
+        const metaOf = page.container.querySelector('#cost .analytics-section__meta');
+        const split = [...page.container.querySelectorAll('#cost .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost split');
+        const read = {
+          meta: [metaOf?.textContent ?? '', metaOf?.getAttribute('title') ?? null],
+          rings: [...(split?.querySelectorAll('svg.donut') ?? [])].map((svg) => svg.querySelector('.donut__label')?.textContent ?? ''),
+          skeleton: (split?.querySelectorAll('.skeleton').length ?? 0) > 0,
+          splitText: split?.querySelector('p.muted')?.textContent ?? null,
+          tiles: [...page.container.querySelectorAll('#cost .stat')].slice(0, 3).map((t) => ({ lines: [...t.querySelectorAll('.stat__pair-line')].map((l) => [textOf(l), l.querySelector('.stat__pair-word')?.textContent?.trim() ?? '']), title: t.getAttribute('title') })),
+        };
+        page.unmount();
+        delete api.getAnalyticsBreakdown;
+        return read;
+      };
+      const unpricedBoth = await unpricedRead(false);
+      const unpricedPlan = await unpricedRead(true);
+      results.push({
+        name: "/analytics under native a range whose plan rows the route priced nothing on the 7-day window reads a dash on the tiles' and the meta's subscription side, and the Cost split draws no subscription ring",
+        ok:
+          totals !== null && totals.planRequests > 0 &&
+          unpricedBoth.tiles.length === 3 &&
+          unpricedBoth.tiles.every((t) => t.lines.length === 2 && JSON.stringify(t.lines[0]) === JSON.stringify(['-', 'subscription']) && t.lines[1][1] === 'billed' && t.title === null) &&
+          /^- and \$[\d,.]+ in range$/.test(unpricedBoth.meta[0]) && unpricedBoth.meta[1] === null &&
+          JSON.stringify(unpricedBoth.rings) === JSON.stringify(['billed']) &&
+          unpricedPlan.tiles.every((t) => JSON.stringify(t.lines) === JSON.stringify([['-', 'subscription']])) &&
+          unpricedPlan.meta[0] === '- in range' &&
+          unpricedPlan.rings.length === 0 && !unpricedPlan.skeleton && unpricedPlan.splitText === '-',
+        missing: [JSON.stringify(unpricedBoth), JSON.stringify(unpricedPlan)],
+      });
     }
     {
       // Under native the Cache and Cache warming sections read one answer in two units, as the Cost section does: the

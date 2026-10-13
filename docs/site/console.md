@@ -492,16 +492,17 @@ tokens the same two ways. Cost by the chosen group stacks the equivalent per buc
 in dollars, the Cost split draws a ring per side by token kind, the subscription requests' with its 7-day equivalent in
 the center and the billed requests' in dollars, and the table reads Requests, Cost, 20x 5-hour, the model week's 20x
 column, Per request and Per 1k output, its Cost the 20x 7-day equivalent, and Cost, Per request and Per 1k output each
-with the billed dollars on a line under the equivalent. Under All in dollars, Billed dollars and Dollar equivalent Cost
-draws the tiles Estimated cost, Billed dollars or Dollar equivalent, Cost per request and Cost per 1k output tokens,
-then Cost by the chosen group as a chart and a table (Requests, Cost, Input, Cache read, Cache write, Output, Per
-request, Per 1k output) and the Cost split as one ring in dollars (Input, Cache read, Cache write, Output). Under Window
-shares, which reads under the account grouping or with one account named in the Accounts filter, the tiles read Window
-share, Per request and Per 1k output, the chart one line per group, the table Plan requests, 5-hour, 7-day, the model
-week, Per request and Per 1k output, and the Cost split the whole in dollars. Every position draws Fast mode spend, and
-an estimated figure carries the `~` and the estimate's hover. The prices behind the dollars are on
-[Pricing](statistics.md#pricing), and the cost model behind the shares and the equivalents on [Plan
-meter](statistics.md#plan-meter).
+with the billed dollars on a line under the equivalent. A subscription side the route could not price on the 7-day
+window, as when a request ran on a model of no known tier, reads a dash, and the Cost split draws no ring for it. Under
+All in dollars, Billed dollars and Dollar equivalent Cost draws the tiles Estimated cost, Billed dollars or Dollar
+equivalent, Cost per request and Cost per 1k output tokens, then Cost by the chosen group as a chart and a table
+(Requests, Cost, Input, Cache read, Cache write, Output, Per request, Per 1k output) and the Cost split as one ring in
+dollars (Input, Cache read, Cache write, Output). Under Window shares, which reads under the account grouping or with
+one account named in the Accounts filter, the tiles read Window share, Per request and Per 1k output, the chart one line
+per group, the table Plan requests, 5-hour, 7-day, the model week, Per request and Per 1k output, and the Cost split the
+whole in dollars. Every position draws Fast mode spend, and an estimated figure carries the `~` and the estimate's
+hover. The prices behind the dollars are on [Pricing](statistics.md#pricing), and the cost model behind the shares and
+the equivalents on [Plan meter](statistics.md#plan-meter).
 
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-light.png#only-light)
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-dark.png#only-dark)

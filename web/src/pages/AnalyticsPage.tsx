@@ -121,24 +121,24 @@ type NativeRatio = { estimated: boolean; figures: CostFigure[]; note: string };
 /**
  * The native Cost per request and per 1k output tiles: the plan rows' 20x 7-day equivalent over the plan requests and
  * output tokens the route counts beside the billed dollars over the rest, a side with no rows left out as the first
- * tile leaves it, and a dash where a count is unknown or zero.
+ * tile leaves it, and a dash where a count is unknown or zero or the route priced the plan rows nothing on the window.
  */
 function nativeRatiosOf(totals: AnalyticsGroup): { perRequest: NativeRatio; perThousand: NativeRatio } {
   const sides = sidesOf(totals, 'seven_day');
   const ratio = (count: number | null, whole: number, scale: number, word: string, note: (n: number) => string): NativeRatio => {
     const billedCount = count === null ? null : whole - count;
     const per = (v: number | null, n: number | null) => (v === null || n === null || !(n > 0) ? null : (v / n) * scale);
-    const equivalent = sides.equivalent === null ? null : per(sides.equivalent, count);
+    const equivalent = sides.equivalent === undefined ? null : per(sides.equivalent, count);
     const estimated = totals.estimated && equivalent !== null;
     return {
       estimated,
-      figures: [...(sides.equivalent === null ? [] : [{ text: equivalentOrDash('seven_day', equivalent, estimated), word: 'subscription' }]), ...(sides.billed === null ? [] : [{ text: usdOrDash(per(sides.billed, billedCount)), word: 'billed' }])],
+      figures: [...(sides.equivalent === undefined ? [] : [{ text: equivalentOrDash('seven_day', equivalent, estimated), word: 'subscription' }]), ...(sides.billed === undefined ? [] : [{ text: usdOrDash(per(sides.billed, billedCount)), word: 'billed' }])],
       note:
         count === null || billedCount === null
           ? `${note(whole)} ${word}`
-          : sides.billed === null
+          : sides.billed === undefined
             ? `${note(count)} subscription ${word}`
-            : sides.equivalent === null
+            : sides.equivalent === undefined
               ? `${note(billedCount)} billed ${word}`
               : `${note(count)} subscription ${word}, ${note(billedCount)} billed`,
     };
@@ -166,18 +166,18 @@ const nativeCell = (cell: { main: string; sub: string; title: string }): ReactNo
  */
 function nativeRowOf(g: AnalyticsGroup): { cells: ReactNode[]; key: string; label: string; title: string } {
   const sides = sidesOf(g, 'seven_day');
-  const priced = (key: string | undefined) => (sides.equivalent === null || key === undefined || !own(g.costEquivalent, key) ? null : g.costEquivalent[key]);
+  const priced = (key: string | undefined) => (sides.equivalent === undefined || key === undefined || !own(g.costEquivalent, key) ? null : g.costEquivalent[key]);
   const sevenDay = priced('seven_day');
   const per = (v: number | null, count: number | null, scale: number) => (v === null || count === null || !(count > 0) ? null : (v / count) * scale);
   // Undefined leaves a side with no rows out of the cell, as the tiles leave it out.
-  const both = (equivalent: number | null, billed: number | null) => nativeCell(nativeCellOf('seven_day', sides.equivalent === null ? undefined : equivalent, g.estimated, sides.billed === null ? undefined : billed));
-  const ratio = (planCount: number | null, whole: number, scale: number) => both(per(sevenDay, planCount, scale), per(sides.billed, planCount === null ? null : whole - planCount, scale));
+  const both = (equivalent: number | null, billed: number | null) => nativeCell(nativeCellOf('seven_day', sides.equivalent === undefined ? undefined : equivalent, g.estimated, sides.billed === undefined ? undefined : billed));
+  const ratio = (planCount: number | null, whole: number, scale: number) => both(per(sevenDay, planCount, scale), per(sides.billed ?? null, planCount === null ? null : whole - planCount, scale));
   const windowCell = (key: string | undefined) => nativeCell(nativeCellOf(key ?? '', priced(key), g.estimated));
   const week = weekKeyOf(g.costEquivalent);
   return {
     cells: [
       fmtInt(g.requests),
-      both(sevenDay, sides.billed),
+      both(sevenDay, sides.billed ?? null),
       windowCell('five_hour'),
       windowCell(week),
       ratio(g.planRequests, g.requests, 1),
@@ -576,7 +576,7 @@ export function AnalyticsPage() {
   // Native draws the cache card's bars in the plan rows' equivalent with the billed dollars in its subtitle, and a
   // range with no plan row draws the billed rows' dollars, its one side.
   const cacheSides = sidesOf(costTotals, 'seven_day');
-  const cacheEquivalent = unit === 'native' && cacheSides.equivalent !== null;
+  const cacheEquivalent = unit === 'native' && cacheSides.equivalent !== undefined;
   const cacheDollars = unit === 'native' ? 'billed' : 'cost';
   const cacheSplit = unit === 'native' ? knownSplit(costTotals.billed) : costSplit;
   // Absent on a fold and wherever no plan row priced, so the legend reads a dash there.
@@ -861,7 +861,7 @@ export function AnalyticsPage() {
                 unit === 'share'
                   ? "Shares of the account's 7-day window per bucket, writing the cache and reading it back"
                   : cacheEquivalent
-                    ? `20x 7-day equivalent per bucket spent writing the cache and reading it back by the subscription requests${cacheSides.billed === null ? '' : `, the billed requests ${usdOrDash(costTotals.billed.cacheWrite)} writing and ${usdOrDash(costTotals.billed.cacheRead)} reading`}`
+                    ? `20x 7-day equivalent per bucket spent writing the cache and reading it back by the subscription requests${cacheSides.billed === undefined ? '' : `, the billed requests ${usdOrDash(costTotals.billed.cacheWrite)} writing and ${usdOrDash(costTotals.billed.cacheRead)} reading`}`
                     : `USD per bucket spent writing the cache and reading it back, ${UNIT_SPLIT[unit === 'native' ? 'usd' : dollars]}`
               }
               loading={costLoading}
@@ -1699,8 +1699,8 @@ function CacheByModel({ error, funded, groups, loading, namedAccount, unit }: { 
       const sides = sidesOf(g, 'seven_day');
       // Absent where no plan row priced, which reads a dash on the plan side.
       const priced = g.cacheEquivalent.seven_day as { read: number; write: number } | undefined;
-      const cell = (side: 'read' | 'write', billed: number | null) => nativeCell(nativeCellOf('seven_day', sides.equivalent === null ? undefined : (priced?.[side] ?? null), g.estimated, sides.billed === null ? undefined : billed));
-      return { cells: [cell('read', g.billed.cacheRead), cell('write', g.billed.cacheWrite)], estimated: g.estimated && sides.equivalent !== null && priced !== undefined };
+      const cell = (side: 'read' | 'write', billed: number | null) => nativeCell(nativeCellOf('seven_day', sides.equivalent === undefined ? undefined : (priced?.[side] ?? null), g.estimated, sides.billed === undefined ? undefined : billed));
+      return { cells: [cell('read', g.billed.cacheRead), cell('write', g.billed.cacheWrite)], estimated: g.estimated && sides.equivalent !== undefined && priced !== undefined };
     }
     if (unit === 'share') return { cells: [cacheShareOf(g, 'read'), cacheShareOf(g, 'write')], estimated: false };
     // A model the side has no row of spent nothing on that side.
@@ -1802,18 +1802,19 @@ function CostDonut({ center, cost, format = fmtUsd, label = 'cost', title }: { c
  * Native's cost split: the plan rows' 20x 7-day equivalent by token kind beside the billed dollars by token kind, a
  * side with no rows left out. The subscription ring's center reads a bare percent, since the card's subtitle names the
  * window, so a marked figure fits inside the ring, and its list names the window, since each row also reads the kind's
- * proportion of the ring as a bare percent.
+ * proportion of the ring as a bare percent. Plan rows the route priced nothing on the window draw no ring, since the
+ * decoder reads the route's empty split as four zeros, and with no billed ring beside it the card reads a dash.
  */
 function NativeSplit({ totals }: { totals: AnalyticsGroup }) {
   const sides = sidesOf(totals, 'seven_day');
-  const subscription = sides.equivalent === null ? null : totals.equivalentSplit;
-  const billed = sides.billed === null ? null : knownSplit(totals.billed);
+  const subscription = sides.equivalent === undefined || sides.equivalent === null ? null : totals.equivalentSplit;
+  const billed = sides.billed === undefined ? null : knownSplit(totals.billed);
   const mark = totals.estimated ? '~' : '';
   const rings = [
     ...(subscription === null ? [] : [<CostDonut key="subscription" cost={subscription} center={(v) => `${mark}${fmtShare(v)}`} format={(v) => `${mark}${equivalentShort('seven_day', v)}`} label="subscription" title={totals.estimated ? ESTIMATED_TITLE : undefined} />]),
     ...(billed === null ? [] : [<CostDonut key="billed" cost={billed} label="billed" />]),
   ];
-  if (rings.length === 0) return <Skeleton height={148} />;
+  if (rings.length === 0) return sides.equivalent === null ? <p className="muted">-</p> : <Skeleton height={148} />;
   return rings.length === 1 ? rings[0] : <div className="split-pair">{rings}</div>;
 }
 

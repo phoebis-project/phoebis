@@ -345,15 +345,17 @@ export function nativeCellOf(windowKey: string, equivalent: number | null | unde
 }
 /**
  * The two sides of a sum over both fundings: the plan rows' 20x equivalent on a window and the billed rows' dollars,
- * a side with no rows null. The route counts the plan requests, and a fold of request rows that counted none tells the
- * sides apart by their figures. A sum with no row on either side reads both, so an empty range reads its zero in each
- * unit rather than nothing.
+ * in `nativeCellOf`'s vocabulary: undefined leaves out a side with no rows, and a null equivalent reads a dash for plan
+ * rows the route priced nothing on the window, since the ledger leaves a window out when it cannot price a plan row
+ * there. The route counts the plan requests, and a fold of request rows that counted none tells the sides apart by
+ * their figures. A sum with no row on either side reads both, so an empty range reads its zero in each unit rather
+ * than nothing.
  */
-export function sidesOf(g: Pick<AnalyticsGroup, 'billedUsd' | 'costEquivalent' | 'planRequests' | 'requests'>, window: string): { billed: number | null; equivalent: number | null } {
+export function sidesOf(g: Pick<AnalyticsGroup, 'billedUsd' | 'costEquivalent' | 'planRequests' | 'requests'>, window: string): { billed: number | undefined; equivalent: number | null | undefined } {
   const plan = g.planRequests === null ? Object.keys(g.costEquivalent).length > 0 : g.planRequests > 0;
   const billed = g.planRequests === null ? g.billedUsd > 0 : g.requests > g.planRequests;
-  const equivalent = own(g.costEquivalent, window) ? g.costEquivalent[window] : 0;
-  return plan || billed ? { billed: billed ? g.billedUsd : null, equivalent: plan ? equivalent : null } : { billed: g.billedUsd, equivalent };
+  const equivalent = own(g.costEquivalent, window) ? g.costEquivalent[window] : null;
+  return plan || billed ? { billed: billed ? g.billedUsd : undefined, equivalent: plan ? equivalent : undefined } : { billed: g.billedUsd, equivalent: equivalent ?? 0 };
 }
 
 /** One figure of a Cost tile, with the word naming its side where the tile stacks two. */
@@ -363,17 +365,18 @@ export interface CostFigure {
 }
 /**
  * A sum's native figures on `window`, each with its funding's word: the plan rows' 20x equivalent, the tilde before it
- * where an estimate priced it, then the billed rows' dollars. A side null for want of rows is left out, and a sum with
- * no row on either side reads both, so it shows its zero in each unit rather than nothing. `marked` says whether the
+ * where an estimate priced it, then the billed rows' dollars. The sides read as `sidesOf` answers them: a side
+ * undefined for want of rows is left out, a null equivalent reads a dash under the subscription word, and a sum with no
+ * row on either side reads both, so it shows its zero in each unit rather than nothing. `marked` says whether the
  * equivalent carries the tilde, so the figure's element takes the estimate's title.
  */
-export function nativeFiguresOf(window: string, sides: { billed: number | null; equivalent: number | null }, estimated: boolean): { figures: CostFigure[]; marked: boolean } {
-  const none = sides.billed === null && sides.equivalent === null;
+export function nativeFiguresOf(window: string, sides: { billed: number | undefined; equivalent: number | null | undefined }, estimated: boolean): { figures: CostFigure[]; marked: boolean } {
+  const none = sides.billed === undefined && sides.equivalent === undefined;
   const equivalent = none ? 0 : sides.equivalent;
   const billed = none ? 0 : sides.billed;
-  const marked = estimated && !none && equivalent !== null;
+  const marked = estimated && !none && equivalent !== null && equivalent !== undefined;
   return {
-    figures: [...(equivalent === null ? [] : [{ text: equivalentOrDash(window, equivalent, marked), word: 'subscription' }]), ...(billed === null ? [] : [{ text: fmtUsd(billed), word: 'billed' }])],
+    figures: [...(equivalent === undefined ? [] : [{ text: equivalentOrDash(window, equivalent, marked), word: 'subscription' }]), ...(billed === undefined ? [] : [{ text: fmtUsd(billed), word: 'billed' }])],
     marked,
   };
 }
@@ -390,8 +393,8 @@ export interface CostHead {
 /**
  * The Cost section's meta line, its first tile and the requests its table reads, from the position's totals. Native
  * pairs the plan rows' 20x 7-day equivalent with the billed dollars, a side with no rows left out, the equivalent
- * marked where an estimate priced a row of it. A dollar position reads its dollars under its own words, and the shares
- * read per account, so under them the head holds the meta alone.
+ * marked where an estimate priced a row of it and a dash where the route priced none. A dollar position reads its
+ * dollars under its own words, and the shares read per account, so under them the head holds the meta alone.
  */
 export function costHeadOf(unit: UnitPosition, totals: AnalyticsGroup): CostHead {
   if (unit === 'share') return { estimated: false, meta: 'shares per account', subset: null, tile: null };
