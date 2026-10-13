@@ -13145,6 +13145,20 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const values = [...(card('Spend per minute')?.querySelectorAll('.legend li .legend__value') ?? [])].map((v) => v.textContent?.trim() ?? '');
     const said = card('Spend per minute')?.textContent ?? '';
     const grouped = pageGroupBy(m)?.value ?? null;
+    // Until the Burn's settings read lands no account reads as sized, so the fold files the rest under tier unknown,
+    // and its label still names no tier it cannot know yet.
+    const { getSettings } = api;
+    let open = () => {};
+    const gate = new Promise((resolve) => {
+      open = resolve;
+    });
+    api.getSettings = (...args) => gate.then(() => getSettings.apply(api, args));
+    await tab(m, 'Cache');
+    await tab(m, 'Burn');
+    const loading = legendOf('Spend per minute');
+    open();
+    await m.settle(300);
+    api.getSettings = getSettings;
     delete api.getAnalyticsBurn;
     await burnGroup('key');
     await burnGroup('account');
@@ -13152,6 +13166,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       name: "/analytics spend per minute under the account grouping draws a folded rest's fast-mode dollars under a dollar label",
       ok: JSON.stringify(folded) === JSON.stringify(['Other (fast mode or overage)']) && JSON.stringify(values) === JSON.stringify(['$0.01']) && grouped === 'account' && !said.includes('No account spent dollars in this range.'),
       missing: [...folded, ...values, `grouped by ${grouped}`, said.slice(0, 120)],
+    });
+    results.push({
+      name: "/analytics spend per minute names a folded rest of subscription accounts by its dollars alone while the Burn's settings read is out",
+      ok: JSON.stringify(loading) === JSON.stringify(['Other (fast mode or overage)']),
+      missing: loading,
     });
   }
 
