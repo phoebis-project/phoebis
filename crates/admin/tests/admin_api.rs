@@ -2969,7 +2969,7 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
 
 #[tokio::test]
 async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects() {
-    use common::{get, json, login, wait_json};
+    use common::{get, json, login, patch, wait_json};
     use phoebis_ledger::Speed;
     let now = common::NOW;
     // One Haiku 5.5 row with both blocks in round numbers: the standard cells at 1, the fast cells at 2 and the
@@ -3009,6 +3009,14 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
     })
     .await;
     let cookie = login(&parts.app, "admin-secret").await;
+    let averaged = patch(
+        &parts.app,
+        "/admin/pools/main",
+        r#"{"burn_average_seconds":600}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(averaged.status(), 200);
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let usd_per_hour =
         |tokens: f64, speed, prompt| tokens * input(speed, prompt) / 1_000_000.0 * 3_600.0;
@@ -3028,7 +3036,7 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
             "{session}: a pin billed in dollars reads no window equivalent: {row}"
         );
     }
-    // 60,000 fast input tokens over the pool's default 600 s window are 100 a second at the fast cells, whatever
+    // 60,000 fast input tokens over the pool's 600 s burn average are 100 a second at the fast cells, whatever
     // the prompt. The standard turn's 600 tokens are one a second beside the seeded hundred, and its prompt of
     // 600 moves the pin's ordinary copy to the standard cells.
     let renewal = |fast: bool, input: u64| phoebis_routing::Report::PinRenewed {
@@ -3067,7 +3075,7 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
 
 #[tokio::test]
 async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on() {
-    use common::{login, wait_json};
+    use common::{login, patch, wait_json};
     let now = common::NOW;
     let parts = sessions_harness_with(|generation| {
         vec![phoebis_store::PinRow {
@@ -3077,8 +3085,16 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
     })
     .await;
     let cookie = login(&parts.app, "admin-secret").await;
+    let averaged = patch(
+        &parts.app,
+        "/admin/pools/main",
+        r#"{"burn_average_seconds":600}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(averaged.status(), 200);
     // A million Opus 5.5 input tokens at the fixed clock, which the peak band never covers, folded over the
-    // pool's default 600-second burn window.
+    // pool's 600-second burn average.
     parts
         .router
         .report(phoebis_routing::Report::PinRenewed {
