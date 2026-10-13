@@ -3343,8 +3343,8 @@ async function barRow(theme, view) {
         if (label === 'at rest' && ROW_BOUND[view] !== undefined && got !== null && got.width >= ROW_BOUND[view]) say(`${width} by ${height} at rest: the row's slots take ${got.width} px, not under ${ROW_BOUND[view]}`);
       }
     }
-    // At 950 px the sidebar leaves the content column narrower than a ranged view's slots, so the row wraps its trailing
-    // slots in place of running the bar past the window.
+    // At 950 px the sidebar leaves the content column narrower than a ranged view's slots, so the row wraps its
+    // trailing slots in place of running the bar past the window.
     if (NARROW_VIEWS.includes(view)) {
       await page.setViewportSize({ height: 800, width: 950 });
       await page.goto(`${base}${view}`);

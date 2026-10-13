@@ -7,15 +7,15 @@ mechanism behind a view lives on its own page, which each section links.
 
 Every list view (Accounts, Analytics, Keys, Pools, Quota, Requests, the Routing log and Sessions) opens on one filter
 bar, which draws the slots the view has in one order: the range pills, the search, Add filter, the view's own controls
-with its primary action last, and at the right edge the split Refresh button and the count of what the view lists. On a
-window 720 px wide or narrower the bar's controls wrap onto a second row. Add filter opens a popover over the view's
-filters, and each filter in force stands as a chip on a line under the bar. The Refresh button's body reads the view
-again now, and its dropdown sets auto reload to Off, 5 s, 10 s, 30 s or 1 min, 5 s when a view opens and off on Requests
-and the Routing log. Auto reload waits while the tab is hidden, while a drawer, a dialog or a menu is open and on an
-older page, with a muted mark and the cause in the dropdown's hover. The filters, the search and the range live in the
-view's address, so a reload or a shared link keeps them, and the interval stays with the open page. An Accounts address
-that names no account, or names one the router no longer holds, opens the first account the router lists among the rows
-the list shows, or the router's first account where the filters hide every row.
+with its primary action last, and at the right edge the split Refresh button and the count of what the view lists. When
+the window is too narrow for the bar's controls on one line, the trailing ones wrap onto a second row. Add filter opens
+a popover over the view's filters, and each filter in force stands as a chip on a line under the bar. The Refresh
+button's body reads the view again now, and its dropdown sets auto reload to Off, 5 s, 10 s, 30 s or 1 min, 5 s when a
+view opens and off on Requests and the Routing log. Auto reload waits while the tab is hidden, while a drawer, a dialog
+or a menu is open and on an older page, with a muted mark and the cause in the dropdown's hover. The filters, the search
+and the range live in the view's address, so a reload or a shared link keeps them, and the interval stays with the open
+page. An Accounts address that names no account, or names one the router no longer holds, opens the first account the
+router lists among the rows the list shows, or the router's first account where the filters hide every row.
 
 ## The shell
 
