@@ -121,15 +121,15 @@ The pool's `keepalive` object carries four fields:
 The break-even of a recipe is the pause length at which its chain of probes costs one re-write of its prefix, `(write -
 read) / (cadence * read)`. The read and write factors are those of the recipe's model under its account's funding. A
 plan-funded recipe reads the cost model's type multipliers, the model's own where it sets them. A token costs the
-model's weight times the type's multiplier, so a plan recipe's break-even does not depend on the model's weight: the
-break-even of an unweighted model reads its model tier's measured weight, and a model of no model tier breaks even where
-a weighted one does. A dollar-funded recipe reads its model's row of the price table, and a model the price table does
-not price reads its tightest row, the one with the smallest break-even among the priced rows. On a row priced by prompt
-length, the recipe reads the set its request's prompt length selects, as the probe's own cost does. The cadence is the
-TTL's: 15 probes an hour on a five-minute entry and 1.11 on a one-hour entry. On the shipped cost model, a plan-funded
-recipe breaks even after 44.1 hours on a one-hour entry and 3 hours 16 minutes on a five-minute entry. Every tick reads
-the price table and the cost model at the revisions in force then, so an entry that takes effect moves the break-even
-from the next tick, without a restart.
+model's weight times the type's multiplier, so the weight enters the probes' cost and the re-write they save alike and
+cancels, and the fallback weight of an unweighted model changes nothing in its break-even. A model of no model tier
+breaks even where a weighted one does. A dollar-funded recipe reads its model's row of the price table, and a model the
+price table does not price reads its tightest row, the one with the smallest break-even among the priced rows. On a row
+priced by prompt length, the recipe reads the set its request's prompt length selects, as the probe's own cost does. The
+cadence is the TTL's: 15 probes an hour on a five-minute entry and 1.11 on a one-hour entry. On the shipped cost model,
+a plan-funded recipe breaks even after 44.1 hours on a one-hour entry and 3 hours 16 minutes on a five-minute entry.
+Every tick reads the price table and the cost model at the revisions in force then, so an entry that takes effect moves
+the break-even from the next tick, without a restart.
 
 A `max_idle_seconds` of 0, a `null` ceiling and any number above the break-even resolve to the break-even, so a field's
 number takes effect only below the break-even. `GET /admin/pools` answers `null` where null was set. An out-of-range

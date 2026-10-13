@@ -129,10 +129,10 @@ The file is a list of revisions under its one key, `revisions`: each entry carri
 form and the whole table of that date, `models`. An entry is in force from 00:00 UTC of its date to the next entry's,
 and an instant before the first entry reads the first. A request is priced at the entry in force when it arrived, so all
 its attempts price under one entry. An entry added late re-prices the ledger's rows from its date on at their next read.
-An entry dated after now is held: every read takes it from its date on, and the burn rates the router builds at start
-for the shedding round take it at the first start after that date. A correction of a figure the file had wrong edits
-every entry that carries the row and adds no entry, since the correction says what was always true, while a provider's
-price change, a new model or a moved threshold adds one.
+An entry dated after the one in force is held: every read takes it from its date on, and the burn rates the router
+builds at start for the shedding round take it at the first start after that date. A correction of a figure the file had
+wrong edits every entry that carries the row and adds no entry, since the correction says what was always true, while a
+provider's price change, a new model or a moved threshold adds one.
 
 The nine rows of the shipped revision in force, in USD per million tokens, in the file's order (the three Opus models'
 fast cells are twice each figure):
@@ -256,13 +256,14 @@ Fable request's share of it is twice its 7-day share.
 A model without a weight of its own reads the weight of the latest weighed model of its model tier as an estimate: the
 prediction charges it, the shedding round ranks its pin by that estimate, and every route that answers its figure
 answers `estimated` true beside it. Once the model has served a plan-funded request since the start, the ledger raises
-the `model_unweighted` attention item for the `phoebis_attention` gauge, and `GET /admin/attention` leaves the item out
-until the console can show it. A model of no model tier, or of a model tier with no weighed model, prices no share: the
-prediction adds no charge, the shedding round ranks the pin after every priced one, the analytics list the share under
-model unlisted and the cost reference shows a dash. An account tier without a capacity on a window prices no share there
-either, and the prediction adds no charge on that window. The shedding round ranks that tier's pins like any other, on
-the anchor tier's rates, and in the analytics an account on a tier the file lacks reads tier unknown, while a window the
-file leaves `null` on a listed tier reads model unlisted. A dated model id reads the weight of its undated name.
+the `model_unweighted` attention item for the `phoebis_attention` gauge, and `GET /admin/attention` leaves the item out,
+because a console that reads an unknown kind would show it as an exhausted pool. A model of no model tier, or of a model
+tier with no weighed model, prices no share: the prediction adds no charge, the shedding round ranks the pin after every
+priced one, the analytics list the share under model unlisted and the cost reference shows a dash. An account tier
+without a capacity on a window prices no share there either, and the prediction adds no charge on that window. The
+shedding round ranks that tier's pins like any other, on the anchor tier's rates, and in the analytics an account on a
+tier the file lacks reads tier unknown, while a window the file leaves `null` on a listed tier reads model unlisted. A
+dated model id reads the weight of its undated name.
 
 The file is a revision list in the price table's shape: `revisions`, each entry an `effective` date and the whole model
 of that date, in force from 00:00 UTC of its date to the next entry's, an instant before the first entry reading the

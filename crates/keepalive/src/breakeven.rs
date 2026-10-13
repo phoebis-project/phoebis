@@ -2,6 +2,7 @@
 //! default every ceiling of the policy resolves to and the cap each of its numbers stays under.
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use phoebis_ledger::{PlanTables, PriceRevisions, PriceTable};
 use phoebis_relay::{CacheTtl, CacheTtlPolicy, TtlBranch};
@@ -193,14 +194,21 @@ impl FactorRows {
     }
 }
 
+/// The shipped price list, parsed once: the fallback below runs per retained recipe on every tick whose tables give no
+/// break-even. The list is held rather than the factors, since it never changes and each call still reads the revision
+/// in force at its own instant, where factors held from the first call would keep that call's revision past the date
+/// the next one takes over.
+static SHIPPED_PRICES: LazyLock<PriceRevisions> = LazyLock::new(PriceRevisions::shipped);
+
+fn shipped_in_force(now: i64) -> &'static PriceTable {
+    SHIPPED_PRICES.in_force(now)
+}
+
 /// The tightest row at the recipe's speed of the shipped price revision in force at `now`: what a recipe's ceilings
 /// fall back to when the tables in force give no break-even, since an operator's price file with no usable row must
 /// not leave a parked session probed until the session expires.
 pub(crate) fn shipped_tightest(fast: bool, now: i64) -> BreakEvenFactors {
-    // Read on each call: only the branch without a break-even reaches it, and a figure held from the first call would
-    // keep that call's revision past the instant the next one takes over.
-    let shipped = PriceRevisions::shipped();
-    let table = shipped.in_force(now);
+    let table = shipped_in_force(now);
     let rows = if fast {
         table.fast_rate_table()
     } else {
@@ -405,4 +413,40 @@ pub(crate) fn resolve_pool(
         }
     }
     resolved
+}
+
+#[cfg(test)]
+mod tests {
+    use phoebis_ledger::effective_instant;
+
+    use super::*;
+
+    /// The boundary is the shipped file's second date, read through the loader so the test pins no shipped date. The
+    /// earlier instant is read first, as a tick before the date would, so a figure held from the first call reads one
+    /// revision at both.
+    #[test]
+    fn two_calls_on_either_side_of_a_shipped_revisions_date_read_the_two_revisions() {
+        let shipped = PriceRevisions::shipped();
+        let boundary = shipped
+            .iter()
+            .nth(1)
+            .and_then(|revision| effective_instant(&revision.effective))
+            .expect("the shipped price file carries a second revision");
+        let before = shipped_in_force(boundary - 1);
+        let after = shipped_in_force(boundary);
+        assert_eq!(
+            before,
+            shipped.in_force(boundary - 1),
+            "the revision before the date"
+        );
+        assert_eq!(
+            after,
+            shipped.in_force(boundary),
+            "the revision from the date on"
+        );
+        assert_ne!(
+            before.effective, after.effective,
+            "the two calls read two revisions"
+        );
+    }
 }

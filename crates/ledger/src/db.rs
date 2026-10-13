@@ -210,7 +210,9 @@ impl LedgerDb {
 
     /// `insert_request_at` with `PriceRevisions::shipped()`. The production landing goes through `insert_request_in`
     /// inside the writer with the list it was started on, so this entry serves the test suites, and a test that
-    /// prices on a list of its own lands through `insert_request_at`.
+    /// prices on a list of its own lands through `insert_request_at`. Built for tests alone, since a production
+    /// caller would band a request at the shipped thresholds whatever file the operator loaded.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn insert_request(
         &self,
         request: &RequestRecord,

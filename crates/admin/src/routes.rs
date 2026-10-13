@@ -1560,8 +1560,8 @@ pub(crate) struct PricingSource {
     pub effective: String,
     /// How many revisions the file lists.
     pub revisions: usize,
-    /// The date of the first revision dated after now, which takes effect at that date's midnight UTC, null when
-    /// none is.
+    /// The date of the first revision dated after the one in force, which takes effect at that date's midnight UTC,
+    /// null when none is.
     pub next: Option<String>,
 }
 

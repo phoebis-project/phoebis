@@ -100,10 +100,11 @@ api prices: built in (2 revisions, in force 2026-10-08, 9 models), since /etc/ph
 subscription costs: built in (1 revision, in force 2026-10-05, 6 weighted models, 8 more by model tier, 3 account tiers), since /etc/phoebis/subscription_costs.yaml was not found
 ```
 
-While a file holds an entry dated after now, its line adds `next {date}` after the date in force. Every price read from
-that date on takes the entry, and the burn rates the router builds at start take it at the first start after the date.
-The start's `ledger opened` log line names the same for the price table: `pricing`, the date in force,
-`pricing_revisions`, the count, and `pricing_next`, the held date, recorded only while an entry is held.
+While a file holds an entry dated after the one in force, its line adds `next {date}` after the date in force, the date
+of the first such entry. Every price read from that date on takes the entry, and the burn rates the router builds at
+start take it at the first start after the date. The start's `ledger opened` log line names the same for the price
+table: `pricing`, the date in force, `pricing_revisions`, the count, and `pricing_next`, the held date, recorded only
+while an entry is held.
 
 `check-config` reads `admin.secret_env` from the process environment when it is set and prints `warning: environment
 variable PHOEBIS_ADMIN_SECRET is unset or empty` when it is not, so sourcing the environment file is optional for it.

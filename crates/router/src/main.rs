@@ -528,8 +528,8 @@ fn run_tls_reload(config_path: &Path, args: &TlsReloadArgs) -> ! {
 }
 
 /// One table's `check-config` line: the file read, or the built-in list with the configured path it found nothing
-/// at, so an operator can tell a missing override from a misspelled one. `next` names an entry dated after now, so
-/// the operator knows what a restart changes.
+/// at, so an operator can tell a missing override from a misspelled one. `next` names the first entry dated after the
+/// one in force, `None` when none is, so the operator knows what a restart changes.
 fn table_line(
     source: &str,
     revisions: usize,

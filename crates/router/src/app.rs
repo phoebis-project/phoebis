@@ -762,8 +762,9 @@ fn router_config(
     }
 }
 
-/// The start's `ledger opened` line. It names the date of an entry dated after the start, which the tables built at
-/// the start take only at the next one, so an operator reads in the log what a restart changes.
+/// The start's `ledger opened` line. It names the date of the first entry dated after the one in force at the start,
+/// and no date when none is. The tables built at the start take that entry only at the next one, so an operator reads
+/// in the log what a restart changes.
 fn log_ledger_opened(
     ledger: &std::path::Path,
     revisions: &phoebis_ledger::PriceRevisions,
