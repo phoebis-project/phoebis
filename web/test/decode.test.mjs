@@ -363,24 +363,167 @@ test('a pool decodes the ceilings the router resolved for it, and a pool with no
   assert.equal(d.decodePool(bare).keepaliveResolved, null, 'a row without the member resolves nothing');
 });
 
-test('a pool decodes its select-below threshold and encodes it back', () => {
+const SHEDDING_FIELDS = ['load_shedding', 'window_ceiling', 'shed_cap', 'burn_average_seconds', 'shed_dwell_seconds'];
+const shedding = (p) => [p.loadShedding, p.windowCeiling, p.shedCap, p.burnAverageSeconds, p.shedDwellSeconds];
+
+test('a pool decodes its switch, its ceiling, its cap, its average and its dwell and encodes them back', () => {
   const row = fixture('pools').pools[0];
-  assert.equal(d.decodePool(row).selectBelowUtilization, null, 'the captured pool sets none');
-  const p = d.decodePool({ ...row, select_below_utilization: 0.4 });
-  assert.equal(p.selectBelowUtilization, 0.4);
+  assert.deepEqual(shedding(d.decodePool(row)), SHEDDING_FIELDS.map((f) => row[f]), 'the captured pool reads as the route answered it');
+  const wire = { ...row, burn_average_seconds: 3_600, load_shedding: false, shed_cap: 0.3, shed_dwell_seconds: 1_800, window_ceiling: 0.8 };
+  const p = d.decodePool(wire);
+  assert.deepEqual(shedding(p), [false, 0.8, 0.3, 3_600, 1_800], 'a pool with its switch off reads it off');
   const back = d.encodePool({ ...p, name: p.name, status: 'active' });
-  assert.equal(back.select_below_utilization, 0.4);
-  assert.equal(d.encodePool({ ...p, name: p.name, selectBelowUtilization: null, status: 'active' }).select_below_utilization, null, 'null clears it rather than leaving it alone');
+  assert.deepEqual(Object.fromEntries(SHEDDING_FIELDS.map((f) => [f, back[f]])), Object.fromEntries(SHEDDING_FIELDS.map((f) => [f, wire[f]])), 'each goes back under the name the route reads');
+  assert.equal(d.encodePool({ ...p, loadShedding: true, name: p.name, status: 'active' }).load_shedding, true, 'the switch is sent on as it is sent off');
+  const bare = { ...row };
+  for (const f of SHEDDING_FIELDS) delete bare[f];
+  const balanced = d.SHEDDING_PRESETS.balanced;
+  assert.deepEqual(shedding(d.decodePool(bare)), [true, 0.95, balanced.shedCap, balanced.burnAverageSeconds, balanced.shedDwellSeconds], 'a row without the fields reads the switch on, the ceiling at 95 % and the balanced preset');
 });
 
-test('a pool decodes its shedding margin and encodes it back', () => {
-  const row = fixture('pools').pools[0];
-  assert.equal(d.decodePool(row).shedAheadOfPace, null, 'the captured pool sets none');
-  const p = d.decodePool({ ...row, shed_ahead_of_pace: 0.25 });
-  assert.equal(p.shedAheadOfPace, 0.25);
+test("a pool body carries none of the six names the route refuses as unknown fields", () => {
+  const p = d.decodePool(fixture('pools').pools[0]);
   const back = d.encodePool({ ...p, name: p.name, status: 'active' });
-  assert.equal(back.shed_ahead_of_pace, 0.25);
-  assert.equal(d.encodePool({ ...p, name: p.name, shedAheadOfPace: null, status: 'active' }).shed_ahead_of_pace, null, 'null clears it rather than leaving it alone');
+  const old = ['burn_window_seconds', 'pace_floor', 'select_below_utilization', 'shed_ahead_of_pace', 'shed_share', 'source_dwell_seconds'];
+  assert.deepEqual(old.filter((f) => f in back), []);
+});
+
+test("a pool decodes its warnings and a member's pace score and burn", () => {
+  const row = fixture('pools').pools[0];
+  const p = d.decodePool(row);
+  assert.deepEqual(p.warnings, row.warnings.map((w) => ({ code: w.code, fields: w.fields, text: w.text })));
+  assert.deepEqual(p.warnings.map((w) => [w.code, w.fields]), [['cap_under_quarter', ['shed_cap']]], 'the captured pool sets its cap under a quarter');
+  const bare = { ...row };
+  delete bare.warnings;
+  assert.deepEqual(d.decodePool(bare).warnings, [], 'a row without the member reads none');
+  assert.deepEqual(d.decodePool({ ...row, warnings: [{ code: 'warm_never', fields: ['warm_sessions'] }, 'stray'] }).warnings, [{ code: 'warm_never', fields: ['warm_sessions'], text: '' }], 'an entry that is no object is left out');
+  assert.deepEqual(p.members.map((m) => [m.accountId, m.paceScore, m.burn]), row.members.map((m) => [m.account_id, m.pace_score, m.burn]));
+  const keyed = p.members.find((m) => m.kind === 'api_key');
+  assert.deepEqual([typeof keyed.paceScore, keyed.burn], ['number', null], "an API-key member's score is its remaining allowance, with no burn");
+  const spending = d.decodePool({ ...row, members: [{ ...row.members[0], burn: 0.085, pace_score: -0.02 }] }).members[0];
+  assert.deepEqual([spending.paceScore, spending.burn], [-0.02, 0.085], 'a spare rate under the burn reads negative');
+  const unread = d.decodePool({ ...row, members: [{ account_id: 'business', priority: 0 }] }).members[0];
+  assert.deepEqual([unread.paceScore, unread.burn], [null, null], 'a member row without the figures reads none');
+});
+
+test('a window decodes its projection, horizon and burn and nulls without them', () => {
+  const body = fixture('account');
+  const [five] = body.windows;
+  assert.equal(five.id, 'five_hour');
+  const wire = { ...body, windows: [{ ...five, burn: 0.085, horizon: five.resets_at, projection: 0.81 }, ...body.windows.slice(1)] };
+  const a = d.decodeAccount(wire);
+  const read = (w) => [w.projection, w.horizon, w.burn];
+  assert.deepEqual(read(a.windows.find((w) => w.id === '5h')), [0.81, new Date(five.resets_at).toISOString(), 0.085]);
+  assert.deepEqual(read(a.windows.find((w) => w.id === '7d')), [null, null, null], 'the capture reads no burn, so nothing is projected');
+  assert.deepEqual(read(a.fableWindow), [null, null, null]);
+  const { burn: _b, horizon: _h, projection: _p, ...unprojected } = five;
+  assert.deepEqual(read(d.decodeAccount({ ...body, windows: [unprojected] }).windows[0]), [null, null, null], 'a window without the members reads null');
+});
+
+test('a session decodes its runway and whether it is bounded', () => {
+  const row = fixture('sessions').sessions[0];
+  const read = (wire) => {
+    const s = d.decodeSession(wire);
+    return [s.runwayMs, s.runwayBounded];
+  };
+  assert.deepEqual(read(row), [row.runway_ms, row.runway_bounded], 'as the route answers it');
+  assert.deepEqual(read({ ...row, runway_bounded: true, runway_ms: 7_800_000 }), [7_800_000, true], 'a bounded runway');
+  assert.deepEqual(read({ ...row, runway_bounded: false, runway_ms: null }), [null, false], 'an unbounded runway');
+  assert.deepEqual(read({ ...row, runway_bounded: null, runway_ms: null }), [null, null], 'no projection to run to');
+  const { runway_bounded: _rb, runway_ms: _rm, ...bare } = row;
+  assert.deepEqual(read(bare), [null, null], 'a row without the members reads no projection');
+});
+
+test("both record versions decode their settings, a version 1 record's three removed ones under legacy", () => {
+  const body = fixture('decision');
+  const v2 = d.decodeDecisionRecord(body);
+  const s = body.settings;
+  assert.equal(v2.version, 2);
+  assert.equal(Object.keys(s).length, 20, 'the route answers twenty settings');
+  assert.deepEqual(Object.keys(v2.settings).filter((k) => k !== 'legacy').length, 20);
+  assert.deepEqual(shedding(v2.settings), SHEDDING_FIELDS.map((f) => s[f]), 'a version 2 record reads the new names');
+  assert.equal(v2.settings.legacy, null);
+  assert.equal(d.decodeDecisionRecord({ ...body, settings: { ...s, load_shedding: false } }).settings.loadShedding, false, 'the switch reads off');
+  assert.equal(d.decodeDecisionRecord({ ...body, settings: { ...s, shed_share: 0.9 } }).settings.shedCap, s.shed_cap, 'a version 2 record reads no old name');
+  const { burn_average_seconds: _a, load_shedding: _l, shed_cap: _c, shed_dwell_seconds: _d, window_ceiling: _w, ...shared } = s;
+  const old = { ...shared, burn_window_seconds: 600, migrate_band: 0.05, pace_floor: 0.05, select_below_utilization: 0.8, shed_ahead_of_pace: 0.2, shed_share: 0.5, source_dwell_seconds: 900 };
+  const v1 = d.decodeDecisionRecord({ ...body, settings: old, version: 1 });
+  assert.equal(v1.version, 1);
+  assert.deepEqual(shedding(v1.settings), [null, null, 0.5, 600, 900], 'the three renamed settings read the old names, the switch and the ceiling none');
+  assert.deepEqual(v1.settings.legacy, { paceFloor: 0.05, selectBelowUtilization: 0.8, shedAheadOfPace: 0.2 });
+  assert.equal(v1.settings.strategy, s.strategy, 'every setting both versions name reads as today');
+  const off = d.decodeDecisionRecord({ ...body, settings: { ...old, select_below_utilization: null, shed_ahead_of_pace: null }, version: 1 });
+  assert.deepEqual(off.settings.legacy, { paceFloor: 0.05, selectBelowUtilization: null, shedAheadOfPace: null }, 'a setting the pool left off reads null');
+});
+
+test('a candidate decodes its fit figures and an outcome its reservation and its hold\'s reason', () => {
+  const body = fixture('decision');
+  const [wire] = body.candidates;
+  const [chosen] = d.decodeDecisionRecord(body).candidates;
+  assert.deepEqual([chosen.binding, chosen.burn, chosen.fit, chosen.runwayMs, chosen.pace.burn], [wire.binding, wire.burn, wire.fit, wire.runway_ms, wire.pace.burn], 'as the route answers it');
+  assert.deepEqual(chosen.windows.fast_input, { ...chosen.windows.fast_input, horizon: null, projection: null, reserved: 0 });
+  const reset = 1_791_724_600_000;
+  const projected = {
+    ...wire,
+    binding: 'five_hour',
+    burn: { five_hour: 0.073, seven_day: 0.0085 },
+    fit: 'rewrite_only',
+    pace: { ...wire.pace, burn: 0.0085 },
+    runway_ms: 7_800_000,
+    windows: { five_hour: { age_ms: 4_000, ahead: 0.1, horizon: reset, observed_at: reset - 3_600_000, projection: 0.993, reserved: 0.104, reset, source: 'head', utilization: 0.96 } },
+  };
+  const [c] = d.decodeDecisionRecord({ ...body, candidates: [projected] }).candidates;
+  assert.deepEqual([c.binding, c.burn, c.fit, c.runwayMs, c.pace.burn], ['five_hour', { five_hour: 0.073, seven_day: 0.0085 }, 'rewrite_only', 7_800_000, 0.0085]);
+  assert.deepEqual([c.windows.five_hour.projection, c.windows.five_hour.horizon, c.windows.five_hour.reserved], [0.993, new Date(reset).toISOString(), 0.104]);
+  const { binding: _b, burn: _u, fit: _f, runway_ms: _r, ...older } = wire;
+  const [v1] = d.decodeDecisionRecord({ ...body, candidates: [{ ...older, pace: { ...wire.pace, burn: undefined } }], version: 1 }).candidates;
+  assert.deepEqual([v1.binding, v1.burn, v1.fit, v1.runwayMs, v1.pace.burn], [null, {}, null, null, 0], 'a version 1 candidate shows no fit and no runway');
+  // The pick writes a burn fact after each score fact, which the walk decodes as it decodes every fact.
+  const facts = [
+    { account_id: null, key: 'strategy', unit: null, value: 'pace' },
+    { account_id: 'business', key: 'score', unit: 'percent_per_hour', value: -0.0021 },
+    { account_id: 'business', key: 'burn', unit: 'percent_per_hour', value: 0.0085 },
+  ];
+  const picked = d.decodeDecisionRecord({ ...body, walk: [{ facts, step: 'pick', verdict: 'chosen' }] }).walk[0];
+  assert.deepEqual(picked.facts.map((f) => [f.key, f.accountId, f.unit, f.value]), facts.map((f) => [f.key, f.account_id, f.unit, f.value]));
+
+  const outcome = d.decodeDecisionRecord(body).outcome;
+  assert.deepEqual([outcome.hold, outcome.markCleared, outcome.reservation], [null, null, null], "the fixture's placement held nothing, cleared no mark and booked nothing");
+  const held = d.decodeDecisionRecord({ ...body, outcome: { ...body.outcome, hold: { account_id: 'business', bound_ms: 60_000, cohort: null, reason: 'reset', until: reset }, kind: 'held' } }).outcome;
+  assert.deepEqual(held.hold, { accountId: 'business', boundMs: 60_000, cohort: null, reason: 'reset', until: new Date(reset).toISOString() });
+  const booked = d.decodeDecisionRecord({
+    ...body,
+    outcome: {
+      ...body.outcome,
+      mark_cleared: { marked_at: reset - 600_000, marked_on: 'business', marked_window: 'five_hour', projection: 0.91, reason: 'healed' },
+      reservation: { account_id: 'business', burn: { five_hour: 0.073 }, expires_at: reset, rewrite: { five_hour: 0.104, seven_day: 0.0121 } },
+    },
+  }).outcome;
+  assert.deepEqual(booked.reservation, { accountId: 'business', burn: { five_hour: 0.073 }, expiresAt: new Date(reset).toISOString(), rewrite: { five_hour: 0.104, seven_day: 0.0121 } });
+  assert.deepEqual(booked.markCleared, { markedAt: new Date(reset - 600_000).toISOString(), markedOn: 'business', markedWindow: 'five_hour', projection: 0.91, reason: 'healed' });
+  const capped = d.decodeDecisionRecord({ ...body, outcome: { ...body.outcome, hold: { account_id: 'business', bound_ms: 60_000, cohort: null }, kind: 'held' } }).outcome;
+  assert.deepEqual([capped.hold.reason, capped.hold.until], ['cap', null], "a hold written before its reason waits for a slot");
+});
+
+test("a record's pin decodes its shed mark and its request the body's estimated tokens", () => {
+  const body = fixture('decision');
+  const r = d.decodeDecisionRecord(body);
+  assert.deepEqual([r.pin.markedAt, r.pin.markedOn, r.pin.markedWindow], [body.pin.marked_at, body.pin.marked_on, body.pin.marked_window]);
+  assert.equal(r.request.bodyTokens, body.request.body_tokens);
+  const at = 1_791_717_520_000;
+  const marked = d.decodeDecisionRecord({ ...body, pin: { ...body.pin, marked: true, marked_at: at, marked_on: 'business', marked_window: 'seven_day' }, request: { ...body.request, body_tokens: 870_174 } });
+  assert.deepEqual([marked.pin.markedAt, marked.pin.markedOn, marked.pin.markedWindow, marked.request.bodyTokens], [new Date(at).toISOString(), 'business', 'seven_day', 870_174]);
+  const { body_tokens: _t, ...refused } = body.request;
+  assert.equal(d.decodeDecisionRecord({ ...body, request: refused }).request.bodyTokens, null, 'a refusal carries no estimate');
+});
+
+test('the rewrites answer decodes its moves by reason and fit', () => {
+  const body = fixture('analytics_rewrites');
+  assert.deepEqual(d.decodeRewrites(body).movesByReasonAndFit, body.moves_by_reason_and_fit);
+  const two = d.decodeRewrites({ moves: { shed: 3, spent: 2 }, moves_by_reason_and_fit: { shed: { fits: 2, least_bad: 1 }, spent: { fits: 1, rewrite_only: 1 } }, points: [] });
+  assert.deepEqual(two.movesByReasonAndFit, { shed: { fits: 2, least_bad: 1 }, spent: { fits: 1, rewrite_only: 1 } }, 'two reasons keep their own fits');
+  assert.deepEqual(d.decodeRewrites({ moves: { spent: 1 }, moves_by_reason_and_fit: { spent: { fits: 'x', unknown: 1 } }, points: [] }).movesByReasonAndFit, { spent: { unknown: 1 } }, 'a count that is not a number is left out');
+  assert.deepEqual(d.decodeRewrites({ moves: {}, points: [] }).movesByReasonAndFit, {}, 'a missing member reads an empty map');
 });
 
 test('a pool and a key decode the stamp of their last write', () => {
@@ -477,22 +620,21 @@ test('a pool decodes the engine fields and encodes them back', () => {
   const row = fixture('pools').pools[0];
   const p = d.decodePool(row);
   assert.deepEqual(
-    [p.shedShare, p.burnWindowSeconds, p.sourceDwellSeconds, p.migrateWhenSpent, p.warmSessions],
-    [0.5, 600, 900, true, 'when_needed'],
-    'the captured pool holds the balanced shedding preset',
+    [p.shedCap, p.burnAverageSeconds, p.shedDwellSeconds, p.migrateWhenSpent, p.warmSessions],
+    [row.shed_cap, 1_800, 900, true, 'when_needed'],
+    'the captured pool holds the balanced average and dwell beside its own cap',
   );
-  assert.deepEqual([p.retryInPlaceSeconds, p.inFlightCap, p.paceFloor, p.overageMoveGraceMinutes, p.windDownMinutes], [60, 16, 0.05, 30, 30], 'and the balanced failover preset');
+  assert.deepEqual([p.retryInPlaceSeconds, p.inFlightCap, p.overageMoveGraceMinutes, p.windDownMinutes], [60, 16, 30, 30], 'and the balanced failover preset');
   assert.deepEqual(p.movesPerHour, { spent: 1 });
   const wire = {
     ...row,
-    shed_share: 0.3,
-    burn_window_seconds: 900,
-    source_dwell_seconds: 1800,
+    shed_cap: 0.3,
+    burn_average_seconds: 900,
+    shed_dwell_seconds: 1800,
     migrate_when_spent: false,
     warm_sessions: 'never',
     retry_in_place_seconds: 20,
     in_flight_cap: 8,
-    pace_floor: 0.1,
     overage_move_grace_minutes: 45,
     wind_down_minutes: 120,
     moves_per_hour: { shed: 2, spent: 0.5 },
@@ -500,7 +642,7 @@ test('a pool decodes the engine fields and encodes them back', () => {
   const q = d.decodePool(wire);
   assert.deepEqual(q.movesPerHour, { shed: 2, spent: 0.5 });
   const back = d.encodePool({ ...q, name: q.name, status: 'active' });
-  const fields = ['shed_share', 'burn_window_seconds', 'source_dwell_seconds', 'migrate_when_spent', 'warm_sessions', 'retry_in_place_seconds', 'in_flight_cap', 'pace_floor', 'overage_move_grace_minutes', 'wind_down_minutes'];
+  const fields = ['shed_cap', 'burn_average_seconds', 'shed_dwell_seconds', 'migrate_when_spent', 'warm_sessions', 'retry_in_place_seconds', 'in_flight_cap', 'overage_move_grace_minutes', 'wind_down_minutes'];
   assert.deepEqual(Object.fromEntries(fields.map((f) => [f, back[f]])), Object.fromEntries(fields.map((f) => [f, wire[f]])), 'every engine field goes back under the name the route reads');
   assert.equal('moves_per_hour' in back, false, 'the moves are the route\'s count, never a setting');
   assert.equal(d.decodePool({ ...row, warm_sessions: 'sometimes' }).warmSessions, 'when_needed', 'an unknown mode reads as the default');
@@ -958,6 +1100,10 @@ test('a budget reads as a skip obstacle and as a pin release reason', () => {
   assert.deepEqual(released.detail.reasons, ['budget', 'spent']);
 });
 
+test('a member the fit gate passed over reads no_fit, and the two partitions that left are no obstacle', () => {
+  assert.deepEqual([...d.SKIP_OBSTACLE_VALUES], ['at_cap', 'attempted', 'budget', 'budget_unknown', 'cooldown', 'credits', 'no_fit', 'operator', 'overage', 'ranked', 'spent', 'subscription_ended', 'winding_down']);
+});
+
 test('the routing log page decodes both row shapes from the fixture', () => {
   const body = fixture('routing_log');
   const page = d.decodeRoutingLogPage(body);
@@ -981,7 +1127,7 @@ test('the routing log page decodes both row shapes from the fixture', () => {
   const declined = d.decodeDecisionSummary({ ...body.rows.find((r) => r.kind === 'exhausted'), exhaustion: { deadline: null, kind: 'credits', obstacle: 'credits', reason: 'declined', window: null } });
   assert.equal(declined.exhaustion.reason, 'declined', "an exhaustion's reason is kept, the Fact a credits exhaustion draws");
   const held = page.rows.find((r) => r.type === 'decision' && r.kind === 'held');
-  assert.deepEqual([held.hold, held.score.unit], [{ accountId: 'business', boundMs: 60_000, cohort: null }, 'percent_per_hour']);
+  assert.deepEqual([held.hold, held.score.unit], [{ accountId: 'business', boundMs: 60_000, cohort: null, reason: 'cap', until: null }, 'percent_per_hour']);
   const round = page.rows.find((r) => r.type === 'event' && r.kind === 'shedding_round');
   assert.ok(isIso(round.at));
   assert.deepEqual([round.accountId, round.agentId, round.poolId, round.requestId, round.sessionId], ['business', 'main', 'main', 'r-failover', 's1']);
@@ -993,7 +1139,7 @@ test('the routing log page decodes both row shapes from the fixture', () => {
 test('a decision record decodes its six blocks and the completion', () => {
   const body = fixture('decision');
   const r = d.decodeDecisionRecord(body);
-  assert.deepEqual([r.version, r.requestId, r.seq], [1, 'r-static', 1]);
+  assert.deepEqual([r.version, r.requestId, r.seq], [2, 'r-static', 1]);
   assert.equal(r.raw, body, 'the record keeps the route answer whole for the card to copy');
   assert.ok(isIso(r.request.at));
   assert.deepEqual([r.request.keyId, r.request.poolId, r.request.canonicalModel], ['desktop', 'main', 'claude-sonnet-5']);
@@ -1002,9 +1148,8 @@ test('a decision record decodes its six blocks and the completion', () => {
   assert.deepEqual(r.request.chain, { boundaries: 0, staticBoundaries: 1, staticHash: false });
   assert.deepEqual([r.pin.found, r.pin.accountId, r.pin.released], ['none', null, []]);
   assert.equal(r.pinReason, null, 'a record with a pin block names no reason');
-  assert.ok('shed_ahead_of_pace' in body.settings, 'the route names the shedding margin as the pool row does');
-  assert.ok(r.settings.shedAheadOfPace === null || typeof r.settings.shedAheadOfPace === 'number', 'the decoded settings carry the margin under its field name');
-  assert.deepEqual([r.settings.strategy, r.settings.inFlightCap, r.settings.migrateBand], ['pace', 16, 0.05]);
+  assert.ok('window_ceiling' in body.settings, 'the route names the ceiling as the pool row does');
+  assert.deepEqual([r.settings.strategy, r.settings.inFlightCap, r.settings.windowCeiling], ['pace', 16, body.settings.window_ceiling]);
   assert.ok(isIso(r.settings.poolUpdatedAt));
   const [chosen, spare] = r.candidates;
   assert.match(chosen.prefix.static.hash, /^[0-9a-f]{64}$/, 'a prefix lookup carries the boundary hash whole');
@@ -1017,7 +1162,7 @@ test('a decision record decodes its six blocks and the completion', () => {
   assert.deepEqual(chosen.cooldowns.map((c) => [c.scope, c.blocking]), [['model:claude-haiku-4-5-20251001', false]]);
   assert.deepEqual([chosen.verdict, spare.verdict, spare.kind, spare.pace.hours], ['chosen', 'not_needed', 'api_key', null]);
   assert.equal(spare.budget[0].spentUsd, 0.0036);
-  assert.deepEqual(r.walk.map((s) => s.step), ['pin', 'eligible', 'partitions', 'rung:content', 'rung:with_main', 'rung:static']);
+  assert.deepEqual(r.walk.map((s) => s.step), ['pin', 'eligible', 'partitions', 'rung:content', 'rung:with_main', 'rung:static', 'reserve']);
   assert.deepEqual(r.walk[5].facts[0], { accountId: null, key: 'depth', unit: 'count', value: 1 });
   assert.deepEqual(r.walk[1].facts[0], { accountId: 'business', key: 'standing', unit: null, value: 'eligible' });
   assert.deepEqual([r.outcome.kind, r.outcome.accountId, r.outcome.rung], ['placed', 'business', { depth: 1, prefixTokens: 31200, rung: 'static' }]);

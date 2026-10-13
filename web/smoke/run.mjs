@@ -377,12 +377,26 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     ['Certificate expiring: proxy.tls', 'badge--warning', null, ["The proxy listener's certificate /etc/phoebis/proxy.pem expires in 12 days (<instant>). Replace the pair and run phoebis tls reload.", 'cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', 'expires: <instant>']],
     ['Priced record parked: jobs', 'badge--serious', '/pools#jobs', ['accounts: ["research"]', 'count: 1', 'pool: jobs']],
     ['Usage poll backing off: secondary', 'badge--warning', '/accounts/secondary', ['account: secondary', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
+    // A routing condition's badge reads its words, the count, the setting and the start, and opens the routing log.
+    [
+      'secondary: 1 wall reached on the 5h window, the last round projected 111 %, shed_cap and window_ceiling, since 14:02',
+      'badge--warning',
+      '/routing-log',
+      ['projection_error: -0.111', 'setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]'],
+    ],
+    ['nightly: 1 move landed and the 5h window was spent within the hour, window_ceiling, since 11:01', 'badge--warning', '/routing-log', ['fits: {"least_bad":1}', 'moves: 1', 'setting: ["window_ceiling"]', 'windows: ["five_hour"]']],
+    [
+      'all: 1 round marked nothing, no destination had runway, window_ceiling 75 %, since 14:12',
+      'badge--warning',
+      '/routing-log',
+      ['accounts: ["primary"]', 'rounds: 1', 'setting: ["window_ceiling"]', 'setting_values: {"window_ceiling":0.75}'],
+    ],
   ];
   const ages = badges().map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
-    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's the routing log, and titled with its detail and age, its sentence first where no pool card draws it",
+    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log, and titled with its detail and age, its sentence first where no pool card draws it",
     ok:
-      lead() === '9 need attention' &&
+      lead() === '12 need attention' &&
       JSON.stringify(read) === JSON.stringify(want) &&
       /^started 1[34]m ago$/.test(ages[0] ?? '') &&
       ages[6] === 'started 18d 0h ago' &&
@@ -448,7 +462,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   results.push({ name: '/ the window regaining focus reads the attention list again, and an answer clears the failure', ok: reads === 1 && quiet(), missing: [`reads ${reads}`, line()?.textContent ?? 'no line'] });
   localStorage.removeItem('phoebis.mockEmpty');
   await tick();
-  results.push({ name: '/ the story back, the next tick draws its nine items again', ok: lead() === '9 need attention', missing: [lead() ?? 'no lead'] });
+  results.push({ name: '/ the story back, the next tick draws its twelve items again', ok: lead() === '12 need attention', missing: [lead() ?? 'no lead'] });
   dash.unmount();
 }
 
@@ -4932,7 +4946,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   // A value the field does not already show first, so the second keystroke changes the form too.
   for (const typed of ['31', '30']) {
-    setter.call(percent(dlg), typed);
+    if (percent(dlg)) setter.call(percent(dlg), typed);
     percent(dlg)?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(120);
   }
@@ -4955,12 +4969,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]')?.click();
   await m.settle(120);
   const proposed = percent(dlg)?.value;
-  setter.call(percent(dlg), '');
+  if (percent(dlg)) setter.call(percent(dlg), '');
   percent(dlg)?.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(120);
   const hint = (group(dlg, 'Utilization thresholds')?.textContent ?? '').includes('Read on the 5-hour and the 7-day window.');
   const empty = [percent(dlg)?.value, footButton(dlg, 'Save pool')?.disabled, dlg?.querySelector('.dialog__status')?.textContent ?? ''];
-  setter.call(percent(dlg), '20');
+  if (percent(dlg)) setter.call(percent(dlg), '20');
   percent(dlg)?.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(120);
   const fifth = await savedMigrate(dlg);

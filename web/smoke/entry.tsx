@@ -34,7 +34,6 @@ export { anchorTier, bandFactor, bandRuns, familyOrder, fullWindowsAWeek, inBand
 // hears from the derivation the strip reads.
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';
 export { earlierHolderLabel, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, shortModel } from '@/lib/format';
-export { SHED_AHEAD_OF_PACE_DEFAULT } from '@/lib/presets';
 // The pace mark's offset and the end it runs to, so the check and the meter place it by one arithmetic.
 export { endOf, remainingTimeShare } from '@/lib/quota';
 // A request's native unit, so a check picks the rows it reads by the rule the Cost cell draws them by.

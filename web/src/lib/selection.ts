@@ -108,15 +108,14 @@ function keyOf(account: Account, strategy: PoolStrategy, now: number): number {
 }
 
 /**
- * Where a member falls in the router's fall-through for a fresh session, lowest first: above the floor and not
- * winding down, then the floor group, then winding down, then both. The router drops each group from the whole
- * selection set before it picks a tier, so a group trails every better member of every tier.
+ * Where a member falls in the router's fall-through for a fresh session, lowest first: not winding down, then winding
+ * down. The router drops the group from the whole selection set before it picks a tier, so it trails every better
+ * member of every tier.
  */
 function resortOf(pool: Pool, account: Account, now: number): { lastResort: LastResort | null; order: number } {
   const end = endOf(account, now);
   const windingDown = end !== null && now >= end - pool.windDownMinutes * 60_000;
-  const atFloor = pool.strategy === 'pace' && remainingOf(account, now).remaining <= pool.paceFloor;
-  return { lastResort: windingDown ? 'winding_down' : atFloor ? 'floor' : null, order: (windingDown ? 2 : 0) + (atFloor ? 1 : 0) };
+  return { lastResort: windingDown ? 'winding_down' : null, order: windingDown ? 2 : 0 };
 }
 
 /** Which kind tier an account sits in; a member the accounts list does not carry has no kind, so it leads. */

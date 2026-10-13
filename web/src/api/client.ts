@@ -37,7 +37,7 @@ import type {
   RequestDetail,
   RequestPage,
   RequestQuery,
-  RewritePoint,
+  RewritesAnswer,
   RoutingLogPage,
   RoutingLogQuery,
   Session,
@@ -85,17 +85,29 @@ export const CACHE_TTL_DEFAULTS: PoolCacheTtl = { enabled: false, injectWhenAbse
 
 export type PoolEngineFields = Pick<
   Pool,
-  'burnWindowSeconds' | 'inFlightCap' | 'migrateWhenSpent' | 'overageMoveGraceMinutes' | 'paceFloor' | 'retryInPlaceSeconds' | 'shedShare' | 'sourceDwellSeconds' | 'warmSessions' | 'windDownMinutes'
+  | 'burnAverageSeconds'
+  | 'inFlightCap'
+  | 'loadShedding'
+  | 'migrateWhenSpent'
+  | 'overageMoveGraceMinutes'
+  | 'retryInPlaceSeconds'
+  | 'shedCap'
+  | 'shedDwellSeconds'
+  | 'warmSessions'
+  | 'windDownMinutes'
+  | 'windowCeiling'
 >;
 
-/** The store's shedding and failover defaults, which a new pool starts with. */
+/** The store's ceiling, shedding and failover defaults, which a new pool starts with. */
 export const POOL_ENGINE_DEFAULTS: PoolEngineFields = {
   ...SHEDDING_PRESETS.balanced,
   ...FAILOVER_PRESETS.balanced,
+  loadShedding: true,
   migrateWhenSpent: true,
   overageMoveGraceMinutes: 30,
   warmSessions: 'when_needed',
   windDownMinutes: 30,
+  windowCeiling: 0.95,
 };
 
 export type PoolAffinityFields = Pick<Pool, 'affinityMode' | 'minSharedPrefixTokens' | 'sessionPlacement' | 'subagentPlacement'>;
@@ -122,9 +134,6 @@ export interface PoolInput extends PoolEngineFields, PoolAffinityFields {
   overagePolicy: OveragePolicy;
   /** Order the selection set by account kind before priority; the operator's answer alone. */
   preferSubscription: boolean;
-  selectBelowUtilization: number | null;
-  /** Null disables the shedding round. */
-  shedAheadOfPace: number | null;
   status: 'active' | 'disabled';
   strategy: PoolStrategy;
 }
@@ -157,7 +166,7 @@ export interface Api {
   getAnalyticsBreakdown(query: AnalyticsQuery): Promise<AnalyticsGroup[]>;
   /** The route reads the range and the grouping alone; no other filter of the query narrows it. */
   getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup): Promise<{ bucketSeconds: number; points: BurnPoint[] }>;
-  getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>): Promise<{ moves: Record<string, number>; points: RewritePoint[] }>;
+  getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>): Promise<RewritesAnswer>;
   /** `funding` keeps the billed or the plan-funded rows. Under the account grouping each point's subscription groups carry their shares. */
   getAnalyticsSeries(query: AnalyticsQuery): Promise<AnalyticsPoint[]>;
   /** The conditions that hold now, worst first and the oldest first within a kind: the route's order is the ranking. */

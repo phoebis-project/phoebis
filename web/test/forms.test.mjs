@@ -12,11 +12,12 @@ const input = {
   affinityMode: pool.affinityMode,
   affinityTtlSeconds: pool.affinityTtlSeconds,
   bodyCaptureHours: pool.bodyCaptureHours,
-  burnWindowSeconds: pool.burnWindowSeconds,
+  burnAverageSeconds: pool.burnAverageSeconds,
   cacheDiagnostics: pool.cacheDiagnostics,
   cacheTtl: pool.cacheTtl,
   inFlightCap: pool.inFlightCap,
   keepalive: pool.keepalive,
+  loadShedding: pool.loadShedding,
   members: pool.members.map((m) => ({ accountId: m.accountId, budgetDailyUsd: m.budgetDailyUsd, budgetMonthlyUsd: m.budgetMonthlyUsd, priority: m.priority })),
   migrateWhenSpent: pool.migrateWhenSpent,
   minSharedPrefixTokens: pool.minSharedPrefixTokens,
@@ -24,19 +25,17 @@ const input = {
   name: pool.name,
   overageMoveGraceMinutes: pool.overageMoveGraceMinutes,
   overagePolicy: pool.overagePolicy,
-  paceFloor: pool.paceFloor,
   preferSubscription: pool.preferSubscription,
   retryInPlaceSeconds: pool.retryInPlaceSeconds,
-  selectBelowUtilization: pool.selectBelowUtilization,
   sessionPlacement: pool.sessionPlacement,
-  shedAheadOfPace: pool.shedAheadOfPace,
-  shedShare: pool.shedShare,
-  sourceDwellSeconds: pool.sourceDwellSeconds,
+  shedCap: pool.shedCap,
+  shedDwellSeconds: pool.shedDwellSeconds,
   status: 'active',
   strategy: pool.strategy,
   subagentPlacement: pool.subagentPlacement,
   warmSessions: pool.warmSessions,
   windDownMinutes: pool.windDownMinutes,
+  windowCeiling: pool.windowCeiling,
 };
 const tuned = (patch) => ({ ...input, keepalive: { ...input.keepalive, ...patch } });
 
@@ -44,7 +43,7 @@ test('a pool input the router would take validates', () => {
   assert.equal(d.validatePoolInput(input, accounts), true);
   assert.equal(d.validatePoolInput({ ...input, affinityTtlSeconds: 0, keepalive: { ...input.keepalive, enabled: false } }, accounts), true, '0 turns affinity off');
   assert.equal(d.validatePoolInput({ ...input, affinityTtlSeconds: 60, keepalive: { ...input.keepalive, enabled: false } }, accounts), true);
-  assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: 0.4 }, accounts), true);
+  assert.equal(d.validatePoolInput({ ...input, loadShedding: false }, accounts), true, 'the switch is a toggle with no bound');
 });
 
 test('a pool input refuses the affinity the router refuses', () => {
@@ -89,25 +88,24 @@ test('a members list that did not load holds the save once and names no member',
 
 test('a pool input refuses thresholds outside their range and an empty name', () => {
   assert.equal(d.validatePoolInput({ ...input, name: '' }, accounts), false);
-  assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: 1.2 }, accounts), false);
-  assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: -0.1 }, accounts), false);
-  assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: 0 }, accounts), true);
-  assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: 1 }, accounts), true);
-  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: 0 }, accounts), true, 'a margin over pace runs from 0 %');
-  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: 0.2 }, accounts), true);
-  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: -0.1 }, accounts), false);
-  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: Number.NaN }, accounts), false, 'a switched-on field left empty holds the save');
-  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: 1.2 }, accounts), false, 'the route bounds every value to 0 to 1');
-  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: 0.9 }, accounts), true);
+  assert.equal(d.validatePoolInput({ ...input, windowCeiling: 0.5 }, accounts), true, 'a ceiling runs from half of a window');
+  assert.equal(d.validatePoolInput({ ...input, windowCeiling: 1 }, accounts), true, 'to the wall itself');
+  assert.equal(d.validatePoolInput({ ...input, windowCeiling: 0.49 }, accounts), false);
+  assert.equal(d.validatePoolInput({ ...input, windowCeiling: 1.01 }, accounts), false);
+  assert.equal(d.validatePoolInput({ ...input, windowCeiling: Number.NaN }, accounts), false, 'a field left empty holds the save');
+  assert.equal(d.validatePoolInput({ ...input, shedCap: 0.1 }, accounts), true, 'a cap runs from a tenth of the burn');
+  assert.equal(d.validatePoolInput({ ...input, shedCap: 1 }, accounts), true);
+  assert.equal(d.validatePoolInput({ ...input, shedCap: 0.09 }, accounts), false);
+  assert.equal(d.validatePoolInput({ ...input, shedCap: 1.01 }, accounts), false);
 });
 
 test('a pool input holds every engine bound', () => {
   const whole = {
-    burnWindowSeconds: [60, 604_800],
+    burnAverageSeconds: [600, 7_200],
     inFlightCap: [1, 4_294_967_295],
     overageMoveGraceMinutes: [0, 300],
     retryInPlaceSeconds: [0, 300],
-    sourceDwellSeconds: [60, 604_800],
+    shedDwellSeconds: [300, 7_200],
     windDownMinutes: [0, 10_080],
   };
   for (const [field, [min, max]] of Object.entries(whole)) {
@@ -119,9 +117,9 @@ test('a pool input holds every engine bound', () => {
       assert.equal(d.validatePoolInput({ ...input, [field]: max + 1 }, accounts), false, `${field} ${max + 1} is past the ceiling`);
     }
   }
-  for (const field of ['paceFloor', 'shedShare']) {
-    for (const v of [0, 0.3, 1]) assert.equal(d.validatePoolInput({ ...input, [field]: v }, accounts), true, `${field} ${v} is a share`);
-    for (const v of [-0.01, 1.01, Number.NaN]) assert.equal(d.validatePoolInput({ ...input, [field]: v }, accounts), false, `${field} ${v} is not`);
+  for (const [field, floor] of [['shedCap', 0.1], ['windowCeiling', 0.5]]) {
+    for (const v of [floor, 0.6, 1]) assert.equal(d.validatePoolInput({ ...input, [field]: v }, accounts), true, `${field} ${v} is inside`);
+    for (const v of [floor - 0.01, 1.01, Number.NaN]) assert.equal(d.validatePoolInput({ ...input, [field]: v }, accounts), false, `${field} ${v} is not`);
   }
   for (const mode of ['always', 'never', 'when_needed']) assert.equal(d.validatePoolInput({ ...input, warmSessions: mode }, accounts), true);
   assert.equal(d.validatePoolInput({ ...input, warmSessions: 'sometimes' }, accounts), false);
@@ -308,14 +306,12 @@ test('a pool refusal names the group its control sits in', () => {
       ],
     ],
     [{ affinityMode: 'sometimes' }, refused('Pin sessions', 'pinning', 'Pin sessions is one of its listed choices.')],
-    [{ shedAheadOfPace: 1.2 }, refused('Shed ahead of pace (%)', 'utilization', 'Shed ahead of pace is from 0 to 100.')],
-    [{ shedAheadOfPace: Number.NaN }, refused('Shed ahead of pace (%)', 'utilization', 'Shed ahead of pace needs a value from 0 to 100.')],
-    [{ selectBelowUtilization: 1.2 }, refused('Select below utilization (%)', 'utilization', 'Select below utilization is from 0 to 100.')],
-    [{ shedShare: 1.2 }, refused('Share (%)', 'shedding', 'Share (%) is from 0 to 100.')],
-    [{ burnWindowSeconds: 59 }, refused('Burn window (s)', 'shedding', 'Burn window (s) is a whole number from 60 to 604,800.')],
-    [{ sourceDwellSeconds: 59 }, refused('Source dwell (s)', 'shedding', 'Source dwell (s) is a whole number from 60 to 604,800.')],
+    [{ windowCeiling: 0.49 }, refused('Window ceiling (%)', 'utilization', 'Window ceiling (%) is from 50 to 100.')],
+    [{ windowCeiling: Number.NaN }, refused('Window ceiling (%)', 'utilization', 'Window ceiling (%) is from 50 to 100.')],
+    [{ shedCap: 1.2 }, refused('Shed cap (%)', 'shedding', 'Shed cap (%) is from 10 to 100.')],
+    [{ burnAverageSeconds: 599 }, refused('Burn average (s)', 'shedding', 'Burn average (s) is a whole number from 600 to 7,200.')],
+    [{ shedDwellSeconds: 299 }, refused('Shed dwell (s)', 'shedding', 'Shed dwell (s) is a whole number from 300 to 7,200.')],
     [{ warmSessions: 'sometimes' }, refused('Warm sessions', 'shedding', 'Warm sessions is one of its listed choices.')],
-    [{ paceFloor: 1.2 }, refused('Pace floor (%)', 'failover', 'Pace floor (%) is from 0 to 100.')],
     [{ inFlightCap: 0 }, refused('In flight', 'failover', 'In flight is a whole number from 1 to 4,294,967,295.')],
     [{ retryInPlaceSeconds: 301 }, refused('Retry in place (s)', 'failover', 'Retry in place (s) is a whole number from 0 to 300.')],
     [{ overageMoveGraceMinutes: 301 }, refused('Overage grace (min)', 'overage', 'Overage grace (min) is a whole number from 0 to 300.')],
@@ -420,12 +416,20 @@ const camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
 // way.
 const keepaliveWith = (fields = {}) => Object.fromEntries(Object.entries(fields).map(([field, value]) => [camel(field.slice('keepalive.'.length)), value]));
 
+/** The fraction probes and the field each one's refusal names in the dialog. */
+const FRACTION_FIELDS = { shed_cap: 'Shed cap (%)', window_ceiling: 'Window ceiling (%)' };
+
 test('the form admits and refuses the values the routes do', () => {
   const { probes } = fixture('bound_refusals');
   assert.ok(probes.length > 0);
+  assert.deepEqual(Object.keys(FRACTION_FIELDS).filter((field) => !probes.some((p) => p.field === field)), [], 'the capture probes both fractions');
   for (const { field, route, status, value, with: fields } of probes) {
     let admitted;
-    if (field.startsWith('keepalive.')) {
+    if (field in FRACTION_FIELDS) {
+      const refusals = d.poolRefusals({ ...input, [camel(field)]: value }, accounts);
+      assert.deepEqual(refusals.map((r) => r.field).filter((f) => f !== FRACTION_FIELDS[field]), [], `${field} ${value} refuses its own field alone`);
+      admitted = refusals.length === 0;
+    } else if (field.startsWith('keepalive.')) {
       const key = camel(field.slice('keepalive.'.length));
       assert.ok(key in d.KEEPALIVE_BOUNDS, `${field} is a field the form bounds`);
       admitted = d.validatePoolInput(tuned({ ...keepaliveWith(fields), [key]: value }), accounts);
@@ -438,4 +442,25 @@ test('the form admits and refuses the values the routes do', () => {
     }
     assert.equal(admitted, status >= 200 && status < 300, `${route} ${field} ${value}: the route answered ${status}`);
   }
+});
+
+test("the warnings mirror reads the pool routes' eight checks on a pool's settings, sorted by code", () => {
+  const row = fixture('pools').pools[0];
+  assert.deepEqual(d.poolWarnings(d.decodePool(row), 0), d.decodePool(row).warnings, 'the captured pool reads the warnings the route answered');
+  const quiet = { affinityTtlSeconds: 3_600, cacheTtl: { ...input.cacheTtl, enabled: true, injectWhenAbsent: true }, inFlightCap: 16, loadShedding: true, migrateWhenSpent: true, shedCap: 0.5, warmSessions: 'when_needed', windowCeiling: 0.95 };
+  assert.deepEqual(d.poolWarnings(quiet, 16), [], 'a pool inside every check reads none');
+  const codes = (patch, cohort = 0) => d.poolWarnings({ ...quiet, ...patch }, cohort).map((w) => [w.code, w.fields]);
+  assert.deepEqual(codes({ affinityTtlSeconds: 600 }), [['affinity_under_cache_ttl', ['affinity_ttl_seconds', 'cache_ttl']]], 'an affinity under the hour the plan main TTL injects');
+  assert.deepEqual(codes({ affinityTtlSeconds: 600, cacheTtl: { ...quiet.cacheTtl, injectWhenAbsent: false } }), [], 'a policy that leaves an absent marker alone injects nothing');
+  assert.deepEqual(codes({ affinityTtlSeconds: 600, cacheTtl: { ...quiet.cacheTtl, enabled: false } }), [], 'a policy that is off injects nothing');
+  assert.deepEqual(codes({}, 17), [['cap_under_cohort', ['in_flight_cap']]]);
+  assert.deepEqual(codes({ shedCap: 0.2 }), [['cap_under_quarter', ['shed_cap']]]);
+  assert.deepEqual(codes({ windowCeiling: 0.75 }), [['ceiling_low', ['window_ceiling']]]);
+  assert.deepEqual(codes({ windowCeiling: 1 }), [['ceiling_without_margin', ['window_ceiling']]]);
+  assert.deepEqual(codes({ loadShedding: false }), [['shedding_off', ['load_shedding']]]);
+  assert.deepEqual(codes({ migrateWhenSpent: false }), [['spent_moves_off', ['migrate_when_spent']]]);
+  assert.deepEqual(codes({ warmSessions: 'never' }), [['warm_never', ['warm_sessions']]]);
+  const every = d.poolWarnings({ ...quiet, affinityTtlSeconds: 600, loadShedding: false, migrateWhenSpent: false, shedCap: 0.2, warmSessions: 'never', windowCeiling: 0.75 }, 17);
+  assert.deepEqual(every.map((w) => w.code), ['affinity_under_cache_ttl', 'cap_under_cohort', 'cap_under_quarter', 'ceiling_low', 'shedding_off', 'spent_moves_off', 'warm_never'], 'sorted by code');
+  assert.equal(every.find((w) => w.code === 'cap_under_cohort').text, 'The in-flight cap is under the largest live cohort of 17 agents, so subagents of one session wait for a slot they share.');
 });

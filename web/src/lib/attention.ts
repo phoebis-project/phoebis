@@ -1,29 +1,35 @@
 import type { AttentionItem, AttentionKind } from '@/api/types';
 import { fmtAbsolute, fmtRelative, instant as clockInstant } from './format';
-import { logHref, sinceCondition } from './routingLog';
+import { WINDOW_WORD, logHref, sinceCondition, type LogLink } from './routingLog';
 
 export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   certificate_expiring: 'Certificate expiring',
   certificate_reload_failed: 'Certificate reload failed',
   client_drift: 'Client drift',
+  destination_spent: 'Destination spent within the hour',
   funding_required: 'Funding required',
   ledger_record_parked: 'Priced record parked',
   poll_backoff: 'Usage poll backing off',
   pool_exhausted: 'Pool exhausted',
   reauth_required: 'Re-auth required',
   refresh_failed: 'Credential refresh failed',
+  shed_no_runway: 'Rounds without a destination',
+  wall_reached: 'Wall reached under the ceiling',
   writer_degraded: 'State writer degraded',
 };
 export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'serious' | 'warning'> = {
   certificate_expiring: 'warning',
   certificate_reload_failed: 'serious',
   client_drift: 'serious',
+  destination_spent: 'warning',
   funding_required: 'serious',
   ledger_record_parked: 'serious',
   poll_backoff: 'warning',
   pool_exhausted: 'critical',
   reauth_required: 'critical',
   refresh_failed: 'critical',
+  shed_no_runway: 'warning',
+  wall_reached: 'warning',
   writer_degraded: 'serious',
 };
 
@@ -39,14 +45,31 @@ type LinkedItem = Pick<AttentionItem, 'kind' | 'link' | 'since'>;
 const exhaustedPool = ({ kind, link }: LinkedItem): string | null => (kind === 'pool_exhausted' && link?.page === 'pools' ? link.id : null);
 
 /**
- * A `pool_exhausted` item opens the routing log on the pool's exhausted decisions from the condition's start. Every
- * other kind opens the account, pool or key where it is fixed. Null when the item names none.
+ * The routing log a routing condition opens, on the subject's rows of the kinds that make it hold, with the words that
+ * name them, null for any other kind or a link that names no subject of the kind's own.
+ */
+function conditionLog({ kind, link }: LinkedItem): { log: Pick<LogLink, 'accounts' | 'kinds' | 'pools'>; words: string } | null {
+  if (link === null) return null;
+  if (kind === 'shed_no_runway' && link.page === 'pools') return { log: { kinds: ['shedding_round'], pools: [link.id] }, words: `pool ${link.id}, shedding rounds` };
+  if (link.page !== 'accounts') return null;
+  if (kind === 'destination_spent') return { log: { accounts: [link.id], kinds: ['pin_migrated', 'window_spent'] }, words: `account ${link.id}, moves and spent windows` };
+  if (kind === 'wall_reached') return { log: { accounts: [link.id], kinds: ['window_spent'] }, words: `account ${link.id}, spent windows` };
+  return null;
+}
+
+/**
+ * A `pool_exhausted` item opens the routing log on the pool's exhausted decisions from the condition's start, and a
+ * routing condition on its subject's rounds, moves and walls since then. Every other kind opens the account, pool or
+ * key where it is fixed. Null when the item names none.
  */
 export function attentionHref(item: LinkedItem, now: number): string | null {
   const { link } = item;
   if (link === null) return null;
+  const since = sinceCondition(Date.parse(item.since), now);
   const pool = exhaustedPool(item);
-  if (pool !== null) return logHref({ pools: [pool], kinds: ['exhausted'], ...sinceCondition(Date.parse(item.since), now) });
+  if (pool !== null) return logHref({ pools: [pool], kinds: ['exhausted'], ...since });
+  const condition = conditionLog(item);
+  if (condition !== null) return logHref({ ...condition.log, ...since });
   const id = encodeURIComponent(link.id);
   return link.page === 'accounts' ? `/accounts/${id}` : `/${link.page}#${id}`;
 }
@@ -56,8 +79,11 @@ export function attentionHref(item: LinkedItem, now: number): string | null {
  * once it is a day away, or null for any other item.
  */
 export function attentionLogLine(item: LinkedItem, now: number): string | null {
+  const start = clockInstant(Date.parse(item.since), now);
   const pool = exhaustedPool(item);
-  return pool === null ? null : `Opens the Routing log: pool ${pool}, exhausted, since ${clockInstant(Date.parse(item.since), now)}`;
+  if (pool !== null) return `Opens the Routing log: pool ${pool}, exhausted, since ${start}`;
+  const condition = conditionLog(item);
+  return condition === null ? null : `Opens the Routing log: ${condition.words}, since ${start}`;
 }
 
 /** The id an address's hash names, the way `attentionHref` wrote it; null for no hash or one that does not decode. */
@@ -119,7 +145,60 @@ export function attentionDetail(item: AttentionItem, now: number): string {
     }
     case 'certificate_reload_failed':
       return `The ${listenerOf(item)} listener's pair did not load: ${text(d.error) ?? ''}. The router keeps serving the pair it loaded at ${fmtAbsolute(instant(d.serving_since))}.`;
+    case 'wall_reached':
+    case 'destination_spent':
+    case 'shed_no_runway':
+      return conditionWords(item, now);
   }
+}
+
+const words = (list: string[]): string => (list.length < 2 ? (list[0] ?? '') : `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`);
+const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+const names = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+/** The spent windows as the record names them, `5h`, `7d` or `Fable`, a key the console does not know as sent. */
+const windowsOf = (v: unknown): string => {
+  const list = names(v);
+  return list.length === 0 ? '' : ` the ${words(list.map((w) => WINDOW_WORD[w] ?? w))} ${list.length === 1 ? 'window' : 'windows'}`;
+};
+
+/**
+ * A routing condition's count, the settings it names with the pool's values where the route sends them, and its start,
+ * without the subject.
+ */
+function conditionWords(item: AttentionItem, now: number): string {
+  const d = item.detail;
+  const settingValues = d.setting_values !== null && typeof d.setting_values === 'object' ? (d.setting_values as Record<string, unknown>) : {};
+  const settings = words(
+    names(d.setting).map((name) => {
+      const value = settingValues[name];
+      return typeof value === 'number' ? `${name} ${Math.round(value * 100)} %` : name;
+    }),
+  );
+  const what = (() => {
+    switch (item.kind) {
+      case 'shed_no_runway':
+        return `${plural(count(d.rounds), 'round', 'rounds')} marked nothing, no destination had runway`;
+      case 'destination_spent': {
+        const spent = windowsOf(d.windows);
+        return `${plural(count(d.moves), 'move', 'moves')} landed${spent ? ` and${spent} ${names(d.windows).length === 1 ? 'was' : 'were'} spent` : ''} within the hour`;
+      }
+      default: {
+        const error = typeof d.projection_error === 'number' && Number.isFinite(d.projection_error) ? `, the last round projected ${Math.round((1 - d.projection_error) * 100)} %` : '';
+        const on = windowsOf(d.windows);
+        return `${plural(count(d.walls), 'wall', 'walls')} reached${on ? ` on${on}` : ''}${error}`;
+      }
+    }
+  })();
+  return [what, ...(settings ? [settings] : []), `since ${clockInstant(Date.parse(item.since), now)}`].join(', ');
+}
+
+/**
+ * A routing condition's sentence as the dashboard's line draws it, its subject first, or null for any other kind, which
+ * keeps its label and subject.
+ */
+export function attentionWords(item: AttentionItem, now: number): string | null {
+  if (item.kind !== 'wall_reached' && item.kind !== 'destination_spent' && item.kind !== 'shed_no_runway') return null;
+  return `${item.subject.label}: ${conditionWords(item, now)}`;
 }
 
 /**

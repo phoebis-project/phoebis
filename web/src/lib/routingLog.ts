@@ -1138,8 +1138,11 @@ export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: 
   };
 }
 
-/** The twenty settings of the card in its order, Strategy to Pace floor. */
-export const SETTINGS_ROWS: { key: keyof RecordSettings; label: string }[] = [
+/** A setting the card draws a row of: every member of the record's settings but a version 1 record's `legacy`. */
+type SettingKey = Exclude<keyof RecordSettings, 'legacy'>;
+
+/** The settings of the card in its order, Strategy to Retry in place. */
+export const SETTINGS_ROWS: { key: SettingKey; label: string }[] = [
   { key: 'strategy', label: 'Strategy' },
   { key: 'preferSubscription', label: 'Tier order' },
   { key: 'overagePolicy', label: 'Overage' },
@@ -1148,26 +1151,23 @@ export const SETTINGS_ROWS: { key: keyof RecordSettings; label: string }[] = [
   { key: 'sessionPlacement', label: 'Sessions placed by' },
   { key: 'minSharedPrefixTokens', label: 'Minimum shared prefix' },
   { key: 'subagentPlacement', label: 'Subagents placed by' },
-  { key: 'selectBelowUtilization', label: 'Select below' },
-  { key: 'shedAheadOfPace', label: 'Shed above' },
   { key: 'migrateWhenSpent', label: 'Move when spent' },
   { key: 'overageMoveGraceMinutes', label: 'Overage grace' },
   { key: 'windDownMinutes', label: 'Wind-down' },
-  { key: 'shedShare', label: 'Shed share' },
-  { key: 'burnWindowSeconds', label: 'Burn window' },
-  { key: 'sourceDwellSeconds', label: 'Shed dwell' },
+  { key: 'shedCap', label: 'Shed share' },
+  { key: 'burnAverageSeconds', label: 'Burn window' },
+  { key: 'shedDwellSeconds', label: 'Shed dwell' },
   { key: 'warmSessions', label: 'Warm sessions' },
   { key: 'inFlightCap', label: 'In-flight cap' },
   { key: 'retryInPlaceSeconds', label: 'Retry in place' },
-  { key: 'paceFloor', label: 'Pace floor' },
 ];
 
-const SECONDS: readonly (keyof RecordSettings)[] = ['affinityTtlSeconds', 'burnWindowSeconds', 'retryInPlaceSeconds', 'sourceDwellSeconds'];
-const MINUTES: readonly (keyof RecordSettings)[] = ['overageMoveGraceMinutes', 'windDownMinutes'];
-const SHARES: readonly (keyof RecordSettings)[] = ['paceFloor', 'selectBelowUtilization', 'shedAheadOfPace', 'shedShare'];
+const SECONDS: readonly SettingKey[] = ['affinityTtlSeconds', 'burnAverageSeconds', 'retryInPlaceSeconds', 'shedDwellSeconds'];
+const MINUTES: readonly SettingKey[] = ['overageMoveGraceMinutes', 'windDownMinutes'];
+const SHARES: readonly SettingKey[] = ['shedCap'];
 
 /** One setting's value as the grid draws it: a span, a share, `on` or `off`, or the setting's word. */
-export function settingValue(key: keyof RecordSettings, settings: RecordSettings): string {
+export function settingValue(key: SettingKey, settings: RecordSettings): string {
   const v = settings[key];
   if (key === 'strategy') return wordOf(STRATEGY_WORD, String(v));
   if (key === 'preferSubscription') return v ? 'subscriptions first' : 'priority alone';

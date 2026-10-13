@@ -325,7 +325,7 @@ function countOrder(ids: string[], poolId: string, atMs: number, model: string, 
   return ranked.map((x) => x.id);
 }
 
-/** The story's one shedding round: secondary's 5-hour window leads its pace by the pool's margin at 11:00. */
+/** The morning's shedding round: secondary's 5-hour window projects past the pool's ceiling at 11:00. */
 export const SHED_ROUND = { accountId: UNPRICED_ACCOUNT, at: clock(11, 0) };
 
 /** The plan windows a head reads spent, the later reset first, as the relay cools the account until it. */
@@ -823,17 +823,25 @@ interface StorySeed {
   userAgent?: string;
 }
 
-/** The routing log's hand-written requests: the story hour, the morning's shedding round and its move. */
+/**
+ * The routing log's hand-written requests: the story hour, the morning's shedding round and its move, the least-bad
+ * move onto nightly and the hold for nightly's reset.
+ */
 export const STORY_IDS = new Set([
-  'req_0b7c2d94-e61', 'req_1d9c3e55-0b2', 'req_1eaa9bc1-a18', 'req_2e7c90a1-6d4', 'req_31f0b7c2-6e1',
-  'req_3b8e51f4-0a9', 'req_4b0e9d17-c31', 'req_51d0e2b8-7a0', 'req_5e2f7a19-b03', 'req_69e30548-32e',
-  'req_6c3a9e27-5b1', 'req_7a2d4c18-e95', 'req_868264bc-611', 'req_9a07c4e1-d55', 'req_a1f04c2e-7b3',
-  'req_a6c19e73-5d2', 'req_b2bed817-a58', 'req_b72e9d05-c14', 'req_c41d0311-200', 'req_c90d3f61-a28',
-  'req_d4e8a7b2-916', 'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_e5a1c093-4d7', 'req_ef099b34-453',
-  'req_f3b6d218-85a', 'req_f8085653-422',
+  'req_0b7c2d94-e61', 'req_1d9c3e55-0b2', 'req_1eaa9bc1-a18', 'req_2c7d9f15-b63', 'req_2e7c90a1-6d4',
+  'req_31f0b7c2-6e1', 'req_3b8e51f4-0a9', 'req_4b0e9d17-c31', 'req_4e8b1d36-f72', 'req_51d0e2b8-7a0',
+  'req_5b2e8d47-c19', 'req_5e2f7a19-b03', 'req_69e30548-32e', 'req_6c3a9e27-5b1', 'req_6e1f3b98-a24',
+  'req_7a2d4c18-e95', 'req_7a3f0c26-d81', 'req_868264bc-611', 'req_9a07c4e1-d55', 'req_9d4c1a73-e58',
+  'req_a1f04c2e-7b3', 'req_a6c19e73-5d2', 'req_b2bed817-a58', 'req_b72e9d05-c14', 'req_c41d0311-200',
+  'req_c90d3f61-a28', 'req_d4e8a7b2-916', 'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_e5a1c093-4d7',
+  'req_ef099b34-453', 'req_f3b6d218-85a', 'req_f8085653-422',
 ]);
 /** The four-attempt failover whose first account refused the model the client spelled without its date. */
 export const REJECTION_STORY_ID = 'req_7015b657-290';
+/** The least-bad move onto nightly. */
+export const FORCED_MOVE_ID = 'req_5b2e8d47-c19';
+/** The conversation the least-bad move takes from the Overflow workspace to nightly. */
+const FORCED_SESSION_ID = 'a3e9c5d1-6b2f-4c8e-9d07-5f1a2b3c4d5e';
 /** The jobs request whose completion crossed research's daily budget. */
 export const BUDGET_CROSSING_ID = 'req_7c19e4a0-2f3';
 /** The session a laptop client sent. */
@@ -1077,6 +1085,35 @@ function storyRequests(): RequestLog[] {
     // The one turn of the session the mod released whole later. The release ends the keepalive record alone, so the
     // pin this turn wrote stays.
     { agentId: 'main', at: t(14, 3), attempts: [{ accountId: 'primary', at: t(14, 3), ms: 5_600, status: 200 }], id: 'req_7a2d4c18-e95', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'main', session: RELEASED_SESSION_ID, usage: { cacheWrite1h: 15_800, input: 2_300, output: 960 } },
+    // A long conversation's turn the Overflow workspace answers, and its next turn once the cache there has gone cold,
+    // which returns it to a plan: primary fits but is full and the rest fall short of the ceiling with its 640k-token
+    // rewrite, so the move lands on the least bad one, and nightly's window is spent within the hour.
+    { agentId: 'main', at: t(10, 52, 30), attempts: [{ accountId: 'overflow', at: t(10, 52, 30), ms: 14_000, status: 200 }], id: 'req_4e8b1d36-f72', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: FORCED_SESSION_ID, usage: { cacheRead: 612_000, cacheWrite5m: 24_000, input: 2_800, output: 1_900 } },
+    { agentId: 'main', at: t(11, 1, 50), attempts: [{ accountId: 'nightly', at: t(11, 1, 50), ms: 21_000, status: 200 }], id: FORCED_MOVE_ID, keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: FORCED_SESSION_ID, usage: { cacheWrite1h: 640_000, input: 3_100, output: 2_400 } },
+    // A new conversation lands on nightly 40 s before its spent window resets, since primary is full. The 429 that
+    // answers cools nightly to the reset, and the spent rule holds the request in place for it rather than move the
+    // pin, so it renews on the fresh window.
+    {
+      agentId: 'main',
+      at: t(13, 10, 20),
+      attempts: [
+        { accountId: 'nightly', at: t(13, 10, 20), cooldown: rateLimited(t(13, 11)), head5h: 1, ms: 900, status: 429 },
+        { accountId: 'nightly', at: t(13, 11), ms: 9_000, status: 200 },
+      ],
+      held: { cohort: null, heldMs: 39_000, waitedOn: ['nightly'] },
+      id: 'req_9d4c1a73-e58',
+      keyId: 'desktop',
+      model: 'claude-sonnet-5-5',
+      requestClass: 'main',
+      session: 'f19a6c2e-8b4d-4e73-a5c0-3d2b7e1f9a08',
+      usage: { cacheWrite1h: 41_200, input: 1_800, output: 1_350 },
+    },
+    // A fresh session placed by the spare rate: secondary falls short of the ceiling and its burn outruns its pace.
+    { agentId: 'main', at: t(13, 45), attempts: [{ accountId: 'primary', at: t(13, 45), ms: 3_800, status: 200 }], id: 'req_2c7d9f15-b63', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: 'b81e4f2a-7c3d-4a90-8e65-2d1f0c9b7a34', usage: { cacheWrite5m: 24_500, input: 2_900, output: 640 } },
+    // A fresh placement whose reservation the answer's usage replaces.
+    { agentId: 'main', at: t(13, 41, 15), attempts: [{ accountId: 'primary', at: t(13, 41, 15), ms: 7_200, status: 200 }], id: 'req_7a3f0c26-d81', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'c5d2e8a1-4f6b-4b17-a9c3-6e0d2f8b1a57', usage: { cacheWrite1h: 38_400, input: 2_600, output: 1_150 } },
+    // A renewal on primary whose round finds no sibling with runway for either pin.
+    { agentId: 'main', at: t(14, 12, 30), attempts: [{ accountId: 'primary', at: t(14, 12, 30), ms: 5_600, status: 200 }], id: 'req_6e1f3b98-a24', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 52_300, cacheWrite1h: 900, input: 2_100, output: 870 } },
   ];
   return seeds.map(storyRow);
 }
@@ -1152,18 +1189,12 @@ function supportedRule(r: RequestLog, from: string): PinMigrationReason | null {
   const spent = (windows: AttemptWindow[]) => spentWindows(windows).length > 0;
   const known = head.windows.some((w) => w.id === '5h' && w.utilization !== null) && head.windows.some((w) => w.id === '7d' && w.utilization !== null);
   const holds = registryKind(head.accountId) === 'api_key' || (known && !spent(head.windows));
-  // A move prefers a cool destination: one whose leads over pace sit under the band and that no round shed from
-  // within the dwell. One that is not cool is taken only where no sibling is, which this rule leaves undecided.
-  const headAccount = ACCOUNTS.find((a) => a.id === head.accountId);
-  const end = headAccount === undefined ? null : endOf(headAccount, at);
-  const band = pool.shedAheadOfPace === null ? null : pool.shedAheadOfPace - 0.05;
-  const under = band === null || head.windows.every((w) => (w.id !== '5h' && w.id !== '7d') || w.utilization === null || aheadOf({ resetsAt: w.resetsAt, utilization: w.utilization }, w.id === '5h' ? 5 * HOUR : 7 * DAY, at, end) < band);
-  const rested = !(head.accountId === SHED_ROUND.accountId && at >= SHED_ROUND.at && at - SHED_ROUND.at < pool.sourceDwellSeconds * 1_000);
-  if (!under || !rested) return null;
+  // The gate answers a destination that does not fit where no sibling at room fits, so any sibling the rule keeps can
+  // take the move, and the record reads its fitting rivals full.
   const toPlan = registryKind(head.accountId) === 'oauth' && !inOverage(head.accountId) && holds;
   if (!fast && pool.migrateWhenSpent && spent(oauthWindows(from, at, () => SERVED_FACTOR))) return holds && !(pool.overagePolicy === 'prefer_plan' && inOverage(head.accountId)) ? 'spent' : null;
   if (!fast && pool.overagePolicy === 'prefer_plan' && registryKind(from) === 'oauth' && inOverage(from)) return toPlan ? 'overage' : null;
-  if (registryKind(from) === 'api_key') return toPlan && at - pinned.createdAt >= pool.sourceDwellSeconds * 1_000 ? 'return_to_plan' : null;
+  if (registryKind(from) === 'api_key') return toPlan && at - pinned.createdAt >= pool.shedDwellSeconds * 1_000 ? 'return_to_plan' : null;
   return null;
 }
 
@@ -1260,6 +1291,7 @@ function storyEvents(): Map<string, RequestEvent[]> {
   moved('req_c41d0311-200', clock(14, 6, 30), 'secondary', 'primary', 'spent');
   moved('req_1d9c3e55-0b2', clock(14, 2, 11), 'secondary', 'primary', 'cooldown');
   moved('req_868264bc-611', clock(11, 8, 30), 'secondary', 'primary', 'shed');
+  moved(FORCED_MOVE_ID, clock(11, 1, 50), 'overflow', 'nightly', 'return_to_plan');
   const rejected = requestById.get('req_2e7c90a1-6d4');
   if (rejected) {
     const pin = { keyId: rejected.keyId, model: rejected.canonicalModel, sessionId: rejected.sessionId };
@@ -1282,10 +1314,9 @@ export const REQUEST_EVENTS: Map<string, RequestEvent[]> = buildRequestEvents();
  * The obstacles a fresh placement's passed-over members are drawn from. Being ranked behind another is the usual one.
  */
 const OBSTACLE_DRAWS: { value: string; weight: number }[] = [
-  { value: 'above_ceiling', weight: 2 },
   { value: 'at_cap', weight: 1 },
   { value: 'cooldown', weight: 2 },
-  { value: 'floor', weight: 1 },
+  { value: 'no_fit', weight: 3 },
   { value: 'operator', weight: 1 },
   { value: 'overage', weight: 1 },
   { value: 'ranked', weight: 10 },

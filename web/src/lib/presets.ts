@@ -5,20 +5,23 @@ import { WINDOW_HOURS, WINDOW_LABEL } from './windows';
 
 export type SheddingPreset = 'balanced' | 'conservative' | 'custom' | 'fast';
 
-/** The store's default is `balanced`. */
-export const SHEDDING_PRESETS: Record<Exclude<SheddingPreset, 'custom'>, { burnWindowSeconds: number; shedShare: number; sourceDwellSeconds: number }> = {
-  balanced: { burnWindowSeconds: 600, shedShare: 0.5, sourceDwellSeconds: 900 },
-  conservative: { burnWindowSeconds: 900, shedShare: 0.3, sourceDwellSeconds: 1_800 },
-  fast: { burnWindowSeconds: 300, shedShare: 0.5, sourceDwellSeconds: 600 },
+/**
+ * The store's default is `balanced`. A preset sets the cap, the average and the dwell, and never the load-shedding
+ * switch, so picking one leaves the round on or off as it was.
+ */
+export const SHEDDING_PRESETS: Record<Exclude<SheddingPreset, 'custom'>, { burnAverageSeconds: number; shedCap: number; shedDwellSeconds: number }> = {
+  balanced: { burnAverageSeconds: 1_800, shedCap: 0.5, shedDwellSeconds: 900 },
+  conservative: { burnAverageSeconds: 3_600, shedCap: 0.3, shedDwellSeconds: 1_800 },
+  fast: { burnAverageSeconds: 900, shedCap: 0.5, shedDwellSeconds: 600 },
 };
 
 export type FailoverPreset = 'balanced' | 'conservative' | 'custom' | 'fast';
 
-/** balanced 16, 60 s, 5 % (the default); fast 8, 20 s, 10 %; conservative 16, 120 s, 5 %. */
-export const FAILOVER_PRESETS: Record<Exclude<FailoverPreset, 'custom'>, { inFlightCap: number; paceFloor: number; retryInPlaceSeconds: number }> = {
-  balanced: { inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 60 },
-  conservative: { inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 120 },
-  fast: { inFlightCap: 8, paceFloor: 0.1, retryInPlaceSeconds: 20 },
+/** balanced 16 and 60 s (the default), fast 8 and 20 s, conservative 16 and 120 s. */
+export const FAILOVER_PRESETS: Record<Exclude<FailoverPreset, 'custom'>, { inFlightCap: number; retryInPlaceSeconds: number }> = {
+  balanced: { inFlightCap: 16, retryInPlaceSeconds: 60 },
+  conservative: { inFlightCap: 16, retryInPlaceSeconds: 120 },
+  fast: { inFlightCap: 8, retryInPlaceSeconds: 20 },
 };
 
 /**
@@ -27,34 +30,27 @@ export const FAILOVER_PRESETS: Record<Exclude<FailoverPreset, 'custom'>, { inFli
  */
 export const MIGRATE_BAND = 0.05;
 
-/**
- * The lead over pace the console proposes when the shed switch turns on: a prediction twenty points ahead of the
- * elapsed share, whose cool line under `MIGRATE_BAND` is 0.15. The router keeps no default, since the switch is the
- * operator's choice.
- */
-export const SHED_AHEAD_OF_PACE_DEFAULT = 0.2;
-
 // A share the store kept as a REAL can read back a rounding off the literal it was saved from.
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
-export function sheddingPresetOf(p: Pick<Pool, 'burnWindowSeconds' | 'shedShare' | 'sourceDwellSeconds'>): SheddingPreset {
+export function sheddingPresetOf(p: Pick<Pool, 'burnAverageSeconds' | 'shedCap' | 'shedDwellSeconds'>): SheddingPreset {
   const names = Object.keys(SHEDDING_PRESETS) as Exclude<SheddingPreset, 'custom'>[];
   return (
     names.find((name) => {
       const v = SHEDDING_PRESETS[name];
-      return v.burnWindowSeconds === p.burnWindowSeconds && near(v.shedShare, p.shedShare) && v.sourceDwellSeconds === p.sourceDwellSeconds;
+      return v.burnAverageSeconds === p.burnAverageSeconds && near(v.shedCap, p.shedCap) && v.shedDwellSeconds === p.shedDwellSeconds;
     }) ?? 'custom'
   );
 }
 
-/** All three values must match a preset; balanced and conservative differ in the retry-in-place bound alone. */
-export function failoverPresetOf(p: Pick<Pool, 'inFlightCap' | 'paceFloor' | 'retryInPlaceSeconds'>): FailoverPreset {
+/** Both values must match a preset. Balanced and conservative differ in the retry-in-place bound alone. */
+export function failoverPresetOf(p: Pick<Pool, 'inFlightCap' | 'retryInPlaceSeconds'>): FailoverPreset {
   const names = Object.keys(FAILOVER_PRESETS) as Exclude<FailoverPreset, 'custom'>[];
   return (
     names.find((name) => {
       const v = FAILOVER_PRESETS[name];
-      return v.inFlightCap === p.inFlightCap && near(v.paceFloor, p.paceFloor) && v.retryInPlaceSeconds === p.retryInPlaceSeconds;
+      return v.inFlightCap === p.inFlightCap && v.retryInPlaceSeconds === p.retryInPlaceSeconds;
     }) ?? 'custom'
   );
 }
@@ -138,14 +134,13 @@ export interface ShedPreview {
  * `sized` names the accounts whose tier the cost model sizes.
  */
 export function shedPreview(
-  pool: Pick<Pool, 'burnWindowSeconds' | 'shedAheadOfPace' | 'shedShare' | 'warmSessions'> & { members: { accountId: string; eligible?: MemberEligibility }[] },
+  pool: Pick<Pool, 'burnAverageSeconds' | 'shedCap' | 'warmSessions' | 'windowCeiling'> & { members: { accountId: string; eligible?: MemberEligibility }[] },
   accounts: Account[],
   sessions: Session[],
   now: number,
   sized: ReadonlySet<string>,
 ): ShedPreview {
-  const threshold = pool.shedAheadOfPace;
-  if (threshold === null) return { averaged: false, burnShare: 0, closest: null, cool: false, hot: [], members: 0, sessions: 0, unit: null, unpriced: 0, warm: 0 };
+  const threshold = pool.windowCeiling;
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const band = threshold - MIGRATE_BAND;
   const lead = (a: Account, id: '5h' | '7d') => {
@@ -180,7 +175,7 @@ export function shedPreview(
     }
     for (const l of leads) if (closest === null || l.lead > closest.lead) closest = l;
   }
-  const windowMs = pool.burnWindowSeconds * 1_000;
+  const windowMs = pool.burnAverageSeconds * 1_000;
   const rounds = hot.map((account) => {
     const pins = sessions
       // The route reads no burn for a window-share pin of an account whose tier the cost model does not size, while
@@ -206,7 +201,7 @@ export function shedPreview(
     const warm = pins.filter((p) => p.warm).sort(byRewrite);
     const ordered = pool.warmSessions === 'always' ? [...cold, ...warm].sort(byRewrite) : [...cold, ...warm];
     const total = pins.reduce((s, p) => s + (p.burn ?? 0), 0);
-    let marks = shedMarks(ordered, pool.shedShare * total);
+    let marks = shedMarks(ordered, pool.shedCap * total);
     // The warm pins stay in the order under `never`, so the last-pin rule still counts them among the member's pins;
     // the marks are priced pins alone, so the cold group's marks are its priced count at most, as the router's
     // `cold_priced` truncation reads them.

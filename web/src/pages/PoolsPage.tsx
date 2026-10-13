@@ -27,7 +27,7 @@ import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fm
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
 import { refreshAttention, useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
-import { FAILOVER_PRESETS, SHED_AHEAD_OF_PACE_DEFAULT, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
+import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { endOf, windowOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
@@ -45,7 +45,8 @@ const isPoolGroup = (value: string | null): value is PoolGroup => value !== null
 /** The strip: a feature the pool has on, in the rail's order, each opening the dialog on the group that edits it. */
 const FEATURES: { group: PoolGroup; on: (pool: Pool) => boolean; word: string }[] = [
   { group: 'autoMode', on: (p) => !p.autoModeServer, word: 'server-side auto mode off' },
-  { group: 'shedding', on: (p) => p.shedAheadOfPace !== null, word: 'load shedding' },
+  // The route serves no lead over pace, so the badge reads as for a pool that sets none.
+  { group: 'shedding', on: () => false, word: 'load shedding' },
   { group: 'cacheTtl', on: (p) => p.cacheTtl.enabled, word: 'cache TTL' },
   { group: 'keepalive', on: (p) => p.keepalive.enabled, word: 'keepalive' },
 ];
@@ -873,12 +874,6 @@ interface PoolForm {
   selectBelow: number;
   selectBelowOn: boolean;
   sessionPlacement: SessionPlacement;
-  /**
-   * The lead over pace in percent: the proposed default for a new pool or a stored null, or null once the operator
-   * clears the field, which a switched-on save refuses.
-   */
-  shedAhead: number | null;
-  shedAheadOn: boolean;
   sheddingCustom: boolean;
   status: 'active' | 'disabled';
   strategy: PoolStrategy;
@@ -886,9 +881,6 @@ interface PoolForm {
 }
 
 const isPreset = (seconds: number) => AFFINITY_PICKS.some((p) => p.seconds === seconds);
-
-// Two decimals, as formFrom keeps a stored lead, so the proposed 0.2 reads as 20 and never as a float's tail.
-const SHED_AHEAD_DEFAULT_PERCENT = Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100;
 
 const blankForm = (): PoolForm => ({
   affinity: 3_600,
@@ -917,8 +909,6 @@ const blankForm = (): PoolForm => ({
   selectBelow: 80,
   selectBelowOn: false,
   sessionPlacement: POOL_AFFINITY_DEFAULTS.sessionPlacement,
-  shedAhead: SHED_AHEAD_DEFAULT_PERCENT,
-  shedAheadOn: false,
   sheddingCustom: false,
   status: 'active',
   strategy: 'pace',
@@ -945,16 +935,17 @@ const formFrom = (pool: Pool): PoolForm => ({
   captureHours: String(pool.bodyCaptureHours || 24),
   customAffinity: !isPreset(pool.affinityTtlSeconds),
   engine: {
-    burnWindowSeconds: pool.burnWindowSeconds,
+    burnAverageSeconds: pool.burnAverageSeconds,
     inFlightCap: pool.inFlightCap,
+    loadShedding: pool.loadShedding,
     migrateWhenSpent: pool.migrateWhenSpent,
     overageMoveGraceMinutes: pool.overageMoveGraceMinutes,
-    paceFloor: pool.paceFloor,
     retryInPlaceSeconds: pool.retryInPlaceSeconds,
-    shedShare: pool.shedShare,
-    sourceDwellSeconds: pool.sourceDwellSeconds,
+    shedCap: pool.shedCap,
+    shedDwellSeconds: pool.shedDwellSeconds,
     warmSessions: pool.warmSessions,
     windDownMinutes: pool.windDownMinutes,
+    windowCeiling: pool.windowCeiling,
   },
   failoverCustom: failoverPresetOf(pool) === 'custom',
   horizonOn: pool.keepalive.scheduledHorizonSeconds !== null,
@@ -970,13 +961,10 @@ const formFrom = (pool: Pool): PoolForm => ({
   // The stored answer, never the effective one, so reopening a pool shows what the operator chose.
   preferSubscription: pool.preferSubscription,
   prefixTokens: String(pool.minSharedPrefixTokens),
-  // Two decimals, so a threshold the API set finer than a percent survives an unrelated edit.
-  selectBelow: pool.selectBelowUtilization === null ? 80 : Math.round(pool.selectBelowUtilization * 10_000) / 100,
-  selectBelowOn: pool.selectBelowUtilization !== null,
+  // The route serves no select-below threshold, so the form opens it as for a pool that sets none.
+  selectBelow: 80,
+  selectBelowOn: false,
   sessionPlacement: pool.sessionPlacement,
-  // Two decimals, as select-below keeps, so a threshold the API set finer than a percent survives an unrelated edit.
-  shedAhead: pool.shedAheadOfPace === null ? SHED_AHEAD_DEFAULT_PERCENT : Math.round(pool.shedAheadOfPace * 10_000) / 100,
-  shedAheadOn: pool.shedAheadOfPace !== null,
   sheddingCustom: sheddingPresetOf(pool) === 'custom',
   // Only the two settable states reach the form; a degraded or exhausted pool is still routing.
   status: pool.status === 'disabled' ? 'disabled' : 'active',
@@ -1087,7 +1075,6 @@ export function PoolDialog({
   if (open && accounts.length > 0 && memberOrder.length === 0) setMemberOrder(orderedAccountIds(accounts, form.members));
 
   const set = <K extends keyof PoolForm>(key: K, value: PoolForm[K]) => setForm((f) => ({ ...f, [key]: value }));
-  const setShedAhead = (value: number | null) => set('shedAhead', value);
   const poolKeys = (pool ? [...localKeys, ...keys.filter((k) => k.poolId === pool.id && !localKeys.some((l) => l.id === k.id))] : localKeys).filter((k) => !moved.has(k.id));
   const otherPools = pools.filter((p) => p.id !== pool?.id);
   // The id the create call derives from the name, which keys created before the pool is saved use too.
@@ -1157,12 +1144,7 @@ export function PoolDialog({
     name: form.name.trim(),
     overagePolicy: form.overage,
     preferSubscription: form.preferSubscription,
-    selectBelowUtilization: form.selectBelowOn ? form.selectBelow / 100 : null,
     sessionPlacement: form.sessionPlacement,
-    // Through whole hundredths of a percent, so a stored four-decimal threshold saves back as stored: the two-decimal
-    // percent divided by 100 lands an ulp off for about a quarter of them. An empty field goes on as NaN, which the
-    // refusals below hold the save for.
-    shedAheadOfPace: form.shedAheadOn ? (form.shedAhead === null ? Number.NaN : Math.round(form.shedAhead * 100) / 10_000) : null,
     status: form.status,
     strategy: form.strategy,
     subagentPlacement: form.subagentPlacement,
@@ -1714,20 +1696,6 @@ export function PoolDialog({
           A window&apos;s pace is the share of it that has elapsed, to its reset, or to the subscription&apos;s end when that comes first. A member runs ahead of pace by the points its used share exceeds the elapsed share, read on its 5-hour and its 7-day window. The readings are the Quota page&apos;s.
         </p>
         <div className="cells">
-          <div className="cell--half">
-            <SwitchedNumber
-              label="Shed ahead of pace"
-              numberLabel="Lead over pace (%)"
-              checked={form.shedAheadOn}
-              onChange={(v) => set('shedAheadOn', v)}
-              input={{ min: 0, max: 100, value: form.shedAhead ?? '', onChange: (e) => setShedAhead(e.target.value === '' ? null : Number(e.target.value)), 'aria-label': 'Shed ahead of pace (%)', 'aria-invalid': invalid('Shed ahead of pace (%)') }}
-              hint={
-                <>
-                  Read on the 5-hour and the 7-day window. A member whose used share runs ahead of the elapsed share by this many points starts a <GroupLink id="shedding">shedding round</GroupLink>, and while the switch is on a member at or above the margin less 5 points is no cool destination either: a new session, and a moved one, lands on a cool sibling while one exists.
-                </>
-              }
-            />
-          </div>
           <Expert refused={refusedFields.has('Select below utilization (%)')}>
             <div className="cell--half">
               <SwitchedNumber
@@ -1756,7 +1724,7 @@ export function PoolDialog({
           >
             <UtilizationBar
               expert={handleShown}
-              margin={form.shedAheadOn ? form.shedAhead : null}
+              margin={null}
               now={now}
               readings={readings}
               selectBelow={form.selectBelowOn ? { onChange: (v) => set('selectBelow', v), value: form.selectBelow } : null}
@@ -1776,34 +1744,34 @@ export function PoolDialog({
               <PresetPills label="Load shedding preset" value={sheddingPill} onPick={pickShedding} hints={SHEDDING_HINT} />
             </Field>
           </Expert>
-          <Expert refused={refusedFields.has('Share (%)')}>
+          <Expert refused={refusedFields.has('Shed cap (%)')}>
             <Field label="Share (%)" className="cell--half" hint="The part of the member's recent burn one round marks to move.">
-              <Input type="number" min={0} max={100} value={percentOf(form.engine.shedShare)} onChange={(e) => setEngine('shedShare', Number(e.target.value) / 100)} disabled={sheddingPill !== 'custom'} aria-invalid={invalid('Share (%)')} />
+              <Input type="number" min={0} max={100} value={percentOf(form.engine.shedCap)} onChange={(e) => setEngine('shedCap', Number(e.target.value) / 100)} disabled={sheddingPill !== 'custom'} aria-invalid={invalid('Shed cap (%)')} />
             </Field>
           </Expert>
-          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.burnWindowSeconds)}>
-            <Field label={ENGINE_FIELD_LABELS.burnWindowSeconds} className="cell--half" hint="The span each session's burn is averaged over.">
+          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.burnAverageSeconds)}>
+            <Field label={ENGINE_FIELD_LABELS.burnAverageSeconds} className="cell--half" hint="The span each session's burn is averaged over.">
               <Input
                 type="number"
-                min={ENGINE_BOUNDS.burnWindowSeconds.min}
+                min={ENGINE_BOUNDS.burnAverageSeconds.min}
                 step={60}
-                value={form.engine.burnWindowSeconds}
-                onChange={(e) => setEngine('burnWindowSeconds', Number(e.target.value))}
+                value={form.engine.burnAverageSeconds}
+                onChange={(e) => setEngine('burnAverageSeconds', Number(e.target.value))}
                 disabled={sheddingPill !== 'custom'}
-                aria-invalid={invalid(ENGINE_FIELD_LABELS.burnWindowSeconds)}
+                aria-invalid={invalid(ENGINE_FIELD_LABELS.burnAverageSeconds)}
               />
             </Field>
           </Expert>
-          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.sourceDwellSeconds)}>
-            <Field label={ENGINE_FIELD_LABELS.sourceDwellSeconds} className="cell--half" hint="The least time between two rounds on one member, and how long a moved session stays off it.">
+          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.shedDwellSeconds)}>
+            <Field label={ENGINE_FIELD_LABELS.shedDwellSeconds} className="cell--half" hint="The least time between two rounds on one member, and how long a moved session stays off it.">
               <Input
                 type="number"
-                min={ENGINE_BOUNDS.sourceDwellSeconds.min}
+                min={ENGINE_BOUNDS.shedDwellSeconds.min}
                 step={60}
-                value={form.engine.sourceDwellSeconds}
-                onChange={(e) => setEngine('sourceDwellSeconds', Number(e.target.value))}
+                value={form.engine.shedDwellSeconds}
+                onChange={(e) => setEngine('shedDwellSeconds', Number(e.target.value))}
                 disabled={sheddingPill !== 'custom'}
-                aria-invalid={invalid(ENGINE_FIELD_LABELS.sourceDwellSeconds)}
+                aria-invalid={invalid(ENGINE_FIELD_LABELS.shedDwellSeconds)}
               />
             </Field>
           </Expert>
@@ -1837,7 +1805,7 @@ export function PoolDialog({
           <Expert>
             <Field label="Preview" plain>
               <p className="shed-preview num" role="status">
-                {form.shedAheadOn ? (
+                {form.engine.loadShedding ? (
                   shedPreviewLine(preview, true, settings.data ? 'ready' : settings.error ? 'missing' : 'loading', now)
                 ) : (
                   <>
@@ -1888,19 +1856,6 @@ export function PoolDialog({
                 disabled={failoverPill !== 'custom'}
                 aria-invalid={invalid(ENGINE_FIELD_LABELS.retryInPlaceSeconds)}
               />
-            </Field>
-          </Expert>
-          <Expert refused={refusedFields.has('Pace floor (%)')}>
-            <Field
-              label="Pace floor (%)"
-              className="cell--half"
-              hint={
-                <>
-                  Under the <GroupLink id="selection">Pace</GroupLink> strategy, a member with this share or less of the window Pace reads left serves only as the last resort.
-                </>
-              }
-            >
-              <Input type="number" min={0} max={100} value={percentOf(form.engine.paceFloor)} onChange={(e) => setEngine('paceFloor', Number(e.target.value) / 100)} disabled={failoverPill !== 'custom'} aria-invalid={invalid('Pace floor (%)')} />
             </Field>
           </Expert>
         </div>

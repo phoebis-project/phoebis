@@ -7,7 +7,7 @@ import type {
   Subscription,
 } from '@/api/types';
 import { foldEffort, foldRequestClass } from '@/lib/dimensions';
-import { modelRulesRefusal, type NumericKeepaliveKey } from '@/lib/forms';
+import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { isFastScope } from '@/lib/quota';
@@ -16,7 +16,7 @@ import { breakdownOf, burnOf, placementsOf, rewritesOf, seriesOf } from './analy
 import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE, memberPins } from './operations';
-import { KEYS, POOLS, composedFor, resolvedFor } from './pools';
+import { KEYS, POOLS, composedFor, resolvedFor, servedFigures } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
 import { createRng } from './rng';
 import { ROUTING_LOG_KINDS, getDecision, listRoutingLog } from './routingLog';
@@ -85,18 +85,16 @@ const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'modelRules' | 'modelRule
   return null;
 };
 
-/** The shedding and failover refusals, in the order and words of the pool routes. */
+/** The ceiling, shedding and failover refusals, in the order and words of the pool routes. */
 const engineRefusal = (input: PoolInput): string | null => {
   const whole = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
-  if (!(input.shedShare >= 0 && input.shedShare <= 1)) return 'shed_share is between 0 and 1';
-  if (!whole(input.burnWindowSeconds, 60, Number.MAX_SAFE_INTEGER)) return 'burn_window_seconds is at least 60';
-  if (input.burnWindowSeconds > 604_800) return 'burn_window_seconds is at most 604800 (one week)';
-  if (!whole(input.sourceDwellSeconds, 60, Number.MAX_SAFE_INTEGER)) return 'source_dwell_seconds is at least 60';
-  if (input.sourceDwellSeconds > 604_800) return 'source_dwell_seconds is at most 604800 (one week)';
+  if (!(input.windowCeiling >= 0.5 && input.windowCeiling <= 1)) return 'window_ceiling is between 0.5 and 1.0';
+  if (!(input.shedCap >= 0.1 && input.shedCap <= 1)) return 'shed_cap is between 0.1 and 1.0';
+  if (!whole(input.burnAverageSeconds, 600, 7_200)) return 'burn_average_seconds is between 600 and 7200';
+  if (!whole(input.shedDwellSeconds, 300, 7_200)) return 'shed_dwell_seconds is between 300 and 7200';
   if (!WARM_SESSIONS_VALUES.some((mode) => mode === input.warmSessions)) return 'warm_sessions must be always, never, or when_needed';
   if (!whole(input.retryInPlaceSeconds, 0, 300)) return 'retry_in_place_seconds is 0 to 300';
   if (!whole(input.inFlightCap, 1, 4_294_967_295)) return 'in_flight_cap is at least 1';
-  if (!(input.paceFloor >= 0 && input.paceFloor <= 1)) return 'pace_floor is between 0 and 1';
   if (!whole(input.overageMoveGraceMinutes, 0, 300)) return 'overage_move_grace_minutes is 0 to 300';
   if (!whole(input.windDownMinutes, 0, 10_080)) return 'wind_down_minutes is at most 10080 (one week)';
   return null;
@@ -277,12 +275,12 @@ const eligibilityOf = (a: Account | undefined, policy: PoolInput['overagePolicy'
 };
 
 /**
- * A written member as the route answers it: the kind read off the account, and no spend, since the mock keeps no
- * ledger to price one from. A member sent without a budget field has no budget over that period. A save moves no pin,
- * so a member the pool held keeps its pins and one it gains holds none yet.
+ * A written member as the route answers it: the kind, the burn and the Pace score read off the account, and no spend,
+ * since the mock keeps no ledger to price one from. A member sent without a budget field has no budget over that
+ * period. A save moves no pin, so a member the pool held keeps its pins and one it gains holds none yet.
  */
 const writtenMember = (m: PoolInput['members'][number], account: Account | undefined, eligible: (member: Omit<PoolMember, 'eligible'>) => MemberEligibility, activePins = 0): PoolMember => {
-  const member = { accountId: m.accountId, activePins, budgetDailyUsd: m.budgetDailyUsd ?? null, budgetMonthlyUsd: m.budgetMonthlyUsd ?? null, budgetUntil: null, kind: account?.kind ?? 'oauth', priority: m.priority, spends: [] };
+  const member = { accountId: m.accountId, activePins, budgetDailyUsd: m.budgetDailyUsd ?? null, budgetMonthlyUsd: m.budgetMonthlyUsd ?? null, budgetUntil: null, kind: account?.kind ?? 'oauth', priority: m.priority, spends: [], ...servedFigures(m.accountId, Date.now()) };
   return { ...member, eligible: eligible(member) };
 };
 
@@ -366,13 +364,13 @@ export class MockApi implements Api {
   /** Set by the first replay, which lands the story's parked records. */
   private parkedLanded = false;
   // The route reads every member's kind and verdict afresh on each answer; the story's are read once, at load.
-  private pools: Omit<Pool, 'activePins' | 'keys'>[] = POOLS.map((p) => ({
+  private pools: Omit<Pool, 'activePins' | 'keys' | 'warnings'>[] = POOLS.map((p) => ({
     ...p,
     // Every pool of the story is its id's first.
     revision: stampToken(1, p.updatedAt),
     members: p.members.map((m) => {
       const account = this.accounts.find((a) => a.id === m.accountId);
-      return { ...m, activePins: memberPins(p.id, m.accountId), budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth' };
+      return { ...m, activePins: memberPins(p.id, m.accountId), budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth', ...servedFigures(m.accountId, Date.now()) };
     }),
   }));
   private secretRng = createRng(MOCK_SEED);
@@ -384,10 +382,15 @@ export class MockApi implements Api {
     return Array.from({ length: n }, () => 'abcdefghijklmnopqrstuvwxyz0123456789'[this.secretRng.int(0, 35)]).join('');
   }
 
-  /** The pool as the route answers it, with its keys listed from the key registry at the time of the read. */
-  private poolView(p: Omit<Pool, 'activePins' | 'keys'>): Pool {
+  /**
+   * The pool as the route answers it, with its keys listed from the key registry at the time of the read, and its
+   * warnings the route's checks on the saved settings and the largest cohort among the pinned sessions under its keys.
+   */
+  private poolView(p: Omit<Pool, 'activePins' | 'keys' | 'warnings'>): Pool {
     const keys = this.keys.filter((k) => k.poolId === p.id).map((k) => ({ enabled: k.enabled, id: k.id, label: k.name, prefix: k.prefix }));
-    return { ...p, activePins: poolPins(p), keys };
+    const ids = new Set(keys.map((k) => k.id));
+    const cohort = Math.max(0, ...this.sessions.filter((s) => s.pinned && ids.has(s.keyId)).map((s) => s.agents));
+    return { ...p, activePins: poolPins(p), keys, warnings: poolWarnings(p, cohort) };
   }
 
   private account(accountId: string): Account {
@@ -556,7 +559,7 @@ export class MockApi implements Api {
     if (members) throw new ApiError(400, members, null);
     const held = heldElsewhere(input.members, this.pools, id);
     if (held) throw new ApiError(409, held, null);
-    const pool: Omit<Pool, 'activePins' | 'keys'> = {
+    const pool: Omit<Pool, 'activePins' | 'keys' | 'warnings'> = {
       ...POOL_SAMPLE,
       ...input,
       cost24h: 0,
@@ -963,7 +966,7 @@ export class MockApi implements Api {
     if (held) return Promise.reject(new ApiError(409, held, null));
     const verdict = new Map(current.members.map((m) => [m.accountId, m.eligible]));
     const pinned = new Map(current.members.map((m) => [m.accountId, m.activePins]));
-    const next: Omit<Pool, 'activePins' | 'keys'> = {
+    const next: Omit<Pool, 'activePins' | 'keys' | 'warnings'> = {
       ...current,
       ...input,
       // From the saved members' kinds, as the router composes them on every save.

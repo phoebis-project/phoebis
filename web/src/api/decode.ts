@@ -1,7 +1,7 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, RecordCandidate, RecordOutcome, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, RewritePoint,
+  ModelsState, Overview, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, RewritesAnswer,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId, WindowSample,
 } from './types';
 import { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES, AUTO_MODE_VALUES, DIAGNOSTICS_SOURCE_VALUES } from './types';
@@ -49,7 +49,10 @@ function inDrawnOrder<T>(byId: Map<WindowId, T>): T[] {
 function decodeWindow(w: Rec): RateLimitWindow | null {
   const id = windowId(str(w.id));
   if (id === null) return null;
-  return { id, label: WINDOW_LABEL[id] ?? id, observedAt: isoOr(w.observed_at, epoch), periodHours: WINDOW_HOURS[id] ?? hoursOfKey(id), resetsAt: isoOrNull(w.resets_at), utilization: num(w.utilization) };
+  return {
+    burn: numOrNull(w.burn), horizon: isoOrNull(w.horizon), id, label: WINDOW_LABEL[id] ?? id, observedAt: isoOr(w.observed_at, epoch), periodHours: WINDOW_HOURS[id] ?? hoursOfKey(id),
+    projection: numOrNull(w.projection), resetsAt: isoOrNull(w.resets_at), utilization: num(w.utilization),
+  };
 }
 
 /** One window per id, the newest reading when both samplers wrote one, in the order the pages draw them. */
@@ -345,7 +348,7 @@ export function decodePool(v: unknown): Pool {
     affinityTtlSeconds: num(p.affinity_ttl_seconds),
     autoModeServer: bool(p.auto_mode_server, true),
     bodyCaptureHours: num(p.body_capture_hours),
-    burnWindowSeconds: num(p.burn_window_seconds, POOL_ENGINE_DEFAULTS.burnWindowSeconds),
+    burnAverageSeconds: num(p.burn_average_seconds, POOL_ENGINE_DEFAULTS.burnAverageSeconds),
     cacheDiagnostics: bool(p.cache_diagnostics),
     cacheTtl: decodeCacheTtl(p.cache_ttl),
     cost24h: num(p.cost_24h),
@@ -357,16 +360,19 @@ export function decodePool(v: unknown): Pool {
     keepaliveResolved: decodeKeepaliveResolved(p.keepalive_resolved),
     // A row without the key fields reads as the store's defaults.
     keys: list(p.keys).map(rec).map((k) => ({ enabled: bool(k.enabled, true), id: str(k.id), label: str(k.label), prefix: str(k.prefix) })),
+    loadShedding: bool(p.load_shedding, POOL_ENGINE_DEFAULTS.loadShedding),
     members: list(p.members).map(rec).map((m) => ({
       accountId: str(m.account_id),
       activePins: num(m.active_pins),
       budgetDailyUsd: numOrNull(m.budget_daily_usd),
       budgetMonthlyUsd: numOrNull(m.budget_monthly_usd),
       budgetUntil: isoOrNull(m.budget_until),
+      burn: numOrNull(m.burn),
       // A row from before the router reported eligibility reads as not servable rather than as servable.
       eligible: ELIGIBILITY_VALUES.find((e) => e === str(m.eligible)) ?? 'unavailable',
       // The route answers null for an account it cannot find, which is no API-key account either.
       kind: ACCOUNT_KIND_VALUES.find((x) => x === str(m.kind)) ?? 'oauth',
+      paceScore: numOrNull(m.pace_score),
       priority: num(m.priority),
       spends: list(m.spends).map(rec).map((s) => ({ period: BUDGET_PERIOD_VALUES.find((x) => x === str(s.period)) ?? 'month', periodEnd: isoOrNull(s.period_end), spentUsd: num(s.spent_usd) })),
     })),
@@ -377,25 +383,25 @@ export function decodePool(v: unknown): Pool {
     name: str(p.label),
     overageMoveGraceMinutes: num(p.overage_move_grace_minutes, POOL_ENGINE_DEFAULTS.overageMoveGraceMinutes),
     overagePolicy: OVERAGE_POLICY_VALUES.find((x) => x === str(p.overage_policy)) ?? 'prefer_plan',
-    paceFloor: num(p.pace_floor, POOL_ENGINE_DEFAULTS.paceFloor),
     preferSubscription: bool(p.prefer_subscription),
     requests24h: num(p.requests_24h),
     retryInPlaceSeconds: num(p.retry_in_place_seconds, POOL_ENGINE_DEFAULTS.retryInPlaceSeconds),
     // A row whose answer carried none reads 0, which the route refuses as stale, so the editor offers Reload rather
     // than landing over a row it could not vouch for.
     revision: num(p.revision),
-    selectBelowUtilization: numOrNull(p.select_below_utilization),
     sessionPlacement: SESSION_PLACEMENT_VALUES.find((x) => x === str(p.session_placement)) ?? POOL_AFFINITY_DEFAULTS.sessionPlacement,
-    shedAheadOfPace: numOrNull(p.shed_ahead_of_pace),
-    shedShare: num(p.shed_share, POOL_ENGINE_DEFAULTS.shedShare),
-    sourceDwellSeconds: num(p.source_dwell_seconds, POOL_ENGINE_DEFAULTS.sourceDwellSeconds),
+    shedCap: num(p.shed_cap, POOL_ENGINE_DEFAULTS.shedCap),
+    shedDwellSeconds: num(p.shed_dwell_seconds, POOL_ENGINE_DEFAULTS.shedDwellSeconds),
     status: POOL_STATUS_VALUES.find((x) => x === str(p.status)) ?? 'active',
     strategy: POOL_STRATEGY_VALUES.find((x) => x === str(p.strategy)) ?? 'pace',
     subagentPlacement: SUBAGENT_PLACEMENT_VALUES.find((x) => x === str(p.subagent_placement)) ?? POOL_AFFINITY_DEFAULTS.subagentPlacement,
     traffic24h: list(p.traffic_24h).map(rec).map((b) => ({ at: isoOr(b.at, epoch), costUsd: num(b.cost_usd), failed: num(b.failed), requests: num(b.requests), tokens: num(b.tokens) })),
     updatedAt: isoOr(p.updated_at, epoch),
     warmSessions: WARM_SESSIONS_VALUES.find((x) => x === str(p.warm_sessions)) ?? POOL_ENGINE_DEFAULTS.warmSessions,
+    // An entry that is no object says nothing the dialog can draw, so it is left out rather than drawn blank.
+    warnings: list(p.warnings).filter((w) => w !== null && typeof w === 'object').map(rec).map((w) => ({ code: str(w.code), fields: strings(w.fields), text: str(w.text) })),
     windDownMinutes: num(p.wind_down_minutes, POOL_ENGINE_DEFAULTS.windDownMinutes),
+    windowCeiling: num(p.window_ceiling, POOL_ENGINE_DEFAULTS.windowCeiling),
   };
 }
 
@@ -418,10 +424,10 @@ export const PIN_RELEASE_REASON_VALUES = [
 ] as const satisfies readonly PinReleaseReason[];
 /**
  * The obstacles the router names for a candidate it passed over: the eligibility checks (`attempted`, `budget`,
- * `budget_unknown`, `cooldown`, `credits`, `operator`, `overage`, `subscription_ended`) and the partitions
- * (`above_ceiling`, `at_cap`, `floor`, `ranked`, `spent`, `winding_down`). The trace keeps any other name as sent.
+ * `budget_unknown`, `cooldown`, `credits`, `operator`, `overage`, `subscription_ended`) and the partitions (`at_cap`,
+ * `no_fit`, `ranked`, `spent`, `winding_down`). The trace keeps any other name as sent.
  */
-export const SKIP_OBSTACLE_VALUES = ['above_ceiling', 'at_cap', 'attempted', 'budget', 'budget_unknown', 'cooldown', 'credits', 'floor', 'operator', 'overage', 'ranked', 'spent', 'subscription_ended', 'winding_down'] as const;
+export const SKIP_OBSTACLE_VALUES = ['at_cap', 'attempted', 'budget', 'budget_unknown', 'cooldown', 'credits', 'no_fit', 'operator', 'overage', 'ranked', 'spent', 'subscription_ended', 'winding_down'] as const;
 export const PLACEMENT_RUNG_VALUES = ['content', 'static', 'with_main'] as const satisfies readonly Placement['rung'][];
 const tierOf = (v: unknown): SelectionTrace['tier'] => {
   const t = list(v);
@@ -476,7 +482,8 @@ const FACT_ENTITY_VALUES = ['account', 'key', 'model', 'pool'] as const satisfie
 const decisionKindOf = (v: unknown): DecisionKind | undefined => DECISION_KIND_VALUES.find((k) => k === str(v));
 const orNull = <T,>(v: unknown, read: (r: Rec) => T): T | null => (v === null || typeof v !== 'object' ? null : read(rec(v)));
 const scoreOf = (v: unknown): Score | null => orNull(v, (s) => ({ accountId: str(s.account_id), score: num(s.score), unit: str(s.unit) }));
-const holdOf = (v: unknown) => orNull(v, (h) => ({ accountId: str(h.account_id), boundMs: num(h.bound_ms), cohort: strOrNull(h.cohort) }));
+/** A hold with no reason is a version 1 record's, which held for a slot alone. */
+const holdOf = (v: unknown): RecordHold | null => orNull(v, (h) => ({ accountId: str(h.account_id), boundMs: num(h.bound_ms), cohort: strOrNull(h.cohort), reason: str(h.reason, 'cap'), until: isoOrNull(h.until) }));
 const exhaustionOf = (v: unknown) => orNull(v, (x) => ({ deadline: isoOrNull(x.deadline), kind: str(x.kind), obstacle: strOrNull(x.obstacle), reason: strOrNull(x.reason), window: strOrNull(x.window) }));
 const refusalOf = (v: unknown) => orNull(v, (x) => ({ code: str(x.code), kind: str(x.kind), reason: str(x.reason) }));
 /** A value the console cannot draw as a number or a word drops its pair rather than drawing a guess. */
@@ -540,22 +547,24 @@ function decodeRecordCandidate(v: unknown): RecordCandidate {
   const prefix = rec(c.prefix);
   return {
     accountId: str(c.account_id), allowanceKnown: bool(c.allowance_known),
+    binding: strOrNull(c.binding),
     budget: list(c.budget).map(rec).map((b) => ({ budgetUsd: num(b.budget_usd), observedAt: isoOrNull(b.observed_at), period: str(b.period), periodEnd: isoOrNull(b.period_end), periodStart: isoOrNull(b.period_start), spentUsd: numOrNull(b.spent_usd) })),
+    burn: numberMap(c.burn),
     cooldowns: list(c.cooldowns).map(rec).map((x) => ({ blocking: bool(x.blocking), reason: str(x.reason), scope: str(x.scope), until: isoOr(x.until, epoch), window: str(x.window) })),
     credits: orNull(c.credits, (x) => ({ blocked: strOrNull(x.blocked), disabledReason: strOrNull(x.disabled_reason), enabled: bool(x.enabled), observedAt: isoOr(x.observed_at, epoch), utilization: numOrNull(x.utilization) })),
-    enabled: bool(c.enabled), inFlight: num(c.in_flight), inFlightCap: num(c.in_flight_cap), inOverage: bool(c.in_overage), incarnation: num(c.incarnation), kind: str(c.kind) === 'api_key' ? 'api_key' : 'oauth',
+    enabled: bool(c.enabled), fit: strOrNull(c.fit), inFlight: num(c.in_flight), inFlightCap: num(c.in_flight_cap), inOverage: bool(c.in_overage), incarnation: num(c.incarnation), kind: str(c.kind) === 'api_key' ? 'api_key' : 'oauth',
     obstacle: orNull(c.obstacle, (o) => ({ name: str(o.name), reason: strOrNull(o.reason), until: isoOrNull(o.until), window: strOrNull(o.window) })),
     overage: orNull(c.overage, (o) => ({ observedAt: isoOr(o.observed_at, epoch), reset: isoOrNull(o.reset), since: isoOr(o.since, epoch), source: str(o.source) })),
-    pace: orNull(c.pace, (p) => ({ deadline: isoOrNull(p.deadline), end: isoOrNull(p.end), hours: numOrNull(p.hours), remaining: num(p.remaining), reset: isoOrNull(p.reset), score: num(p.score), window: strOrNull(p.window) })),
+    pace: orNull(c.pace, (p) => ({ burn: num(p.burn), deadline: isoOrNull(p.deadline), end: isoOrNull(p.end), hours: numOrNull(p.hours), remaining: num(p.remaining), reset: isoOrNull(p.reset), score: num(p.score), window: strOrNull(p.window) })),
     partition: strOrNull(c.partition), planTier: strOrNull(c.plan_tier),
     prefix: { content: prefixEntryOf(prefix.content), contentMatch: prefixEntryOf(prefix.content_match), static: prefixEntryOf(prefix.static), staticMatch: prefixEntryOf(prefix.static_match), withMain: bool(prefix.with_main) },
-    priority: num(c.priority), rank: numOrNull(c.rank), score: numOrNull(c.score), state: str(c.state),
+    priority: num(c.priority), rank: numOrNull(c.rank), runwayMs: numOrNull(c.runway_ms), score: numOrNull(c.score), state: str(c.state),
     term: orNull(c.term, (t) => ({ cancelled: bool(t.cancelled), ended: bool(t.ended), endsAt: isoOrNull(t.ends_at), since: isoOrNull(t.since), trialEndsAt: isoOrNull(t.trial_ends_at), windingDown: bool(t.winding_down) })),
     tier: tierOrZero(c.tier), verdict: str(c.verdict),
     windows: Object.fromEntries(
       Object.entries(rec(c.windows)).map(([name, w]) => {
         const x = rec(w);
-        return [name, { ageMs: num(x.age_ms), ahead: numOrNull(x.ahead), observedAt: isoOr(x.observed_at, epoch), reset: isoOrNull(x.reset), source: str(x.source), utilization: num(x.utilization) }];
+        return [name, { ageMs: num(x.age_ms), ahead: numOrNull(x.ahead), horizon: isoOrNull(x.horizon), observedAt: isoOr(x.observed_at, epoch), projection: numOrNull(x.projection), reserved: num(x.reserved), reset: isoOrNull(x.reset), source: str(x.source), utilization: num(x.utilization) }];
       }),
     ),
   };
@@ -570,16 +579,41 @@ function decodeRecordOutcome(v: unknown): RecordOutcome {
       cacheReadTokens: numOrNull(c.cache_read_tokens), completedAt: isoOrNull(c.completed_at), freed: bool(c.freed), heldMs: numOrNull(c.held_ms), hit: typeof c.hit === 'boolean' ? c.hit : null, inputTokens: numOrNull(c.input_tokens), promisedTokens: numOrNull(c.promised_tokens), status: numOrNull(c.status),
     })),
     exhaustion: exhaustionOf(o.exhaustion), fromAccountId: strOrNull(o.from_account_id), hold: holdOf(o.hold), inOverage: bool(o.in_overage), kind: decisionKindOf(o.kind) ?? 'placed',
+    markCleared: orNull(o.mark_cleared, (m) => ({ markedAt: isoOr(m.marked_at, epoch), markedOn: str(m.marked_on), markedWindow: str(m.marked_window), projection: numOrNull(m.projection), reason: str(m.reason) })),
     pinEvents: list(o.pin_events).map(rec).map((e) => ({ kind: str(e.kind), reason: strOrNull(e.reason) })),
     pinWritten: orNull(o.pin_written, (p) => ({ action: str(p.action), epoch: num(p.epoch), hashesStamped: bool(p.hashes_stamped), lane: str(p.lane), refreshStamped: bool(p.refresh_stamped) })),
-    refusal: refusalOf(o.refusal), rule: strOrNull(o.rule), rung: placementOf(o.rung),
+    refusal: refusalOf(o.refusal),
+    reservation: orNull(o.reservation, (x) => ({ accountId: str(x.account_id), burn: numberMap(x.burn), expiresAt: isoOr(x.expires_at, epoch), rewrite: numberMap(x.rewrite) })),
+    rule: strOrNull(o.rule), rung: placementOf(o.rung),
     shedMarks: Array.isArray(o.shed_marks) ? o.shed_marks.map(rec).map((m) => ({ agentId: str(m.agent_id), keyId: str(m.key_id), model: str(m.model), sessionId: str(m.session_id) })) : null,
     strategy: str(o.strategy), tier: tierOf(o.tier), upstreamModel: strOrNull(o.upstream_model),
   };
 }
 
+/**
+ * The settings by the record's version: version 2 names the switch, the ceiling, the cap, the average and the dwell, and
+ * version 1 the three old names of the last three with its three removed settings, which `legacy` keeps so an old
+ * record still shows what it read.
+ */
+function decodeRecordSettings(x: Rec, version: number): RecordSettings {
+  const shared = {
+    affinityMode: str(x.affinity_mode), affinityTtlSeconds: num(x.affinity_ttl_seconds), inFlightCap: num(x.in_flight_cap), migrateWhenSpent: bool(x.migrate_when_spent),
+    minSharedPrefixTokens: num(x.min_shared_prefix_tokens), overageMoveGraceMinutes: num(x.overage_move_grace_minutes), overagePolicy: str(x.overage_policy), poolUpdatedAt: isoOr(x.pool_updated_at, epoch),
+    preferSubscription: bool(x.prefer_subscription), retryInPlaceSeconds: num(x.retry_in_place_seconds), sessionPlacement: str(x.session_placement), strategy: str(x.strategy), subagentPlacement: str(x.subagent_placement),
+    warmSessions: str(x.warm_sessions), windDownMinutes: num(x.wind_down_minutes),
+  };
+  if (version === 1) {
+    return {
+      ...shared, burnAverageSeconds: num(x.burn_window_seconds), legacy: { paceFloor: num(x.pace_floor), selectBelowUtilization: numOrNull(x.select_below_utilization), shedAheadOfPace: numOrNull(x.shed_ahead_of_pace) },
+      loadShedding: null, shedCap: num(x.shed_share), shedDwellSeconds: num(x.source_dwell_seconds), windowCeiling: null,
+    };
+  }
+  return { ...shared, burnAverageSeconds: num(x.burn_average_seconds), legacy: null, loadShedding: bool(x.load_shedding), shedCap: num(x.shed_cap), shedDwellSeconds: num(x.shed_dwell_seconds), windowCeiling: num(x.window_ceiling) };
+}
+
 export function decodeDecisionRecord(v: unknown): DecisionRecord {
   const r = rec(v);
+  const version = num(r.version);
   const q = rec(r.request);
   const lane = rec(q.lane);
   const flags = rec(q.flags);
@@ -590,13 +624,14 @@ export function decodeDecisionRecord(v: unknown): DecisionRecord {
     outcome: decodeRecordOutcome(r.outcome),
     pin: orNull(r.pin, (p) => ({
       accountId: strOrNull(p.account_id), createdAt: isoOrNull(p.created_at), epoch: numOrNull(p.epoch), found: str(p.found, 'none'), idleMs: numOrNull(p.idle_ms), incarnation: numOrNull(p.incarnation), lane: strOrNull(p.lane), lastRefreshAt: isoOrNull(p.last_refresh_at), lastUsedAt: isoOrNull(p.last_used_at),
-      marked: bool(p.marked), refreshAgeMs: numOrNull(p.refresh_age_ms), released: strings(p.released), shed: orNull(p.shed, (x) => ({ at: isoOr(x.at, epoch), from: str(x.from) })), warmth: strOrNull(p.warmth), warmthCause: strOrNull(p.warmth_cause),
+      marked: bool(p.marked), markedAt: isoOrNull(p.marked_at), markedOn: strOrNull(p.marked_on), markedWindow: strOrNull(p.marked_window), refreshAgeMs: numOrNull(p.refresh_age_ms), released: strings(p.released),
+      shed: orNull(p.shed, (x) => ({ at: isoOr(x.at, epoch), from: str(x.from) })), warmth: strOrNull(p.warmth), warmthCause: strOrNull(p.warmth_cause),
     })),
     // A word this build does not know reads as none, as a poll outcome does. The raw answer still carries it.
     pinReason: PIN_REASON_VALUES.find((x) => x === r.pin_reason) ?? null,
     raw: v,
     request: {
-      agentId: str(q.agent_id), at: isoOr(q.at, epoch), attempt: num(q.attempt, 1), attempted: strings(q.attempted), canonicalModel: str(q.canonical_model),
+      agentId: str(q.agent_id), at: isoOr(q.at, epoch), attempt: num(q.attempt, 1), attempted: strings(q.attempted), bodyTokens: numOrNull(q.body_tokens), canonicalModel: str(q.canonical_model),
       chain: { boundaries: num(chain.boundaries), staticBoundaries: num(chain.static_boundaries), staticHash: bool(chain.static_hash) }, clientClass: str(q.client_class),
       flags: { contextCompacted: bool(flags.context_compacted), count: bool(flags.count), fast: bool(flags.fast), marker: bool(flags.marker), portable: bool(flags.portable), probe: bool(flags.probe) },
       holds: list(q.holds).map(rec).map((h) => ({ accountId: str(h.account_id), attempt: num(h.attempt, 1), cohort: strOrNull(h.cohort), heldMs: num(h.held_ms), ranOut: bool(h.ran_out) })),
@@ -605,13 +640,8 @@ export function decodeDecisionRecord(v: unknown): DecisionRecord {
     },
     requestId: str(r.request_id),
     seq: num(r.seq, 1),
-    settings: orNull(s, (x) => ({
-      affinityMode: str(x.affinity_mode), affinityTtlSeconds: num(x.affinity_ttl_seconds), burnWindowSeconds: num(x.burn_window_seconds), inFlightCap: num(x.in_flight_cap), migrateBand: num(x.migrate_band),
-      migrateWhenSpent: bool(x.migrate_when_spent), minSharedPrefixTokens: num(x.min_shared_prefix_tokens), overageMoveGraceMinutes: num(x.overage_move_grace_minutes), overagePolicy: str(x.overage_policy), paceFloor: num(x.pace_floor),
-      poolUpdatedAt: isoOr(x.pool_updated_at, epoch), preferSubscription: bool(x.prefer_subscription), retryInPlaceSeconds: num(x.retry_in_place_seconds), selectBelowUtilization: numOrNull(x.select_below_utilization), sessionPlacement: str(x.session_placement),
-      shedAheadOfPace: numOrNull(x.shed_ahead_of_pace), shedShare: num(x.shed_share), sourceDwellSeconds: num(x.source_dwell_seconds), strategy: str(x.strategy), subagentPlacement: str(x.subagent_placement), warmSessions: str(x.warm_sessions), windDownMinutes: num(x.wind_down_minutes),
-    })),
-    version: num(r.version),
+    settings: orNull(s, (x) => decodeRecordSettings(x, version)),
+    version,
     walk: list(r.walk).map(rec).map((w) => ({ facts: list(w.facts).map(rec).map((f) => ({ accountId: strOrNull(f.account_id), key: str(f.key), unit: strOrNull(f.unit), value: f.value ?? null })), step: str(w.step), verdict: str(w.verdict) })),
   };
 }
@@ -685,8 +715,9 @@ export const decodeBurnPoint = (v: unknown): BurnPoint => {
   };
 };
 export const decodeBurn = (v: unknown): { bucketSeconds: number; points: BurnPoint[] } => ({ bucketSeconds: num(rec(v).bucket_seconds, 3_600), points: list(rec(v).points).map(decodeBurnPoint) });
-export const decodeRewrites = (v: unknown): { moves: Record<string, number>; points: RewritePoint[] } => ({
+export const decodeRewrites = (v: unknown): RewritesAnswer => ({
   moves: numberMap(rec(v).moves),
+  movesByReasonAndFit: Object.fromEntries(Object.entries(rec(rec(v).moves_by_reason_and_fit)).map(([reason, fits]) => [reason, numberMap(fits)])),
   points: list(rec(v).points).map(rec).map((p) => ({ at: isoOr(p.at, epoch), rewriteTokens: num(p.rewrite_tokens) })),
 });
 
@@ -734,7 +765,7 @@ const burnUnit = (v: unknown): BurnUnit | null => BURN_UNIT_VALUES.find((u) => u
 export function decodeSession(v: unknown): Session {
   const s = rec(v);
   const k = rec(s.keepalive);
-  return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from) };
+  return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: typeof s.runway_bounded === 'boolean' ? s.runway_bounded : null, runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from) };
 }
 
 /** Every cause word the engine serializes, so the decoder never reads one it sends as none. */
@@ -939,9 +970,9 @@ export const encodePool = (i: PoolInput) => ({
   cache_ttl: { enabled: i.cacheTtl.enabled, inject_when_absent: i.cacheTtl.injectWhenAbsent, metered: encodeTtlRules(i.cacheTtl.metered), plan: encodeTtlRules(i.cacheTtl.plan) },
   enabled: i.status === 'active', model_rules: encodeModelRules(i.modelRules),
   keepalive: { enabled: i.keepalive.enabled, max_idle_seconds: i.keepalive.maxIdleSeconds, max_parked_seconds: i.keepalive.maxParkedSeconds, scheduled_horizon_seconds: i.keepalive.scheduledHorizonSeconds },
-  label: i.name, members: i.members.map((m) => ({ account_id: m.accountId, budget_daily_usd: m.budgetDailyUsd, budget_monthly_usd: m.budgetMonthlyUsd, priority: m.priority })), shed_ahead_of_pace: i.shedAheadOfPace,
-  min_shared_prefix_tokens: i.minSharedPrefixTokens, overage_policy: i.overagePolicy, prefer_subscription: i.preferSubscription, select_below_utilization: i.selectBelowUtilization,
+  label: i.name, members: i.members.map((m) => ({ account_id: m.accountId, budget_daily_usd: m.budgetDailyUsd, budget_monthly_usd: m.budgetMonthlyUsd, priority: m.priority })),
+  min_shared_prefix_tokens: i.minSharedPrefixTokens, overage_policy: i.overagePolicy, prefer_subscription: i.preferSubscription,
   session_placement: i.sessionPlacement, strategy: i.strategy, subagent_placement: i.subagentPlacement,
-  burn_window_seconds: i.burnWindowSeconds, in_flight_cap: i.inFlightCap, migrate_when_spent: i.migrateWhenSpent, overage_move_grace_minutes: i.overageMoveGraceMinutes, pace_floor: i.paceFloor,
-  retry_in_place_seconds: i.retryInPlaceSeconds, shed_share: i.shedShare, source_dwell_seconds: i.sourceDwellSeconds, warm_sessions: i.warmSessions, wind_down_minutes: i.windDownMinutes,
+  burn_average_seconds: i.burnAverageSeconds, in_flight_cap: i.inFlightCap, load_shedding: i.loadShedding, migrate_when_spent: i.migrateWhenSpent, overage_move_grace_minutes: i.overageMoveGraceMinutes,
+  retry_in_place_seconds: i.retryInPlaceSeconds, shed_cap: i.shedCap, shed_dwell_seconds: i.shedDwellSeconds, warm_sessions: i.warmSessions, wind_down_minutes: i.windDownMinutes, window_ceiling: i.windowCeiling,
 });

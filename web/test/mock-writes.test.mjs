@@ -566,6 +566,7 @@ test('the mock answers each captured bound probe with the route\'s status and se
   // form's own check, which the form's test holds to these probes.
   const base = await storyPool(api);
   const probes = fixture('bound_refusals').probes.filter((p) => p.field !== 'model_rules');
+  assert.deepEqual(['shed_cap', 'window_ceiling'].filter((field) => !probes.some((p) => p.field === field)), [], 'the two fractions are among the probes');
   const camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
   const keepalive = (field) => camel(field.slice('keepalive.'.length));
   // The capture names under `with` what it sent beside the probed field, a retry ceiling at its base or a lead beside
@@ -593,15 +594,26 @@ test('the mock answers each captured bound probe with the route\'s status and se
   }
 });
 
-test('the mock refuses a burn window or a source dwell past a week and admits a week', async () => {
+test('the mock refuses a burn average or a shed dwell past two hours and admits two hours', async () => {
   const api = await signedIn();
   const base = await storyPool(api);
   for (const [field, error] of [
-    ['burnWindowSeconds', 'burn_window_seconds is at most 604800 (one week)'],
-    ['sourceDwellSeconds', 'source_dwell_seconds is at most 604800 (one week)'],
+    ['burnAverageSeconds', 'burn_average_seconds is between 600 and 7200'],
+    ['shedDwellSeconds', 'shed_dwell_seconds is between 300 and 7200'],
   ]) {
-    await assert.rejects(() => api.updatePool('all', { ...base, [field]: 604_801 }), refusedAs(400, error), `${field} 604801`);
-    const admitted = await api.updatePool('all', { ...base, [field]: 604_800 });
-    assert.equal(admitted[field], 604_800, `${field} 604800`);
+    await assert.rejects(() => api.updatePool('all', { ...base, [field]: 7_201 }), refusedAs(400, error), `${field} 7201`);
+    const admitted = await api.updatePool('all', { ...base, [field]: 7_200 });
+    assert.equal(admitted[field], 7_200, `${field} 7200`);
   }
+});
+
+test("the mock answers a two-field mistake with the route's first sentence, the ceiling before the cap, the average and the dwell", async () => {
+  const api = await signedIn();
+  const base = await storyPool(api);
+  const cases = [
+    [{ burnAverageSeconds: 599, shedCap: 0.05, shedDwellSeconds: 299, windowCeiling: 0.4 }, 'window_ceiling is between 0.5 and 1.0'],
+    [{ burnAverageSeconds: 599, shedCap: 0.05, shedDwellSeconds: 299 }, 'shed_cap is between 0.1 and 1.0'],
+    [{ burnAverageSeconds: 599, shedDwellSeconds: 299 }, 'burn_average_seconds is between 600 and 7200'],
+  ];
+  for (const [patch, error] of cases) await assert.rejects(() => api.updatePool('all', { ...base, ...patch }), refusedAs(400, error), JSON.stringify(patch));
 });

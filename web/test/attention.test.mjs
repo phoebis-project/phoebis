@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ATTENTION_KIND_VALUES, ATTENTION_LABEL, ATTENTION_REFRESH_MS, ATTENTION_TONE, attentionDetail, attentionHref, attentionTitle, createAttentionPoll, decodeAttention, fmtAbsolute, fmtShortTime } from './dist/api.js';
+import { ATTENTION_KIND_VALUES, ATTENTION_LABEL, ATTENTION_REFRESH_MS, ATTENTION_TONE, attentionDetail, attentionHref, attentionLogLine, attentionTitle, attentionWords, createAttentionPoll, decodeAttention, fmtAbsolute, fmtShortTime } from './dist/api.js';
 
 const NOW = Date.parse('2026-09-18T12:00:00.000Z');
 const item = (kind, over = {}) => ({ detail: {}, kind, link: null, pools: [], since: '2026-09-18T10:00:00.000Z', subject: { id: kind, label: kind, type: 'account' }, ...over });
@@ -8,7 +8,7 @@ const item = (kind, over = {}) => ({ detail: {}, kind, link: null, pools: [], si
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 test('the attention kinds rank worst first, the order the route answers in', () => {
-  assert.deepEqual([...ATTENTION_KIND_VALUES], ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff']);
+  assert.deepEqual([...ATTENTION_KIND_VALUES], ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'wall_reached', 'destination_spent', 'shed_no_runway']);
 });
 
 test("a listener's two certificate kinds decode as themselves, never as the worst kind", () => {
@@ -22,15 +22,18 @@ test('each attention kind has its word and its tone, a client drift serious', ()
     certificate_expiring: 'Certificate expiring',
     certificate_reload_failed: 'Certificate reload failed',
     client_drift: 'Client drift',
+    destination_spent: 'Destination spent within the hour',
     funding_required: 'Funding required',
     ledger_record_parked: 'Priced record parked',
     poll_backoff: 'Usage poll backing off',
     pool_exhausted: 'Pool exhausted',
     reauth_required: 'Re-auth required',
     refresh_failed: 'Credential refresh failed',
+    shed_no_runway: 'Rounds without a destination',
+    wall_reached: 'Wall reached under the ceiling',
     writer_degraded: 'State writer degraded',
   });
-  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'serious', 'critical', 'serious', 'critical', 'warning', 'serious', 'warning']);
+  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'serious', 'critical', 'serious', 'critical', 'warning', 'serious', 'warning', 'warning', 'warning', 'warning']);
 });
 
 test('an item opens the page where its condition is fixed, and an item without a link opens nothing', () => {
@@ -144,6 +147,45 @@ test('a kind this build does not know opens its link, never a pool log named by 
   assert.equal(attentionTitle(later, NOW).split('\n').pop(), 'started 2h 0m ago', 'and its title names no log');
   const pooled = decodeAttention({ detail: {}, kind: 'quota_drift', link: { id: 'jobs', page: 'pools' }, pools: ['jobs'], since, subject: { id: 'jobs', label: 'jobs', type: 'pool' } });
   assert.equal(new URL(attentionHref(pooled, NOW), 'http://console.test').pathname, '/routing-log', 'one that names a pool opens its log');
+  const known = ['wall_reached', 'destination_spent', 'shed_no_runway'].map((kind) => decodeAttention({ detail: {}, kind, link: null, pools: [], since, subject: { id: 'x', label: 'x', type: 'account' } }).kind);
+  assert.deepEqual(known, ['wall_reached', 'destination_spent', 'shed_no_runway'], 'the three routing conditions decode as themselves');
+});
+
+test("the three routing conditions open the routing log on their subject's moves, walls and rounds since the condition began", () => {
+  const since = '2026-09-18T10:41:00.000Z';
+  const window = { from: since, to: '2026-09-18T12:00:00.000Z' };
+  const query = (it) => {
+    const url = new URL(attentionHref(it, NOW), 'http://console.test');
+    return [url.pathname, Object.fromEntries(url.searchParams)];
+  };
+  const account = { link: { id: 'primary', page: 'accounts' }, pools: ['all'], since, subject: { id: 'primary', label: 'primary', type: 'account' } };
+  const pool = { link: { id: 'all', page: 'pools' }, pools: ['all'], since, subject: { id: 'all', label: 'all', type: 'pool' } };
+  assert.deepEqual(query(item('shed_no_runway', pool)), ['/routing-log', { ...window, kinds: 'shedding_round', pools: 'all' }]);
+  assert.deepEqual(query(item('destination_spent', account)), ['/routing-log', { ...window, accounts: 'primary', kinds: 'pin_migrated,window_spent' }]);
+  assert.deepEqual(query(item('wall_reached', account)), ['/routing-log', { ...window, accounts: 'primary', kinds: 'window_spent' }]);
+  assert.equal(attentionHref(item('wall_reached', { ...account, link: null }), NOW), null, 'an account the registry no longer holds opens nothing');
+  const at = fmtShortTime(since);
+  assert.deepEqual(
+    [attentionLogLine(item('shed_no_runway', pool), NOW), attentionLogLine(item('destination_spent', account), NOW), attentionLogLine(item('wall_reached', account), NOW)],
+    [`Opens the Routing log: pool all, shedding rounds, since ${at}`, `Opens the Routing log: account primary, moves and spent windows, since ${at}`, `Opens the Routing log: account primary, spent windows, since ${at}`],
+  );
+  assert.equal(attentionTitle(item('shed_no_runway', pool), NOW).split('\n').pop(), `Opens the Routing log: pool all, shedding rounds, since ${at}`, 'the title ends with what the log opens on');
+});
+
+test('the three routing conditions read the count, the setting and the start on the dashboard line and the pool card', () => {
+  const since = '2026-09-18T10:41:00.000Z';
+  const at = fmtShortTime(since);
+  const account = { link: { id: 'primary', page: 'accounts' }, pools: ['all'], since, subject: { id: 'primary', label: 'primary', type: 'account' } };
+  const main = { link: { id: 'main', page: 'pools' }, pools: ['main'], since, subject: { id: 'main', label: 'main', type: 'pool' } };
+  const words = (kind, over, detail) => attentionWords(item(kind, { ...over, detail }), NOW);
+  assert.equal(words('shed_no_runway', main, { accounts: ['primary'], rounds: 4, setting: ['window_ceiling'], setting_values: { window_ceiling: 0.95 } }), `main: 4 rounds marked nothing, no destination had runway, window_ceiling 95 %, since ${at}`);
+  assert.equal(words('shed_no_runway', main, { accounts: ['primary'], rounds: 1, setting: ['window_ceiling'] }), `main: 1 round marked nothing, no destination had runway, window_ceiling, since ${at}`, 'a pool the registry lost carries no value');
+  assert.equal(words('destination_spent', account, { fits: { fits: 1, rewrite_only: 1 }, moves: 2, setting: ['window_ceiling'], windows: ['five_hour'] }), `primary: 2 moves landed and the 5h window was spent within the hour, window_ceiling, since ${at}`);
+  assert.equal(words('destination_spent', account, { fits: { least_bad: 1 }, moves: 1, setting: ['window_ceiling'], windows: ['five_hour', 'seven_day'] }), `primary: 1 move landed and the 5h and 7d windows were spent within the hour, window_ceiling, since ${at}`);
+  assert.equal(words('wall_reached', account, { projection_error: 0.04, setting: ['shed_cap', 'window_ceiling'], walls: 1, windows: ['five_hour'] }), `primary: 1 wall reached on the 5h window, the last round projected 96 %, shed_cap and window_ceiling, since ${at}`);
+  assert.equal(words('wall_reached', account, { projection_error: null, setting: ['shed_cap', 'window_ceiling'], walls: 2, windows: ['seven_day', 'seven_day_fable'] }), `primary: 2 walls reached on the 7d and Fable windows, shed_cap and window_ceiling, since ${at}`, 'a wall no round projected names no error');
+  assert.equal(attentionWords(item('pool_exhausted', { detail: { pool: 'jobs' } }), NOW), null, 'another kind keeps its label and subject');
+  for (const kind of ['wall_reached', 'destination_spent', 'shed_no_runway']) assert.equal(attentionDetail(item(kind, { ...account, detail: {} }), NOW), attentionWords(item(kind, { ...account, detail: {} }), NOW).replace(/^primary: /, ''), `${kind}'s row reads the words without the subject`);
 });
 
 test('the pool exhausted title names the day of a condition that began more than a day ago', () => {

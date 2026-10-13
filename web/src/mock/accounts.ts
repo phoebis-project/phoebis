@@ -5,12 +5,21 @@ import { createRng } from './rng';
 import { ACCOUNT_SAMPLE, QUOTA_SNAPSHOT_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
 
-function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoMs = 40_000): RateLimitWindow {
+/**
+ * A window as the account routes answer it: `burn` is the share of the window the sessions on the account burn per
+ * hour, and the projection runs it to the horizon, the reset on the 5-hour window and the earlier of the reset and five
+ * hours out on a weekly one. A null burn is a window the router holds no reading of, which projects nothing.
+ */
+function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoMs = 40_000, burn: number | null = 0): RateLimitWindow {
+  const horizonInMs = id === '5h' ? resetsInMs : Math.min(5 * HOUR, resetsInMs);
   return {
+    burn,
+    horizon: burn === null ? null : ahead(horizonInMs),
     id,
     label: WINDOW_LABEL[id] ?? id,
     observedAt: ago(observedAgoMs),
     periodHours: WINDOW_HOURS[id] ?? hoursOfKey(id),
+    projection: burn === null ? null : Math.round((utilization + (burn * horizonInMs) / HOUR) * 1_000) / 1_000,
     resetsAt: ahead(resetsInMs),
     utilization,
   };
@@ -37,7 +46,8 @@ export const ACCOUNTS: Account[] = ([
     status: 'cooldown',
     routingEnabled: true,
     // The poll's week for a model the family table has no row for: kept and shown under its key, read by no rule.
-    windows: [win('5h', 0.62, 2 * HOUR + 14 * MINUTE), win('7d', 0.41, 3 * DAY + 5 * HOUR + 40 * MINUTE), win('seven_day_opus', 0.08, 3 * DAY + 5 * HOUR + 40 * MINUTE)],
+    // Its sessions burn the 5-hour window fast enough to reach 81% at the reset, past the all pool's ceiling.
+    windows: [win('5h', 0.62, 2 * HOUR + 14 * MINUTE, 40_000, 0.085), win('7d', 0.41, 3 * DAY + 5 * HOUR + 40 * MINUTE, 40_000, 0.006), win('seven_day_opus', 0.08, 3 * DAY + 5 * HOUR + 40 * MINUTE)],
     fableWindow: win('7d_fable', 0.12, 3 * DAY + 5 * HOUR + 40 * MINUTE),
     extraUsage: { disabledReason: null, enabled: true, inUse: false, monthlyLimitCredits: 5000, usedCredits: 1234 },
     fastLane: fastLane(1, 0.64, 12 * MINUTE),
@@ -122,7 +132,8 @@ export const ACCOUNTS: Account[] = ([
     email: 'operator+nightly@example.com',
     status: 'ready',
     routingEnabled: true,
-    windows: [win('5h', 0.97, 3 * HOUR + 41 * MINUTE), win('7d', 0.35, 1 * DAY + 18 * HOUR + 12 * MINUTE)],
+    // Past every pool's ceiling at its reset, 104%.
+    windows: [win('5h', 0.97, 3 * HOUR + 41 * MINUTE, 40_000, 0.019), win('7d', 0.35, 1 * DAY + 18 * HOUR + 12 * MINUTE)],
     fableWindow: win('7d_fable', 0.41, 1 * DAY + 18 * HOUR + 12 * MINUTE),
     extraUsage: { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
     fastLane: null,
@@ -207,7 +218,8 @@ export const ACCOUNTS: Account[] = ([
     email: 'operator+old@example.com',
     status: 'reauth_required',
     routingEnabled: false,
-    windows: [win('5h', 0.18, -2 * DAY, 2 * DAY + 3 * HOUR), win('7d', 0.52, 2 * DAY, 2 * DAY + 3 * HOUR)],
+    // Read before their resets and never since, so the router projects neither.
+    windows: [win('5h', 0.18, -2 * DAY, 2 * DAY + 3 * HOUR, null), win('7d', 0.52, 2 * DAY, 2 * DAY + 3 * HOUR, null)],
     fableWindow: null,
     // Off since the provider stopped funding it, as the last clean poll read it.
     extraUsage: { disabledReason: 'Payment method declined on 02 Sep. Overage paused by the provider', enabled: false, inUse: false, monthlyLimitCredits: 0, usedCredits: 0 },

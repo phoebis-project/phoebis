@@ -82,7 +82,7 @@ test('listRoutingLog encodes comma lists, ISO instants and kinds, and getDecisio
   assert.equal(calls[1].url, '/admin/routing-log', 'no filter sends no query');
   const decoded = await api.getDecision('req/1', 2);
   assert.equal(calls[2].url, '/admin/requests/req%2F1/decisions/2');
-  assert.deepEqual([decoded.version, decoded.requestId], [1, 'r-static']);
+  assert.deepEqual([decoded.version, decoded.requestId], [2, 'r-static']);
   assert.equal(await api.getDecision('gone', 1), null, 'a decision the ledger no longer holds answers null');
 });
 
@@ -337,14 +337,14 @@ const poolSave = (name) => ({
   minSharedPrefixTokens: 30_000,
   modelRules: [],
   name,
+  loadShedding: false,
   overagePolicy: 'prefer_plan',
   preferSubscription: false,
-  selectBelowUtilization: 0.4,
   sessionPlacement: 'by_warm_prefix',
-  shedAheadOfPace: 0.25,
   status: 'active',
   strategy: 'pace',
   subagentPlacement: 'with_main',
+  windowCeiling: 0.8,
 });
 
 test('a pool save is one PATCH that carries the members with the settings', async () => {
@@ -357,8 +357,9 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
     { account_id: 'business', budget_daily_usd: null, budget_monthly_usd: null, priority: 0 },
     { account_id: 'direct', budget_daily_usd: 12.5, budget_monthly_usd: 50, priority: 1 },
   ], 'a member without a budget sends null, which clears a stored one');
-  assert.equal(body.select_below_utilization, 0.4);
-  assert.equal(body.shed_ahead_of_pace, 0.25);
+  assert.deepEqual([body.load_shedding, body.window_ceiling], [false, 0.8], 'the switch is sent off as it is sent on');
+  const refused = ['burn_window_seconds', 'pace_floor', 'select_below_utilization', 'shed_ahead_of_pace', 'shed_share', 'source_dwell_seconds'];
+  assert.deepEqual(refused.filter((f) => f in body), [], 'the body names no field the route refuses as unknown');
   assert.equal(body.cache_diagnostics, false, 'the switch is sent off as it is sent on');
   assert.deepEqual(
     [body.affinity_mode, body.subagent_placement, body.session_placement, body.min_shared_prefix_tokens],
@@ -486,7 +487,13 @@ test('the attention read is one GET, and its failures reach no toast, since the 
   const calls = stub(() => answer(200, body));
   const items = await new HttpApi().getAttention();
   assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['GET', '/admin/attention']]);
-  assert.deepEqual(items.map((i) => [i.kind, i.subject.id, i.link]), [['pool_exhausted', 'main', { id: 'main', page: 'pools' }], ['ledger_record_parked', 'main', { id: 'main', page: 'pools' }]]);
+  assert.deepEqual(items.map((i) => [i.kind, i.subject.id, i.link]), [
+    ['pool_exhausted', 'main', { id: 'main', page: 'pools' }],
+    ['ledger_record_parked', 'main', { id: 'main', page: 'pools' }],
+    ['wall_reached', 'business', { id: 'business', page: 'accounts' }],
+    ['destination_spent', 'business', { id: 'business', page: 'accounts' }],
+    ['shed_no_runway', 'main', { id: 'main', page: 'pools' }],
+  ]);
   stub(() => answer(500, { error: 'the store is unavailable' }));
   await assert.rejects(new HttpApi().getAttention(), (e) => e instanceof ApiError && e.status === 500 && e.message === 'the store is unavailable');
   stub(() => Promise.reject(new TypeError('fetch failed')));

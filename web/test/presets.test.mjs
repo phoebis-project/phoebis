@@ -3,28 +3,44 @@ import { test } from 'node:test';
 import * as d from './dist/api.js';
 
 test('a preset is derived from the values and custom when none matches', () => {
+  assert.deepEqual(d.SHEDDING_PRESETS, {
+    balanced: { burnAverageSeconds: 1_800, shedCap: 0.5, shedDwellSeconds: 900 },
+    conservative: { burnAverageSeconds: 3_600, shedCap: 0.3, shedDwellSeconds: 1_800 },
+    fast: { burnAverageSeconds: 900, shedCap: 0.5, shedDwellSeconds: 600 },
+  });
+  assert.deepEqual(d.FAILOVER_PRESETS, {
+    balanced: { inFlightCap: 16, retryInPlaceSeconds: 60 },
+    conservative: { inFlightCap: 16, retryInPlaceSeconds: 120 },
+    fast: { inFlightCap: 8, retryInPlaceSeconds: 20 },
+  });
   for (const name of ['balanced', 'conservative', 'fast']) {
     assert.equal(d.sheddingPresetOf(d.SHEDDING_PRESETS[name]), name);
     assert.equal(d.failoverPresetOf(d.FAILOVER_PRESETS[name]), name);
   }
   const shedding = d.SHEDDING_PRESETS.balanced;
-  for (const off of [{ shedShare: 0.4 }, { burnWindowSeconds: 601 }, { sourceDwellSeconds: 899 }]) assert.equal(d.sheddingPresetOf({ ...shedding, ...off }), 'custom', JSON.stringify(off));
-  assert.equal(d.sheddingPresetOf({ ...d.SHEDDING_PRESETS.conservative, shedShare: 0.1 + 0.2 }), 'conservative', 'a share that reads back a rounding off still names its preset');
+  for (const off of [{ shedCap: 0.4 }, { burnAverageSeconds: 1_801 }, { shedDwellSeconds: 899 }]) assert.equal(d.sheddingPresetOf({ ...shedding, ...off }), 'custom', JSON.stringify(off));
+  assert.equal(d.sheddingPresetOf({ ...d.SHEDDING_PRESETS.conservative, shedCap: 0.1 + 0.2 }), 'conservative', 'a cap that reads back a rounding off still names its preset');
   assert.deepEqual(
     [
-      d.failoverPresetOf({ inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 60 }),
-      d.failoverPresetOf({ inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 120 }),
-      d.failoverPresetOf({ inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 20 }),
+      d.failoverPresetOf({ inFlightCap: 16, retryInPlaceSeconds: 60 }),
+      d.failoverPresetOf({ inFlightCap: 16, retryInPlaceSeconds: 120 }),
+      d.failoverPresetOf({ inFlightCap: 16, retryInPlaceSeconds: 20 }),
     ],
     ['balanced', 'conservative', 'custom'],
-    'balanced and conservative share the cap and the floor, so the retry-in-place bound alone tells them apart',
+    'balanced and conservative share the cap, so the retry-in-place bound alone tells them apart',
   );
-  for (const off of [{ inFlightCap: 9 }, { paceFloor: 0.05 }, { retryInPlaceSeconds: 21 }]) assert.equal(d.failoverPresetOf({ ...d.FAILOVER_PRESETS.fast, ...off }), 'custom', JSON.stringify(off));
+  for (const off of [{ inFlightCap: 9 }, { retryInPlaceSeconds: 21 }]) assert.equal(d.failoverPresetOf({ ...d.FAILOVER_PRESETS.fast, ...off }), 'custom', JSON.stringify(off));
 });
 
-test('the proposed lead over pace is a lead the router can shed on, above the cool band', () => {
-  assert.ok(d.SHED_AHEAD_OF_PACE_DEFAULT > 0 && d.SHED_AHEAD_OF_PACE_DEFAULT < 1);
-  assert.ok(d.SHED_AHEAD_OF_PACE_DEFAULT - d.MIGRATE_BAND > 0, 'the cool line under the proposed lead stays above zero');
+test('a preset sets the cap, the average and the dwell and never the switch, so applying one leaves the switch as it was', () => {
+  for (const [name, values] of Object.entries(d.SHEDDING_PRESETS)) assert.deepEqual(Object.keys(values).sort(), ['burnAverageSeconds', 'shedCap', 'shedDwellSeconds'], name);
+  for (const [name, values] of Object.entries(d.FAILOVER_PRESETS)) assert.deepEqual(Object.keys(values).sort(), ['inFlightCap', 'retryInPlaceSeconds'], name);
+  for (const on of [true, false]) {
+    for (const name of ['balanced', 'conservative', 'fast']) {
+      const applied = { ...{ ...d.SHEDDING_PRESETS.fast, loadShedding: on, windowCeiling: 0.9 }, ...d.SHEDDING_PRESETS[name] };
+      assert.deepEqual([applied.loadShedding, applied.windowCeiling, d.sheddingPresetOf(applied)], [on, 0.9, name], `${name} with the switch ${on ? 'on' : 'off'}`);
+    }
+  }
 });
 
 const NOW = Date.parse('2026-09-16T14:30:00Z');
@@ -54,14 +70,14 @@ const pin = (sessionId, burn, warm, over = {}) => ({
   ...over,
 });
 const pool = (over = {}) => ({
-  burnWindowSeconds: 600,
+  burnAverageSeconds: 600,
   members: [
     { accountId: 'hot', eligible: 'eligible', priority: 0 },
     { accountId: 'cool', eligible: 'eligible', priority: 0 },
   ],
-  shedAheadOfPace: 0.8,
-  shedShare: 0.5,
+  shedCap: 0.5,
   warmSessions: 'when_needed',
+  windowCeiling: 0.8,
   ...over,
 });
 /** Every account the cost model sizes, so each subscription member's pins enter the round. */
@@ -93,7 +109,7 @@ test('a window leads its pace by its utilization less the share of it that has e
 
 test('a member at half its week counts as hot at a margin of a fifth ten percent in and not sixty percent in', () => {
   const halfway = (elapsed) => ({ ...account('halfway', 0.1), windows: [reading('5h', 0.1), { ...reading('7d', 0.5), resetsAt: at(NOW + WEEK * (1 - elapsed)) }] });
-  const members = (elapsed) => replay([halfway(elapsed)], [], { shedAheadOfPace: 0.2 }).members;
+  const members = (elapsed) => replay([halfway(elapsed)], [], { windowCeiling: 0.2 }).members;
   assert.deepEqual([members(0.1), members(0.6)], [1, 0], '0.4 ahead of pace runs a round, 0.1 behind it does not');
 });
 
@@ -130,10 +146,10 @@ test('the preview orders cold pins first, stops at the share, and never marks th
   const pair = preview([pin('warm-9', 9, true), pin('cold-1', 1, false)]);
   assert.deepEqual([pair.sessions, pair.warm, pair.burnShare.toFixed(2)], [1, 0, '0.10'], 'the cold pin is marked first and the warm one is the last unmarked');
   assert.equal(preview(four.map((p) => ({ ...p, burn: 0 }))).sessions, 0, 'no burn is a zero target');
-  assert.equal(preview(four, { shedShare: 0 }).sessions, 0, 'a share of 0 marks nothing');
+  assert.equal(preview(four, { shedCap: 0 }).sessions, 0, 'a cap of 0 marks nothing');
   const never = preview(four, { warmSessions: 'never' });
   assert.deepEqual([never.sessions, never.warm, never.burnShare.toFixed(2)], [1, 0, '0.30'], 'never stops after the cold pins');
-  assert.deepEqual([preview(four, { shedAheadOfPace: 0.95 }).members, preview(four, { shedAheadOfPace: null }).members], [0, 0], 'no member at the threshold, or no threshold, replays no round');
+  assert.equal(preview(four, { windowCeiling: 0.95 }).members, 0, 'no member at the threshold replays no round');
   // Folded one burn window ago, 10 has decayed to 10/e, under the 5 folded now; a burn never folded reads as stored.
   const decayed = preview([pin('old', 10, false, { burnAt: at(NOW - 600_000) }), pin('new', 5, false), pin('unfolded', 1, false, { burnAt: null })]);
   assert.deepEqual([decayed.sessions, decayed.burnShare.toFixed(3)], [1, (5 / (10 / Math.E + 5 + 1)).toFixed(3)], 'the order and the share read each burn decayed to now');
@@ -174,7 +190,7 @@ test("the pins of an account whose tier the cost model does not size stay out of
 
 test('under never an unpriced cold pin keeps no warm mark', () => {
   const pins = [pin('cold-priced', 1, false), pin('cold-unlisted', null, false), pin('warm', 5, true)];
-  const round = replay([hot, cool], pins, { shedShare: 0.9, warmSessions: 'never' });
+  const round = replay([hot, cool], pins, { shedCap: 0.9, warmSessions: 'never' });
   assert.deepEqual([round.sessions, round.warm], [1, 0], 'the marks are cut at the one priced cold pin, not at both cold pins');
 });
 
@@ -218,7 +234,7 @@ test('an api_key member reads cool while its worst live bucket holds room, whate
     windows: [{ id: 'itpm:claude-sonnet-5', label: 'itpm', observedAt: at(NOW), periodHours: 1 / 60, resetsAt: at(NOW + MINUTE), utilization }],
   });
   // `hot` keeps a round in the preview, so `cool` is read for a round with marks; the margin's band sits at 0.15.
-  const read = (key) => d.shedPreview(pool({ members: [member('hot'), member('key')], shedAheadOfPace: 0.2 }), [hot, key], [pin('cold-3', 3, false)], NOW, SIZED).cool;
+  const read = (key) => d.shedPreview(pool({ members: [member('hot'), member('key')], windowCeiling: 0.2 }), [hot, key], [pin('cold-3', 3, false)], NOW, SIZED).cool;
   assert.equal(read(keyed(0.95)), true, 'a bucket with room is a destination, far above the band');
   assert.equal(read(keyed(1)), false, 'an exhausted bucket is no destination');
 });
@@ -226,7 +242,7 @@ test('an api_key member reads cool while its worst live bucket holds room, whate
 test("an api_key member's cool reading counts its standing rpm, itpm and otpm buckets alone, as the router's", () => {
   const bucket = (id, utilization, over = {}) => ({ id, label: id, observedAt: at(NOW), periodHours: 1 / 60, resetsAt: at(NOW + MINUTE), utilization, ...over });
   const keyed = (...windows) => ({ id: 'key', kind: 'api_key', label: 'key', windows });
-  const read = (key) => d.shedPreview(pool({ members: [member('hot'), member('key')], shedAheadOfPace: 0.2 }), [hot, key], [pin('cold-3', 3, false)], NOW, SIZED).cool;
+  const read = (key) => d.shedPreview(pool({ members: [member('hot'), member('key')], windowCeiling: 0.2 }), [hot, key], [pin('cold-3', 3, false)], NOW, SIZED).cool;
   assert.equal(read(keyed(bucket('fast_input', 1), bucket('itpm:claude-sonnet-5', 0.4))), true, "an exhausted fast-lane bucket leaves the member cool");
   assert.equal(read(keyed(bucket('itpm:claude-sonnet-5', 1, { observedAt: at(NOW - 61_000), resetsAt: null }))), true, 'a reading without a reset, observed 61 s ago, says nothing about the account now');
   assert.equal(read(keyed(bucket('rpm:claude-sonnet-5', 1))), false, 'a standing rpm bucket at 1.0 is no destination');
@@ -312,7 +328,7 @@ test('the preview line reads the hot members, the round and the closest member i
   const spare = oauth('spare', windowAt('5h', 0.1, 0.5), windowAt('7d', 0.1, 0.5));
   const pins = [...four.map((p) => ({ ...p, accountId: 'primary' })), ...four.map((p) => ({ ...p, accountId: 'nightly', sessionId: `n-${p.sessionId}` }))];
   const sized = new Set(['nightly', 'primary', 'spare']);
-  const read = (accounts, over) => d.shedPreview(pool({ members: accounts.map((a) => member(a.id)), shedAheadOfPace: 0.08, ...over }), accounts, pins, NOW, sized);
+  const read = (accounts, over) => d.shedPreview(pool({ members: accounts.map((a) => member(a.id)), windowCeiling: 0.08, ...over }), accounts, pins, NOW, sized);
   const cool = read([primary, nightly, spare]);
   assert.deepEqual(cool.hot.map(leadOf), [
     ['primary', '5h', '0.14'],
@@ -327,7 +343,7 @@ test('the preview line reads the hot members, the round and the closest member i
     d.shedPreviewLine(stuck, true),
     "2 members run ahead of pace by the margin: primary (5-hour, 14 points ahead) and nightly (7-day, 9 points ahead). A round there would mark 4 sessions (2 warm), 70% of the hot members' recent burn together, in window share, but no sibling reads under the margin less 5 points, so the sessions would be marked and stay.",
   );
-  const none = read([primary, nightly, spare], { shedAheadOfPace: 0.2 });
+  const none = read([primary, nightly, spare], { windowCeiling: 0.2 });
   assert.deepEqual([none.hot, leadOf(none.closest)], [[], ['primary', '5h', '0.14']]);
   assert.equal(d.shedPreviewLine(none, true), 'No member is ahead of pace by the margin: the closest is primary, 14 points ahead.');
 });
@@ -338,7 +354,7 @@ test("the preview reads a member's lead to its end and names the end where it co
   const end = NOW + WEEK / 5;
   const ends = { ...oauth('ends', windowAt('5h', 0.1, 0), windowAt('7d', 0.74, 0.2)), cancelled: true, subscription: { endsAt: at(end), trialEndsAt: null } };
   const later = { ...oauth('later', windowAt('5h', 0.1, 0), windowAt('7d', 0.74, 0.2)), cancelled: true, subscription: { endsAt: at(NOW + WEEK * 2), trialEndsAt: null } };
-  const both = d.shedPreview(pool({ members: [member('ends'), member('later')], shedAheadOfPace: 0.2 }), [ends, later], [], NOW, SIZED);
+  const both = d.shedPreview(pool({ members: [member('ends'), member('later')], windowCeiling: 0.2 }), [ends, later], [], NOW, SIZED);
   assert.deepEqual(both.hot.map((h) => [...leadOf(h), h.end]), [
     ['ends', '7d', '0.24', end],
     ['later', '7d', '0.54', null],
@@ -347,7 +363,7 @@ test("the preview reads a member's lead to its end and names the end where it co
     d.shedPreviewLine(both, true, 'ready', NOW).startsWith(`2 members run ahead of pace by the margin: ends (7-day, 24 points ahead to its end at ${d.formatFact(end, 'time', NOW)}) and later (7-day, 54 points ahead). `),
     d.shedPreviewLine(both, true, 'ready', NOW),
   );
-  const under = d.shedPreview(pool({ members: [member('ends')], shedAheadOfPace: 0.3 }), [ends], [], NOW, SIZED);
+  const under = d.shedPreview(pool({ members: [member('ends')], windowCeiling: 0.3 }), [ends], [], NOW, SIZED);
   assert.equal(d.shedPreviewLine(under, true, 'ready', NOW), `No member is ahead of pace by the margin: the closest is ends, 24 points ahead to its end at ${d.formatFact(end, 'time', NOW)}.`);
 });
 

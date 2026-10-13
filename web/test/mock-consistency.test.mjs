@@ -88,7 +88,7 @@ async function decisionsOf(s) {
 function keptOf(d, r) {
   const facts = r.walk.find((w) => w.step === 'partitions')?.facts ?? [];
   return narrowedSetOf(r).filter((c) => {
-    const alone = d.partitionsOf([{ ...c }], d.poolById.get(r.request.poolId), d.requestById.get(r.requestId));
+    const alone = d.partitionsOf([{ ...c }], d.poolById.get(r.request.poolId), d.requestById.get(r.requestId), moving(r));
     return facts.every((f, i) => typeof f.value !== 'number' || alone[i].value === 0);
   });
 }
@@ -108,9 +108,9 @@ async function logOf(s) {
 
 /** The members the store's `pool_diff` writes on a pool edit: the whole row after the save. */
 const POOL_DIFF_MEMBERS = [
-  'affinity_mode', 'affinity_ttl_seconds', 'auto_mode_server', 'body_capture_hours', 'burn_window_seconds', 'cache_diagnostics', 'cache_ttl', 'enabled', 'in_flight_cap', 'label',
-  'migrate_when_spent', 'min_shared_prefix_tokens', 'model_rules', 'overage_move_grace_minutes', 'overage_policy', 'pace_floor', 'prefer_subscription', 'retry_in_place_seconds',
-  'select_below_utilization', 'session_placement', 'shed_ahead_of_pace', 'shed_share', 'source_dwell_seconds', 'strategy', 'subagent_placement', 'warm_sessions', 'wind_down_minutes',
+  'affinity_mode', 'affinity_ttl_seconds', 'auto_mode_server', 'body_capture_hours', 'burn_average_seconds', 'cache_diagnostics', 'cache_ttl', 'enabled', 'in_flight_cap', 'label', 'load_shedding',
+  'migrate_when_spent', 'min_shared_prefix_tokens', 'model_rules', 'overage_move_grace_minutes', 'overage_policy', 'prefer_subscription', 'retry_in_place_seconds',
+  'session_placement', 'shed_cap', 'shed_dwell_seconds', 'strategy', 'subagent_placement', 'warm_sessions', 'wind_down_minutes', 'window_ceiling',
 ];
 
 /** Whether one tier ranks before another, compared member by member as the engine orders them. */
@@ -119,6 +119,9 @@ const tierBefore = (x, y) => {
   return i >= 0 && x[i] < y[i];
 };
 const sameTier = (x, y) => x.tier.join('/') === y.tier.join('/');
+
+/** Whether a record's partitions narrow a move's destinations, which the no-fit partition keeps as its gate left them. */
+const moving = (r) => r.walk.some((w) => w.step === 'cap_filter');
 
 /**
  * The set a record's partitions narrow: a move's destinations (the cap filter's facts name them), else the eligible
@@ -218,6 +221,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       }
     }
     for (const a of s.accounts) assert.deepEqual(a.pool, holder.get(a.id) ?? null, `account ${a.id} answers the pool whose members name it`);
+  });
+
+  test(`each pool's warnings are what the eight checks give on its own settings and its largest live cohort, at ${at}`, async () => {
+    const s = await story;
+    const poolOfKey = new Map(s.keys.map((k) => [k.id, k.poolId]));
+    const cohortOf = (poolId) => Math.max(0, ...s.sessions.filter((x) => x.pinned && poolOfKey.get(x.keyId) === poolId).map((x) => x.agents));
+    for (const p of s.pools) assert.deepEqual(p.warnings, s.lib.poolWarnings(p, cohortOf(p.id)), p.id);
+    const codes = new Map(s.pools.map((p) => [p.id, p.warnings.map((w) => w.code)]));
+    assert.deepEqual([codes.get('all'), codes.get('jobs'), codes.get('work')], [['affinity_under_cache_ttl', 'ceiling_low'], ['spent_moves_off', 'warm_never'], []]);
   });
 
   test(`no account's rollup row predates the plan it was served under, at ${at}`, async () => {
@@ -535,7 +547,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const r of records) for (const c of r.candidates) if (c.kind === 'oauth' && c.pace !== null) assert.equal(c.pace.window, 'seven_day_fable', r.requestId);
   });
 
-  test(`every Pace placement's winner scores highest in its tier among the eligible members above the floor, at ${at}`, async () => {
+  test(`every Pace placement's winner scores highest in its tier among the eligible members, at ${at}`, async () => {
     const s = await story;
     let seen = 0;
     for (const r of await decisionsOf(s)) {
@@ -545,7 +557,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       // A move picks among its destinations and a placement among the eligible members, each past the partitions.
       const tier = keptOf(s.lib, r).filter((c) => c !== winner && c.accountId !== r.outcome.fromAccountId && sameTier(c, winner));
       assert.equal(winner.score, winner.pace.score, `${id}: ${winner.accountId}'s score is the one its reading gives`);
-      for (const c of tier.filter((x) => x.pace.remaining > r.settings.paceFloor)) {
+      for (const c of tier) {
         assert.ok(winner.pace.score >= c.pace.score, `${id}: ${winner.accountId} scores ${winner.pace.score} under ${c.accountId}'s ${c.pace.score}`);
       }
       seen += 1;
@@ -764,7 +776,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const records = await decisionsOf(s);
     assert.ok(records.length > 20);
-    const seen = { exhausted: 0, held: 0, ranOut: 0 };
+    const seen = { exhausted: 0, held: 0, ranOut: 0, reset: 0 };
     for (const r of records) {
       const id = `${r.requestId}/${r.seq}`;
       const steps = r.walk.map((w) => w.step);
@@ -773,6 +785,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const partitions = steps.flatMap((x, i) => (x === 'partitions' ? [i] : []));
       const pick = r.walk.find((w) => w.step === 'pick');
       if (!['exhausted', 'held', 'moved', 'placed'].includes(r.outcome.kind)) continue;
+      // A hold for a spent window's reset ends the walk at the spent rule, before any placement.
+      if (r.outcome.hold?.reason === 'reset') {
+        seen.reset += 1;
+        assert.deepEqual([steps.indexOf('move:spent') >= 0 && r.walk[steps.indexOf('move:spent')].verdict, steps.includes('partitions'), steps[steps.length - 1]], ['held', false, 'reserve'], walk);
+        continue;
+      }
       assert.ok(firstRung >= 0, walk);
       assert.equal(partitions.length, 1, walk);
       assert.ok(partitions[0] < firstRung, `${walk}: partitions after the rungs`);
@@ -802,11 +820,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         assert.equal(pick?.verdict, r.outcome.rung === null ? 'chosen' : undefined, walk);
       }
     }
-    assert.ok(seen.exhausted > 0 && seen.held > 0 && seen.ranOut > 0, JSON.stringify(seen));
+    assert.ok(seen.exhausted > 0 && seen.held > 0 && seen.ranOut > 0 && seen.reset > 0, JSON.stringify(seen));
     assert.ok(records.some((r) => r.requestId === 'req_51d0e2b8-7a0' && r.walk.some((w) => w.step === 'partitions')), 'the empty-eligible exhaustion walks the partitions');
   });
 
-  test(`every partitions step reads the five facts the derivation gives over the record's own set, none past the set, at ${at}`, async () => {
+  test(`every partitions step reads the four facts the derivation gives over the record's own set, none past the set, at ${at}`, async () => {
     const s = await story;
     const d = s.lib;
     const records = await decisionsOf(s);
@@ -815,11 +833,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const steps = r.walk.map((w) => w.step);
       if (!steps.some((x) => x.startsWith('rung:'))) continue;
       const set = narrowedSetOf(r);
-      const expected = d.partitionsOf(set.map((c) => ({ ...c })), d.poolById.get(r.request.poolId), d.requestById.get(r.requestId));
+      const expected = d.partitionsOf(set.map((c) => ({ ...c })), d.poolById.get(r.request.poolId), d.requestById.get(r.requestId), moving(r));
       for (const w of r.walk.filter((x) => x.step === 'partitions')) {
         seen += 1;
         assert.deepEqual(w.facts.map((f) => [f.key, f.value]), expected.map((f) => [f.key, f.value]), `${r.requestId}/${r.seq}`);
-        assert.deepEqual(w.facts.map((f) => f.key), ['spent', 'at_cap', 'above_ceiling', 'winding_down', 'floor']);
+        assert.deepEqual(w.facts.map((f) => f.key), ['spent', 'at_cap', 'no_fit', 'winding_down']);
         // The engine writes a partition's count bare, as it writes its words.
         assert.ok(w.facts.every((f) => f.unit === null), `${r.requestId}/${r.seq}: ${w.facts.map((f) => f.unit).join(', ')}`);
         for (const f of w.facts) {
@@ -834,29 +852,33 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const w = records.find((r) => `${r.requestId}/${r.seq}` === id)?.walk.find((x) => x.step === 'partitions');
       return [w?.verdict, (w?.facts ?? []).filter((f) => keys.includes(f.key)).map((f) => [f.key, f.value])];
     };
-    // The cohort hold waits with every member it could take at its cap, under a non-Fable model and no ceiling.
-    assert.deepEqual(read('req_69e30548-32e/1', ['spent', 'at_cap', 'above_ceiling']), ['match', [['spent', 'off'], ['at_cap', 'held'], ['above_ceiling', 'off']]]);
-    // Nothing is left to narrow, so the step reads none with every count 0 or off, the floor off on a round-robin pool.
-    assert.deepEqual(read('req_51d0e2b8-7a0/1', ['spent', 'at_cap', 'above_ceiling', 'winding_down', 'floor']), ['none', [['spent', 'off'], ['at_cap', 0], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 'off']]]);
+    // The cohort hold waits with every member it could take at its cap, under a non-Fable model, and with neither
+    // fitting under the ceiling the set stays whole.
+    assert.deepEqual(read('req_69e30548-32e/1', ['spent', 'at_cap', 'no_fit']), ['match', [['spent', 'off'], ['at_cap', 'held'], ['no_fit', 'fell_through']]]);
+    // The spare-rate placement passes over secondary, which falls short of the ceiling.
+    assert.deepEqual(read('req_2c7d9f15-b63/1', ['no_fit']), ['match', [['no_fit', 1]]]);
+    // Nothing is left to narrow, so the step reads none with every count 0 or off.
+    assert.deepEqual(read('req_51d0e2b8-7a0/1', ['spent', 'at_cap', 'no_fit', 'winding_down']), ['none', [['spent', 'off'], ['at_cap', 0], ['no_fit', 0], ['winding_down', 0]]]);
 
     const pairs = (facts) => facts.map((f) => [f.key, f.value]);
-    const member = (accountId, o = {}) => ({ accountId, credits: null, inFlight: 0, inFlightCap: 4, kind: 'oauth', pace: { remaining: 0.5 }, term: { windingDown: false }, windows: {}, ...o });
+    const member = (accountId, o = {}) => ({ accountId, credits: null, fit: null, inFlight: 0, inFlightCap: 4, kind: 'oauth', pace: { remaining: 0.5 }, term: { windingDown: false }, windows: {}, ...o });
     const haiku = { canonicalModel: 'claude-haiku-4-5-20251001', kind: 'inference' };
     const fable = { canonicalModel: 'claude-fable-5-1', kind: 'inference' };
     // The cap drops the member at it, and the wind-down then falls through rather than empty the set.
-    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4 }), member('b', { term: { windingDown: true } })], d.poolById.get('jobs'), haiku)), [['spent', 'off'], ['at_cap', 1], ['above_ceiling', 'off'], ['winding_down', 'fell_through'], ['floor', 'off']]);
+    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4 }), member('b', { term: { windingDown: true } })], d.poolById.get('jobs'), haiku)), [['spent', 'off'], ['at_cap', 1], ['no_fit', 0], ['winding_down', 'fell_through']]);
     // A Fable request draws on the shared windows too, and a spent member drops outright, even when none is left.
     const spentOn = (name) => ({ windows: { [name]: { utilization: 1 } } });
-    assert.deepEqual(pairs(d.partitionsOf([member('a', spentOn('five_hour')), member('b')], d.poolById.get('all'), fable)), [['spent', 1], ['at_cap', 0], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 0]]);
-    assert.deepEqual(pairs(d.partitionsOf([member('a', spentOn('seven_day')), member('b', spentOn('seven_day_fable'))], d.poolById.get('all'), fable)), [['spent', 2], ['at_cap', 0], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 0]]);
-    // Under Pace a member at the floor drops while one above it is left.
+    assert.deepEqual(pairs(d.partitionsOf([member('a', spentOn('five_hour')), member('b')], d.poolById.get('all'), fable)), [['spent', 1], ['at_cap', 0], ['no_fit', 0], ['winding_down', 0]]);
+    assert.deepEqual(pairs(d.partitionsOf([member('a', spentOn('seven_day')), member('b', spentOn('seven_day_fable'))], d.poolById.get('all'), fable)), [['spent', 2], ['at_cap', 0], ['no_fit', 0], ['winding_down', 0]]);
+    // A member the request does not fit drops while one it fits is left, and with none fitting the set stays whole.
     const all = d.poolById.get('all');
-    assert.deepEqual(pairs(d.partitionsOf([member('a'), member('b', { pace: { remaining: all.paceFloor } })], all, haiku)), [['spent', 'off'], ['at_cap', 0], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 1]]);
+    assert.deepEqual(pairs(d.partitionsOf([member('a'), member('b', { fit: 'least_bad' })], all, haiku)), [['spent', 'off'], ['at_cap', 0], ['no_fit', 1], ['winding_down', 0]]);
+    assert.deepEqual(pairs(d.partitionsOf([member('a', { fit: 'rewrite_only' }), member('b', { fit: 'least_bad' })], all, haiku)), [['spent', 'off'], ['at_cap', 0], ['no_fit', 'fell_through'], ['winding_down', 0]]);
     // A token count takes no slot, so the cap keeps every member, even with each at it.
-    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4 }), member('b', { inFlight: 4 })], d.poolById.get('jobs'), { ...haiku, kind: 'count_tokens' })), [['spent', 'off'], ['at_cap', 0], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 'off']]);
+    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4 }), member('b', { inFlight: 4 })], d.poolById.get('jobs'), { ...haiku, kind: 'count_tokens' })), [['spent', 'off'], ['at_cap', 0], ['no_fit', 0], ['winding_down', 0]]);
     // With every member at its cap, a Fable request's spent member drops before the cap holds the rest, so it is never
     // the account the request waits on or passes over.
-    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4, ...spentOn('five_hour') }), member('b', { inFlight: 4 })], all, fable)), [['spent', 1], ['at_cap', 'held'], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 0]]);
+    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4, ...spentOn('five_hour') }), member('b', { inFlight: 4 })], all, fable)), [['spent', 1], ['at_cap', 'held'], ['no_fit', 0], ['winding_down', 0]]);
   });
 
   test(`the member a placement, a move or a hold names is one the partitions kept, at ${at}`, async () => {
@@ -915,12 +937,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(lead('secondary', '5h') > 0 && lead('secondary', '7d') > 0, `secondary's windows read ${lead('secondary', '5h')} and ${lead('secondary', '7d')}, not both ahead of pace`);
   });
 
-  test(`every decision record reads a plan window's lead and deadline as the console's arithmetic does, to the end where it comes first, at ${at}`, async () => {
+  test(`every decision record reads a plan window's lead as the console's arithmetic does and projects it to its horizon, at ${at}`, async () => {
     const s = await story;
-    let named = 0;
+    let capped = 0;
+    let burning = 0;
     for (const r of await decisionsOf(s)) {
       const t = Date.parse(r.request.at);
-      const deadlines = r.walk.flatMap((w) => w.facts).filter((f) => f.key.startsWith('deadline_'));
       for (const c of r.candidates) {
         const account = s.accounts.find((a) => a.id === c.accountId);
         if (account?.kind !== 'oauth') continue;
@@ -931,17 +953,30 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
           const want = Math.round(s.aheadOf({ resetsAt: w.reset, utilization: w.utilization }, hours * HOUR, t, end) * 1000) / 1000;
           assert.ok(near(w.ahead, want), `${r.requestId}: ${c.accountId}'s ${name} reads ${w.ahead}, not ${want}`);
         }
-      }
-      for (const f of deadlines) {
-        // The shed line's facts read the pinned account, a cool line's the member each names.
-        const pinned = r.walk.find((w) => w.step === 'pin')?.facts.find((p) => p.key === 'account_id')?.value;
-        const account = s.accounts.find((a) => a.id === (f.accountId ?? pinned));
-        const w = r.candidates.find((c) => c.accountId === account?.id)?.windows[f.key.slice('deadline_'.length)];
-        assert.equal(f.value, s.lib.paceEnd(w?.reset ?? null, s.lib.endOf(account, t)), `${r.requestId}: ${f.key} names the end its pace runs to`);
-        named += 1;
+        // The 5-hour window runs to its reset and a weekly one five hours out at most, each to the end where it comes
+        // first, and the projection adds the account's burn over the span.
+        for (const [name, w] of Object.entries(c.windows)) {
+          const reset = w.reset === null ? null : Date.parse(w.reset);
+          const bounds = name === 'five_hour' ? [reset ?? t + 5 * HOUR, end] : [t + 5 * HOUR, reset, end];
+          const horizon = Math.max(t, Math.min(...bounds.filter((x) => x !== null)));
+          assert.equal(w.horizon, iso(horizon), `${r.requestId}/${r.seq}: ${c.accountId}'s ${name} horizon`);
+          const projected = Math.round((w.utilization + ((c.burn[name] ?? 0) * (horizon - t)) / HOUR) * 1000) / 1000;
+          assert.ok(near(w.projection, projected), `${r.requestId}/${r.seq}: ${c.accountId}'s ${name} projects ${w.projection}, not ${projected}`);
+          if (name !== 'five_hour' && reset !== null && horizon < reset) capped += 1;
+          if ((c.burn[name] ?? 0) > 0) burning += 1;
+        }
       }
     }
-    assert.ok(named > 0, "the story holds a lead whose pace runs to its account's end");
+    assert.ok(capped > 0 && burning > 0, `a weekly horizon five hours out (${capped}) and a burning window (${burning})`);
+  });
+
+  test(`the rewrites answer counts each reason's moves over its fits, two reasons by different fits, at ${at}`, async () => {
+    const s = await story;
+    const { moves, movesByReasonAndFit } = await s.api.getAnalyticsRewrites({ from: iso(s.now - 7 * DAY), to: iso(s.now) });
+    assert.deepEqual(Object.keys(movesByReasonAndFit).sort(), Object.keys(moves).sort());
+    for (const [reason, fits] of Object.entries(movesByReasonAndFit)) assert.equal(sum(Object.values(fits), (n) => n), moves[reason], reason);
+    const shapes = new Set(Object.values(movesByReasonAndFit).map((fits) => JSON.stringify(Object.keys(fits).sort())));
+    assert.ok(shapes.size > 1, `the reasons read ${[...shapes].join(', ')}`);
   });
 
   test(`every plan-funded row of a weighted model carries non-null shares and no API key, overage or fast row carries one, at ${at}`, async () => {

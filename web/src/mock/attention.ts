@@ -2,6 +2,7 @@ import type { AttentionItem } from '@/api/types';
 import { accountById } from './accounts';
 import { KEYS, POOLS } from './pools';
 import { REQUESTS } from './requests';
+import { ROUTING_EVENTS } from './routingLog';
 import { ATTENTION_ITEM_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, iso } from './time';
 
@@ -32,13 +33,61 @@ function exhaustion(poolId: string): Pick<AttentionItem, 'detail' | 'since'> | n
 
 const jobsExhausted = exhaustion('jobs');
 
+/** The trailing day's events of a kind, oldest first, which the ledger folds the routing conditions from. */
+const lastDay = (kind: string) => ROUTING_EVENTS.filter((e) => e.kind === kind && Date.parse(e.at) >= NOW - DAY);
+const sorted = (values: unknown[]) => [...new Set(values.map(String))].sort();
+
+/**
+ * An account's walls over the day as the reader dates them, with the error of the newest round's projection on the
+ * newest wall's window inside that window's length before it. Null where no window of the account was spent.
+ */
+function walls(accountId: string): Pick<AttentionItem, 'detail' | 'since'> | null {
+  const spent = lastDay('window_spent').filter((e) => e.accountId === accountId);
+  const newest = spent[spent.length - 1];
+  if (!newest) return null;
+  const window = String(newest.detail.window);
+  const wallAt = Date.parse(newest.at);
+  const length = window === 'five_hour' ? 5 * HOUR : 7 * DAY;
+  const round = ROUTING_EVENTS.filter((e) => e.kind === 'shedding_round' && e.accountId === accountId && e.detail.window === window && Date.parse(e.at) <= wallAt && wallAt - Date.parse(e.at) <= length).pop();
+  const projection = typeof round?.detail.projection === 'number' ? round.detail.projection : null;
+  return {
+    detail: { projection_error: projection === null ? null : Math.round((1 - projection) * 1_000) / 1_000, setting: ['shed_cap', 'window_ceiling'], walls: spent.length, windows: sorted(spent.map((e) => e.detail.window)) },
+    since: spent[0].at,
+  };
+}
+
+/** The moves that landed on an account whose window was spent within the hour after, as the reader counts them. */
+function spentDestination(accountId: string): Pick<AttentionItem, 'detail' | 'since'> | null {
+  const spent = lastDay('window_spent').filter((e) => e.accountId === accountId);
+  const after = (move: (typeof spent)[number]) => spent.filter((w) => Date.parse(w.at) >= Date.parse(move.at) && Date.parse(w.at) - Date.parse(move.at) <= HOUR);
+  const moves = lastDay('pin_migrated').filter((e) => e.accountId === accountId && after(e).length > 0);
+  if (moves.length === 0) return null;
+  const fits: Record<string, number> = {};
+  for (const m of moves) fits[String(m.detail.fit ?? 'unknown')] = (fits[String(m.detail.fit ?? 'unknown')] ?? 0) + 1;
+  return { detail: { fits, moves: moves.length, setting: ['window_ceiling'], windows: sorted(moves.flatMap((m) => after(m).map((w) => w.detail.window))) }, since: moves[0].at };
+}
+
+/** A pool's rounds that marked nothing for want of a destination with runway, with the ceiling the pool holds. */
+function roundsWithoutRunway(poolId: string): Pick<AttentionItem, 'detail' | 'since'> | null {
+  const rounds = lastDay('shedding_round').filter((e) => e.poolId === poolId && e.detail.outcome === 'nothing_to_mark' && e.detail.reason === 'no_runway');
+  if (rounds.length === 0) return null;
+  const ceiling = POOLS.find((p) => p.id === poolId)?.windowCeiling ?? null;
+  return { detail: { accounts: sorted(rounds.map((e) => e.accountId)), rounds: rounds.length, setting: ['window_ceiling'], setting_values: { window_ceiling: ceiling } }, since: rounds[0].at };
+}
+
+const secondaryWalls = walls('secondary');
+const nightlyMoves = spentDestination('nightly');
+const allRounds = roundsWithoutRunway('all');
+
 /**
  * One item per kind but a failed certificate reload, on the story's accounts, pools, keys and proxy listener, in the
  * route's order: jobs exhausted from the runner's first request after its one member spent the day's budget, a client
  * build refused on the laptop key, the routing state writer keeping its writes in memory, legacy's lapsed credential,
  * the Overflow workspace out of funding as its account reads, legacy's refreshes failing, the proxy listener's
- * certificate 12 days from its end, a priced record of the jobs pool's one member parked in the ledger file, and the
- * backoff secondary's poll is in.
+ * certificate 12 days from its end, a priced record of the jobs pool's one member parked in the ledger file, the
+ * backoff secondary's poll is in, secondary's wall after the 11:00 round, nightly spent after the least-bad move onto
+ * it, and the all pool's round that found no destination with runway. The three routing conditions read the routing
+ * log's events as the ledger folds them.
  */
 export const ATTENTION: AttentionItem[] = [
   ...(jobsExhausted
@@ -117,4 +166,9 @@ export const ATTENTION: AttentionItem[] = [
     kind: 'poll_backoff',
     since: secondaryPoll?.backoffSince ?? ago(42 * MINUTE),
   },
+  ...(secondaryWalls ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount('secondary'), ...secondaryWalls, kind: 'wall_reached' as const }] : []),
+  ...(nightlyMoves ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount('nightly'), ...nightlyMoves, kind: 'destination_spent' as const }] : []),
+  ...(allRounds
+    ? [{ ...ATTENTION_ITEM_SAMPLE, ...allRounds, kind: 'shed_no_runway' as const, link: { id: 'all', page: 'pools' as const }, pools: ['all'], subject: { id: 'all', label: 'all', type: 'pool' as const } }]
+    : []),
 ];

@@ -1,5 +1,5 @@
 import type {
-  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, PinMigrationReason, PlacementRow, RequestKind, RequestLog, RewritePoint,
+  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, PinMigrationReason, PlacementRow, RequestKind, RequestLog, RewritePoint, RewritesAnswer,
   WastedProbeReason,
 } from '@/api/types';
 import { bucketShare } from '@/lib/analytics';
@@ -457,10 +457,19 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
 /** The reason each hour's moves are filed under, in turn, weighted toward the failover and the shedding round. */
 const MOVE_TURNS: PinMigrationReason[] = ['cooldown', 'shed', 'cooldown', 'spent', 'shed', 'overage', 'cooldown', 'return_to_plan', 'drain', 'mark', 'fast_lane'];
 
-/** The account rollups' moves into each account, with the cache the first request after each one wrote again. */
-export function rewritesOf(rollups: AccountRollup[], range: Range): { moves: Record<string, number>; points: RewritePoint[] } {
+/**
+ * The destination fit each hour's moves are filed under, in turn beside the reason. A turn of another length than the
+ * reasons' gives two reasons different fits over a day.
+ */
+const FIT_TURNS = ['fits', 'fits', 'rewrite_only', 'fits', 'least_bad', 'fits', 'unknown'];
+
+/**
+ * The account rollups' moves into each account by reason and by the destination's fit, with the cache the first
+ * request after each one wrote again. `moves` is each reason's sum over its fits, as the route answers it.
+ */
+export function rewritesOf(rollups: AccountRollup[], range: Range): RewritesAnswer {
   const { bucketMs, starts } = bucketsOf(range);
-  const moves: Record<string, number> = {};
+  const movesByReasonAndFit: Record<string, Record<string, number>> = {};
   const points = starts.map((at): RewritePoint => {
     let rewriteTokens = 0;
     for (const r of rollups) {
@@ -469,11 +478,14 @@ export function rewritesOf(rollups: AccountRollup[], range: Range): { moves: Rec
       const turn = Math.floor(hour / HOUR);
       rewriteTokens += r.pins.migratedIn * (18_000 + (turn % 5) * 9_000);
       const reason = MOVE_TURNS[turn % MOVE_TURNS.length];
-      moves[reason] = (moves[reason] ?? 0) + r.pins.migratedIn;
+      const fit = FIT_TURNS[turn % FIT_TURNS.length];
+      const fits = (movesByReasonAndFit[reason] ??= {});
+      fits[fit] = (fits[fit] ?? 0) + r.pins.migratedIn;
     }
     return { at: iso(at), rewriteTokens };
   });
-  return { moves, points };
+  const moves = Object.fromEntries(Object.entries(movesByReasonAndFit).map(([reason, fits]) => [reason, Object.values(fits).reduce((n, x) => n + x, 0)]));
+  return { moves, movesByReasonAndFit, points };
 }
 
 /**

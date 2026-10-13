@@ -55,10 +55,12 @@ quota history's `sawtooth`) to the fixtures' shape.
 writes for it, and the three words a partition fact carries in place of a count. `PHOEBIS_WRITE_FIXTURES=1 cargo test -p
 phoebis-routing --test walk_steps` writes it from the routing crate's table, which the recorder asserts each step
 against, and the same test run without the variable fails when the file differs from the table. The recorder does not
-see the `cool` step or the refusal record's two steps, so the test checks those three against the table itself.
-`test/decisionStrip.test.mjs` reads the file and fails `npm test` when a step lacks its station or its name, a verdict
-its tone, or a partition value its word or its tone, and when the console's station table names a step the file does not
-list. `npm run sync-mock` reads only the files directly under `test/fixtures/`, so it skips this subdirectory.
+see the refusal record's two steps, so the test checks those two against the table itself. `test/decisionStrip.test.mjs`
+reads the file and fails `npm test` when a step lacks its station or its name, a verdict its tone, or a partition value
+its word or its tone, and when the console's station table names a step the file does not list. Beside it,
+`test/fixtures/routing/walk_steps_v1.json` is the frozen copy of the table version 1 records were written against,
+with the `cool` step, which the legacy station map that draws a version 1 record is held to. Nothing regenerates it.
+`npm run sync-mock` reads only the files directly under `test/fixtures/`, so it skips this subdirectory.
 
 To add a route: capture its fixture in the Rust harness, run `npm run sync-mock`, write its decoder in
 `src/api/decode.ts` and its `Api` method, add a `SYNC` row for it in `test/mock-sync.test.mjs` (the test names

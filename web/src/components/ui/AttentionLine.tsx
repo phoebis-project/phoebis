@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api } from '@/api';
 import type { AttentionItem } from '@/api/types';
-import { ATTENTION_LABEL, ATTENTION_TONE, attentionHref, attentionTitle } from '@/lib/attention';
+import { ATTENTION_LABEL, ATTENTION_TONE, attentionHref, attentionTitle, attentionWords } from '@/lib/attention';
 import { fmtInt, fmtRelative } from '@/lib/format';
 import { Badge, BadgeLink, Pill, Skeleton } from './primitives';
 
@@ -62,7 +62,7 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
         {items.length} {items.length === 1 ? 'needs' : 'need'} attention
       </span>
       {items.map((item) => {
-        const text = `${ATTENTION_LABEL[item.kind]}: ${item.subject.label}`;
+        const text = attentionWords(item, now) ?? `${ATTENTION_LABEL[item.kind]}: ${item.subject.label}`;
         const title = attentionTitle(item, now);
         const href = attentionHref(item, now);
         const key = `${item.kind}:${item.subject.type}:${item.subject.id}`;

@@ -21,13 +21,13 @@ const admin = async () => {
 };
 /**
  * A summary fact's value is a number or a word by design and a walk fact's any value the engine read, so both sides
- * read as one kind there; a member's windows are keyed by window name, data rather than schema, so the comparison
- * holds each entry to the fixture's first.
+ * read as one kind there. A member's windows and its burns are keyed by window name, data rather than schema, so the
+ * comparison holds each entry to the fixture's first.
  */
 const factValue = (f) => ({ ...f, value: typeof f.value === 'number' || typeof f.value === 'string' ? 'number or string' : f.value });
 /** The merged page split by row type, so each of the two shapes meets the fixture's own rows of that type. */
 const byType = (page) => ({ decisions: page.rows.filter((r) => r.type === 'decision').map((r) => ({ ...r, fact: r.fact.map(factValue) })), events: page.rows.filter((r) => r.type === 'event') });
-const recordShape = (r) => r && { ...r, candidates: r.candidates.map((c) => ({ ...c, windows: Object.values(c.windows) })), walk: r.walk.map((w) => ({ ...w, facts: w.facts.map((f) => ({ ...f, value: 'any' })) })) };
+const recordShape = (r) => r && { ...r, candidates: r.candidates.map((c) => ({ ...c, burn: Object.values(c.burn), windows: Object.values(c.windows) })), walk: r.walk.map((w) => ({ ...w, facts: w.facts.map((f) => ({ ...f, value: 'any' })) })) };
 
 /**
  * One row per fixture: how the decoder reads it, and how the mock answers the same route. A list route
@@ -49,7 +49,9 @@ const SYNC = {
   analytics_budgets: { decode: (b) => b.members.map(d.decodeMemberBudget), mock: (api) => api.analyticsBudgets() },
   analytics_burn: { decode: (b) => d.decodeBurn(b), mock: (api) => api.getAnalyticsBurn(query, 'account') },
   analytics_placements: { decode: (b) => b.rows.map(d.decodePlacementRow), mock: (api) => api.analyticsPlacements(query) },
-  analytics_rewrites: { decode: (b) => d.decodeRewrites(b), mock: (api) => api.getAnalyticsRewrites(query) },
+  // Its moves by reason and fit are a map of maps keyed by data on both levels, which the mock's consistency test holds
+  // to the moves.
+  analytics_rewrites: { decode: (b) => d.decodeRewrites(b), mock: (api) => api.getAnalyticsRewrites(query), opaque: (path) => (path === '.movesByReasonAndFit' ? ['object'] : false) },
   analytics_series: { decode: (b) => b.points.filter((p) => p.groups.length).map(d.decodeAnalyticsPoint), mock: async (api) => (await api.getAnalyticsSeries(query)).filter((p) => p.groups.length) },
   analytics_series_accounts: { decode: (b) => b.points.filter((p) => p.groups.length).map(d.decodeAnalyticsPoint), mock: async (api) => (await api.getAnalyticsSeries({ ...query, groupBy: 'account' })).filter((p) => p.groups.length) },
   attention: { decode: (b) => b.items.map(d.decodeAttention), mock: (api) => api.getAttention() },
@@ -172,8 +174,8 @@ test('the mock refuses the affinity and the keepalive values the route refuses',
   await refused({ ...poolInputOf(all), keepalive: { ...all.keepalive, scheduledHorizonSeconds: 604_801 } }, 'keepalive.scheduled_horizon_seconds must be between 60 and 604800, not 604801');
   await refused({ ...poolInputOf(all), affinityTtlSeconds: 120 }, 'keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed');
   assert.equal((await api.listPools()).find((p) => p.id === 'all').affinityTtlSeconds, all.affinityTtlSeconds, 'a refused save stores nothing');
-  const saved = await api.updatePool('all', { ...poolInputOf(all), selectBelowUtilization: 0.4, keepalive: { ...all.keepalive, enabled: false } });
-  assert.deepEqual([saved.selectBelowUtilization, saved.keepalive.enabled], [0.4, false]);
+  const saved = await api.updatePool('all', { ...poolInputOf(all), windowCeiling: 0.8, keepalive: { ...all.keepalive, enabled: false } });
+  assert.deepEqual([saved.windowCeiling, saved.keepalive.enabled], [0.8, false]);
 });
 
 test('a null ceiling is the break-even, which the mock admits as the route does', async () => {

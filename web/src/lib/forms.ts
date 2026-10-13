@@ -1,7 +1,7 @@
 import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
 import { AFFINITY_MODE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
 import { slug } from '@/api/http';
-import type { Account, ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
+import type { Account, ApiKey, ModelRule, ModelRulesMode, Pool, PoolKeepalive, PoolWarning } from '@/api/types';
 import { fmtInt, toLocalInput } from './format';
 import { checkPattern } from './patterns';
 
@@ -36,18 +36,18 @@ export function modelRulesRefusal(rules: ModelRule[]): string | null {
 
 type WholeEngineKey = { [K in keyof PoolEngineFields]-?: PoolEngineFields[K] extends number ? K : never }[keyof PoolEngineFields];
 
-/** The pool routes' inclusive bound on each whole-number engine field; the two shares are ratios from 0 to 1. */
-export const ENGINE_BOUNDS: Record<Exclude<WholeEngineKey, 'paceFloor' | 'shedShare'>, { max: number; min: number }> = {
-  burnWindowSeconds: { max: 604_800, min: 60 },
+/** The pool routes' inclusive bound on each whole-number engine field. The cap and the ceiling are fractions. */
+export const ENGINE_BOUNDS: Record<Exclude<WholeEngineKey, 'shedCap' | 'windowCeiling'>, { max: number; min: number }> = {
+  burnAverageSeconds: { max: 7_200, min: 600 },
   inFlightCap: { max: 4_294_967_295, min: 1 },
   overageMoveGraceMinutes: { max: 300, min: 0 },
   retryInPlaceSeconds: { max: 300, min: 0 },
-  sourceDwellSeconds: { max: 604_800, min: 60 },
+  shedDwellSeconds: { max: 7_200, min: 300 },
   windDownMinutes: { max: 10_080, min: 0 },
 };
 
 const whole = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
-const ratio = (v: number | null, min: number) => v === null || (v >= min && v <= 1);
+const ratio = (v: number, min: number) => v >= min && v <= 1;
 
 /** Why the member write would refuse a budget field as it stands, or null; empty is no budget. */
 export function budgetRefusal(value: string): string | null {
@@ -75,11 +75,11 @@ export interface PoolRefusal {
 
 /** The labels the dialog draws over each bounded engine field, as the refusals name them. */
 export const ENGINE_FIELD_LABELS: Record<keyof typeof ENGINE_BOUNDS, string> = {
-  burnWindowSeconds: 'Burn window (s)',
+  burnAverageSeconds: 'Burn average (s)',
   inFlightCap: 'In flight',
   overageMoveGraceMinutes: 'Overage grace (min)',
   retryInPlaceSeconds: 'Retry in place (s)',
-  sourceDwellSeconds: 'Source dwell (s)',
+  shedDwellSeconds: 'Shed dwell (s)',
   windDownMinutes: 'Wind down (min)',
 };
 
@@ -156,19 +156,16 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   refuse('pinning', 'Session affinity in seconds', whole(affinity, 0, Number.MAX_SAFE_INTEGER) && (affinity === 0 || affinity >= 60) ? null : 'Session affinity is off or at least 60 whole seconds.');
   refuse('pinning', 'Pin sessions', AFFINITY_MODE_VALUES.some((mode) => mode === input.affinityMode) ? null : listed('Pin sessions'));
 
-  // NaN is a switched-on field left empty, held here so a save never reads it as a margin of 0.
-  const shedAhead = input.shedAheadOfPace;
-  refuse('utilization', 'Shed ahead of pace (%)', Number.isNaN(shedAhead) ? 'Shed ahead of pace needs a value from 0 to 100.' : ratio(shedAhead, 0) ? null : 'Shed ahead of pace is from 0 to 100.');
-  refuse('utilization', 'Select below utilization (%)', ratio(input.selectBelowUtilization, 0) ? null : 'Select below utilization is from 0 to 100.');
+  // NaN is a field left empty, which fails the range and so holds the save.
+  refuse('utilization', 'Window ceiling (%)', ratio(input.windowCeiling, 0.5) ? null : 'Window ceiling (%) is from 50 to 100.');
 
   const engine = (group: PoolGroup, key: keyof typeof ENGINE_BOUNDS) =>
     refuse(group, ENGINE_FIELD_LABELS[key], whole(input[key], ENGINE_BOUNDS[key].min, ENGINE_BOUNDS[key].max) ? null : boundText(ENGINE_FIELD_LABELS[key], ENGINE_BOUNDS[key]));
-  refuse('shedding', 'Share (%)', ratio(input.shedShare, 0) ? null : 'Share (%) is from 0 to 100.');
-  engine('shedding', 'burnWindowSeconds');
-  engine('shedding', 'sourceDwellSeconds');
+  refuse('shedding', 'Shed cap (%)', ratio(input.shedCap, 0.1) ? null : 'Shed cap (%) is from 10 to 100.');
+  engine('shedding', 'burnAverageSeconds');
+  engine('shedding', 'shedDwellSeconds');
   refuse('shedding', 'Warm sessions', WARM_SESSIONS_VALUES.some((mode) => mode === input.warmSessions) ? null : listed('Warm sessions'));
 
-  refuse('failover', 'Pace floor (%)', ratio(input.paceFloor, 0) ? null : 'Pace floor (%) is from 0 to 100.');
   engine('failover', 'inFlightCap');
   engine('failover', 'retryInPlaceSeconds');
 
@@ -188,6 +185,50 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
 /** Whether the pool routes would take `input` as it stands, with every member one of `accountIds`; null holds it. */
 export function validatePoolInput(input: PoolInput, accountIds: ReadonlySet<string> | null, checks: PoolChecks = {}): boolean {
   return poolRefusals(input, accountIds, checks).length === 0;
+}
+
+/** The settings the pool routes' static checks read, on a saved pool or a dialog's input alike. */
+export type WarnedSettings = Pick<Pool, 'affinityTtlSeconds' | 'cacheTtl' | 'inFlightCap' | 'loadShedding' | 'migrateWhenSpent' | 'shedCap' | 'warmSessions' | 'windowCeiling'>;
+
+const TTL_SECONDS = { '1h': 3_600, '5m': 300 } as const;
+
+/**
+ * The pool routes' eight static checks, the mirror of the route's own as `ENGINE_BOUNDS` mirrors its bounds: each with
+ * the fields it reads and its sentence, sorted by code. `cohort` is the most agents of one session among the pins
+ * under the pool's keys. A warning blocks nothing.
+ */
+export function poolWarnings(pool: WarnedSettings, cohort: number): PoolWarning[] {
+  const out: PoolWarning[] = [];
+  const warn = (code: string, fields: string[], text: string) => out.push({ code, fields, text });
+  const ttl = pool.cacheTtl;
+  // The route reads the policy's four main and subagent TTLs, and an injection switch on a policy that is off injects
+  // nothing.
+  const longest = Math.max(...[ttl.plan.main, ttl.plan.subagent, ttl.metered.main, ttl.metered.subagent].map((t) => TTL_SECONDS[t]));
+  if (ttl.enabled && ttl.injectWhenAbsent && pool.affinityTtlSeconds < longest) {
+    warn('affinity_under_cache_ttl', ['affinity_ttl_seconds', 'cache_ttl'], 'The session affinity ends before the cache TTL the pool injects, so a pin can expire while its cache is warm and the next request can land cold elsewhere.');
+  }
+  if (pool.inFlightCap < cohort) {
+    warn('cap_under_cohort', ['in_flight_cap'], `The in-flight cap is under the largest live cohort of ${cohort} agents, so subagents of one session wait for a slot they share.`);
+  }
+  if (pool.shedCap < 0.25) {
+    warn('cap_under_quarter', ['shed_cap'], 'A shed cap under 25 percent removes at most a quarter of the burn per round, so a window far over the ceiling needs several rounds and dwells to come under it.');
+  }
+  if (pool.windowCeiling < 0.8) {
+    warn('ceiling_low', ['window_ceiling'], 'A ceiling under 80 percent leaves a fifth of every window unused and moves sessions that would have finished the window warm.');
+  }
+  if (pool.windowCeiling >= 1) {
+    warn('ceiling_without_margin', ['window_ceiling'], 'A ceiling at 100 percent leaves no margin for a stale reading or a large turn, so a session can reach the wall before the round or the gate reads it.');
+  }
+  if (!pool.loadShedding) {
+    warn('shedding_off', ['load_shedding'], 'With load shedding off no round marks sessions on a member whose window would pass the ceiling, so a session stays until its window is spent or its account refuses it.');
+  }
+  if (!pool.migrateWhenSpent) {
+    warn('spent_moves_off', ['migrate_when_spent'], 'With spent moves off a session stays on a spent account until the upstream refuses it, so the destination gate never runs for that move.');
+  }
+  if (pool.warmSessions === 'never') {
+    warn('warm_never', ['warm_sessions'], 'With warm sessions never a round stops after the cold sessions, so the excess is covered only while cold sessions carry it.');
+  }
+  return out.sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
 }
 
 export type AutoModeOverride = 'inherit' | 'off' | 'on';

@@ -10,11 +10,17 @@ export type KnownWindowId = '5h' | '7d' | '7d_fable';
 export type WindowId = KnownWindowId | (string & {});
 
 export interface RateLimitWindow {
+  /** The share of the window the sessions on the account burn per hour, null where nothing is projected. */
+  burn: number | null;
+  /** The instant the projection runs to: the reset, the account's end, or five hours out on a weekly window. */
+  horizon: string | null;
   id: WindowId;
   label: string;
   periodHours: number;
   /** Observed as of `observedAt`; may be stale for accounts that cannot refresh. */
   observedAt: string;
+  /** The prediction plus the burn to `horizon`; null for a window with no reading or an account in no pool. */
+  projection: number | null;
   /** Null while the sampler has seen a utilization but no reset time for this window. */
   resetsAt: string | null;
   utilization: number;
@@ -234,7 +240,7 @@ export interface QuotaSnapshot {
  * The conditions that need the operator, worst first: the order the route ranks by and the dashboard's line draws,
  * so not alphabetical.
  */
-export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff'] as const;
+export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'wall_reached', 'destination_spent', 'shed_no_runway'] as const;
 export type AttentionKind = (typeof ATTENTION_KIND_VALUES)[number];
 
 /** One condition that holds now, as `GET /admin/attention` answers it. */
@@ -329,8 +335,15 @@ export interface PoolMember {
   budgetMonthlyUsd: number | null;
   /** The router's end for a member at a budget: the latest end among the budgets reached; null while none is. */
   budgetUntil: string | null;
+  /** The 7-day window's share the sessions on the member burn per hour, null on an API-key member. */
+  burn: number | null;
   eligible: MemberEligibility;
   kind: AccountKind;
+  /**
+   * The router's Pace score for the member whatever its kind: the spare rate for an OAuth member, the remaining
+   * worst bucket for an API-key member.
+   */
+  paceScore: number | null;
   priority: number;
   /** One report per budgeted period the ledger has summed; empty until it reports. */
   spends: { period: BudgetPeriod; periodEnd: string | null; spentUsd: number }[];
@@ -347,6 +360,14 @@ export interface PoolKey {
 /** Whether a shedding round may mark a warm session: never, only once the cold ones fall short, or by burn alone. */
 export type WarmSessions = 'always' | 'never' | 'when_needed';
 
+/** One static check that holds on a pool's saved settings. A warning blocks nothing. */
+export interface PoolWarning {
+  code: string;
+  /** The pool fields the check reads, as the route names them. */
+  fields: string[];
+  text: string;
+}
+
 export interface Pool {
   activePins: number;
   affinityMode: AffinityMode;
@@ -356,8 +377,8 @@ export interface Pool {
   autoModeServer: boolean;
   /** Hours of captured request and response bodies for keys with no override; 0 is off. */
   bodyCaptureHours: number;
-  /** The time constant of each pin's burn average, which a shedding round sizes its target from. */
-  burnWindowSeconds: number;
+  /** The time constant of each session's burn average, which the projection and the shedding round read. */
+  burnAverageSeconds: number;
   /** The pool's switch for the cache-diagnosis beta and `diagnostics.previous_message_id`; off by default. */
   cacheDiagnostics: boolean;
   /** Always answered; `enabled` off is how a pool that rewrites no breakpoint reads. */
@@ -374,6 +395,8 @@ export interface Pool {
    */
   keepaliveResolved: { breakEvenSeconds: Range; horizonSeconds: Range; idleSeconds: Range; idleShare: Range; parkedSeconds: Range } | null;
   keys: PoolKey[];
+  /** The shedding round's switch. Off, no round runs. The spent move keeps `migrateWhenSpent`. */
+  loadShedding: boolean;
   members: PoolMember[];
   /** Whether a pin moves off a member whose window for its model is spent while a sibling has allowance left. */
   migrateWhenSpent: boolean;
@@ -386,8 +409,6 @@ export interface Pool {
   /** Minutes a session stays on an account in overage while its window resets within them. */
   overageMoveGraceMinutes: number;
   overagePolicy: OveragePolicy;
-  /** Under Pace, a member with no more than this share of its window left takes a fresh session only as the last resort. */
-  paceFloor: number;
   /** Order the selection set by account kind before priority; the operator's answer alone. */
   preferSubscription: boolean;
   requests24h: number;
@@ -396,15 +417,11 @@ export interface Pool {
   /** The row's edit token, which an edit sends back as `expected_revision`. A pool deleted and created again under
    * its id never answers one its predecessor did. */
   revision: number;
-  /** Null lets selection pick among every eligible member; otherwise it prefers those under this 5-hour utilization. */
-  selectBelowUtilization: number | null;
   sessionPlacement: SessionPlacement;
-  /** Null disables the shedding round. */
-  shedAheadOfPace: number | null;
-  /** The share of a hot member's burn one shedding round moves. */
-  shedShare: number;
+  /** The most of a member's burn one shedding round removes, as a share of it. */
+  shedCap: number;
   /** Seconds a member that shed waits before its next round, and a session shed off it stays away. */
-  sourceDwellSeconds: number;
+  shedDwellSeconds: number;
   /** `active` and `disabled` are set by hand; the rest are observed. */
   status: 'active' | 'degraded' | 'disabled' | 'exhausted';
   strategy: PoolStrategy;
@@ -413,8 +430,15 @@ export interface Pool {
   /** The stamp of the row's last write, which `revision` carries. */
   updatedAt: string;
   warmSessions: WarmSessions;
+  /** The static checks that hold on the saved settings, sorted by code. None blocks a save. */
+  warnings: PoolWarning[];
   /** Minutes before an account's subscription end from which it takes a fresh session only as the last resort. */
   windDownMinutes: number;
+  /**
+   * The share of every plan window a move or a new session must stay under until the window resets, and the line a
+   * shedding round triggers on.
+   */
+  windowCeiling: number;
 }
 
 export type KeyStatus = 'active' | 'disabled' | 'expired' | 'revoked';
@@ -823,7 +847,7 @@ export interface DecisionSummary {
   fact: SummaryFact[];
   fast: boolean;
   fromAccountId: string | null;
-  hold: { accountId: string; boundMs: number; cohort: string | null } | null;
+  hold: RecordHold | null;
   keyId: string | null;
   kind: DecisionKind;
   model: string | null;
@@ -896,6 +920,8 @@ export interface RecordRequest {
   at: string;
   attempt: number;
   attempted: string[];
+  /** The relay's estimate of the body's prompt tokens, a fresh session's rewrite, null on a refusal. */
+  bodyTokens: number | null;
   canonicalModel: string;
   chain: { boundaries: number; staticBoundaries: number; staticHash: boolean };
   clientClass: string;
@@ -929,6 +955,12 @@ export interface RecordPin {
   lastRefreshAt: string | null;
   lastUsedAt: string | null;
   marked: boolean;
+  /** When a shedding round marked the pin, null while it carries no mark. */
+  markedAt: string | null;
+  /** The account the round marked the pin on. */
+  markedOn: string | null;
+  /** The plan window whose projection fired the round. */
+  markedWindow: string | null;
   refreshAgeMs: number | null;
   released: string[];
   shed: { at: string; from: string } | null;
@@ -936,30 +968,36 @@ export interface RecordPin {
   warmthCause: string | null;
 }
 
-/** The values that entered the decision, each named as the pool row names the field it was read from. */
+/**
+ * The twenty values that entered the decision, each named as the pool row names the field it was read
+ * from. A version 1 record read the cap, the average and the dwell under their old names and carried neither the
+ * switch nor the ceiling.
+ */
 export interface RecordSettings {
   affinityMode: string;
   affinityTtlSeconds: number;
-  burnWindowSeconds: number;
+  burnAverageSeconds: number;
   inFlightCap: number;
-  migrateBand: number;
+  /** A version 1 record's three removed settings, null on a version 2 record. */
+  legacy: { paceFloor: number; selectBelowUtilization: number | null; shedAheadOfPace: number | null } | null;
+  /** Null on a version 1 record, which carried no switch. */
+  loadShedding: boolean | null;
   migrateWhenSpent: boolean;
   minSharedPrefixTokens: number;
   overageMoveGraceMinutes: number;
   overagePolicy: string;
-  paceFloor: number;
   poolUpdatedAt: string;
   preferSubscription: boolean;
   retryInPlaceSeconds: number;
-  selectBelowUtilization: number | null;
   sessionPlacement: string;
-  shedAheadOfPace: number | null;
-  shedShare: number;
-  sourceDwellSeconds: number;
+  shedCap: number;
+  shedDwellSeconds: number;
   strategy: string;
   subagentPlacement: string;
   warmSessions: string;
   windDownMinutes: number;
+  /** Null on a version 1 record, which carried no ceiling. */
+  windowCeiling: number | null;
 }
 
 /** A member's spend against one budget. The spend and its period are null while the ledger has reported none. */
@@ -1006,9 +1044,15 @@ export interface RecordCandidate {
   accountId: string;
   allowanceKnown: boolean;
   budget: RecordBudget[];
+  /** The plan window whose runway is the candidate's, null where the gate read none. */
+  binding: string | null;
+  /** The share of each plan window the sessions on the account burn per hour, empty on a version 1 record. */
+  burn: Record<string, number>;
   cooldowns: RecordCooldown[];
   credits: RecordCredits | null;
   enabled: boolean;
+  /** `fits`, `rewrite_only`, `least_bad` or `ending` where the gate or the no-fit partition read the candidate. */
+  fit: string | null;
   inFlight: number;
   inFlightCap: number;
   inOverage: boolean;
@@ -1016,7 +1060,8 @@ export interface RecordCandidate {
   kind: 'api_key' | 'oauth';
   obstacle: { name: string; reason: string | null; until: string | null; window: string | null } | null;
   overage: { observedAt: string; reset: string | null; since: string; source: string } | null;
-  pace: { deadline: string | null; end: string | null; hours: number | null; remaining: number; reset: string | null; score: number; window: string | null } | null;
+  /** `score` is the spare rate: the remaining share per hour less `burn`, the account's burn on `window`. */
+  pace: { burn: number; deadline: string | null; end: string | null; hours: number | null; remaining: number; reset: string | null; score: number; window: string | null } | null;
   partition: string | null;
   planTier: string | null;
   /**
@@ -1026,12 +1071,15 @@ export interface RecordCandidate {
   prefix: { content: PrefixEntry | null; contentMatch: PrefixEntry | null; static: PrefixEntry | null; staticMatch: PrefixEntry | null; withMain: boolean };
   priority: number;
   rank: number | null;
+  /** Until the window that binds reaches the ceiling with the pin's rewrite and burn, null for an unbounded runway. */
+  runwayMs: number | null;
   score: number | null;
   state: string;
   term: { cancelled: boolean; ended: boolean; endsAt: string | null; since: string | null; trialEndsAt: string | null; windingDown: boolean } | null;
   tier: [number, number, number];
   verdict: string;
-  windows: Record<string, { ageMs: number; ahead: number | null; observedAt: string; reset: string | null; source: string; utilization: number }>;
+  /** `projection` and `horizon` are null where nothing is projected, and `reserved` sums the live reservations. */
+  windows: Record<string, { ageMs: number; ahead: number | null; horizon: string | null; observedAt: string; projection: number | null; reserved: number; reset: string | null; source: string; utilization: number }>;
 }
 
 /** One step of the rule walk in the engine's order, with the facts it read. */
@@ -1062,20 +1110,33 @@ export interface RecordCompletion {
   status: number | null;
 }
 
+/** A hold: `cap` waits for a slot, `reset` for the spent window's reset at `until`. */
+export interface RecordHold {
+  accountId: string;
+  boundMs: number;
+  cohort: string | null;
+  reason: string;
+  until: string | null;
+}
+
 export interface RecordOutcome {
   accountId: string | null;
   cohortHold: CohortHold | null;
   completion: RecordCompletion | null;
   exhaustion: { deadline: string | null; kind: string; obstacle: string | null; reason: string | null; window: string | null } | null;
   fromAccountId: string | null;
-  hold: { accountId: string; boundMs: number; cohort: string | null } | null;
+  hold: RecordHold | null;
   inOverage: boolean;
   kind: DecisionKind;
+  /** The shed mark this decision cleared, with the healing projection on `healed`; null when it cleared none. */
+  markCleared: { markedAt: string; markedOn: string; markedWindow: string; projection: number | null; reason: string } | null;
   /** In the routing task's emit order: two for a replaced expired pin, `pin_expired` then `pin_created`. */
   pinEvents: { kind: string; reason: string | null }[];
   pinWritten: { action: string; epoch: number; hashesStamped: boolean; lane: string; refreshStamped: boolean } | null;
   /** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift`) beside its sentence. */
   refusal: { code: string; kind: string; reason: string } | null;
+  /** What the decision booked on the account until the usage replaces it: the rewrite and the burn per hour by plan window. */
+  reservation: { accountId: string; burn: Record<string, number>; expiresAt: string; rewrite: Record<string, number> } | null;
   rule: string | null;
   rung: Placement | null;
   /** The pins the shedding round this decision ran marked, or null when no round ran. */
@@ -1085,9 +1146,12 @@ export interface RecordOutcome {
   upstreamModel: string | null;
 }
 
-/** Record v1 as the record route answers it, every block in camelCase. `raw` is the route's
- * answer as it arrived, kept for the card's Copy as JSON, and `settings` null for a refusal under a key or pool the
- * registry no longer held. */
+/**
+ * A record as the record route answers it, every block in camelCase: version 2, or version 1 for a decision made
+ * before the projection, whose settings read the old names and whose walk carries the cool reading. `raw` is the
+ * route's answer as it arrived, kept for the card's Copy as JSON, and `settings` null for a refusal under a key or
+ * pool the registry no longer held.
+ */
 export interface DecisionRecord {
   candidates: RecordCandidate[];
   outcome: RecordOutcome;
@@ -1296,6 +1360,14 @@ export interface RewritePoint {
   rewriteTokens: number;
 }
 
+/** The rewrites route's answer: the moves by reason, and by reason and destination fit, over the range. */
+export interface RewritesAnswer {
+  moves: Record<string, number>;
+  /** Each reason's moves by the fit of the destination they landed on (`fits`, `rewrite_only`, `least_bad`, `unknown`). */
+  movesByReasonAndFit: Record<string, Record<string, number>>;
+  points: RewritePoint[];
+}
+
 /** The keepalive mod's lifecycle word for an agent. */
 export type KeepaliveState = 'busy' | 'idle' | 'parked' | 'released' | 'unknown';
 
@@ -1317,8 +1389,7 @@ export interface Session {
    *  no pin at all, with one whose account left the registry, on a subscription account whose tier is unknown, or
    *  on a model it has no weight for, or a tier it has no capacity for on that window. */
   burn: number | null;
-  /** When `burn` was last folded, the instant the shedding preview decays it forward from; null with no pin, or for a
-   *  pin never folded. */
+  /** The instant the served burn is decayed to, null with no pin or for a pin never folded. */
   burnAt: string | null;
   /** Null for a session with no pin, or one whose account left the registry: no kind is left to pick a unit from. */
   burnUnit: BurnUnit | null;
@@ -1360,6 +1431,13 @@ export interface Session {
   presenceAgeSeconds: number | null;
   /** Ledgered requests on this session; 0 means analytics has nothing to show. */
   requests: number;
+  /**
+   * Null with no projection, false for an unbounded runway, true for a bounded one, whose `runwayMs` is set. Null on an
+   * unpinned row.
+   */
+  runwayBounded: boolean | null;
+  /** Until the pin's account's projection reaches the ceiling on the window that binds, null unless `runwayBounded`. */
+  runwayMs: number | null;
   sessionId: string;
   /** The account a shed round marked this pin's session to leave, kept off until the session moves; null off a
    *  pin never marked, or with no pin. */

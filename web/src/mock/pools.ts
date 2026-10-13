@@ -1,18 +1,43 @@
 import { CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, POOL_AFFINITY_DEFAULTS } from '@/api/client';
 import type { AccountKind, ApiKey, BudgetPeriod, CacheTtl, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, Range } from '@/api/types';
+import { endOf } from '@/lib/quota';
+import { accountById } from './accounts';
 import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NOW, ago, ahead, daysAgo, iso } from './time';
 
 /**
- * A member as the story seeds it. The mock reads its kind and its eligibility off the account, as the route does, and
- * its pins off the recipes once they are drawn.
+ * A member as the story seeds it. The mock reads its kind, its eligibility, its burn and its Pace score off the
+ * account, as the route does, and its pins off the recipes once they are drawn.
  */
-type MemberSeed = Omit<PoolMember, 'activePins' | 'budgetUntil' | 'eligible' | 'kind'>;
+type MemberSeed = Omit<PoolMember, 'activePins' | 'budgetUntil' | 'burn' | 'eligible' | 'kind' | 'paceScore'>;
+
+/** The worst live bucket of each API-key account, which the router reads as its room. */
+export const WORST_BUCKET: Readonly<Record<string, number>> = { overflow: 0.04, research: 0.1 };
+
+/**
+ * A member's two figures as the pools route serves them: the 7-day window's burn, and the router's Pace score, the
+ * spare rate on the 7-day window for an OAuth member (its remaining share per hour to the earlier of the reset and the
+ * end, less the burn) and the remaining worst bucket for an API-key member, which burns no plan window.
+ */
+export function servedFigures(accountId: string, now: number): Pick<PoolMember, 'burn' | 'paceScore'> {
+  const account = accountById.get(accountId);
+  if (account === undefined) return { burn: null, paceScore: null };
+  if (account.kind === 'api_key') return { burn: null, paceScore: 1 - (WORST_BUCKET[accountId] ?? 0) };
+  const week = account.windows.find((w) => w.id === '7d');
+  if (week === undefined) return { burn: null, paceScore: null };
+  const end = endOf(account, now);
+  const reset = week.resetsAt === null ? null : Date.parse(week.resetsAt);
+  const deadline = [reset, end].filter((x): x is number => x !== null).reduce<number | null>((min, x) => (min === null || x < min ? x : min), null);
+  const hours = deadline === null ? 168 : Math.max(1, (deadline - now) / HOUR);
+  const burn = week.burn ?? 0;
+  return { burn: week.burn, paceScore: Math.round(((1 - week.utilization) / hours - burn) * 100_000) / 100_000 };
+}
 /**
  * The route lists a pool's keys from the key registry, so the story seeds none on the pool itself. Its pins are its
- * members' sum, which the pool view reads, so the seed holds no figure of its own.
+ * members' sum, which the pool view reads, so the seed holds no figure of its own. Its warnings are the route's checks
+ * on its settings, which the mock computes as the route does.
  */
-export type PoolSeed = Omit<Pool, 'activePins' | 'keys' | 'members'> & { members: MemberSeed[] };
+export type PoolSeed = Omit<Pool, 'activePins' | 'keys' | 'members' | 'warnings'> & { members: MemberSeed[] };
 
 const unbudgeted = (accountId: string, priority: number): MemberSeed => ({ accountId, budgetDailyUsd: null, budgetMonthlyUsd: null, priority, spends: [] });
 
@@ -102,8 +127,13 @@ const POOL_ROWS: PoolSeed[] = [
     strategy: 'pace',
     preferSubscription: true,
     overagePolicy: 'prefer_plan',
-    shedAheadOfPace: 0.9,
-    selectBelowUtilization: null,
+    // A ceiling under 80 % with its shedding on the balanced preset: primary, secondary and nightly all project past
+    // it, and the route warns about the unused fifth.
+    windowCeiling: 0.75,
+    loadShedding: true,
+    shedCap: 0.5,
+    burnAverageSeconds: 1_800,
+    shedDwellSeconds: 900,
     affinityTtlSeconds: 600,
     // Pins only for a request that caches, and a fresh session placed where its static prefix is warm.
     affinityMode: 'when_cached',
@@ -152,10 +182,10 @@ const POOL_ROWS: PoolSeed[] = [
       },
     ],
     ...UNTIL_DRAWN,
-    // The 09:05:12 edit that set its shedding margin, the registry change the routing log records.
+    // The 09:05:12 edit that set its ceiling, the registry change the routing log records.
     updatedAt: iso(NOW - (5 * HOUR + 24 * MINUTE + 48_000)),
-    // The sample's shedding and failover settings are the store's defaults, so this pool reads balanced on both. The
-    // last hour's moves are the routing log's story: two failovers, a fast lane's and two by the spent rule.
+    // The sample's failover settings are the store's defaults, so this pool reads balanced on both groups. The last
+    // hour's moves are the routing log's story: two failovers, a fast lane's and two by the spent rule.
     movesPerHour: { cooldown: 2, fast_lane: 1, spent: 2 },
   },
   {
@@ -167,17 +197,16 @@ const POOL_ROWS: PoolSeed[] = [
     strategy: 'round_robin',
     preferSubscription: false,
     overagePolicy: 'allow',
-    shedAheadOfPace: 0.85,
-    selectBelowUtilization: null,
+    windowCeiling: 0.95,
+    loadShedding: true,
     // A batch pool tuned by hand, so neither setting group matches a preset and both read custom.
-    shedShare: 0.4,
-    burnWindowSeconds: 1_200,
-    sourceDwellSeconds: 1_800,
+    shedCap: 0.4,
+    burnAverageSeconds: 1_200,
+    shedDwellSeconds: 1_800,
     migrateWhenSpent: false,
     warmSessions: 'never',
     inFlightCap: 4,
     retryInPlaceSeconds: 30,
-    paceFloor: 0.05,
     overageMoveGraceMinutes: 0,
     windDownMinutes: 120,
     movesPerHour: {},
@@ -212,8 +241,10 @@ const POOL_ROWS: PoolSeed[] = [
     strategy: 'priority',
     preferSubscription: true,
     overagePolicy: 'prefer_plan',
-    shedAheadOfPace: null,
-    selectBelowUtilization: null,
+    windowCeiling: 0.95,
+    loadShedding: true,
+    // Its own cap at the balanced preset's, where the sample's captured pool sets one under a quarter.
+    shedCap: 0.5,
     affinityTtlSeconds: 3_600,
     movesPerHour: {},
     // Warming on with the plan's main turns on the hour, so its one plan member reads one figure each.
@@ -231,8 +262,9 @@ const POOL_ROWS: PoolSeed[] = [
   },
 ];
 
-// MockApi restamps revision at construction, so the served figure is not this seed's.
-export const POOLS: PoolSeed[] = POOL_ROWS;
+// MockApi restamps revision at construction, so the served figure is not this seed's. The sample's warnings are the
+// captured pool's, so the seed drops them: the mock answers its own.
+export const POOLS: PoolSeed[] = POOL_ROWS.map(({ warnings: _, ...seed }: PoolSeed & { warnings?: unknown }) => seed);
 
 export const poolById = new Map(POOLS.map((p) => [p.id, p]));
 
