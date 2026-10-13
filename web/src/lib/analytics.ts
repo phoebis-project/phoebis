@@ -577,8 +577,7 @@ export function foldBurn(
     const [fiveHour, sevenDay, week] = figures(p);
     add(s.fiveHour, fiveHour, p.tokens > 0);
     add(s.sevenDay, sevenDay, p.tokens > 0);
-    // A model week reads null on every bucket no row of which ran on a model with a week of its own, so a null there is
-    // no unpriced traffic.
+    // A null model week is a bucket the route did not price on the week, so it adds nothing here and is drawn as a gap.
     if (week !== null) s.week = (s.week ?? 0) + week;
     if (p.estimated) s.estimated = true;
   }
