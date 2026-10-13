@@ -1314,8 +1314,11 @@ export interface AccountRollup {
   windows: Partial<Record<string, WindowSample>>;
 }
 
-/** The dimensions the burn route groups on; `session` reads the twenty sessions with the most tokens. */
-export type BurnGroup = 'account' | 'key' | 'request_class' | 'session';
+/**
+ * The dimensions the burn route groups on: the breakdown's, and `session`, which reads the twenty sessions with the most
+ * tokens and which no other route groups on.
+ */
+export type BurnGroup = Exclude<AnalyticsGroupBy, 'all'> | 'session';
 
 /** One group's burn over one bucket, as `GET /admin/analytics/burn` answers it. */
 export interface BurnPoint {
@@ -1324,14 +1327,22 @@ export interface BurnPoint {
   cachedTokens: number;
   /** True when any plan row of the bucket priced through the model tier's fallback weight. */
   estimated: boolean;
-  /** The bucket's plan rows as a 20x 5-hour equivalent, the band weighed in, under every grouping. Null for an idle
-   *  bucket and for one with no plan row. */
+  /** The bucket's plan rows as a 20x 5-hour equivalent, the band weighed in, under every grouping. A billed row adds a
+   *  zero, so a bucket with tokens and no plan row reads 0. Null for an idle bucket and for one holding a row the cost
+   *  model cannot price on the window. */
   fiveHourEquivalent: number | null;
   /** A subscription account's spend in the bucket as a fraction of its own 5-hour window, the band weighed in; null
    *  for an API-key account, one whose tier is unknown, a bucket with no row the cost model prices (an idle hour among
-   *  them) or one holding a row the cost model cannot price, and under every other grouping. */
+   *  them) or one holding a row the cost model cannot price, and wherever the group holds more than one account's rows
+   *  (every grouping but the account one, unless the Accounts filter names exactly one account). */
   fiveHourShare: number | null;
   group: string;
+  /** The same plan rows as a 20x equivalent of the model's own week, null where no row of the bucket is on a model
+   *  with a week of its own. */
+  modelWeekEquivalent: number | null;
+  /** The same spend as a fraction of the account's model week, null where `fiveHourShare` is and where no row of the
+   *  bucket is on a model with a week of its own. */
+  modelWeekShare: number | null;
   /** The same plan rows as a 20x 7-day equivalent, unbanded. */
   sevenDayEquivalent: number | null;
   /** The same spend as a fraction of the account's 7-day window, unbanded. */
@@ -1341,7 +1352,7 @@ export interface BurnPoint {
   /** Uncached input tokens. */
   uncachedTokens: number;
   /** What the account spends in: a subscription's window share, even while no tier prices it, or an API key's
-   *  dollars; null under every other grouping, and for an account the registry no longer holds. */
+   *  dollars. Null where the shares are, and for an account the registry no longer holds. */
   unit: BurnUnit | null;
   /** An API-key account's estimated cost. */
   usd: number;

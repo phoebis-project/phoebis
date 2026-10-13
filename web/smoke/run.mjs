@@ -252,6 +252,13 @@ const changeSelect = async (page, select, value) => {
   await page.settle(900);
 };
 const chooseUnit = (page, value) => changeSelect(page, shellUnit(page), value);
+/** The Analytics filter bar's Group by select, the one the Burn section follows, told by its Burn-only option. */
+const pageGroupBy = (page) => [...page.container.querySelectorAll('.filters select')].find((s) => [...s.options].some((o) => o.value === 'session'));
+/**
+ * A burn point as the route answers it, idle and on no window unless `over` says otherwise: an API-key bucket with
+ * tokens reads a zero 20x equivalent, and a subscription one its figures.
+ */
+const burnPoint = (over) => ({ cachedTokens: 0, estimated: false, fiveHourEquivalent: null, fiveHourShare: null, modelWeekEquivalent: null, modelWeekShare: null, sevenDayEquivalent: null, sevenDayShare: null, tokens: 0, uncachedTokens: 0, unit: null, usd: 0, ...over });
 
 // The generator skips overnight rows by wall-clock hour, so pick rows by the
 // shape each check needs rather than by position.
@@ -11494,10 +11501,11 @@ m.unmount();
   page = await mount('/analytics#burn', { now: at });
   spy = countCalls('getAnalyticsBurn');
   endOf = ([range]) => range?.to;
-  await act('Burn group by', async () => {
-    const select = page.container.querySelector('#burn select[aria-label="Burn group by"]');
-    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, 'key');
-    select?.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await act('the group-by on the Burn tab', async () => {
+    const select = pageGroupBy(page);
+    if (!select) return;
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, 'model');
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
   });
   results.push({ name: handlersCheck, ok: moved.length === 0, missing: moved });
   spy.restore();
@@ -11522,24 +11530,26 @@ m.unmount();
 
   // One bucket at 14:00 holding $18: its rate is $18 over the minutes the read saw of it.
   const wiringCheck = "/analytics the burn charts rate the last bucket up to the instant its read was made";
-  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [{ at: new Date(at14).toISOString(), cachedTokens: 0, fiveHourShare: null, group: 'overflow', sevenDayShare: null, tokens: 18_000, uncachedTokens: 18_000, unit: 'usd', usd: 18 }] });
+  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [burnPoint({ at: new Date(at14).toISOString(), fiveHourEquivalent: 0, group: 'overflow', sevenDayEquivalent: 0, tokens: 18_000, uncachedTokens: 18_000, unit: 'usd', usd: 18 })] });
   const burnPage = await mount('/analytics#burn', { now: at14 + 20 * 60_000 });
   const rate = () => {
     const card = [...burnPage.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Spend per minute');
     return card?.querySelector('.legend li .legend__value')?.textContent?.trim() ?? 'no legend';
   };
   const regroup = async (value) => {
-    const select = burnPage.container.querySelector('#burn select[aria-label="Burn group by"]');
-    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, value);
-    select?.dispatchEvent(new window.Event('change', { bubbles: true }));
+    const select = pageGroupBy(burnPage);
+    if (select) {
+      Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, value);
+      select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    }
     await burnPage.settle();
   };
   await customRange(burnPage);
   // Read at the range's end, 20 minutes into the hour.
   const atEnd = rate();
   tick(10 * 60_000);
-  await regroup('key');
   await regroup('account');
+  await regroup('key');
   // Read again ten minutes past the end: the route answered 30 minutes of the hour.
   const later = rate();
   tick(31 * 60_000);
@@ -11557,7 +11567,7 @@ m.unmount();
   const at13 = Date.UTC(2026, 8, 16, 13);
   const burnAt = (usd) => async () => ({
     bucketSeconds: 3_600,
-    points: [at13, at13 + 3_600_000].map((t, i) => ({ at: new Date(t).toISOString(), cachedTokens: 0, fiveHourShare: null, group: 'overflow', sevenDayShare: null, tokens: 0, uncachedTokens: 0, unit: 'usd', usd: usd[i] })),
+    points: [at13, at13 + 3_600_000].map((t, i) => burnPoint({ at: new Date(t).toISOString(), group: 'overflow', unit: 'usd', usd: usd[i] })),
   });
   const measure = window.HTMLElement.prototype.getBoundingClientRect;
   window.HTMLElement.prototype.getBoundingClientRect = function () {
@@ -11588,7 +11598,7 @@ m.unmount();
   // A lone bucket 20 seconds old sets no scale, so recharts spans its $0.004 a minute alone, and the labels have to
   // read at that precision rather than all as $0.00.
   const precisionCheck = "/analytics a spend axis recharts spans on its own labels its ticks at the drawn rows' precision";
-  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [{ at: new Date(at13 + 3_600_000).toISOString(), cachedTokens: 0, fiveHourShare: null, group: 'overflow', sevenDayShare: null, tokens: 600, uncachedTokens: 600, unit: 'usd', usd: 0.004 / 3 }] });
+  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [burnPoint({ at: new Date(at13 + 3_600_000).toISOString(), fiveHourEquivalent: 0, group: 'overflow', sevenDayEquivalent: 0, tokens: 600, uncachedTokens: 600, unit: 'usd', usd: 0.004 / 3 })] });
   const lone = await mount('/analytics#burn', { now: at13 + 3_600_000 + 20_000 });
   const labels = ticksOf(lone);
   results.push({ name: precisionCheck, ok: labels.length > 1 && new Set(labels).size === labels.length, missing: labels });
@@ -11671,9 +11681,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 {
   const card = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
   const legendOf = (t) => [...(card(t)?.querySelectorAll('.legend li') ?? [])].map((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''));
-  // Takes the grouping's key, the option's value, as the page's own state holds it.
+  // Takes the grouping's key, the option's value, as the page's own state holds it: the Burn section follows the page's
+  // group-by.
   const burnGroup = async (value) => {
-    const select = m.container.querySelector('#burn select[aria-label="Burn group by"]');
+    const select = pageGroupBy(m);
     if (select) {
       setSelect.call(select, value);
       select.dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -11681,8 +11692,27 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await m.settle(700);
   };
   await tab(m, 'Burn');
-  expect('/analytics burn section', m.text(), ['Burn', 'Spend per minute', 'Plan per hour']);
-  results.push({ name: '/analytics the Burn tab draws Spend per minute and Plan per hour and no token chart', ok: card('Tokens per minute') === undefined && !m.text().includes('Tokens per minute'), missing: [card('Tokens per minute') ? 'the token chart drawn' : 'the words on the page'] });
+  expect('/analytics burn section', m.text(), ['Burn', 'Spend per minute', '5-hour per hour', '7-day per hour', 'Model week per hour']);
+  results.push({ name: '/analytics the Burn tab draws Spend per minute and a plan card per window and no token chart', ok: card('Tokens per minute') === undefined && !m.text().includes('Tokens per minute'), missing: [card('Tokens per minute') ? 'the token chart drawn' : 'the words on the page'] });
+  {
+    // The section draws no group-by and no reason line of its own. The page's group-by carries the Burn's session
+    // grouping as its eleventh option, named as the Burn's own.
+    const section = m.container.querySelector('#burn');
+    const options = [...(pageGroupBy(m)?.options ?? [])];
+    const session = options.find((o) => o.value === 'session');
+    results.push({
+      name: "/analytics the Burn section draws no group-by of its own and the page's group-by offers Session as the Burn's own eleventh option",
+      ok:
+        section !== null &&
+        section.querySelector('select') === null &&
+        !section.textContent?.includes('Burn groups by') &&
+        options.length === 11 &&
+        options.at(-1) === session &&
+        session?.textContent?.trim() === 'Session (Burn only)' &&
+        session?.getAttribute('title') === 'The Burn section groups by session, and every other section groups by key, since no rollup carries a session',
+      missing: [`${section?.querySelectorAll('select').length ?? 'no'} selects in the section`, ...options.map((o) => `${o.value}=${o.textContent}`)],
+    });
+  }
   expect('/analytics the Burn tab draws the spend per minute note', card('Spend per minute')?.querySelector('.card__subtitle')?.textContent ?? '', ["Dollars per minute: API-key traffic, and a subscription account's fast-mode and overage answers."]);
   await tab(m, 'Traffic');
   {
@@ -12650,71 +12680,147 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   results.push({ name: '/analytics the rewrites legend names each move reason the range holds', ok: Object.keys(moves.moves).length > 1 && moveLegend.length === Object.keys(moves.moves).length && moveLegend.includes('Failed over') && moveLegend.includes('Shed'), missing: moveLegend });
 
   await tab(m, 'Burn');
-  const planned = legendOf('Plan per hour');
-  const windows = ['primary', 'secondary', 'nightly', 'studio'].flatMap((id) => [`${id} (5-hour)`, `${id} (7-day)`]);
-  const planItems = [...(card('Plan per hour')?.querySelectorAll('.legend li') ?? [])];
-  const dashedOf = (items) => items.filter((li) => li.querySelector('.legend__swatch')?.getAttribute('style')?.includes('repeating-linear-gradient')).map((li) => li.textContent ?? '');
+  await burnGroup('account');
+  const legendItems = (t) => [...(card(t)?.querySelectorAll('.legend li') ?? [])];
+  const valueOf = (li) => li.querySelector('.legend__value')?.textContent?.trim() ?? '';
+  const labelOf = (li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('');
+  // A line's entry carries a line swatch in a color of its own, and the muted entries name what no line draws.
+  const MUTED = ['estimated', 'model unlisted'];
+  const lineLabels = (t) => legendItems(t).filter((li) => !MUTED.includes(labelOf(li)) && valueOf(li) !== 'tier unknown').map(labelOf);
+  const subscribed = ['nightly', 'primary', 'secondary', 'studio'];
+  const PLAN_CARDS = ['5-hour per hour', '7-day per hour'];
+  const subtitleOf = (t) => card(t)?.querySelector('.card__subtitle')?.textContent ?? '';
   {
-    // `secondary` serves the story's Sonnet 4.6 traffic, which the cost model has no weight for: its model tier's
-    // latest weighed model stands in, so its two windows carry a figure as every other account's do.
-    const valueOf = (li) => li.querySelector('.legend__value')?.textContent?.trim() ?? '';
-    const labelOf = (li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('');
-    const fiveHour = planItems.filter((li) => labelOf(li).endsWith('(5-hour)'));
-    const sevenDay = planItems.filter((li) => labelOf(li).endsWith('(7-day)'));
-    const unlisted = planItems.filter((li) => labelOf(li) === 'model unlisted');
+    // Native reads a subscription request in 20x window equivalents, which no account tier reads, so every subscription
+    // account draws on each window's card, `secondary`'s Sonnet 4.6 traffic through its model tier's latest weighted
+    // model, and the API-key accounts, whose buckets read a zero equivalent, draw on none.
+    const read = PLAN_CARDS.map((t) => ({ items: legendItems(t), lines: lineLabels(t), t }));
+    const estimated = read.map((r) => r.items.filter((li) => labelOf(li) === 'estimated'));
+    const swatch = (li) => li?.querySelector('.legend__swatch')?.getAttribute('style') ?? '';
     results.push({
-      name: "/analytics plan per hour draws every subscription account's 5-hour and 7-day shares, the Sonnet 4.6 account's through its model tier, and no model unlisted entry",
+      name: "/analytics under native the 5-hour and 7-day cards draw every subscription account in 20x equivalents, the Sonnet 4.6 account's through its model tier, no API-key account and no model unlisted entry",
       ok:
-        windows.every((w) => planned.includes(w)) &&
-        !planned.some((t) => t.startsWith('overflow')) &&
-        dashedOf(planItems).every((t) => t.includes('(7-day)')) &&
-        dashedOf(planItems).length === 4 &&
-        fiveHour.length === 4 &&
-        fiveHour.every((li) => valueOf(li).endsWith('%')) &&
-        sevenDay.length === 4 &&
-        sevenDay.every((li) => valueOf(li).endsWith('%')) &&
-        unlisted.length === 0,
-      missing: planItems.map((li) => `${labelOf(li)}=${valueOf(li)}`),
+        read.every((r) => JSON.stringify([...r.lines].sort()) === JSON.stringify(subscribed)) &&
+        read.every((r) => r.items.filter((li) => subscribed.includes(labelOf(li))).every((li) => valueOf(li).endsWith('%'))) &&
+        read.every((r) => !r.items.some((li) => labelOf(li) === 'model unlisted')) &&
+        subtitleOf('5-hour per hour').startsWith('The subscription traffic per hour in 20x 5-hour equivalents, weighed by the peak band, whose hours are shaded.') &&
+        subtitleOf('7-day per hour').startsWith('The subscription traffic per hour in 20x 7-day equivalents.'),
+      missing: read.map((r) => `${r.t}: ${r.items.map((li) => `${labelOf(li)}=${valueOf(li)}`).join(', ')}`),
+    });
+    results.push({
+      name: '/analytics each plan card lists one estimated entry with a hollow swatch, muted, titled with the estimate, while a drawn line holds an estimated bucket',
+      ok: estimated.every((e) => e.length === 1 && /background: transparent/.test(swatch(e[0])) && /border: 1px solid/.test(swatch(e[0])) && e[0].getAttribute('title') === 'A bucket whose model has no measured weight and reads the latest weighed model of its model tier'),
+      missing: estimated.map((e) => `${e.length} entries ${swatch(e[0])} ${e[0]?.getAttribute('title') ?? ''}`),
+    });
+    // The story's Fable traffic gives its accounts a model week of their own, which its own card charts.
+    const week = lineLabels('Model week per hour');
+    const drawn = lineLabels('5-hour per hour');
+    const burned = await api.getAnalyticsBurn({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() }, 'account');
+    const onWeek = [...new Set(burned.points.filter((p) => p.modelWeekEquivalent !== null && drawn.includes(p.group)).map((p) => p.group))].sort();
+    results.push({
+      name: "/analytics the model week card draws each account that ran on a model with a week of its own, read off the route's model week members",
+      ok: onWeek.length > 0 && JSON.stringify([...week].sort()) === JSON.stringify(onWeek) && subtitleOf('Model week per hour').startsWith("The subscription traffic per hour in 20x equivalents of its model's own week"),
+      missing: [`drawn ${week.join(',')}`, `on a week ${onWeek.join(',')}`, subtitleOf('Model week per hour')],
     });
     // The legend's per-hour mean ends in `%` over a single gap too, so the buckets themselves are read: no bucket with
-    // tokens on a subscription account leaves a window unpriced, the ones Sonnet 4.6 ran on among them.
+    // tokens on a subscription account leaves a window unpriced, the ones Sonnet 4.6 ran on among them, and a bucket of
+    // an API-key account with tokens reads a zero equivalent rather than none.
     const gaps = [];
     const sonnet46 = requests.filter((r) => r.model === 'claude-sonnet-4-6' && r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output > 0);
     let carried = 0;
+    let billed = 0;
     for (const days of [1, 7]) {
       const burn = await api.getAnalyticsBurn({ from: new Date(Date.now() - days * 86_400_000).toISOString(), to: new Date().toISOString() }, 'account');
       const ranSonnet46 = (p) => sonnet46.some((r) => r.accountId === p.group && Date.parse(r.at) >= Date.parse(p.at) && Date.parse(r.at) < Date.parse(p.at) + burn.bucketSeconds * 1_000);
       const busy = burn.points.filter((p) => ['nightly', 'primary', 'secondary'].includes(p.group) && p.tokens > 0);
       carried += busy.filter(ranSonnet46).length;
-      gaps.push(...busy.filter((p) => p.fiveHourShare === null || p.sevenDayShare === null).map((p) => `${days}d ${p.group} ${p.at}`));
+      gaps.push(...busy.filter((p) => p.fiveHourShare === null || p.sevenDayShare === null || p.fiveHourEquivalent === null || p.sevenDayEquivalent === null).map((p) => `${days}d ${p.group} ${p.at}`));
+      const keyed = burn.points.filter((p) => p.unit === 'usd' && p.tokens > 0);
+      billed += keyed.length;
+      gaps.push(...keyed.filter((p) => p.fiveHourEquivalent !== 0 || p.sevenDayEquivalent !== 0).map((p) => `${days}d ${p.group} ${p.at} reads ${p.fiveHourEquivalent}`));
     }
-    results.push({ name: '/analytics every bucket with tokens of a subscription account carries its 5-hour and 7-day shares, the buckets Sonnet 4.6 ran on among them', ok: gaps.length === 0 && carried > 0, missing: gaps });
+    results.push({ name: '/analytics every bucket with tokens of a subscription account carries its two shares and equivalents, the buckets Sonnet 4.6 ran on among them, and an API-key bucket a zero equivalent', ok: gaps.length === 0 && carried > 0 && billed > 0, missing: gaps });
+  }
+  {
+    // Window shares read each subscription account's own windows under the account grouping, the route's gate.
+    await chooseUnit(m, 'share');
+    const read = PLAN_CARDS.map((t) => ({ items: legendItems(t), lines: lineLabels(t), t }));
+    const subtitle = subtitleOf('5-hour per hour');
+    await burnGroup('key');
+    const keyed = PLAN_CARDS.map((t) => card(t)?.querySelector('p.muted')?.textContent?.trim() ?? '');
+    await burnGroup('account');
+    await chooseUnit(m, 'native');
+    results.push({
+      name: "/analytics under Window shares the plan cards draw each subscription account's own window shares under the account grouping, and under the key grouping the note naming the grouping and the filter",
+      ok:
+        read.every((r) => JSON.stringify([...r.lines].sort()) === JSON.stringify(subscribed) && r.items.filter((li) => subscribed.includes(labelOf(li))).every((li) => valueOf(li).endsWith('%'))) &&
+        subtitle.startsWith("The share of each subscription account's own 5-hour window its traffic used per hour, weighed by the peak band, whose hours are shaded.") &&
+        keyed.every((n) => n === "Shares of one account's windows alone: group by account, or name one account in the Accounts filter."),
+      missing: [...read.map((r) => `${r.t}: ${r.lines.join(',')}`), subtitle, ...keyed],
+    });
   }
   const spend = legendOf('Spend per minute');
-  const spendDashed = dashedOf([...(card('Spend per minute')?.querySelectorAll('.legend li') ?? [])]);
+  const spendDashed = [...(card('Spend per minute')?.querySelectorAll('.legend li') ?? [])].filter((li) => li.querySelector('.legend__swatch')?.getAttribute('style')?.includes('repeating-linear-gradient'));
   // A subscription account spends dollars only on its fast-mode answers, which the story's desktop key sends on Opus.
   const burned = await api.getAnalyticsBurn({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() }, 'account');
   const fastSpenders = ['nightly', 'primary', 'secondary'].filter((id) => burned.points.some((p) => p.group === id && p.usd > 0));
   results.push({
-    name: "/analytics spend per minute charts dollars alone, a subscription account's fast-mode dollars among them, and plan per hour a subscription account's two window shares",
+    name: "/analytics spend per minute charts dollars alone, a subscription account's fast-mode dollars among them",
     ok:
       spend.includes('overflow') &&
       spend.includes('research') &&
       fastSpenders.length > 0 &&
       fastSpenders.length < 3 &&
       JSON.stringify(spend.filter((t) => ['primary', 'secondary', 'nightly'].includes(t)).sort()) === JSON.stringify(fastSpenders) &&
-      spendDashed.length === 0 &&
-      windows.every((w) => planned.includes(w)),
-    missing: [...spend, ...spendDashed, `fast spenders ${fastSpenders.join(',')}`],
+      spendDashed.length === 0,
+    missing: [...spend, `${spendDashed.length} dashed`, `fast spenders ${fastSpenders.join(',')}`],
   });
+
+  {
+    // The burn route takes the page's grouping, its Accounts filter and its user agent groups.
+    const spy = countCalls('getAnalyticsBurn');
+    await burnGroup('model');
+    const [, modelGroup, modelFilters] = spy.calls.at(-1) ?? [];
+    spy.restore();
+    await burnGroup('account');
+    const lines = legendOf('Spend per minute');
+    results.push({
+      name: "/analytics the Burn section reads the page's grouping and its Accounts filter and user agent groups, and charts the models under the model grouping",
+      ok: modelGroup === 'model' && Array.isArray(modelFilters?.accountIds) && 'userAgentGroups' in (modelFilters ?? {}) && lines.length > 0,
+      missing: [`group ${modelGroup}`, JSON.stringify(modelFilters ?? null)],
+    });
+  }
 
   await burnGroup('request_class');
   const classes = legendOf('Spend per minute');
-  results.push({ name: '/analytics the request class grouping splits conversation from overhead', ok: JSON.stringify(classes) === JSON.stringify(['conversation', 'overhead']) && card('Plan per hour') === undefined, missing: classes });
+  const classPlan = lineLabels('5-hour per hour');
+  results.push({
+    name: '/analytics the request class grouping splits conversation from overhead in dollars and in each window\'s 20x equivalents',
+    ok: JSON.stringify(classes) === JSON.stringify(['conversation', 'overhead']) && classPlan.length > 0 && classPlan.every((c) => ['conversation', 'overhead'].includes(c)),
+    missing: [...classes, ...classPlan],
+  });
   expect('/analytics burn by request class glosses the two classes under Spend per minute', card('Spend per minute')?.querySelector('.card__subtitle')?.textContent ?? '', ['Conversation is compaction, main, subagent', 'Overhead is every other class']);
   await burnGroup('key');
   const keys = legendOf('Spend per minute');
-  results.push({ name: '/analytics the key grouping charts each key in dollars and draws no plan share', ok: keys.includes('desktop') && keys.includes('laptop') && card('Plan per hour') === undefined, missing: keys });
+  const keyPlan = lineLabels('5-hour per hour');
+  results.push({ name: '/analytics the key grouping charts each key in dollars and in 20x equivalents per window', ok: keys.includes('desktop') && keys.includes('laptop') && keyPlan.includes('desktop'), missing: [...keys, ...keyPlan] });
+  {
+    // The route groups an earlier holder of a key id under `<id>@<generation>`, which the legend names as the
+    // breakdown labels it.
+    const at = new Date(Date.now() - 3_600_000).toISOString();
+    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [burnPoint({ at, fiveHourEquivalent: 0, group: 'desktop', sevenDayEquivalent: 0, tokens: 600, uncachedTokens: 600, usd: 0.6 }), burnPoint({ at, fiveHourEquivalent: 0, group: `desktop@${DELETED_HOLDER_GENERATION}`, sevenDayEquivalent: 0, tokens: 300, uncachedTokens: 300, usd: 0.3 })] });
+    await burnGroup('model');
+    await burnGroup('key');
+    const holders = legendOf('Spend per minute');
+    delete api.getAnalyticsBurn;
+    await burnGroup('model');
+    await burnGroup('key');
+    results.push({
+      name: "/analytics the key grouping names an earlier holder of a key id as the breakdown's key rows do",
+      ok: JSON.stringify(holders) === JSON.stringify(['desktop', earlierHolderLabel('desktop', DELETED_HOLDER_GENERATION)]),
+      missing: holders,
+    });
+  }
   await burnGroup('account');
   {
     // Past the seven lines a chart draws, subscription accounts fold into one plan line. Seven standard-only
@@ -12722,13 +12828,13 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // carries them, under a label that names the dollars rather than the plan unit. The eighth is the story's
     // primary account, since a line's unit comes from the tier on file and its Max 20x tier is one the table sizes.
     const at = new Date(Date.now() - 3_600_000).toISOString();
-    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: Array.from({ length: 8 }, (_, i) => ({ at, cachedTokens: 0, fiveHourShare: i < 7 ? 0.01 : 0, group: i < 7 ? `plan-${i}` : 'primary', sevenDayShare: i < 7 ? 0.001 : 0, tokens: 1_000 * (8 - i), uncachedTokens: 1_000 * (8 - i), unit: 'window_share', usd: i < 7 ? 0 : 0.6 })) });
+    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: Array.from({ length: 8 }, (_, i) => burnPoint({ at, fiveHourEquivalent: i < 7 ? 0.01 : 0, fiveHourShare: i < 7 ? 0.01 : 0, group: i < 7 ? `plan-${i}` : 'primary', sevenDayEquivalent: i < 7 ? 0.001 : 0, sevenDayShare: i < 7 ? 0.001 : 0, tokens: 1_000 * (8 - i), uncachedTokens: 1_000 * (8 - i), unit: 'window_share', usd: i < 7 ? 0 : 0.6 })) });
     await burnGroup('key');
     await burnGroup('account');
     const folded = legendOf('Spend per minute');
     const values = [...(card('Spend per minute')?.querySelectorAll('.legend li .legend__value') ?? [])].map((v) => v.textContent?.trim() ?? '');
     const said = card('Spend per minute')?.textContent ?? '';
-    const grouped = m.container.querySelector('#burn select[aria-label="Burn group by"]')?.value ?? null;
+    const grouped = pageGroupBy(m)?.value ?? null;
     delete api.getAnalyticsBurn;
     await burnGroup('key');
     await burnGroup('account');
@@ -12740,73 +12846,124 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   }
 
   {
-    // jsdom lays nothing out, so the plan chart's container reads a browser's size here and the chart draws its
-    // lines, dots and tooltip. `primary` is a Max 20x account the cost model sizes: its middle hour priced, and the
-    // hours either side carried traffic on a model of no tier the cost model weighs, which no story model is, so the
-    // route is stubbed and the 5-hour series reads [null, 0.05, null] and the 7-day one [null, 0.005, null].
-    const hours = [11, 12, 13].map((h) => Date.UTC(2026, 8, 16, h));
-    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at, h) => ({ at: new Date(at).toISOString(), cachedTokens: 0, fiveHourShare: h === 1 ? 0.05 : null, group: 'primary', sevenDayShare: h === 1 ? 0.005 : null, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share', usd: 0 })) });
+    // jsdom lays nothing out, so the plan charts' containers read a browser's size here and the charts draw their
+    // lines, dots and tooltips.
     const measure = window.HTMLElement.prototype.getBoundingClientRect;
     window.HTMLElement.prototype.getBoundingClientRect = function () {
       return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
     };
-    await burnGroup('key');
-    await burnGroup('account');
-    const plan = card('Plan per hour');
-    const dots = [...(plan?.querySelectorAll('.recharts-line-dots .recharts-line-dot') ?? [])];
-    const curves = [...(plan?.querySelectorAll('.recharts-line-curve') ?? [])].map((c) => c.getAttribute('d')).filter((d) => d !== null);
-    results.push({
-      name: '/analytics plan per hour marks a priced hour between two unpriced ones with a dot on each window and leaves the gaps unconnected',
-      ok: dots.length === 2 && curves.length > 0 && curves.every((d) => !/[CLHV]/i.test(d.slice(1))),
-      missing: [`${dots.length} dots`, ...curves],
-    });
-    // The first hour's every share is null: the tooltip still names it, with a dash and the unpriced hint per window.
-    plan?.querySelector('.recharts-wrapper')?.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: 60, clientY: 60 }));
-    await m.settle(300);
-    const tip = plan?.querySelector('.chart-tip');
-    const tipRows = [...(tip?.querySelectorAll('.chart-tip__row') ?? [])].map((row) => ({
-      hint: row.querySelector('.chart-tip__label')?.getAttribute('title'),
-      label: row.querySelector('.chart-tip__label')?.textContent?.trim(),
-      value: row.querySelector('.chart-tip__value')?.textContent?.trim(),
-    }));
-    const when = new Date(hours[0]).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hourCycle: 'h23', minute: '2-digit', month: 'short', second: '2-digit', year: 'numeric' });
-    results.push({
-      name: '/analytics plan per hour keeps the tooltip of an hour whose every share is null, its date, dashes and unpriced hint',
-      ok:
-        tip?.querySelector('.chart-tip__title')?.textContent === when &&
-        JSON.stringify(tipRows.map((r) => [r.label, r.value])) === JSON.stringify([['primary (5-hour)', '-'], ['primary (7-day)', '-']]) &&
-        tipRows.every((r) => r.hint === 'A bucket whose traffic ran on a model the cost model has no weight for, or on a tier it has no capacity for on that window, prices no share there and draws no point'),
-      missing: [tip?.querySelector('.chart-tip__title')?.textContent ?? 'no tooltip', when, JSON.stringify(tipRows)],
-    });
+    const dotsOf = (t, which) => [...(card(t)?.querySelectorAll(`.recharts-line-dots ${which}`) ?? [])];
+    const tipOf = async (t) => {
+      card(t)?.querySelector('.recharts-wrapper')?.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: 60, clientY: 60 }));
+      await m.settle(300);
+      const tip = card(t)?.querySelector('.chart-tip');
+      return {
+        rows: [...(tip?.querySelectorAll('.chart-tip__row') ?? [])].map((row) => ({ hint: row.querySelector('.chart-tip__label')?.getAttribute('title') ?? null, label: row.querySelector('.chart-tip__label')?.textContent?.trim(), value: row.querySelector('.chart-tip__value')?.textContent?.trim() })),
+        title: tip?.querySelector('.chart-tip__title')?.textContent ?? null,
+      };
+    };
+    {
+      // Every estimated bucket of a drawn line takes a hollow dot, read per account off the mock's own answer: Sonnet
+      // 4.6 runs on secondary and, moved, on primary, so nothing pins the dots to one account.
+      await burnGroup('key');
+      await burnGroup('account');
+      const answer = await api.getAnalyticsBurn({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() }, 'account');
+      const drawn = new Set(lineLabels('5-hour per hour'));
+      const want = (read) => answer.points.filter((p) => drawn.has(p.group) && p.estimated && read(p) !== null).length;
+      const hollow = dotsOf('5-hour per hour', '.recharts-line-dot--estimated');
+      const sevenDay = dotsOf('7-day per hour', '.recharts-line-dot--estimated');
+      const accounts = [...new Set(answer.points.filter((p) => drawn.has(p.group) && p.estimated).map((p) => p.group))];
+      results.push({
+        name: '/analytics each plan card marks every estimated bucket of a drawn line with a hollow dot in the line color on the card ground',
+        ok:
+          want((p) => p.fiveHourEquivalent) > 0 &&
+          hollow.length === want((p) => p.fiveHourEquivalent) &&
+          sevenDay.length === want((p) => p.sevenDayEquivalent) &&
+          accounts.length > 0 &&
+          hollow.every((dot) => dot.getAttribute('r') === '3' && dot.getAttribute('stroke-width') === '2'),
+        missing: [`5-hour ${hollow.length} of ${want((p) => p.fiveHourEquivalent)}`, `7-day ${sevenDay.length} of ${want((p) => p.sevenDayEquivalent)}`, `accounts ${accounts.join(',')}`],
+      });
+      // The peak band shades the 5-hour card alone, the one window the band weighs.
+      const areas = (t) => card(t)?.querySelectorAll('.recharts-reference-area').length ?? 0;
+      results.push({
+        name: '/analytics the peak band shades the 5-hour card alone',
+        ok: areas('5-hour per hour') > 0 && areas('7-day per hour') === 0 && areas('Model week per hour') === 0,
+        missing: PLAN_CARDS.concat('Model week per hour').map((t) => `${t} ${areas(t)}`),
+      });
+    }
+    {
+      // `secondary` ran three hours on Sonnet 4.6, which the cost model weighs through its model tier: the tooltip of
+      // its first hour titles its figure with the estimate and marks it.
+      const hours = [11, 12, 13].map((h) => Date.UTC(2026, 8, 16, h));
+      api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at) => burnPoint({ at: new Date(at).toISOString(), estimated: true, fiveHourEquivalent: 0.02, group: 'secondary', sevenDayEquivalent: 0.002, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share' })) });
+      await burnGroup('key');
+      await burnGroup('account');
+      const tip = await tipOf('5-hour per hour');
+      delete api.getAnalyticsBurn;
+      results.push({
+        name: "/analytics an estimated hour's tooltip marks its figure and titles it with the estimate",
+        ok: JSON.stringify(tip.rows.map((r) => [r.label, r.value, r.hint])) === JSON.stringify([['secondary', `~${fmtShare(0.02)}`, 'A bucket whose model has no measured weight and reads the latest weighed model of its model tier']]),
+        missing: [JSON.stringify(tip)],
+      });
+    }
+    {
+      // `primary`'s middle hour priced, and the hours either side carried traffic on a model of no known model tier,
+      // which no story model is, so the route is stubbed and each window reads [null, x, null].
+      const hours = [11, 12, 13].map((h) => Date.UTC(2026, 8, 16, h));
+      api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at, h) => burnPoint({ at: new Date(at).toISOString(), fiveHourEquivalent: h === 1 ? 0.05 : null, group: 'primary', sevenDayEquivalent: h === 1 ? 0.005 : null, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share' })) });
+      await burnGroup('key');
+      await burnGroup('account');
+      const dots = PLAN_CARDS.map((t) => dotsOf(t, '.recharts-line-dot').length);
+      const curves = PLAN_CARDS.flatMap((t) => [...(card(t)?.querySelectorAll('.recharts-line-curve') ?? [])].map((c) => c.getAttribute('d')).filter((d) => d !== null));
+      results.push({
+        name: '/analytics each plan card marks a priced hour between two unpriced ones with a dot and leaves the gaps unconnected',
+        ok: JSON.stringify(dots) === JSON.stringify([1, 1]) && curves.length > 0 && curves.every((d) => !/[CLHV]/i.test(d.slice(1))),
+        missing: [`${dots.join(', ')} dots`, ...curves],
+      });
+      // The first hour's every figure is null: the tooltip still names it, with a dash and the unpriced hint.
+      const tip = await tipOf('5-hour per hour');
+      const when = new Date(hours[0]).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hourCycle: 'h23', minute: '2-digit', month: 'short', second: '2-digit', year: 'numeric' });
+      const unlisted = legendItems('5-hour per hour').filter((li) => labelOf(li) === 'model unlisted');
+      delete api.getAnalyticsBurn;
+      results.push({
+        name: '/analytics a plan card keeps the tooltip of an hour whose every figure is null, its date, a dash and the unpriced hint, and lists the model unlisted entry',
+        ok:
+          tip.title === when &&
+          JSON.stringify(tip.rows.map((r) => [r.label, r.value])) === JSON.stringify([['primary', '-']]) &&
+          tip.rows.every((r) => r.hint === 'A bucket whose traffic ran on a model of no known tier, or on a tier the cost model has no capacity for on that window, prices no share there and draws no point') &&
+          unlisted.length === 1 &&
+          valueOf(unlisted[0]) === '5-hour',
+        missing: [tip.title ?? 'no tooltip', when, JSON.stringify(tip.rows), `${unlisted.length} unlisted entries`],
+      });
+    }
     window.HTMLElement.prototype.getBoundingClientRect = measure;
-    delete api.getAnalyticsBurn;
     await burnGroup('key');
     await burnGroup('account');
   }
 
   {
-    // A subscription account whose tier the cost model does not size draws no plan line: beside a priced account the
-    // legend names it as tier unknown, and with no priced account the chart's empty state names it. `tierless` is a
-    // group no account of the story sizes, as a subscription account with no tier on file reads.
+    // Under Window shares a subscription account whose tier the cost model does not size draws no plan line: beside a
+    // priced account the legend names it as tier unknown, and with no priced account the chart's empty state names it.
+    // `tierless` is a group no account of the story sizes, as a subscription account with no tier on file reads.
     const sizedId = (await api.listAccounts()).find((a) => a.subscription?.rateLimitTier === 'default_claude_max_20x')?.id;
     const at = new Date(Date.now() - 3_600_000).toISOString();
-    const point = (group, share) => ({ at, cachedTokens: 0, fiveHourShare: share, group, sevenDayShare: share, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share', usd: 0 });
-    const valueOf = (li) => li.querySelector('.legend__value')?.textContent?.trim() ?? '';
-    const labelOf = (li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('');
+    const point = (group, share) => burnPoint({ at, fiveHourShare: share, group, sevenDayShare: share, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share' });
+    await chooseUnit(m, 'share');
     api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [point(sizedId, 0.01), point('tierless', null)] });
     await burnGroup('key');
     await burnGroup('account');
-    const items = [...(card('Plan per hour')?.querySelectorAll('.legend li') ?? [])];
+    const items = legendItems('5-hour per hour');
     const tierless = items.filter((li) => labelOf(li) === 'tierless');
     api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [point('tierless', null)] });
     await burnGroup('key');
     await burnGroup('account');
-    const emptied = card('Plan per hour')?.querySelector('p.muted')?.textContent?.trim() ?? '';
+    const emptied = PLAN_CARDS.map((t) => card(t)?.querySelector('p.muted')?.textContent?.trim() ?? '');
     delete api.getAnalyticsBurn;
     await burnGroup('key');
     await burnGroup('account');
+    await chooseUnit(m, 'native');
     results.push({
-      name: '/analytics plan per hour names a subscription account the cost model does not size as tier unknown',
+      name: '/analytics under Window shares a plan card names a subscription account the cost model does not size as tier unknown',
       ok:
         sizedId !== undefined &&
         tierless.length === 1 &&
@@ -12815,15 +12972,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: [`sized ${sizedId}`, ...items.map((li) => `${labelOf(li)}=${valueOf(li)}`)],
     });
     results.push({
-      name: '/analytics plan per hour with no sized subscription account names the unsized ones in its empty state',
-      ok: emptied === 'No subscription account in range has a tier the cost model sizes: tierless.',
-      missing: [emptied],
+      name: '/analytics under Window shares the plan cards with no sized subscription account name the unsized ones in their empty state',
+      ok: emptied.every((e) => e === 'No subscription account in range has a tier the cost model sizes: tierless.'),
+      missing: emptied,
     });
   }
 
   {
-    // The account grouping alone sizes its lines by tier, so with the settings read failing the key grouping still
-    // draws its charts while the account grouping states the failure.
+    // Only the shares size their lines by tier, so with the settings read failing the equivalents still draw under
+    // every grouping while the shares under the account grouping state the failure.
     const { getSettings } = api;
     api.getSettings = () => Promise.reject(new Error('the settings read failed'));
     await tab(m, 'Cache');
@@ -12832,16 +12989,20 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const keyed = card('Spend per minute')?.textContent ?? '';
     const keyedLegend = legendOf('Spend per minute');
     await burnGroup('account');
-    const accounted = card('Spend per minute')?.textContent ?? '';
+    const accounted = card('5-hour per hour')?.textContent ?? '';
+    await chooseUnit(m, 'share');
+    const shared = card('Spend per minute')?.textContent ?? '';
     api.getSettings = getSettings;
+    await chooseUnit(m, 'native');
     await tab(m, 'Cache');
     await tab(m, 'Burn');
     results.push({
-      name: '/analytics a failed settings read leaves the burn charts of a grouping that reads no tier',
-      ok: !keyed.includes('Could not load') && keyedLegend.length > 0 && accounted.includes('Could not load spend per minute'),
-      missing: [`key: ${keyed.includes('Could not load') ? 'the error drawn' : 'no error'}`, `key legend: ${JSON.stringify(keyedLegend)}`, `account: ${accounted.includes('Could not load spend per minute') ? 'the error drawn' : 'no error'}`],
+      name: '/analytics a failed settings read leaves the burn charts that read no tier and fails the shares, which size their lines by it',
+      ok: !keyed.includes('Could not load') && keyedLegend.length > 0 && !accounted.includes('Could not load') && shared.includes('Could not load spend per minute'),
+      missing: [`key: ${keyed.includes('Could not load') ? 'the error drawn' : 'no error'}`, `key legend: ${JSON.stringify(keyedLegend)}`, `account under native: ${accounted.includes('Could not load') ? 'the error drawn' : 'no error'}`, `shares: ${shared.includes('Could not load spend per minute') ? 'the error drawn' : 'no error'}`],
     });
   }
+  await burnGroup('key');
 
   // Placements by rung sit in the Cache section, each budgeted member's spend in the Burn section.
   const tableOf = (t) => ({
@@ -13426,8 +13587,13 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     results.push({ name: '/analytics shows Traffic alone and mounts no other section', ok: mounted() === 'traffic' && m.container.querySelector('#traffic')?.getAttribute('role') === 'tabpanel' && m.container.querySelector('#traffic')?.getAttribute('aria-labelledby') === 'tab-traffic', missing: [mounted()] });
     await tab(m, 'Burn');
     results.push({ name: '/analytics a tab click writes its hash and mounts its section alone', ok: m.location().hash === '#burn' && m.location().pathname === '/analytics' && mounted() === 'burn', missing: [JSON.stringify(m.location()), mounted()] });
-    const selects = ['.filters select.groupby-select', '#burn select.groupby-select[aria-label="Burn group by"]'].map((s) => m.container.querySelector(s));
-    results.push({ name: "/analytics both group-by controls are selects of one class, Burn's named and explained beside it", ok: selects.every((s) => s !== null) && [...(selects[1]?.options ?? [])].map((o) => o.textContent).join() === 'Account,Key,Session,Request class' && (m.container.querySelector('#burn .analytics-groupby__reason')?.textContent ?? '') === "Burn groups by account, key, session or request class alone. The plan shares read under Account, since shares of different accounts' windows do not add.", missing: selects.map((s) => s?.outerHTML.slice(0, 80) ?? 'missing') });
+    const groupSelect = m.container.querySelector('.filters select.groupby-select');
+    const burnSelects = m.container.querySelectorAll('#burn select').length;
+    results.push({
+      name: "/analytics the Burn tab reads the page's one group-by select, its Session option last as the Burn's own, and draws no group-by or reason line of its own",
+      ok: groupSelect !== null && [...groupSelect.options].map((o) => o.textContent).join() === 'Account,Client,Key,Effort,Kind,Model,Pool,Request class,Speed,User agent,Session (Burn only)' && burnSelects === 0 && m.container.querySelector('#burn .analytics-groupby__reason') === null,
+      missing: [groupSelect?.outerHTML.slice(0, 80) ?? 'missing', `${burnSelects} selects in the Burn section`],
+    });
     await tab(m, 'Traffic');
     m.unmount();
     m = await mount('/analytics#burn');
@@ -15684,8 +15850,8 @@ m.unmount();
   dash.unmount();
   results.push({ name: "/ the 5-hour ring's subtitle opens the cost reference on Tiers and peak band", ok: ringSubtitle === 'Subscription accounts, 5-hour window, weighed by tier Cost reference' && fromDash === 'Tiers and peak band', missing: [ringSubtitle, fromDash] });
 
-  // The plan chart shades the band's own hours over the instants it spans, one area per run of bandRuns, on the 7-day
-  // range's six-hour buckets and on a custom range's daily ones. jsdom lays nothing out, so the chart reads a browser's
+  // The 5-hour plan card shades the band's own hours over the instants it spans, one area per run of bandRuns, on the
+  // 7-day range's six-hour buckets and on a custom range's daily ones. jsdom lays nothing out, so the chart reads a browser's
   // size here.
   const measure = window.HTMLElement.prototype.getBoundingClientRect;
   window.HTMLElement.prototype.getBoundingClientRect = function () {
@@ -15695,7 +15861,7 @@ m.unmount();
   const read = api.getAnalyticsBurn.bind(api);
   api.getAnalyticsBurn = async (...args) => (answer = await read(...args));
   const analytics = await mount('/analytics#burn', { now: CLOCK_ORIGIN });
-  const plan = () => [...analytics.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour');
+  const plan = () => [...analytics.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === '5-hour per hour');
   const fromAnalytics = await opened(analytics, linkIn(plan()?.querySelector('.card__subtitle')));
   const shaded = () => {
     const ats = [...new Set((answer?.points ?? []).map((p) => Date.parse(p.at)))].sort((a, b) => a - b);
@@ -15712,9 +15878,9 @@ m.unmount();
   analytics.unmount();
   delete api.getAnalyticsBurn;
   window.HTMLElement.prototype.getBoundingClientRect = measure;
-  results.push({ name: "/analytics the plan chart's note opens the cost reference on Tiers and peak band", ok: fromAnalytics === 'Tiers and peak band', missing: [fromAnalytics] });
+  results.push({ name: "/analytics the 5-hour plan card's note opens the cost reference on Tiers and peak band", ok: fromAnalytics === 'Tiers and peak band', missing: [fromAnalytics] });
   results.push({
-    name: "/analytics the plan chart shades one area per run of the peak band over the instants it spans, on six-hour and on daily buckets",
+    name: "/analytics the 5-hour plan card shades one area per run of the peak band over the instants it spans, on six-hour and on daily buckets",
     ok: week.bucket === 21_600 && week.runs > 0 && week.areas === week.runs && custom.bucket === 86_400 && custom.runs > 0 && custom.areas === custom.runs,
     missing: [JSON.stringify(week), JSON.stringify(custom)],
   });

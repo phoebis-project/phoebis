@@ -626,8 +626,8 @@ export class MockApi implements Api {
     return latency(breakdownOf(emptyStore() ? [] : ALL_ROLLUPS, query));
   }
 
-  getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup) {
-    return latency(burnOf(emptyStore() ? [] : ALL_ROLLUPS, range, groupBy));
+  getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup, filters?: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'>) {
+    return latency(burnOf(emptyStore() ? [] : ALL_ROLLUPS, range, groupBy, filters));
   }
 
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>) {

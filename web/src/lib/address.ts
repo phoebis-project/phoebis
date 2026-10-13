@@ -1,5 +1,5 @@
 import { REQUEST_KIND_VALUES } from '@/api/decode';
-import type { AnalyticsGroupBy, BurnGroup, KeyStatus, RequestKind } from '@/api/types';
+import type { BurnGroup, KeyStatus, RequestKind } from '@/api/types';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -192,8 +192,7 @@ export interface AnalyticsAddress {
   accounts: string[];
   /** The user agent pattern. */
   agent: string;
-  burn: string;
-  /** The group-by. */
+  /** The group-by, the Burn section's own `session` among its values. */
   by: string;
   /** The client pattern. */
   class: string;
@@ -211,18 +210,16 @@ export interface AnalyticsAddress {
   unit: string;
 }
 
-// Key tables rather than lists, so a group-by or a burn group the types gain fails to compile until it is listed here.
-const GROUP_BY_KEYS = { account: true, client: true, effort: true, key: true, kind: true, model: true, pool: true, request_class: true, speed: true, user_agent: true } satisfies Record<Exclude<AnalyticsGroupBy, 'all'>, true>;
-const BURN_GROUP_KEYS = { account: true, key: true, request_class: true, session: true } satisfies Record<BurnGroup, true>;
-const GROUP_BYS = Object.keys(GROUP_BY_KEYS) as Exclude<AnalyticsGroupBy, 'all'>[];
-const BURN_GROUPS = Object.keys(BURN_GROUP_KEYS) as BurnGroup[];
+// A key table rather than a list, so a grouping the burn route gains fails to compile until it is listed here. The
+// burn route's groupings are the breakdown's and its own `session`.
+const GROUP_BY_KEYS = { account: true, client: true, effort: true, key: true, kind: true, model: true, pool: true, request_class: true, session: true, speed: true, user_agent: true } satisfies Record<BurnGroup, true>;
+const GROUP_BYS = Object.keys(GROUP_BY_KEYS) as BurnGroup[];
 
 export const ANALYTICS_CODEC = codecOf<AnalyticsAddress>({
   session: text('session'),
   key: text('key'),
   accounts: list('accounts'),
   agent: text('agent'),
-  burn: { default: 'account', kind: 'choice', name: 'burn', values: BURN_GROUPS },
   by: { default: 'key', kind: 'choice', name: 'by', values: GROUP_BYS },
   class: text('class'),
   groups: text('groups'),

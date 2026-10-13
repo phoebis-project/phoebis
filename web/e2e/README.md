@@ -39,59 +39,60 @@ bound, at 1280 by 800 and in a window that sets two cards on the card grid's flo
 and at 375 by 800 and 390 by 844 with no sideways scroll on the page and each card inside the window (the reset label on
 a row of its own there, so its column goes unread), the remaining cards, the error state, the lines under the quota
 rings, the recent requests' model cells and their table's fit, the recent requests' columns (Key the fill), the cost-cap
-rows, the wasted-probe rows, the burn cards, the plan legend's model unlisted entry, the placement and budget tables
-(Cache by model's width recorded under native, every column inside its wrap at 1280 by 800, and in the mock pass a cost
-cell's billed line drawn), the Analytics tables' columns, each read on the tab that draws it (the Traffic breakdown's
-group column the fill, Key on the misses-by-reason breakdown under its wrapped headers, Rung on the placements table,
-Pool and Account on the member budgets, whose Spent column is as wide as its meter's 140 px floor), the request table's
-fit (asserted in the router pass and recorded in the mock pass, whose story runs past the card at 1280 by 800), its
-columns (Client the fill, the Status, Attempts and links cells wrapping, the width past the card
-recorded in the mock pass), its text at 1920 by 1080 in the mock pass (no client class or agent type
-cut, each read on its own span), the request pages' widths, walked on a load of their own once every view's shot is
-taken, the speed filter, and the cache miss reason, effort and request class filters (each against
-Turn origin), the Cost split's rings under native (each center figure inside its ring, two side by side in the mock
-pass), the native Cost by table (its width recorded, every column inside its wrap at 1280 by 800), the traffic cards
-(each Analytics check opens the tab it reads and returns to Traffic), the tab strip docked under the filter bar at the
-end of the Latency tab, the Unit select and the legend's button in the top bar (inside the bar, clear of Log out and the
-theme switch, inside the viewport at 1280 and 400 px with nothing scrolling the bar sideways, every short label whole
-and no legend button at 400 px, the long labels whole at 1280 px, and the legend's popover over the filter bar uncovered
-at 1280 px), the top bar on every view at 1280 and 400 px (nothing scrolling it sideways, its last control inside its
-padding, the title whole on one line, and Log out a text button at 1280 px and its icon alone at 400 px), the fast lane,
-the request drawer, which opens once the request list's shot is taken (its chips in the status badge's type, and the
-Estimated cost row's 20x equivalent chips and muted equivalent on one line each inside the cell at 1280 by 800 and 1440
-by 900, the story's Fable request reading a 20x 5-hour, a 20x 7-day and a 20x Fable week equivalent in that order), a
-reasons panel link landing on a list whose first row's drawer reads the reason (mock pass, on a load of its own once
-every view's shot is taken), the routing log's decision card, which opens once the log's shot is taken (the strip and
-the candidate table inside the card at 1280 by 800 and 1440 by 900 with nothing scrolling sideways, the table 958 then
-1118 px, the strip's drawing as wide as the strip at each width, every station badge in the kind badge's box, the
-station labels clear of the leaf rows and the brackets, every station's and way out's dot, the gap to its words and its
-word taking the pointer for its own button and the line on either side of the dot and a station's side of the line away
-from its label not taking it (in the mock pass on the shed move's card too, and there at the strip's 640 px floor for
-the dots and the line), the strip's height from its rows, a moved row's badge the Move station's color, the chosen row's
-Prefix chips on the first rung placement the log lists, and a station's popover inside the card and the card's part on
-screen less 8 px either side at both viewports and at 700 by 800 (the Move list, the widest, among them), visible with
-no transition once placed, its width bound the least of 720 px, the window less 16, the card less 16 and the card's part
-on screen less 16, its table's heads on at most two lines and nothing in it scrolling sideways (the Cool reading's ten
-columns among them), and the Pick table's rows striped as the candidate table's are, every station's and way out's word
-at the card's muted contrast or better on the open row's tint in both themes with an idle way out among them, the
-strip's station count the record's steps and placeholders at both viewports, and in the mock pass the fresh placement's
-Pick station opened by Enter and by Space with the focus inside its popover and closed by Escape with the focus back on
-the station), the subscription end editor, the catalog popup and its columns (Model and Name the fills), the Keys
-table's columns (Name, Models and Status the fills) and the badges of its fill cells (each ending inside its cell and
-cutting its own label with the ellipsis), the Models rules table's columns (Pattern the fill), the key dialog's Access
-selects, the Pool select against the Status select, the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900
-(the head's height closed and open, the button on the sentence's last line or flush left on the next, the opened
-paragraph 6 px under the lead, Cost reference one line at the head's top right), the cost reference, the session table's
-fit and its columns (each fit column as wide as its content, the Session column the fill), the session id's width, the
-session row menu, the agent lines, the fork badges (inside their cell and whole),
-the fork link, which is followed once the session list's shot is taken,
-the copy fallback (Copied on the Settings snippet with the clipboard API removed, on the Settings view's own load, and
-on a Key created dialog's secret in the mock pass, on a load of its own)). A check that opens an editor, a dialog or a
-row closes it again before the view's shot, and one that turns a column on turns it off again. The recent requests'
-table is fitted in the router pass and recorded in the mock pass, whose story's subscription rows read their 5-hour
-equivalent in the Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls inside its wrap there, and
-its width under Window shares, where the cell keeps its two-line shares, is recorded beside it. The script exits
-non-zero with the list of failures when any of that does not hold.
+rows, the wasted-probe rows, the burn cards (an odd last card spanning its row), the plan legend's estimated entry (a
+hollow swatch) and model unlisted entry, the placement and budget tables (Cache by model's width recorded under native,
+every column inside its wrap at 1280 by 800, and in the mock pass a cost cell's billed line drawn), the Analytics
+tables' columns, each read on the tab that draws it (the Traffic breakdown's group column the fill, Key on the
+misses-by-reason breakdown under its wrapped headers, Rung on the placements table, Pool and Account on the member
+budgets, whose Spent column is as wide as its meter's 140 px floor), the request table's fit (asserted in the router
+pass and recorded in the mock pass, whose story runs past the card at 1280 by 800), its columns (Client
+the fill, the Status, Attempts and links cells wrapping, the width past the card recorded in the mock pass), its
+text at 1920 by 1080 in the mock pass (no client class or agent type cut, each read on its own span),
+the request pages' widths, walked on a load of their own once every view's shot is taken, the speed
+filter, and the cache miss reason, effort and request class filters (each against Turn origin), the Cost split's rings
+under native (each center figure inside its ring, two side by side in the mock pass), the native Cost by table (its
+width recorded, every column inside its wrap at 1280 by 800), the traffic cards (each Analytics check opens the tab it
+reads and returns to Traffic), the tab strip docked under the filter bar at the end of the Latency tab, the Unit select
+and the legend's button in the top bar (inside the bar, clear of Log out and the theme switch, inside the viewport at
+1280 and 400 px with nothing scrolling the bar sideways, every short label whole and no legend button at 400 px, the
+long labels whole at 1280 px, and the legend's popover over the filter bar uncovered at 1280 px), the top bar on every
+view at 1280 and 400 px (nothing scrolling it sideways, its last control inside its padding, the title whole on one
+line, and Log out a text button at 1280 px and its icon alone at 400 px), the fast lane, the request drawer, which opens
+once the request list's shot is taken (its chips in the status badge's type, and the Estimated cost row's 20x equivalent
+chips and muted equivalent on one line each inside the cell at 1280 by 800 and 1440 by 900, the story's Fable request
+reading a 20x 5-hour, a 20x 7-day and a 20x Fable week equivalent in that order), a reasons panel link landing on a list
+whose first row's drawer reads the reason (mock pass, on a load of its own once every view's shot is taken), the routing
+log's decision card, which opens once the log's shot is taken (the strip and the candidate table inside the card at 1280
+by 800 and 1440 by 900 with nothing scrolling sideways, the table 958 then 1118 px, the strip's drawing as wide as the
+strip at each width, every station badge in the kind badge's box, the station labels clear of the leaf rows and the
+brackets, every station's and way out's dot, the gap to its words and its word taking the pointer for its own button and
+the line on either side of the dot and a station's side of the line away from its label not taking it (in the mock pass
+on the shed move's card too, and there at the strip's 640 px floor for the dots and the line), the strip's height from
+its rows, a moved row's badge the Move station's color, the chosen row's Prefix chips on the first rung placement the
+log lists, and a station's popover inside the card and the card's part on screen less 8 px either side at both viewports
+and at 700 by 800 (the Move list, the widest, among them), visible with no transition once placed, its width bound the
+least of 720 px, the window less 16, the card less 16 and the card's part on screen less 16, its table's heads on at
+most two lines and nothing in it scrolling sideways (the Cool reading's ten columns among them), and the Pick table's
+rows striped as the candidate table's are, every station's and way out's word at the card's muted contrast or better on
+the open row's tint in both themes with an idle way out among them, the strip's station count the record's steps and
+placeholders at both viewports, and in the mock pass the fresh placement's Pick station opened by Enter and by Space
+with the focus inside its popover and closed by Escape with the focus back on the station), the subscription end editor,
+the catalog popup and its columns (Model and Name the fills), the Keys table's columns (Name, Models and Status the
+fills) and the badges of its fill cells (each ending inside its cell and cutting its own label with the ellipsis), the
+Models rules table's columns (Pattern the fill), the key dialog's Access selects, the Pool select against the Status
+select, the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900 (the head's height closed and open, the
+button on the sentence's last line or flush left on the next, the opened paragraph 6 px under the lead, Cost reference
+one line at the head's top right), the cost reference, the session table's fit and its columns (each fit column as wide
+as its content, the Session column the fill), the session id's width, the session row menu, the agent lines,
+the fork badges (inside their cell and whole),
+the fork link, which is followed once the session list's shot is taken, the copy fallback (Copied on the Settings
+snippet with the clipboard API removed, on the Settings view's own load, and on a Key created dialog's secret in the
+mock pass, on a load of its own)). A check that opens an editor, a dialog or a row closes it again before the view's
+shot, and one that turns a column on turns it off again. The recent requests' table is fitted in the router pass and
+recorded in the mock pass, whose story's subscription rows read their 5-hour equivalent in the Cost cell, wider than the
+card leaves at 1280 by 800, so the table scrolls inside its wrap there, and its width under Window shares, where the
+cell keeps its two-line shares, is recorded beside it. The script exits non-zero with the list of failures when any of
+that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.
@@ -132,8 +133,8 @@ admin secret and the clock pinned at `2026-09-16T14:30:00Z`, the weekday afterno
 draws are seeded, so two runs write the same screenshots byte for byte, which `diff -r` over the two directories shows.
 Beside the views' shots it writes the open catalog popup's as `<theme>/accounts-catalog.png`, the open cost reference's
 three tabs as `<theme>/cost-reference-tiers.png`, `cost-reference-plan-rates.png` and `cost-reference-api-prices.png`,
-and the Analytics page's Burn tab, its plan chart shading the peak band, as `<theme>/analytics-burn.png`. Its views
-include the Analytics page's Cache warming tab as `<theme>/analytics-cache-warming.png` and the Quota page's Quota
+and the Analytics page's Burn tab, its 5-hour plan card shading the peak band, as `<theme>/analytics-burn.png`. Its
+views include the Analytics page's Cache warming tab as `<theme>/analytics-cache-warming.png` and the Quota page's Quota
 windows section as `<theme>/quota-windows.png`. The router's pass writes none of these: one shot per view it runs, which
 its test counts. The dashboard's remaining cards and its empty state are checked against the router's seeded registry
 alone (`PHOEBIS_E2E_MOCK=1` skips them), since the mock's story has subscription accounts and no empty list on the

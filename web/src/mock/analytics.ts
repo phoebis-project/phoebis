@@ -371,11 +371,15 @@ const holderOf = (key: string, groupBy: AnalyticsGroupBy): Pick<AnalyticsGroup, 
   return { keyCreatedAt: holder.generation, keyId: holder.id };
 };
 
+/**
+ * A row's group key under a grouping. A pattern list names the groups under the user agent dimension, and every agent
+ * none of them names falls under the one bucket, as the breakdown route files it.
+ */
+const groupKeyOf = (groupBy: AnalyticsGroupBy, named: string[]): ((r: HourlyRollup) => string) =>
+  groupBy === 'user_agent' && named.length ? (r) => named.find((p) => matchesPattern(p, USER_AGENTS[r.keyId] ?? '')) ?? 'other' : GROUP_KEY[groupBy];
+
 export function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
-  const named = q.userAgentGroups ?? [];
-  // A pattern list names the groups under the client dimension; every client none of them names falls under
-  // the one bucket, as the breakdown route files it.
-  const of = q.groupBy === 'user_agent' && named.length ? (r: HourlyRollup) => named.find((p) => matchesPattern(p, USER_AGENTS[r.keyId] ?? '')) ?? 'other' : GROUP_KEY[q.groupBy];
+  const of = groupKeyOf(q.groupBy, q.userAgentGroups ?? []);
   const buckets = new Map<string, HourlyRollup[]>();
   for (const r of rows) buckets.set(of(r), [...(buckets.get(of(r)) ?? []), r]);
   return [...buckets.entries()].map(([key, list]) => ({ ...groupOf(key, labelOf(key, q.groupBy), list, q.includeProbes ?? false, q.groupBy, q.accountIds), ...holderOf(key, q.groupBy) })).sort((a, b) => a.label.localeCompare(b.label) || (a.keyCreatedAt ?? 0) - (b.keyCreatedAt ?? 0) || a.key.localeCompare(b.key));
@@ -437,7 +441,7 @@ const sharesOf = (r: HourlyRollup, tier: string) => atHour(r, (window, usage, at
 const equivalentsOf = (r: HourlyRollup) => atHour(r, (window, usage, at) => equivalentOf(TABLES, window, r.model, usage, at)?.equivalent ?? null);
 
 /** A bucket's sums, each window's shares and equivalents kept per row so one unpriced row nulls the window, as the
- *  route reads it. */
+ *  route reads it. The model week's lists hold the rows on a model with a week of its own alone. */
 interface BurnSum {
   cached: number;
   estimated: boolean;
@@ -448,21 +452,31 @@ interface BurnSum {
   tokens: number;
   uncached: number;
   usd: number;
+  week: (number | null)[];
+  weekEquivalent: (number | null)[];
 }
-const emptyBurn = (): BurnSum => ({ cached: 0, estimated: false, fiveHour: [], fiveHourEquivalent: [], sevenDay: [], sevenDayEquivalent: [], tokens: 0, uncached: 0, usd: 0 });
+const emptyBurn = (): BurnSum => ({ cached: 0, estimated: false, fiveHour: [], fiveHourEquivalent: [], sevenDay: [], sevenDayEquivalent: [], tokens: 0, uncached: 0, usd: 0, week: [], weekEquivalent: [] });
 
 /** How many sessions the session grouping keeps, the route's cut. */
 const BURN_SESSIONS = 20;
 
-export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): { bucketSeconds: number; points: BurnPoint[] } {
+/**
+ * A row's group under a burn grouping: the breakdown's key for every dimension it shares, so an earlier key holder
+ * reads `<id>@<generation>` as the breakdown names it, a user agent pattern list's group under the user agent
+ * dimension, and the row's session under the burn's own session grouping.
+ */
+const burnGroupOf = (groupBy: BurnGroup, named: string[]): ((r: HourlyRollup) => string) => (groupBy === 'session' ? (r) => r.sessionId : groupKeyOf(groupBy, named));
+
+export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, filters: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'> = {}): { bucketSeconds: number; points: BurnPoint[] } {
   const { bucketMs, starts } = bucketsOf(range);
   const kinds = new Map(ACCOUNTS.map((a) => [a.id, a.kind]));
   const tiers = new Map(ACCOUNTS.map((a) => [a.id, a.subscription?.rateLimitTier]));
   const first = starts[0] ?? 0;
   const end = (starts[starts.length - 1] ?? 0) + bucketMs;
+  const accounts = filters.accountIds ?? [];
   // The route prices a row by its account's kind and skips a row whose account left the registry.
-  const kept = rows.filter((r) => Date.parse(r.hour) >= first && Date.parse(r.hour) < end && kinds.has(r.accountId));
-  const groupOf = (r: HourlyRollup) => (groupBy === 'account' ? r.accountId : groupBy === 'key' ? r.keyId : groupBy === 'session' ? r.sessionId : r.requestClass);
+  const kept = rows.filter((r) => Date.parse(r.hour) >= first && Date.parse(r.hour) < end && kinds.has(r.accountId) && (accounts.length === 0 || accounts.includes(r.accountId)));
+  const groupOf = burnGroupOf(groupBy, filters.userAgentGroups ?? []);
   const sums = new Map<string, Map<number, BurnSum>>();
   for (const r of kept) {
     const at = Math.floor((Date.parse(r.hour) - first) / bucketMs) * bucketMs + first;
@@ -483,12 +497,20 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
     s.usd += oauth && !billed ? 0 : r.costUsd;
     // A row with no token has nothing to price, as the route reads it: a failed request on a model the cost model has
     // no weight for never nulls a priced bucket.
-    if (!oauth || tokens === 0) continue;
-    const tier = tiers.get(r.accountId);
+    if (tokens === 0) continue;
+    const week = modelWeeks(TABLES, r.model)[0];
+    const tier = oauth ? tiers.get(r.accountId) : undefined;
     if (billed) {
-      // The zero rests on the tier alone, as the route reads a dollar-billed row, and never nulls a bucket.
-      if (tier !== undefined && tierCapacity(TABLES, tier, 'five_hour') !== null) s.fiveHour.push(0);
-      if (tier !== undefined && tierCapacity(TABLES, tier, 'seven_day') !== null) s.sevenDay.push(0);
+      // Every billed row adds a zero equivalent, so a bucket with tokens and no plan row reads 0 and only an idle one
+      // null. The zero share rests on the tier alone, as the route reads a dollar-billed row, and an API key account
+      // has no window to share.
+      s.fiveHourEquivalent.push(0);
+      s.sevenDayEquivalent.push(0);
+      if (week !== undefined) s.weekEquivalent.push(0);
+      const sized = (window: 'five_hour' | 'seven_day') => tier !== undefined && tierCapacity(TABLES, tier, window) !== null;
+      if (sized('five_hour')) s.fiveHour.push(0);
+      if (sized('seven_day')) s.sevenDay.push(0);
+      if (week !== undefined && sized('seven_day')) s.week.push(0);
       continue;
     }
     // The row's own shares, its requests priced one by one at their completions, and its equivalents, which read no
@@ -497,27 +519,35 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
     s.sevenDay.push(tier === undefined ? null : (r.shares.seven_day ?? null));
     s.fiveHourEquivalent.push(r.equivalents.five_hour ?? null);
     s.sevenDayEquivalent.push(r.equivalents.seven_day ?? null);
+    if (week !== undefined) {
+      s.week.push(tier === undefined ? null : (r.shares[week] ?? null));
+      s.weekEquivalent.push(r.equivalents[week] ?? null);
+    }
     if (r.estimated) s.estimated = true;
   }
   const tokensOf = (group: string) => [...(sums.get(group)?.values() ?? [])].reduce((n, s) => n + s.cached + s.uncached, 0);
   let groups = [...sums.keys()].sort();
   if (groupBy === 'session') groups = [...groups].sort((a, b) => tokensOf(b) - tokensOf(a)).slice(0, BURN_SESSIONS).sort();
-  // The route answers the shares and the unit under the account grouping alone.
-  const byAccount = groupBy === 'account';
+  // The route answers the shares and the unit where each group holds one account's rows: the account grouping, or a
+  // filter naming exactly one account.
+  const accountOf = (group: string) => (groupBy === 'account' ? group : accounts.length === 1 ? accounts[0] : null);
   const points = groups.flatMap((group) =>
     starts.map((at): BurnPoint => {
       const s = sums.get(group)?.get(at) ?? emptyBurn();
-      const kind = byAccount ? kinds.get(group) : undefined;
-      // A bucket with no plan row reads no equivalent, as an idle one does.
+      const account = accountOf(group);
+      const kind = account === null ? undefined : kinds.get(account);
+      const share = (list: (number | null)[]) => (account === null ? null : bucketShare(list));
       return {
         at: iso(at),
         cachedTokens: Math.round(s.cached),
         estimated: s.estimated,
         fiveHourEquivalent: bucketShare(s.fiveHourEquivalent),
-        fiveHourShare: byAccount ? bucketShare(s.fiveHour) : null,
+        fiveHourShare: share(s.fiveHour),
         group,
+        modelWeekEquivalent: bucketShare(s.weekEquivalent),
+        modelWeekShare: share(s.week),
         sevenDayEquivalent: bucketShare(s.sevenDayEquivalent),
-        sevenDayShare: byAccount ? bucketShare(s.sevenDay) : null,
+        sevenDayShare: share(s.sevenDay),
         tokens: Math.round(s.tokens),
         uncachedTokens: Math.round(s.uncached),
         unit: kind === undefined ? null : kind === 'oauth' ? 'window_share' : 'usd',

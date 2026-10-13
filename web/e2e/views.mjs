@@ -2586,7 +2586,8 @@ async function wastedProbeRows(theme) {
 /**
  * The burn section and the rewrites card against the Failovers card they sit beside: the same title type, the same
  * width in the grid, and, where a card drew a chart, the same chart height. The rewrites card follows Failovers. The
- * burn cards are read on the Burn tab, Failovers and the rewrites card on Traffic.
+ * burn cards are read on the Burn tab, Failovers and the rewrites card on Traffic. A burn card that ends an odd count
+ * spans its grid's row instead, so it is read against the grid's width.
  */
 async function burnCards(theme) {
   // The named cards the shown tab draws, and whether the rewrites card follows Failovers there.
@@ -2598,7 +2599,9 @@ async function burnCards(theme) {
         if (!el) return null;
         const head = getComputedStyle(el.querySelector('.card__title'));
         const chart = el.querySelector('.recharts-responsive-container');
-        return { chart: chart ? Math.round(chart.getBoundingClientRect().height) : null, title, type: `${head.fontSize}/${head.fontWeight}`, width: Math.round(el.getBoundingClientRect().width) };
+        const width = Math.round(el.getBoundingClientRect().width);
+        const row = el.parentElement.classList.contains('burn-grid') ? Math.round(el.parentElement.getBoundingClientRect().width) : null;
+        return { chart: chart ? Math.round(chart.getBoundingClientRect().height) : null, spans: row !== null && Math.abs(width - row) <= 1, title, type: `${head.fontSize}/${head.fontWeight}`, width };
       };
       return { beside: card('Failovers') !== undefined && card('Failovers').nextElementSibling === card('Migration rewrites'), boxes: titles.map(box).filter(Boolean) };
     }, titles);
@@ -2606,7 +2609,7 @@ async function burnCards(theme) {
     if (!(await tabTo(theme, 'Traffic'))) return;
     const failovers = await read(['Failovers']);
     if (!(await tabTo(theme, 'Burn'))) return;
-    const burn = await read(['Spend per minute', 'Plan per hour']);
+    const burn = await read(['5-hour per hour', '7-day per hour', 'Model week per hour', 'Spend per minute']);
     if (!(await tabTo(theme, 'Traffic'))) return;
     const rewrites = await read(['Migration rewrites']);
     const cards = { beside: rewrites.beside, boxes: [...failovers.boxes, ...rewrites.boxes, ...burn.boxes] };
@@ -2619,7 +2622,7 @@ async function burnCards(theme) {
     }
     for (const b of rest) {
       if (b.type !== reference.type) failures.push(`${theme} /analytics: "${b.title}" titles in ${b.type} against Failovers' ${reference.type}`);
-      if (b.width !== reference.width) failures.push(`${theme} /analytics: "${b.title}" is ${b.width}px wide against Failovers' ${reference.width}px`);
+      if (b.width !== reference.width && !b.spans) failures.push(`${theme} /analytics: "${b.title}" is ${b.width}px wide against Failovers' ${reference.width}px`);
       if (b.chart !== null && b.chart !== reference.chart) failures.push(`${theme} /analytics: "${b.title}" draws a ${b.chart}px chart against Failovers' ${reference.chart}px`);
     }
   } finally {
@@ -2628,18 +2631,20 @@ async function burnCards(theme) {
 }
 
 /**
- * The Plan per hour legend's model unlisted entry against its neighbors: the entry before it, a planned account's
- * 7-day entry, on type and swatch size, and, where an account whose tier the cost model does not size draws a tier
- * unknown entry beside it, that muted entry on type, swatch size and color too. In the mock's story every model has a
- * model tier the cost model weighs, `secondary`'s Sonnet 4.6 pricing at its tier's latest weight, so the entry must
- * not draw there. The router's seed bills no subscription traffic, so there the pass records that it is not drawn.
+ * The 5-hour plan card's muted legend entries against their neighbors. The estimated entry draws its swatch hollow: a
+ * transparent box with a border in its color, taller than the 2 px line swatch, the type its neighbor's. The model
+ * unlisted entry reads against the entry before it, a planned line's, on type and swatch size, and, where an account
+ * whose tier the cost model does not size draws a tier unknown entry beside it, that muted entry on type, swatch size and
+ * color too. In the mock's story every model has a model tier the cost model weighs, `secondary`'s Sonnet 4.6 pricing
+ * at its tier's latest weight as an estimate, so the estimated entry must draw there and the model unlisted entry must
+ * not. The router's seed bills no subscription traffic, so there the pass records what it reads.
  */
 async function planLegend(theme) {
   try {
     if (!(await tabTo(theme, 'Burn'))) return;
     if (mock) await burnShot(theme);
     const read = await page.evaluate(() => {
-      const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour');
+      const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === '5-hour per hour');
       if (!card) return null;
       const items = [...card.querySelectorAll('.legend li')];
       const label = (li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('');
@@ -2649,15 +2654,30 @@ async function planLegend(theme) {
         const s = getComputedStyle(li);
         const swatch = li.querySelector('.legend__swatch');
         const r = swatch?.getBoundingClientRect();
-        return { color: swatch ? getComputedStyle(swatch).backgroundColor : null, label: label(li), swatch: r ? `${Math.round(r.width)}x${Math.round(r.height)}` : null, type: `${s.fontFamily}/${s.fontSize}/${s.fontWeight}`, value: value(li) };
+        const look = swatch ? getComputedStyle(swatch) : null;
+        return { background: look?.backgroundColor ?? null, border: look ? `${look.borderTopWidth} ${look.borderTopStyle} ${look.borderTopColor}` : null, color: look?.backgroundColor ?? null, height: r?.height ?? null, label: label(li), swatch: r ? `${Math.round(r.width)}x${Math.round(r.height)}` : null, type: `${s.fontFamily}/${s.fontSize}/${s.fontWeight}`, value: value(li) };
       };
       const at = items.findIndex((li) => label(li) === 'model unlisted');
-      return { neighbour: at > 0 ? box(items[at - 1]) : null, tierUnknown: box(items.find((li) => value(li) === 'tier unknown')), unlisted: at < 0 ? null : box(items[at]) };
+      const estimated = items.findIndex((li) => label(li) === 'estimated');
+      return {
+        estimated: estimated < 0 ? null : box(items[estimated]),
+        estimatedNeighbour: estimated > 0 ? box(items[estimated - 1]) : null,
+        neighbour: at > 0 ? box(items[at - 1]) : null,
+        tierUnknown: box(items.find((li) => value(li) === 'tier unknown')),
+        unlisted: at < 0 ? null : box(items[at]),
+      };
     });
     measurements.push(`${theme} /analytics plan legend ${JSON.stringify(read)}`);
     if (read === null) {
-      failures.push(`${theme} /analytics: no Plan per hour card to read the legend of`);
+      failures.push(`${theme} /analytics: no 5-hour plan card to read the legend of`);
       return;
+    }
+    if (read.estimated === null) {
+      if (mock) failures.push(`${theme} /analytics: the story prices Sonnet 4.6 as an estimate, yet no estimated entry draws`);
+    } else {
+      const e = read.estimated;
+      if (e.background !== 'rgba(0, 0, 0, 0)' || !e.border?.startsWith('1px solid') || !(e.height > 2)) failures.push(`${theme} /analytics: the estimated entry's swatch reads ${e.background} under ${e.border}, ${e.height}px tall, not a hollow box`);
+      if (read.estimatedNeighbour) failures.push(...compare(e, read.estimatedNeighbour, ['type'], `${theme} /analytics: the estimated entry against the entry before it`));
     }
     if (read.unlisted === null) return;
     if (mock) failures.push(`${theme} /analytics: every story model prices through its model tier, yet a model unlisted entry draws`);
@@ -2994,30 +3014,28 @@ async function requestsTableNoFill(theme) {
 }
 
 /**
- * The Burn tab under a grouping other than the account one draws Spend per minute alone, which spans the width of the
- * grid it sits in, so the tab draws no empty half. The grouping returns to the account one afterwards.
+ * The Burn tab under the account grouping, its cards a plan card per window and Spend per minute: an odd last card
+ * spans the width of the grid it sits in, so the tab draws no empty half. The page's grouping returns to the key one,
+ * its default, afterwards.
  */
 async function burnLoneCard(theme) {
-  const say = (what) => failures.push(`${theme} /analytics Burn by key: ${what}`);
+  const say = (what) => failures.push(`${theme} /analytics Burn by account: ${what}`);
   try {
     if (!(await tabTo(theme, 'Burn'))) return;
-    const group = page.locator('#burn select[aria-label="Burn group by"]');
-    await group.selectOption('key');
-    await advance(LOAD_MS);
-    const read = await page.evaluate(() => {
-      const card = (t) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
-      const spend = card('Spend per minute');
-      const grid = spend?.parentElement;
-      return spend && grid ? { cards: grid.children.length, grid: Math.round(grid.getBoundingClientRect().width), plan: card('Plan per hour') !== undefined, spend: Math.round(spend.getBoundingClientRect().width) } : null;
-    });
+    const group = page.locator('.filters select').filter({ has: page.locator('option[value="session"]') });
     await group.selectOption('account');
     await advance(LOAD_MS);
-    measurements.push(`${theme} /analytics Burn by key ${JSON.stringify(read)}`);
+    const read = await page.evaluate(() => {
+      const spend = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Spend per minute');
+      const grid = spend?.parentElement;
+      const last = grid?.lastElementChild;
+      return spend && grid && last ? { cards: grid.children.length, grid: Math.round(grid.getBoundingClientRect().width), last: Math.round(last.getBoundingClientRect().width), titles: [...grid.children].map((c) => c.querySelector('.card__title')?.textContent?.trim() ?? '') } : null;
+    });
+    await group.selectOption('key');
+    await advance(LOAD_MS);
+    measurements.push(`${theme} /analytics Burn by account ${JSON.stringify(read)}`);
     if (read === null) say('no Spend per minute card to measure');
-    else {
-      if (read.plan || read.cards !== 1) say(`the grid holds ${read.cards} cards${read.plan ? ', Plan per hour among them' : ''}, not Spend per minute alone`);
-      if (Math.abs(read.spend - read.grid) > 1) say(`Spend per minute is ${read.spend}px wide in a ${read.grid}px grid, leaving a half empty`);
-    }
+    else if (read.cards % 2 === 1 && Math.abs(read.last - read.grid) > 1) say(`${read.titles.at(-1)} is ${read.last}px wide in a ${read.grid}px grid of ${read.cards} cards, leaving a half empty`);
   } finally {
     await tabTo(theme, 'Traffic');
     await atRest();
@@ -5442,14 +5460,14 @@ async function costReference(theme) {
 }
 
 /**
- * The Analytics page's Burn tab, which the views' shots never reach: the plan chart with the peak band shaded. It
+ * The Analytics page's Burn tab, which the views' shots never reach: the 5-hour plan card with the peak band shaded. It
  * runs on the tab the plan legend's check opened, so the pass takes no step of the clock more than it did before.
  */
 async function burnShot(theme) {
   await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});
-  const areas = await page.evaluate(() => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour')?.querySelectorAll('.recharts-reference-area').length ?? 0);
+  const areas = await page.evaluate(() => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === '5-hour per hour')?.querySelectorAll('.recharts-reference-area').length ?? 0);
   measurements.push(`${theme} /analytics burn plan chart shades ${areas} band runs`);
-  if (areas === 0) failures.push(`${theme} /analytics: the Burn view's plan chart shades no hour of the peak band`);
+  if (areas === 0) failures.push(`${theme} /analytics: the Burn view's 5-hour plan card shades no hour of the peak band`);
   await atRest();
   await page.screenshot({ fullPage: true, path: join(shots, theme, 'analytics-burn.png') });
 }

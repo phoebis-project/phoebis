@@ -155,8 +155,11 @@ export interface Api {
   getAccountCatalog(accountId: string, refresh?: boolean): Promise<AccountCatalog>;
   /** `funding` keeps the billed or the plan-funded rows. Under the account grouping a subscription account's row carries its shares. */
   getAnalyticsBreakdown(query: AnalyticsQuery): Promise<AnalyticsGroup[]>;
-  /** The route reads the range and the grouping alone; no other filter of the query narrows it. */
-  getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup): Promise<{ bucketSeconds: number; points: BurnPoint[] }>;
+  /**
+   * The route reads the range, the grouping, the Accounts filter and the user agent groups, and no other filter of the
+   * page narrows it. Naming exactly one account answers that account's shares and unit under any grouping.
+   */
+  getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup, filters?: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'>): Promise<{ bucketSeconds: number; points: BurnPoint[] }>;
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>): Promise<{ moves: Record<string, number>; points: RewritePoint[] }>;
   /** `funding` keeps the billed or the plan-funded rows. Under the account grouping each point's subscription groups carry their shares. */
   getAnalyticsSeries(query: AnalyticsQuery): Promise<AnalyticsPoint[]>;

@@ -222,6 +222,13 @@ test('the burn and rewrite reads send the range and the grouping and answer what
     'both window shares read as the route answers them',
   );
   assert.deepEqual([rewrites.moves, rewrites.points.length], [{ spent: 1 }, bodies['/admin/analytics/rewrites'].points.length]);
+  await api.getAnalyticsBurn(range, 'user_agent', { accountIds: ['primary'], userAgentGroups: ['a,1', 'b'] });
+  const filtered = new URL(calls[2].url, 'http://x');
+  assert.deepEqual(
+    [filtered.searchParams.get('accounts'), filtered.searchParams.get('group_by'), filtered.searchParams.get('user_agent_groups')],
+    ['primary', 'user_agent', 'a,1\nb'],
+    'the Accounts filter and the user agent groups, one pattern per line, travel with the grouping',
+  );
 });
 
 test('the placements read sends the range and the key and pool lists, the budgets read no query, and both decode', async () => {

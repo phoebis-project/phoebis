@@ -347,18 +347,68 @@ test('an account is sized on a window only when its listed tier has a capacity t
   assert.deepEqual([...d.sizedAccounts(ONE_WINDOW_ACCOUNTS, ONE_WINDOW, 'seven_day')].sort(), ['bare', 'pro', 'stored'], 'the window named is the one read');
 });
 
-test('a burn read outside the account grouping reads no accounts, so a failed account read leaves it whole', async () => {
+test('a burn read where the shares do not answer reads no accounts, so a failed account read leaves it whole, and the filters travel with it', async () => {
+  const sent = [];
   const source = {
-    getAnalyticsBurn: async () => ({ bucketSeconds: 3_600, points: [] }),
+    getAnalyticsBurn: async (...args) => {
+      sent.push(args);
+      return { bucketSeconds: 3_600, points: [] };
+    },
     listAccounts: async () => {
       throw new Error('the accounts read failed');
     },
   };
   const range = { from: new Date(0).toISOString(), to: new Date(HOUR).toISOString() };
-  for (const group of ['key', 'request_class', 'session']) {
-    assert.deepEqual(await d.readBurn(source, range, group), { accounts: [], answer: { bucketSeconds: 3_600, points: [] } }, group);
+  const two = { accountIds: ['primary', 'secondary'], userAgentGroups: undefined };
+  for (const group of ['key', 'model', 'request_class', 'session']) {
+    assert.deepEqual(await d.readBurn(source, range, group, two), { accounts: [], answer: { bucketSeconds: 3_600, points: [] } }, group);
   }
+  assert.deepEqual(sent[0], [range, 'key', two], 'the Accounts filter and the user agent groups travel with the grouping');
   await assert.rejects(d.readBurn(source, range, 'account'), /the accounts read failed/, 'the account grouping sizes its lines by tier and needs the read');
+  await assert.rejects(d.readBurn(source, range, 'model', { accountIds: ['primary'] }), /the accounts read failed/, 'so does a filter naming one account, whose shares answer under any grouping');
+});
+
+test('the burn fold marks the slots whose bucket priced through the model tier fallback, and each line holding one', () => {
+  const plan = (at, group, over) => point(at * HOUR, group, { fiveHourShare: 0.01, sevenDayShare: 0.001, tokens: 100, uncachedTokens: 100, unit: 'window_share', ...over });
+  const { lines, rows } = d.foldBurn([plan(0, 'primary', { estimated: true }), plan(1, 'primary'), plan(0, 'secondary'), plan(1, 'secondary')], 'account', 3_600, new Set(['primary', 'secondary']));
+  const [primary, secondary] = ['primary', 'secondary'].map((k) => lines.findIndex((l) => l.key === k));
+  assert.deepEqual(rows.map((r) => r.estimated[primary]), [true, false], 'the bucket the route marked, and not the next one');
+  assert.deepEqual(rows.map((r) => r.estimated[secondary]), [false, false]);
+  assert.deepEqual([lines[primary].estimated, lines[secondary].estimated], [true, false], 'the legend lists the estimate for the line that holds one');
+  const many = Array.from({ length: 9 }, (_, i) => plan(0, `s${i}`, { cachedTokens: (i + 1) * 60, estimated: true }));
+  const folded = d.foldBurn(many, 'session', 60, NONE);
+  assert.deepEqual([folded.lines.at(-1).other, folded.lines.at(-1).estimated, folded.rows[0].estimated.at(-1)], [true, false, false], 'a folded rest draws no plan line, so it carries no mark');
+  assert.ok(folded.lines.slice(0, -1).every((l) => l.estimated), 'every kept line keeps its own');
+});
+
+test('the plan cards read the 20x equivalents under any grouping, and the model week beside the two shared windows', () => {
+  const p = (at, group, over) => point(at * HOUR, group, { fiveHourEquivalent: 0.02, modelWeekEquivalent: null, sevenDayEquivalent: 0.004, tokens: 100, uncachedTokens: 100, ...over });
+  const { lines, rows } = d.foldBurn([p(0, 'desktop', { modelWeekEquivalent: 0.008 }), p(1, 'desktop'), p(0, 'laptop')], 'key', 3_600, NONE, d.MAX_BURN_LINES, undefined, undefined, { figure: 'equivalent' });
+  const [desktop, laptop] = ['desktop', 'laptop'].map((k) => lines.findIndex((l) => l.key === k));
+  assert.deepEqual(rows.map((r) => [r.fiveHour[desktop], r.sevenDay[desktop]]), [[0.02, 0.004], [0.02, 0.004]], 'the equivalents per hour, which no account tier reads');
+  assert.deepEqual(rows.map((r) => r.week[desktop]), [0.008, 0], 'a bucket with traffic and none on a model with a week of its own reads zero there once the line priced the week');
+  assert.ok(Math.abs(lines[desktop].weekPerHour - 0.004) < 1e-12);
+  assert.deepEqual([rows.map((r) => r.week[laptop]), lines[laptop].weekPerHour], [[null, null], null], 'a line that never ran on such a model has no week to chart');
+  assert.deepEqual([rows[1].fiveHour[laptop], lines[laptop].unpriced], [0, { fiveHour: false, sevenDay: false }], 'an idle bucket reads zero on a window the line priced');
+  const unpriced = d.foldBurn([p(0, 'desktop', { fiveHourEquivalent: null, sevenDayEquivalent: null })], 'key', 3_600, NONE, d.MAX_BURN_LINES, undefined, undefined, { figure: 'equivalent' });
+  assert.deepEqual(unpriced.lines[0].unpriced, { fiveHour: true, sevenDay: true }, 'traffic on a model of no known model tier prices no equivalent and lists as model unlisted');
+  const shares = d.foldBurn([p(0, 'desktop')], 'key', 3_600, NONE);
+  assert.deepEqual([shares.rows[0].fiveHour[0], shares.rows[0].sevenDay[0]], [null, null], 'the share figure reads the shares, which a grouping of several accounts never answers');
+});
+
+test('a filter naming one account sizes every group by that account, so its shares chart under any grouping', () => {
+  const p = (group) => point(0, group, { fiveHourShare: 0.01, sevenDayShare: 0.002, tokens: 100, uncachedTokens: 100, unit: 'window_share' });
+  const answered = [p('claude-opus-5-5'), p('claude-sonnet-4-6')];
+  const fold = (sized, account) => d.foldBurn(answered, 'model', 3_600, sized, d.MAX_BURN_LINES, undefined, undefined, { account }).lines.map((l) => l.unit);
+  assert.deepEqual(fold(new Set(['primary']), 'primary'), ['window_share', 'window_share'], "the named account's tier sizes each model's line");
+  assert.deepEqual(fold(NONE, 'primary'), ['unknown', 'unknown'], 'an account whose tier the cost model does not size reads tier unknown');
+  assert.deepEqual(fold(new Set(['primary']), null), ['usd', 'usd'], 'with no account named the grouping mixes accounts');
+});
+
+test('the key grouping names an earlier holder of a key id as the breakdown does', () => {
+  const generation = 1_791_720_940_000;
+  const { lines } = d.foldBurn([point(0, 'desktop', { uncachedTokens: 60 }), point(0, `desktop@${generation}`, { uncachedTokens: 30 })], 'key', 60, NONE);
+  assert.deepEqual(lines.map((l) => l.label), ['desktop', d.earlierHolderLabel('desktop', generation)]);
 });
 
 test('a priced bucket between unpriced ones, or at an end beside one, is an isolated slot the plan chart marks', () => {

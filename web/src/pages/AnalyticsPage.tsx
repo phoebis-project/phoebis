@@ -19,7 +19,7 @@ import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, ANALYTICS_RANGES, type AnalyticsAddress } from '@/lib/address';
-import { CACHE_MODEL_SHARE_NOTE, CACHE_SHARE_NOTE, CONVERSATION_CLASSES, MAX_BURN_LINES, NATIVE_SUBSET, SHARE_NOTE, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, isolatedSlots, moveLabel, nativeCellOf, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
+import { CACHE_MODEL_SHARE_NOTE, CACHE_SHARE_NOTE, CONVERSATION_CLASSES, MAX_BURN_LINES, NATIVE_SUBSET, SHARE_NOTE, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, isolatedSlots, moveLabel, nativeCellOf, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -46,9 +46,9 @@ const SPEED_SERIES = [
   { key: 'standard', label: 'standard', slot: 0 },
   { key: 'fast', label: 'fast', slot: 4 },
 ] as const;
-const BURN_GROUP_LABEL: Record<BurnGroup, string> = { account: 'Account', key: 'Key', request_class: 'Request class', session: 'Session' };
-// Account first: the route's default, and the one grouping that draws the plan share.
-const BURN_GROUPS: BurnGroup[] = ['account', 'key', 'session', 'request_class'];
+/** The group-by's eleventh option, which the Burn section alone honors: no rollup carries a session. */
+const SESSION_OPTION = 'Session (Burn only)';
+const SESSION_OPTION_HINT = 'The Burn section groups by session, and every other section groups by key, since no rollup carries a session';
 const DIM_LABEL: Record<QueryDim, string> = { accountId: 'Account', keyId: 'Key', model: 'Model', poolId: 'Pool' };
 /** The address key each filter dimension travels under. */
 const DIM_KEY: Record<QueryDim, 'accounts' | 'keys' | 'models' | 'pools'> = { accountId: 'accounts', keyId: 'keys', model: 'models', poolId: 'pools' };
@@ -272,13 +272,14 @@ export function AnalyticsPage() {
   const pair = `${a.range.from} ${a.range.to}`;
   const [draft, setDraft] = useState<{ for: string; from: string; to: string } | null>(null);
   const custom = draft !== null && draft.for === pair ? draft : { from: toLocalInput(Date.parse(a.range.from)), to: toLocalInput(Date.parse(a.range.to)) };
-  const groupBy = a.by as GroupBy;
+  // Every section but the Burn reads the default grouping under the Burn's own session grouping.
+  const pageBy = a.by as BurnGroup;
+  const groupBy: GroupBy = pageBy === 'session' ? 'key' : pageBy;
   const userAgentPattern = a.agent;
   const classPattern = a.class;
   const clientGroups = a.groups;
   const [groupsCut, setGroupsCut] = useState(false);
   const includeProbes = a.probes;
-  const burnGroup = a.burn as BurnGroup;
   const filtersRef = useRef<HTMLDivElement>(null);
   const filtersHeight = useStickyHeight(filtersRef);
   const location = useLocation();
@@ -357,17 +358,13 @@ export function AnalyticsPage() {
     setDraft(null);
     commit({ range: { from: iso(next.from), preset: 'custom', to: iso(next.to) } });
   };
-  const changeGroupBy = (next: GroupBy) => commit({ by: next });
+  const changeGroupBy = (next: BurnGroup) => commit({ by: next });
   const changeFilter = (dim: QueryDim, next: string[]) => {
     const patch: Partial<AnalyticsAddress> = {};
     patch[DIM_KEY[dim]] = next;
     commit(patch);
   };
   const changeProbes = (on: boolean) => commit({ probes: on });
-  const changeBurnGroup = (next: BurnGroup) => {
-    if (next === burnGroup) return;
-    commit({ burn: next });
-  };
   // Enter inserts a line in the groups field, so it commits on the pause and on blur alone.
   const groupsText = useCommittedText(clientGroups, commitGroups);
 
@@ -428,8 +425,8 @@ export function AnalyticsPage() {
   const burn = useAsync(() => {
     if (tab !== 'burn') return Promise.resolve(null);
     const readAt = clock.now();
-    return readBurn(api, { from: fromIso, to: toIso }, burnGroup).then((read) => ({ ...read, endMs: span.toMs, readAt }));
-  }, [fromIso, toIso, burnGroup, tab, generation]);
+    return readBurn(api, { from: fromIso, to: toIso }, pageBy, { accountIds: filters.accountId, userAgentGroups: agentGroups }).then((read) => ({ ...read, endMs: span.toMs, readAt }));
+  }, [fromIso, toIso, pageBy, filters.accountId, agentGroups, tab, generation]);
   // The registry's list, for the account slots alone: the range's option list holds the accounts with traffic and
   // differs from the Dashboard's, and one account keeps one color across the views.
   const registry = useAsync(() => api.listAccounts(), [], { refreshMs: 30_000 });
@@ -550,8 +547,14 @@ export function AnalyticsPage() {
   // The cache chart's week rows are keyed off the one account's map, so its legend names that map's week.
   const cacheWeek = weekLabelOf(oneGroup === null || oneGroup.cacheShares === null ? undefined : weekKeyOf(oneGroup.cacheShares));
   const otherFilters = filters.keyId.length > 0 || filters.poolId.length > 0 || filters.model.length > 0 || userAgentPattern.trim() !== '' || classPattern.trim() !== '' || sessionId !== null || includeProbes;
-  // The burn, rewrite and fit routes read the range alone, so every filter of the bar passes them by.
+  // The rewrite and fit routes read the range alone, so every filter of the bar passes them by. The burn route reads
+  // the Accounts filter and the user agent groups beside it.
   const unfiltered = otherFilters || filters.accountId.length > 0;
+  // The plan cards follow the unit: the shares under Window shares, where the route answers them for the account
+  // grouping or one named account, and the 20x equivalents, a subscription request's native unit, under every other.
+  const burnFigure: BurnFigure = unit === 'share' ? 'share' : 'equivalent';
+  const burnAccount = filters.accountId.length === 1 ? filters.accountId[0] : null;
+  const burnSizes = burnFigure === 'share' && (pageBy === 'account' || burnAccount !== null);
 
   const groupSlot = useMemo(() => {
     // Slots follow the range's whole key list so a filter never repaints the survivors, and an account's slot is the
@@ -624,12 +627,15 @@ export function AnalyticsPage() {
         <span className="filters__sep" aria-hidden />
         <label className="row">
           <span className="muted">Group by</span>
-          <Select value={groupBy} onChange={(e) => changeGroupBy(e.target.value as GroupBy)} className="groupby-select">
+          <Select value={pageBy} onChange={(e) => changeGroupBy(e.target.value as BurnGroup)} className="groupby-select">
             {(Object.keys(GROUP_LABEL) as GroupBy[]).map((g) => (
               <option key={g} value={g}>
                 {GROUP_LABEL[g]}
               </option>
             ))}
+            <option value="session" title={SESSION_OPTION_HINT}>
+              {SESSION_OPTION}
+            </option>
           </Select>
         </label>
         {DIMS.map((dim) => (
@@ -767,25 +773,16 @@ export function AnalyticsPage() {
       )}
 
       {tab === 'burn' && (
-        <Section id="burn" shown={shown} title="Burn" meta={`Tokens, spend and plan share over the range${unfiltered ? UNFILTERED_NOTE : ''}`}>
-          <div className="row analytics-groupby">
-            <span className="muted">Group by</span>
-            <Select value={burnGroup} onChange={(e) => changeBurnGroup(e.target.value as BurnGroup)} aria-label="Burn group by" className="groupby-select">
-              {BURN_GROUPS.map((g) => (
-                <option key={g} value={g}>
-                  {BURN_GROUP_LABEL[g]}
-                </option>
-              ))}
-            </Select>
-            <span className="muted analytics-groupby__reason">Burn groups by account, key, session or request class alone. The plan shares read under Account, since shares of different accounts&apos; windows do not add.</span>
-          </div>
-          {/* Only the account grouping sizes its lines by tier, so another one neither waits on nor fails with the settings read. */}
+        <Section id="burn" shown={shown} title="Burn" meta={`Tokens, spend and plan share over the range${otherFilters ? BURN_UNFILTERED_NOTE : ''}`}>
+          {/* Only the shares size their lines by tier, so the equivalents neither wait on nor fail with the settings read. */}
           <BurnCharts
+            account={burnAccount}
             answer={burn.stale ? null : (burn.data?.answer ?? null)}
             costs={burnSettings.data?.subscriptionCosts ?? null}
-            error={burn.error ?? (burnGroup === 'account' ? burnSettings.error : null)}
-            groupBy={burnGroup}
-            loading={burn.data === null || burn.stale || (burnGroup === 'account' && sized === null)}
+            error={burn.error ?? (burnSizes ? burnSettings.error : null)}
+            figure={burnFigure}
+            groupBy={pageBy}
+            loading={burn.data === null || burn.stale || (burnSizes && sized === null)}
             rangeEndMs={burn.data?.endMs}
             readAt={burn.data?.readAt}
             sized={sized}
@@ -1337,7 +1334,7 @@ function ChartCard({
   error?: string | null;
   footer?: ReactNode;
   height?: number;
-  legend?: { color: string; dashed?: boolean; label: string; shape?: 'line' | 'rect'; title?: string; value?: ReactNode }[];
+  legend?: { color: string; dashed?: boolean; hollow?: boolean; label: string; shape?: 'line' | 'rect'; title?: string; value?: ReactNode }[];
   loading: boolean;
   subtitle?: ReactNode;
   title: string;
@@ -1964,6 +1961,7 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, unit }:
 }
 
 const UNFILTERED_NOTE = '. The filters above do not apply here';
+const BURN_UNFILTERED_NOTE = '. Of the filters above, the Accounts filter and the user agent groups alone apply here';
 type TimeAxis = { height?: number; label?: { fill: string; fontSize: number; position: 'insideBottomRight'; value: string }; tickFormatter: (v: number) => string };
 /**
  * A time axis over buckets `bucketMs` wide. The 6-hour and daily buckets are UTC multiples, so their ticks print the
@@ -2050,16 +2048,66 @@ const CONVERSATION_HINT = CONVERSATION_CLASSES.join(', ');
 const OVERHEAD_HINT = 'every other class, and requests that named none';
 const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}. Overhead is ${OVERHEAD_HINT}`;
 
-const SPEND_NOTE = "Dollars per minute: API-key traffic, and a subscription account's fast-mode and overage answers. Its plan quota spends window share, charted under Plan per hour";
+const SPEND_NOTE = "Dollars per minute: API-key traffic, and a subscription account's fast-mode and overage answers. Its plan quota spends window share, charted per window beside it";
 /** A folded rest of subscription accounts as the dollars chart names it: its dollars are its members' fast-mode
  *  and overage answers, and its own label names the plan unit, which the dollars axis does not chart. */
 const SPEND_REST_LABEL: Record<Exclude<BurnLineUnit, 'usd'>, string> = { unknown: 'Other (fast mode or overage, tier unknown)', window_share: 'Other (fast mode or overage)' };
-const PLAN_NOTE =
-  "The share of each subscription account's own 5-hour window (solid) and 7-day window (dashed) its traffic used per hour, the 5-hour share weighed by the peak band, whose hours are shaded";
 const TIER_UNKNOWN_HINT = 'No tier on file, or one the cost model does not size, so no share of its windows is priced';
-const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model the cost model has no weight for, or on a tier it has no capacity for on that window, prices no share there and draws no point';
+const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model of no known tier, or on a tier the cost model has no capacity for on that window, prices no share there and draws no point';
+// "Model tier", since the tier unknown entries beside it name the account tier.
+const ESTIMATED_HINT = 'A bucket whose model has no measured weight and reads the latest weighed model of its model tier';
+/** The plan cards' note under Window shares where no group holds one account's rows alone. */
+const BURN_SHARE_NOTE = "Shares of one account's windows alone: group by account, or name one account in the Accounts filter.";
 const NO_ACCOUNT: ReadonlySet<string> = new Set();
 const PARTIAL_NOTE = 'The last bucket is partial, rated over the part of its width it covers';
+
+/**
+ * One plan card's window: the rows' figure it reads, the line's per-hour mean, whether a line left traffic unpriced on
+ * it, and its subtitle under each figure. Only the 5-hour card shades the peak band, the one window it weighs. The
+ * route names no model week, so its card reads the one the cost model ships, the Fable week.
+ */
+interface PlanWindow {
+  band: boolean;
+  equivalent: string;
+  perHour: (l: BurnLine) => number | null;
+  read: (r: BurnRow) => (number | null)[];
+  share: (whose: string) => string;
+  title: string;
+  unpriced: (l: BurnLine) => boolean;
+  word: string;
+}
+const PLAN_WINDOWS: PlanWindow[] = [
+  {
+    band: true,
+    equivalent: 'The subscription traffic per hour in 20x 5-hour equivalents, weighed by the peak band, whose hours are shaded',
+    perHour: (l) => l.fiveHourPerHour,
+    read: (r) => r.fiveHour,
+    share: (whose) => `The share of ${whose} own 5-hour window its traffic used per hour, weighed by the peak band, whose hours are shaded`,
+    title: '5-hour per hour',
+    unpriced: (l) => l.unpriced.fiveHour,
+    word: '5-hour',
+  },
+  {
+    band: false,
+    equivalent: 'The subscription traffic per hour in 20x 7-day equivalents',
+    perHour: (l) => l.sevenDayPerHour,
+    read: (r) => r.sevenDay,
+    share: (whose) => `The share of ${whose} own 7-day window its traffic used per hour`,
+    title: '7-day per hour',
+    unpriced: (l) => l.unpriced.sevenDay,
+    word: '7-day',
+  },
+  {
+    band: false,
+    equivalent: `The subscription traffic per hour in 20x equivalents of its model's own week, the ${weekLabelOf(undefined)} window`,
+    perHour: (l) => l.weekPerHour,
+    read: (r) => r.week,
+    share: (whose) => `The share of ${whose} own model week its traffic used per hour, the ${weekLabelOf(undefined)} window`,
+    title: 'Model week per hour',
+    unpriced: () => false,
+    word: weekLabelOf(undefined),
+  },
+];
 
 /**
  * A line's dot, drawn on the slots `isolatedSlots` names alone: the line leaves its null slots unconnected, so a
@@ -2072,14 +2120,31 @@ const isolatedDot = (values: (number | null)[], color: string) => {
 };
 
 /**
- * The burn route's two views of one grouping. A line's color follows its group within the answer rather than
- * its rank, so a range that reorders the groups does not repaint them; the account grouping keeps each account's
- * page-wide color.
+ * A plan line's dot: hollow on a slot whose bucket priced through the model tier's fallback, a channel of its own
+ * beside the dash and the isolated slot's filled dot, which it takes elsewhere.
+ */
+const estimatedDot = (values: (number | null)[], estimated: boolean[], color: string, ground: string) => {
+  const isolated = isolatedDot(values, color);
+  return (props: { cx?: number; cy?: number; index: number; key?: string }) =>
+    estimated[props.index] && values[props.index] !== null ? (
+      <Dot key={props.key} className="recharts-line-dot recharts-line-dot--estimated" cx={props.cx} cy={props.cy} r={3} fill={ground} stroke={color} strokeWidth={2} />
+    ) : (
+      isolated(props)
+    );
+};
+
+/**
+ * The burn route's views of one grouping: the dollars per minute, and one plan card per window. A line's color
+ * follows its group within the answer rather than its rank, so a range that reorders the groups does not repaint
+ * them, and the account grouping keeps each account's page-wide color. `figure` is what the plan cards read, and
+ * `account` the one account the Accounts filter names, whose shares answer under any grouping.
  */
 function BurnCharts({
+  account,
   answer,
   costs,
   error,
+  figure,
   groupBy,
   loading,
   rangeEndMs,
@@ -2087,9 +2152,11 @@ function BurnCharts({
   sized,
   slotOf,
 }: {
+  account: string | null;
   answer: { bucketSeconds: number; points: BurnPoint[] } | null;
   costs: SubscriptionCosts | null;
   error: string | null;
+  figure: BurnFigure;
   groupBy: BurnGroup;
   loading: boolean;
   rangeEndMs: number | undefined;
@@ -2099,8 +2166,8 @@ function BurnCharts({
 }) {
   const ink = useChartInk();
   const { lines, rows } = useMemo(
-    () => (answer === null ? { lines: [] as BurnLine[], rows: [] as BurnRow[] } : foldBurn(answer.points, groupBy, answer.bucketSeconds, sized ?? NO_ACCOUNT, MAX_BURN_LINES, rangeEndMs, readAt)),
-    [answer, groupBy, rangeEndMs, readAt, sized],
+    () => (answer === null ? { lines: [] as BurnLine[], rows: [] as BurnRow[] } : foldBurn(answer.points, groupBy, answer.bucketSeconds, sized ?? NO_ACCOUNT, MAX_BURN_LINES, rangeEndMs, readAt, { account, figure })),
+    [account, answer, figure, groupBy, rangeEndMs, readAt, sized],
   );
   const named = useMemo(() => lines.filter((l) => !l.other).map((l) => l.key).sort(), [lines]);
   const colorOf = (l: BurnLine) => (l.other ? ink.muted : groupBy === 'account' ? accountColor(ink, slotOf(l.key)) : ink.series[Math.min(7, named.indexOf(l.key))]);
@@ -2111,18 +2178,24 @@ function BurnCharts({
   // Read off the buckets, not the lines: the class grouping draws its two lines even over a range with no traffic.
   const empty = !loading && error === null && rows.length === 0 ? 'No traffic in this range.' : undefined;
   const byAccount = groupBy === 'account';
+  // The route answers the shares where each group holds one account's rows.
+  const shared = byAccount || account !== null;
   // Every other grouping mixes both kinds of account, so its lines chart the dollars their API-key traffic and
   // fast-mode and overage answers spent. Under the account grouping a subscription account, or a folded rest of
   // them, draws a dollar line only for what its fast-mode and overage answers spent.
   const spent = lines.map((l, i) => ({ i, l })).filter(({ l }) => !byAccount || l.unit === 'usd' || l.usdPerMinute > 0);
   const spendNameOf = (l: BurnLine) => (l.other && l.unit !== 'usd' ? SPEND_REST_LABEL[l.unit] : nameOf(l));
-  const planned = lines.map((l, i) => ({ i, l })).filter(({ l }) => byAccount && !l.other && l.unit === 'window_share');
-  const unpriced = lines.filter((l) => byAccount && !l.other && l.unit === 'unknown');
+  // Under the shares a sized subscription account draws, an idle one reading a dash. The equivalents read no tier, so
+  // every group whose traffic a plan paid for draws, and a group of billed rows alone, which reads zero, does not.
+  const planned = lines
+    .map((l, i) => ({ i, l }))
+    .filter(({ l }) => !l.other && (figure === 'share' ? l.unit === 'window_share' : l.unpriced.fiveHour || l.unpriced.sevenDay || [l.fiveHourPerHour, l.sevenDayPerHour, l.weekPerHour].some((v) => v !== null && v > 0)));
+  const unpriced = figure === 'share' && shared ? lines.filter((l) => !l.other && l.unit === 'unknown') : [];
   const shareOf = (share: number | null) => (share === null ? '-' : fmtShare(share));
   const partial = rows[rows.length - 1]?.partial === true;
   // The band's own hours over the instants the plan chart spans: the buckets are UTC multiples whose starts fall off
   // the band's edges, so shading whole buckets would mark the wrong hours.
-  const band = useMemo(() => (costs === null || !byAccount || rows.length < 2 ? [] : bandRuns(costs, rows[0].at, rows[rows.length - 1].at)), [byAccount, costs, rows]);
+  const band = useMemo(() => (costs === null || rows.length < 2 ? [] : bandRuns(costs, rows[0].at, rows[rows.length - 1].at)), [costs, rows]);
   // A bucket too short to set the scale would stretch the axis over a few seconds' rate, so the axis stops at the
   // buckets that set it and the short one runs past the top.
   const scaled = rows.filter((r) => r.setsScale);
@@ -2134,8 +2207,80 @@ function BurnCharts({
   const spentScale = scaleTo(spentValues);
   // Without a capped domain recharts spans every row, so the labels' precision reads every row too.
   const spentAxis = usdAxis('domain' in spentScale ? spentValues : rows.flatMap((r) => spent.map(({ i }) => r.usd[i])));
+  const whose = byAccount ? "each subscription account's" : "the named account's";
+  // The model week's card draws while a line ran on a model with a week of its own.
+  const windows = PLAN_WINDOWS.filter((w) => w !== PLAN_WINDOWS[2] || planned.some(({ l }) => l.weekPerHour !== null));
+  const planCard = (w: PlanWindow) => {
+    const drawn = w === PLAN_WINDOWS[2] ? planned.filter(({ l }) => l.weekPerHour !== null) : planned;
+    const legend = [
+      ...drawn.map(({ l }) => ({
+        color: colorOf(l),
+        label: nameOf(l),
+        shape: 'line' as const,
+        title: withEstimate(w.band && l.fiveHourPeak !== null ? `Highest hour ${fmtShare(l.fiveHourPeak)}` : '', l.estimated) || undefined,
+        value: `${l.estimated && w.perHour(l) !== null ? '~' : ''}${shareOf(w.perHour(l))}`,
+      })),
+      // One entry for every figure the cost model cannot price on the window, whichever line it fell on. Muted, since it
+      // draws no line of its own.
+      ...(drawn.some(({ l }) => w.unpriced(l)) ? [{ color: ink.muted, label: 'model unlisted', shape: 'line' as const, title: MODEL_UNLISTED_HINT, value: w.word }] : []),
+      ...(drawn.some(({ l }) => l.estimated) ? [{ color: ink.muted, hollow: true, label: 'estimated', shape: 'line' as const, title: ESTIMATED_HINT }] : []),
+      // Muted, since no line of its own is drawn.
+      ...unpriced.map((l) => ({ color: ink.muted, label: nameOf(l), shape: 'line' as const, title: TIER_UNKNOWN_HINT, value: 'tier unknown' })),
+    ];
+    return (
+      <ChartCard
+        key={w.title}
+        title={w.title}
+        subtitle={
+          <>
+            {figure === 'share' ? w.share(whose) : w.equivalent}.{partial ? ` ${PARTIAL_NOTE}.` : ''} <CostReferenceLink tab="tiers" />
+          </>
+        }
+        error={error}
+        loading={loading}
+        empty={
+          empty ??
+          (figure === 'share' && !shared
+            ? BURN_SHARE_NOTE
+            : drawn.length > 0
+              ? undefined
+              : unpriced.length > 0
+                ? `No subscription account in range has a tier the cost model sizes: ${unpriced.map(nameOf).join(', ')}.`
+                : figure === 'share'
+                  ? 'No subscription account burned in this range.'
+                  : 'No subscription traffic in this range.')
+        }
+        legend={legend}
+      >
+        <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+          <CartesianGrid vertical={false} stroke={ink.grid} />
+          {/* A category axis places a reference area on its categories alone, so this one counts instants and ticks on the buckets. */}
+          <XAxis dataKey="at" type="number" scale="time" domain={['dataMin', 'dataMax']} ticks={rows.map((r) => r.at)} {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+          <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={52} {...scaleTo(scaled.flatMap((r) => drawn.map(({ i }) => w.read(r)[i] ?? 0)))} />
+          {/* Recharts drops null entries by default, and a bucket whose every figure is null would lose its date, its dashes and the unpriced hint. */}
+          <Tooltip
+            cursor={{ stroke: ink.axis }}
+            filterNull={false}
+            content={timeTip<BurnRow>((r) =>
+              drawn.map(({ i, l }) => {
+                const v = w.read(r)[i];
+                const marked = r.estimated[i] && v !== null;
+                return { color: colorOf(l), label: nameOf(l), title: w.unpriced(l) && slotUnpriced(v, r.tokens[i]) ? MODEL_UNLISTED_HINT : marked ? ESTIMATED_HINT : undefined, value: `${marked ? '~' : ''}${shareOf(v)}` };
+              }),
+            )}
+          />
+          {w.band && band.map((run) => <ReferenceArea key={run.from} x1={run.from} x2={run.to} fill={ink.series[6]} fillOpacity={0.34} ifOverflow="hidden" />)}
+          {drawn.map(({ i, l }) => (
+            // A null slot draws no point, and the gap stays since the lines do not connect across it.
+            <Line key={i} type="monotone" dataKey={(r: BurnRow) => w.read(r)[i]} stroke={colorOf(l)} strokeWidth={2} dot={estimatedDot(rows.map((r) => w.read(r)[i]), rows.map((r) => r.estimated[i]), colorOf(l), ink.surface)} isAnimationActive={false} />
+          ))}
+        </LineChart>
+      </ChartCard>
+    );
+  };
   return (
-    <div className="grid-2">
+    <div className="grid-2 burn-grid">
+      {windows.map(planCard)}
       <ChartCard
         title="Spend per minute"
         subtitle={`${byAccount ? SPEND_NOTE : `${SPEND_NOTE} when grouped by account`}${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}${partial ? `. ${PARTIAL_NOTE}` : ''}`}
@@ -2154,86 +2299,6 @@ function BurnCharts({
           ))}
         </LineChart>
       </ChartCard>
-
-      {byAccount && (
-        <ChartCard
-          title="Plan per hour"
-          subtitle={
-            <>
-              {PLAN_NOTE}.{partial ? ` ${PARTIAL_NOTE}.` : ''} <CostReferenceLink tab="tiers" />
-            </>
-          }
-          error={error}
-          loading={loading}
-          empty={
-            empty ??
-            (planned.length > 0
-              ? undefined
-              : unpriced.length > 0
-                ? `No subscription account in range has a tier the cost model sizes: ${unpriced.map(nameOf).join(', ')}.`
-                : 'No subscription account burned in this range.')
-          }
-          legend={[
-            ...planned.flatMap(({ l }) => [
-              {
-                color: colorOf(l),
-                label: `${nameOf(l)} (5-hour)`,
-                shape: 'line' as const,
-                title: l.fiveHourPeak === null ? undefined : `Highest hour ${fmtShare(l.fiveHourPeak)}`,
-                value: shareOf(l.fiveHourPerHour),
-              },
-              {
-                color: colorOf(l),
-                dashed: true,
-                label: `${nameOf(l)} (7-day)`,
-                shape: 'line' as const,
-                value: shareOf(l.sevenDayPerHour),
-              },
-            ]),
-            // One entry for every share the cost model cannot price, whichever account and window it fell on; muted,
-            // since it draws no line of its own.
-            ...(planned.some(({ l }) => l.unpriced.fiveHour || l.unpriced.sevenDay)
-              ? [
-                  {
-                    color: ink.muted,
-                    label: 'model unlisted',
-                    shape: 'line' as const,
-                    title: MODEL_UNLISTED_HINT,
-                    value: [planned.some(({ l }) => l.unpriced.fiveHour) ? '5-hour' : null, planned.some(({ l }) => l.unpriced.sevenDay) ? '7-day' : null].filter((w) => w !== null).join(', '),
-                  },
-                ]
-              : []),
-            // Muted, since no line of its own is drawn.
-            ...unpriced.map((l) => ({ color: ink.muted, label: nameOf(l), shape: 'line' as const, title: TIER_UNKNOWN_HINT, value: 'tier unknown' })),
-          ]}
-        >
-          <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-            <CartesianGrid vertical={false} stroke={ink.grid} />
-            {/* A category axis places a reference area on its categories alone, so this one counts instants and ticks on the buckets. */}
-            <XAxis dataKey="at" type="number" scale="time" domain={['dataMin', 'dataMax']} ticks={rows.map((r) => r.at)} {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-            <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={52} {...scaleTo(scaled.flatMap((r) => planned.flatMap(({ i }) => [r.fiveHour[i] ?? 0, r.sevenDay[i] ?? 0])))} />
-            {/* Recharts drops null entries by default, and a bucket whose every share is null would lose its date, its dashes and the unpriced hint. */}
-            <Tooltip
-              cursor={{ stroke: ink.axis }}
-              filterNull={false}
-              content={timeTip<BurnRow>((r) => [
-                ...planned.flatMap(({ i, l }) => [
-                  { color: colorOf(l), label: `${nameOf(l)} (5-hour)`, title: slotUnpriced(r.fiveHour[i], r.tokens[i]) ? MODEL_UNLISTED_HINT : undefined, value: shareOf(r.fiveHour[i]) },
-                  { color: colorOf(l), label: `${nameOf(l)} (7-day)`, title: slotUnpriced(r.sevenDay[i], r.tokens[i]) ? MODEL_UNLISTED_HINT : undefined, value: shareOf(r.sevenDay[i]) },
-                ]),
-              ])}
-            />
-            {band.map((r) => (
-              <ReferenceArea key={r.from} x1={r.from} x2={r.to} fill={ink.series[6]} fillOpacity={0.34} ifOverflow="hidden" />
-            ))}
-            {planned.flatMap(({ i, l }) => [
-              // A null slot draws no point, and the gap stays since the lines do not connect across it.
-              <Line key={`${i}-5h`} type="monotone" dataKey={(r: BurnRow) => r.fiveHour[i]} stroke={colorOf(l)} strokeWidth={2} dot={isolatedDot(rows.map((r) => r.fiveHour[i]), colorOf(l))} isAnimationActive={false} />,
-              <Line key={`${i}-7d`} type="monotone" dataKey={(r: BurnRow) => r.sevenDay[i]} stroke={colorOf(l)} strokeWidth={2} strokeDasharray="5 3" dot={isolatedDot(rows.map((r) => r.sevenDay[i]), colorOf(l))} isAnimationActive={false} />,
-            ])}
-          </LineChart>
-        </ChartCard>
-      )}
     </div>
   );
 }

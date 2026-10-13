@@ -715,7 +715,7 @@ test('an answer from before the 20x equivalents reads them empty, zero, null or 
     'a group',
   );
   const point = d.decodeBurnPoint({});
-  assert.deepEqual([point.estimated, point.fiveHourEquivalent, point.sevenDayEquivalent], [false, null, null], 'a burn point');
+  assert.deepEqual([point.estimated, point.fiveHourEquivalent, point.sevenDayEquivalent, point.modelWeekEquivalent, point.modelWeekShare], [false, null, null, null, null], 'a burn point');
   const day = d.decodeDashboard({ hourly: [{ at: 0 }] });
   assert.deepEqual([day.billed24h, day.equivalent24h, day.estimated24h, day.hourly[0].billed, day.hourly[0].equivalent], [0, zero, false, 0, zero], 'the dashboard');
   const key = d.decodeKey({});
@@ -954,6 +954,8 @@ test('the burn series decodes each point with its instant, both token sides, and
     fiveHourEquivalent: wire.five_hour_equivalent,
     fiveHourShare: wire.five_hour_share,
     group: 'business',
+    modelWeekEquivalent: wire.model_week_equivalent,
+    modelWeekShare: wire.model_week_share,
     sevenDayEquivalent: wire.seven_day_equivalent,
     sevenDayShare: wire.seven_day_share,
     tokens: wire.tokens,
@@ -961,6 +963,9 @@ test('the burn series decodes each point with its instant, both token sides, and
     unit: 'window_share',
     usd: wire.usd,
   });
+  assert.ok(body.points.every((p) => 'model_week_share' in p && 'model_week_equivalent' in p), 'every point carries the model week beside the two shared windows');
+  const week = d.decodeBurnPoint({ ...wire, model_week_equivalent: 0.25, model_week_share: 0.125 });
+  assert.deepEqual([week.modelWeekEquivalent, week.modelWeekShare], [0.25, 0.125], "a bucket on a model with a week of its own reads that week's share and equivalent");
   const direct = burn.points[burn.points.length - 1];
   assert.deepEqual(
     [direct.group, direct.fiveHourShare, direct.sevenDayShare, direct.fiveHourEquivalent, direct.sevenDayEquivalent, direct.unit, direct.usd],

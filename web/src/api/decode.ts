@@ -703,6 +703,8 @@ export const decodeBurnPoint = (v: unknown): BurnPoint => {
     fiveHourEquivalent: numOrNull(p.five_hour_equivalent),
     fiveHourShare: numOrNull(p.five_hour_share),
     group: str(p.group),
+    modelWeekEquivalent: numOrNull(p.model_week_equivalent),
+    modelWeekShare: numOrNull(p.model_week_share),
     sevenDayEquivalent: numOrNull(p.seven_day_equivalent),
     sevenDayShare: numOrNull(p.seven_day_share),
     tokens: num(p.tokens),

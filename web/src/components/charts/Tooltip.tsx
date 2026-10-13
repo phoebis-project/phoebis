@@ -26,12 +26,19 @@ export function ChartTooltip({ title, rows }: { rows: TooltipRow[]; title: React
   );
 }
 
-export function Legend({ items }: { items: { color: string; dashed?: boolean; label: string; shape?: 'line' | 'rect'; title?: string; value?: ReactNode }[] }) {
+/**
+ * `hollow` draws the swatch as an outline in the color, as a chart's hollow dot marks a point: a line swatch grows to
+ * 4 px, since under border-box a 1 px border on each side of a 2 px swatch would leave no interior.
+ */
+export function Legend({ items }: { items: { color: string; dashed?: boolean; hollow?: boolean; label: string; shape?: 'line' | 'rect'; title?: string; value?: ReactNode }[] }) {
   return (
     <ul className="legend">
       {items.map((i) => (
         <li key={i.label} title={i.title}>
-          <span className={`legend__swatch legend__swatch--${i.shape ?? 'rect'}`} style={{ background: i.dashed ? `repeating-linear-gradient(90deg, ${i.color} 0 4px, transparent 4px 7px)` : i.color }} />
+          <span
+            className={`legend__swatch legend__swatch--${i.shape ?? 'rect'}`}
+            style={i.hollow ? { background: 'transparent', border: `1px solid ${i.color}`, height: i.shape === 'line' ? 4 : undefined } : { background: i.dashed ? `repeating-linear-gradient(90deg, ${i.color} 0 4px, transparent 4px 7px)` : i.color }}
+          />
           {i.label}
           {i.value !== undefined && <span className="legend__value num">{i.value}</span>}
         </li>
