@@ -90,12 +90,13 @@ const rowDomId = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'
 /**
  * The request log on the session the client sent under the row's key lifetime, since a key id created again can hold
  * the same session id, inside the narrowest range that covers its last request, read on the clock at the click: the
- * page's `now` is a sample up to five seconds old, and the request log measures its window from its own load.
+ * page's `now` is a sample up to five seconds old, and the request log measures its window from its own load. The
+ * session lands as the log's session chip, which matches the id exactly.
  */
 const requestsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId' | 'lastRequestAt'>) => {
   const defaults = REQUESTS_CODEC.fromParams(new URLSearchParams());
   const range = requestsRange(session.lastRequestAt, clock.now());
-  return `/requests?${REQUESTS_CODEC.toParams({ ...defaults, keys: [`${session.keyId}@${session.keyGeneration}`], range: range === null ? defaults.range : { from: '', preset: range, to: '' }, search: trafficSession })}`;
+  return `/requests?${REQUESTS_CODEC.toParams({ ...defaults, keys: [`${session.keyId}@${session.keyGeneration}`], range: range === null ? defaults.range : { from: '', preset: range, to: '' }, session: trafficSession })}`;
 };
 /** The analytics on the session the client sent under the row's key lifetime. */
 const analyticsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId'>) =>

@@ -145,10 +145,12 @@ export interface RequestsAddress {
   outcomes: string[];
   pools: string[];
   range: RangeValue;
+  request: string;
   requestClasses: string[];
   /** The page size. */
   rows: string;
   search: string;
+  session: string;
   speeds: string[];
   statuses: string[];
   turnOrigins: string[];
@@ -158,6 +160,8 @@ const REQUEST_KINDS: readonly ('' | RequestKind)[] = ['', ...REQUEST_KIND_VALUES
 
 export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   search: text('search'),
+  request: text('request'),
+  session: text('session'),
   client: text('client'),
   agent: text('agent'),
   agentTypes: list('agent_types'),

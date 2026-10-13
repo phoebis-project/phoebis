@@ -131,7 +131,15 @@ const MODEL: Dimension = { field: 'models', group: 'Routing', kind: 'list', labe
 const POOL: Dimension = { field: 'pools', group: 'Routing', kind: 'list', label: 'Pool', mono: true, word: 'pool' };
 const USER_AGENT: Dimension = { field: 'agent', group: 'Request', kind: 'pattern', label: 'User agent', mono: true, word: 'user agent' };
 
-/** Routing, Outcome, Request. A status chip prints the codes alone, since an option's label adds the code's name. */
+/**
+ * A dimension's disabled reason while its option list did not load, `{ [field]: "The key list did not load: ..." }`,
+ * else nothing. A list that loaded keeps it through a refresh that fails.
+ */
+export function notLoadedReason(field: string, name: string, read: { data: unknown; error: string | null }): Record<string, string> {
+  return read.data === null && read.error !== null ? { [field]: `The ${name} list did not load: ${read.error}` } : {};
+}
+
+/** Routing, Outcome, Request, Subject. A status chip prints the codes alone, since an option's label adds the code's name. */
 export const REQUESTS_DIMENSIONS: Dimension[] = [
   ACCOUNT,
   KEY,
@@ -159,6 +167,8 @@ export const REQUESTS_DIMENSIONS: Dimension[] = [
   { field: 'speeds', group: 'Request', kind: 'list', label: 'Speed', mono: true, word: 'speed' },
   { field: 'turnOrigins', group: 'Request', kind: 'list', label: 'Turn origin', mono: true, word: 'turn origin' },
   USER_AGENT,
+  { field: 'request', group: 'Subject', kind: 'id', label: 'Request', mono: true, word: 'request' },
+  { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' },
 ];
 
 /** Kinds, Routing, Subject: the kinds lead, since their presets are the way to narrow this view. */

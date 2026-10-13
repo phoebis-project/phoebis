@@ -34,7 +34,7 @@ test("a session view's link carries its exact window", () => {
   assert.deepEqual([from, to], ['2026-09-16T11:20:00.000Z', '2026-09-16T14:10:00.000Z']);
 });
 
-test("the page's selections, its class pattern and a session id travel as the Requests page reads them", () => {
+test("the page's selections, its class pattern and a session id travel as the Requests page reads them, the session as its own filter", () => {
   const read = target(link({ filters: { accountIds: ['primary', 'secondary'], clientPattern: 'claude-code/*', keyIds: ['desktop'], models: ['m'], poolIds: ['p'], sessionId: SESSION } }).href);
   assert.deepEqual(read, {
     accounts: 'primary,secondary',
@@ -45,7 +45,7 @@ test("the page's selections, its class pattern and a session id travel as the Re
     models: 'm',
     path: '/requests',
     pools: 'p',
-    search: SESSION,
+    session: SESSION,
     to: '2026-09-16T14:30:00.000Z',
   });
 });
@@ -56,14 +56,14 @@ test("a session read under a key lifetime links with that lifetime alone, in pla
   assert.deepEqual(d.linkedKeyIds(['laptop'], null), ['laptop']);
   const read = target(link({ filters: { keyIds: d.linkedKeyIds(['laptop'], 'desktop@1000'), sessionId: SESSION }, window: { exact: true } }).href);
   assert.equal(read.keys, 'desktop@1000');
-  assert.equal(read.search, SESSION);
+  assert.equal(read.session, SESSION);
 });
 
 test("a link reads back through the Requests page's address as its custom span, its reason and its filters", () => {
   const href = link({ filters: { accountIds: ['primary'], keyIds: ['desktop@1000'], sessionId: SESSION }, group: { by: 'request_class', key: 'conversation' } }).href;
   const read = d.REQUESTS_CODEC.fromParams(new URL(href, 'http://console.test').searchParams);
   assert.deepEqual(read.range, { from: '2026-09-16T11:00:00.000Z', preset: 'custom', to: '2026-09-16T14:30:00.000Z' });
-  assert.deepEqual([read.cacheMissReasons, read.accounts, read.keys, read.requestClasses, read.search], [['messages_changed'], ['primary'], ['desktop@1000'], ['conversation'], SESSION]);
+  assert.deepEqual([read.cacheMissReasons, read.accounts, read.keys, read.requestClasses, read.session], [['messages_changed'], ['primary'], ['desktop@1000'], ['conversation'], SESSION]);
   assert.equal(d.REQUESTS_CODEC.toParams(read).toString(), new URL(href, 'http://console.test').searchParams.toString());
 });
 
@@ -155,4 +155,47 @@ test("with probes included a link says the list leaves them out, and the kind gr
   const probes = link({ filters: { includeProbes: true }, group: { by: 'kind', key: 'probe' } });
   assert.equal(target(probes.href).kind, 'probe');
   assert.doesNotMatch(probes.title, /probes out/);
+});
+
+const NOW = at('2026-09-16T14:30:00Z');
+/** A request that arrived ten minutes before now and took four seconds. */
+const ROW = { accountId: 'primary', at: '2026-09-16T14:20:20.500Z', durationMs: 4_000, id: 'req_1', sessionId: SESSION };
+
+test("the drawer's three widenings write a fresh Requests address each, in the order this minute, this session, this account, with the page size kept", () => {
+  const widened = d.requestsWiden(ROW, NOW, '50');
+  assert.deepEqual(
+    widened.map((w) => [w.label, w.title]),
+    [
+      ['this minute', null],
+      ['this session', SESSION],
+      ['this account', 'primary'],
+    ],
+  );
+  assert.deepEqual(
+    widened.map((w) => target(w.href)),
+    [
+      { from: '2026-09-16T14:20:00.000Z', path: '/requests', rows: '50', to: '2026-09-16T14:20:59.999Z' },
+      { from: '2026-09-16T13:20:20.500Z', path: '/requests', rows: '50', session: SESSION, to: '2026-09-16T14:30:00.000Z' },
+      { accounts: 'primary', from: '2026-09-16T14:05:20.500Z', path: '/requests', rows: '50', to: '2026-09-16T14:30:00.000Z' },
+    ],
+  );
+  assert.deepEqual(
+    d.requestsWiden(ROW, NOW, '25').map((w) => target(w.href).rows),
+    [undefined, undefined, undefined],
+    'the default page size leaves the address',
+  );
+});
+
+test('a request without a session omits this session, and one without an account omits this account', () => {
+  const labels = (over) => d.requestsWiden({ ...ROW, ...over }, NOW, '25').map((w) => w.label);
+  assert.deepEqual(labels({ sessionId: null }), ['this minute', 'this account']);
+  assert.deepEqual(labels({ accountId: null }), ['this minute', 'this session']);
+  assert.deepEqual(labels({ accountId: null, sessionId: null }), ['this minute']);
+});
+
+test('a running request widens to its account from its start', () => {
+  const early = { ...ROW, at: '2026-09-16T13:00:00.000Z' };
+  const account = (row) => target(d.requestsWiden(row, NOW, '25')[2].href);
+  assert.deepEqual([account({ ...early, durationMs: null }).from, account({ ...early, durationMs: null }).to], ['2026-09-16T12:45:00.000Z', '2026-09-16T13:15:00.000Z']);
+  assert.equal(account({ ...early, durationMs: 120_000 }).to, '2026-09-16T13:17:00.000Z', 'a finished request widens to the quarter hour after its finish');
 });

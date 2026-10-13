@@ -85,7 +85,7 @@ test('each dimension list names keys of its codec, and every codec key but the e
 
 test("the lists are alphabetical inside each group, the groups in the view's order, and the Routing log leads with its kinds", () => {
   const groups = (dimensions) => [...new Set(dimensions.map((x) => x.group))];
-  assert.deepEqual(groups(d.REQUESTS_DIMENSIONS), ['Routing', 'Outcome', 'Request']);
+  assert.deepEqual(groups(d.REQUESTS_DIMENSIONS), ['Routing', 'Outcome', 'Request', 'Subject']);
   assert.deepEqual(groups(d.ROUTING_LOG_DIMENSIONS), ['Kinds', 'Routing', 'Subject']);
   assert.deepEqual(groups(d.ANALYTICS_DIMENSIONS), ['Routing', 'Request', 'Subject']);
   assert.deepEqual(groups(d.KEYS_DIMENSIONS), ['Keys']);
@@ -98,4 +98,11 @@ test("the lists are alphabetical inside each group, the groups in the view's ord
   const words = Object.fromEntries(d.ANALYTICS_DIMENSIONS.map((x) => [x.field, x.word]));
   assert.deepEqual([words.class, words.probes, words.agent], ['client', 'include probes', 'user agent'], 'the Analytics client pattern reads client over its class key');
   assert.equal(d.ROUTING_LOG_DIMENSIONS[0].word, 'kinds');
+});
+
+test("a dimension whose list did not load carries the failure's words, and a list that loaded or is on its way carries none", () => {
+  assert.deepEqual(d.notLoadedReason('keys', 'key', { data: null, error: 'the store is unavailable' }), { keys: 'The key list did not load: the store is unavailable' });
+  assert.deepEqual(d.notLoadedReason('keys', 'key', { data: null, error: null }), {});
+  assert.deepEqual(d.notLoadedReason('pools', 'pool', { data: [], error: null }), {});
+  assert.deepEqual(d.notLoadedReason('models', 'model', { data: [{ id: 'm' }], error: 'a refresh failed' }), {}, 'a refresh that fails keeps the list it read');
 });

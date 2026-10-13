@@ -1913,6 +1913,11 @@
   }
 }
 
+/* The bar spans the list and the drawer, so its row keeps one line while the drawer narrows the list's column. */
+.requests > .filter-bar {
+  grid-column: 1 / -1;
+}
+
 /* The cells sit 8 px apart, so the fit columns leave the Client fill, which floors at sixteen characters, as much of the
    card as they can. Where the values run past the card the table scrolls inside its wrap. */
 .requests__table th,
@@ -2823,18 +2828,10 @@
 }
 
 .cols-popover {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 20;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 4px 14px;
   padding: 10px 12px;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
 }
 
 .cols-popover label {
@@ -2897,6 +2894,15 @@
   padding: 14px 16px;
   background: var(--surface);
   border-bottom: 1px solid var(--hairline);
+}
+
+/* Beside the head's actions the 400 and 440 px drawers leave the line too little room, so it breaks between its links
+   rather than inside one. */
+.drawer__widen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  font-size: 12.5px;
 }
 
 .drawer__title {

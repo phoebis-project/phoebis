@@ -39,6 +39,8 @@ export { SHED_AHEAD_OF_PACE_DEFAULT } from '@/lib/presets';
 export { endOf, remainingTimeShare } from '@/lib/quota';
 // A request's native unit, so a check picks the rows it reads by the rule the Cost cell draws them by.
 export { costUnitOf } from '@/lib/requests';
+// The drawer's widenings, so a check reads the drawer's links against the addresses the page builds them from.
+export { requestsWiden } from '@/lib/requestsLink';
 export { fmtWindows, ringFigures } from '@/lib/rings';
 // The walk's words, so a card check reads a popover's column and its title as the console words them.
 export { keyWord, STEP_NAME } from '@/lib/routingLog';

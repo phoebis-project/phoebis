@@ -2988,12 +2988,12 @@ async function requestsTableWide(theme) {
  */
 async function requestsTableNoFill(theme) {
   const say = (what) => failures.push(`${theme} /requests without its fills: ${what}`);
-  const button = page.locator('.filters__cols button', { hasText: /^Columns/ });
+  const button = page.locator('.filter-bar button[aria-label="Columns"]');
   const turn = async (labels) => {
     await button.click();
     await settle();
     for (const label of labels) {
-      await page.locator('.cols-popover label', { hasText: new RegExp(`^${label}$`) }).locator('input[type="checkbox"]').click();
+      await page.locator('.popover .cols-popover label', { hasText: new RegExp(`^${label}$`) }).locator('input[type="checkbox"]').click();
       await settle();
     }
     await button.click();
@@ -3142,22 +3142,20 @@ async function pagerControls(theme, path) {
 
 /**
  * The range control at rest on the request log's bar: the group 32 px with its six pills 28 px on one top, the group
- * against the Refresh button on height and against the search field on height and top, and the Custom pill's width at
- * rest recorded, the base its span grows from. The bar wraps its controls, which puts Refresh rows below the range,
- * so the field beside the group on its row holds the top.
+ * against the split Refresh button and against the search field on height and top, since the bar holds all three on
+ * its one row, and the Custom pill's width at rest recorded, the base its span grows from.
  */
 async function rangePills(theme) {
   const read = await page.evaluate(() => {
     const box = (el) => (el ? { height: Math.round(el.getBoundingClientRect().height), top: Math.round(el.getBoundingClientRect().top) } : null);
     const group = document.querySelector('.segmented[aria-label="Range"]');
     const pills = [...(group?.querySelectorAll('button') ?? [])];
-    const refresh = [...document.querySelectorAll('.filters .btn')].find((b) => b.textContent?.trim() === 'Refresh');
     return {
       custom: pills.length > 0 ? Math.round(pills[pills.length - 1].getBoundingClientRect().width * 10) / 10 : null,
       group: box(group),
       pills: pills.map((b) => ({ ...box(b), text: b.textContent?.trim() ?? '' })),
-      refresh: box(refresh),
-      search: box(document.querySelector('.filters input.filters__search')),
+      refresh: box(document.querySelector('.filter-bar .refresh-control')),
+      search: box(document.querySelector('.filter-bar input.filter-bar__search')),
     };
   });
   measurements.push(`${theme} /requests range pills ${JSON.stringify(read)}`);
@@ -3165,45 +3163,189 @@ async function rangePills(theme) {
   if (read.group?.height !== 32) say(`group is ${read.group?.height} px, not 32`);
   if (read.pills.length !== 6 || read.pills.some((p) => p.height !== 28)) say(`pills measure ${JSON.stringify(read.pills)}, not six of 28 px`);
   if (new Set(read.pills.map((p) => p.top)).size > 1) say(`pills stand at ${JSON.stringify(read.pills.map((p) => p.top))}, not one top`);
-  failures.push(...compare(read.group, read.refresh, ['height'], `${theme} /requests: the range group against Refresh`));
+  failures.push(...compare(read.group, read.refresh, ['height', 'top'], `${theme} /requests: the range group against the split Refresh button`));
   failures.push(...compare(read.group, read.search, ['height', 'top'], `${theme} /requests: the range group against the search field`));
 }
 
-/**
- * The Speed control at the end of the request log's filter bar against the Turn origin control it follows: the
- * same trigger box, type and border, on the same row of the bar or at the start of the next one.
- */
-async function speedFilter(theme) {
-  const read = await page.evaluate(() => {
-    const trigger = (label) => [...document.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith(label));
+/** The request log on an address of its own, loaded the way a view loads, its rows awaited. */
+async function loadRequests(search = '') {
+  await page.goto(`${base}/requests${search}`);
+  await booted();
+  await advance(LOAD_MS);
+  await page.waitForSelector('.filter-bar', { timeout: 15_000 }).catch(() => {});
+}
+
+/** The filter chips' address both chip measures load: values the mock's story holds, though a chip draws without rows. */
+const CHIPPED = '?turn_origins=human&efforts=high&request_classes=main&speeds=fast&cache_miss_reasons=messages_changed';
+
+/** A chip's box, type and border, the words the chip measures compare. */
+const chipBoxes = (words) =>
+  page.evaluate((list) => {
     const box = (el) => {
       if (!el) return null;
       const s = getComputedStyle(el);
       return { border: `${s.borderTopWidth} ${s.borderTopStyle} ${s.borderTopColor}`, font: `${s.fontFamily}/${s.fontSize}/${s.fontWeight}`, height: Math.round(el.getBoundingClientRect().height), padding: `${s.paddingTop} ${s.paddingLeft}`, radius: s.borderRadius };
     };
-    return { speed: box(trigger('Speed')), turn: box(trigger('Turn origin')) };
-  });
+    const chip = (word) => [...document.querySelectorAll('.chip-line .chip--filter')].find((c) => c.textContent?.trim().startsWith(`${word}:`));
+    return Object.fromEntries(list.map((word) => [word, box(chip(word))]));
+  }, words);
+
+/**
+ * The speed chip against the turn origin chip beside it on the request log's chip line: the same box, type and border
+ * at the chips' 26 px. Read after the view's shot on an address that holds both, and the bare log loads again after.
+ */
+async function speedFilter(theme) {
+  await loadRequests(CHIPPED);
+  const read = await chipBoxes(['speed', 'turn origin']);
   measurements.push(`${theme} /requests speed filter ${JSON.stringify(read)}`);
-  failures.push(...compare(read.speed, read.turn, ['border', 'font', 'height', 'padding', 'radius'], `${theme} /requests: the Speed control against Turn origin`));
+  failures.push(...compare(read.speed, read['turn origin'], ['border', 'font', 'height', 'padding', 'radius'], `${theme} /requests: the speed chip against the turn origin chip`));
+  if (read.speed && read.speed.height !== 26) failures.push(`${theme} /requests: the speed chip is ${read.speed.height} px, not 26`);
+  await loadRequests();
 }
 
 /**
- * The Cache miss reason, Effort and Request class controls of the request log's filter bar against the Turn origin
- * control, as the Speed control is read: the same trigger box, type and border.
+ * The cache miss reason, effort and request class chips of the request log's chip line against the turn origin chip,
+ * as the speed chip is read: the same box, type and border at 26 px.
  */
 async function diagnosticsFilters(theme) {
-  const LABELS = ['Cache miss reason', 'Effort', 'Request class'];
-  const read = await page.evaluate((labels) => {
-    const trigger = (label) => [...document.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith(label));
-    const box = (el) => {
-      if (!el) return null;
-      const s = getComputedStyle(el);
-      return { border: `${s.borderTopWidth} ${s.borderTopStyle} ${s.borderTopColor}`, font: `${s.fontFamily}/${s.fontSize}/${s.fontWeight}`, height: Math.round(el.getBoundingClientRect().height), padding: `${s.paddingTop} ${s.paddingLeft}`, radius: s.borderRadius };
-    };
-    return { controls: Object.fromEntries(labels.map((label) => [label, box(trigger(label))])), turn: box(trigger('Turn origin')) };
-  }, LABELS);
+  const WORDS = ['cache miss reason', 'effort', 'request class'];
+  await loadRequests(CHIPPED);
+  const read = await chipBoxes([...WORDS, 'turn origin']);
   measurements.push(`${theme} /requests diagnostics filters ${JSON.stringify(read)}`);
-  for (const label of LABELS) failures.push(...compare(read.controls[label], read.turn, ['border', 'font', 'height', 'padding', 'radius'], `${theme} /requests: the ${label} control against Turn origin`));
+  for (const word of WORDS) {
+    failures.push(...compare(read[word], read['turn origin'], ['border', 'font', 'height', 'padding', 'radius'], `${theme} /requests: the ${word} chip against the turn origin chip`));
+    if (read[word] && read[word].height !== 26) failures.push(`${theme} /requests: the ${word} chip is ${read[word].height} px, not 26`);
+  }
+  await loadRequests();
+}
+
+/** The address `barRow` reads a view's chip line on, five chips on its own dimensions. A view without one is measured at rest. */
+const BAR_CHIPS = { '/requests': '?accounts=primary&keys=laptop&models=claude-opus-5&pools=jobs&statuses=200' };
+/** A span from 23:00 the day before the pass's clock to 01:00 on its day, the Custom pill's widest words. */
+const MIDNIGHT = (origin) => {
+  const day = new Date(origin).toISOString().slice(0, 10);
+  const before = new Date(Date.parse(`${day}T00:00:00.000Z`) - 3_600_000).toISOString();
+  return `?from=${before}&to=${day}T01:00:00.000Z`;
+};
+
+/**
+ * The bar's measure on `view`, called after its shot: the row 32 px at rest and the bar 66 with a chip line, every row
+ * child 32 px at one top (a segmented's pills 28 inside their group), the chips 26 with the word in --ink-2 and the
+ * values in --ink, one line (scrollWidth equal to clientWidth) at 1280 by 800 and 1440 by 900 at rest, with the view's
+ * chips and, on a ranged view, with a span across midnight, and the row against the first card's head. Records to
+ * `measurements`.
+ */
+async function barRow(theme, view) {
+  const say = (what) => failures.push(`${theme} ${view} bar: ${what}`);
+  const ranged = view === '/requests' || view === '/routing-log' || view === '/analytics';
+  const read = () =>
+    page.evaluate(() => {
+      const bar = document.querySelector('.filter-bar');
+      const row = bar?.querySelector(':scope > .filter-bar__row');
+      const line = bar?.querySelector(':scope > .chip-line');
+      if (!bar || !row) return null;
+      const box = (el) => el.getBoundingClientRect();
+      // A token as a color the browser resolves, so it compares with a computed color.
+      const ink = (token) => {
+        const probe = document.createElement('span');
+        probe.style.color = `var(${token})`;
+        bar.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      };
+      const head = document.querySelector('.card--table .card__head') ?? document.querySelector('.card--table thead th, table thead th');
+      const chips = [...(line?.querySelectorAll('.chip--filter') ?? [])].filter((c) => !c.hidden);
+      return {
+        bar: Math.round(box(bar).height),
+        bottom: Math.round(box(bar).bottom),
+        chips: chips.map((c) => ({ height: Math.round(box(c).height), values: c.querySelector('.chip__values') ? getComputedStyle(c.querySelector('.chip__values')).color : null, word: getComputedStyle(c.querySelector('.chip__word')).color })),
+        children: [...row.children].map((el) => ({ height: Math.round(box(el).height), name: el.className.split(' ')[0] || el.tagName.toLowerCase(), top: Math.round(box(el).top) })),
+        custom: row.querySelector('.segmented button:last-child')?.textContent?.trim() ?? null,
+        head: head ? Math.round(box(head).top) : null,
+        inks: { ink: ink('--ink'), ink2: ink('--ink-2') },
+        line: line ? { client: line.clientWidth, scroll: line.scrollWidth } : null,
+        pills: [...(row.querySelectorAll('.segmented button') ?? [])].map((b) => Math.round(box(b).height)),
+        row: { client: row.clientWidth, height: Math.round(box(row).height), scroll: row.scrollWidth, top: Math.round(box(row).top), width: Math.round(box(row).width) },
+      };
+    });
+  const check = (at, got, chipped) => {
+    if (got === null) return say(`${at}: no bar to measure`);
+    if (got.row.height !== 32) say(`${at}: the row is ${got.row.height} px, not 32`);
+    if (got.row.scroll > got.row.client) say(`${at}: the row runs ${got.row.scroll} px in ${got.row.client}, past one line`);
+    const off = got.children.filter((c) => c.height !== 32);
+    if (off.length > 0) say(`${at}: row children not 32 px ${JSON.stringify(off)}`);
+    if (new Set(got.children.map((c) => c.top)).size > 1) say(`${at}: the row's children stand at ${JSON.stringify(got.children.map((c) => c.top))}, not one top`);
+    if (got.pills.some((h) => h !== 28)) say(`${at}: the pills measure ${JSON.stringify(got.pills)}, not 28`);
+    if (got.head !== null && got.head < got.bottom) say(`${at}: the first card's head stands at ${got.head}, above the bar's bottom ${got.bottom}`);
+    if (!chipped) {
+      if (got.bar !== 32) say(`${at}: the bar is ${got.bar} px at rest, not 32`);
+      return;
+    }
+    if (got.bar !== 66) say(`${at}: the bar is ${got.bar} px with a chip line, not 66`);
+    if (got.chips.length === 0 || got.chips.some((c) => c.height !== 26)) say(`${at}: the chips measure ${JSON.stringify(got.chips.map((c) => c.height))}, not 26`);
+    if (got.chips.some((c) => c.word !== got.inks.ink2 || (c.values !== null && c.values !== got.inks.ink))) say(`${at}: the chips' inks ${JSON.stringify(got.chips)} against --ink-2 ${got.inks.ink2} and --ink ${got.inks.ink}`);
+    if (got.line && got.line.scroll > got.line.client) say(`${at}: the chip line runs ${got.line.scroll} px in ${got.line.client}, past one line`);
+  };
+  try {
+    for (const [width, height] of [
+      [1280, 800],
+      [1440, 900],
+    ]) {
+      await page.setViewportSize({ height, width });
+      const cases = [['at rest', '', false], ...(BAR_CHIPS[view] ? [['with its chips', BAR_CHIPS[view], true]] : []), ...(ranged ? [['with a span across midnight', MIDNIGHT(clockOrigin), false]] : [])];
+      for (const [label, search, chipped] of cases) {
+        await page.goto(`${base}${view}${search}`);
+        await booted();
+        await advance(LOAD_MS);
+        await page.waitForSelector('.filter-bar', { timeout: 15_000 }).catch(() => {});
+        const got = await read();
+        measurements.push(`${theme} ${view} bar row at ${width} by ${height} ${label} ${JSON.stringify(got)}`);
+        check(`${width} by ${height} ${label}`, got, chipped);
+      }
+    }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await page.goto(`${base}${view}`);
+    await booted();
+    await advance(LOAD_MS);
+    await atRest();
+  }
+}
+
+/**
+ * The split Refresh button keeps its width whatever its state, so the count beside it never moves: the control's width
+ * and the count's left read at Off, at 5 s chosen through its menu, and paused under the drawer the first row's Details
+ * link opens, all equal. The interval returns to Off and the drawer closes afterwards.
+ */
+async function refreshControlWidth(theme) {
+  const read = (state) =>
+    page.evaluate((s) => {
+      const control = document.querySelector('.filter-bar .refresh-control');
+      const count = document.querySelector('.filter-bar .filter-bar__count');
+      return { count: count ? Math.round(count.getBoundingClientRect().left * 10) / 10 : null, data: control?.getAttribute('data-state') ?? null, state: s, width: control ? Math.round(control.getBoundingClientRect().width * 10) / 10 : null };
+    }, state);
+  const choose = async (word) => {
+    await page.locator('.filter-bar .refresh-control__part').click();
+    await settle();
+    await page.locator('.popover[role="menu"] [role="menuitemradio"]', { hasText: new RegExp(`^${word}$`) }).click();
+    await settle();
+  };
+  const reads = [await read('off')];
+  await choose('5 s');
+  reads.push(await read('on'));
+  await page.locator('.requests__table tbody tr .requests__links a', { hasText: 'Details' }).first().click();
+  await advance(LOAD_MS);
+  reads.push(await read('paused'));
+  await page.locator('button[aria-label="Close details"]').click();
+  await settle();
+  await choose('Off');
+  await atRest();
+  measurements.push(`${theme} /requests split Refresh button ${JSON.stringify(reads)}`);
+  const say = (what) => failures.push(`${theme} /requests: the split Refresh button ${what}`);
+  if (JSON.stringify(reads.map((r) => r.data)) !== JSON.stringify(['off', 'on', 'paused'])) say(`reads the states ${JSON.stringify(reads.map((r) => r.data))}, not off, on and paused`);
+  if (reads.some((r) => r.width === null || r.width !== reads[0].width)) say(`measures ${JSON.stringify(reads.map((r) => r.width))} across its states, not one width`);
+  if (reads.some((r) => r.count === null || r.count !== reads[0].count)) say(`moves the count to ${JSON.stringify(reads.map((r) => r.count))} across its states`);
 }
 
 /**
@@ -3421,7 +3563,8 @@ async function fastLane(theme, path) {
 
 /**
  * The newest request's drawer beside the compact table: the drawer is 400 px at 1280 by 800 and 440 px at 1440 by 900,
- * its head 70 px at both, the table draws Time, Model, Status, Attempts and the links' column with nothing to scroll
+ * its head 106 px at both (the id, the time and the "Widen to" line, which breaks once beside the head's actions at
+ * either width), the table draws Time, Model, Status, Attempts and the links' column with nothing to scroll
  * sideways at both, and every chip the drawer draws, the Answer row's and the upstream ids', takes the status badge's
  * type and height, and the request class badge its box. The Estimated cost row of a request a subscription window
  * paid draws its share chips in the same type, each on one line inside the cell, with the muted equivalent on one
@@ -3540,7 +3683,7 @@ async function requestDrawerCompact(theme) {
     const got = await read();
     measurements.push(`${theme} /requests drawer at ${width} by ${height} ${JSON.stringify(got)}`);
     if (got.drawer !== drawer) say(`${where} is ${got.drawer}px wide, not ${drawer}px`);
-    if (got.head !== 70) say(`${where}: the head is ${got.head}px tall, not 70px`);
+    if (got.head !== 106) say(`${where}: the head is ${got.head}px tall, not 106px`);
     if (JSON.stringify(got.heads) !== JSON.stringify(['Time', 'Model', 'Status', 'Attempts', ''])) say(`${where}: the table draws the columns ${JSON.stringify(got.heads)}`);
     if (got.table === null) say(`${where} has no table to measure`);
     else if (got.table.scroll > got.table.client) say(`${where}: the table needs ${got.table.scroll}px of its card's ${got.table.client}px`);
@@ -6002,8 +6145,6 @@ try {
         // is empty. In the mock pass the story's values run past the card, so the table's width is a record there.
         await tableColumns(theme, 'requests', '.requests__table', ['Client'], 0, { overflowRecorded: mock, wrapping: ['Status', 'Attempts', ''] });
         if (mock) await requestsTableWide(theme);
-        await speedFilter(theme);
-        await diagnosticsFilters(theme);
         await pagerControls(theme, view.path);
       }
       if (view.path === '/routing-log') {
@@ -6037,6 +6178,12 @@ try {
       if (view.path === '/keys') await dialogControls(theme);
       if (view.path === '/analytics') await burnLoneCard(theme);
       if (view.path === '/requests') await rangePills(theme);
+      // The chip measures, the bar's and the split button's each load what they read and leave the bare log at 1280 by
+      // 800, so the shot above stays the bare log and the measures after them read it.
+      if (view.path === '/requests') await speedFilter(theme);
+      if (view.path === '/requests') await diagnosticsFilters(theme);
+      if (view.path === '/requests') await barRow(theme, view.path);
+      if (view.path === '/requests') await refreshControlWidth(theme);
       if (view.path === '/requests') await requestsTableNoFill(theme);
       if (view.path === '/requests') await requestDrawerCompact(theme);
       if (view.path === '/requests' && mock) await attemptCardAtTheBottom(theme);

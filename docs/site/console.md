@@ -321,21 +321,27 @@ the last 24 hours. The rule grammar and the levels are on [Model rules](routing.
 ![The Requests view: the table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the table with its client column](assets/requests-dark.png#only-dark)
 
-The filter bar opens on "Search id, session, key, account, model, error, message id", which matches the request id,
-the session, the key, the model, the error code, and an attempt's account, upstream request id or upstream message id,
-literally (`_` and `%` are characters). The range offers Last hour, Last 6 hours, Last 24 hours (the default), Last 7
-days, Last 30 days or Custom range with From and To, drawn as the pills 1h, 6h, 24h, 7d, 30d and Custom. Custom opens
-From and To in a popover on the window the table shows, where "End must be after start." holds Apply off while the pair
-is wrong and an end past now reads as now, and once applied the pill prints the span ("13:00 to 14:30", the date before
-each time across days). The multi-selects Keys, Pools, Accounts and Models follow, then "Client pattern" and "User agent
-pattern", which take a pattern (`claude-cli/2.1.*`, `*sdk-cli*`: `*` for any run of characters, `?` for one, a backslash
-quoting either, and a value with no wildcard matching in full), then Status, Outcome, Cache miss reason, Agent type,
-Turn origin, Effort and Request class, the Kind select (Any kind, Inference, Count tokens, Probe), Speed, the "Held
-only" switch, the "Follow" switch, Refresh and the Columns control. The account filter keeps the requests whose serving
-attempt ran on the account, so a request that failed over lists under the account that answered it. Each multi-select
-opens with a Select all row, and the search and the two pattern fields apply 400 milliseconds after the last keystroke,
-on Enter, or when the field loses focus. Every filter, the range and the page size live in the page's address, so a
-reload or a shared link keeps them, and "Reset" clears them.
+The filter bar holds one row: the range, the search, Add filter, the Columns button, and at the right edge the split
+Refresh button and the count of rows shown ("25 shown, more available"). The range offers Last hour, Last 6 hours, Last
+24 hours (the default), Last 7 days, Last 30 days or Custom range with From and To, drawn as the pills 1h, 6h, 24h, 7d,
+30d and Custom. Custom opens From and To in a popover on the window the table shows, where "End must be after start."
+holds Apply off while the pair is wrong and an end past now reads as now, and once applied the pill prints the span
+("13:00 to 14:30", the date before each time across days). The search, "Search id, session, key, account, model, error,
+message id", matches the request id, the session, the key, the model, the error code, and an attempt's account,
+upstream request id or upstream message id, literally (`_` and `%` are characters), and applies 400 milliseconds after
+the last keystroke, on Enter, or when the field loses focus. Add filter opens a "Filter by" field over the filters in
+four groups: Routing (Account, Key, Model, Pool), Outcome (Cache miss reason, Held only, Outcome, Status), Request
+(Agent type, Client, Effort, Kind, Request class, Speed, Turn origin, User agent) and Subject (Request, Session).
+Choosing one opens its values: a list with a Select all row that applies on each click, a pattern field for Client and
+User agent (`claude-cli/2.1.*`, `*sdk-cli*`: `*` for any run of characters, `?` for one, a backslash quoting either,
+and a value with no wildcard matching in full), an id field for Request and Session, which match the id exactly, or the
+Kind choices (Any kind, Inference, Count tokens, Probe), while Held only applies at once. A pattern or an id applies on
+Enter or Apply. Each filter in force stands as a chip on a line under the bar, such as "account: primary, nightly" or
+"held only": a click on the chip opens its values again, its x removes it, the chips past five fold behind "+N more",
+and from two chips on "Clear all" removes them and keeps the range, the search and the page size. The account filter
+keeps the requests whose serving attempt ran on the account, so a request that failed over lists under the account
+that answered it. Every filter, the range and the page size live in the page's address, so a reload or a shared link
+keeps them.
 
 The table offers thirteen columns, Time, Key, Pool, Account, Model, Client, Kind, Transport, Status,
 Attempts, TTFB, Tokens and Cost, with Kind, Pool and Transport hidden until the Columns control turns them on, and
@@ -350,16 +356,20 @@ status on hover, nothing for a request of one attempt, and a `held {time}` badge
 while every account was at its cap. Cost reads window shares for a request a subscription window paid, each with its
 window's short word (`0.12% Fable week` over `0.42% 5h`, the full labels on hover), and dollars for an overage, fast
 mode or API-key request. The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous and Next,
-holds the requests up to the moment you opened it so paging does not shift, and Refresh brings it up to now. An empty
-table reads "No requests match" with "Widen the date range or clear a filter." What each figure means is on
-[Statistics](statistics.md).
+holds the requests up to the moment you opened it so paging does not shift, and the split Refresh button's body brings
+it up to now. An empty table reads "No requests match" with "Widen the date range or clear a filter." and "Reset
+filters", which clears the filters, the search and the range. What each figure means is on [Statistics](statistics.md).
 
-Follow, off by default, reads the list every 5 seconds with the range ending now, takes every row that arrived since
-the read before, up to eight pages, and lands a new row at the top in the accent tint until the next read. Past eight
-pages a line reads "More rows arrived than auto reload could fetch. Reload to read them.", and Next reads on from the
-last row the poll fetched. A filter change keeps the switch on. The poll waits while the tab is hidden, while the drawer
-is open, and on an older page until you go back to the first, with the switch left on. When the wait ends 5 seconds or
-more after its last answer, it reads at once.
+Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
+and the choice stays with the open page, out of its address. At each interval it reads the list with the range ending
+now, takes every row that arrived since the read before, up to eight pages, and lands a new row at the top in the accent
+tint until the next read. Past eight pages a line reads "More rows arrived than auto reload could fetch. Reload to read
+them.", and Next reads on from the last row the poll fetched. A filter change keeps the interval. The poll waits while
+the tab is hidden, while the drawer is open, on an older page until you go back to the first, and while a menu or
+popover under the bar is open, with the interval kept and the cause named in the dropdown's title. When the wait ends a
+full interval or more after its last answer, it reads at once. A custom range that ended before the page opened has
+nothing new to read, so the dropdown reads Off and stays disabled, while a link whose range ends at the moment it was
+made reads on.
 
 Selecting a row opens the "Request details" drawer, with the request's id and time, a "Routing log" link that opens the
 [routing log](#routing-log) on the request a quarter hour either side, and these sections:
@@ -384,6 +394,11 @@ Selecting a row opens the "Request details" drawer, with the request's id and ti
   pretty-printed in a window of its lines and a streamed answer as its events, or "Not captured for this key. Enable
   body capture on the key to record the exchange." or "Bodies for this request have aged out of retention." What
   capture stores and for how long is on [Body capture](statistics.md#body-capture).
+
+The "Widen to" line under the request's time links this minute, this session and this account, each opening the list
+in place of the drawer over the clock minute that holds the request, its session an hour either side, or its account a
+quarter hour either side, with every other filter dropped, the page size kept and the link left out where the request
+has no session or no account.
 
 A request the ledger does not hold reads "Request not found" with "It may have aged out of the ledger."
 

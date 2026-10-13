@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, spanText, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, requestsWiden, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, spanText, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -215,20 +215,90 @@ const sessionCell = (m, tr, header) => {
   const i = [...m.container.querySelectorAll('.sessions-table thead th')].findIndex((th) => th.textContent?.trim() === header);
   return i < 0 ? undefined : tr?.children[i];
 };
+// The filter bar's controls. Add filter, a chip's values, the Columns grid and the interval menu are popovers a portal
+// draws at the end of the body, so a check reads them off the document rather than the page's container.
+const setInput = (input, text) => {
+  Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, text);
+  input.dispatchEvent(new window.Event('input', { bubbles: true }));
+};
+const pressKey = (key, at = document.activeElement) => at?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key }));
+const barSearch = (page) => page.container.querySelector('input.filter-bar__search');
+const addFilterButton = (page) => [...page.container.querySelectorAll('.filter-bar__row > button')].find((b) => b.textContent?.trim() === 'Add filter');
+const filterBox = () => document.querySelector('.popover .add-filter')?.closest('.popover') ?? null;
+const filterRows = () => [...(filterBox()?.querySelectorAll('.add-filter__row') ?? [])];
+/** Escape on each open popover, which closes it and hands the focus back to its opener. */
+const closeBoxes = async (page) => {
+  for (const box of document.querySelectorAll('.popover')) pressKey('Escape', box);
+  await page.settle(100);
+};
 /**
- * Turns a Sessions column on through the card's Columns control, then closes the control, whose labels would otherwise
- * join the page's text for every check after it.
+ * Opens Add filter and steps into the row reading `label`, the way a reader picks a dimension: the box, or null where no
+ * row reads the label. A flag's row writes at once and closes the box.
+ */
+const addFilter = async (page, label) => {
+  await closeBoxes(page);
+  addFilterButton(page)?.click();
+  await page.settle(100);
+  const row = filterRows().find((r) => r.firstElementChild?.textContent?.trim() === label);
+  row?.click();
+  await page.settle(100);
+  return row === undefined ? null : filterBox();
+};
+/** The open values step's option rows, a list's past its Select all row or a choice's radios. */
+const boxOptions = () => [...(filterBox()?.querySelectorAll(`${CHOICE}, [role="radio"]`) ?? [])];
+/** Clicks `option` in `label`'s values through Add filter, answering whether both stood, once the read it starts lands. */
+const pick = async (page, label, option) => {
+  const box = await addFilter(page, label);
+  const row = boxOptions().find((o) => o.textContent?.trim() === option);
+  row?.click();
+  await page.settle(700);
+  return box !== null && row !== undefined;
+};
+/** Writes a pattern or an id through Add filter's field with Enter, as a reader applies it: false where no field stands. */
+const applyText = async (page, label, text) => {
+  const input = (await addFilter(page, label))?.querySelector('input');
+  if (!input) return false;
+  setInput(input, text);
+  pressKey('Enter', input);
+  await page.settle(700);
+  return true;
+};
+/** A chip by its dimension's word: a value's chip reads "word: values", a flag's the word alone. */
+const chipOf = (page, word) =>
+  [...page.container.querySelectorAll('.chip--filter')].find((c) => {
+    const text = c.textContent?.trim() ?? '';
+    return text === word || text.startsWith(`${word}:`);
+  });
+const chipRead = (page, word) => chipOf(page, word)?.textContent?.trim() ?? `no ${word} chip`;
+const removeChip = async (page, word) => {
+  chipOf(page, word)?.querySelector('.chip__remove')?.click();
+  await page.settle(700);
+};
+const columnsButton = (page) => page.container.querySelector('button[aria-label="Columns"]');
+const columnsGrid = () => document.querySelector('.popover .cols-popover');
+const intervalPart = (page) => page.container.querySelector('.refresh-control__part');
+/** The interval the split button's part reads, from its own span, since the part also holds the widest word as a sizer. */
+const intervalWord = (page) => intervalPart(page)?.querySelector('.refresh-control__shown')?.textContent?.trim() ?? null;
+const chooseInterval = async (page, word) => {
+  intervalPart(page)?.click();
+  await page.settle(100);
+  [...document.querySelectorAll('.popover[role="menu"] [role="menuitemradio"]')].find((b) => b.textContent?.trim() === word)?.click();
+  await page.settle(100);
+};
+/**
+ * Turns a Sessions column on through the Columns control, then closes the control, whose open grid would otherwise
+ * stand over every check after it. The grid is a popover a portal draws at the end of the body.
  */
 async function showColumn(m, label) {
-  const button = () => [...m.container.querySelectorAll('.card__actions .filters__cols button')].find((b) => b.textContent?.trim().startsWith('Columns'));
-  button()?.click();
+  columnsButton(m)?.click();
   await m.settle(100);
-  const box = [...m.container.querySelectorAll('.cols-popover label')].find((l) => l.textContent?.trim() === label)?.querySelector('input[type="checkbox"]');
+  const box = [...(columnsGrid()?.querySelectorAll('label') ?? [])].find((l) => l.textContent?.trim() === label)?.querySelector('input[type="checkbox"]');
   if (box && !box.checked) box.click();
   await m.settle(100);
-  button()?.click();
+  columnsButton(m)?.click();
   await m.settle(100);
 }
+
 /**
  * A link into the routing log read as its path and its query values, so a check compares the filters and the range
  * whatever order the address writes them in.
@@ -6905,7 +6975,15 @@ m.unmount();
 }
 
 m = await mount('/requests');
-expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'claude-code/cli', 'Agent type', 'Turn origin', 'fable-5-1', 'desktop', 'laptop', 'shown']);
+expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', 'fable-5-1', 'desktop', 'laptop', 'shown']);
+{
+  const button = columnsButton(m);
+  results.push({
+    name: '/requests the Columns control is an icon button reading the count of shown columns, every column counted in its title',
+    ok: button?.textContent?.trim() === '10' && button.getAttribute('title') === 'Columns: 10 of 13 shown' && button.querySelector('svg') !== null && button.getAttribute('aria-haspopup') === 'dialog',
+    missing: [button ? `${JSON.stringify(button.textContent?.trim())} titled ${JSON.stringify(button.getAttribute('title'))}` : 'no Columns button'],
+  });
+}
 {
   // The client cell holds two lines (the class over the agent type), so each of its spans carries its own text as its
   // title.
@@ -6931,11 +7009,11 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   // Pool, Kind and Transport start hidden, since the drawer names all three, and the control still offers every column.
   const ALL = ['Time', 'Key', 'Pool', 'Account', 'Model', 'Client', 'Kind', 'Transport', 'Status', 'Attempts', 'TTFB', 'Tokens', 'Cost'];
   const HIDDEN = ['Pool', 'Kind', 'Transport'];
-  const colsButton = () => [...m.container.querySelectorAll('.filters__cols button')].find((b) => b.textContent?.trim().startsWith('Columns'));
+  const colsButton = () => columnsButton(m);
   const heads = () => [...m.container.querySelectorAll('.requests__table thead th')].map((th) => th.textContent?.trim() ?? '');
-  const offered = () => [...m.container.querySelectorAll('.cols-popover label')].map((l) => ({ checked: l.querySelector('input[type="checkbox"]')?.checked ?? null, label: l.textContent?.trim() ?? '' }));
+  const offered = () => [...(columnsGrid()?.querySelectorAll('label') ?? [])].map((l) => ({ checked: l.querySelector('input[type="checkbox"]')?.checked ?? null, label: l.textContent?.trim() ?? '' }));
   const turn = async (label) => {
-    [...m.container.querySelectorAll('.cols-popover label')].find((l) => l.textContent?.trim() === label)?.querySelector('input[type="checkbox"]')?.click();
+    [...(columnsGrid()?.querySelectorAll('label') ?? [])].find((l) => l.textContent?.trim() === label)?.querySelector('input[type="checkbox"]')?.click();
     await m.settle(100);
   };
   const shownBefore = heads();
@@ -6946,7 +7024,7 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   const withPool = heads();
   const poolAt = withPool.indexOf('Pool');
   const poolCells = [...m.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.children[poolAt]?.textContent?.trim() ?? '');
-  const poolCount = colsButton()?.textContent?.trim();
+  const poolCount = `${colsButton()?.textContent?.trim()}, ${colsButton()?.getAttribute('title')}`;
   results.push({
     name: '/requests the Columns control lists all thirteen columns and turning Pool on draws it',
     ok:
@@ -6956,7 +7034,7 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
       poolAt === withPool.indexOf('Key') + 1 &&
       poolCells.length > 0 &&
       poolCells.every((c) => c.length > 0) &&
-      poolCount === 'Columns (11)',
+      poolCount === '11, Columns: 11 of 13 shown',
     missing: [JSON.stringify(listed), JSON.stringify(shownBefore), JSON.stringify(withPool), String(poolCount)],
   });
   // Transport stays a column the control offers, so its badges draw once it is turned on.
@@ -6985,14 +7063,14 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   });
   colsButton()?.click();
   await m.settle(100);
-  results.push({ name: '/requests the Columns control closes on its button and the default set returns', ok: m.container.querySelector('.cols-popover') === null && JSON.stringify(heads()) === JSON.stringify(shownBefore), missing: heads() });
+  results.push({ name: '/requests the Columns control closes on its button and the default set returns', ok: columnsGrid() === null && JSON.stringify(heads()) === JSON.stringify(shownBefore), missing: heads() });
 }
 {
   // The cell reads the family and version, as the Dashboard and Sessions do, so the column gives its width to the fit;
   // the title keeps the id whole whenever the cell shows less.
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const dated = requests.find((r) => /-\d{8}$/.test(r.model) && r.kind !== 'probe');
-  const field = m.container.querySelector('input.filters__search');
+  const field = barSearch(m);
   const modelCell = () => {
     const at = [...m.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Model');
     const cells = [...m.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.children[at]);
@@ -7025,42 +7103,40 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
 }
 {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  // A pattern is typed into Add filter's field for its dimension and applied with Enter.
   const type = async (check, label, value) => {
-    const input = m.container.querySelector(`input[aria-label="${label}"]`);
-    if (!input) {
+    if (!(await applyText(m, label, value))) {
       controlMissing(check, label);
-      return;
+      await closeBoxes(m);
     }
-    setter.call(input, value);
-    input.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(700);
   };
   const keyColumn = () => [...m.container.querySelectorAll('.requests__table tbody tr td:nth-child(2)')].map((td) => td.textContent?.trim());
   // The class is the capped text's own; an agent type rides beneath it in a line of its own.
   const classColumn = () => [...m.container.querySelectorAll('.requests__table tbody .requests__client')].map((td) => td.querySelector('.requests__client-text')?.textContent?.trim());
   const agentCheck = '/requests the user agent filter is a pattern';
-  await type(agentCheck, 'User agent pattern', 'phoebis-batch/*');
+  await type(agentCheck, 'User agent', 'phoebis-batch/*');
   const wildcard = keyColumn();
-  await type(agentCheck, 'User agent pattern', 'phoebis-batch');
+  const agentChip = chipRead(m, 'user agent');
+  await type(agentCheck, 'User agent', 'phoebis-batch');
   const bare = keyColumn();
   results.push({
     name: agentCheck,
-    ok: wildcard.length > 0 && wildcard.every((k) => k === 'ci') && bare.length === 0,
-    missing: [`with a star ${wildcard.slice(0, 3).join(',')}`, `without one ${bare.length} rows`],
+    ok: wildcard.length > 0 && wildcard.every((k) => k === 'ci') && agentChip === 'user agent: phoebis-batch/*' && bare.length === 0,
+    missing: [`with a star ${wildcard.slice(0, 3).join(',')}`, agentChip, `without one ${bare.length} rows`],
   });
-  await type(agentCheck, 'User agent pattern', '');
+  await type(agentCheck, 'User agent', '');
 
   const classCheck = '/requests client pattern narrows the table';
-  await type(classCheck, 'Client pattern', 'claude-code/*');
+  await type(classCheck, 'Client', 'claude-code/*');
   const claudeCode = classColumn();
-  await type(classCheck, 'Client pattern', 'other');
+  await type(classCheck, 'Client', 'other');
   const otherKeys = keyColumn();
   results.push({
     name: classCheck,
     ok: claudeCode.length > 0 && !claudeCode.includes('other') && otherKeys.length > 0 && otherKeys.every((k) => k === 'ci'),
     missing: [`claude-code/* ${[...new Set(claudeCode)].join(',')}`, `other ${[...new Set(otherKeys)].join(',')}`],
   });
-  await type(classCheck, 'Client pattern', '');
+  await type(classCheck, 'Client', '');
 
   const cells = [...m.container.querySelectorAll('.requests__table tbody .requests__client')];
   // A row with no class draws a muted dash and no capped text, and carries no title.
@@ -7069,34 +7145,23 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   results.push({ name: '/requests the client cell carries the class on its title', ok: cells.length > 0 && cells.some((td) => titleOf(td) !== null) && untitled.length === 0, missing: [...new Set(untitled)].slice(0, 3) });
 
   const subCheck = '/requests agent type narrows to subagent rows';
-  const agentType = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Agent type'));
-  if (!agentType) controlMissing(subCheck, 'Agent type');
-  agentType?.querySelector('.mselect__trigger')?.click();
-  await m.settle(150);
-  [...(agentType?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'Explore')?.click();
-  await m.settle(700);
+  if (!(await pick(m, 'Agent type', 'Explore'))) controlMissing(subCheck, 'Agent type');
+  await closeBoxes(m);
   const subLines = [...m.container.querySelectorAll('.requests__table tbody .requests__client')].map((td) => td.querySelector('.sub')?.textContent?.trim() ?? '');
   results.push({
     name: subCheck,
-    ok: subLines.length > 0 && subLines.every((line) => line === 'Explore'),
-    missing: [...new Set(subLines)],
+    ok: subLines.length > 0 && subLines.every((line) => line === 'Explore') && chipRead(m, 'agent type') === 'agent type: Explore',
+    missing: [...new Set(subLines), chipRead(m, 'agent type')],
   });
-  agentType?.querySelector('.mselect__clear')?.click();
-  await m.settle(150);
-  agentType?.querySelector('.mselect__trigger')?.click();
-  await m.settle(700);
+  await removeChip(m, 'agent type');
 
   const speedCheck = '/requests the speed filter keeps the requests whose serving attempt answered fast or that asked for fast and made no attempt';
-  const speed = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Speed'));
-  if (!speed) controlMissing(speedCheck, 'Speed');
-  speed?.querySelector('.mselect__trigger')?.click();
-  await m.settle(150);
-  const speedOptions = [...(speed?.querySelectorAll(CHOICE) ?? [])].map((o) => o.textContent?.trim());
+  if (!(await addFilter(m, 'Speed'))) controlMissing(speedCheck, 'Speed');
+  const speedOptions = boxOptions().map((o) => o.textContent?.trim());
   results.push({ name: '/requests the Speed control offers fast and standard', ok: JSON.stringify(speedOptions) === JSON.stringify(['fast', 'standard']), missing: speedOptions });
-  [...(speed?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'fast')?.click();
+  boxOptions().find((o) => o.textContent?.trim() === 'fast')?.click();
   await m.settle(700);
-  speed?.querySelector('.mselect__trigger')?.click();
-  await m.settle(150);
+  await closeBoxes(m);
   // Each row opens its drawer in turn, so the check reads the serving attempt's Answer row rather than the story's
   // rule. A request refused before any attempt draws no Answer row and files under the speed its shape asked for.
   const servedAs = [];
@@ -7114,8 +7179,7 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   }
   const fastDay = (await api.listRequests({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), limit: 25, speeds: ['fast'], to: new Date().toISOString() })).requests.length;
   results.push({ name: speedCheck, ok: servedAs.length > 0 && servedAs.length === fastDay && servedAs.every((s) => s === 'fast'), missing: [`${servedAs.length} rows against ${fastDay}`, ...new Set(servedAs)] });
-  speed?.querySelector('.mselect__clear')?.click();
-  await m.settle(700);
+  await removeChip(m, 'speed');
   await m.navigate('/requests');
   await m.settle(300);
 
@@ -7124,7 +7188,7 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   const servedHeld = requests.find((r) => r.held?.heldMs === 1250 && r.attempts.length === 1);
   const heldAtCap = requests.find((r) => r.held !== null && r.attempts.length === 0 && r.errorCode === 'accounts_at_cap');
   results.push({ name: 'fixture: a request served after a hold and one held with nothing dispatched', ok: servedHeld !== undefined && heldAtCap !== undefined, missing: [String(servedHeld?.id), String(heldAtCap?.id)] });
-  const heldSearch = m.container.querySelector('input.filters__search');
+  const heldSearch = barSearch(m);
   /** The one row a search by id leaves, with the count of rows it left for the message when that is not one. */
   const rowById = async (id) => {
     setter.call(heldSearch, id);
@@ -7293,19 +7357,20 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   }
   await m.navigate('/requests');
   await m.settle(300);
-  const heldCheck = '/requests the Held only switch keeps the requests that waited for a slot';
-  const heldOnly = m.container.querySelector('.filters button[role="switch"][aria-label="Held only"]');
-  if (!heldOnly) controlMissing(heldCheck, 'Held only');
-  const caption = heldOnly?.closest('label')?.querySelector('.secondary')?.textContent?.trim();
-  const besideSpeed = heldOnly?.closest('label')?.previousElementSibling?.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Speed');
-  heldOnly?.click();
+  const heldCheck = '/requests the Held only filter keeps the requests that waited for a slot';
+  // A flag has no values to choose, so its row writes the filter at once and closes the box.
+  await addFilter(m, 'Held only');
   await m.settle(700);
+  const heldChip = chipRead(m, 'held only');
+  if (heldChip !== 'held only') controlMissing(heldCheck, 'Held only');
+  const flagged = new URLSearchParams(m.location().search).get('held');
+  const closed = filterBox() === null;
   const heldRows = [...m.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.querySelector('.requests__attempts > .badge')?.textContent?.trim() ?? 'no marker');
   const heldDay = (await api.listRequests({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), held: true, limit: 25, to: new Date().toISOString() })).requests.length;
   results.push({
     name: heldCheck,
-    ok: heldOnly?.getAttribute('aria-checked') === 'true' && caption === 'Held only' && besideSpeed === true && heldRows.length > 0 && heldRows.length === heldDay && heldRows.every((t) => t.startsWith('held ')),
-    missing: [`${heldRows.length} rows against ${heldDay}`, String(caption), String(besideSpeed), ...new Set(heldRows)],
+    ok: heldChip === 'held only' && flagged === '1' && closed && heldRows.length > 0 && heldRows.length === heldDay && heldRows.every((t) => t.startsWith('held ')),
+    missing: [`${heldRows.length} rows against ${heldDay}`, heldChip, `held=${flagged}`, `box closed ${closed}`, ...new Set(heldRows)],
   });
   const heldMarkers = [...m.container.querySelectorAll('.requests__table tbody .requests__attempts > .badge')].filter((b) => b.textContent?.trim().startsWith('held '));
   results.push({
@@ -7313,8 +7378,7 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     ok: heldMarkers.length > 0 && heldMarkers.every((b) => b.classList.contains('badge--warning')),
     missing: [`${heldMarkers.length} markers`, ...new Set(heldMarkers.map((b) => b.className))],
   });
-  heldOnly?.click();
-  await m.settle(700);
+  await removeChip(m, 'held only');
 }
 {
   const hinted = requests.find((r) => r.turnOrigin !== null && r.userAgent !== null);
@@ -7425,7 +7489,9 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   await m.settle(500);
   const back = [...m.container.querySelectorAll('tbody tr')].map((r) => r.querySelector('.sub.mono')?.textContent);
   results.push({ name: '/requests Previous returns to the earlier page', ok: back[0] === firstPage[0], missing: [String(back[0])] });
-  results.push({ name: '/requests the pager says more rows are available', ok: m.text().includes('more available'), missing: [] });
+  const count = m.container.querySelector('.filter-bar__count')?.textContent ?? 'no count';
+  const pager = m.container.querySelector('.pager')?.textContent ?? 'no pager';
+  results.push({ name: "/requests the count at the bar's edge says more rows are available, and the pager keeps no count", ok: count === '10 shown, more available' && !pager.includes('shown') && !pager.includes('more available'), missing: [count, pager] });
 }
 // The ledger's own tests prove the route answers no cursor for an exact page; this guards the pager over the mock's
 // answer. The counts come from the mock itself under the page's own range, so a row the page's window or key
@@ -7451,12 +7517,12 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   else {
     const exact = await mount(`/requests?${new URLSearchParams({ ...hit.params, rows: String(hit.count) })}`, { now: CLOCK_ORIGIN });
     const shown = exact.container.querySelectorAll('.requests__table tbody tr').length;
-    const pager = exact.container.querySelector('.pager')?.textContent ?? '';
+    const count = exact.container.querySelector('.filter-bar__count')?.textContent ?? 'no count';
     const next = exact.container.querySelector('button[aria-label="Next page"]');
     results.push({
       name: exactCheck,
-      ok: shown === hit.count && !pager.includes('more available') && next?.disabled === true,
-      missing: [JSON.stringify(hit.params), `${shown} of ${hit.count} rows`, pager, `Next disabled ${next?.disabled}`],
+      ok: shown === hit.count && count === `${hit.count} shown` && next?.disabled === true,
+      missing: [JSON.stringify(hit.params), `${shown} of ${hit.count} rows`, count, `Next disabled ${next?.disabled}`],
     });
     exact.unmount();
   }
@@ -7621,7 +7687,7 @@ results.push({
   });
   await m.navigate('/requests');
   await m.settle(300);
-  const search = m.container.querySelector('input.filters__search');
+  const search = barSearch(m);
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   setter.call(search, served.upstreamMessageId ?? '');
   search?.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -8283,11 +8349,11 @@ m.unmount();
   const page = await mount('/requests', { now: CLOCK_ORIGIN });
   const heads = () => [...page.container.querySelectorAll('.requests__table thead th')].map((th) => th.textContent?.trim() ?? '');
   const cells = () => [...page.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.children.length);
-  const colsButton = () => [...page.container.querySelectorAll('.filters__cols button')].find((b) => b.textContent?.trim().startsWith('Columns'));
+  const colsButton = () => columnsButton(page);
   const turn = async (label) => {
     colsButton()?.click();
     await page.settle(100);
-    [...page.container.querySelectorAll('.cols-popover label')].find((l) => l.textContent?.trim() === label)?.querySelector('input[type="checkbox"]')?.click();
+    [...(columnsGrid()?.querySelectorAll('label') ?? [])].find((l) => l.textContent?.trim() === label)?.querySelector('input[type="checkbox"]')?.click();
     await page.settle(100);
     colsButton()?.click();
     await page.settle(100);
@@ -8309,7 +8375,7 @@ m.unmount();
       open.drawer &&
       JSON.stringify(open.heads) === JSON.stringify(COMPACT) &&
       JSON.stringify(open.cells) === JSON.stringify([COMPACT.length]) &&
-      open.columns === 'Columns (11)' &&
+      open.columns === '11' &&
       !closed.drawer &&
       JSON.stringify(closed.heads) === JSON.stringify(chosen),
     missing: [JSON.stringify(chosen), JSON.stringify(open), JSON.stringify(closed)],
@@ -8329,7 +8395,7 @@ m.unmount();
 
   const tenCheck = '/requests ten keystrokes into the search issue one list read';
   const typing = await mount('/requests', { now: CLOCK_ORIGIN });
-  const typed = typing.container.querySelector('input.filters__search');
+  const typed = barSearch(typing);
   if (!typed) controlMissing(tenCheck, 'the search');
   else {
     const spy = countCalls('listRequests');
@@ -8345,7 +8411,7 @@ m.unmount();
 
   const enterCheck = '/requests Enter commits the search at once';
   const pressing = await mount('/requests', { now: CLOCK_ORIGIN });
-  const pressed = pressing.container.querySelector('input.filters__search');
+  const pressed = barSearch(pressing);
   if (!pressed) controlMissing(enterCheck, 'the search');
   else {
     const spy = countCalls('listRequests');
@@ -8368,7 +8434,8 @@ m.unmount();
     setter.call(input, text);
     input.dispatchEvent(new window.Event('input', { bubbles: true }));
   };
-  const trigger = (page, label) => [...page.container.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith(label))?.textContent?.trim() ?? `no ${label} filter`;
+  // A chip by its word and a colon, so "request:" never reads the "request class:" chip, or a flag by its word alone.
+  const trigger = chipRead;
   const column = (page, header) => {
     const at = [...page.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === header);
     return [...page.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.children[at]?.textContent?.trim() ?? '');
@@ -8380,24 +8447,23 @@ m.unmount();
   const statusesApplied = [...applied.container.querySelectorAll('.requests__table tbody .requests__status .badge')].map((b) => b.textContent?.trim() ?? '');
   results.push({
     name: '/requests mounts with keys=laptop&statuses=429 applied',
-    ok: trigger(applied, 'Keys') === 'Keys (1)' && trigger(applied, 'Status') === 'Status (1)' && keysApplied.length > 0 && keysApplied.every((k) => k === 'laptop') && statusesApplied.length === keysApplied.length && statusesApplied.every((s) => s === '429'),
-    missing: [trigger(applied, 'Keys'), trigger(applied, 'Status'), JSON.stringify(keysApplied), JSON.stringify(statusesApplied)],
+    ok: trigger(applied, 'key') === 'key: laptop' && trigger(applied, 'status') === 'status: 429' && keysApplied.length > 0 && keysApplied.every((k) => k === 'laptop') && statusesApplied.length === keysApplied.length && statusesApplied.every((s) => s === '429'),
+    missing: [trigger(applied, 'key'), trigger(applied, 'status'), JSON.stringify(keysApplied), JSON.stringify(statusesApplied)],
   });
   applied.unmount();
   {
-    // A lifetime the address names reads by its holder: an earlier holder of an id by its deleted label, checked, while
-    // the live key's own lifetime is no deleted holder's.
+    // A lifetime the address names reads by its holder: an earlier holder of an id by its deleted label on the key chip
+    // and checked among its values, while the live key's own lifetime is no deleted holder's.
     const live = (await api.listKeys()).find((k) => k.id === 'desktop');
     const keyOptions = async (page) => {
-      const control = [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Keys'));
-      control?.querySelector('.mselect__trigger')?.click();
+      chipOf(page, 'key')?.querySelector('.chip__body')?.click();
       await page.settle(60);
-      const options = [...(control?.querySelectorAll(CHOICE) ?? [])].map((o) => [o.textContent?.trim() ?? '', o.getAttribute('aria-selected')]);
-      control?.querySelector('.mselect__trigger')?.click();
-      await page.settle(60);
+      const options = [...(filterBox()?.querySelectorAll(CHOICE) ?? [])].map((o) => [o.textContent?.trim() ?? '', o.getAttribute('aria-selected')]);
+      await closeBoxes(page);
       return options;
     };
     const earlier = await mount(`/requests?keys=desktop@${DELETED_HOLDER_GENERATION}`);
+    const heldChip = trigger(earlier, 'key');
     const held = await keyOptions(earlier);
     earlier.unmount();
     const current = await mount(`/requests?keys=desktop@${Date.parse(live?.createdAt ?? '')}`);
@@ -8405,9 +8471,9 @@ m.unmount();
     current.unmount();
     const label = earlierHolderLabel('desktop', DELETED_HOLDER_GENERATION);
     results.push({
-      name: "/requests the Keys control lists an earlier holder's lifetime from the address as a checked option",
-      ok: label.startsWith('desktop (deleted, created ') && held.some(([l, on]) => l === label && on === 'true') && live !== undefined && own.length > 0 && !own.some(([l]) => l.includes('(deleted')),
-      missing: [label, JSON.stringify(held), JSON.stringify(own)],
+      name: "/requests the key chip names an earlier holder's lifetime from the address, and its values list it as a checked option",
+      ok: label.startsWith('desktop (deleted, created ') && heldChip === `key: ${label}` && held.some(([l, on]) => l === label && on === 'true') && live !== undefined && own.length > 0 && !own.some(([l]) => l.includes('(deleted')),
+      missing: [label, heldChip, JSON.stringify(held), JSON.stringify(own)],
     });
   }
 
@@ -8420,8 +8486,8 @@ m.unmount();
       const shown = tr.querySelector('.sub.mono')?.textContent?.replace(/…$/, '') ?? '';
       return requests.find((r) => shown !== '' && r.id.startsWith(shown))?.keyId ?? '';
     });
-  const state = () => ({ drawer: kept.container.querySelector('.drawer') !== null, keys: keysOf(kept), trigger: trigger(kept, 'Keys') });
-  const held = (s) => s.trigger === 'Keys (1)' && s.keys.length > 0 && s.keys.every((k) => k === 'laptop');
+  const state = () => ({ drawer: kept.container.querySelector('.drawer') !== null, keys: keysOf(kept), trigger: trigger(kept, 'key') });
+  const held = (s) => s.trigger === 'key: laptop' && s.keys.length > 0 && s.keys.every((k) => k === 'laptop');
   const before = state();
   const details = [...(kept.container.querySelector('.requests__table tbody tr')?.querySelectorAll('a') ?? [])].find((a) => a.textContent?.trim() === 'Details')?.getAttribute('href') ?? 'no Details link';
   kept.container.querySelector('.requests__table tbody tr')?.click();
@@ -8472,7 +8538,7 @@ m.unmount();
   // The address replacing the search while an edit waits drops the edit: the commit it armed would undo the address.
   const replacedCheck = '/requests a pending search edit replaced by a navigation commits nothing';
   const replaced = await mount('/requests', { now: CLOCK_ORIGIN });
-  const field = replaced.container.querySelector('input.filters__search');
+  const field = barSearch(replaced);
   if (!field) controlMissing(replacedCheck, 'the search');
   else {
     const spy = countCalls('listRequests');
@@ -8490,22 +8556,29 @@ m.unmount();
 // The cache miss reason, effort and request class filters and the custom range live in the address beside the other
 // filters: each control narrows the table to the rows the rollups file under its value and writes its own key.
 {
-  const filterOf = (page, label) => [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith(label));
-  const triggerText = (page, label) => filterOf(page, label)?.querySelector('.mselect__trigger')?.textContent?.trim() ?? `no ${label} filter`;
-  // A list stays open across a choice, so it is opened only while it is shut.
+  // A list stays open across a choice, so its values are opened only while the box shows another step.
   const openOptions = async (page, label) => {
-    const filter = filterOf(page, label);
-    if (filter && !filter.querySelector('.mselect__list')) {
-      filter.querySelector('.mselect__trigger')?.click();
-      await page.settle(150);
-    }
-    return [...(filterOf(page, label)?.querySelectorAll(CHOICE) ?? [])];
+    if (filterBox()?.querySelector('.popover__title')?.textContent?.trim() !== label) await addFilter(page, label);
+    return boxOptions();
   };
-  const pick = async (page, label, text) => {
+  const choose = async (page, label, text) => {
     (await openOptions(page, label)).find((o) => o.textContent?.trim() === text)?.click();
     await page.settle();
   };
-  const resetOf = (page) => [...page.container.querySelectorAll('.filters .link-btn')].find((b) => b.textContent?.trim() === 'Reset');
+  /** The group heading the Add filter list draws above the row reading `label`. */
+  const groupOf = async (page, label) => {
+    await closeBoxes(page);
+    addFilterButton(page)?.click();
+    await page.settle(100);
+    let heading = null;
+    for (const el of filterBox()?.querySelectorAll('.mselect__group, .add-filter__row') ?? []) {
+      if (el.classList.contains('mselect__group')) heading = el.textContent?.trim() ?? null;
+      else if (el.firstElementChild?.textContent?.trim() === label) break;
+    }
+    await closeBoxes(page);
+    return heading;
+  };
+  const clearAllOf = (page) => [...page.container.querySelectorAll('.chip-line .link-btn')].find((b) => b.textContent?.trim() === 'Clear all');
   // The table's rows, matched back to the story by their short id.
   const listed = (page) =>
     [...page.container.querySelectorAll('.requests__table tbody tr')].map((tr) => {
@@ -8516,16 +8589,15 @@ m.unmount();
   const served = (r) => r?.attempts.at(-1)?.cacheMissReason ?? null;
   const KNOWN = ['No divergence', 'Model changed', 'System prompt changed', 'Tools changed', 'History edited', 'Previous message not found', 'Unavailable', 'Not requested'];
 
-  const reasonCheck = '/requests the Cache miss reason filter follows Outcome and offers the known reasons in their reading order';
+  const reasonCheck = '/requests the Cache miss reason filter stands in the Outcome group of Add filter and offers the known reasons in their reading order';
   const page = await mount('/requests', { now: CLOCK_ORIGIN });
-  const triggers = [...page.container.querySelectorAll('.filters .mselect__trigger')].map((t) => t.textContent?.trim() ?? '');
-  const after = (label, before) => triggers.indexOf(label) > 0 && triggers.indexOf(label) === triggers.indexOf(before) + 1;
+  const reasonGroup = await groupOf(page, 'Cache miss reason');
   const reasons = (await openOptions(page, 'Cache miss reason')).map((o) => o.textContent?.trim() ?? '');
-  results.push({ name: reasonCheck, ok: after('Cache miss reason', 'Outcome') && JSON.stringify(reasons.slice(0, KNOWN.length)) === JSON.stringify(KNOWN), missing: [JSON.stringify(triggers), JSON.stringify(reasons)] });
+  results.push({ name: reasonCheck, ok: reasonGroup === 'Outcome' && JSON.stringify(reasons.slice(0, KNOWN.length)) === JSON.stringify(KNOWN), missing: [String(reasonGroup), JSON.stringify(reasons)] });
 
   const chosenCheck = '/requests choosing History edited narrows the table to its serving attempts and writes cache_miss_reasons';
   const spy = countCalls('listRequests');
-  await pick(page, 'Cache miss reason', 'History edited');
+  await choose(page, 'Cache miss reason', 'History edited');
   spy.restore();
   const changed = listed(page);
   results.push({
@@ -8535,15 +8607,16 @@ m.unmount();
   });
   page.unmount();
 
-  const remountCheck = '/requests mounts with cache_miss_reasons applied and Reset clears it';
-  const again = await mount('/requests?cache_miss_reasons=messages_changed', { now: CLOCK_ORIGIN });
-  const mounted = { rows: listed(again), trigger: triggerText(again, 'Cache miss reason') };
-  resetOf(again)?.click();
+  // Clear all ends the chip line from two chips on, so the reason stands beside the kind every reason's row carries.
+  const remountCheck = '/requests mounts with cache_miss_reasons applied and Clear all clears it with the chip beside it';
+  const again = await mount('/requests?cache_miss_reasons=messages_changed&kind=inference', { now: CLOCK_ORIGIN });
+  const mounted = { rows: listed(again), trigger: chipRead(again, 'cache miss reason') };
+  clearAllOf(again)?.click();
   await again.settle();
-  const cleared = { param: param(again, 'cache_miss_reasons'), trigger: triggerText(again, 'Cache miss reason') };
+  const cleared = { kind: param(again, 'kind'), param: param(again, 'cache_miss_reasons'), trigger: chipRead(again, 'cache miss reason') };
   results.push({
     name: remountCheck,
-    ok: mounted.trigger === 'Cache miss reason (1)' && mounted.rows.length > 0 && mounted.rows.every((r) => served(r) === 'messages_changed') && cleared.trigger === 'Cache miss reason' && cleared.param === null,
+    ok: mounted.trigger === 'cache miss reason: History edited' && mounted.rows.length > 0 && mounted.rows.every((r) => served(r) === 'messages_changed') && cleared.trigger === 'no cache miss reason chip' && cleared.param === null && cleared.kind === null,
     missing: [mounted.trigger, `${mounted.rows.length} rows`, JSON.stringify(cleared)],
   });
   again.unmount();
@@ -8581,7 +8654,7 @@ m.unmount();
   });
 
   const refreshCheck = '/requests Refresh reads the custom range again and says so';
-  const refreshButton = [...linked.container.querySelectorAll('.filters__cols button')].find((b) => b.textContent?.trim() === 'Refresh');
+  const refreshButton = linked.container.querySelector('.refresh-control__body[aria-label="Refresh"]');
   const refreshTitle = refreshButton?.getAttribute('title') ?? 'no Refresh button';
   // The clock stands still, so it is stepped for Refresh to take a new instant.
   tick(1_000);
@@ -8654,38 +8727,41 @@ m.unmount();
   }
   chosen.unmount();
 
-  const effortCheck = '/requests the Effort filter offers the levels, none and other, and choosing none lists the rows without an effort and writes efforts';
+  const effortCheck = '/requests the Effort filter stands in the Request group, offers the levels, none and other, and choosing none lists the rows without an effort and writes efforts';
   const efforts = await mount('/requests', { now: CLOCK_ORIGIN });
+  const effortGroup = await groupOf(efforts, 'Effort');
   const levels = (await openOptions(efforts, 'Effort')).map((o) => ({ mono: o.classList.contains('mono'), text: o.textContent?.trim() ?? '' }));
-  await pick(efforts, 'Effort', 'none');
+  await choose(efforts, 'Effort', 'none');
   const effortless = listed(efforts);
   results.push({
     name: effortCheck,
     ok:
-      after('Effort', 'Turn origin') &&
+      effortGroup === 'Request' &&
       JSON.stringify(levels.map((l) => l.text)) === JSON.stringify(['low', 'medium', 'high', 'xhigh', 'max', 'none', 'other']) &&
       levels.every((l) => l.mono) &&
       effortless.length > 0 &&
       effortless.every((r) => r !== null && r.shape.effort === null) &&
       param(efforts, 'efforts') === 'none',
-    missing: [JSON.stringify(levels), `${effortless.length} rows`, efforts.location().search],
+    missing: [String(effortGroup), JSON.stringify(levels), `${effortless.length} rows`, efforts.location().search],
   });
   efforts.unmount();
 
-  const classCheck = '/requests the Request class filter lists the rows without a class under unattributed, then the main rows, and writes request_classes';
+  const classCheck = '/requests the Request class filter stands in the Request group, lists the rows without a class under unattributed, then the main rows, and writes request_classes';
   const classes = await mount('/requests', { now: CLOCK_ORIGIN });
+  const classGroup = await groupOf(classes, 'Request class');
   const offered = (await openOptions(classes, 'Request class')).map((o) => ({ mono: o.classList.contains('mono'), text: o.textContent?.trim() ?? '' }));
-  await pick(classes, 'Request class', 'unattributed');
+  await choose(classes, 'Request class', 'unattributed');
+  await closeBoxes(classes);
   const classless = { param: param(classes, 'request_classes'), rows: listed(classes) };
-  // A chosen class narrows the loaded rows, and with them the classes offered, so the second choice starts from Reset.
-  resetOf(classes)?.click();
-  await classes.settle();
-  await pick(classes, 'Request class', 'main');
+  // A chosen class narrows the loaded rows, and with them the classes offered, so the second choice starts from the
+  // chip's x.
+  await removeChip(classes, 'request class');
+  await choose(classes, 'Request class', 'main');
   const mains = { param: param(classes, 'request_classes'), rows: listed(classes) };
   results.push({
     name: classCheck,
     ok:
-      after('Request class', 'Effort') &&
+      classGroup === 'Request' &&
       JSON.stringify(offered.slice(-2).map((o) => o.text)) === JSON.stringify(['unattributed', 'other']) &&
       offered.some((o) => o.text === 'main') &&
       offered.every((o) => o.mono) &&
@@ -8695,21 +8771,23 @@ m.unmount();
       mains.param === 'main' &&
       mains.rows.length > 0 &&
       mains.rows.every((r) => r !== null && r.requestClass === 'main'),
-    missing: [JSON.stringify(offered), JSON.stringify({ ...classless, rows: classless.rows.length }), JSON.stringify({ ...mains, rows: mains.rows.length })],
+    missing: [String(classGroup), JSON.stringify(offered), JSON.stringify({ ...classless, rows: classless.rows.length }), JSON.stringify({ ...mains, rows: mains.rows.length })],
   });
+  await closeBoxes(classes);
   classes.unmount();
 }
 
-// Auto reload reads the list again every 5 seconds over the page's filters with the range ending at the poll, and
-// lands what arrived at the top in the accent tint. The open drawer and an older page pause it with the switch left on,
-// and the address never holds it.
+// Auto reload starts off on this view and reads the list again at the interval the split button's menu sets, over the
+// page's filters with the range ending at the poll, and lands what arrived at the top in the accent tint. The open
+// drawer, an older page and an open menu or popover under the bar pause it with the interval kept and the cause in the
+// part's title, and the address never holds it.
 {
   const HOUR = 3_600_000;
-  const followSwitch = (page) => page.container.querySelector('.filters__cols button[role="switch"][aria-label="Follow"]');
   const requestRows = (page) => [...page.container.querySelectorAll('.requests__table tbody tr')];
   // The time cell carries the whole id on its title, the one place a row names its request.
   const idOf = (tr) => tr?.querySelector('.sub.mono')?.getAttribute('title') ?? null;
   const nextPage = (page) => page.container.querySelector('button[aria-label="Next page"]');
+  const partTitle = (page) => intervalPart(page)?.getAttribute('title') ?? null;
   {
     // Mounted two seconds before the newest row the page's filters list, so the first poll's range is the first to
     // reach it. The row reaches the table through the poll's read alone.
@@ -8717,8 +8795,9 @@ m.unmount();
     const t = Date.parse(newest.at);
     const page = await mount('/requests', { now: t - 2_000 });
     const before = idOf(requestRows(page)[0]);
-    followSwitch(page)?.click();
-    await page.settle(100);
+    const start = { title: partTitle(page), word: intervalWord(page) };
+    await chooseInterval(page, '5 s');
+    const chosen = { title: partTitle(page), word: intervalWord(page) };
     const polls = countCalls('listRequests');
     tick(5_000);
     await page.settle();
@@ -8733,7 +8812,7 @@ m.unmount();
     tick(5_000);
     await page.settle();
     paused.restore();
-    const drawer = { calls: paused.calls.length, id: idOf(requestRows(page)[0]), open: page.container.querySelector('.drawer') !== null };
+    const drawer = { calls: paused.calls.length, id: idOf(requestRows(page)[0]), open: page.container.querySelector('.drawer') !== null, title: partTitle(page) };
     page.container.querySelector('button[aria-label="Close details"]')?.click();
     await page.settle();
     // The close comes a full period after the last answer, so the poll reads at once as it arms again, and the next
@@ -8745,21 +8824,31 @@ m.unmount();
     const after = { calls: resumed.calls.length, id: idOf(requestRows(page)[0]), tinted: page.container.querySelectorAll('.requests__table tbody tr.is-new').length, to: resumed.calls[0]?.[0]?.to };
     nextPage(page)?.click();
     await page.settle();
-    // The older page pauses the poll and leaves the switch on, so the next tick reads nothing.
+    // The older page pauses the poll and keeps the interval, so the next tick reads nothing.
     const older = countCalls('listRequests');
     tick(5_000);
     await page.settle();
     older.restore();
-    const paged = { calls: older.calls.length, checked: followSwitch(page)?.getAttribute('aria-checked') ?? null, rows: requestRows(page).length };
+    const paged = { calls: older.calls.length, rows: requestRows(page).length, title: partTitle(page), word: intervalWord(page) };
+    page.container.querySelector('button[aria-label="First page"]')?.click();
+    await page.settle();
+    // The first page arms the poll again, and the next tick reads up to it.
+    const back = countCalls('listRequests');
+    tick(5_000);
+    await page.settle();
+    back.restore();
+    const firstPage = { calls: back.calls.length, title: partTitle(page), to: back.calls.at(-1)?.[0]?.to ?? null };
     results.push({
-      name: '/requests auto reload merges a new row under the fresh tint, keeps it under the drawer and pauses on Next',
+      name: '/requests auto reload at 5 s merges a new row under the fresh tint, waits under the drawer and on an older page, and resumes on the first page',
       ok:
+        start.word === 'Off' && start.title === 'Auto reload off' && chosen.word === '5 s' && chosen.title === 'Auto reload every 5 s' &&
         before !== newest.id &&
         landed.calls === 2 && landed.cursor === undefined && typeof landed.second === 'string' && landed.to === isoAt(t + 3_000) && landed.id === newest.id && landed.isNew &&
-        drawer.open && drawer.calls === 0 && drawer.id === newest.id &&
+        drawer.open && drawer.calls === 0 && drawer.id === newest.id && drawer.title === 'Auto reload every 5 s, paused while a request is open' &&
         after.calls === 1 && after.to === isoAt(t + 13_000) && after.id === newest.id && after.tinted === 0 &&
-        paged.calls === 0 && paged.checked === 'true' && paged.rows > 0,
-      missing: [`first before ${before}, newest ${newest.id}`, JSON.stringify(landed), JSON.stringify(drawer), JSON.stringify(after), JSON.stringify(paged)],
+        paged.calls === 0 && paged.rows > 0 && paged.word === '5 s' && paged.title === 'Auto reload every 5 s, paused on an older page' &&
+        firstPage.calls > 0 && firstPage.to === isoAt(t + 23_000) && firstPage.title === 'Auto reload every 5 s',
+      missing: [JSON.stringify(start), JSON.stringify(chosen), `first before ${before}, newest ${newest.id}`, JSON.stringify(landed), JSON.stringify(drawer), JSON.stringify(after), JSON.stringify(paged), JSON.stringify(firstPage)],
     });
     page.unmount();
   }
@@ -8777,8 +8866,7 @@ m.unmount();
     const listed = requestRows(page).map(idOf);
     // The late request finishes, so the ledger holds its row from here on.
     requests.splice(slot, 0, held);
-    followSwitch(page)?.click();
-    await page.settle(100);
+    await chooseInterval(page, '5 s');
     const polls = countCalls('listRequests');
     tick(5_000);
     await page.settle();
@@ -8790,7 +8878,7 @@ m.unmount();
     const tinted = [...page.container.querySelectorAll('.requests__table tbody tr.is-new')].map(idOf);
     const sent = polls.calls.map((c) => c[0]);
     results.push({
-      name: '/requests Follow reads on past a page that brought a new row and lands a request that finished late in its place',
+      name: '/requests auto reload reads on past a page that brought a new row and lands a request that finished late in its place',
       ok:
         JSON.stringify(listed) === JSON.stringify([...before.slice(0, 9), before[10]].map((r) => r.id)) && all.indexOf(late.id) >= 10 &&
         JSON.stringify(drawn) === JSON.stringify(expected) && tinted.includes(late.id) && tinted.includes(newest.id) &&
@@ -8806,8 +8894,7 @@ m.unmount();
     const page = await mount('/requests?rows=10', { now: CLOCK_ORIGIN });
     const errorOf = () => page.container.querySelector('.requests__table .empty--error .empty__title')?.textContent ?? null;
     const failed = { error: errorOf(), rows: requestRows(page).map(idOf).filter((id) => id !== null).length };
-    followSwitch(page)?.click();
-    await page.settle(100);
+    await chooseInterval(page, '5 s');
     const polls = countCalls('listRequests');
     tick(5_000);
     await page.settle();
@@ -8822,7 +8909,7 @@ m.unmount();
     next.restore();
     const read = next.calls.map((c) => c[0]);
     results.push({
-      name: '/requests a Follow poll that answers after the list read failed draws its rows with no error, and Next reads on from them',
+      name: '/requests an auto reload poll that answers after the list read failed draws its rows with no error, and Next reads on from them',
       ok:
         failed.error === 'Could not load the request log' && failed.rows === 0 &&
         stood.calls === 1 && stood.error === null && stood.tinted === 0 && answer.requests.length === 10 && JSON.stringify(drawn) === JSON.stringify(answer.requests.map((r) => r.id)) &&
@@ -8832,28 +8919,40 @@ m.unmount();
     page.unmount();
   }
   {
-    // A day back, the list holds the window's first hour, and the first poll, whose range ends now, finds more arrived
-    // than its eight pages of ten read. Next reads on from the last row the poll read, up to the poll's end.
-    const from = CLOCK_ORIGIN - 24 * HOUR;
-    const page = await mount(`/requests?from=${isoAt(from)}&to=${isoAt(from + HOUR)}&rows=10`, { now: CLOCK_ORIGIN });
+    // Ninety requests arrive after the page loaded: the list reads up to the instant of the ninety-first newest, the
+    // interval menu left open holds the poll while the clock moves past the ninety to the pinned origin, and the first
+    // poll after the menu closes finds more than its eight pages of ten read. Next reads on from the last row the poll
+    // read, up to the poll's end.
+    const end = isoAt(CLOCK_ORIGIN + 5_000);
+    // Every row under the bounds, newest first.
+    const rowsUnder = async (from) => {
+      const ids = [];
+      for (let cursor; ; ) {
+        const answer = await api.listRequests({ cursor, from: isoAt(from), limit: 100, to: end });
+        ids.push(...answer.requests.map((r) => r.id));
+        if (answer.nextCursor === null) return ids;
+        cursor = answer.nextCursor;
+      }
+    };
+    const atOf = (id) => Date.parse(requests.find((r) => r.id === id)?.at ?? '');
+    const near = await rowsUnder(CLOCK_ORIGIN - 48 * HOUR);
+    const loaded = atOf(near[90]);
+    const all = await rowsUnder(loaded - 24 * HOUR);
+    const page = await mount('/requests?rows=10', { now: loaded });
     const listed = requestRows(page).map(idOf);
-    followSwitch(page)?.click();
+    await chooseInterval(page, '5 s');
+    intervalPart(page)?.click();
     await page.settle(100);
+    const held = countCalls('listRequests');
+    tick(CLOCK_ORIGIN - loaded);
+    await page.settle();
+    held.restore();
+    await closeBoxes(page);
     const polls = countCalls('listRequests');
     tick(5_000);
     await page.settle(2_000);
     polls.restore();
     const sent = polls.calls.map((c) => c[0]);
-    const end = isoAt(CLOCK_ORIGIN + 5_000);
-    // Every row under the poll's bounds, newest first.
-    const all = [];
-    for (let cursor; ; ) {
-      const answer = await api.listRequests({ cursor, from: isoAt(from), limit: 100, to: end });
-      all.push(...answer.requests.map((r) => r.id));
-      if (answer.nextCursor === null) break;
-      cursor = answer.nextCursor;
-    }
-    const arrived = listed.length > 0 ? all.indexOf(listed[0]) : all.length;
     const overrun = sent.length === 8 ? (await api.listRequests(sent[7])).nextCursor : null;
     const line = page.container.querySelector('.requests__overrun')?.textContent ?? null;
     const drawn = requestRows(page).map(idOf);
@@ -8864,78 +8963,177 @@ m.unmount();
     const read = next.calls.map((c) => c[0]);
     const after = requestRows(page).map(idOf);
     results.push({
-      name: '/requests Next past a Follow overrun reads the rows the poll left up to its end',
+      name: '/requests Next past an auto reload overrun reads the rows the poll left up to its end',
       ok:
-        arrived > 90 && sent.length === 8 && sent.every((q) => q.to === end && q.limit === 10) && line === 'More rows arrived than auto reload could fetch. Reload to read them.' &&
+        all.length >= 100 && atOf(near[89]) > loaded && loaded < CLOCK_ORIGIN && held.calls.length === 0 && JSON.stringify(listed) === JSON.stringify(all.slice(90, 100)) &&
+        sent.length === 8 && sent.every((q) => q.to === end && q.limit === 10) && line === 'More rows arrived than auto reload could fetch. Reload to read them.' &&
         drawn.length === 80 + listed.length && JSON.stringify(drawn.slice(0, 80)) === JSON.stringify(all.slice(0, 80)) &&
         overrun !== null && read.length === 1 && read[0].cursor === overrun && read[0].to === end && JSON.stringify(after) === JSON.stringify(all.slice(80, 90)),
-      missing: [`${arrived} arrived over ${listed.length} listed`, `${sent.length} reads, line ${line}`, `${drawn.length} drawn`, `overrun ${overrun}`, JSON.stringify(read.map((q) => [q.cursor, q.to])), `next ${after.slice(0, 2).join(' | ')}`, `gap ${all.slice(80, 82).join(' | ')}`],
+      missing: [`${all.length} rows, loaded ${isoAt(loaded)}, ${held.calls.length} reads while held`, `listed ${listed.slice(0, 2).join(' | ')}`, `${sent.length} reads, line ${line}`, `${drawn.length} drawn`, `overrun ${overrun}`, JSON.stringify(read.map((q) => [q.cursor, q.to])), `next ${after.slice(0, 2).join(' | ')}`, `gap ${all.slice(80, 82).join(' | ')}`],
     });
     page.unmount();
   }
   {
+    // The interval is page state: a range and a filter change write their keys alone, and the part keeps its word.
     const page = await mount('/requests', { now: CLOCK_ORIGIN });
-    followSwitch(page)?.click();
-    await page.settle(100);
+    await chooseInterval(page, '5 s');
     const on = page.location().search;
     rangePill(page, '6h')?.click();
     await page.settle();
+    await pick(page, 'Speed', 'fast');
+    await closeBoxes(page);
     const changed = page.location().search;
-    const checked = followSwitch(page)?.getAttribute('aria-checked') ?? null;
     results.push({
-      name: '/requests the Follow switch is never in the address',
-      ok: on === '' && changed === '?range=6h' && checked === 'true',
-      missing: [JSON.stringify(on), JSON.stringify(changed), String(checked)],
+      name: '/requests the auto reload interval is never in the address',
+      ok: on === '' && changed === '?speeds=fast&range=6h' && intervalWord(page) === '5 s',
+      missing: [JSON.stringify(on), JSON.stringify(changed), String(intervalWord(page))],
     });
     page.unmount();
   }
+  {
+    // Each cause holds the poll with no read at the tick and names itself after the interval in the part's title.
+    const page = await mount('/requests', { now: CLOCK_ORIGIN });
+    await chooseInterval(page, '5 s');
+    const held = async (cause) => {
+      const spy = countCalls('listRequests');
+      tick(5_000);
+      await page.settle();
+      spy.restore();
+      return { cause, reads: spy.calls.length, title: partTitle(page) };
+    };
+    const causes = [];
+    intervalPart(page)?.click();
+    await page.settle(100);
+    causes.push(await held('the interval menu'));
+    await closeBoxes(page);
+    addFilterButton(page)?.click();
+    await page.settle(100);
+    causes.push(await held('Add filter'));
+    await closeBoxes(page);
+    columnsButton(page)?.click();
+    await page.settle(100);
+    causes.push(await held('the Columns grid'));
+    await closeBoxes(page);
+    requestRows(page)[0]?.click();
+    await page.settle();
+    causes.push(await held('the drawer'));
+    page.container.querySelector('button[aria-label="Close details"]')?.click();
+    await page.settle();
+    nextPage(page)?.click();
+    await page.settle();
+    causes.push(await held('an older page'));
+    page.container.querySelector('button[aria-label="First page"]')?.click();
+    await page.settle();
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    document.dispatchEvent(new window.Event('visibilitychange'));
+    await page.settle(100);
+    causes.push(await held('a hidden tab'));
+    delete document.hidden;
+    document.dispatchEvent(new window.Event('visibilitychange'));
+    await page.settle();
+    const words = (cause) => `Auto reload every 5 s, ${cause}`;
+    const wanted = [words('paused while a menu is open'), words('paused while a menu is open'), words('paused while a menu is open'), words('paused while a request is open'), words('paused on an older page'), words('paused while the tab is hidden')];
+    results.push({
+      name: "/requests each pause cause reads in the split button's title, an open interval menu and an open Add filter popover among them with no read at the tick",
+      ok: causes.every((c) => c.reads === 0) && JSON.stringify(causes.map((c) => c.title)) === JSON.stringify(wanted) && partTitle(page) === 'Auto reload every 5 s',
+      missing: [...causes.map((c) => JSON.stringify(c)), String(partTitle(page))],
+    });
+    page.unmount();
+  }
+  {
+    // A span that ended before the page opened has nothing new to read: the part reads Off, disabled, with why, and a
+    // tick reads nothing, while 5 s stays chosen for the preset a later choice returns to.
+    const ENDED = `/requests?from=${isoAt(CLOCK_ORIGIN - 25 * HOUR)}&to=${isoAt(CLOCK_ORIGIN - 24 * HOUR)}`;
+    const page = await mount('/requests', { now: CLOCK_ORIGIN });
+    await chooseInterval(page, '5 s');
+    await page.navigate(ENDED);
+    const spy = countCalls('listRequests');
+    tick(5_000);
+    await page.settle();
+    spy.restore();
+    const ended = { disabled: intervalPart(page)?.disabled ?? null, reads: spy.calls.length, title: partTitle(page), word: intervalWord(page) };
+    await page.navigate('/requests');
+    const preset = { disabled: intervalPart(page)?.disabled ?? null, word: intervalWord(page) };
+    page.unmount();
+    const opened = await mount(ENDED, { now: CLOCK_ORIGIN });
+    const fresh = { disabled: intervalPart(opened)?.disabled ?? null, word: intervalWord(opened) };
+    opened.unmount();
+    results.push({
+      name: '/requests an ended custom span reads Off and disabled and polls nothing at the tick with auto reload on',
+      ok:
+        ended.disabled === true && ended.word === 'Off' && ended.title === 'A custom range that has ended has nothing new to read' && ended.reads === 0 &&
+        preset.disabled === false && preset.word === '5 s' &&
+        fresh.disabled === true && fresh.word === 'Off',
+      missing: [JSON.stringify(ended), JSON.stringify(preset), JSON.stringify(fresh)],
+    });
+  }
+  {
+    // A link capped at now ends its span at the clock it was made on, so the page reads it at the chosen interval while
+    // it stays open, and a row that finishes late still lands. A span a minute short of the load reads so too.
+    const page = await mount(`/requests?from=${isoAt(CLOCK_ORIGIN - HOUR)}&to=${isoAt(CLOCK_ORIGIN)}`, { now: CLOCK_ORIGIN });
+    const enabled = intervalPart(page)?.disabled === false;
+    await chooseInterval(page, '5 s');
+    const spy = countCalls('listRequests');
+    tick(5_000);
+    await page.settle();
+    spy.restore();
+    const sent = spy.calls.map(([q]) => q?.to ?? null);
+    const word = intervalWord(page);
+    page.unmount();
+    const graced = await mount(`/requests?from=${isoAt(CLOCK_ORIGIN - HOUR)}&to=${isoAt(CLOCK_ORIGIN - 30_000)}`, { now: CLOCK_ORIGIN });
+    const short = intervalPart(graced)?.disabled === false;
+    graced.unmount();
+    results.push({
+      name: '/requests a custom span that ends at the clock reads at the chosen interval',
+      ok: enabled && word === '5 s' && sent.length > 0 && sent[0] === isoAt(CLOCK_ORIGIN + 5_000) && short,
+      missing: [`enabled ${enabled}`, String(word), JSON.stringify(sent), `a span 30 s short enabled ${short}`],
+    });
+  }
 }
 
-// A filter fed by a list that did not load offers nothing to pick, so it is disabled and says why where a pointer and a
-// screen reader both find it; the filters beside it stay as they are.
+// A dimension fed by a list that did not load offers nothing to pick, so its Add filter row is disabled and says why on
+// its title, and a click on it leaves the list where it is; the rows beside it stay as they are.
 {
   const sentence = 'The key list did not load: the registry is unavailable';
   failNextCall('listKeys', '/admin/keys', 'the registry is unavailable');
   const page = await mount('/requests');
-  const triggerOf = (label) => [...page.container.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith(label));
-  const describedBy = (el) => {
-    const id = el?.getAttribute('aria-describedby');
-    return id ? (document.getElementById(id)?.textContent ?? `no node ${id}`) : null;
-  };
-  const keysFilter = triggerOf('Keys');
-  const poolsFilter = triggerOf('Pools');
-  keysFilter?.click();
+  addFilterButton(page)?.click();
   await page.settle(100);
-  const opened = page.container.querySelector('.mselect__list') !== null;
+  const rowOf = (label) => filterRows().find((r) => r.firstElementChild?.textContent?.trim() === label);
+  const keyRow = rowOf('Key');
+  const poolRow = rowOf('Pool');
+  const read = { disabled: keyRow?.getAttribute('aria-disabled') ?? null, pool: [poolRow?.getAttribute('aria-disabled') ?? null, poolRow?.getAttribute('title') ?? null], title: keyRow?.getAttribute('title') ?? null };
+  keyRow?.click();
+  await page.settle(100);
+  const stayed = filterBox()?.querySelector('.add-filter__search') !== null && filterBox()?.querySelector('[aria-label="Back to the filter list"]') === null;
+  await closeBoxes(page);
   results.push({
-    name: '/requests a failed keys read disables the Keys filter and names the failure',
-    ok: keysFilter?.disabled === true && keysFilter.getAttribute('title') === sentence && describedBy(keysFilter) === sentence && !opened && poolsFilter?.disabled === false && poolsFilter.getAttribute('title') === null && describedBy(poolsFilter) === null,
-    missing: [`disabled ${keysFilter?.disabled}`, `title ${keysFilter?.getAttribute('title')}`, `description ${describedBy(keysFilter)}`, `opened ${opened}`, `Pools disabled ${poolsFilter?.disabled}, titled ${poolsFilter?.getAttribute('title')}, described ${describedBy(poolsFilter)}`],
+    name: '/requests a failed keys read disables the Key row of Add filter and names the failure',
+    ok: read.disabled === 'true' && read.title === sentence && stayed && read.pool[0] === null && read.pool[1] === null,
+    missing: [JSON.stringify(read), `stayed on the list ${stayed}`],
   });
   page.unmount();
 }
-// A disabled filter still holds what the address lists, so a link to that address reads the same rows, and its clear
-// button still lets the value go.
+// A disabled dimension still holds what the address lists, so a link to that address reads the same rows, and its
+// chip's x still lets the value go.
 {
   const keptCheck = '/requests a disabled filter keeps the value its address carries and can still be cleared';
   failNextCall('listKeys', '/admin/keys', 'the registry is unavailable');
   const spy = countCalls('listRequests');
   const page = await mount('/requests?keys=laptop');
-  const filter = [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Keys'));
-  const trigger = filter?.querySelector('.mselect__trigger');
-  const clear = filter?.querySelector('.mselect__clear');
+  const summary = chipRead(page, 'key');
+  const clear = chipOf(page, 'key')?.querySelector('.chip__remove');
   const keyCells = [...page.container.querySelectorAll('.requests__table tbody tr td:nth-child(2)')].map((td) => td.textContent?.trim());
   const sent = spy.calls.map(([q]) => JSON.stringify(q?.keyIds ?? null));
   const clearable = clear !== null && clear !== undefined && !clear.disabled;
-  const summary = trigger?.textContent?.trim();
   clear?.click();
   await page.settle();
-  const cleared = { last: JSON.stringify(spy.calls.at(-1)?.[0]?.keyIds ?? null), trigger: trigger?.textContent?.trim() };
+  const cleared = { last: JSON.stringify(spy.calls.at(-1)?.[0]?.keyIds ?? null), trigger: chipRead(page, 'key') };
   spy.restore();
   results.push({
     name: keptCheck,
-    ok: trigger?.disabled === true && summary === 'Keys (1)' && sent.length > 0 && sent.every((k) => k === '["laptop"]') && keyCells.length > 0 && keyCells.every((k) => k === 'laptop') && clearable && cleared.last === '[]' && cleared.trigger === 'Keys',
-    missing: [`disabled ${trigger?.disabled}`, String(summary), `sent ${sent.join(' ')}`, `key cells ${[...new Set(keyCells)].join(',')}`, `clear ${clear ? (clear.disabled ? 'disabled' : 'enabled') : 'missing'}`, JSON.stringify(cleared)],
+    ok: summary === 'key: laptop' && sent.length > 0 && sent.every((k) => k === '["laptop"]') && keyCells.length > 0 && keyCells.every((k) => k === 'laptop') && clearable && cleared.last === '[]' && cleared.trigger === 'no key chip',
+    missing: [String(summary), `sent ${sent.join(' ')}`, `key cells ${[...new Set(keyCells)].join(',')}`, `clear ${clear ? (clear.disabled ? 'disabled' : 'enabled') : 'missing'}`, JSON.stringify(cleared)],
   });
   page.unmount();
 }
@@ -8953,27 +9151,32 @@ m.unmount();
 
   const heldCheck = '/requests a click right after typing keeps the search the blur committed';
   const switched = await mount('/requests', { now: CLOCK_ORIGIN });
-  const typed = switched.container.querySelector('input.filters__search');
-  const held = switched.container.querySelector('.filters button[role="switch"][aria-label="Held only"]');
-  if (!typed || !held) controlMissing(heldCheck, typed ? 'Held only' : 'the search');
+  const typed = barSearch(switched);
+  const add = addFilterButton(switched);
+  if (!typed || !add) controlMissing(heldCheck, typed ? 'Add filter' : 'the search');
   else {
     const spy = countCalls('listRequests');
     typeFocused(typed, 'abc');
-    // One turn for the focus move and the click: the blur's write renders, but a transition it starts gets no task to
-    // render in before the click.
-    held.focus();
-    held.click();
+    // One turn for the focus move and the clicks: the blur's write and the box render in the microtasks React flushes
+    // them in, but a transition the write starts gets no task to render in before the Held only row writes the flag.
+    add.focus();
+    add.click();
+    await null;
+    await null;
+    const held = filterRows().find((r) => r.firstElementChild?.textContent?.trim() === 'Held only');
+    held?.focus();
+    held?.click();
     await switched.settle();
     const read = reads(spy);
     spy.restore();
     const last = read.at(-1);
-    results.push({ name: heldCheck, ok: last?.search === 'abc' && last.held === true && typed.value === 'abc', missing: [JSON.stringify(read), `field ${JSON.stringify(typed.value)}`] });
+    results.push({ name: heldCheck, ok: held !== undefined && last?.search === 'abc' && last.held === true && typed.value === 'abc', missing: [held ? 'the Held only row' : 'no Held only row', JSON.stringify(read), `field ${JSON.stringify(typed.value)}`] });
   }
   switched.unmount();
 
   const rowCheck = '/requests a row clicked right after typing opens under the search the blur committed';
   const opened = await mount('/requests?keys=laptop', { now: CLOCK_ORIGIN });
-  const field = opened.container.querySelector('input.filters__search');
+  const field = barSearch(opened);
   const row = opened.container.querySelector('.requests__table tbody tr');
   // The row's own id, so the search the blur commits still lists it.
   const id = row?.querySelector('.sub.mono')?.textContent?.replace(/…$/, '') ?? '';
@@ -8989,11 +9192,11 @@ m.unmount();
     opened.container.querySelector('button[aria-label="Close details"]')?.click();
     await opened.settle();
     spy.restore();
-    const keys = [...opened.container.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith('Keys'))?.textContent?.trim();
+    const keys = chipRead(opened, 'key');
     const last = read.at(-1);
     results.push({
       name: rowCheck,
-      ok: drawer && last?.search === id && JSON.stringify(last.keys) === '["laptop"]' && field.value === id && keys === 'Keys (1)' && opened.container.querySelector('.drawer') === null,
+      ok: drawer && last?.search === id && JSON.stringify(last.keys) === '["laptop"]' && field.value === id && keys === 'key: laptop' && opened.container.querySelector('.drawer') === null,
       missing: [JSON.stringify(read), `drawer ${drawer}`, `field after Close ${JSON.stringify(field.value)}`, String(keys)],
     });
   }
@@ -9003,12 +9206,7 @@ m.unmount();
 // A request that did not succeed names how it ended, in the ledger's own words, beside its status, in the drawer and as
 // a filter; the status filter offers the codes the router and Anthropic answer.
 {
-  const filterOf = (page, label) => [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith(label));
-  const openOptions = async (page, filter) => {
-    filter?.querySelector('.mselect__trigger')?.click();
-    await page.settle(150);
-    return [...(filter?.querySelectorAll(CHOICE) ?? [])];
-  };
+  const openOptions = async (page, label) => ((await addFilter(page, label)) === null ? null : boxOptions());
 
   const canceledCheck = '/requests a canceled request names its outcome in the list and the drawer';
   const canceled = requests.find((r) => r.outcome === 'canceled');
@@ -9045,12 +9243,12 @@ m.unmount();
 
   const filterCheck = '/requests the Outcome filter narrows to canceled requests and sends outcomes';
   const narrowed = await mount('/requests');
-  const outcome = filterOf(narrowed, 'Outcome');
-  if (!outcome) controlMissing(filterCheck, 'Outcome');
+  const outcomes = await openOptions(narrowed, 'Outcome');
+  if (!outcomes) controlMissing(filterCheck, 'Outcome');
   else {
-    const options = (await openOptions(narrowed, outcome)).map((o) => o.textContent?.trim());
+    const options = outcomes.map((o) => o.textContent?.trim());
     const spy = countCalls('listRequests');
-    [...outcome.querySelectorAll('.mselect__option')].find((o) => o.textContent?.trim() === 'canceled')?.click();
+    outcomes.find((o) => o.textContent?.trim() === 'canceled')?.click();
     await narrowed.settle();
     spy.restore();
     const sent = spy.calls.map(([q]) => q?.outcomes ?? null);
@@ -9068,18 +9266,18 @@ m.unmount();
   const spy = countCalls('listRequests');
   const addressed = await mount('/requests?outcomes=canceled,nonsense');
   spy.restore();
-  const summary = filterOf(addressed, 'Outcome')?.querySelector('.mselect__trigger')?.textContent?.trim() ?? 'no Outcome filter';
+  const summary = chipRead(addressed, 'outcome');
   const sent = spy.calls.map(([q]) => JSON.stringify(q?.outcomes ?? null));
-  results.push({ name: addressCheck, ok: summary === 'Outcome (1)' && sent.length > 0 && sent.every((o) => o === '["canceled"]'), missing: [summary, ...sent] });
+  results.push({ name: addressCheck, ok: summary === 'outcome: canceled' && sent.length > 0 && sent.every((o) => o === '["canceled"]'), missing: [summary, ...sent] });
   addressed.unmount();
 
   // A code the address selects stays offered under its number, so it can be seen and cleared.
   const statusCheck = '/requests the Status filter offers the common codes';
   const coded = await mount('/requests?statuses=418');
-  const status = filterOf(coded, 'Status');
-  if (!status) controlMissing(statusCheck, 'Status');
+  const codes = await openOptions(coded, 'Status');
+  if (!codes) controlMissing(statusCheck, 'Status');
   else {
-    const options = (await openOptions(coded, status)).map((o) => o.textContent?.trim() ?? '');
+    const options = codes.map((o) => o.textContent?.trim() ?? '');
     const common = ['200 OK', '400 Bad request', '401 Unauthorized', '403 Forbidden', '404 Not found', '413 Payload too large', '418', '429 Rate limited', '500 Server error', '502 Bad gateway', '503 Unavailable', '504 Gateway timeout', '524 Timeout', '529 Overloaded'];
     results.push({ name: statusCheck, ok: JSON.stringify(options) === JSON.stringify(common), missing: options });
   }
@@ -9095,15 +9293,339 @@ m.unmount();
   };
   const held = await mount('/requests');
   api.listRequests = listRequests;
-  const heldStatus = filterOf(held, 'Status');
-  if (!heldStatus) controlMissing(rowCheck, 'Status');
+  const statusChip = chipRead(held, 'status');
+  const heldCodes = await openOptions(held, 'Status');
+  if (!heldCodes) controlMissing(rowCheck, 'Status');
   else {
-    const summary = heldStatus.querySelector('.mselect__trigger')?.textContent?.trim();
-    const options = (await openOptions(held, heldStatus)).map((o) => o.textContent?.trim() ?? '');
+    const options = heldCodes.map((o) => o.textContent?.trim() ?? '');
     const common = ['200 OK', '400 Bad request', '401 Unauthorized', '403 Forbidden', '404 Not found', '413 Payload too large', '418', '429 Rate limited', '500 Server error', '502 Bad gateway', '503 Unavailable', '504 Gateway timeout', '524 Timeout', '529 Overloaded'];
-    results.push({ name: rowCheck, ok: summary === 'Status' && JSON.stringify(options) === JSON.stringify(common), missing: [String(summary), ...options] });
+    results.push({ name: rowCheck, ok: statusChip === 'no status chip' && JSON.stringify(options) === JSON.stringify(common), missing: [statusChip, ...options] });
   }
+  await closeBoxes(held);
   held.unmount();
+}
+
+// The bar on Requests: its slots, its chips in each form, the fold, the Add filter popover's two steps, a chip's values,
+// the drawer's widenings, the subject chips on the route and the count.
+{
+  const HOUR = 3_600_000;
+  const idOf = (tr) => tr?.querySelector('.sub.mono')?.getAttribute('title') ?? null;
+  const rowIds = (page) => [...page.container.querySelectorAll('.requests__table tbody tr')].map(idOf).filter((id) => id !== null);
+  const param = (page, name) => new URLSearchParams(page.location().search).get(name);
+  const countText = (page) => page.container.querySelector('.filter-bar__count')?.textContent ?? 'no count';
+  const removeLink = () => [...(filterBox()?.querySelectorAll('.popover__head .link-btn') ?? [])].find((b) => b.textContent?.trim() === 'Remove');
+  const backButton = () => filterBox()?.querySelector('[aria-label="Back to the filter list"]') ?? null;
+  const subject = requests.find((r) => r.sessionId !== null && r.accountId !== null && r.kind !== 'probe' && r.durationMs !== null && Date.parse(r.at) < CLOCK_ORIGIN - HOUR && Date.parse(r.at) > CLOCK_ORIGIN - 6 * HOUR);
+  results.push({ name: 'fixture: a request with a session and an account between one and six hours old', ok: subject !== undefined, missing: [] });
+
+  {
+    // The bar is the grid's first row, above the list and beside nothing, so the drawer opens under it.
+    const page = await mount('/requests', { now: CLOCK_ORIGIN });
+    const slotOf = (el) =>
+      el.matches('.segmented[aria-label="Range"]')
+        ? 'range'
+        : el.matches('span.search')
+          ? 'search'
+          : el.matches('button') && el.textContent?.trim() === 'Add filter'
+            ? 'add filter'
+            : el.matches('button[aria-label="Columns"]')
+              ? 'columns'
+              : el.matches('.filter-bar__edge')
+                ? 'edge'
+                : `${el.tagName.toLowerCase()}.${el.className}`;
+    const row = page.container.querySelector('.requests > .filter-bar:first-child > .filter-bar__row');
+    const slots = [...(row?.children ?? [])];
+    const read = {
+      edge: [...(row?.querySelector('.filter-bar__edge')?.children ?? [])].map((el) => (el.classList.contains('refresh-control') ? 'refresh' : el.classList.contains('filter-bar__count') ? 'count' : el.className)),
+      empty: slots.filter((el) => el.childElementCount === 0 && (el.textContent?.trim() ?? '') === '').map(slotOf),
+      placeholder: barSearch(page)?.getAttribute('placeholder') ?? null,
+      slots: slots.map(slotOf),
+    };
+    page.container.querySelector('.requests__table tbody tr')?.click();
+    await page.settle();
+    // The drawer's description host draws a hidden node of its own beside the drawer, which takes no place in the grid.
+    const opened = [...(page.container.querySelector('.requests')?.children ?? [])].filter((el) => !el.hasAttribute('data-descriptions')).map((el) => el.className.split(' ')[0]);
+    results.push({
+      name: '/requests mounts the bar first with its slots in order and no empty slot',
+      ok:
+        JSON.stringify(read.slots) === JSON.stringify(['range', 'search', 'add filter', 'columns', 'edge']) &&
+        read.empty.length === 0 &&
+        JSON.stringify(read.edge) === JSON.stringify(['refresh', 'count']) &&
+        read.placeholder === 'Search id, session, key, account, model, error, message id' &&
+        JSON.stringify(opened) === JSON.stringify(['filter-bar', 'stack', 'drawer']),
+      missing: [JSON.stringify(read), JSON.stringify(opened)],
+    });
+    page.unmount();
+  }
+  {
+    // Six forms on one address: a list of four over three labels and +1, a flag, a list of two codes, a pattern in the
+    // mono face, a choice and an id cut to eight. The line folds the sixth, so it is expanded before every chip is read.
+    const accounts = (await api.listAccounts()).slice(0, 4);
+    const id = 'req_f8085653-422';
+    const address = new URLSearchParams({ accounts: accounts.map((a) => a.id).join(','), client: 'claude-code*', held: '1', kind: 'inference', request: id, statuses: '429,500' });
+    const page = await mount(`/requests?${address}`, { now: CLOCK_ORIGIN });
+    page.container.querySelector('.chip--more')?.click();
+    await page.settle(100);
+    const chips = [...page.container.querySelectorAll('.chip--filter')].map((c) => ({ mono: c.querySelector('.chip__values')?.classList.contains('mono') ?? null, text: c.textContent?.trim() ?? '', title: c.getAttribute('title') }));
+    const labels = accounts.map((a) => a.label);
+    const wanted = [
+      { mono: false, text: `account: ${labels.slice(0, 3).join(', ')} +1`, title: labels.join(', ') },
+      { mono: null, text: 'held only', title: 'held only' },
+      { mono: false, text: 'status: 429, 500', title: '429 Rate limited, 500 Server error' },
+      { mono: true, text: 'client: claude-code*', title: 'claude-code*' },
+      { mono: false, text: 'kind: Inference', title: 'Inference' },
+      { mono: true, text: 'request: req_f808…', title: id },
+    ];
+    results.push({ name: '/requests draws a chip per form with its title', ok: accounts.length === 4 && JSON.stringify(chips) === JSON.stringify(wanted), missing: [JSON.stringify(chips), JSON.stringify(wanted)] });
+    page.unmount();
+  }
+  {
+    // Seven filters fold past the fifth chip. The range, the search and the page size have their own controls, so
+    // Clear all leaves them.
+    const filters = { accounts: 'primary', keys: 'laptop', models: 'claude-opus-5', pools: 'jobs', statuses: '200', efforts: 'high', speeds: 'fast' };
+    const page = await mount(`/requests?${new URLSearchParams({ search: 'abc', ...filters, rows: '50', range: '6h' })}`, { now: CLOCK_ORIGIN });
+    const line = () => page.container.querySelector('.chip-line');
+    const shown = () => [...page.container.querySelectorAll('.chip--filter')].filter((c) => !c.hidden).map((c) => c.textContent?.trim().split(':')[0]);
+    const fold = () => page.container.querySelector('.chip--more');
+    const folded = { fold: fold()?.textContent?.trim() ?? null, shown: shown(), title: fold()?.getAttribute('title') ?? null };
+    fold()?.click();
+    await page.settle(100);
+    const expanded = { expanded: line()?.classList.contains('is-expanded') ?? null, fold: fold()?.textContent?.trim() ?? null, shown: shown() };
+    [...(line()?.querySelectorAll('.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'Clear all')?.click();
+    await page.settle();
+    const cleared = { chips: page.container.querySelectorAll('.chip--filter').length, line: line() !== null, search: page.location().search };
+    results.push({
+      name: '/requests folds the chips past five behind +N more, expands them and clears all from two',
+      ok:
+        JSON.stringify(folded) === JSON.stringify({ fold: '+2 more', shown: ['account', 'key', 'model', 'pool', 'status'], title: 'Folded: effort, speed' }) &&
+        JSON.stringify(expanded) === JSON.stringify({ expanded: true, fold: 'Show fewer', shown: ['account', 'key', 'model', 'pool', 'status', 'effort', 'speed'] }) &&
+        JSON.stringify(cleared) === JSON.stringify({ chips: 0, line: false, search: '?search=abc&rows=50&range=6h' }),
+      missing: [JSON.stringify(folded), JSON.stringify(expanded), JSON.stringify(cleared)],
+    });
+    page.unmount();
+  }
+  {
+    // Step one is the Filter by field over the four groups. A list applies each click with the box open and Back
+    // returns to step one, a pattern and an id apply on Enter or Apply and close, a choice applies and closes on a click
+    // from its any row, and a flag writes at once. Escape, a click outside and focus leaving each close the box.
+    const page = await mount('/requests', { now: CLOCK_ORIGIN });
+    addFilterButton(page)?.click();
+    await page.settle(100);
+    const one = {
+      expanded: addFilterButton(page)?.getAttribute('aria-expanded') ?? null,
+      field: document.activeElement === filterBox()?.querySelector('.add-filter__search'),
+      groups: [...(filterBox()?.querySelectorAll('.mselect__group') ?? [])].map((g) => g.textContent?.trim()),
+      rows: filterRows().length,
+    };
+    await addFilter(page, 'Outcome');
+    const head = { back: backButton() !== null, remove: removeLink() !== undefined, title: filterBox()?.querySelector('.popover__title')?.textContent?.trim() ?? null };
+    boxOptions().find((o) => o.textContent?.trim() === 'canceled')?.click();
+    await page.settle(700);
+    const list = { open: filterBox() !== null, outcomes: param(page, 'outcomes'), remove: removeLink() !== undefined };
+    backButton()?.click();
+    await page.settle(100);
+    const back = filterBox()?.querySelector('.add-filter__search') !== null;
+    const grammar = (await addFilter(page, 'Client'))?.querySelector('input')?.getAttribute('title') ?? '';
+    const patternInput = filterBox()?.querySelector('input');
+    if (patternInput) {
+      setInput(patternInput, 'claude-code*');
+      pressKey('Enter', patternInput);
+    }
+    await page.settle(700);
+    const pattern = { client: param(page, 'client'), open: filterBox() !== null };
+    const idInput = (await addFilter(page, 'Session'))?.querySelector('input');
+    if (idInput) setInput(idInput, 's1');
+    await page.settle(100);
+    [...(filterBox()?.querySelectorAll('.popover__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Apply')?.click();
+    await page.settle(700);
+    const idStep = { open: filterBox() !== null, session: param(page, 'session') };
+    await addFilter(page, 'Kind');
+    const radios = boxOptions().map((o) => `${o.textContent?.trim()} ${o.getAttribute('aria-checked')}`);
+    boxOptions().find((o) => o.textContent?.trim() === 'Probe')?.click();
+    await page.settle(700);
+    const choice = { kind: param(page, 'kind'), open: filterBox() !== null };
+    await addFilter(page, 'Held only');
+    const flag = { held: param(page, 'held'), open: filterBox() !== null };
+    addFilterButton(page)?.click();
+    await page.settle(100);
+    pressKey('Escape', filterBox()?.querySelector('.add-filter__search'));
+    await page.settle(100);
+    const escaped = { focus: document.activeElement === addFilterButton(page), open: filterBox() !== null };
+    addFilterButton(page)?.click();
+    await page.settle(100);
+    document.body.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+    await page.settle(100);
+    const outside = filterBox() !== null;
+    addFilterButton(page)?.click();
+    await page.settle(100);
+    barSearch(page)?.focus();
+    await page.settle(100);
+    const left = filterBox() !== null;
+    results.push({
+      name: '/requests the Add filter popover walks its two steps for a list, a pattern, an id, a choice and a flag and closes on Escape, a click outside and focus leaving',
+      ok:
+        JSON.stringify(one) === JSON.stringify({ expanded: 'true', field: true, groups: ['Routing', 'Outcome', 'Request', 'Subject'], rows: 18 }) &&
+        JSON.stringify(head) === JSON.stringify({ back: true, remove: false, title: 'Outcome' }) &&
+        JSON.stringify(list) === JSON.stringify({ open: true, outcomes: 'canceled', remove: true }) &&
+        back &&
+        grammar.length > 0 &&
+        JSON.stringify(pattern) === JSON.stringify({ client: 'claude-code*', open: false }) &&
+        JSON.stringify(idStep) === JSON.stringify({ open: false, session: 's1' }) &&
+        JSON.stringify(radios) === JSON.stringify(['Any kind true', 'Inference false', 'Count tokens false', 'Probe false']) &&
+        JSON.stringify(choice) === JSON.stringify({ kind: 'probe', open: false }) &&
+        JSON.stringify(flag) === JSON.stringify({ held: '1', open: false }) &&
+        JSON.stringify(escaped) === JSON.stringify({ focus: true, open: false }) &&
+        !outside &&
+        !left,
+      missing: [JSON.stringify(one), JSON.stringify(head), JSON.stringify(list), `back ${back}`, `grammar ${JSON.stringify(grammar)}`, JSON.stringify(pattern), JSON.stringify(idStep), JSON.stringify(radios), JSON.stringify(choice), JSON.stringify(flag), JSON.stringify(escaped), `open after a click outside ${outside}`, `open after focus left ${left}`],
+    });
+    page.unmount();
+  }
+  {
+    // A chip's body opens its dimension's values with Back, the label and Remove, and Remove clears the value, closes
+    // the box and leaves the focus on Add filter once no chip stands. A dimension whose list did not load is skipped by
+    // the keys and says why on its row's title.
+    const [model] = (await api.listCatalog()).map((c) => c.id);
+    const page = await mount(`/requests?models=${encodeURIComponent(model ?? '')}`, { now: CLOCK_ORIGIN });
+    chipOf(page, 'model')?.querySelector('.chip__body')?.click();
+    await page.settle(100);
+    const box = filterBox();
+    const opened = {
+      back: backButton() !== null,
+      checked: boxOptions().filter((o) => o.getAttribute('aria-selected') === 'true').map((o) => o.textContent?.trim()),
+      labelled: box !== null && box.getAttribute('aria-labelledby') === box.querySelector('.popover__title')?.id,
+      remove: removeLink() !== undefined,
+      title: box?.querySelector('.popover__title')?.textContent?.trim() ?? null,
+    };
+    removeLink()?.click();
+    await page.settle(700);
+    const removed = { chip: chipRead(page, 'model'), focus: document.activeElement === addFilterButton(page), models: param(page, 'models'), open: filterBox() !== null };
+    page.unmount();
+    failNextCall('listPools', '/admin/pools', 'the registry is unavailable');
+    const failed = await mount('/requests', { now: CLOCK_ORIGIN });
+    addFilterButton(failed)?.click();
+    await failed.settle(100);
+    const pool = filterRows().find((r) => r.firstElementChild?.textContent?.trim() === 'Pool');
+    const walked = [];
+    for (let i = 0; i < 4; i++) {
+      pressKey('ArrowDown');
+      await failed.settle(50);
+      walked.push(document.activeElement?.firstElementChild?.textContent?.trim() ?? null);
+    }
+    await closeBoxes(failed);
+    failed.unmount();
+    results.push({
+      name: "/requests a chip's click opens its values and a disabled dimension carries its reason",
+      ok:
+        model !== undefined &&
+        JSON.stringify(opened) === JSON.stringify({ back: true, checked: [model], labelled: true, remove: true, title: 'Model' }) &&
+        JSON.stringify(removed) === JSON.stringify({ chip: 'no model chip', focus: true, models: null, open: false }) &&
+        pool?.getAttribute('aria-disabled') === 'true' &&
+        pool.getAttribute('title') === 'The pool list did not load: the registry is unavailable' &&
+        JSON.stringify(walked) === JSON.stringify(['Account', 'Key', 'Model', 'Cache miss reason']),
+      missing: [String(model), JSON.stringify(opened), JSON.stringify(removed), `${pool?.getAttribute('aria-disabled')} ${pool?.getAttribute('title')}`, JSON.stringify(walked)],
+    });
+  }
+  if (subject) {
+    // The drawer's line reads the Routing log's three windows around the request, each a fresh address with the page
+    // size kept, and a widening leaves the drawer for the list, the request among its rows.
+    const page = await mount(`/requests/${subject.id}?keys=laptop&rows=50`, { now: CLOCK_ORIGIN });
+    const line = page.container.querySelector('.drawer__head .drawer__widen');
+    const links = [...(line?.querySelectorAll('a') ?? [])];
+    const drawn = links.map((a) => ({ href: a.getAttribute('href'), label: a.textContent?.trim(), title: a.getAttribute('title') }));
+    const wanted = requestsWiden(subject, CLOCK_ORIGIN, '50').map((w) => ({ href: w.href, label: w.label, title: w.title }));
+    const session = links.find((a) => a.textContent?.trim() === 'this session');
+    session?.click();
+    await page.settle(700);
+    const landed = page.location();
+    const listed = rowIds(page);
+    results.push({
+      name: "/requests the drawer's three widenings write the view's address and close it",
+      ok:
+        (line?.textContent ?? '').startsWith('Widen to') &&
+        JSON.stringify(drawn) === JSON.stringify(wanted) &&
+        JSON.stringify(drawn.map((d) => d.label)) === JSON.stringify(['this minute', 'this session', 'this account']) &&
+        `${landed.pathname}${landed.search}` === wanted[1]?.href &&
+        page.container.querySelector('.drawer') === null &&
+        listed.includes(subject.id),
+      missing: [line?.textContent ?? 'no line', JSON.stringify(drawn), JSON.stringify(wanted), JSON.stringify(landed), `${listed.length} rows, the request among them ${listed.includes(subject.id)}`],
+    });
+    page.unmount();
+  }
+  {
+    // A session with more than a page of ten in the day, beside a search every request id holds, so Next reads on; and
+    // one request beside a part of its own id. Each subject reaches the route as its own parameter on every read.
+    const day = (await api.listRequests({ from: isoAt(CLOCK_ORIGIN - 24 * HOUR), limit: 500, to: isoAt(CLOCK_ORIGIN) })).requests;
+    const perSession = new Map();
+    for (const r of day) if (r.sessionId !== null) perSession.set(r.sessionId, (perSession.get(r.sessionId) ?? 0) + 1);
+    const session = [...perSession].find(([, n]) => n > 10)?.[0];
+    const sessionOf = (id) => requests.find((r) => r.id === id)?.sessionId ?? null;
+    const spy = countCalls('listRequests');
+    const page = await mount(`/requests?search=req_&session=${encodeURIComponent(session ?? '')}&rows=10`, { now: CLOCK_ORIGIN });
+    const subjectOf = (q) => ({ request: q?.request ?? null, search: q?.search ?? null, session: q?.session ?? null });
+    const firstRead = subjectOf(spy.calls[0]?.[0]);
+    const chips = { search: barSearch(page)?.value ?? null, session: chipRead(page, 'session') };
+    const firstRows = rowIds(page);
+    await chooseInterval(page, '5 s');
+    const before = spy.calls.length;
+    tick(5_000);
+    await page.settle();
+    const polled = spy.calls.slice(before).map(([q]) => subjectOf(q));
+    page.container.querySelector('button[aria-label="Next page"]')?.click();
+    await page.settle();
+    const next = spy.calls.at(-1)?.[0];
+    const nextRows = rowIds(page);
+    spy.restore();
+    page.unmount();
+    const one = requests.find((r) => r.kind !== 'probe' && Date.parse(r.at) > CLOCK_ORIGIN - 24 * HOUR && Date.parse(r.at) <= CLOCK_ORIGIN);
+    const part = one?.id.slice(4, 12) ?? '';
+    const oneSpy = countCalls('listRequests');
+    const single = await mount(`/requests?search=${part}&request=${encodeURIComponent(one?.id ?? '')}`, { now: CLOCK_ORIGIN });
+    const singleRead = subjectOf(oneSpy.calls[0]?.[0]);
+    const singleRows = rowIds(single);
+    const requestChip = chipRead(single, 'request');
+    oneSpy.restore();
+    single.unmount();
+    const want = { request: null, search: 'req_', session };
+    results.push({
+      name: '/requests a request chip and a session chip stand beside a search and each reaches the route as its own parameter',
+      ok:
+        session !== undefined &&
+        JSON.stringify(firstRead) === JSON.stringify(want) &&
+        JSON.stringify(chips) === JSON.stringify({ search: 'req_', session: `session: ${session.slice(0, 8)}…` }) &&
+        firstRows.length === 10 &&
+        firstRows.every((id) => sessionOf(id) === session) &&
+        polled.length > 0 &&
+        polled.every((q) => JSON.stringify(q) === JSON.stringify(want)) &&
+        typeof next?.cursor === 'string' &&
+        JSON.stringify(subjectOf(next)) === JSON.stringify(want) &&
+        nextRows.length > 0 &&
+        nextRows.every((id) => sessionOf(id) === session) &&
+        one !== undefined &&
+        JSON.stringify(singleRead) === JSON.stringify({ request: one.id, search: part, session: null }) &&
+        JSON.stringify(singleRows) === JSON.stringify([one.id]) &&
+        requestChip === `request: ${one.id.slice(0, 8)}…`,
+      missing: [String(session), JSON.stringify(firstRead), JSON.stringify(chips), `${firstRows.length} rows`, JSON.stringify(polled), JSON.stringify(next ?? null), `${nextRows.length} rows on Next`, JSON.stringify(singleRead), JSON.stringify(singleRows), requestChip],
+    });
+  }
+  {
+    // The count reads the page's rows at the bar's right edge: a cursor left, the rows alone, or none.
+    const more = await mount('/requests', { now: CLOCK_ORIGIN });
+    const several = countText(more);
+    more.unmount();
+    const none = await mount('/requests?search=no-such-request', { now: CLOCK_ORIGIN });
+    const empty = countText(none);
+    none.unmount();
+    const id = requests.find((r) => r.kind !== 'probe' && Date.parse(r.at) > CLOCK_ORIGIN - 24 * HOUR && Date.parse(r.at) <= CLOCK_ORIGIN)?.id ?? '';
+    const single = await mount(`/requests?request=${encodeURIComponent(id)}`, { now: CLOCK_ORIGIN });
+    const alone = countText(single);
+    single.unmount();
+    results.push({
+      name: '/requests the count reads No rows, n shown and more available',
+      ok: several === '25 shown, more available' && empty === 'No rows' && alone === '1 shown',
+      missing: [several, empty, alone],
+    });
+  }
 }
 
 // The routing log on the pinned clock. Every figure a check names is read from the mock's own answer to the query the
@@ -13099,24 +13621,26 @@ m.unmount();
     return [...(tr?.querySelectorAll('.menu__list button') ?? [])];
   };
   const entryOf = async (page, tr) => (await toggleMenu(page, tr)).find((b) => b.textContent?.trim() === 'View in requests');
-  const keysFilter = (page) => [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Keys'));
   const landing = (page) => {
     const at = page.location();
     const params = new URLSearchParams(at.search);
-    const keys = keysFilter(page);
     return {
-      keyFilter: keys?.querySelector('.mselect__trigger')?.textContent?.trim() ?? null,
       // The live keys' options list bare ids and an earlier holder's lifetime takes an option of its own, so a live key's
-      // own lifetime is a value no option carries: the trigger still counts it and offers its Clear.
-      keyFilterSet: keys?.classList.contains('has-value') === true && keys.querySelector('.mselect__clear[aria-label="Clear Keys"]') !== null,
+      // own lifetime is a value no option carries: its chip prints it as the address writes it, and the x still clears it.
+      keyChip: chipRead(page, 'key'),
+      keyChipClears: chipOf(page, 'key')?.querySelector('.chip__remove[aria-label="Remove key filter"]') != null,
       keys: params.get('keys'),
       path: at.pathname,
       range: params.get('range'),
       search: params.get('search'),
+      session: params.get('session'),
+      sessionChip: chipRead(page, 'session'),
       pill: pressedRange(page)?.textContent ?? null,
-      typed: page.container.querySelector('input.filters__search')?.value ?? null,
+      typed: barSearch(page)?.value ?? null,
     };
   };
+  const cut = (id) => (id.length > 8 ? `${id.slice(0, 8)}…` : id);
+  const keyWords = (s) => `key: ${s.historical ? earlierHolderLabel(s.keyId, s.keyGeneration) : lifetime(s)}`;
   const page = await mount('/sessions', { now: CLOCK_ORIGIN });
   const first = rowsOf(page)[0];
   const labels = (await toggleMenu(page, first)).map((b) => b.textContent?.trim() ?? '');
@@ -13140,7 +13664,7 @@ m.unmount();
     const s = sessionOf(page, tr);
     (await entryOf(page, tr))?.click();
     await page.settle(300);
-    followed.push({ band, got: landing(page), key: lifetime(s), session: s.sessionId, want: rangeAt(s.lastRequestAt, CLOCK_ORIGIN) });
+    followed.push({ band, got: landing(page), key: lifetime(s), keyChip: keyWords(s), session: s.sessionId, want: rangeAt(s.lastRequestAt, CLOCK_ORIGIN) });
     await page.navigate('/sessions');
     await page.settle(300);
   }
@@ -13171,13 +13695,14 @@ m.unmount();
     const answered = read?.answer.requests ?? [];
     const heads = [...page.container.querySelectorAll('.requests__table thead th')].map((th) => th.textContent?.trim() ?? '');
     const drawn = [...page.container.querySelectorAll('.requests__table tbody tr')].map((row) => row.children[heads.indexOf('Key')]?.textContent?.trim() ?? '');
-    const filter = keysFilter(page);
-    filter?.querySelector('.mselect__trigger')?.click();
+    chipOf(page, 'key')?.querySelector('.chip__body')?.click();
     await page.settle(150);
-    const options = [...(filter?.querySelectorAll(CHOICE) ?? [])];
+    const options = [...(filterBox()?.querySelectorAll(CHOICE) ?? [])];
+    const checked = options.filter((o) => o.getAttribute('aria-selected') === 'true').length;
+    await closeBoxes(page);
     const unscoped = read === undefined ? [] : (await listRequests.call(api, { ...read.query, cursor: undefined, keyIds: [], limit: 500 })).requests;
     pair.push({
-      checked: options.filter((o) => o.getAttribute('aria-selected') === 'true').length,
+      checked,
       drawn: [...new Set(drawn)],
       drawnCount: drawn.length,
       historical: s.historical,
@@ -13215,7 +13740,7 @@ m.unmount();
   await later.navigate('/sessions');
   later.unmount();
   results.push({
-    name: "/sessions the row menu offers View in requests after View in analytics, disabled without traffic, and opens the Requests page with the session in its search, the row's key lifetime in its key filter and the narrowest range that covers its last request, listing that holder's requests alone",
+    name: "/sessions the row menu offers View in requests after View in analytics, disabled without traffic, and opens the Requests page on the session's chip, the row's key lifetime as its key chip and the narrowest range that covers its last request, listing that holder's requests alone",
     ok:
       labels.indexOf('View in requests') === labels.indexOf('View in routing log') - 1 &&
       labels.indexOf('View in requests') > labels.indexOf('View in analytics') &&
@@ -13223,7 +13748,7 @@ m.unmount();
       off.disabled &&
       (off.getAttribute('title') ?? '').includes('no ledgered requests') &&
       followed.length > 0 &&
-      followed.every((f) => f.got.path === '/requests' && f.got.search === f.session && f.got.keys === f.key && f.got.keyFilter === 'Keys (1)' && f.got.keyFilterSet && f.got.range === (f.want === '24h' ? null : f.want) && f.got.typed === f.session && f.got.pill === (f.want ?? '24h')) &&
+      followed.every((f) => f.got.path === '/requests' && f.got.session === f.session && f.got.sessionChip === `session: ${cut(f.session)}` && f.got.search === null && f.got.typed === '' && f.got.keys === f.key && f.got.keyChip === f.keyChip && f.got.keyChipClears && f.got.range === (f.want === '24h' ? null : f.want) && f.got.pill === (f.want ?? '24h')) &&
       movedRow !== undefined &&
       atClick.path === '/requests' &&
       atClick.keys === lifetime(moved) &&
@@ -13608,12 +14133,12 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   const HIDDEN = ['Last request', 'Agents', 'Next probe'];
   {
     // The default set fits the card at 1280 by 800 without these three, each one tick away in the control.
-    const button = () => [...m.container.querySelectorAll('.card__actions .filters__cols button')].find((b) => b.textContent?.trim().startsWith('Columns'));
+    const button = () => m.container.querySelector('button[aria-label="Columns"]');
     const shown = heads();
-    const label = button()?.textContent?.trim();
+    const label = `${button()?.textContent?.trim()}, ${button()?.getAttribute('title')}`;
     button()?.click();
     await m.settle(100);
-    const offered = [...m.container.querySelectorAll('.cols-popover label')].map((l) => ({ checked: l.querySelector('input[type="checkbox"]')?.checked ?? null, label: l.textContent?.trim() ?? '' }));
+    const offered = [...document.querySelectorAll('.popover .cols-popover label')].map((l) => ({ checked: l.querySelector('input[type="checkbox"]')?.checked ?? null, label: l.textContent?.trim() ?? '' }));
     button()?.click();
     await m.settle(100);
     results.push({
@@ -13622,8 +14147,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
         JSON.stringify(offered.map((c) => c.label)) === JSON.stringify(COLUMNS) &&
         offered.every((c) => c.checked === !HIDDEN.includes(c.label)) &&
         JSON.stringify(shown) === JSON.stringify(['', 'Session', ...COLUMNS.filter((c) => !HIDDEN.includes(c)), '']) &&
-        label === `Columns (${COLUMNS.length - HIDDEN.length})` &&
-        m.container.querySelector('.cols-popover') === null,
+        label === `${COLUMNS.length - HIDDEN.length}, Columns: ${COLUMNS.length - HIDDEN.length} of ${COLUMNS.length} shown` &&
+        document.querySelector('.popover .cols-popover') === null,
       missing: [JSON.stringify(offered), JSON.stringify(shown), String(label)],
     });
   }
@@ -15436,13 +15961,11 @@ m.unmount();
   const named = (el) => (el === document.body ? 'the body' : `${el?.tagName.toLowerCase()} ${el?.className} ${el?.textContent?.trim().slice(0, 30)}`);
 
   let page = await mount('/requests');
-  const filter = (label) => [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith(label));
-  const agentType = filter('Agent type');
-  const agentOpener = agentType?.querySelector('.mselect__trigger');
-  agentOpener?.click();
-  await page.settle(100);
+  // Each list opens in Add filter's values step, anchored to Add filter, which takes the focus back on Escape.
+  const agentType = await addFilter(page, 'Agent type');
+  const agentOpener = addFilterButton(page);
   const labels = [...(agentType?.querySelectorAll('.mselect__option') ?? [])].map((o) => o.textContent?.trim());
-  const at = () => (agentType?.querySelector('.mselect__list')?.contains(document.activeElement) ? document.activeElement?.textContent?.trim() : named(document.activeElement));
+  const at = () => (filterBox()?.querySelector('.option-list')?.contains(document.activeElement) ? document.activeElement?.textContent?.trim() : named(document.activeElement));
   const moves = [at()];
   for (const key of ['ArrowDown', 'ArrowUp', 'End', 'Home']) {
     press(key);
@@ -15451,23 +15974,21 @@ m.unmount();
   }
   press('Escape');
   await page.settle(50);
-  const escaped = [agentType?.querySelector('.mselect__list') === null, document.activeElement === agentOpener];
-  agentOpener?.click();
-  await page.settle(100);
-  const reopened = agentType?.querySelector('.mselect__list') !== null;
-  page.container.querySelector('input.filters__search')?.focus();
+  const escaped = [filterBox() === null, document.activeElement === agentOpener];
+  await addFilter(page, 'Agent type');
+  const reopened = filterBox()?.querySelector('.option-list') != null;
+  barSearch(page)?.focus();
   await page.settle(50);
-  const tabbedOut = agentType?.querySelector('.mselect__list') === null;
+  const tabbedOut = filterBox() === null;
   const wanted = [labels[0], labels[1], labels[0], labels.at(-1), labels[0]];
   results.push({
     name: 'the Agent type filter opens onto its Select all row and the keys move, close and return focus',
     ok: labels.length > 2 && labels[0] === 'Select all' && JSON.stringify(moves) === JSON.stringify(wanted) && escaped.every(Boolean) && reopened && tabbedOut,
-    missing: [`moves ${JSON.stringify(moves)} against ${JSON.stringify(wanted)}`, `Escape closed ${escaped[0]}, on the trigger ${escaped[1]}`, `reopened ${reopened}, a Tab out closed ${tabbedOut}`],
+    missing: [`moves ${JSON.stringify(moves)} against ${JSON.stringify(wanted)}`, `Escape closed ${escaped[0]}, on Add filter ${escaped[1]}`, `reopened ${reopened}, a Tab out closed ${tabbedOut}`],
   });
 
-  const models = filter('Models');
-  models?.querySelector('.mselect__trigger')?.click();
-  await page.settle(100);
+  // A list past twelve options opens with its search field: on this story the status codes, past the six models.
+  const models = await addFilter(page, 'Status');
   const search = models?.querySelector('.mselect__search');
   const onSearch = search != null && document.activeElement === search;
   press('ArrowDown');
@@ -15480,29 +16001,32 @@ m.unmount();
   press('Escape');
   await page.settle(50);
   results.push({
-    name: 'the Models filter opens onto its search field',
-    ok: onSearch && down && up && models?.querySelector('.mselect__list') === null,
+    name: 'the Status filter, a list past twelve options, opens onto its search field',
+    ok: onSearch && down && up && filterBox() === null,
     missing: [`on the search field ${onSearch}`, `ArrowDown to the Select all row ${down}`, `ArrowUp back ${up}`, named(document.activeElement)],
   });
 
-  agentOpener?.click();
-  await page.settle(100);
-  [...(agentType?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === labels[0])?.click();
+  // A chip holds its body and its x side by side, since a button holds no other button, and the x of the last chip
+  // hands the focus to Add filter.
+  await addFilter(page, 'Agent type');
+  [...(filterBox()?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === labels[1])?.click();
   await page.settle(150);
-  const clear = agentType?.querySelector('.mselect__clear');
-  const nested = page.container.querySelector('button [role="button"]');
-  const beside = `${named(clear)} after ${named(clear?.previousElementSibling)}`;
-  const besideOk = nested === null && clear?.tagName === 'BUTTON' && clear.getAttribute('type') === 'button' && clear.parentElement === agentType && clear.previousElementSibling === agentOpener;
-  clear?.click();
-  await page.settle(150);
-  const clearedOnto = document.activeElement === agentOpener;
-  results.push({
-    name: 'a clear control is a button beside the trigger, not inside it',
-    ok: besideOk && clearedOnto,
-    missing: [nested ? `a ${named(nested)} inside a button` : 'nothing nested', clear ? beside : 'no clear control', `focus after the clear on ${named(document.activeElement)}`],
-  });
   press('Escape');
   await page.settle(50);
+  const chip = chipOf(page, 'agent type');
+  const clear = chip?.querySelector('.chip__remove');
+  const nested = page.container.querySelector('button button, button [role="button"]');
+  const beside = `${named(clear)} after ${named(clear?.previousElementSibling)}`;
+  const besideOk = nested === null && clear?.tagName === 'BUTTON' && clear.getAttribute('type') === 'button' && clear.getAttribute('aria-label') === 'Remove agent type filter' && clear.parentElement === chip && clear.previousElementSibling === chip.querySelector('.chip__body');
+  clear?.focus();
+  clear?.click();
+  await page.settle(150);
+  const clearedOnto = document.activeElement === addFilterButton(page);
+  results.push({
+    name: "a chip's remove control is a button beside its body, not inside it",
+    ok: besideOk && clearedOnto,
+    missing: [nested ? `a ${named(nested)} inside a button` : 'nothing nested', clear ? beside : 'no remove control', `focus after the remove on ${named(document.activeElement)}`],
+  });
   page.unmount();
 
   page = await mount('/keys');
@@ -15556,30 +16080,61 @@ m.unmount();
 }
 
 {
-  // The Select all row of every multi-select, one case per picker on the pinned clock, late in the run like the
-  // keyboard checks before it, so the real time the clicks' reads take moves none of the story's relative times the
-  // earlier checks read. The checked marks read the address back, so a row that handed its options over one change at a
-  // time would leave fewer of them checked than the list holds, which the checked count catches. The address term reads
-  // that the page wrote the picker's own key with every value.
+  // The Select all row of every list, one case per picker on the pinned clock, late in the run like the keyboard checks
+  // before it, so the real time the clicks' reads take moves none of the story's relative times the earlier checks
+  // read. The checked marks read the address back, so a row that handed its options over one change at a time would
+  // leave fewer of them checked than the list holds, which the checked count catches. The address term reads that the
+  // page wrote the picker's own key with every value. A view on the filter bar opens each list in Add filter's values
+  // step and reads its chip, and a view that still draws the multi-selects reads their triggers.
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const barred = (page) => page.container.querySelector('.filter-bar') !== null;
   const filterOf = (page, label) =>
-    [...page.container.querySelectorAll('.filters .mselect')].find((d) => {
-      const shown = d.querySelector('.mselect__trigger')?.textContent?.trim() ?? '';
-      return shown === label || shown.startsWith(`${label} (`);
-    });
+    barred(page)
+      ? filterBox()?.querySelector('.popover__title')?.textContent?.trim() === label
+        ? (filterBox()?.querySelector('.option-list') ?? undefined)
+        : undefined
+      : [...page.container.querySelectorAll('.filters .mselect')].find((d) => {
+          const shown = d.querySelector('.mselect__trigger')?.textContent?.trim() ?? '';
+          return shown === label || shown.startsWith(`${label} (`);
+        });
+  const openList = async (page, label) => {
+    if (barred(page)) await addFilter(page, label);
+    else {
+      filterOf(page, label)?.querySelector('.mselect__trigger')?.click();
+      await page.settle(150);
+    }
+  };
+  const closeList = async (page, label) => {
+    if (barred(page)) await closeBoxes(page);
+    else {
+      filterOf(page, label)?.querySelector('.mselect__trigger')?.click();
+      await page.settle(100);
+    }
+  };
   const read = (page, label, key) => {
     const filter = filterOf(page, label);
     const head = filter?.querySelector('.mselect__option--all');
     const choices = [...(filter?.querySelectorAll(CHOICE) ?? [])];
+    const chip = barred(page) ? chipOf(page, label.toLowerCase()) : undefined;
     return {
       address: new URLSearchParams(page.location().search).get(key)?.split(',') ?? null,
       checked: choices.filter((o) => o.getAttribute('aria-selected') === 'true').map((o) => o.textContent?.trim() ?? ''),
       choices: choices.map((o) => o.textContent?.trim() ?? ''),
       first: head != null && filter?.querySelector('[role="option"]') === head,
       head: head ? { checked: head.getAttribute('aria-checked'), selected: head.getAttribute('aria-selected'), text: head.textContent?.trim() } : null,
-      set: filter?.classList.contains('has-value') === true,
-      trigger: filter?.querySelector('.mselect__trigger')?.textContent?.trim() ?? `no ${label} filter`,
+      set: barred(page) ? chip !== undefined : filter?.classList.contains('has-value') === true,
+      title: chip?.getAttribute('title') ?? null,
+      trigger: barred(page) ? (chip?.textContent?.trim() ?? `no ${label} chip`) : (filter?.querySelector('.mselect__trigger')?.textContent?.trim() ?? `no ${label} filter`),
     };
+  };
+  /**
+   * The words a picker shows with `checked` on: a chip's word, three of its values and "+N" with every label in its
+   * title, a status by its code alone, or a trigger's count.
+   */
+  const summary = (page, label, checked) => {
+    if (!barred(page)) return { title: null, trigger: `${label} (${checked.length})` };
+    const values = label === 'Status' ? checked.map((c) => c.split(' ')[0]) : checked;
+    return { title: checked.join(', '), trigger: `${label.toLowerCase()}: ${values.slice(0, 3).join(', ')}${values.length > 3 ? ` +${values.length - 3}` : ''}` };
   };
   const clickHead = async (page, label) => {
     filterOf(page, label)?.querySelector('.mselect__option--all')?.click();
@@ -15590,9 +16145,12 @@ m.unmount();
 
   const PICKERS = [
     ['/analytics', [['Key', 'keys'], ['Pool', 'pools'], ['Account', 'accounts'], ['Model', 'models']]],
-    ['/requests', [['Keys', 'keys'], ['Pools', 'pools'], ['Accounts', 'accounts'], ['Models', 'models'], ['Status', 'statuses'], ['Outcome', 'outcomes'], ['Cache miss reason', 'cache_miss_reasons'], ['Agent type', 'agent_types'], ['Turn origin', 'turn_origins'], ['Effort', 'efforts'], ['Request class', 'request_classes'], ['Speed', 'speeds']]],
+    ['/requests', [['Key', 'keys'], ['Pool', 'pools'], ['Account', 'accounts'], ['Model', 'models'], ['Status', 'statuses'], ['Outcome', 'outcomes'], ['Cache miss reason', 'cache_miss_reasons'], ['Agent type', 'agent_types'], ['Turn origin', 'turn_origins'], ['Effort', 'efforts'], ['Request class', 'request_classes'], ['Speed', 'speeds']]],
     ['/routing-log', [['Kinds', 'kinds'], ['Keys', 'keys'], ['Pools', 'pools'], ['Accounts', 'accounts'], ['Models', 'models']]],
   ];
+  // The list each view searches under a query, and the query: one whose options pass the length that draws a search
+  // field.
+  const QUERIED = { '/requests': ['Status', '50'], '/routing-log': ['Models', 'sonnet'] };
   for (const [view, pickers] of PICKERS) {
     const page = await mount(view, { now: CLOCK_ORIGIN });
     for (const [label, key] of pickers) {
@@ -15601,12 +16159,11 @@ m.unmount();
       const name = kinds
         ? `${view} Select all on Kinds checks every kind and a second click returns the default set`
         : `${view} Select all on ${label} checks every option and a second click clears them`;
+      await openList(page, label);
       if (!filterOf(page, label)) {
         controlMissing(name, label);
         continue;
       }
-      filterOf(page, label)?.querySelector('.mselect__trigger')?.click();
-      await page.settle(150);
       const before = read(page, label, key);
       await clickHead(page, label);
       const all = read(page, label, key);
@@ -15615,7 +16172,8 @@ m.unmount();
       const opened = kinds ? before.head?.checked === 'mixed' && before.head.selected === 'false' : before.head?.checked === null && before.head.selected === 'false' && before.checked.length === 0;
       const cleared = kinds
         ? none.trigger === 'Kinds (2 hidden)' && !none.set && none.address === null && none.checked.length === none.choices.length - 2 && sameSet(none.checked, before.checked)
-        : none.trigger === label && !none.set && none.address === null && none.checked.length === 0;
+        : (barred(page) || none.trigger === label) && !none.set && none.address === null && none.checked.length === 0;
+      const wanted = summary(page, label, all.checked);
       results.push({
         name,
         ok:
@@ -15626,15 +16184,17 @@ m.unmount();
           all.checked.length === all.choices.length &&
           all.head?.selected === 'true' &&
           all.head.checked === null &&
-          all.trigger === `${label} (${all.choices.length})` &&
+          all.trigger === wanted.trigger &&
+          all.title === wanted.title &&
           all.address?.length === all.choices.length &&
           cleared &&
           none.head?.selected === 'false',
-        missing: [`opened: ${brief(before)}`, `first click: ${brief(all)}`, `second click: ${brief(none)}`],
+        missing: [`opened: ${brief(before)}`, `first click: ${brief(all)}`, `wanted: ${JSON.stringify(wanted)}`, `second click: ${brief(none)}`],
       });
       // A searchable list's row reaches the options its query leaves, and the hidden ones keep their state.
-      if (label === 'Models') {
-        const queryName = `${view} Select all on Models under a query checks the options the search shows and leaves the hidden ones unchecked`;
+      const [queried, query] = QUERIED[view] ?? [];
+      if (label === queried) {
+        const queryName = `${view} Select all on ${label} under a query checks the options the search shows and leaves the hidden ones unchecked`;
         const search = filterOf(page, label)?.querySelector('.mselect__search');
         const type = async (text) => {
           setter.call(search, text);
@@ -15643,35 +16203,40 @@ m.unmount();
         };
         if (!search) results.push({ name: queryName, ok: false, missing: ['no search field'] });
         else {
-          await type('sonnet');
+          await type(query);
           const shown = read(page, label, key);
           await clickHead(page, label);
           const under = read(page, label, key);
           await type('');
           const whole = read(page, label, key);
+          const words = summary(page, label, whole.checked);
           results.push({
             name: queryName,
             ok:
               shown.choices.length > 0 &&
               shown.choices.length < whole.choices.length &&
-              shown.choices.every((c) => c.includes('sonnet')) &&
+              shown.choices.every((c) => c.includes(query)) &&
               shown.checked.length === 0 &&
               under.checked.length === shown.choices.length &&
               under.head?.selected === 'true' &&
               sameSet(whole.checked, shown.choices) &&
               whole.head?.checked === 'mixed' &&
               whole.address !== null &&
-              sameSet(whole.address, shown.choices) &&
-              whole.trigger === `Models (${shown.choices.length})`,
-            missing: [`shown ${shown.choices.join(',')}`, `under the query: ${brief(under)}`, `whole list: ${brief(whole)}, checked ${whole.checked.join(',')}, address ${whole.address?.join(',')}`],
+              (barred(page) || sameSet(whole.address, shown.choices)) &&
+              whole.address.length === shown.choices.length &&
+              whole.trigger === words.trigger &&
+              whole.title === words.title,
+            missing: [`shown ${shown.choices.join(',')}`, `under the query: ${brief(under)}`, `whole list: ${brief(whole)}, checked ${whole.checked.join(',')}, address ${whole.address?.join(',')}`, `wanted ${JSON.stringify(words)}`],
           });
-          filterOf(page, label)?.querySelector('.mselect__clear')?.click();
-          await page.settle(700);
+          if (barred(page)) await removeChip(page, label.toLowerCase());
+          else {
+            filterOf(page, label)?.querySelector('.mselect__clear')?.click();
+            await page.settle(700);
+          }
         }
       }
-      // Clearing leaves the list open, so the trigger closes it.
-      filterOf(page, label)?.querySelector('.mselect__trigger')?.click();
-      await page.settle(100);
+      // Clearing leaves the list open, so it is closed before the next picker opens.
+      await closeList(page, label);
     }
     page.unmount();
   }

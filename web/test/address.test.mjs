@@ -16,7 +16,7 @@ const FILLED = {
   MODELS_CODEC: { key: 'laptop' },
   POOLS_CODEC: {},
   QUOTA_CODEC: {},
-  REQUESTS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', agentTypes: ['main', 'subagent'], cacheMissReasons: ['messages_changed', 'ttl_expired'], client: 'claude-code/*', efforts: ['high', 'low'], held: true, keys: ['desktop', 'laptop'], kind: 'probe', models: ['claude-opus-5', 'claude-sonnet-5'], outcomes: ['failed', 'succeeded'], pools: ['all', 'jobs'], range: preset('6h'), requestClasses: ['conversation', 'title'], rows: '50', search: 'req_1d9c3e55', speeds: ['fast', 'standard'], statuses: ['200', '429'], turnOrigins: ['agent', 'user'] },
+  REQUESTS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', agentTypes: ['main', 'subagent'], cacheMissReasons: ['messages_changed', 'ttl_expired'], client: 'claude-code/*', efforts: ['high', 'low'], held: true, keys: ['desktop', 'laptop'], kind: 'probe', models: ['claude-opus-5', 'claude-sonnet-5'], outcomes: ['failed', 'succeeded'], pools: ['all', 'jobs'], range: preset('6h'), request: 'req_f8085653', requestClasses: ['conversation', 'title'], rows: '50', search: 'req_1d9c3e55', session: '407dd39b-dd60', speeds: ['fast', 'standard'], statuses: ['200', '429'], turnOrigins: ['agent', 'user'] },
   ROUTING_LOG_CODEC: { accounts: ['primary', 'secondary'], keys: ['desktop', 'laptop'], kinds: ['exhausted', 'moved'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], range: preset('6h'), request: 'req_1d9c3e55', session: '407dd39b-dd60' },
   SESSIONS_CODEC: {},
 };
@@ -49,6 +49,16 @@ test('a preset travels by its name, nothing for the default, and a custom span a
   const params = d.ROUTING_LOG_CODEC.toParams({ ...FILLED.ROUTING_LOG_CODEC, range: CUSTOM });
   assert.deepEqual([...params.keys()], ['accounts', 'keys', 'kinds', 'models', 'pools', 'request', 'session', 'from', 'to']);
   assert.deepEqual([params.get('from'), params.get('to'), params.get('range')], [FROM, TO, null]);
+});
+
+test('the Requests codec carries a request and a session after the search, each exact and absent at its default', () => {
+  const filters = read(d.REQUESTS_CODEC, 'request=req_1&session=s1');
+  assert.deepEqual([filters.request, filters.session], ['req_1', 's1']);
+  assert.deepEqual(read(d.REQUESTS_CODEC, write(d.REQUESTS_CODEC, filters)), filters);
+  assert.deepEqual([...d.REQUESTS_CODEC.toParams({ ...filters, client: 'claude-code/*', search: 'claude' }).keys()], ['search', 'request', 'session', 'client']);
+  const bare = read(d.REQUESTS_CODEC, '');
+  assert.deepEqual([bare.request, bare.session], ['', '']);
+  assert.equal(write(d.REQUESTS_CODEC, bare), '');
 });
 
 test('from and to win over range while both parse, and the next write drops range', () => {
