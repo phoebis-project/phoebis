@@ -157,6 +157,10 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
     const value = filters[d.field];
     const known = options[d.field] ?? [];
     const none = d.defaultValue ?? '';
+    const listed = Array.isArray(value) ? (value as string[]) : [];
+    // An empty value that means every option reads every row checked, so a row's click unchecks one and a preset's
+    // narrows to its members.
+    const every = d.emptyMeansAll === true && listed.length === 0;
     return (
       <div ref={bodyRef} className="add-filter" onKeyDown={d.kind === 'choice' ? (e) => walkRows(e, e.currentTarget) : undefined}>
         <div className="popover__head">
@@ -176,14 +180,14 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
           <OptionList
             key={d.field}
             autoFocus
+            everyByDefault={every}
             label={d.label}
             mono={d.mono}
             onChange={(next) => update({ [d.field]: next })}
             options={known}
             presets={presets[d.field]}
             searchable={d.searchable === true || known.length > SEARCHED}
-            // An empty value that means every option reads every row checked, so a click unchecks one.
-            value={Array.isArray(value) && value.length > 0 ? value : d.emptyMeansAll ? known.map((o) => o.value) : []}
+            value={every ? known.map((o) => o.value) : listed}
           />
         )}
         {(d.kind === 'id' || d.kind === 'pattern') && (

@@ -9743,7 +9743,34 @@ m.unmount();
     });
   }
   {
-    // From a link's one kind, since at rest every kind is on and every preset row reads checked.
+    // From every kind, a preset's click lists its kinds alone, and its second click removes them, which empties the set
+    // and returns to every kind.
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    const kindsOf = () => new URLSearchParams(page.location().search).get('kinds');
+    const keepalive = ['probe', 'warm_prefix_expired'];
+    const answer = await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - HOUR), kinds: keepalive, limit: 25, to: iso(CLOCK_ORIGIN) });
+    const rest = { address: kindsOf(), chip: chipRead(page, 'kinds') };
+    await addFilter(page, 'Kinds');
+    const presetRow = () => [...(filterBox()?.querySelectorAll('.option-list .mselect__option--preset') ?? [])].find((o) => o.textContent?.trim() === 'keepalive');
+    const before = presetRow()?.getAttribute('aria-selected') ?? null;
+    await clickOption(page, 'keepalive');
+    const one = { address: kindsOf(), chip: chipRead(page, 'kinds'), rows: trs(page).map((tr) => tr.getAttribute('data-row')) };
+    await clickOption(page, 'keepalive');
+    const options = [...(filterBox()?.querySelectorAll(`.option-list ${CHOICE}:not(.mselect__option--preset)`) ?? [])];
+    const back = { address: kindsOf(), checked: options.filter((o) => o.getAttribute('aria-selected') === 'true').length, chip: chipRead(page, 'kinds'), options: options.length };
+    await closeBoxes(page);
+    page.unmount();
+    results.push({
+      name: "/routing-log a preset row clicked at rest lists the preset's kinds alone under its chip, and a second click returns every kind",
+      ok:
+        rest.address === null && rest.chip === 'no kinds chip' && before === 'true' &&
+        one.address === keepalive.join(',') && one.chip === 'kinds: keepalive' && answer.rows.length > 0 && JSON.stringify(one.rows) === JSON.stringify(answer.rows.map(rowKeyOf)) &&
+        back.address === null && back.chip === 'no kinds chip' && back.options === 35 && back.checked === 35,
+      missing: [JSON.stringify(rest), String(before), JSON.stringify(one), `${answer.rows.length} keepalive rows`, JSON.stringify(back)],
+    });
+  }
+  {
+    // From a link's one kind, where a preset's click adds its members to the set.
     const page = await mount('/routing-log?kinds=moved', { now: CLOCK_ORIGIN });
     const kindsOf = () => new URLSearchParams(page.location().search).get('kinds');
     const spy = countCalls('listRoutingLog');

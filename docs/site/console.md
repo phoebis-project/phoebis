@@ -595,15 +595,17 @@ From and To in a popover as on the Requests view. Add filter opens a "Filter by"
 Kinds, Routing (Account, Key, Model, Pool) and Subject (Request, and Session, which a prefix matches). Every decision
 and event kind lists by default. The Kinds filter opens with eight presets above the kinds: placements and pins, moves
 and holds, exhaustion and refusals, account state and windows, cooldowns and backoff, keepalive, registry changes,
-router life cycle. A preset checks its members, two presets combine, and a hand edit after a preset is one click apart.
-Each filter in force stands as a chip on a line under the bar, as on the Requests view: a set of whole presets reads
-their names ("kinds: moves and holds"), any other set of kinds reads their words ("kinds: moved, held, placed +5"), and
-the request chip's hover counts the request's decisions and events ("1 decision, 0 events"). The widenings stand on each
-decision's card, after "Widen to": "this minute", "this session" (an hour either side) and "this account" (a quarter
-hour either side). Every filter lives in the page's address (a preset range by its name as in `range=6h`, a custom range
-as `from` and `to`, two UTC instants, the lists as comma lists), so a filtered view is a link and Back returns to the
-view before it. A `kinds` value names exactly the kinds listed, so `kinds=probe` lists probe decisions alone. An empty
-range reads "No decisions or events in this range." with "Widen the range or clear a filter."
+router life cycle. While every kind is shown, a preset's click lists its kinds alone, so keepalive reads the
+cache-warming traffic in one click. From there a preset checks or unchecks its members, two presets combine, a hand edit
+after a preset is one click apart, and unchecking the last kind returns to every kind. Each filter in force stands as a
+chip on a line under the bar, as on the Requests view: a set of whole presets reads their names ("kinds: moves and
+holds"), any other set of kinds reads their words ("kinds: moved, held, placed +5"), and the request chip's hover counts
+the request's decisions and events ("1 decision, 0 events"). The widenings stand on each decision's card, after "Widen
+to": "this minute", "this session" (an hour either side) and "this account" (a quarter hour either side). Every filter
+lives in the page's address (a preset range by its name as in `range=6h`, a custom range as `from` and `to`, two UTC
+instants, the lists as comma lists), so a filtered view is a link and Back returns to the view before it. A `kinds`
+value names exactly the kinds listed, so `kinds=probe` lists probe decisions alone. An empty range reads "No decisions
+or events in this range." with "Widen the range or clear a filter."
 
 Auto reload is off when the view opens and reads as on the Requests view. The split Refresh button's dropdown sets it to
 Off, 5 s, 10 s, 30 s or 1 min, out of the page's address, and each read takes every row that arrived since the read

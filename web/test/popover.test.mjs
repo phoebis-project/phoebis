@@ -328,7 +328,7 @@ const OPTIONS = {
 const EMPTY = { accounts: [], agent: '', held: false, keys: [], kind: '', session: '' };
 
 /** A bar's wiring: the filters in state, Add filter and the chip line over them, a chip's click opening its step. */
-function bar(initial, { dimensions = DIMENSIONS, disabled, options = OPTIONS } = {}) {
+function bar(initial, { dimensions = DIMENSIONS, disabled, options = OPTIONS, presets } = {}) {
   const addRef = { current: null };
   const writes = [];
   function Bar() {
@@ -342,7 +342,7 @@ function bar(initial, { dimensions = DIMENSIONS, disabled, options = OPTIONS } =
     return h(
       'div',
       null,
-      h(AddFilter, { buttonRef: addRef, dimensions, disabled, edit, filters, onEditDone: () => setEdit(null), options, update }),
+      h(AddFilter, { buttonRef: addRef, dimensions, disabled, edit, filters, onEditDone: () => setEdit(null), options, presets, update }),
       h(ChipLine, {
         addFilterRef: addRef,
         address: JSON.stringify(filters),
@@ -587,4 +587,25 @@ test('an empty value under emptyMeansAll draws every row checked, and unchecking
   assert.equal(box().querySelector('.popover__head .link-btn'), null, 'every kind holds no value to remove');
   click(rows.find((o) => o.textContent === 'Placed'));
   assert.deepEqual(b.writes, [{ kinds: ['moved', 'cooldown_set'] }]);
+});
+
+test("a preset's click on an empty value under emptyMeansAll writes the preset's members alone, and its second click returns to every option", () => {
+  const kinds = [
+    { group: 'Decisions', label: 'Moved', value: 'moved' },
+    { group: 'Decisions', label: 'Probe decisions', value: 'probe' },
+    { group: 'Events', label: 'Cooldown set', value: 'cooldown_set' },
+    { group: 'Events', label: 'Warm prefix expired', value: 'warm_prefix_expired' },
+  ];
+  const dimensions = [{ emptyMeansAll: true, field: 'kinds', group: 'Kinds', kind: 'list', label: 'Kinds', word: 'kinds' }];
+  const presets = { kinds: [{ label: 'keepalive', members: ['probe', 'warm_prefix_expired'] }] };
+  const b = bar({ kinds: [] }, { dimensions, options: { kinds }, presets });
+  click(b.button());
+  click(b.rowOf('Kinds'));
+  const preset = () => box().querySelector('.mselect__option--preset');
+  assert.equal(preset()?.getAttribute('aria-selected'), 'true', 'every option is on, so the preset reads checked');
+  click(preset());
+  const checked = () => [...box().querySelectorAll('.mselect__option:not(.mselect__option--all):not(.mselect__option--preset)')].filter((o) => o.getAttribute('aria-selected') === 'true').map((o) => o.textContent);
+  assert.deepEqual([b.writes, checked()], [[{ kinds: ['probe', 'warm_prefix_expired'] }], ['Probe decisions', 'Warm prefix expired']]);
+  click(preset());
+  assert.deepEqual([b.writes.at(-1), checked().length, box().querySelector('.mselect__option--all')?.getAttribute('aria-selected')], [{ kinds: [] }, 4, 'true'], 'removing the last members returns to the empty value, every option checked');
 });

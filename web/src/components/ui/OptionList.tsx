@@ -17,6 +17,8 @@ export interface Preset {
 export interface OptionListProps {
   /** Focus the search field, else the first row, on mount. */
   autoFocus?: boolean;
+  /** The value is every option because none is chosen, so a preset row's click replaces it with the preset's members. */
+  everyByDefault?: boolean;
   /** The search field's placeholder reads `Search ${label.toLowerCase()}`. */
   label: string;
   mono?: boolean;
@@ -57,7 +59,7 @@ export function walkRows(e: KeyboardEvent<HTMLElement>, list: HTMLElement): void
 }
 
 /** The multi-select's body: `div.option-list[role=listbox][aria-multiselectable]`, the `.mselect__search` field, "No matches", the `.mselect__option--all` row with its three states, the `.mselect__group` headings and the `.mselect__option` rows, ArrowDown, ArrowUp, Home and End walking the field and the rows. Escape is the opener's. */
-export function OptionList({ autoFocus = false, label, mono = false, onChange, options, presets = [], searchable = false, value }: OptionListProps): JSX.Element {
+export function OptionList({ autoFocus = false, everyByDefault = false, label, mono = false, onChange, options, presets = [], searchable = false, value }: OptionListProps): JSX.Element {
   const [query, setQuery] = useState('');
   const ref = useRef<HTMLDivElement>(null);
   // Focus enters the list as it opens, so the list's keys reach it.
@@ -74,7 +76,8 @@ export function OptionList({ autoFocus = false, label, mono = false, onChange, o
   // The row reaches the options the search shows, so a query narrows what it selects and the hidden ones stay as
   // they are.
   const toggleAll = () => onChange(allOn ? value.filter((v) => !visibleValues.includes(v)) : [...value, ...visibleValues.filter((v) => !value.includes(v))]);
-  const togglePreset = (members: readonly string[]) => onChange(members.every((m) => value.includes(m)) ? value.filter((v) => !members.includes(v)) : [...value, ...members.filter((m) => !value.includes(m))]);
+  const togglePreset = (members: readonly string[]) =>
+    onChange(everyByDefault ? [...members] : members.every((m) => value.includes(m)) ? value.filter((v) => !members.includes(v)) : [...value, ...members.filter((m) => !value.includes(m))]);
   return (
     <div className="option-list" role="listbox" aria-multiselectable ref={ref} onKeyDown={(e) => walkRows(e, e.currentTarget)}>
       {searchable && <input className="input mselect__search" placeholder={`Search ${label.toLowerCase()}`} value={query} onChange={(e) => setQuery(e.target.value)} />}
