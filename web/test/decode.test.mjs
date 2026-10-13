@@ -964,8 +964,8 @@ test('the burn series decodes each point with its instant, both token sides, and
   const direct = burn.points[burn.points.length - 1];
   assert.deepEqual(
     [direct.group, direct.fiveHourShare, direct.sevenDayShare, direct.fiveHourEquivalent, direct.sevenDayEquivalent, direct.unit, direct.usd],
-    ['direct', null, null, null, null, 'usd', body.points.at(-1).usd],
-    'an API-key point spends dollars and reads no window',
+    ['direct', null, null, 0, 0, 'usd', body.points.at(-1).usd],
+    'an API-key point spends dollars, reads no window share and a zero 20x equivalent',
   );
   assert.ok(burn.points.every((p) => isIso(p.at)));
   // Every grouping but the account one answers the shares and the unit as null, and the equivalents under every one.
