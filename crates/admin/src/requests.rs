@@ -625,6 +625,10 @@ pub(crate) struct RequestsQuery {
     /// Matches the request id, the session, the key, the model, the error code, and the attempts' account id,
     /// upstream request id and upstream message id, literally: `_`, `%` and `\` are characters.
     pub text: Option<String>,
+    /// The one request whose id equals the value, literally. Combines with `text` and every other filter.
+    pub request: Option<String>,
+    /// The requests whose session id equals the value, literally. Combines with `text` and every other filter.
+    pub session: Option<String>,
     /// A comma list. A value is read as the breakdown's: a bare id for the current key's rows,
     /// `<id>@<generation>` for an earlier holder's, or `-` for requests no key was read for.
     pub keys: Option<String>,
@@ -702,6 +706,9 @@ pub(crate) async fn list(
     };
     let filter = RequestFilter {
         text: q.get("text").cloned(),
+        // An emptied field in the view's bar narrows nothing, as an absent one.
+        request: q.get("request").filter(|r| !r.is_empty()).cloned(),
+        session: q.get("session").filter(|s| !s.is_empty()).cloned(),
         keys: list_param(&q, "keys"),
         pools: list_param(&q, "pools"),
         accounts: list_param(&q, "accounts"),

@@ -177,6 +177,12 @@ test('the request list encodes the outcome list', async () => {
   assert.ok(!String(calls[1].url).includes('outcomes'), 'no outcome filter, no parameter');
 });
 
+test('listRequests passes the request and the session as they are', async () => {
+  const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
+  await new HttpApi().listRequests({ request: 'req_1', session: 's1' });
+  assert.equal(calls[0].url, '/admin/requests?request=req_1&session=s1');
+});
+
 test('the analytics reads encode the range, the dimension, and every id list', async () => {
   const calls = stub((url) => answer(200, url.startsWith('/admin/analytics/series') ? { points: [] } : { rows: [] }));
   const api = new HttpApi();

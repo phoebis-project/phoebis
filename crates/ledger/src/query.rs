@@ -101,6 +101,10 @@ pub type RequestWithAttempts = (RequestRecord, Vec<AttemptRecord>);
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct RequestFilter {
     pub text: Option<String>,
+    /// Keep the one request whose id equals the value, literally.
+    pub request: Option<String>,
+    /// Keep the requests whose session id equals the value, literally.
+    pub session: Option<String>,
     pub keys: Vec<String>,
     pub pools: Vec<String>,
     /// Keep the requests whose serving attempt, the last one, ran on an account in the list: the account the
@@ -292,6 +296,14 @@ pub fn list_requests(
         args.push(Box::new(format!("%{}%", literal_like(text))));
         let n = args.len();
         clauses.push(format!("(id LIKE ?{n} ESCAPE '\\' OR session_id LIKE ?{n} ESCAPE '\\' OR key_id LIKE ?{n} ESCAPE '\\' OR model LIKE ?{n} ESCAPE '\\' OR error_code LIKE ?{n} ESCAPE '\\' OR EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id AND (a.account_id LIKE ?{n} ESCAPE '\\' OR a.upstream_request_id LIKE ?{n} ESCAPE '\\' OR a.upstream_message_id LIKE ?{n} ESCAPE '\\')))"));
+    }
+    if let Some(request) = filter.request.as_deref().filter(|r| !r.is_empty()) {
+        args.push(Box::new(request.to_string()));
+        clauses.push(format!("id = ?{}", args.len()));
+    }
+    if let Some(session) = filter.session.as_deref().filter(|s| !s.is_empty()) {
+        args.push(Box::new(session.to_string()));
+        clauses.push(format!("session_id = ?{}", args.len()));
     }
     key_lifetimes(&filter.keys, live, &mut args, &mut clauses);
     in_list_or_null("pool_id", &filter.pools, &mut args, &mut clauses);

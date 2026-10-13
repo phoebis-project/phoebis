@@ -73,3 +73,23 @@ test('the mock lists the rows inside a from and to window', async () => {
   narrowed(expected, 'inside 12:00 to 13:00');
   assert.deepEqual(await listed({ from, to }), ids(expected));
 });
+
+test('the mock answers a request id with the one row, whole and never by prefix', async () => {
+  const [row] = unprobed;
+  assert.deepEqual(await listed({ request: row.id }), [row.id]);
+  assert.deepEqual(await listed({ request: row.id.slice(0, 6) }), [], 'a prefix of an id is no id');
+});
+
+test("the mock answers a session id with the session's rows beside the search", async () => {
+  const shared = (id) => unprobed.filter((r) => r.sessionId === id);
+  const session = unprobed.map((r) => r.sessionId).find((id) => id !== null && shared(id).length > 1);
+  assert.ok(session, 'the story holds a session two listed rows share');
+  const expected = shared(session);
+  narrowed(expected, `in session ${session}`);
+  assert.deepEqual(await listed({ session }), ids(expected));
+  const search = expected[0].model;
+  const searched = await listed({ search });
+  const inside = new Set(ids(expected));
+  assert.ok(searched.some((id) => !inside.has(id)), `the search ${search} also hits rows outside the session`);
+  assert.deepEqual(await listed({ search, session }), searched.filter((id) => inside.has(id)), 'the session and the search combine');
+});
