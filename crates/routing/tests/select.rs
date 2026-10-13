@@ -13,8 +13,8 @@ use phoebis_routing::{
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
     CooldownRow, Failover, OveragePolicy, PinBurn, PinKey, PinRow, PoolMember,
-    PoolRow, RegistryLoad, RoutingLoad, RulesMode, SessionPlacement, ShedPin, ShedRoundRow,
-    Shedding, StateCause, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
+    PoolRow, RegistryLoad, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow, Shedding,
+    StateCause, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -960,33 +960,70 @@ fn a_pin_on_a_depleted_account_is_renewed_rather_than_moved() {
 }
 
 #[test]
-fn a_marked_pin_moves_to_a_fitting_sibling_and_stays_when_none_fits() {
+fn a_round_with_no_fitting_destination_marks_nothing_and_records_no_runway() {
     let s = tiered(Pool {
         shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
-    // Two cold pins, so the round has one to spare: it marks the heavier.
-    let mut st = priced(vec![
-        burning("s1", "a", 4.0, false, T),
-        burning("s0", "a", 1.0, false, T),
+    // Two cold pins burning 0.5 of the window an hour, so a at 0.94 projects to 1.44 and a round runs, and the burn
+    // decayed over the dwell on the pool's 600 second average still takes the second arm's projection over the ceiling.
+    let mut st = rounding(vec![
+        burning("s1", "a", 40.0, false, T),
+        burning("s0", "a", 10.0, false, T),
     ]);
-    st.record_sample("a", sample(0.85, 0.3, T - 500));
+    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500));
     st.record_sample("b", sample(0.95, 0.3, T - 500));
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(
         landed(d.result.clone()),
         ("a".into(), None),
-        "the rewrite takes b to the ceiling, so nothing fits and the marked pin stays"
+        "the rewrite takes b to the ceiling, so nothing fits, no pin is marked and the current pin renews"
     );
-    let fit = line(&d.record, "fit");
-    assert_eq!(fit.verdict, "none");
+    let round = d.shed_round.as_ref().expect("the round ran").facts.clone();
     assert_eq!(
-        fact_of(fit, "verdict", "b"),
-        &FactValue::Text("least_bad".into())
+        (round.outcome.as_str(), round.reason, round.marks.len()),
+        ("nothing_to_mark", Some("no_runway"), 0)
     );
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.skip, p.planned.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("s1", Some("no_runway"), None),
+            ("s0", Some("no_runway"), None)
+        ],
+        "every pin lacked a destination, so each reads no_runway"
+    );
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(fact(shed, "round"), &FactValue::Text("ran".into()));
+    assert_eq!(
+        fact(shed, "skipped"),
+        &FactValue::List(vec![
+            "k/s1/main/claude-sonnet-5: no_runway".into(),
+            "k/s0/main/claude-sonnet-5: no_runway".into(),
+        ])
+    );
+    assert_eq!(fact(shed, "marked"), &FactValue::Bool(false));
+    assert!(
+        d.writes.iter().any(|w| matches!(
+            w,
+            StateWrite::ShedRound { round_at, .. } if *round_at == T
+        )) && !d
+            .writes
+            .iter()
+            .any(|w| matches!(w, StateWrite::UpsertPin(row) if row.marked_at.is_some())),
+        "the round's time is written so the dwell holds, and no pin carries a mark: {:?}",
+        d.writes
+    );
+    assert_eq!(st.last_shed("p", "a"), Some(T));
+    assert!(!marked(&st, "s1") && !marked(&st, "s0"));
+    // Past the dwell b has room, so the next round marks s1 and it moves to the fitting sibling.
     st.record_sample("b", sample(0.1, 0.3, T + 500));
-    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T + 1_000), &mut rng());
+    let later = T + 901_000;
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", later), &mut rng());
     assert_eq!(
         landed(d.result.clone()),
         ("b".into(), Some(MigrateReason::Shed)),
@@ -994,7 +1031,16 @@ fn a_marked_pin_moves_to_a_fitting_sibling_and_stays_when_none_fits() {
     );
     assert_eq!(line(&d.record, "fit").verdict, "fits");
     assert_eq!(
-        landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 2_000), &mut rng()).0),
+        d.record
+            .outcome
+            .mark_cleared
+            .as_ref()
+            .map(|m| (m.reason, m.marked_at)),
+        Some(("moved", later)),
+        "the move consumed the mark the same round made"
+    );
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", later + 1_000), &mut rng()).0),
         ("b".into(), None),
         "the new pin is on b"
     );
@@ -2851,14 +2897,14 @@ fn a_marked_pins_fitting_destinations_tie_break_by_the_weekly_band_and_the_compa
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         ..Pool::default()
     });
-    // `b` and `c` read alike on the 5-hour window, so their runways tie and the weekly band decides. `a` sits at
-    // exactly the threshold, so every arm also proves the trigger's `>=` is inclusive.
+    // `b` and `c` read alike on the 5-hour window, so their runways tie and the weekly band decides. `a` at 0.94 with
+    // its pins burning 0.05 of the window an hour projects to 0.99, so its round runs and marks s1.
     let run = |b_seven_day: f64| {
-        let mut st = priced(vec![
+        let mut st = rounding(vec![
             burning("s1", "a", 4.0, false, T),
             burning("s0", "a", 1.0, false, T),
         ]);
-        st.record_sample("a", sample(0.8, 0.1, T - 500));
+        st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500));
         st.record_sample("b", sample(0.3, b_seven_day, T - 500));
         st.record_sample("c", sample(0.3, 0.1, T - 500));
         decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng())
@@ -3385,7 +3431,8 @@ fn a_spent_window_moves_a_pin_back_to_the_account_that_shed_it_inside_the_dwell(
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
-    let mut st = loaded(vec![
+    // a at 0.85 with nine hours to its reset and its pins burning 0.05 of the window an hour projects to 1.3.
+    let mut st = rounding(vec![
         burning("s1", "a", 4.0, false, T),
         burning("s0", "a", 1.0, false, T),
     ]);
@@ -4831,6 +4878,22 @@ fn with_dwells(s: &RegistrySnapshot, dwells: &[(&str, u64)]) -> RegistrySnapshot
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
 
+/// `s` rebuilt with every account on `TIER`, so the rounds of these cases price their pins and fit their destinations.
+fn on_tier(s: &RegistrySnapshot) -> RegistrySnapshot {
+    let ids: Vec<&str> = s.accounts().map(|a| a.id.as_str()).collect();
+    let load = RegistryLoad {
+        accounts: s.accounts().cloned().collect(),
+        credential_generations: Vec::new(),
+        keys: s.keys().cloned().collect(),
+        members: s.pools().flat_map(|p| s.members(&p.id).to_vec()).collect(),
+        pools: s.pools().cloned().collect(),
+        retired_secrets: Vec::new(),
+        reused_key_ids: Vec::new(),
+        terms: tier_terms(&ids),
+    };
+    RegistrySnapshot::from_load(load, [0; 32], 0, 1)
+}
+
 /// The main agent's pin of `session` under `key_id`.
 fn key(key_id: &str, session: &str) -> PinKey {
     PinKey {
@@ -4840,12 +4903,12 @@ fn key(key_id: &str, session: &str) -> PinKey {
 }
 
 #[test]
-fn a_round_on_an_account_marks_among_every_pin_on_it_under_its_pools_share_and_dwell() {
-    let s = shedding_pools(
+fn a_round_on_an_account_marks_among_every_pin_on_it_under_its_pools_cap_and_dwell() {
+    let s = on_tier(&shedding_pools(
         &[("k1", "p1"), ("k2", "p1")],
         &[("p1", "a", 1), ("p1", "b", 0), ("p2", "c", 0)],
-    );
-    let mut st = loaded(vec![
+    ));
+    let mut st = rounding(vec![
         PinRow {
             key_id: "k1".into(),
             ..burning("s1", "a", 4.0, false, T)
@@ -4863,7 +4926,7 @@ fn a_round_on_an_account_marks_among_every_pin_on_it_under_its_pools_share_and_d
             ..burning("s2", "a", 0.5, false, T)
         },
     ]);
-    hot_a_cool_b(&mut st, T);
+    over_a_fitting_b(&mut st, T);
     // Through a pin the round leaves: a request through a marked pin would move it in the same selection, spending
     // the mark read below.
     let req = select_request(
@@ -4880,7 +4943,8 @@ fn a_round_on_an_account_marks_among_every_pin_on_it_under_its_pools_share_and_d
         landed(select(&mut st, &s, &req, &mut rng()).0),
         ("a".into(), None)
     );
-    // Half of the 8.5 burning is 4.25, which k1's s1 and k2's s3 carry the marked burn past.
+    // The pins burn 0.085 of the window an hour, so a at 0.94 projects to 1.025 and the excess of 0.075 is capped at
+    // half the burn, 0.0425, which k1's s1 and k2's s3 carry the removed burn past.
     assert_eq!(
         [
             key("k1", "s1"),
@@ -4888,14 +4952,14 @@ fn a_round_on_an_account_marks_among_every_pin_on_it_under_its_pools_share_and_d
             key("k1", "s0"),
             key("k2", "s2"),
         ]
-        .map(|k| st.shed_marked("p1", &k, T, 900_000)),
+        .map(|k| st.shed_marked(&k)),
         [true, true, false, false],
-        "the round ranks the pins under both of p1's keys and marks by p1's share"
+        "the round ranks the pins under both of p1's keys and marks under p1's cap"
     );
     assert_eq!(st.last_shed("p1", "a"), Some(T));
 
     let inside = T + 450_000;
-    hot_a_cool_b(&mut st, inside);
+    over_a_fitting_b(&mut st, inside);
     let req = select_request(
         &s,
         "k2",
@@ -4920,10 +4984,13 @@ fn a_round_on_an_account_marks_among_every_pin_on_it_under_its_pools_share_and_d
 #[test]
 fn pins_a_former_pool_left_on_an_account_stay_out_of_its_new_pools_round() {
     let keys = [("k1", "p1"), ("k2", "p2")];
-    let before = shedding_pools(&keys, &[("p1", "a", 1), ("p1", "b", 0), ("p2", "c", 0)]);
+    let before = on_tier(&shedding_pools(
+        &keys,
+        &[("p1", "a", 1), ("p1", "b", 0), ("p2", "c", 0)],
+    ));
     // A pin enters the state through a load or a placement, so the k2 pins load with the rest: their key is p2's,
     // so p1's round below reads none of them.
-    let mut st = loaded(vec![
+    let mut st = rounding(vec![
         PinRow {
             key_id: "k1".into(),
             ..burning("s1", "a", 8.0, false, T)
@@ -4941,7 +5008,7 @@ fn pins_a_former_pool_left_on_an_account_stay_out_of_its_new_pools_round() {
             ..burning("s2", "a", 1.0, false, T)
         },
     ]);
-    hot_a_cool_b(&mut st, T);
+    over_a_fitting_b(&mut st, T);
     let req = select_request(
         &before,
         "k1",
@@ -4956,21 +5023,24 @@ fn pins_a_former_pool_left_on_an_account_stay_out_of_its_new_pools_round() {
         landed(select(&mut st, &before, &req, &mut rng()).0),
         ("a".into(), None)
     );
-    assert!(st.shed_marked("p1", &key("k1", "s1"), T, 900_000));
+    assert!(st.shed_marked(&key("k1", "s1")));
     assert!(
-        !st.shed_marked("p1", &key("k1", "s0"), T, 900_000),
+        !st.shed_marked(&key("k1", "s0")),
         "s0 is the last unmarked pin of p1's round, which no round marks"
     );
 
     let moved = T + 60_000;
-    let after = shedding_pools(&keys, &[("p1", "b", 0), ("p2", "a", 1), ("p2", "c", 0)]);
+    let after = on_tier(&shedding_pools(
+        &keys,
+        &[("p1", "b", 0), ("p2", "a", 1), ("p2", "c", 0)],
+    ));
     st.purge(&after, moved);
     assert!(
         st.pin(&key("k1", "s1")).is_some() && st.pin(&key("k1", "s0")).is_some(),
         "the purge keeps the pins p1 left on a, since their key and pool stand"
     );
-    hot_a_cool_b(&mut st, moved);
-    st.record_sample("c", sample(0.1, 0.1, moved));
+    over_a_fitting_b(&mut st, moved);
+    st.record_sample("c", refreshing(0.1, moved + HOUR, moved + 72 * HOUR, moved));
     let req = select_request(
         &after,
         "k2",
@@ -4987,24 +5057,20 @@ fn pins_a_former_pool_left_on_an_account_stay_out_of_its_new_pools_round() {
     );
     assert_eq!(st.last_shed("p2", "a"), Some(moved));
     assert!(
-        st.shed_marked("p2", &key("k2", "s3"), moved, 900_000),
+        st.shed_marked(&key("k2", "s3")),
         "p2's round marks among the k2 pins"
     );
-    assert!(!st.shed_marked("p2", &key("k2", "s2"), moved, 900_000));
+    assert!(!st.shed_marked(&key("k2", "s2")));
     assert!(
-        !st.shed_marked("p2", &key("k1", "s1"), moved, 900_000)
-            && !st.shed_marked("p2", &key("k1", "s0"), moved, 900_000),
-        "neither pin p1 left on a is ranked or marked in p2's round"
-    );
-    assert!(
-        !st.shed_marked("p1", &key("k1", "s0"), moved, 900_000),
-        "the pin p1's round left unmarked stays unmarked"
+        st.shed_marked(&key("k1", "s1")) && !st.shed_marked(&key("k1", "s0")),
+        "neither pin p1 left on a is ranked in p2's round: s1 keeps the mark p1's round made, since a mark is the \
+         pin's and not the pool's, and s0 stays unmarked"
     );
 }
 
 #[test]
-fn an_accounts_round_stamp_is_kept_for_its_own_pools_dwell_and_no_longer() {
-    // p2 carries the longest dwell and holds b alone, so it has no say over how long a's stamp stays.
+fn a_rounds_time_is_kept_for_its_own_pools_dwell_and_no_longer() {
+    // p2 carries the longest dwell and holds b alone, so it has no say over how long p1's round on a stays.
     let s = with_dwells(
         &shedding_pools(
             &[("k1", "p1"), ("k2", "p2")],
@@ -5012,33 +5078,28 @@ fn an_accounts_round_stamp_is_kept_for_its_own_pools_dwell_and_no_longer() {
         ),
         &[("p1", 600), ("p2", 1_800)],
     );
-    let mut st = loaded(vec![
-        PinRow {
-            key_id: "k1".into(),
-            ..burning("s1", "a", 4.0, false, T)
-        },
-        PinRow {
-            key_id: "k2".into(),
-            ..burning("s2", "b", 4.0, false, T)
-        },
-    ]);
-    st.record_sample("a", sample(0.9, 0.3, T));
-    st.record_sample("b", sample(0.9, 0.3, T));
-    for (key_id, session) in [("k1", "s1"), ("k2", "s2")] {
-        let req = select_request(
-            &s,
-            key_id,
-            Some(session),
-            "claude-sonnet-5",
-            "main",
-            true,
-            &[],
-            T,
-        );
-        select(&mut st, &s, &req, &mut rng());
-    }
+    let round = |pool: &str, account: &str| ShedRoundRow {
+        pool_id: pool.into(),
+        account_id: account.into(),
+        incarnation: 1,
+        round_at: T,
+    };
+    let mut st = RoutingState::from_load(RoutingLoad {
+        pins: vec![
+            PinRow {
+                key_id: "k1".into(),
+                ..burning("s1", "a", 4.0, false, T)
+            },
+            PinRow {
+                key_id: "k2".into(),
+                ..burning("s2", "b", 4.0, false, T)
+            },
+        ],
+        shed_rounds: vec![round("p1", "a"), round("p2", "b")],
+        ..RoutingLoad::default()
+    });
     assert_eq!(
-        (st.newest_shed("a"), st.newest_shed("b")),
+        (st.last_shed("p1", "a"), st.last_shed("p2", "b")),
         (Some(T), Some(T)),
         "a round ran on each account at T"
     );
@@ -5046,21 +5107,21 @@ fn an_accounts_round_stamp_is_kept_for_its_own_pools_dwell_and_no_longer() {
     // Inside the 900 s `shedding_pools` sets and past p1's 600 s, so p1's own dwell decides.
     st.purge(&s, T + 700_000);
     assert_eq!(
-        st.newest_shed("a"),
+        st.last_shed("p1", "a"),
         None,
-        "past p1's 600 s the purge drops a's stamp, so a cool check on a reads cool"
+        "past p1's 600 s the purge drops p1's round on a, so its next request may run another"
     );
     assert_eq!(
-        st.newest_shed("b"),
+        st.last_shed("p2", "b"),
         Some(T),
-        "b's stamp stays inside p2's 1 800 s"
+        "p2's round on b stays inside p2's 1 800 s"
     );
 
     st.purge(&s, T + 1_800_000);
     assert_eq!(
-        st.newest_shed("b"),
+        st.last_shed("p2", "b"),
         None,
-        "b's stamp leaves with p2's dwell"
+        "p2's round leaves with its dwell"
     );
 }
 
@@ -5080,7 +5141,7 @@ fn the_shed_move_takes_the_fitting_siblings_with_the_longest_runway_the_band_and
         ("cap", vec!["b"]),
         ("none", vec!["b", "c"]),
     ] {
-        let mut st = priced(vec![
+        let mut st = rounding(vec![
             burning("s1", "a", 4.0, false, T),
             burning("s0", "a", 1.0, false, T),
         ]);
@@ -6013,11 +6074,11 @@ fn after_a_shed_a_warm_entry_on_the_source_cannot_place_the_request() {
     let s = tiered(shedding_pool(Shedding::default()));
     // A shed round never takes every pin on an account, so a second (unmarked) pin sits beside the one under
     // test: cold and heavier, "s1" sorts first and is the one the round marks.
-    let mut st = loaded(vec![
+    let mut st = rounding(vec![
         burning("s1", "a", 5.0, false, T),
         burning("s0", "a", 1.0, true, T),
     ]);
-    hot_a_cool_b(&mut st, T - 500);
+    over_a_fitting_b(&mut st, T - 500);
     seed_affinity(
         &st,
         vec![affinity_row(
@@ -7593,6 +7654,9 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         static_hash: None,
         tail_hash: None,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+        marked_at: None,
+        marked_on: None,
+        marked_window: None,
     };
     st.record_overage("a", overage(true, 1_000, Some(1_999)));
     let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
@@ -10068,6 +10132,9 @@ fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
         static_hash: None,
         tail_hash: None,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+        marked_at: None,
+        marked_on: None,
+        marked_window: None,
     }
 }
 
@@ -10236,8 +10303,8 @@ fn landed(result: SelectResult) -> (String, Option<MigrateReason>) {
     }
 }
 
-fn marked(st: &RoutingState, session: &str, now: i64) -> bool {
-    st.shed_marked("p", &pin_key(session), now, 900_000)
+fn marked(st: &RoutingState, session: &str) -> bool {
+    st.shed_marked(&pin_key(session))
 }
 
 const MINUTE: i64 = 60_000;
@@ -10999,13 +11066,13 @@ fn a_fitting_sibling_at_its_cap_is_passed_over_for_a_least_bad_one_under_it() {
 
 #[test]
 fn a_marked_pin_on_a_cooled_account_is_released_with_cooldown_rather_than_shed() {
-    let s = snapshot(shedding_pool(Shedding::default()));
+    let s = tiered(shedding_pool(Shedding::default()));
     // Two cold pins, so the round has one to spare: it marks the hotter.
-    let mut st = loaded(vec![
+    let mut st = rounding(vec![
         burning("s1", "a", 4.0, false, T),
         burning("s0", "a", 1.0, false, T),
     ]);
-    hot_a_cool_b(&mut st, T - 500);
+    over_a_fitting_b(&mut st, T - 500);
     st.record_cooldown(cooled(
         "a",
         "model:claude-sonnet-5",
@@ -11037,7 +11104,10 @@ fn a_marked_pin_on_a_cooled_account_is_released_with_cooldown_rather_than_shed()
         st.last_shed("p", "a").is_some(),
         "the round still ran, since the cooldown is the model's alone"
     );
-    assert!(!marked(&st, "s1", T), "the mark left with the released pin");
+    assert!(
+        !marked(&st, "s1") && pinned(&st, "s1").marked_at.is_none(),
+        "the mark left with the released pin, and the fresh row on b carries none"
+    );
 
     let cleared = T + 10 * MINUTE + 1_000;
     let (result, _) = select(&mut st, &s, &auxiliary(&s, "s1", cleared), &mut rng());
@@ -11061,9 +11131,46 @@ fn shedding_pool(shedding: Shedding) -> Pool {
     }
 }
 
-fn hot_a_cool_b(st: &mut RoutingState, at: i64) {
-    st.record_sample("a", sample(0.9, 0.3, at));
-    st.record_sample("b", sample(0.1, 0.1, at));
+/// `a` at 0.94 on its 5-hour window with the reset an hour out, so pins burning a hundredth of the window an hour
+/// between them take its projection over the ceiling, and `b` at 0.1 on both windows, fitting every pin of these cases
+/// to its horizon. Both weeks run behind their pace, so the weekly trigger stays quiet.
+fn over_a_fitting_b(st: &mut RoutingState, at: i64) {
+    st.record_sample("a", refreshing(0.94, at + HOUR, at + 72 * HOUR, at));
+    st.record_sample("b", refreshing(0.1, at + HOUR, at + 72 * HOUR, at));
+}
+
+/// `loaded` with the round pricer set, so a round prices its pins' burn and its marks' rewrites.
+fn rounding(pins: Vec<PinRow>) -> RoutingState {
+    let mut st = loaded(pins);
+    st.set_share(hourly_pricer());
+    st
+}
+
+/// The round cases' pricer on `TIER`: a pin burning `x` input tokens a second burns `x / 100` of the 5-hour window an
+/// hour, a sixth of that of the 7-day window and a third of the Fable week, and a cache-write token prices as
+/// `ratio_pricer`'s. A model spelled `guess` or `unpriced`, or the unlisted `claude-opus-4-8`, prices nothing.
+fn hourly_pricer() -> SharePricer {
+    fn per_token(window: &str, tier: &str, model: &str) -> Option<f64> {
+        if tier != TIER
+            || model.contains("guess")
+            || model.contains("unpriced")
+            || model == "claude-opus-4-8"
+        {
+            return None;
+        }
+        match window {
+            FIVE_HOUR => Some(10_000_000.0),
+            SEVEN_DAY => Some(60_000_000.0),
+            SEVEN_DAY_FABLE => Some(30_000_000.0),
+            _ => None,
+        }
+    }
+    SharePricer::new(|window, tier, model, usage, _| {
+        per_token(window, tier, model).map(|per| (usage.write_5m + 2 * usage.write_1h) as f64 / per)
+    })
+    .with_rate(|window, tier, model, burn, _| {
+        per_token(window, tier, model).map(|per| burn.input / per * 100_000.0 / 3_600.0)
+    })
 }
 
 /// A margin of 0.2 over pace on the shedding pool, where the cool line sits at 0.15.
@@ -11076,7 +11183,7 @@ fn pace_pool() -> Pool {
 
 /// Two cold pins on `a`, so a round there marks `s1`, the heavier, and leaves `s0`.
 fn two_pins_on_a() -> RoutingState {
-    loaded(vec![
+    rounding(vec![
         burning("s1", "a", 4.0, false, T),
         burning("s0", "a", 1.0, false, T),
     ])
@@ -11119,17 +11226,19 @@ fn a_pin_half_through_a_week_ten_percent_elapsed_sheds_at_a_margin_of_a_fifth() 
 
 #[test]
 fn the_round_s_elapsed_share_is_the_exported_reading_of_its_window_s_reset() {
-    let s = snapshot(pace_pool());
+    let s = tiered(pace_pool());
     let mut st = two_pins_on_a();
     st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
     st.record_sample("b", weekly(0.1, 0.3, 4, T - 500));
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     let round = d.shed_round.expect("the round ran on this decision").facts;
     let exported = elapsed_share_at(SEVEN_DAY, Some(T + WEEK_MS * 9 / 10), None, T);
+    let elapsed = round
+        .elapsed_share
+        .expect("a lead trigger carries the elapsed share");
     assert!(
-        (round.elapsed_share - exported).abs() < 1e-12 && (exported - 0.1).abs() < 1e-9,
-        "the engine's reading and the exported arithmetic agree on a tenth of the week: {} against {exported}",
-        round.elapsed_share
+        (elapsed - exported).abs() < 1e-12 && (exported - 0.1).abs() < 1e-9,
+        "the engine's reading and the exported arithmetic agree on a tenth of the week: {elapsed} against {exported}"
     );
 }
 
@@ -11209,8 +11318,10 @@ fn a_pinned_account_that_ends_inside_its_week_reads_the_smaller_lead_and_runs_no
         (&FactValue::Int(end), Some("time"))
     );
     assert!(
-        shed.facts.iter().all(|f| f.key != "deadline_five_hour"),
-        "the 5-hour reading names no reset, so it names no deadline: {:?}",
+        shed.facts.iter().all(|f| !f.key.ends_with("_five_hour")
+            || f.key.starts_with("projection")
+            || f.key.starts_with("horizon")),
+        "the 5-hour window's lead left the shed line, which names its projection alone: {:?}",
         shed.facts
     );
     let (plain, last_shed) = run(None);
@@ -11224,7 +11335,7 @@ fn a_pinned_account_that_ends_inside_its_week_reads_the_smaller_lead_and_runs_no
 
 #[test]
 fn the_same_reading_sixty_percent_elapsed_does_not_shed() {
-    let s = snapshot(pace_pool());
+    let s = tiered(pace_pool());
     let mut st = two_pins_on_a();
     // 0.5 with six tenths of the week gone runs 0.1 behind pace; the 5-hour window leads by 0.1.
     st.record_sample("a", weekly(0.1, 0.5, 4, T - 500));
@@ -11238,16 +11349,17 @@ fn the_same_reading_sixty_percent_elapsed_does_not_shed() {
 }
 
 #[test]
-fn a_five_hour_window_at_nine_tenths_eighty_percent_elapsed_does_not_shed() {
-    let s = snapshot(pace_pool());
+fn a_five_hour_window_whose_projection_stays_under_the_ceiling_at_its_reset_does_not_shed() {
+    let s = tiered(pace_pool());
     let mut st = two_pins_on_a();
-    // An hour left of five puts 0.9 at 0.1 ahead of pace; the week reads 0.1 with no reset, 0.1 ahead.
+    // An hour left of five: 0.85 plus the pins' 0.05 an hour reaches 0.9 at the reset, under the ceiling, and the
+    // week reads 0.1 with no reset, 0.1 ahead of its pace and under the margin.
     st.record_sample(
         "a",
-        sample(0.9, 0.1, T - 500).with(
+        sample(0.85, 0.1, T - 500).with(
             FIVE_HOUR,
             WindowReading {
-                utilization: 0.9,
+                utilization: 0.85,
                 reset: Some(T + HOUR),
                 observed_at: T - 500,
                 source: WindowSource::Poll,
@@ -11255,12 +11367,22 @@ fn a_five_hour_window_at_nine_tenths_eighty_percent_elapsed_does_not_shed() {
         ),
     );
     st.record_sample("b", sample(0.1, 0.1, T - 500));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(
-        landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
+        landed(d.result.clone()),
         ("a".into(), None),
-        "a 5-hour lead of 0.1 sits under the margin of 0.2"
+        "a projection of 0.9 at the reset sits under the ceiling"
     );
     assert_eq!(st.last_shed("p", "a"), None);
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(shed.verdict, "no");
+    assert!(
+        (number(fact(shed, "projection_five_hour")) - 0.9).abs() < 1e-9,
+        "the line names the projection the trigger read"
+    );
+    assert_eq!(fact(shed, "horizon_five_hour"), &FactValue::Int(T + HOUR));
+    assert!((number(fact(shed, "ceiling")) - 0.95).abs() < 1e-9);
+    assert!(shed.facts.iter().all(|f| f.key != "trigger"));
 }
 
 #[test]
@@ -11270,11 +11392,12 @@ fn a_destination_at_four_tenths_twenty_percent_elapsed_loses_the_tie_to_one_at_t
         ..pace_pool()
     });
     let run = |b_seven_day: f64| {
-        let mut st = priced(vec![
+        let mut st = rounding(vec![
             burning("s1", "a", 4.0, false, T),
             burning("s0", "a", 1.0, false, T),
         ]);
-        // The 5-hour window with no reset leads by its whole 0.9, so a round runs on a and marks s1.
+        // The 5-hour window at 0.9 with no reset projects five hours of the pins' 0.05 an hour, 1.15, so a round
+        // runs on a and marks s1.
         st.record_sample("a", sample(0.9, 0.1, T - 500));
         st.record_sample("b", weekly(0.1, b_seven_day, 8, T - 500));
         // 0.3 with two tenths of the week gone runs 0.1 ahead, under the cool line of 0.15.
@@ -11310,10 +11433,10 @@ fn a_subscription_pin_in_overage_orders_the_round_by_the_dollar_average_and_leav
     // table the other way round, so the unit alone decides which pin is heavier.
     let opus = PinRow {
         model: "claude-opus-5".into(),
-        ..burning("opus", "a", 1.0, false, T)
+        ..burning("opus", "a", 10.0, false, T)
     };
-    let sonnet = burning("sonnet", "a", 1.0, false, T);
-    let mut st = loaded(vec![opus, sonnet]);
+    let sonnet = burning("sonnet", "a", 10.0, false, T);
+    let mut st = rounding(vec![opus, sonnet]);
     st.set_rates(BurnRates {
         dollars: input_prices(&[("claude-opus-5", Some(1.0)), ("claude-sonnet-5", Some(9.0))]),
         five_hour: input_prices(&[("claude-opus-5", Some(9.0)), ("claude-sonnet-5", Some(1.0))]),
@@ -11332,17 +11455,25 @@ fn a_subscription_pin_in_overage_orders_the_round_by_the_dollar_average_and_leav
             &[],
         )
     };
-    hot_a_cool_b(&mut st, T - 500);
+    over_a_fitting_b(&mut st, T - 500);
     st.record_overage("a", overage(true, T - 500, Some(T + 10 * MINUTE)));
     assert_eq!(
         landed(select(&mut st, &s, &opus_turn(T), &mut rng()).0),
         ("a".into(), None),
         "in overage the round reads dollars, so the Opus pin is the last unmarked one"
     );
-    assert!(marked(&st, "sonnet", T) && !st.shed_marked("p", &opus_key, T, 900_000));
+    assert!(marked(&st, "sonnet") && !st.shed_marked(&opus_key));
+    // a drops under the ceiling, so the sonnet's next request heals its mark: a standing mark would count as removed
+    // in the next round and leave the opus pin the last one.
+    st.record_sample("a", refreshing(0.5, T + HOUR, T + 72 * HOUR, T + 500));
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "sonnet", T + 1_000), &mut rng()).0),
+        ("a".into(), None)
+    );
+    assert!(!marked(&st, "sonnet"), "the heal cleared the mark");
 
     let later = T + 900_000;
-    hot_a_cool_b(&mut st, later - 500);
+    over_a_fitting_b(&mut st, later - 500);
     assert!(
         !st.in_overage("a", later, FALLBACK_MS),
         "the reset has passed"
@@ -11355,7 +11486,7 @@ fn a_subscription_pin_in_overage_orders_the_round_by_the_dollar_average_and_leav
     let untouched = pinned(&st, "sonnet");
     assert_eq!(
         (untouched.burn, untouched.burn_banded),
-        (input_rate(1.0), input_rate(1.0)),
+        (input_rate(10.0), input_rate(10.0)),
         "neither copy was reset by the switch"
     );
 }
@@ -11364,7 +11495,7 @@ fn a_subscription_pin_in_overage_orders_the_round_by_the_dollar_average_and_leav
 fn the_shedding_round_orders_cold_pins_first_then_warm_by_burn_over_rewrite_and_stops_at_the_share()
 {
     let s = tiered(shedding_pool(Shedding::default()));
-    let mut st = loaded(vec![
+    let mut st = rounding(vec![
         burning("warm-4", "a", 4.0, true, T),
         burning("cold-3", "a", 3.0, false, T),
         burning("warm-2", "a", 2.0, true, T),
@@ -11376,7 +11507,7 @@ fn the_shedding_round_orders_cold_pins_first_then_warm_by_burn_over_rewrite_and_
         five_hour: input_prices(&[("claude-sonnet-5", Some(0.0454e-6))]),
         ..BurnRates::default()
     });
-    hot_a_cool_b(&mut st, T - 500);
+    over_a_fitting_b(&mut st, T - 500);
     assert_eq!(
         landed(select(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng()).0),
         ("a".into(), None),
@@ -11385,12 +11516,12 @@ fn the_shedding_round_orders_cold_pins_first_then_warm_by_burn_over_rewrite_and_
     assert_eq!(st.last_shed("p", "a"), Some(T));
     let marks: Vec<&str> = ["warm-4", "cold-3", "warm-2", "warm-1"]
         .into_iter()
-        .filter(|session| marked(&st, session, T))
+        .filter(|session| marked(&st, session))
         .collect();
     assert_eq!(
         marks,
         ["warm-4", "cold-3"],
-        "cold-3 first, then warm-4, and 7 of 10 reaches half"
+        "cold-3 first, then warm-4, and 0.07 of the 0.1 an hour reaches the cap's half"
     );
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "cold-3", T + 1_000), &mut rng()).0),
@@ -11415,12 +11546,12 @@ fn the_shedding_round_orders_cold_pins_first_then_warm_by_burn_over_rewrite_and_
 
 #[test]
 fn an_unpriced_pin_is_never_marked_and_stays_out_of_the_shed_share_sum() {
-    let s = snapshot(shedding_pool(Shedding::default()));
+    let s = tiered(shedding_pool(Shedding::default()));
     let guess = |session: &str, warm: bool| PinRow {
         model: "claude-guess".into(),
         ..burning(session, "a", 9.0, warm, T)
     };
-    let mut st = loaded(vec![
+    let mut st = rounding(vec![
         guess("cold-guess", false),
         burning("cold-3", "a", 3.0, false, T),
         guess("warm-guess", true),
@@ -11432,19 +11563,19 @@ fn an_unpriced_pin_is_never_marked_and_stays_out_of_the_shed_share_sum() {
         five_hour: input_prices(&[("claude-sonnet-5", Some(1.0)), ("claude-guess", None)]),
         ..BurnRates::default()
     });
-    hot_a_cool_b(&mut st, T - 500);
+    over_a_fitting_b(&mut st, T - 500);
     assert_eq!(
         landed(select(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng()).0),
         ("a".into(), None)
     );
     let marks: Vec<&str> = ["cold-guess", "cold-3", "warm-guess", "warm-4", "warm-1"]
         .into_iter()
-        .filter(|session| marked(&st, session, T))
+        .filter(|session| marked(&st, session))
         .collect();
     assert_eq!(
         marks,
         ["cold-3", "warm-4"],
-        "the priced burn is 8 and the target 4: cold-3 then warm-4 reach it, and neither guess is marked"
+        "the priced burn is 0.08 an hour and the target 0.04: cold-3 then warm-4 reach it, and neither guess is marked"
     );
 }
 
@@ -11453,8 +11584,8 @@ fn an_unpriced_pin_is_never_marked_and_stays_out_of_the_shed_share_sum() {
 /// priced pin.
 #[test]
 fn a_pin_on_a_model_the_share_table_does_not_list_burns_nothing_and_is_never_marked() {
-    let s = snapshot(shedding_pool(Shedding::default()));
-    let mut st = loaded(vec![
+    let s = tiered(shedding_pool(Shedding::default()));
+    let mut st = rounding(vec![
         PinRow {
             model: "claude-opus-4-8".into(),
             ..burning("cold-unlisted", "a", 9.0, false, T)
@@ -11476,7 +11607,7 @@ fn a_pin_on_a_model_the_share_table_does_not_list_burns_nothing_and_is_never_mar
         },
         ..BurnRates::default()
     });
-    hot_a_cool_b(&mut st, T - 500);
+    over_a_fitting_b(&mut st, T - 500);
     let (pins, sum) = st.burn_of("a", &|_| true, BurnUnit::WindowShare, st.rates(), T, HOUR);
     let unlisted = pins
         .iter()
@@ -11497,7 +11628,7 @@ fn a_pin_on_a_model_the_share_table_does_not_list_burns_nothing_and_is_never_mar
         ("a".into(), None)
     );
     assert!(
-        marked(&st, "cold-3", T) && !marked(&st, "cold-unlisted", T),
+        marked(&st, "cold-3") && !marked(&st, "cold-unlisted"),
         "the priced pin is marked, the guess never"
     );
 }
@@ -11509,18 +11640,23 @@ fn a_move_consumes_the_mark_so_a_pin_returning_inside_the_dwell_renews_in_place(
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         ..Pool::default()
     });
-    let mut st = loaded(vec![
+    let mut st = rounding(vec![
         burning("s1", "a", 4.0, false, T),
         burning("s0", "a", 1.0, false, T),
     ]);
-    // c fits as b does, so a mark that outlived the move would find it a destination, while the spent move below
-    // ties a and c and the strategy takes a.
-    hot_a_cool_b(&mut st, T - 500);
-    st.record_sample("c", sample(0.1, 0.1, T - 500));
+    // c reads 0.92, so the spent move below finds the rewrite fitting on a and c alone and takes a, whose runway is
+    // the longer. c then drops to 0.1 and fits, so a mark that outlived the move would find it a destination.
+    over_a_fitting_b(&mut st, T - 500);
+    st.record_sample("c", sample(0.92, 0.1, T - 500));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(
-        landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
+        landed(d.result.clone()),
         ("b".into(), Some(MigrateReason::Shed)),
         "a's round marks s1 and it moves"
+    );
+    assert_eq!(
+        d.record.outcome.mark_cleared.as_ref().map(|m| m.reason),
+        Some("moved")
     );
     st.record_sample("a", sample(0.9, 0.3, T + 500));
     st.record_sample("b", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
@@ -11529,18 +11665,20 @@ fn a_move_consumes_the_mark_so_a_pin_returning_inside_the_dwell_renews_in_place(
         ("a".into(), Some(MigrateReason::Spent)),
         "b spends its window and the spent move takes s1 back to a, inside a's dwell"
     );
+    st.record_sample("c", sample(0.1, 0.1, T + 1_500));
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 2_000), &mut rng()).0),
         ("a".into(), None),
-        "a is still hot and its round still stands, but the move consumed s1's mark"
+        "a still projects over the ceiling and its round still stands, but the move consumed s1's mark"
     );
+    assert!(pinned(&st, "s1").marked_at.is_none());
     assert_eq!(st.last_shed("p", "a"), Some(T), "no new round ran on a");
 }
 
 #[test]
 fn a_round_that_ran_pushes_its_write_and_one_inside_the_dwell_pushes_none() {
     let s = tiered(shedding_pool(Shedding::default()));
-    let mut st = loaded(vec![
+    let mut st = rounding(vec![
         PinRow {
             epoch: 4,
             ..burning("s1", "a", 4.0, false, T)
@@ -11550,7 +11688,7 @@ fn a_round_that_ran_pushes_its_write_and_one_inside_the_dwell_pushes_none() {
             ..burning("s0", "a", 1.0, false, T)
         },
     ]);
-    hot_a_cool_b(&mut st, T - 500);
+    over_a_fitting_b(&mut st, T - 500);
     let decided = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(
         landed(decided.result.clone()),
@@ -11569,26 +11707,35 @@ fn a_round_that_ran_pushes_its_write_and_one_inside_the_dwell_pushes_none() {
             account_id: "a".into(),
             incarnation: 1,
             round_at: T,
-            pins: vec![
-                ShedPin {
-                    key: pin_key("s1"),
-                    epoch: 4,
-                    marked: true,
-                },
-                ShedPin {
-                    key: pin_key("s0"),
-                    epoch: 5,
-                    marked: false,
-                },
-            ],
         }],
-        "one write names every pin of the round in its order, each with its epoch and its mark"
+        "one write stamps the round's time on the pool and the account"
     );
+    let marked_row = |w: &StateWrite| {
+        matches!(
+            w,
+            StateWrite::UpsertPin(row)
+                if row.session_id == "s1"
+                    && row.epoch == 4
+                    && row.marked_at == Some(T)
+                    && row.marked_on.as_deref() == Some("a")
+                    && row.marked_window.as_deref() == Some("five_hour")
+        )
+    };
     let at = |found: &dyn Fn(&StateWrite) -> bool| decided.writes.iter().position(found);
     let moved = |w: &StateWrite| matches!(w, StateWrite::DeletePin(key) if *key == pin_key("s1"));
     assert!(
-        at(&round).expect("the round's write") < at(&moved).expect("the move's delete"),
-        "the round lands ahead of the move that spends its mark"
+        at(&round).expect("the round's write")
+            < at(&marked_row).expect("the marked pin's row with its mark")
+            && at(&marked_row).unwrap() < at(&moved).expect("the move's delete"),
+        "the round's stamp and the marked row land ahead of the move that spends the mark: {:?}",
+        decided.writes
+    );
+    assert!(
+        !decided.writes.iter().any(|w| matches!(
+            w,
+            StateWrite::UpsertPin(row) if row.session_id == "s0" && row.marked_at.is_some()
+        )),
+        "the unmarked pin's row is not written by the round"
     );
     let next = decide(&mut st, &s, &auxiliary(&s, "s0", T + 1_000), &mut rng());
     assert_eq!(landed(next.result), ("a".into(), None));
@@ -11599,26 +11746,31 @@ fn a_round_that_ran_pushes_its_write_and_one_inside_the_dwell_pushes_none() {
 }
 
 #[test]
-fn from_load_restores_the_account_s_newest_round_from_the_loaded_rows() {
-    let row = |pool: &str, session: &str, round_at: i64| ShedRoundRow {
+fn from_load_restores_each_pools_round_time_and_the_marks_from_the_pin_rows() {
+    let row = |pool: &str, round_at: i64| ShedRoundRow {
         pool_id: pool.into(),
         account_id: "a".into(),
         incarnation: 1,
-        key_id: "k".into(),
-        session_id: session.into(),
-        agent_id: "main".into(),
-        model: "claude-sonnet-5".into(),
-        epoch: 1,
         round_at,
-        marked: false,
     };
     let st = RoutingState::from_load(RoutingLoad {
-        pins: vec![seeded_pin("s1", "a", T), seeded_pin("s2", "a", T)],
-        shed_rounds: vec![
-            row("p", "s1", T - 60_000),
-            row("p", "s2", T - 60_000),
-            row("q", "s2", T - 30_000),
+        pins: vec![
+            PinRow {
+                marked_at: Some(T - 60_000),
+                marked_on: Some("a".into()),
+                marked_window: Some(FIVE_HOUR.into()),
+                ..seeded_pin("s1", "a", T)
+            },
+            seeded_pin("s2", "a", T),
+            // A mark made on another account travels on no row the engine writes, and stands on none it loads.
+            PinRow {
+                marked_at: Some(T - 60_000),
+                marked_on: Some("b".into()),
+                marked_window: Some(FIVE_HOUR.into()),
+                ..seeded_pin("s3", "a", T)
+            },
         ],
+        shed_rounds: vec![row("p", T - 60_000), row("q", T - 30_000)],
         ..RoutingLoad::default()
     });
     assert_eq!(
@@ -11626,71 +11778,41 @@ fn from_load_restores_the_account_s_newest_round_from_the_loaded_rows() {
         (Some(T - 60_000), Some(T - 30_000)),
         "each pool reads its own round"
     );
+    assert_eq!(st.last_shed("p", "b"), None);
     assert_eq!(
-        st.newest_shed("a"),
-        Some(T - 30_000),
-        "the account's stamp is the newest round any pool ran on it"
+        (marked(&st, "s1"), marked(&st, "s2"), marked(&st, "s3")),
+        (true, false, false),
+        "a mark stands on the loaded row when it was made on the account the pin sits on"
     );
-    assert_eq!(st.newest_shed("b"), None);
-}
-
-#[test]
-fn a_pin_placed_after_a_load_takes_an_epoch_above_every_loaded_round_s() {
-    let s = snapshot(Pool::default());
-    // The pin the round marked under epoch 7 was deleted before the restart. The only pin left is s1, under epoch 6,
-    // so a seed read off the pins alone would hand out 7 again.
-    let mut st = RoutingState::from_load(RoutingLoad {
-        pins: vec![PinRow {
-            epoch: 6,
-            ..seeded_pin("s1", "a", T)
-        }],
-        shed_rounds: vec![ShedRoundRow {
-            pool_id: "p".into(),
-            account_id: "a".into(),
-            incarnation: 1,
-            key_id: "k".into(),
-            session_id: "s2".into(),
-            agent_id: "main".into(),
-            model: "claude-sonnet-5".into(),
-            epoch: 7,
-            round_at: T - 60_000,
-            marked: true,
-        }],
-        ..RoutingLoad::default()
-    });
-    select(
-        &mut st,
-        &s,
-        &request(&s, Some("s2"), "claude-sonnet-5", true, &[], T),
-        &mut rng(),
-    );
-    assert!(
-        pinned(&st, "s2").epoch > 7,
-        "a fresh pin under the round's key never takes the epoch its row names: {}",
-        pinned(&st, "s2").epoch
+    assert_eq!(
+        st.marked_pins("a")
+            .into_iter()
+            .map(|p| p.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["s1"]
     );
 }
 
 #[test]
-fn a_pin_that_fails_over_off_its_account_spends_its_mark_there() {
-    let s = snapshot(Pool {
+fn a_pin_that_fails_over_off_its_account_leaves_its_mark_with_the_row() {
+    let s = tiered(Pool {
         shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         ..Pool::default()
     });
-    let mut st = loaded(vec![
+    let mut st = rounding(vec![
         burning("s1", "a", 4.0, false, T),
         burning("s0", "a", 1.0, false, T),
     ]);
-    // No sibling is cool, so a's round marks s1 and it stays.
-    st.record_sample("a", sample(0.9, 0.3, T - 500));
-    st.record_sample("b", sample(0.9, 0.3, T - 500));
+    // s0's request runs a's round, which marks s1 with b as its planned destination and leaves s1 where it is until
+    // its own next request. c reads full, so no mark finds it a destination yet.
+    over_a_fitting_b(&mut st, T - 500);
     st.record_sample("c", sample(0.9, 0.3, T - 500));
     assert_eq!(
-        landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
+        landed(select(&mut st, &s, &auxiliary(&s, "s0", T), &mut rng()).0),
         ("a".into(), None)
     );
-    assert!(marked(&st, "s1", T));
+    assert!(marked(&st, "s1"));
     // What the task does with a cooldown report that names the pin: the row, then the invalidation.
     let fail_over = |st: &mut RoutingState, account: &str, until: i64| {
         let current = pinned(st, "s1");
@@ -11708,10 +11830,18 @@ fn a_pin_that_fails_over_off_its_account_spends_its_mark_there() {
         ));
     };
     fail_over(&mut st, "a", T + 5_000);
+    assert!(
+        st.pin(&pin_key("s1")).is_none(),
+        "the invalidation took the row, and the mark with it"
+    );
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 1_000), &mut rng()).0),
         ("b".into(), None),
         "the session fails over off the cooled a"
+    );
+    assert!(
+        pinned(&st, "s1").marked_at.is_none(),
+        "a fresh row carries no mark"
     );
     fail_over(&mut st, "b", T + HOUR);
     assert_eq!(
@@ -11724,64 +11854,153 @@ fn a_pin_that_fails_over_off_its_account_spends_its_mark_there() {
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 7_000), &mut rng()).0),
         ("a".into(), None),
-        "a is still hot and its round still stands, but leaving a spent s1's mark"
+        "a still projects over the ceiling and its round still stands, but the fail-over took s1's mark with its row"
     );
+    assert!(!marked(&st, "s1"));
     assert_eq!(st.last_shed("p", "a"), Some(T), "no new round ran on a");
 }
 
 #[test]
-fn a_round_never_marks_the_last_pin_and_a_zero_target_marks_nothing() {
+fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
     let s = tiered(shedding_pool(Shedding::default()));
-    let mut st = loaded(vec![burning("only", "a", 100.0, false, T)]);
-    hot_a_cool_b(&mut st, T - 500);
+    let mut st = rounding(vec![burning("only", "a", 100.0, false, T)]);
+    over_a_fitting_b(&mut st, T - 500);
+    let d = decide(&mut st, &s, &auxiliary(&s, "only", T), &mut rng());
     assert_eq!(
-        landed(select(&mut st, &s, &auxiliary(&s, "only", T), &mut rng()).0),
+        landed(d.result.clone()),
         ("a".into(), None),
         "a one-pin account sheds nothing"
     );
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        (round.outcome.as_str(), round.reason, round.pins[0].skip),
+        ("nothing_to_mark", Some("last_pin"), Some("last_pin"))
+    );
 
-    let mut st = loaded(vec![
+    let mut st = rounding(vec![
         burning("cold-1", "a", 1.0, false, T),
         burning("warm-9", "a", 9.0, true, T),
     ]);
-    hot_a_cool_b(&mut st, T - 500);
+    over_a_fitting_b(&mut st, T - 500);
+    let d = decide(&mut st, &s, &auxiliary(&s, "cold-1", T), &mut rng());
     assert_eq!(
-        landed(select(&mut st, &s, &auxiliary(&s, "cold-1", T), &mut rng()).0),
+        landed(d.result.clone()),
         ("b".into(), Some(MigrateReason::Shed)),
         "the cold pin is marked first and moves"
     );
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.marked, p.skip))
+            .collect::<Vec<_>>(),
+        [("cold-1", true, None), ("warm-9", false, Some("last_pin"))],
+        "the warm pin is the last unmarked one, whatever the target still asks"
+    );
     assert_eq!(
         landed(select(&mut st, &s, &main_turn(&s, "warm-9", T + 1_000), &mut rng()).0),
-        ("a".into(), None),
-        "the warm pin was the last unmarked one, whatever the target still asked"
+        ("a".into(), None)
     );
 
-    let four = |burns: [f64; 4]| {
-        let mut st = loaded(
-            ["cold-a", "cold-b", "cold-c", "cold-d"]
-                .into_iter()
-                .zip(burns)
-                .map(|(session, burn)| burning(session, "a", burn, false, T))
-                .collect(),
-        );
-        hot_a_cool_b(&mut st, T - 500);
-        st
+    // An unpriced pin is never marked and still counts as one of the account's pins: last in the order, since the
+    // anchor table prices the guess model at nothing, it is the last unmarked one, so the priced pin before it can be
+    // marked.
+    let mut st = rounding(vec![
+        burning("cold-5", "a", 5.0, false, T),
+        PinRow {
+            model: "claude-guess".into(),
+            ..burning("guess", "a", 9.0, false, T)
+        },
+    ]);
+    st.set_rates(BurnRates {
+        five_hour: input_prices(&[("claude-sonnet-5", Some(1.0)), ("claude-guess", None)]),
+        ..BurnRates::default()
+    });
+    over_a_fitting_b(&mut st, T - 500);
+    let d = decide(&mut st, &s, &auxiliary(&s, "cold-5", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Shed))
+    );
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.burn.is_some(), p.marked, p.skip))
+            .collect::<Vec<_>>(),
+        [("cold-5", true, true, None), ("guess", false, false, None)],
+        "the priced pin's mark meets the target, so the unpriced one after it is left as it is"
+    );
+
+    // Three unpriced pins on an account over the ceiling: the round can price no burn to remove.
+    let mut st = rounding(
+        ["guess-a", "guess-b", "guess-c"]
+            .into_iter()
+            .map(|session| PinRow {
+                model: "claude-guess".into(),
+                ..burning(session, "a", 9.0, false, T)
+            })
+            .collect(),
+    );
+    st.record_sample("a", refreshing(0.96, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    let guess = |session: &str| PinKey {
+        model: "claude-guess".into(),
+        ..pin_key(session)
     };
-    let mut st = four([0.0; 4]);
+    let req = SelectRequest {
+        canonical_model: "claude-guess".into(),
+        folded_model: "claude-guess".into(),
+        ..auxiliary(&s, "guess-a", T)
+    };
+    let d = decide(&mut st, &s, &req, &mut rng());
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        (
+            round.outcome.as_str(),
+            round.reason,
+            round.burn_sum,
+            round.target
+        ),
+        ("nothing_to_mark", Some("unpriced"), 0.0, 0.0),
+        "no priced burn, so nothing to remove under the cap"
+    );
+    assert!(["guess-a", "guess-b", "guess-c"]
+        .iter()
+        .all(|session| !st.shed_marked(&guess(session))));
+
+    // No burn projects nothing over the reading, so an account under the ceiling runs no round.
+    let mut st = rounding(
+        ["cold-a", "cold-b", "cold-c", "cold-d"]
+            .into_iter()
+            .map(|session| burning(session, "a", 0.0, false, T))
+            .collect(),
+    );
+    over_a_fitting_b(&mut st, T - 500);
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "cold-a", T), &mut rng()).0),
-        ("a".into(), None),
-        "no burn in the window is a zero target"
+        ("a".into(), None)
     );
-    assert!(["cold-a", "cold-b", "cold-c", "cold-d"]
-        .iter()
-        .all(|session| !marked(&st, session, T)));
+    assert_eq!(
+        st.last_shed("p", "a"),
+        None,
+        "0.94 with nothing burning stays under the ceiling"
+    );
 
-    let unshared = snapshot(shedding_pool(Shedding {
+    let unshared = tiered(shedding_pool(Shedding {
         shed_share: 0.0,
         ..Shedding::default()
     }));
-    let mut st = four([4.0, 3.0, 2.0, 1.0]);
+    let mut st = rounding(
+        ["cold-a", "cold-b", "cold-c", "cold-d"]
+            .into_iter()
+            .zip([4.0, 3.0, 2.0, 1.0])
+            .map(|(session, burn)| burning(session, "a", burn, false, T))
+            .collect(),
+    );
+    over_a_fitting_b(&mut st, T - 500);
     assert_eq!(
         landed(
             select(
@@ -11793,11 +12012,11 @@ fn a_round_never_marks_the_last_pin_and_a_zero_target_marks_nothing() {
             .0
         ),
         ("a".into(), None),
-        "a share of 0 marks nothing"
+        "a cap of 0 bounds the target at nothing"
     );
     assert!(["cold-a", "cold-b", "cold-c", "cold-d"]
         .iter()
-        .all(|session| !marked(&st, session, T)));
+        .all(|session| !marked(&st, session)));
 }
 
 #[test]
@@ -11822,16 +12041,16 @@ fn warm_sessions_never_stops_after_the_cold_pins_and_always_ignores_warmth() {
         (WarmSessions::Never, vec!["cold-3"]),
         (WarmSessions::Always, vec!["warm-4", "warm-2"]),
     ] {
-        let s = snapshot(shedding_pool(Shedding {
+        let s = tiered(shedding_pool(Shedding {
             warm_sessions: knob,
             ..Shedding::default()
         }));
-        let mut st = loaded(pins());
-        hot_a_cool_b(&mut st, T - 500);
+        let mut st = rounding(pins());
+        over_a_fitting_b(&mut st, T - 500);
         select(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng());
         let marks: Vec<&str> = ["cold-3", "warm-4", "warm-2", "warm-1"]
             .into_iter()
-            .filter(|session| marked(&st, session, T))
+            .filter(|session| marked(&st, session))
             .collect();
         assert_eq!(marks, expected, "{knob:?}");
     }
@@ -11841,11 +12060,11 @@ fn warm_sessions_never_stops_after_the_cold_pins_and_always_ignores_warmth() {
 /// fall short of its length; `never` keeps that warm pin unmarked all the same.
 #[test]
 fn warm_sessions_never_marks_no_warm_pin_when_an_unpriced_cold_pin_leaves_the_cold_marks_short() {
-    let s = snapshot(shedding_pool(Shedding {
+    let s = tiered(shedding_pool(Shedding {
         warm_sessions: WarmSessions::Never,
         ..Shedding::default()
     }));
-    let mut st = loaded(vec![
+    let mut st = rounding(vec![
         burning("cold-1", "a", 1.0, false, T),
         PinRow {
             model: "claude-guess".into(),
@@ -11858,27 +12077,27 @@ fn warm_sessions_never_marks_no_warm_pin_when_an_unpriced_cold_pin_leaves_the_co
         five_hour: input_prices(&[("claude-sonnet-5", Some(1.0)), ("claude-guess", None)]),
         ..BurnRates::default()
     });
-    hot_a_cool_b(&mut st, T - 500);
+    over_a_fitting_b(&mut st, T - 500);
     assert_eq!(
         landed(select(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng()).0),
         ("a".into(), None)
     );
     let marks: Vec<&str> = ["cold-1", "warm-4", "warm-1"]
         .into_iter()
-        .filter(|session| marked(&st, session, T))
+        .filter(|session| marked(&st, session))
         .collect();
     assert_eq!(
         marks,
         ["cold-1"],
-        "the priced burn is 6 and the target 3: cold-1 is marked, the order passes the unpriced cold pin and reaches \
-         warm-4, which `never` keeps"
+        "the priced burn is 0.06 an hour and the target 0.03: cold-1 is marked, the order passes the unpriced cold \
+         pin and reaches warm-4, which `never` keeps"
     );
     let guess = PinKey {
         model: "claude-guess".into(),
         ..pin_key("cold-guess")
     };
     assert!(
-        !st.shed_marked("p", &guess, T, 900_000),
+        !st.shed_marked(&guess),
         "the unpriced cold pin is never marked"
     );
 }
@@ -11887,13 +12106,13 @@ fn warm_sessions_never_marks_no_warm_pin_when_an_unpriced_cold_pin_leaves_the_co
 fn a_shed_pin_never_returns_to_the_account_that_shed_it_within_the_dwell_even_when_that_account_cooled(
 ) {
     let s = tiered(shedding_pool(Shedding::default()));
-    let mut st = loaded(vec![
+    let mut st = rounding(vec![
         burning("p4", "a", 4.0, false, T),
         burning("p3", "a", 3.0, false, T),
         burning("p2", "a", 2.0, false, T),
         burning("p1", "a", 1.0, false, T),
     ]);
-    hot_a_cool_b(&mut st, T - 500);
+    over_a_fitting_b(&mut st, T - 500);
     for (session, now) in [("p4", T), ("p3", T + 1_000)] {
         assert_eq!(
             landed(select(&mut st, &s, &auxiliary(&s, session, now), &mut rng()).0),
@@ -11929,17 +12148,32 @@ fn a_shed_pin_never_returns_to_the_account_that_shed_it_within_the_dwell_even_wh
             _ => p,
         })
         .collect();
-    let mut st = loaded(pins);
+    let mut st = rounding(pins);
     st.record_sample("a", sample(0.1, 0.1, at));
     st.record_sample("b", sample(0.9, 0.3, at));
     let crossed = T + 3_000;
+    let d = decide(&mut st, &s, &auxiliary(&s, "p4", crossed), &mut rng());
     assert_eq!(
-        landed(select(&mut st, &s, &auxiliary(&s, "p4", crossed), &mut rng()).0),
+        landed(d.result.clone()),
         ("b".into(), None),
-        "B's round marks p4, and A, cool now, is still no destination for a pin it shed"
+        "B's round runs, and A, cool now, is still no destination for a pin it shed, so p4 is not marked"
     );
-    assert!(marked(&st, "p4", crossed));
-    let after = T + 900_001;
+    let round = d.shed_round.expect("B's round ran").facts;
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.marked, p.skip))
+            .collect::<Vec<_>>(),
+        [
+            ("p4", false, Some("no_runway")),
+            ("p3", false, Some("no_runway"))
+        ],
+        "neither pin may return to A inside the dwell, and B has no other sibling"
+    );
+    assert!(!marked(&st, "p4"));
+    // Past both the pins' no-return time and B's own dwell, A is a destination again.
+    let after = T + 903_001;
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "p4", after), &mut rng()).0),
         ("a".into(), Some(MigrateReason::Shed)),
@@ -11961,15 +12195,15 @@ fn a_compacted_request_on_a_warm_pin_is_first_in_the_order_on_that_request() {
             burning("warm-1", "a", 1.0, true, T),
         ]
     };
-    let mut st = loaded(pins());
-    hot_a_cool_b(&mut st, T - 500);
+    let mut st = rounding(pins());
+    over_a_fitting_b(&mut st, T - 500);
     assert_eq!(
         landed(select(&mut st, &s, &main_turn(&s, "warm-9", T), &mut rng()).0),
         ("a".into(), None),
         "warm, the hottest pin ranks behind the cold one and stays"
     );
-    let mut st = loaded(pins());
-    hot_a_cool_b(&mut st, T - 500);
+    let mut st = rounding(pins());
+    over_a_fitting_b(&mut st, T - 500);
     let compacted = SelectRequest {
         context_compacted: true,
         ..main_turn(&s, "warm-9", T)
@@ -12001,12 +12235,12 @@ fn a_fast_pin_leaves_a_plan_quota_round_and_stays_in_a_dollar_round() {
     let marks = |st: &RoutingState| -> Vec<&str> {
         ["fast-3", "warm-2", "warm-1"]
             .into_iter()
-            .filter(|session| marked(st, session, T))
+            .filter(|session| marked(st, session))
             .collect()
     };
     let s = tiered(shedding_pool(Shedding::default()));
-    let mut st = loaded(pins());
-    hot_a_cool_b(&mut st, T - 500);
+    let mut st = rounding(pins());
+    over_a_fitting_b(&mut st, T - 500);
     assert_eq!(
         landed(select(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng()).0),
         ("a".into(), None)
@@ -12021,8 +12255,8 @@ fn a_fast_pin_leaves_a_plan_quota_round_and_stays_in_a_dollar_round() {
         policy: OveragePolicy::Allow,
         ..shedding_pool(Shedding::default())
     });
-    let mut st = loaded(pins());
-    hot_a_cool_b(&mut st, T - 500);
+    let mut st = rounding(pins());
+    over_a_fitting_b(&mut st, T - 500);
     st.record_overage("a", overage(true, T - 500, Some(T + 10 * MINUTE)));
     select(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng());
     assert_eq!(
@@ -12047,21 +12281,33 @@ fn a_fast_pin_leaves_a_plan_quota_round_and_stays_in_a_dollar_round() {
 
 #[test]
 fn a_pin_turned_fast_leaves_the_round_and_its_standard_burn_counts_again_once_it_returns() {
-    let s = tiered(shedding_pool(Shedding::default()));
-    let mut st = loaded(vec![
-        burning("mover", "a", 3.0, true, T),
-        burning("warm-2", "a", 2.0, true, T),
-        burning("warm-1", "a", 1.0, true, T),
+    // `always` orders every pin by its rewrite whatever its warmth, so the returning pin's burn alone decides its place
+    // in the order.
+    let s = tiered(shedding_pool(Shedding {
+        warm_sessions: WarmSessions::Always,
+        ..Shedding::default()
+    }));
+    let mut st = rounding(vec![
+        burning("mover", "a", 30.0, true, T),
+        burning("warm-2", "a", 20.0, true, T),
+        burning("warm-1", "a", 10.0, true, T),
     ]);
-    hot_a_cool_b(&mut st, T - 500);
+    over_a_fitting_b(&mut st, T - 500);
     assert_eq!(
         landed(select(&mut st, &s, &fast(main_turn(&s, "mover", T)), &mut rng()).0),
         ("a".into(), None),
         "on the fast lane the pin draws no window, so the round passes it over"
     );
-    assert!(!marked(&st, "mover", T) && marked(&st, "warm-2", T));
+    assert!(!marked(&st, "mover") && marked(&st, "warm-2"));
+    // The marked pin moves on its own request, so no standing mark covers the next round's excess.
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "warm-2", T + 1_000), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Shed))
+    );
+    // The fast turn stamped its lane on the pin, so a quota turn would still read the pin as fast: the standard main
+    // turn restamps the lane.
     let later = T + 900_000;
-    hot_a_cool_b(&mut st, later - 500);
+    over_a_fitting_b(&mut st, later - 500);
     assert_eq!(
         landed(select(&mut st, &s, &main_turn(&s, "mover", later), &mut rng()).0),
         ("b".into(), Some(MigrateReason::Shed)),
@@ -12072,13 +12318,13 @@ fn a_pin_turned_fast_leaves_the_round_and_its_standard_burn_counts_again_once_it
 #[test]
 fn a_plan_quota_rounds_mark_moves_a_standard_request_of_the_pin_and_never_a_fast_one() {
     let s = tiered(shedding_pool(Shedding::default()));
-    let mut st = loaded(vec![
+    let mut st = rounding(vec![
         burning("cold-3", "a", 3.0, false, T),
         burning("warm-1", "a", 1.0, true, T),
     ]);
-    hot_a_cool_b(&mut st, T - 500);
+    over_a_fitting_b(&mut st, T - 500);
     select(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng());
-    assert!(marked(&st, "cold-3", T));
+    assert!(marked(&st, "cold-3"));
     assert_eq!(
         landed(
             select(
@@ -12113,15 +12359,15 @@ fn a_lane_changed_pin_sorts_among_the_cold_ones_in_the_shed_round() {
             burning("warm-1", "a", 1.0, true, T),
         ]
     };
-    let mut st = loaded(pins());
-    hot_a_cool_b(&mut st, T - 500);
+    let mut st = rounding(pins());
+    over_a_fitting_b(&mut st, T - 500);
     assert_eq!(
         landed(select(&mut st, &s, &main_turn(&s, "warm-9", T), &mut rng()).0),
         ("a".into(), None),
         "on its own lane the hottest pin is warm, ranks behind the cold one and stays"
     );
-    let mut st = loaded(pins());
-    hot_a_cool_b(&mut st, T - 500);
+    let mut st = rounding(pins());
+    over_a_fitting_b(&mut st, T - 500);
     let switched = SelectRequest {
         lane: lane_key("claude-sonnet-5", "fast", "none", "-"),
         ..main_turn(&s, "warm-9", T)
@@ -12284,7 +12530,7 @@ fn a_renewal_records_five_no_move_lines_and_their_facts() {
         &FactValue::Bool(false)
     );
     assert_eq!(
-        fact(line(&d.record, "move:shed"), "threshold"),
+        fact(line(&d.record, "move:shed"), "margin"),
         &FactValue::Text("off".into())
     );
     let pin = d.record.pin.as_ref().expect("the live pin's block");
@@ -12511,17 +12757,26 @@ fn a_shed_move_records_the_round_and_its_marks() {
     );
     assert!((number(fact(shed, "ahead_seven_day")) - 0.4).abs() < 1e-9);
     assert!((number(fact(shed, "elapsed_seven_day")) - 0.1).abs() < 1e-9);
-    assert!((number(fact(shed, "ahead_five_hour")) - 0.1).abs() < 1e-9);
+    assert!(
+        shed.facts
+            .iter()
+            .all(|f| f.key != "ahead_five_hour" && f.key != "elapsed_five_hour"),
+        "the 5-hour window's lead is no trigger and leaves the line: {:?}",
+        shed.facts
+    );
     assert!(
         shed.facts.iter().all(|f| !f.key.starts_with("deadline_")),
         "a pace to the reset names no deadline: {:?}",
         shed.facts
     );
-    assert!((number(fact(shed, "threshold")) - 0.2).abs() < 1e-9);
     assert!(
         (number(fact(shed, "margin")) - 0.2).abs() < 1e-9,
-        "the larger lead less the threshold"
+        "the margin is the setting"
     );
+    assert_eq!(fact(shed, "trigger"), &FactValue::Text("lead".into()));
+    assert!(number(fact(shed, "excess")) > 0.0);
+    assert!(number(fact(shed, "target")) > 0.0);
+    assert_eq!(fact(shed, "skipped"), &FactValue::List(Vec::new()));
     assert_eq!(fact(shed, "marked"), &FactValue::Bool(true));
     assert_eq!(
         d.record.outcome.shed_marks,
@@ -12540,8 +12795,8 @@ fn a_shed_move_records_the_round_and_its_marks() {
 }
 
 #[test]
-fn a_shed_round_answers_its_hot_window_and_its_pins_in_the_round_s_order() {
-    let s = snapshot(pace_pool());
+fn a_shed_round_answers_its_trigger_and_its_pins_in_the_rounds_order() {
+    let s = tiered(pace_pool());
     let mut st = two_pins_on_a();
     st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
     st.record_sample("b", weekly(0.1, 0.3, 4, T - 500));
@@ -12561,20 +12816,27 @@ fn a_shed_round_answers_its_hot_window_and_its_pins_in_the_round_s_order() {
         "the round names the pin it ran on and that pin's account"
     );
     let round = ran.facts;
-    // The 5-hour lead of 0.1 stays under the threshold. The week's 0.4 is the first to reach it.
+    // The 5-hour window at 0.1 with no reset projects 0.35, under the ceiling. The week's lead of 0.4 reaches the
+    // margin, so the round reads the week: the pins burn 0.05 of the 5-hour window an hour, a sixth of that of the
+    // week, against a pace of the remaining half over the 0.9 week to the reset.
+    let burn_sum: f64 = 0.05 / 6.0;
+    let excess: f64 = burn_sum - 0.5 / (0.9 * 168.0);
     assert_eq!(
-        (round.window.as_str(), round.unit),
-        ("seven_day", "window_share")
+        (round.trigger, round.window.as_str(), round.unit),
+        ("lead", "seven_day", "window_share")
     );
+    assert_eq!((round.projection, round.horizon), (None, None));
     for (read, expected) in [
         (round.utilization, 0.5),
-        (round.elapsed_share, 0.1),
-        (round.ahead, 0.4),
-        (round.threshold, 0.2),
-        (round.margin, 0.2),
-        (round.shed_share, 0.5),
-        (round.burn_sum, 5.0),
-        (round.target, 2.5),
+        (round.ceiling, 0.95),
+        (round.elapsed_share.unwrap(), 0.1),
+        (round.ahead.unwrap(), 0.4),
+        (round.threshold.unwrap(), 0.2),
+        (round.shed_cap, 0.5),
+        (round.burn_sum, burn_sum),
+        (round.excess, excess),
+        (round.target, excess.min(0.5 * burn_sum)),
+        (round.removed, 0.04 / 6.0),
     ] {
         assert!((read - expected).abs() < 1e-9, "{read} against {expected}");
     }
@@ -12585,10 +12847,12 @@ fn a_shed_round_answers_its_hot_window_and_its_pins_in_the_round_s_order() {
             .map(|p| (
                 p.session_id.as_str(),
                 p.cold,
-                p.burn,
+                p.burn.map(|b| (b * 1e6).round()),
                 p.last_input_tokens,
-                p.per_rewrite,
+                p.per_rewrite.map(|r| (r * 1e9).round()),
                 p.marked,
+                p.planned.as_deref(),
+                p.skip,
                 p.note
             ))
             .collect::<Vec<_>>(),
@@ -12596,16 +12860,49 @@ fn a_shed_round_answers_its_hot_window_and_its_pins_in_the_round_s_order() {
             (
                 "s1",
                 true,
-                Some(4.0),
+                Some(6_667.0),
                 1_000,
-                Some(0.004),
+                Some(6_667.0),
                 true,
+                Some("b"),
+                None,
                 Some("current")
             ),
-            ("s0", true, Some(1.0), 1_000, Some(0.001), false, None),
+            (
+                "s0",
+                true,
+                Some(1_667.0),
+                1_000,
+                Some(1_667.0),
+                false,
+                None,
+                None,
+                None
+            ),
         ],
-        "cold first by burn, the request's own pin named"
+        "cold first by burn, the request's own pin named, the mark's destination planned"
     );
+    let marked_pin = &round.pins[0];
+    assert!(
+        marked_pin
+            .rewrite
+            .is_some_and(|r| (r - 1_000.0 / 60_000_000.0).abs() < 1e-12),
+        "the rewrite on the week, priced on b's tier: {:?}",
+        marked_pin.rewrite
+    );
+    assert!(
+        marked_pin
+            .payback
+            .is_some_and(|p| (p - 9_600.0).abs() < 1e-6),
+        "a day of the pin's burn over its rewrite: {:?}",
+        marked_pin.payback
+    );
+    assert!(
+        marked_pin.runway_ms.is_some_and(|r| r > 5 * HOUR),
+        "the pin fits b to its horizon: {:?}",
+        marked_pin.runway_ms
+    );
+    assert_eq!((round.outcome.as_str(), round.reason), ("marked 1", None));
     assert_eq!(
         Some(round.marks.clone()),
         d.record.outcome.shed_marks,
@@ -12613,7 +12910,7 @@ fn a_shed_round_answers_its_hot_window_and_its_pins_in_the_round_s_order() {
     );
     assert_eq!(
         (
-            round.burn_window_seconds,
+            round.burn_average_seconds,
             round.warm_sessions,
             round.dwell_seconds,
             round.dwell_until
@@ -14070,7 +14367,7 @@ fn a_four_member_shed_move_serializes_under_twenty_kilobytes() {
         Some(3.0),
         None,
     );
-    let mut st = priced(vec![
+    let mut st = rounding(vec![
         burning("s1", "a", 4.0, false, T),
         burning("s2", "a", 3.0, false, T),
         burning("s3", "a", 2.0, false, T),
@@ -14230,10 +14527,9 @@ fn the_last_account_fact_reads_the_accounts_tried_rather_than_the_wire_attempt()
 #[test]
 fn a_pin_whose_last_prompt_was_over_the_threshold_prices_its_burn_at_the_long_context_rates_in_the_round(
 ) {
-    // Both members api_key funded, so the round reads dollars and no plan-funded sibling takes a cold pin back to
-    // plan before it runs.
-    let s = snapshot(Pool {
-        kinds: vec![("a", AccountKind::ApiKey), ("b", AccountKind::ApiKey)],
+    // a in overage under `allow`, so the round's order reads dollars while the trigger reads a's 5-hour projection.
+    let s = tiered(Pool {
+        policy: OveragePolicy::Allow,
         ..shedding_pool(Shedding::default())
     });
     // Sonnet 5's input at 1 and at 5 over 1,000 prompt tokens. The `long` pin burns one token a second with its
@@ -14247,7 +14543,7 @@ fn a_pin_whose_last_prompt_was_over_the_threshold_prices_its_burn_at_the_long_co
         last_input_tokens: 1_000,
         ..burning("short", "a", 2.0, false, T)
     };
-    let mut st = loaded(vec![long, short]);
+    let mut st = rounding(vec![long, short]);
     st.set_rates(BurnRates {
         dollars: long_context_input_prices(
             &[("claude-sonnet-5", Some(1.0))],
@@ -14269,14 +14565,17 @@ fn a_pin_whose_last_prompt_was_over_the_threshold_prices_its_burn_at_the_long_co
         "the long pin's burn reads at the long-context rate, five times its token rate, the short pin's at the \
          standard rate"
     );
-    hot_a_cool_b(&mut st, T - 500);
+    over_a_fitting_b(&mut st, T - 500);
+    st.record_overage("a", overage(true, T - 500, Some(T + 10 * MINUTE)));
+    let d = decide(&mut st, &s, &auxiliary(&s, "short", T), &mut rng());
     assert_eq!(
-        landed(select(&mut st, &s, &auxiliary(&s, "short", T), &mut rng()).0),
+        landed(d.result.clone()),
         ("a".into(), None),
         "the round marks the long pin first, so the short pin is the last unmarked one and renews in place"
     );
+    assert_eq!(d.shed_round.expect("the round ran").facts.unit, "usd");
     assert!(
-        marked(&st, "long", T) && !marked(&st, "short", T),
+        marked(&st, "long") && !marked(&st, "short"),
         "the long pin carries the mark"
     );
 }
@@ -15586,21 +15885,24 @@ fn the_shed_rule_takes_the_one_fitting_destination_with_the_longest_runway_or_no
     assert_eq!(
         landed(d.result.clone()),
         ("a".into(), None),
-        "nothing fits, so the pin renews in place"
+        "nothing fits the heavy pin, so the round marks the light one instead and the heavy pin renews in place"
     );
     let shed = line(&d.record, "move:shed");
     assert_eq!(shed.verdict, "no");
-    assert_eq!(fact(shed, "marked"), &FactValue::Bool(true));
-    assert_eq!(fact(shed, "no_destination"), &FactValue::Bool(true));
-    assert!(marked(&st, "s1", T + 1_000), "the mark stands");
-    let fit = line(&d.record, "fit");
-    assert_eq!(fit.verdict, "none");
-    for id in ["b", "c"] {
-        assert_eq!(
-            fact_of(fit, "verdict", id),
-            &FactValue::Text("least_bad".into())
-        );
-    }
+    assert_eq!(fact(shed, "marked"), &FactValue::Bool(false));
+    assert_eq!(
+        fact(shed, "skipped"),
+        &FactValue::List(vec!["k/s1/main/claude-sonnet-5: no_runway".into()])
+    );
+    assert!(
+        !marked(&st, "s1") && marked(&st, "s0"),
+        "no mark without a destination that fits: the light pin fits b to its horizon, the heavy one does not"
+    );
+    assert!(
+        d.record.walk.iter().all(|w| w.step != "fit"),
+        "an unmarked pin takes no gate of its own: {:?}",
+        steps(&d.record)
+    );
 }
 
 #[test]
@@ -15910,4 +16212,501 @@ fn a_siblings_five_hour_lead_alone_no_longer_reads_hot_for_the_weekly_band() {
         fact(line(&d.record, "move:spent"), "destinations"),
         &FactValue::List(vec!["b".into(), "c".into()])
     );
+}
+
+/// The 5-hour projection's source for the round cases: `a` at 0.80 with the reset an hour out and its pins burning
+/// 0.42 of the window an hour, so the projection reads 1.22 and the excess 0.27 an hour under a cap of half the burn.
+fn three_pins_projecting_over() -> RoutingState {
+    let mut st = rounding(vec![
+        burning("s1", "a", 16.0, false, T),
+        burning("s2", "a", 14.0, false, T),
+        burning("s3", "a", 12.0, false, T),
+    ]);
+    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T));
+    st
+}
+
+/// A Pace pool over `members` with the weekly margin at 0.2 and every member on `TIER`.
+fn projection_pool(members: Vec<(&'static str, u32)>) -> RegistrySnapshot {
+    tiered(Pool {
+        strategy: Strategy::Pace,
+        shed_ahead: Some(0.2),
+        members,
+        ..Pool::default()
+    })
+}
+
+#[test]
+fn a_five_hour_round_fires_on_the_projection_over_the_ceiling_and_marks_until_the_removed_burn_covers_the_excess(
+) {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = three_pins_projecting_over();
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s3", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("a".into(), None),
+        "the round leaves the third pin, whose request this is"
+    );
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(shed.verdict, "no");
+    assert_eq!(fact(shed, "trigger"), &FactValue::Text("projection".into()));
+    assert!((number(fact(shed, "projection_five_hour")) - 1.22).abs() < 1e-9);
+    assert_eq!(fact(shed, "horizon_five_hour"), &FactValue::Int(T + HOUR));
+    assert!((number(fact(shed, "ceiling")) - 0.95).abs() < 1e-9);
+    assert!((number(fact(shed, "excess")) - 0.27).abs() < 1e-9);
+    assert!((number(fact(shed, "target")) - 0.21).abs() < 1e-9);
+    assert_eq!(fact(shed, "round"), &FactValue::Text("ran".into()));
+    assert_eq!(
+        fact(shed, "marks"),
+        &FactValue::List(vec![
+            "k/s1/main/claude-sonnet-5".into(),
+            "k/s2/main/claude-sonnet-5".into(),
+        ])
+    );
+    assert_eq!(fact(shed, "skipped"), &FactValue::List(Vec::new()));
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        (
+            round.trigger,
+            round.window.as_str(),
+            round.outcome.as_str(),
+            round.reason
+        ),
+        ("projection", "five_hour", "marked 2", None)
+    );
+    for (read, expected) in [
+        (round.utilization, 0.80),
+        (round.projection.unwrap(), 1.22),
+        (round.ceiling, 0.95),
+        (round.burn_sum, 0.42),
+        (round.excess, 0.27),
+        (round.target, 0.21),
+        (round.removed, 0.30),
+        (round.shed_cap, 0.5),
+    ] {
+        assert!((read - expected).abs() < 1e-9, "{read} against {expected}");
+    }
+    assert_eq!(round.horizon, Some(T + HOUR));
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.marked, p.planned.as_deref(), p.skip))
+            .collect::<Vec<_>>(),
+        [
+            ("s1", true, Some("b"), None),
+            ("s2", true, Some("b"), None),
+            ("s3", false, None, None),
+        ],
+        "the first pin's 0.16 is under the target, the second's 0.30 is over it, and the walk stops"
+    );
+    assert_eq!(round.marks.len(), 2);
+    let rounds: Vec<&StateWrite> = d
+        .writes
+        .iter()
+        .filter(|w| matches!(w, StateWrite::ShedRound { .. }))
+        .collect();
+    assert_eq!(
+        rounds,
+        vec![&StateWrite::ShedRound {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            incarnation: 1,
+            round_at: T,
+        }],
+        "the round's write carries the time alone"
+    );
+    let marked_rows: Vec<&str> = d
+        .writes
+        .iter()
+        .filter_map(|w| match w {
+            StateWrite::UpsertPin(row)
+                if row.marked_at == Some(T)
+                    && row.marked_on.as_deref() == Some("a")
+                    && row.marked_window.as_deref() == Some("five_hour") =>
+            {
+                Some(row.session_id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(marked_rows, ["s1", "s2"], "two pin writes carry the marks");
+    assert!(marked(&st, "s1") && marked(&st, "s2") && !marked(&st, "s3"));
+}
+
+#[test]
+fn a_round_counts_a_siblings_headroom_once_across_its_marks() {
+    // b holds room for one pin's rewrite and burn to its horizon, c for one more.
+    let with_c = projection_pool(vec![("a", 0), ("b", 1), ("c", 2)]);
+    let mut st = three_pins_projecting_over();
+    st.record_sample("b", refreshing(0.70, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("c", refreshing(0.70, T + HOUR, T + 72 * HOUR, T));
+    let d = decide(&mut st, &with_c, &auxiliary(&with_c, "s3", T), &mut rng());
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.marked, p.planned.as_deref(), p.skip))
+            .collect::<Vec<_>>(),
+        [
+            ("s1", true, Some("b"), None),
+            ("s2", true, Some("c"), None),
+            ("s3", false, None, None),
+        ],
+        "the first mark plans b, and the second pin's fit reads b with that plan's rewrite and burn on it, so it plans c"
+    );
+    assert_eq!(round.outcome, "marked 2");
+
+    let without_c = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = three_pins_projecting_over();
+    st.record_sample("b", refreshing(0.70, T + HOUR, T + 72 * HOUR, T));
+    let d = decide(
+        &mut st,
+        &without_c,
+        &auxiliary(&without_c, "s3", T),
+        &mut rng(),
+    );
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.marked, p.planned.as_deref(), p.skip))
+            .collect::<Vec<_>>(),
+        [
+            ("s1", true, Some("b"), None),
+            ("s2", false, None, Some("no_runway")),
+            ("s3", false, None, Some("no_runway")),
+        ],
+        "with c gone the second and third pins read b with the first mark's plan on it and fit nowhere"
+    );
+    assert_eq!(
+        (round.outcome.as_str(), round.reason, round.removed),
+        ("marked 1", None, 0.16)
+    );
+    assert_eq!(
+        fact(line(&d.record, "move:shed"), "skipped"),
+        &FactValue::List(vec![
+            "k/s2/main/claude-sonnet-5: no_runway".into(),
+            "k/s3/main/claude-sonnet-5: no_runway".into(),
+        ])
+    );
+}
+
+#[test]
+fn a_standing_mark_counts_as_removed_and_is_skipped_standing() {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    // s1 carries the mark of a round that ran a while ago: a move pending, whose burn the round counts as removed
+    // before it marks anything else.
+    let mut st = rounding(vec![
+        PinRow {
+            marked_at: Some(T - 1_000_000),
+            marked_on: Some("a".into()),
+            marked_window: Some(FIVE_HOUR.into()),
+            ..burning("s1", "a", 16.0, false, T)
+        },
+        burning("s2", "a", 14.0, false, T),
+        burning("s3", "a", 12.0, false, T),
+    ]);
+    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s3", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (
+                p.session_id.as_str(),
+                p.marked,
+                p.planned.as_deref(),
+                p.skip
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("s1", true, None, Some("standing")),
+            ("s2", true, Some("b"), None),
+            ("s3", false, None, None),
+        ],
+        "the standing pin is skipped and the round adds one mark beside it"
+    );
+    assert_eq!((round.outcome.as_str(), round.marks.len()), ("marked 1", 1));
+    assert!(
+        (round.removed - 0.30).abs() < 1e-9,
+        "the standing pin's 0.16 counts as removed beside the new mark's 0.14: {}",
+        round.removed
+    );
+    assert_eq!(
+        fact(line(&d.record, "move:shed"), "skipped"),
+        &FactValue::List(vec!["k/s1/main/claude-sonnet-5: standing".into()])
+    );
+    assert!(marked(&st, "s1") && marked(&st, "s2") && !marked(&st, "s3"));
+    assert_eq!(
+        pinned(&st, "s1").marked_at,
+        Some(T - 1_000_000),
+        "the standing mark keeps its own time"
+    );
+}
+
+#[test]
+fn a_weekly_round_skips_a_pin_whose_day_of_burn_is_under_three_rewrites_and_the_five_hour_round_marks_it(
+) {
+    let s = tiered(pace_pool());
+    // Both pins last wrote 300 000 tokens, a two-hundredth of the week. The light pin burns a sixth of a thousandth of
+    // the week an hour, 0.8 rewrites a day, the heavy one twenty times that.
+    let pins = || {
+        vec![
+            PinRow {
+                last_input_tokens: 300_000,
+                ..burning("light", "a", 0.1, false, T)
+            },
+            PinRow {
+                last_input_tokens: 300_000,
+                ..burning("heavy", "a", 2.0, true, T)
+            },
+        ]
+    };
+    let mut st = rounding(pins());
+    // The week at 0.95 with three tenths left leads its pace by 0.25, and the pins burn past the pace of the remaining
+    // twentieth over the 50 hours to the reset.
+    st.record_sample("a", weekly(0.1, 0.95, 3, T));
+    st.record_sample("b", weekly(0.1, 0.3, 4, T));
+    let d = decide(&mut st, &s, &auxiliary(&s, "light", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("a".into(), None),
+        "the light pin is skipped and renews"
+    );
+    let round = d.shed_round.expect("the weekly round ran").facts;
+    assert_eq!(round.trigger, "lead");
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (
+                p.session_id.as_str(),
+                p.marked,
+                p.skip,
+                p.payback.map(|r| (r * 100.0).round() / 100.0)
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("light", false, Some("payback"), Some(0.8)),
+            ("heavy", true, None, Some(16.0)),
+        ],
+        "the light pin's day of burn is under three rewrites, the heavy pin's over"
+    );
+    assert_eq!((round.outcome.as_str(), round.reason), ("marked 1", None));
+    assert!(marked(&st, "heavy") && !marked(&st, "light"));
+
+    // The 5-hour round takes no payback filter: at the wall the light pin moves cold like any other.
+    let mut st = rounding(pins());
+    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", weekly(0.1, 0.3, 4, T));
+    let d = decide(&mut st, &s, &auxiliary(&s, "light", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "the light pin is marked and moves on its own request"
+    );
+    let round = d.shed_round.expect("the 5-hour round ran").facts;
+    assert_eq!(round.trigger, "projection");
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.marked, p.skip, p.payback))
+            .collect::<Vec<_>>(),
+        [
+            ("light", true, None, None),
+            ("heavy", false, Some("last_pin"), None),
+        ],
+        "no payback is read, the light pin is marked and the heavy one is the last pin"
+    );
+}
+
+#[test]
+fn a_weekly_round_on_an_account_burning_under_its_pace_marks_nothing_with_under_pace() {
+    let s = tiered(pace_pool());
+    // The week at 0.55 with its reset 120 hours out has 48 of its 168 hours gone, a lead of 0.26 over the margin. Its
+    // remaining 0.45 over 120 hours is a pace of 0.00375 an hour.
+    let week = |at: i64| {
+        sample(0.1, 0.55, at).with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 0.55,
+                reset: Some(T + 120 * HOUR),
+                observed_at: at,
+                source: WindowSource::Poll,
+            },
+        )
+    };
+    let run = |s1: f64, s2: f64| {
+        let mut st = rounding(vec![
+            burning("s1", "a", s1, false, T),
+            burning("s2", "a", s2, false, T),
+        ]);
+        st.record_sample("a", week(T));
+        st.record_sample("b", weekly(0.1, 0.3, 4, T));
+        let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+        (d, st)
+    };
+    // The pins burn 0.003 of the week an hour between them, under the pace.
+    let (d, st) = run(1.2, 0.6);
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        (round.trigger, round.outcome.as_str(), round.reason),
+        ("lead", "nothing_to_mark", Some("under_pace"))
+    );
+    assert!(
+        (round.excess + 0.00075).abs() < 1e-9,
+        "0.003 an hour less the pace of 0.00375: {}",
+        round.excess
+    );
+    assert!(round
+        .ahead
+        .is_some_and(|lead| (lead - (0.55 - 48.0 / 168.0)).abs() < 1e-9));
+    assert!(!marked(&st, "s1") && !marked(&st, "s2"));
+    assert_eq!(
+        st.last_shed("p", "a"),
+        Some(T),
+        "the round is recorded, so the dwell holds"
+    );
+    // Twice the burn, 0.006 an hour, runs over the pace by 0.00225.
+    let (d, _) = run(2.4, 1.2);
+    let round = d.shed_round.expect("the round ran").facts;
+    assert!(
+        (round.excess - 0.00225).abs() < 1e-9,
+        "0.006 an hour less the pace of 0.00375: {}",
+        round.excess
+    );
+    assert_eq!(round.outcome, "marked 1");
+}
+
+#[test]
+fn a_mark_holds_past_the_dwell_heals_when_the_projection_reads_under_the_ceiling_and_stays_with_no_fitting_destination(
+) {
+    let s = tiered(shedding_pool(Shedding::default()));
+    // s1 was marked 963 seconds ago by a round whose 900 second dwell has passed, and has not asked since.
+    let marked_at = T - 963_000;
+    let state = || {
+        let mut st = RoutingState::from_load(RoutingLoad {
+            pins: vec![
+                PinRow {
+                    marked_at: Some(marked_at),
+                    marked_on: Some("a".into()),
+                    marked_window: Some(FIVE_HOUR.into()),
+                    last_used_at: marked_at,
+                    ..burning("s1", "a", 4.0, false, marked_at)
+                },
+                burning("s0", "a", 1.0, false, T),
+            ],
+            shed_rounds: vec![ShedRoundRow {
+                pool_id: "p".into(),
+                account_id: "a".into(),
+                incarnation: 1,
+                round_at: marked_at,
+            }],
+            ..RoutingLoad::default()
+        });
+        st.set_share(hourly_pricer());
+        st
+    };
+
+    let mut st = state();
+    over_a_fitting_b(&mut st, T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "the mark stands past the dwell and the pin moves at its next request"
+    );
+    let pin = d.record.pin.as_ref().expect("the pin block");
+    assert_eq!(
+        (
+            pin.marked,
+            pin.marked_at,
+            pin.marked_on.as_deref(),
+            pin.marked_window.as_deref()
+        ),
+        (true, Some(marked_at), Some("a"), Some("five_hour"))
+    );
+    assert_eq!(line(&d.record, "fit").verdict, "fits");
+    assert_eq!(
+        d.record.outcome.mark_cleared.as_ref().map(|m| (
+            m.reason,
+            m.marked_at,
+            m.marked_on.as_str(),
+            m.projection
+        )),
+        Some(("moved", marked_at, "a", None))
+    );
+
+    // The account's projection fell under the ceiling: the heal check clears the mark ahead of the move rules.
+    let mut st = state();
+    st.record_sample("a", refreshing(0.5, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let pin = d.record.pin.as_ref().expect("the pin block");
+    assert_eq!(
+        (
+            pin.marked,
+            pin.marked_at,
+            pin.marked_on.as_deref(),
+            pin.marked_window.as_deref()
+        ),
+        (false, None, None, None),
+        "the record's pin block reads the cleared row"
+    );
+    let cleared = d.record.outcome.mark_cleared.as_ref().expect("the heal");
+    assert_eq!(
+        (
+            cleared.reason,
+            cleared.marked_at,
+            cleared.marked_on.as_str(),
+            cleared.marked_window.as_str()
+        ),
+        ("healed", marked_at, "a", "five_hour")
+    );
+    assert!(
+        cleared.projection.is_some_and(|p| p > 0.5 && p < 0.95),
+        "the healing projection at the horizon: {:?}",
+        cleared.projection
+    );
+    assert!(
+        d.writes.iter().any(|w| matches!(
+            w,
+            StateWrite::UpsertPin(row)
+                if row.session_id == "s1"
+                    && row.marked_at.is_none()
+                    && row.marked_on.is_none()
+                    && row.marked_window.is_none()
+        )),
+        "the cleared row is written: {:?}",
+        d.writes
+    );
+    assert!(!marked(&st, "s1"));
+    assert_eq!(d.record.outcome.kind, "renewed");
+
+    // Over the ceiling with no sibling that fits: the pin renews in place and its mark stands.
+    let mut st = state();
+    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", sample(0.95, 0.3, T));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    assert!(d.record.pin.as_ref().is_some_and(|pin| pin.marked));
+    assert_eq!(d.record.outcome.mark_cleared, None);
+    assert_eq!(
+        pinned(&st, "s1").marked_at,
+        Some(marked_at),
+        "the mark stands until a destination fits"
+    );
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(fact(shed, "marked"), &FactValue::Bool(true));
+    assert_eq!(fact(shed, "no_destination"), &FactValue::Bool(true));
 }

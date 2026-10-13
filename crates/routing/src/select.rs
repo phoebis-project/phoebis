@@ -1,13 +1,13 @@
 //! One selection: the spec's seven steps over the snapshot and the routing state.
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityMode, BudgetPeriod, CooldownRow, OveragePolicy,
-    PinBurn, PinKey, PinRow, PoolMember, PoolRow, SessionPlacement, ShedPin, Strategy,
-    SubagentPlacement, WarmSessions,
+    PinBurn, PinKey, PinRow, PoolMember, PoolRow, SessionPlacement, Strategy, SubagentPlacement,
+    WarmSessions,
 };
 use rand::{Rng, RngExt};
 
@@ -15,14 +15,14 @@ use crate::affinity::{AffinityEntry, AffinityMap, RungWalk, Visited};
 use crate::record::{
     key_fact, settings_of, BudgetFacts, By, CandidateFacts, ChainFacts, CooldownFacts,
     CreditsFacts, DecisionRecord, DecisionSummary, ExhaustionFacts, Fact, FactEntity, FactValue,
-    HoldOutcome, LaneFacts, ObstacleFacts, Outcome, OverageFacts, PaceFacts,
-    PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts,
+    HoldOutcome, LaneFacts, MarkClearedFacts, ObstacleFacts, Outcome, OverageFacts,
+    PaceFacts, PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts,
     RequestFacts, RequestFlags, Score, ShedPinFacts, ShedRoundFacts, SummaryFact, TermFacts,
     WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION, WALK_STEPS,
 };
 use crate::state::{
-    budget_reached, burn_average_ms, burn_decayed, ceiling, plan_windows, shed_cap, shed_dwell_ms,
-    shed_marks, warm, weekly_lead_margin, BurnUnit, CreditsState, MemberSpend, PinRef, PinUsage,
+    budget_reached, burn_average_ms, burn_decayed, ceiling, mark_holds, plan_windows, shed_cap,
+    shed_dwell_ms, warm, weekly_lead_margin, BurnUnit, CreditsState, MemberSpend, PinRef, PinUsage,
     Reservation, RoutingState, StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR,
     IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
@@ -374,6 +374,10 @@ fn stamp_hashes(pin: &mut PinRow, request: &SelectRequest) {
 /// The hysteresis band under the shedding margin (`shed_ahead_of_pace`): a subscription destination counts only below
 /// `margin - MIGRATE_BAND`; an api_key one reads its bucket against 1.0.
 pub const MIGRATE_BAND: f64 = 0.05;
+
+/// The weekly round's payback factor: a pin is marked when its burn over the next day (or the rest of the week)
+/// exceeds this many times its rewrite's weekly cost. A design constant like `MIGRATE_BAND`.
+pub const PAYBACK_FACTOR: f64 = 3.0;
 
 /// Why a selection landed where it did, for the attempt row and the request drawer. `Serialize` here, so the
 /// relay can put the trace on the bus as JSON without this crate's callers needing to depend on the ledger.
@@ -917,41 +921,33 @@ pub fn decide(
     }
 }
 
-/// The round `move_of` just ran, as the registry keeps it: each pin of the round with its mark and its epoch at the
-/// round.
+/// The round `move_of` just ran, as the registry keeps it: the round's stamp, then each marked pin's row with its
+/// mark, read back from the state the round marked them on.
 fn round_write(
     state: &RoutingState,
     pool: &PoolRow,
     current: &PinRow,
     at: i64,
     round: &ShedRoundRecord,
-) -> StateWrite {
-    let pins = round
-        .facts
-        .pins
-        .iter()
-        .filter_map(|facts| {
-            let key = PinKey {
-                key_id: facts.key_id.clone(),
-                session_id: facts.session_id.clone(),
-                agent_id: facts.agent_id.clone(),
-                model: facts.model.clone(),
-            };
-            let epoch = state.pin(&key)?.epoch;
-            Some(ShedPin {
-                key,
-                epoch,
-                marked: facts.marked,
-            })
-        })
-        .collect();
-    StateWrite::ShedRound {
+) -> Vec<StateWrite> {
+    let mut writes = vec![StateWrite::ShedRound {
         pool_id: pool.id.clone(),
         account_id: round.account_id.clone(),
         incarnation: current.incarnation,
         round_at: at,
-        pins,
+    }];
+    for mark in &round.facts.marks {
+        let key = PinKey {
+            key_id: mark.key_id.clone(),
+            session_id: mark.session_id.clone(),
+            agent_id: mark.agent_id.clone(),
+            model: mark.model.clone(),
+        };
+        if let Some(row) = state.pin(&key) {
+            writes.push(StateWrite::UpsertPin(row.clone()));
+        }
     }
+    writes
 }
 
 /// `decide` without its record: the tests' entry and nothing else's.
@@ -988,6 +984,8 @@ struct Recorder {
     pin_written: Option<PinWritten>,
     hold_place: Option<&'static str>,
     shed_round: Option<ShedRoundRecord>,
+    /// The mark step 1's heal check or step 4's move cleared, for the outcome and the task's event.
+    mark_cleared: Option<MarkClearedFacts>,
     pick: Option<Pick>,
     renewal: Option<Renewal>,
 }
@@ -1070,7 +1068,7 @@ fn run(
             agent_id: request.agent_id.clone(),
             model: request.canonical_model.clone(),
         };
-        if let Some(current) = state.pin(&key).cloned() {
+        if let Some(mut current) = state.pin(&key).cloned() {
             let serves = request
                 .candidates
                 .iter()
@@ -1083,8 +1081,20 @@ fn run(
             } else {
                 "live"
             };
-            let marked = found == "live"
-                && state.shed_marked(&pool.id, &key, request.now, shed_dwell_ms(pool));
+            let mut marked = found == "live" && state.shed_marked(&key);
+            // The heal check: a live marked pin whose trigger reads gone at this request loses its mark here, ahead
+            // of the move rules, so the record's pin block and the renewal below read the cleared row.
+            if marked {
+                if let Some(projection) = healed(state, snapshot, pool, &current, request.now) {
+                    if let Some(cleared) = state.clear_mark(&key) {
+                        rec.mark_cleared =
+                            Some(mark_cleared_of(&current, "healed", projection, request.now));
+                        writes.push(StateWrite::UpsertPin(cleared.clone()));
+                        current = cleared;
+                        marked = false;
+                    }
+                }
+            }
             rec.pin = Some(pin_facts(found, Some(&current), marked, request.now));
             if found == "live" {
                 pin = Some(current);
@@ -1284,7 +1294,8 @@ fn run(
     // The row a move takes off its source, whose burn and last prompt the new row carries.
     let mut moving: Option<PinRow> = None;
     let mut selection_set: Vec<&Candidate> = eligible.clone();
-    if let Some(current) = pin.as_ref() {
+    if let Some(mut current) = pin.take() {
+        let mut moved_off = false;
         let ended = snapshot
             .term(&current.account_id)
             .is_some_and(|term| term::ended(term, request.now));
@@ -1298,7 +1309,7 @@ fn run(
                 rec.step(rule, "not_run", vec![Fact::text("reason", reason)]);
             }
         } else {
-            let cold = !warm_on(current, verdict, request.now);
+            let cold = !warm_on(&current, verdict, request.now);
             // The lane the pin carries once this request renews it: a request that leaves the pin alone stamps
             // none.
             let fast = if verdict == Warmth::Untouched {
@@ -1307,14 +1318,22 @@ fn run(
                 request.fast
             };
             let moved = move_of(
-                state, snapshot, pool, request, current, &eligible, window, cold, fast, rec,
+                state, snapshot, pool, request, &current, &eligible, window, cold, fast, rec,
             );
-            // Ahead of the move's own writes, so the store holds the mark before the pin write that spends it.
+            // A round marks the state's rows, the request's own among them, so the row the renewal writes back or
+            // the move takes off the account is read again with its mark.
+            if rec.shed_round.is_some() {
+                if let Some(fresh) = state.pin(&current.key()).cloned() {
+                    current = fresh;
+                }
+            }
+            // Ahead of the move's own writes, so the store holds the marks before the pin write that spends one.
             if let Some(round) = rec.shed_round.as_ref() {
-                writes.push(round_write(state, pool, current, request.now, round));
+                writes.extend(round_write(state, pool, &current, request.now, round));
             }
             // A spent window about to reset holds the request on its own account: the hold books and writes
-            // nothing, the relay waits to the reset and selects again, and the pin renews in place then.
+            // nothing, the relay waits to the later of the reset and the cooldown's end and selects again, and the
+            // pin renews in place then.
             if let MoveVerdict::Wait { until } = moved {
                 let hold = HoldFacts {
                     account_id: current.account_id.clone(),
@@ -1354,6 +1373,11 @@ fn run(
                 if open {
                     state.remove_pin(&current.key());
                     writes.push(StateWrite::DeletePin(current.key()));
+                    // The mark leaves with the row the move takes off the account it was made on.
+                    if mark_holds(&current) {
+                        rec.mark_cleared =
+                            Some(mark_cleared_of(&current, "moved", None, request.now));
+                    }
                     if reason == MigrateReason::Shed {
                         shed_from = Some(current.account_id.clone());
                     }
@@ -1363,9 +1387,12 @@ fn run(
                     migrated = Some(reason);
                     selection_set = set;
                     moving = Some(current.clone());
-                    pin = None;
+                    moved_off = true;
                 }
             }
+        }
+        if !moved_off {
+            pin = Some(current);
         }
     }
 
@@ -1847,6 +1874,9 @@ fn fresh_pin(
         static_hash: None,
         tail_hash: None,
         lane: request.lane.clone(),
+        marked_at: None,
+        marked_on: None,
+        marked_window: None,
     };
     stamp_hashes(&mut row, request);
     row
@@ -2002,7 +2032,6 @@ fn projections_of(
 
 /// The projection of `account_id` on `window` at its horizon: `None` for an account with no reading of the window or
 /// an api_key account.
-#[allow(dead_code)]
 pub(crate) fn projection_of(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2317,45 +2346,16 @@ fn under_band(
     }
 }
 
-/// The two shared windows' leads and elapsed shares as facts, each window's deadline where its pace runs to the
-/// account's end, and the larger lead's margin over `against` (the shed threshold): what the shed line states of one
-/// reading each. Answers the two leads, 5-hour first.
-fn lead_facts(
-    facts: &mut Vec<Fact>,
-    five_hour: Option<(f64, f64, Option<i64>)>,
-    seven_day: Option<(f64, f64, Option<i64>)>,
-    against: f64,
-) -> [Option<f64>; 2] {
-    for (ahead_key, elapsed_key, deadline_key, read) in [
-        (
-            "ahead_five_hour",
-            "elapsed_five_hour",
-            "deadline_five_hour",
-            five_hour,
-        ),
-        (
-            "ahead_seven_day",
-            "elapsed_seven_day",
-            "deadline_seven_day",
-            seven_day,
-        ),
-    ] {
-        if let Some((lead, elapsed, end)) = read {
-            facts.push(Fact::number(ahead_key, lead).unit("percent"));
-            facts.push(Fact::number(elapsed_key, elapsed).unit("percent"));
-            if let Some(end) = end {
-                facts.push(Fact::int(deadline_key, end).unit("time"));
-            }
+/// The 7-day window's lead and elapsed share as facts, with its deadline where its pace runs to the account's end:
+/// what the shed line states of the weekly reading.
+fn lead_facts(facts: &mut Vec<Fact>, seven_day: Option<(f64, f64, Option<i64>)>) {
+    if let Some((lead, elapsed, end)) = seven_day {
+        facts.push(Fact::number("ahead_seven_day", lead).unit("percent"));
+        facts.push(Fact::number("elapsed_seven_day", elapsed).unit("percent"));
+        if let Some(end) = end {
+            facts.push(Fact::int("deadline_seven_day", end).unit("time"));
         }
     }
-    let leads = [
-        five_hour.map(|(lead, _, _)| lead),
-        seven_day.map(|(lead, _, _)| lead),
-    ];
-    if let Some(larger) = leads.into_iter().flatten().reduce(f64::max) {
-        facts.push(Fact::number("margin", larger - against).unit("percent"));
-    }
-    leads
 }
 
 /// Whether the account's allowance is known: an api_key account has no plan window to read, and a subscription
@@ -2774,68 +2774,67 @@ fn move_of<'a>(
         no_destination(rec, 3, facts, gate);
     }
 
-    // The trigger reads how far the prediction runs ahead of the window's pace, as the ceiling reads the
-    // prediction itself: a week at 0.5 ten percent in is a session worth shedding, the same week at 0.5 sixty
-    // percent in is not, and a refunded window reads zero at its reset.
-    let Some(threshold) = weekly_lead_margin(pool) else {
-        rec.step(RULES[4], "no", vec![Fact::text("threshold", "off")]);
-        return MoveVerdict::Stay;
-    };
-    let mut facts = Vec::new();
-    let leads = [
-        (
-            FIVE_HOUR,
-            ahead(state, snapshot, &current.account_id, FIVE_HOUR, now),
-        ),
-        (
-            SEVEN_DAY,
-            ahead(state, snapshot, &current.account_id, SEVEN_DAY, now),
-        ),
-    ];
-    lead_facts(&mut facts, leads[0].1, leads[1].1, threshold);
-    facts.push(Fact::number("threshold", threshold).unit("percent"));
-    let Some((window, (lead, elapsed, _))) = leads.into_iter().find_map(|(window, read)| {
-        read.filter(|(lead, _, _)| *lead >= threshold)
-            .map(|read| (window, read))
-    }) else {
+    // The shed rule's two triggers: the 5-hour projection at its horizon over the ceiling first, then the weekly lead
+    // over the margin, one round per selection at most. The line names the projection and the lead it read whether or
+    // not either fired.
+    let source = current.account_id.as_str();
+    let tier = snapshot.tier(source).unwrap_or_default();
+    let projections = projections_of(state, snapshot, pool, source, tier, now);
+    let seven_day = ahead(state, snapshot, source, SEVEN_DAY, now);
+    let mut facts = vec![Fact::number("ceiling", ceiling(pool, FIVE_HOUR)).unit("percent")];
+    if let Some(five_hour) = projections.get(FIVE_HOUR) {
+        facts.push(Fact::number("projection_five_hour", five_hour.at_horizon).unit("percent"));
+        facts.push(Fact::int("horizon_five_hour", five_hour.horizon).unit("time"));
+    }
+    lead_facts(&mut facts, seven_day);
+    match weekly_lead_margin(pool) {
+        Some(margin) => facts.push(Fact::number("margin", margin).unit("percent")),
+        None => facts.push(Fact::text("margin", "off")),
+    }
+    let Some(trigger) = trigger_of(state, snapshot, pool, source, &projections, seven_day, now)
+    else {
         rec.step(RULES[4], "no", facts);
         return MoveVerdict::Stay;
     };
+    facts.push(Fact::text("trigger", trigger.kind));
+    facts.push(Fact::number("excess", trigger.excess * 3_600.0).unit("percent_per_hour"));
     if state
-        .last_shed(&pool.id, &current.account_id)
+        .last_shed(&pool.id, source)
         .is_none_or(|at| now - at >= dwell_ms)
     {
-        let hot = HotWindow {
-            window,
-            utilization: state
-                .predicted(&current.account_id, window, now)
-                .map_or(lead + elapsed, |reading| reading.utilization),
-            elapsed_share: elapsed,
-            ahead: lead,
-            threshold,
-        };
-        let (marks, round) = shed_round(
+        let round = shed_round(
             state,
             snapshot,
             pool,
+            request,
+            eligible,
             current,
             cold,
             fast,
             now,
             fallback_ms,
-            hot,
+            &trigger,
         );
         facts.push(Fact::text("round", "ran"));
+        facts.push(Fact::number("target", round.facts.target).unit("percent_per_hour"));
         facts.push(Fact::list(
             "marks",
-            marks.iter().map(pin_key_text).collect(),
+            round
+                .marks
+                .iter()
+                .map(|mark| pin_key_text(&mark.key))
+                .collect(),
         ));
+        facts.push(Fact::list("skipped", round.skipped));
+        for mark in &round.marks {
+            state.mark_pin(&mark.key, now, trigger.window);
+        }
         rec.shed_round = Some(ShedRoundRecord {
-            account_id: current.account_id.clone(),
+            account_id: source.to_string(),
             pin: pin_key_facts(&current.key()),
-            facts: round,
+            facts: round.facts,
         });
-        state.record_shed(&pool.id, &current.account_id, now, marks);
+        state.record_shed(&pool.id, source, now);
     } else {
         facts.push(Fact::text("round", "within_dwell"));
     }
@@ -2858,7 +2857,7 @@ fn move_of<'a>(
     // A pin moves only when its session asks, so an unmarked pin never moves for utilization and a marked one
     // moves at its next request. A plan-quota round sheds window share, which a fast request does not draw, so
     // its mark moves a standard request alone; a dollar round's mark moves a fast one too.
-    let marked = state.shed_marked(&pool.id, &current.key(), now, dwell_ms);
+    let marked = state.shed_marked(&current.key());
     facts.push(Fact::bool("marked", marked));
     if !marked {
         rec.step(RULES[4], "no", facts);
@@ -2945,41 +2944,266 @@ fn burn_unit(
     BurnUnit::of(kind, state.in_overage(account_id, now, fallback_ms))
 }
 
-/// The window whose lead over pace fired a shedding round, as `ahead` read it, with the threshold it reached.
-struct HotWindow {
-    window: &'static str,
-    utilization: f64,
-    elapsed_share: f64,
-    ahead: f64,
-    threshold: f64,
+/// What fired a round: the 5-hour projection over the ceiling (`projection`) or the weekly lead over the margin
+/// (`lead`), with the fields of the other kind `None`. `excess` is share per second on `window`.
+pub(crate) struct Trigger {
+    pub kind: &'static str,
+    pub window: &'static str,
+    pub utilization: f64,
+    pub projection: Option<f64>,
+    pub horizon: Option<i64>,
+    pub ceiling: f64,
+    pub ahead: Option<f64>,
+    pub elapsed_share: Option<f64>,
+    pub threshold: Option<f64>,
+    pub excess: f64,
+}
+
+/// A mark the round made: the pin and the destination the round found for it.
+pub(crate) struct Mark {
+    pub key: PinKey,
+    pub planned: String,
+}
+
+/// What a round made of one pin: its skip word, or the figures it read on the destination it planned.
+#[derive(Default)]
+struct PinRead {
+    skip: Option<&'static str>,
+    rewrite: Option<f64>,
+    payback: Option<f64>,
+    planned: Option<String>,
+    runway_ms: Option<i64>,
+}
+
+/// A round's answer: its facts, the marks it made and the skips as `key: reason` texts for the shed line.
+struct Round {
+    facts: ShedRoundFacts,
+    marks: Vec<Mark>,
+    skipped: Vec<String>,
+}
+
+/// The earlier of a window's reset and the account's end, as `pace_of` reads a deadline.
+fn deadline_of(reset: Option<i64>, end: Option<i64>) -> Option<i64> {
+    match (reset, end) {
+        (Some(reset), Some(end)) => Some(reset.min(end)),
+        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+        (None, None) => None,
+    }
+}
+
+/// What fires a round on `source`, if anything: the 5-hour projection at its horizon over the ceiling, else the weekly
+/// lead at or over the margin. The excess is share per second on the trigger's window: the burn that, removed now,
+/// lands the projection on the ceiling at the horizon, or the burn on the week above the account's pace rate.
+fn trigger_of(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    source: &str,
+    projections: &BTreeMap<String, Projection>,
+    seven_day: Option<(f64, f64, Option<i64>)>,
+    now: i64,
+) -> Option<Trigger> {
+    let limit = ceiling(pool, FIVE_HOUR);
+    if let Some(projection) = projections
+        .get(FIVE_HOUR)
+        .filter(|projection| projection.at_horizon > limit)
+    {
+        return Some(Trigger {
+            kind: "projection",
+            window: FIVE_HOUR,
+            utilization: projection.predicted,
+            projection: Some(projection.at_horizon),
+            horizon: Some(projection.horizon),
+            ceiling: limit,
+            ahead: None,
+            elapsed_share: None,
+            threshold: None,
+            // A horizon at `now` would divide by nothing: the excess then reads the whole overrun as one second's.
+            excess: (projection.at_horizon - limit) / seconds(projection.horizon - now).max(1.0),
+        });
+    }
+    let threshold = weekly_lead_margin(pool)?;
+    let (lead, elapsed, _) = seven_day.filter(|(lead, _, _)| *lead >= threshold)?;
+    let utilization = state
+        .predicted(source, SEVEN_DAY, now)
+        .map_or(lead + elapsed, |reading| reading.utilization);
+    // The pace rate as `pace_of` reads it: the remaining allowance over the seconds to the earlier of the reset and
+    // the end, a week with neither, floored at a minute.
+    let (remaining, reset) = remaining(state, source, SEVEN_DAY, now);
+    let span = deadline_of(reset, account_end(snapshot, source, now))
+        .map_or(WEEK_HOURS * 3_600.0, |deadline| {
+            seconds(deadline - now).max(60.0)
+        });
+    let burn = projections.get(SEVEN_DAY).map_or(0.0, |p| p.burn);
+    Some(Trigger {
+        kind: "lead",
+        window: SEVEN_DAY,
+        utilization,
+        projection: None,
+        horizon: None,
+        ceiling: ceiling(pool, SEVEN_DAY),
+        ahead: Some(lead),
+        elapsed_share: Some(elapsed),
+        threshold: Some(threshold),
+        excess: burn - remaining / span,
+    })
+}
+
+/// Whether a marked pin's trigger reads gone at `now`: for a mark made on the 5-hour window the account's projection
+/// at its horizon under the ceiling, strictly, for one made on the week the lead under the margin less the band, or no
+/// margin set. Answers the healing projection where one was read, `None` for a mark that stands.
+fn healed(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    pin: &PinRow,
+    now: i64,
+) -> Option<Option<f64>> {
+    match pin.marked_window.as_deref() {
+        Some(FIVE_HOUR) => {
+            let tier = snapshot.tier(&pin.account_id).unwrap_or_default();
+            let projection =
+                projection_of(state, snapshot, pool, &pin.account_id, tier, FIVE_HOUR, now)?;
+            (projection.at_horizon < ceiling(pool, FIVE_HOUR))
+                .then_some(Some(projection.at_horizon))
+        }
+        _ => under_band(state, snapshot, pool, &pin.account_id, now).then_some(None),
+    }
+}
+
+/// The facts of the mark `row` carries, as the decision clears it for `reason`.
+fn mark_cleared_of(
+    row: &PinRow,
+    reason: &'static str,
+    projection: Option<f64>,
+    now: i64,
+) -> MarkClearedFacts {
+    MarkClearedFacts {
+        reason,
+        marked_at: row.marked_at.unwrap_or(now),
+        marked_on: row.marked_on.clone().unwrap_or_default(),
+        marked_window: row.marked_window.clone().unwrap_or_default(),
+        projection,
+    }
+}
+
+/// The request `fit_of` and `pin_figures` read a pin of the round by. The request's own pin reads the request as it
+/// is. Another pin reads the request's shape with its own model and lane, which name the windows it draws and its
+/// speed, and no body estimate, since a pin never renewed with usage has no prompt to rewrite.
+fn pin_request(request: &SelectRequest, pin: &PinRow, current: bool) -> SelectRequest {
+    if current {
+        return request.clone();
+    }
+    SelectRequest {
+        canonical_model: pin.model.clone(),
+        folded_model: pin.model.clone(),
+        lane: pin.lane.clone(),
+        fast: lane_is_fast(&pin.lane),
+        body_tokens: 0,
+        ..request.clone()
+    }
+}
+
+/// The shed rule's destination for `pin` among the eligible siblings, as its own move would read it: the no-return
+/// keep, the allowance filter and the cap as `gate` applies them, the order `fits` alone reduced to the longest runway
+/// and the band, and the first of what the strategy would pick among. `planned` holds the reservations the round
+/// planned for its earlier marks, which the fit counts on their destinations. `None` when nothing fits.
+#[allow(clippy::too_many_arguments)]
+fn destination_of(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    request: &SelectRequest,
+    eligible: &[&Candidate],
+    pin: &PinRow,
+    planned: &[Reservation],
+    now: i64,
+    dwell_ms: i64,
+) -> Option<(String, FitRead)> {
+    let window = window_for(&pin.model);
+    let cap = pool.failover.in_flight_cap;
+    let set: Vec<&Candidate> = eligible
+        .iter()
+        .copied()
+        .filter(|c| c.account_id != pin.account_id)
+        .filter(|c| {
+            !(pin.shed_from.as_deref() == Some(c.account_id.as_str())
+                && pin.shed_at.is_some_and(|at| now - at < dwell_ms))
+        })
+        .filter(|c| window == SEVEN_DAY || holds_allowance(state, &c.account_id, window, now))
+        .filter(|c| state.in_flight().account(&c.account_id) < cap)
+        .collect();
+    let reads: Vec<(String, FitRead)> = set
+        .iter()
+        .map(|c| {
+            (
+                c.account_id.clone(),
+                fit_of(
+                    state,
+                    snapshot,
+                    pool,
+                    request,
+                    Some(pin),
+                    &c.account_id,
+                    planned,
+                    now,
+                ),
+            )
+        })
+        .collect();
+    let fits = cool_subset(
+        state,
+        snapshot,
+        pool,
+        longest(order(&set, &reads, "fits")),
+        now,
+    );
+    let chosen = fits.first().map(|(c, _)| c.account_id.clone())?;
+    reads.into_iter().find(|(id, _)| *id == chosen)
+}
+
+/// The seconds a weekly round's payback reads the burn over: the next day, or the rest of the week where the source's
+/// deadline on `window` (the earlier of its reset and the account's end, as `pace_of` reads it) comes sooner.
+fn payback_span(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    account_id: &str,
+    window: &str,
+    now: i64,
+) -> f64 {
+    let (_, reset) = remaining(state, account_id, window, now);
+    deadline_of(reset, account_end(snapshot, account_id, now)).map_or(86_400.0, |deadline| {
+        seconds(deadline - now).clamp(0.0, 86_400.0)
+    })
 }
 
 /// A shedding round over the pool's pins on the account `current` sits on: every pin of it under one of the pool's
-/// keys, cold first by burn, then warm by burn over rewrite cost, bounded by `warm_sessions`, marked in that order
-/// up to `shed_share` of that slice's burn in the unit its funding selects. On plan quota each burn is the
-/// subscription cost model's 5-hour share rate on its anchor tier: the tier's capacity ratio divides every pin of
-/// the account alike, so neither the order nor the share of the sum needs it, and a pin on a fast lane is out of the
-/// round, since it draws no window and has nothing to shed there; in dollars it stays. The current pin's warmth and
-/// lane are this request's. Every other pin's are the stored ones. Answers the marks with what the round read, `hot`
-/// the window that fired it.
+/// keys, ordered as the anchor table prices them (cold first by burn, then warm by burn over rewrite cost, bounded by
+/// `warm_sessions`, a fast-lane pin out of a window-share round), then walked while the removed burn is under the
+/// target, `min(excess, shed_cap x burn_sum)` on the trigger's window. A standing mark is a move pending, so its burn
+/// counts as removed and the pin is skipped. The last unmarked pin and an unpriced one are never marked, a pin with no
+/// fitting destination counts nothing, and a weekly round skips a pin under the payback factor. Each mark plans a
+/// reservation on its destination, which the next pin's fit counts, so a sibling's headroom is taken once. The
+/// current pin's warmth and lane are this request's, every other pin's the stored ones.
 #[allow(clippy::too_many_arguments)]
 fn shed_round(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
+    request: &SelectRequest,
+    eligible: &[&Candidate],
     current: &PinRow,
     current_cold: bool,
     current_fast: bool,
     now: i64,
     fallback_ms: i64,
-    hot: HotWindow,
-) -> (Vec<PinKey>, ShedRoundFacts) {
+    trigger: &Trigger,
+) -> Round {
     let account_id = &current.account_id;
     let unit = burn_unit(state, snapshot, account_id, now, fallback_ms);
     let in_pool = in_pool(snapshot, pool);
     let average_ms = burn_average_ms(pool);
-    let (mut pins, mut sum) =
-        state.burn_of(account_id, &in_pool, unit, state.rates(), now, average_ms);
+    let (mut pins, _) = state.burn_of(account_id, &in_pool, unit, state.rates(), now, average_ms);
     let is_current = |p: &PinRow| p.key() == current.key();
     let is_cold = |p: &PinRow| {
         if is_current(p) {
@@ -2998,7 +3222,6 @@ fn shed_round(
             }
         };
         (left_out, pins) = pins.into_iter().partition(|(p, _)| on_fast_lane(p));
-        sum = pins.iter().filter_map(|(_, burn)| *burn).sum();
     }
     let (mut cold, mut warm_pins): (Vec<_>, Vec<_>) =
         pins.into_iter().partition(|(p, _)| is_cold(p));
@@ -3018,70 +3241,198 @@ fn shed_round(
     };
     cold.sort_by(|a, b| priced_first(&a.1, &b.1, |x, y| y.total_cmp(&x)));
     warm_pins.sort_by(by_rewrite);
-    let cold_priced = cold.iter().filter(|(_, burn)| burn.is_some()).count();
+    let cold_count = cold.len();
     let mut ordered = cold;
     ordered.extend(warm_pins);
     if pool.shedding.warm_sessions == WarmSessions::Always {
         ordered.sort_by(by_rewrite);
     }
+    let ordered: Vec<PinRow> = ordered.into_iter().map(|(p, _)| p).collect();
+
+    // The walk's figures: each pin's burn on the trigger's window in share per second, `None` for a pin the pricer
+    // does not weight, and the record's figures per hour.
+    let tier = snapshot.tier(account_id).unwrap_or_default();
+    let share_of = |p: &PinRow| {
+        state
+            .share()
+            .rate(trigger.window, tier, &p.model, &p.burn, now)
+            .map(|rate| burn_decayed(rate, p.burn_at, now, average_ms))
+    };
+    let per_hour = |share: f64| share * 3_600.0;
+    let burn_sum: f64 = ordered.iter().filter_map(share_of).sum();
     let cap = shed_cap(pool);
-    let target = cap * sum;
-    let mut marks = shed_marks(&ordered, target);
-    // `never` stops after the cold pins. The warm ones stay in the order all the same, so the last-pin rule
-    // still counts them among the account's pins; the marks are priced pins alone, so the cold group's marks are
-    // its priced count at most.
-    if pool.shedding.warm_sessions == WarmSessions::Never {
-        marks.truncate(cold_priced);
+    let target = trigger.excess.min(cap * burn_sum);
+    let dwell_ms = shed_dwell_ms(pool);
+    let total = ordered.len();
+    let standing = ordered.iter().filter(|p| mark_holds(p)).count();
+    // A standing mark is a move pending, so its burn counts as removed before the walk marks anything else.
+    let mut removed: f64 = ordered
+        .iter()
+        .filter(|p| mark_holds(p))
+        .filter_map(share_of)
+        .sum();
+    let mut marks: Vec<Mark> = Vec::new();
+    let mut planned: Vec<Reservation> = Vec::new();
+    let mut reads: HashMap<PinKey, PinRead> = HashMap::new();
+    for (index, p) in ordered.iter().enumerate() {
+        let mut read = PinRead::default();
+        if mark_holds(p) {
+            read.skip = Some("standing");
+        } else if removed >= target
+            || (pool.shedding.warm_sessions == WarmSessions::Never && index >= cold_count)
+        {
+            // The target is met, or `never` stops after the cold pins: the rest of the order is left as it is.
+        } else if marks.len() + standing + 1 >= total {
+            // The last unmarked pin stays whatever the target still asks, so no round takes all of an account's
+            // burn. An indivisible pin may carry the removed burn past the target, and the walk stops there.
+            read.skip = Some("last_pin");
+        } else if let Some(burn) = share_of(p) {
+            let req = pin_request(request, p, is_current(p));
+            match destination_of(
+                state, snapshot, pool, &req, eligible, p, &planned, now, dwell_ms,
+            ) {
+                None => read.skip = Some("no_runway"),
+                Some((destination, fit)) => {
+                    let destination_tier = snapshot.tier(&destination).unwrap_or_default();
+                    let (rewrite, pin_burn) =
+                        pin_figures(state, snapshot, pool, &req, Some(p), destination_tier, now);
+                    read.runway_ms = fit.runway_ms;
+                    read.rewrite = rewrite.get(trigger.window).copied();
+                    let mut passes = true;
+                    if trigger.kind == "lead" {
+                        // The payback reads the model's own week where it has one: a day of the pin's burn there
+                        // against its rewrite priced on the destination's tier.
+                        let week = window_for(&p.model);
+                        if let Some(cost) = rewrite.get(week).copied().filter(|cost| *cost > 0.0) {
+                            let span = payback_span(state, snapshot, account_id, week, now);
+                            let ratio = pin_burn.get(week).copied().unwrap_or(0.0) * span / cost;
+                            read.payback = Some(ratio);
+                            passes = ratio > PAYBACK_FACTOR;
+                        }
+                    }
+                    if passes {
+                        marks.push(Mark {
+                            key: p.key(),
+                            planned: destination.clone(),
+                        });
+                        removed += burn;
+                        planned.push(Reservation {
+                            account_id: destination,
+                            attempt: request.attempt,
+                            pin: Some(p.key()),
+                            booked_at: now,
+                            rewrite,
+                            burn: pin_burn,
+                            expires_at: now.saturating_add(IN_FLIGHT_RECLAIM_MS),
+                        });
+                    } else {
+                        read.planned = Some(destination);
+                        read.skip = Some("payback");
+                    }
+                }
+            }
+        } else {
+            // An unpriced burn moves the removed sum nowhere, so marking the pin would shed a session on a guess: it
+            // stays, and it still counts as one of the account's pins for the last-pin rule.
+            read.skip = Some("unpriced");
+        }
+        reads.insert(p.key(), read);
     }
-    let pin_facts = |pin: &(PinRow, Option<f64>), left: bool| {
-        let (p, burn) = pin;
+    let (outcome, reason) = if marks.is_empty() {
+        // The last skip class that applied, in the walk's order, `under_pace` for an excess of nothing, and `unpriced`
+        // where no pin was walked because no priced burn was there to remove.
+        let skips: Vec<&'static str> = reads.values().filter_map(|read| read.skip).collect();
+        let deepest = ["payback", "no_runway", "unpriced", "last_pin", "standing"]
+            .into_iter()
+            .find(|word| skips.contains(word));
+        let reason = if trigger.excess <= 0.0 {
+            "under_pace"
+        } else {
+            deepest.unwrap_or("unpriced")
+        };
+        ("nothing_to_mark".to_string(), Some(reason))
+    } else {
+        (format!("marked {}", marks.len()), None)
+    };
+    let pin_facts = |p: &PinRow, left: bool| {
+        let read = reads.get(&p.key());
+        let burn = share_of(p).map(per_hour);
+        let mark = marks.iter().find(|mark| mark.key == p.key());
         ShedPinFacts {
             key_id: p.key_id.clone(),
             session_id: p.session_id.clone(),
             agent_id: p.agent_id.clone(),
             model: p.model.clone(),
             cold: is_cold(p),
-            burn: *burn,
+            burn,
             last_input_tokens: p.last_input_tokens,
-            per_rewrite: per_rewrite(pin),
-            marked: marks.contains(&p.key()),
-            note: if left {
+            per_rewrite: burn.map(|b| b / p.last_input_tokens.max(1) as f64),
+            marked: mark.is_some() || mark_holds(p),
+            rewrite: read.and_then(|read| read.rewrite),
+            payback: read.and_then(|read| read.payback),
+            planned: mark
+                .map(|mark| mark.planned.clone())
+                .or_else(|| read.and_then(|read| read.planned.clone())),
+            runway_ms: read.and_then(|read| read.runway_ms),
+            skip: if left {
                 Some("fast_lane")
-            } else if burn.is_none() {
-                Some("unpriced")
-            } else if is_current(p) {
-                Some("current")
             } else {
-                None
+                read.and_then(|read| read.skip)
             },
+            note: is_current(p).then_some("current"),
         }
     };
-    let dwell_ms = shed_dwell_ms(pool);
+    let pins: Vec<ShedPinFacts> = ordered
+        .iter()
+        .map(|p| pin_facts(p, false))
+        .chain(left_out.iter().map(|(p, _)| pin_facts(p, true)))
+        .collect();
+    let skipped = pins
+        .iter()
+        .filter_map(|facts| {
+            let key = PinKey {
+                key_id: facts.key_id.clone(),
+                session_id: facts.session_id.clone(),
+                agent_id: facts.agent_id.clone(),
+                model: facts.model.clone(),
+            };
+            facts
+                .skip
+                .map(|skip| format!("{}: {skip}", pin_key_text(&key)))
+        })
+        .collect();
     // The record echoes the two settings in their own unit, seconds.
-    let seconds = |ms: i64| u64::try_from(ms / 1_000).unwrap_or(u64::MAX);
-    let round = ShedRoundFacts {
-        window: hot.window.to_string(),
-        utilization: hot.utilization,
-        elapsed_share: hot.elapsed_share,
-        ahead: hot.ahead,
-        threshold: hot.threshold,
-        margin: hot.ahead - hot.threshold,
+    let whole_seconds = |ms: i64| u64::try_from(ms / 1_000).unwrap_or(u64::MAX);
+    let facts = ShedRoundFacts {
+        trigger: trigger.kind,
+        window: trigger.window.to_string(),
+        utilization: trigger.utilization,
+        projection: trigger.projection,
+        horizon: trigger.horizon,
+        ceiling: trigger.ceiling,
+        elapsed_share: trigger.elapsed_share,
+        ahead: trigger.ahead,
+        threshold: trigger.threshold,
         unit: unit.as_str(),
-        burn_window_seconds: seconds(average_ms),
-        shed_share: cap,
-        burn_sum: sum,
-        target,
+        burn_average_seconds: whole_seconds(average_ms),
+        shed_cap: cap,
+        burn_sum: per_hour(burn_sum),
+        excess: per_hour(trigger.excess),
+        target: per_hour(target),
+        removed: per_hour(removed),
         warm_sessions: pool.shedding.warm_sessions.as_str(),
-        pins: ordered
-            .iter()
-            .map(|pin| pin_facts(pin, false))
-            .chain(left_out.iter().map(|pin| pin_facts(pin, true)))
-            .collect(),
-        marks: marks.iter().map(pin_key_facts).collect(),
-        dwell_seconds: seconds(dwell_ms),
+        pins,
+        marks: marks.iter().map(|mark| pin_key_facts(&mark.key)).collect(),
+        outcome,
+        reason,
+        dwell_seconds: whole_seconds(dwell_ms),
         dwell_until: now.saturating_add(dwell_ms),
     };
-    (marks, round)
+    Round {
+        facts,
+        marks,
+        skipped,
+    }
 }
 
 fn pin_key_facts(key: &PinKey) -> PinKeyFacts {
@@ -4102,6 +4453,9 @@ fn pin_facts(found: &'static str, row: Option<&PinRow>, marked: bool, now: i64) 
         warmth: None,
         warmth_cause: None,
         released: Vec::new(),
+        marked_at: row.and_then(|p| p.marked_at),
+        marked_on: row.and_then(|p| p.marked_on.clone()),
+        marked_window: row.and_then(|p| p.marked_window.clone()),
     }
 }
 
@@ -4376,6 +4730,7 @@ fn finish(
         pin_written,
         hold_place,
         shed_round,
+        mark_cleared,
         pick,
         renewal,
     } = rec;
@@ -4398,6 +4753,7 @@ fn finish(
         refusal: None,
         cohort_hold: cohort_hold(&request.holds),
         shed_marks: shed_round.as_ref().map(|round| round.facts.marks.clone()),
+        mark_cleared,
     };
     let mut skipped = 0;
     match result {

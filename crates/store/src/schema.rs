@@ -82,11 +82,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (50, V50),
     (51, V51),
     (52, V52),
+    (53, V53),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 52;
+pub const SCHEMA_VERSION: u32 = 53;
 
 /// The version that bounds an account to one pool; a file below it is read for overlaps before it migrates.
 pub const ONE_POOL_VERSION: u32 = 47;
@@ -746,4 +747,21 @@ ALTER TABLE pins ADD COLUMN burn_fast_cache_read REAL NOT NULL DEFAULT 0;
 ALTER TABLE pins ADD COLUMN burn_fast_write_5m REAL NOT NULL DEFAULT 0;
 ALTER TABLE pins ADD COLUMN burn_fast_write_1h REAL NOT NULL DEFAULT 0;
 ALTER TABLE pins ADD COLUMN burn_fast_output REAL NOT NULL DEFAULT 0;
+"#;
+
+// A shedding mark lives on the pin it was made on: when it was made, the account it was made on and the window whose
+// trigger made it. The rounds table keeps one row per pool and account with the round's time alone, which the dwell
+// between rounds reads. The old rounds are dropped with the table: nothing released depends on them.
+const V53: &str = r#"
+ALTER TABLE pins ADD COLUMN marked_at INTEGER;
+ALTER TABLE pins ADD COLUMN marked_on TEXT;
+ALTER TABLE pins ADD COLUMN marked_window TEXT;
+DROP TABLE shed_rounds;
+CREATE TABLE shed_rounds (
+  pool_id TEXT NOT NULL,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  incarnation INTEGER NOT NULL,
+  round_at INTEGER NOT NULL,
+  PRIMARY KEY (pool_id, account_id)
+);
 "#;

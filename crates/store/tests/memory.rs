@@ -61,12 +61,16 @@ fn rows_outlive_a_reopen_of_the_on_disk_store() {
         store.load(&key("main")).unwrap(),
         Some(record(1, "{}", 1_000))
     );
-    assert_eq!(store.schema_version().unwrap(), 52);
+    assert_eq!(store.schema_version().unwrap(), 53);
 }
 
 // The reverse of the registry's member budgets migration, so a store stamped back below it can run it again. One
 // line with the marker last. The trailing `\n` ends the marker's comment.
 const UNDO_V41: &str = "ALTER TABLE pool_members ADD COLUMN budget_usd REAL; ALTER TABLE pool_members ADD COLUMN budget_period TEXT NOT NULL DEFAULT 'month'; UPDATE pool_members SET budget_usd = COALESCE(budget_monthly_usd, budget_daily_usd), budget_period = CASE WHEN budget_monthly_usd IS NULL AND budget_daily_usd IS NOT NULL THEN 'day' ELSE 'month' END; ALTER TABLE pool_members DROP COLUMN budget_monthly_usd; ALTER TABLE pool_members DROP COLUMN budget_daily_usd; -- rollback\n";
+// The reverse of the registry's version 53: the three mark columns leave the pins and the rounds table is rebuilt as
+// version 46 left it, so the chains below replay `UNDO_V46` over it unchanged. One line with the marker last. The
+// trailing `\n` ends the marker's comment.
+const UNDO_V53: &str = "ALTER TABLE pins DROP COLUMN marked_at; ALTER TABLE pins DROP COLUMN marked_on; ALTER TABLE pins DROP COLUMN marked_window; DROP TABLE shed_rounds; CREATE TABLE shed_rounds (pool_id TEXT NOT NULL, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, incarnation INTEGER NOT NULL, key_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, model TEXT NOT NULL, epoch INTEGER NOT NULL, round_at INTEGER NOT NULL, marked INTEGER NOT NULL, PRIMARY KEY (pool_id, account_id, key_id, session_id, agent_id, model)); -- rollback\n";
 // The reverse of the registry's version 52: the five fast burn columns. One line with the marker last. The trailing
 // `\n` ends the marker's comment.
 const UNDO_V52: &str = "ALTER TABLE pins DROP COLUMN burn_fast_input; ALTER TABLE pins DROP COLUMN burn_fast_cache_read; ALTER TABLE pins DROP COLUMN burn_fast_write_5m; ALTER TABLE pins DROP COLUMN burn_fast_write_1h; ALTER TABLE pins DROP COLUMN burn_fast_output; -- rollback\n";
@@ -130,7 +134,7 @@ fn rows_keyed_s1_and_session_s1_both_survive_the_kind_prefix() {
     // `session:s1`, both valid ids, each with its own payload.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V41}"
+        "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V41}"
     ))
     .unwrap();
     conn.execute_batch(
@@ -143,7 +147,7 @@ fn rows_keyed_s1_and_session_s1_both_survive_the_kind_prefix() {
     .unwrap();
     drop(conn);
     let store = Store::open(&path, &storage).expect("the migration completes and the store opens");
-    assert_eq!(store.schema_version().unwrap(), 52);
+    assert_eq!(store.schema_version().unwrap(), 53);
     let payload = |session: &str| {
         store
             .load(&MemoryKey::for_session("desktop", 1_000, session, "main"))

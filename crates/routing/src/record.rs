@@ -167,6 +167,11 @@ pub struct PinFacts {
     pub warmth: Option<&'static str>,
     pub warmth_cause: Option<&'static str>,
     pub released: Vec<&'static str>,
+    /// The row's mark as step 1 read it, after the heal check: when it was made, the account it was made on and the
+    /// window whose trigger made it, `None` on a row that carries none.
+    pub marked_at: Option<i64>,
+    pub marked_on: Option<String>,
+    pub marked_window: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -458,6 +463,20 @@ pub struct Outcome {
     pub cohort_hold: Option<CohortHold>,
     /// The pins the shedding round this decision ran marked, or `None` when no round ran.
     pub shed_marks: Option<Vec<PinKeyFacts>>,
+    /// The mark this decision cleared, `None` when none stood or it stands on.
+    pub mark_cleared: Option<MarkClearedFacts>,
+}
+
+/// A mark the decision cleared: `healed` when the heal check found the trigger gone at the pin's request, `moved` when
+/// the pin left the account the mark was made on.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct MarkClearedFacts {
+    pub reason: &'static str,
+    pub marked_at: i64,
+    pub marked_on: String,
+    pub marked_window: String,
+    /// The healing projection, on `healed`.
+    pub projection: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -514,31 +533,46 @@ pub struct PinKeyFacts {
     pub model: String,
 }
 
-/// What a shedding round read and did, for the round's event. The record keeps the marks alone. The hot window's
-/// fields are the first of `five_hour` and `seven_day` whose lead over pace reached the threshold.
+/// What a shedding round read and did, for the round's event. The record keeps the marks alone. The trigger is the
+/// 5-hour projection over the ceiling (`projection`, with `projection` and `horizon` filled) or the weekly lead over
+/// the margin (`lead`, with `elapsed_share`, `ahead` and `threshold` filled). `burn_sum`, `excess`, `target` and
+/// `removed` are shares of the trigger's window per hour.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ShedRoundFacts {
+    /// `projection` or `lead`.
+    pub trigger: &'static str,
     pub window: String,
+    /// The prediction at the round's instant.
     pub utilization: f64,
-    pub elapsed_share: f64,
-    pub ahead: f64,
-    pub threshold: f64,
-    pub margin: f64,
-    /// `window_share` or `usd`.
+    pub projection: Option<f64>,
+    pub horizon: Option<i64>,
+    pub ceiling: f64,
+    pub elapsed_share: Option<f64>,
+    pub ahead: Option<f64>,
+    pub threshold: Option<f64>,
+    /// `window_share` or `usd`, the unit the round's order read the anchor table in.
     pub unit: &'static str,
-    pub burn_window_seconds: u64,
-    pub shed_share: f64,
+    pub burn_average_seconds: u64,
+    pub shed_cap: f64,
     pub burn_sum: f64,
+    pub excess: f64,
     pub target: f64,
+    pub removed: f64,
     pub warm_sessions: &'static str,
     pub pins: Vec<ShedPinFacts>,
     pub marks: Vec<PinKeyFacts>,
+    /// `marked N` or `nothing_to_mark`.
+    pub outcome: String,
+    /// `None` after marks, else the last skip class that applied: `last_pin`, `no_runway`, `payback`, `standing`,
+    /// `under_pace` or `unpriced`.
+    pub reason: Option<&'static str>,
     pub dwell_seconds: u64,
     pub dwell_until: i64,
 }
 
 /// One of the pool's pins on the account its round ran on: those in the round in its order, then those it left out. A
-/// pin there under a key of a pool the account left is in no round and is not listed here.
+/// pin there under a key of a pool the account left is in no round and is not listed here. `burn` and `rewrite` are
+/// shares of the trigger's window, the burn per hour.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ShedPinFacts {
     pub key_id: String,
@@ -550,9 +584,17 @@ pub struct ShedPinFacts {
     pub last_input_tokens: u64,
     pub per_rewrite: Option<f64>,
     pub marked: bool,
-    /// `unpriced` for a pin whose burn could not be priced, `fast_lane` for one left out of a window-share round,
-    /// `current` for the request's own pin, and `None` otherwise. A pin left out reads `fast_lane` and an unpriced
-    /// one `unpriced` whether or not it is the request's own.
+    /// The pin's rewrite on its planned destination, `None` with none.
+    pub rewrite: Option<f64>,
+    /// A weekly round's ratio of the burn over the next day (or the rest of the week) to the rewrite, read against
+    /// `PAYBACK_FACTOR`.
+    pub payback: Option<f64>,
+    /// The destination the round found for the pin.
+    pub planned: Option<String>,
+    pub runway_ms: Option<i64>,
+    /// `fast_lane`, `last_pin`, `no_runway`, `payback`, `standing` or `unpriced`.
+    pub skip: Option<&'static str>,
+    /// `current` for the request's own pin.
     pub note: Option<&'static str>,
 }
 
@@ -750,6 +792,7 @@ impl DecisionRecord {
                 refusal: Some(refusal.clone()),
                 cohort_hold: None,
                 shed_marks: None,
+                mark_cleared: None,
             },
         };
         let fact = if refusal.kind == "client" {
@@ -904,6 +947,9 @@ mod tests {
                 warmth: Some("refresh"),
                 warmth_cause: Some("class_refreshes"),
                 released: Vec::new(),
+                marked_at: None,
+                marked_on: None,
+                marked_window: None,
             }),
             pin_reason: None,
             settings: Some(Settings {
@@ -1011,6 +1057,7 @@ mod tests {
                 refusal: None,
                 cohort_hold: None,
                 shed_marks: None,
+                mark_cleared: None,
             },
         }
     }

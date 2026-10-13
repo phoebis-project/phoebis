@@ -16,8 +16,8 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
-    MemberWrite, ModelRule, PinBurn, PinKey, PinRow, PoolRow, RoutingLoad, RulesMode, ShedPin,
-    Shedding, StateCause, StorageKey, Store, Strategy, SubscriptionRow, WindowRow,
+    MemberWrite, ModelRule, PinBurn, PinRow, PoolRow, RoutingLoad, RulesMode, Shedding, StateCause,
+    StorageKey, Store, Strategy, SubscriptionRow, WindowRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -6646,13 +6646,13 @@ fn head_reading(at: i64, utilization: f64, reset: Option<i64>, request_id: &str)
 #[tokio::test]
 async fn a_shedding_round_emits_its_pins_and_marks_once() {
     use phoebis_routing::{PinKeyFacts, RouterEvent};
-    let store = seeded_oauth(&["a"]);
-    let mut pool = store.pool("p").unwrap().unwrap();
-    pool.shed_ahead_of_pace = Some(0.2);
-    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    let store = shedding_store(&["a", "b"]);
+    with_tier(&store, "a");
+    with_tier(&store, "b");
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    // Two sessions on `a`, `s1` burning four times what `s2` burns.
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    // Two sessions on `a`, `s1` burning four times what `s2` burns: 4 000 and 1 000 tokens folded over the 600 s
+    // average read as 0.067 and 0.017 of the 5-hour window an hour through the harness pricer.
     let s1 = selected_pin(
         handle
             .select(request(&handle, Some("s1"), 1_000))
@@ -6665,7 +6665,7 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
             .await
             .unwrap(),
     );
-    for (pin, input) in [(s1, 4_000_000), (s2, 1_000_000)] {
+    for (pin, input) in [(s1, 4_000), (s2, 1_000)] {
         handle
             .report(renewal(
                 pin,
@@ -6679,10 +6679,12 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
             ))
             .await;
     }
-    // A 5-hour reading with no reset runs ahead of its pace by its whole utilization.
+    // A 5-hour reading at 0.9 with no reset projects five hours of the pins' burn, 0.42 more, over the ceiling. `b`
+    // reads both windows low, so it fits a marked pin to its horizon.
     handle
         .report(observed("a", sample_with(2_000, FIVE_HOUR, 0.9, None)))
         .await;
+    handle.report(windows("b", 0.1, 0.1, 2_000)).await;
     handle.samples().await.unwrap();
     let mut events = handle.subscribe_events();
     // Ten minutes on, `s2`'s cache has lapsed. `s1`'s is the one this request refreshes, so it reads warm.
@@ -6726,34 +6728,54 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
                 ("a", "p", "r-1", "k", "s1", "main", "claude-sonnet-5", at)
             );
             assert_eq!(
-                (round.window.as_str(), round.unit, round.warm_sessions),
-                ("five_hour", "window_share", "when_needed")
+                (
+                    round.trigger,
+                    round.window.as_str(),
+                    round.unit,
+                    round.warm_sessions
+                ),
+                ("projection", "five_hour", "window_share", "when_needed")
             );
             assert!((round.utilization - 0.9).abs() < 1e-9);
-            assert!((round.ahead - 0.9).abs() < 1e-9);
-            assert_eq!(round.elapsed_share, 0.0);
-            assert!((round.threshold - 0.2).abs() < 1e-9);
+            assert!((round.ceiling - 0.95).abs() < 1e-9);
+            assert_eq!(
+                round.horizon,
+                Some(at + 5 * HOUR),
+                "no reset, so five hours out"
+            );
             assert!(
-                (round.margin - 0.7).abs() < 1e-9,
-                "the hot window's lead less the threshold"
+                round.projection.is_some_and(|p| p > round.ceiling),
+                "the projection at the horizon fired the round: {:?}",
+                round.projection
+            );
+            assert_eq!(
+                (round.elapsed_share, round.ahead, round.threshold),
+                (None, None, None),
+                "a projection trigger carries no lead facts"
             );
             assert_eq!(
                 round
                     .pins
                     .iter()
-                    .map(|p| (p.session_id.as_str(), p.cold, p.marked, p.note))
+                    .map(|p| (p.session_id.as_str(), p.cold, p.marked, p.skip, p.note))
                     .collect::<Vec<_>>(),
                 [
-                    ("s2", true, true, None),
-                    ("s1", false, false, Some("current"))
+                    ("s2", true, true, None, None),
+                    ("s1", false, false, Some("last_pin"), Some("current"))
                 ],
-                "the round's order: the cold pin first, then the warm one, and the cold one marked"
+                "the round's order: the cold pin first and marked, the warm current one the last pin"
             );
             assert!(round.pins.iter().all(|p| p.burn.is_some()));
             let sum: f64 = round.pins.iter().filter_map(|p| p.burn).sum();
             assert!((round.burn_sum - sum).abs() < 1e-9);
-            assert!((round.target - 0.5 * sum).abs() < 1e-9);
+            assert!(
+                (round.target - round.excess.min(0.5 * sum)).abs() < 1e-9,
+                "the target is the lesser of the excess and the cap's share of the burn"
+            );
+            assert!((round.removed - round.pins[0].burn.unwrap()).abs() < 1e-9);
+            assert_eq!(round.pins[0].planned.as_deref(), Some("b"));
             assert_eq!(round.marks, vec![key("s2")]);
+            assert_eq!((round.outcome.as_str(), round.reason), ("marked 1", None));
             assert_eq!(
                 (round.dwell_seconds, round.dwell_until),
                 (900, at + 900_000)
@@ -6761,12 +6783,40 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
         }
         other => panic!("the round follows its decision, not {other:?}"),
     }
-    // Inside the dwell no round runs, so the next decision comes alone: the marked `s2` has no sibling to move to.
+    // Inside the dwell no round runs: the marked `s2` moves to `b` at its next request, and the mark leaves with it.
     handle
         .select(request(&handle, Some("s2"), at + 1_000))
         .await
         .unwrap();
-    assert_eq!(next_decision(&mut events).await.0.kind, "renewed");
+    assert_eq!(next_decision(&mut events).await.0.kind, "moved");
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::PinMigrated { .. }
+    ));
+    match next_event(&mut events).await {
+        RouterEvent::MarkCleared {
+            account_id,
+            session_id,
+            reason,
+            marked_at,
+            marked_on,
+            marked_window,
+            projection,
+            ..
+        } => assert_eq!(
+            (
+                account_id.as_str(),
+                session_id.as_str(),
+                reason,
+                marked_at,
+                marked_on.as_str(),
+                marked_window.as_str(),
+                projection
+            ),
+            ("a", "s2", "moved", at, "a", "five_hour", None)
+        ),
+        other => panic!("the move clears the mark beside its pin event, not {other:?}"),
+    }
     no_further_event(&mut events).await;
 }
 
@@ -6813,19 +6863,49 @@ fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64
         static_hash: None,
         tail_hash: None,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+        marked_at: None,
+        marked_on: None,
+        marked_window: None,
     }
 }
 
-fn shed_pin(session: &str, epoch: u64, marked: bool) -> ShedPin {
-    ShedPin {
-        key: PinKey {
-            key_id: "k".into(),
-            session_id: session.into(),
-            agent_id: "main".into(),
-            model: "claude-sonnet-5".into(),
-        },
-        epoch,
-        marked,
+/// `pin` as a round at `at` on the 5-hour window left it: marked on the account it sits on.
+fn marked(pin: PinRow, at: i64) -> PinRow {
+    PinRow {
+        marked_at: Some(at),
+        marked_on: Some(pin.account_id.clone()),
+        marked_window: Some(FIVE_HOUR.into()),
+        ..pin
+    }
+}
+
+/// `RouterConfig::default()` with a pricer on `TIER`: one cache-write token a ten-millionth of the 5-hour window and a
+/// sixty-millionth of the 7-day window, and a pin burning `x` input tokens a second a hundredth of `x` of the 5-hour
+/// window an hour, a sixth of that on the 7-day window. Nothing on any other tier.
+fn priced_config() -> RouterConfig {
+    fn per_token(window: &str) -> Option<f64> {
+        match window {
+            FIVE_HOUR => Some(10_000_000.0),
+            SEVEN_DAY => Some(60_000_000.0),
+            SEVEN_DAY_FABLE => Some(30_000_000.0),
+            _ => None,
+        }
+    }
+    let share = SharePricer::new(|window, tier, _, usage, _| {
+        (tier == TIER)
+            .then(|| per_token(window))
+            .flatten()
+            .map(|per| (usage.write_5m + usage.write_1h) as f64 / per)
+    })
+    .with_rate(|window, tier, _, burn, _| {
+        if tier != TIER {
+            return None;
+        }
+        per_token(window).map(|per| burn.input / per * 100_000.0 / 3_600.0)
+    });
+    RouterConfig {
+        share,
+        ..RouterConfig::default()
     }
 }
 
@@ -6933,26 +7013,19 @@ async fn the_marks_and_the_dwell_gate_survive_a_restart() {
     let store = shedding_store(&["a", "b"]);
     with_tier(&store, "a");
     with_tier(&store, "b");
-    // Neither pin burns, so a round run now would mark nothing: s1 moves on the stored mark alone.
+    // Neither pin burns, so a round run now would mark nothing: s1 moves on the stored mark alone, which the
+    // previous run's round on a made a minute before the restart, leaving s2.
     for pin in [
-        stored_pin(&store, "s1", "a", 1, 0.0),
+        marked(stored_pin(&store, "s1", "a", 1, 0.0), AT - 60_000),
         stored_pin(&store, "s2", "a", 2, 0.0),
     ] {
         store.upsert_pin(&pin).unwrap();
     }
-    // The previous run's round on a, a minute before the restart, marked s1 and left s2.
-    store
-        .replace_shed_round(
-            "p",
-            "a",
-            1,
-            AT - 60_000,
-            &[shed_pin("s1", 1, true), shed_pin("s2", 2, false)],
-        )
-        .unwrap();
+    store.replace_shed_round("p", "a", 1, AT - 60_000).unwrap();
     let now = Arc::new(AtomicI64::new(AT));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle.report(windows("a", 0.9, 0.3, AT)).await;
+    // a reads over the ceiling with nothing burning, so the trigger fires and the loaded round's dwell holds it.
+    handle.report(windows("a", 0.96, 0.3, AT)).await;
     handle.report(windows("b", 0.1, 0.1, AT)).await;
     handle.samples().await.unwrap();
     let mut events = handle.subscribe_events();
@@ -6986,6 +7059,18 @@ async fn the_marks_and_the_dwell_gate_survive_a_restart() {
         no_round(&later),
         "inside the loaded dwell no round runs on the hot account: {later:?}"
     );
+    assert!(
+        later.iter().any(|event| matches!(
+            event,
+            phoebis_routing::RouterEvent::MarkCleared {
+                session_id,
+                reason: "moved",
+                marked_at,
+                ..
+            } if session_id == "s1" && *marked_at == AT - 60_000
+        )),
+        "the move clears the loaded mark: {later:?}"
+    );
 }
 
 #[tokio::test]
@@ -7002,12 +7087,13 @@ async fn a_pin_that_moved_away_and_returned_inside_the_dwell_is_not_shed_again_a
         store.upsert_pin(&pin).unwrap();
     }
     let now = Arc::new(AtomicI64::new(AT));
-    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    // c fits as b does, so a mark that outlived the move would find it a destination. Its week leads by 0.3, over
-    // the band of 0.15 like a's, so the spent move below ties a and c and the strategy takes a.
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    // a at 0.9 with its pins burning 0.05 of the window an hour projects to 1.15, so its round runs and marks s1. b
+    // fits. c reads 0.92, so the spent move below finds the rewrite fitting on a and c alone and takes a, whose runway
+    // is the longer.
     handle.report(windows("a", 0.9, 0.3, AT)).await;
     handle.report(windows("b", 0.1, 0.1, AT)).await;
-    handle.report(windows("c", 0.1, 0.3, AT)).await;
+    handle.report(windows("c", 0.92, 0.1, AT)).await;
     handle.samples().await.unwrap();
     assert_eq!(
         landed_on(
@@ -7035,9 +7121,11 @@ async fn a_pin_that_moved_away_and_returned_inside_the_dwell_is_not_shed_again_a
     handle.shutdown().await.unwrap();
 
     now.store(AT + 2_000, Ordering::SeqCst);
-    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
     handle.report(windows("a", 0.9, 0.3, AT + 2_000)).await;
     handle.report(windows("b", 1.0, 0.1, AT + 2_000)).await;
+    // c now fits, so a mark that outlived the move would find it a destination.
+    handle.report(windows("c", 0.1, 0.1, AT + 2_000)).await;
     handle.samples().await.unwrap();
     let mut events = handle.subscribe_events();
     assert_eq!(
@@ -7065,6 +7153,8 @@ async fn a_pin_that_moved_away_and_returned_inside_the_dwell_is_not_shed_again_a
 #[tokio::test]
 async fn a_released_and_recreated_pin_s_mark_does_not_survive_a_restart() {
     let store = shedding_store(&["a", "b"]);
+    with_tier(&store, "a");
+    with_tier(&store, "b");
     for pin in [
         stored_pin(&store, "s1", "a", 1, 4.0),
         stored_pin(&store, "s0", "a", 2, 1.0),
@@ -7072,7 +7162,7 @@ async fn a_released_and_recreated_pin_s_mark_does_not_survive_a_restart() {
         store.upsert_pin(&pin).unwrap();
     }
     let now = Arc::new(AtomicI64::new(AT));
-    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
     handle.report(windows("a", 0.9, 0.3, AT)).await;
     handle.report(windows("b", 0.1, 0.1, AT)).await;
     handle.samples().await.unwrap();
@@ -7100,6 +7190,24 @@ async fn a_released_and_recreated_pin_s_mark_does_not_survive_a_restart() {
         other => panic!("the round follows its decision, not {other:?}"),
     }
     assert_eq!(handle.release_session("k", "s1").await.unwrap(), 1);
+    assert!(matches!(
+        next_event(&mut events).await,
+        phoebis_routing::RouterEvent::PinReleased { .. }
+    ));
+    match next_event(&mut events).await {
+        phoebis_routing::RouterEvent::MarkCleared {
+            session_id,
+            reason,
+            marked_at,
+            marked_on,
+            ..
+        } => assert_eq!(
+            (session_id.as_str(), reason, marked_at, marked_on.as_str()),
+            ("s1", "released", AT, "a"),
+            "the release clears the mark beside its pin event"
+        ),
+        other => panic!("{other:?}"),
+    }
     now.store(AT + 1_000, Ordering::SeqCst);
     assert_eq!(
         landed_on(
@@ -7114,7 +7222,7 @@ async fn a_released_and_recreated_pin_s_mark_does_not_survive_a_restart() {
     handle.shutdown().await.unwrap();
 
     now.store(AT + 2_000, Ordering::SeqCst);
-    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
     handle.report(windows("a", 0.9, 0.3, AT + 2_000)).await;
     handle.report(windows("b", 0.1, 0.1, AT + 2_000)).await;
     handle.samples().await.unwrap();
@@ -7141,6 +7249,84 @@ async fn a_released_and_recreated_pin_s_mark_does_not_survive_a_restart() {
 }
 
 #[tokio::test]
+async fn a_marked_pin_released_inside_a_decision_clears_its_mark_as_released() {
+    use phoebis_routing::RouterEvent;
+    let store = shedding_store(&["a", "b"]);
+    with_tier(&store, "a");
+    with_tier(&store, "b");
+    for pin in [
+        marked(stored_pin(&store, "s1", "a", 1, 0.0), AT - 60_000),
+        stored_pin(&store, "s0", "a", 2, 0.0),
+    ] {
+        store.upsert_pin(&pin).unwrap();
+    }
+    // The model is cooled on a, so step 5 releases s1's pin and the session is placed afresh on b.
+    store
+        .upsert_cooldown(&CooldownRow {
+            account_id: "a".into(),
+            scope: "model:claude-sonnet-5".into(),
+            until: AT + 600_000,
+            set_at: AT - 1_000,
+            reason: "rate_limit".into(),
+            window: "retry_after".into(),
+            source_request_id: None,
+            incarnation: 1,
+        })
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    // a reads over the ceiling with nothing burning, so the heal check leaves the mark standing.
+    handle.report(windows("a", 0.96, 0.3, AT)).await;
+    handle.report(windows("b", 0.1, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s1"), AT))
+                .await
+                .unwrap()
+        ),
+        ("b".into(), None),
+        "the cooled account's pin is released and the session placed afresh"
+    );
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(summary.kind, "placed");
+    assert!(record.pin.as_ref().is_some_and(|pin| pin.marked));
+    assert_eq!(
+        record.outcome.mark_cleared, None,
+        "no heal and no move cleared it"
+    );
+    let later = drained(&mut events).await;
+    assert!(
+        later
+            .iter()
+            .any(|event| matches!(event, RouterEvent::PinExpired { reasons, .. } if reasons.contains(&"cooldown"))),
+        "{later:?}"
+    );
+    assert!(
+        later.iter().any(|event| matches!(
+            event,
+            RouterEvent::MarkCleared {
+                account_id,
+                session_id,
+                reason: "released",
+                marked_at,
+                marked_on,
+                marked_window,
+                projection: None,
+                ..
+            } if account_id == "a"
+                && session_id == "s1"
+                && *marked_at == AT - 60_000
+                && marked_on == "a"
+                && marked_window == "five_hour"
+        )),
+        "the release inside the decision clears the mark: {later:?}"
+    );
+}
+
+#[tokio::test]
 async fn the_purge_tick_writes_the_round_cut_past_the_longest_dwell() {
     let store = seeded(&["a"]);
     let mut pool = store.pool("p").unwrap().unwrap();
@@ -7149,11 +7335,9 @@ async fn the_purge_tick_writes_the_round_cut_past_the_longest_dwell() {
     second_pool(&store, 1_800);
     // p's round is past p's own dwell and inside q's, the longest of the snapshot's pools, which sets the cut, and q's
     // round is past q's dwell.
+    store.replace_shed_round("p", "a", 1, AT - 900_000).unwrap();
     store
-        .replace_shed_round("p", "a", 1, AT - 900_000, &[shed_pin("s1", 1, true)])
-        .unwrap();
-    store
-        .replace_shed_round("q", "a", 1, AT - 2_000_000, &[shed_pin("s2", 2, false)])
+        .replace_shed_round("q", "a", 1, AT - 2_000_000)
         .unwrap();
     let now = Arc::new(AtomicI64::new(AT));
     let _handle = spawn(
@@ -7203,9 +7387,7 @@ async fn after_a_restart_a_spent_pin_moves_to_a_sibling_whatever_its_former_pool
         .upsert_pin(&stored_pin(&store, "s1", "x", 1, 0.0))
         .unwrap();
     // q's round on a a minute before the restart, run while a was q's member, and p never ran one there.
-    store
-        .replace_shed_round("q", "a", 1, AT - 60_000, &[shed_pin("s9", 9, true)])
-        .unwrap();
+    store.replace_shed_round("q", "a", 1, AT - 60_000).unwrap();
     let now = Arc::new(AtomicI64::new(AT));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     handle.report(windows("x", 1.0, 0.1, AT)).await;
@@ -7241,46 +7423,30 @@ async fn after_a_restart_a_spent_pin_moves_to_a_sibling_whatever_its_former_pool
 }
 
 #[tokio::test]
-async fn the_load_counts_name_the_marks_within_the_dwell_and_the_stale_rows() {
+async fn the_load_counts_name_the_standing_marks_and_the_stale_round_rows() {
     let store = seeded(&["a"]);
     second_pool(&store, 600);
-    // s2 was created again under another epoch since its round marked it.
+    // s1's mark was made on a, where it sits, so it stands. s2 carries a mark made on another account, which no
+    // longer stands. s3 is unmarked.
     for pin in [
-        stored_pin(&store, "s1", "a", 1, 0.0),
-        stored_pin(&store, "s2", "a", 9, 0.0),
+        marked(stored_pin(&store, "s1", "a", 1, 0.0), AT - 60_000),
+        PinRow {
+            marked_on: Some("z".into()),
+            ..marked(stored_pin(&store, "s2", "a", 2, 0.0), AT - 60_000)
+        },
         stored_pin(&store, "s3", "a", 3, 0.0),
     ] {
         store.upsert_pin(&pin).unwrap();
     }
-    // p's round a minute ago is inside its 900-second dwell: s1's mark counts, s2's names an epoch its pin left and
-    // s3 is unmarked. q's round is past its 600-second dwell, both rows of it stale.
-    store
-        .replace_shed_round(
-            "p",
-            "a",
-            1,
-            AT - 60_000,
-            &[
-                shed_pin("s1", 1, true),
-                shed_pin("s2", 2, true),
-                shed_pin("s3", 3, false),
-            ],
-        )
-        .unwrap();
-    store
-        .replace_shed_round(
-            "q",
-            "a",
-            1,
-            AT - 700_000,
-            &[shed_pin("s1", 1, true), shed_pin("s3", 3, false)],
-        )
-        .unwrap();
+    // p's round a minute ago is inside its 900-second dwell. q's round is past its 600-second dwell, so its row is
+    // stale.
+    store.replace_shed_round("p", "a", 1, AT - 60_000).unwrap();
+    store.replace_shed_round("q", "a", 1, AT - 700_000).unwrap();
     let handle = spawn(store, Arc::new(|| AT), RouterConfig::default()).unwrap();
     let counts = handle.load_counts();
     assert_eq!(
         (counts.pins, counts.shed_marks, counts.shed_rounds_stale),
-        (3, 1, 2)
+        (3, 1, 1)
     );
 }
 

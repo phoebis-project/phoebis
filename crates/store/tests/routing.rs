@@ -1,8 +1,8 @@
 use phoebis_routing::lane_key;
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityChain, AffinityRow, CooldownRow, CreditsRow,
-    OverageRow, PinBurn, PinKey, PinRow, RekeyWrite, ResolutionRow, ShedPin, ShedRoundRow,
-    StateCause, StorageKey, Store, WindowRow,
+    OverageRow, PinBurn, PinKey, PinRow, RekeyWrite, ResolutionRow, ShedRoundRow, StateCause,
+    StorageKey, Store, WindowRow,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
@@ -34,6 +34,9 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
         static_hash: None,
         tail_hash: None,
         lane: lane_key(model, "standard", "none", "-"),
+        marked_at: None,
+        marked_on: None,
+        marked_window: None,
     }
 }
 
@@ -845,6 +848,10 @@ fn affinity_rows_land_together_replace_by_model_and_hash_and_delete_by_key() {
     );
 }
 
+// The reverse of the registry's version 53: the three mark columns leave the pins and the rounds table is rebuilt as
+// version 46 left it, so the chains below replay `UNDO_V46` over it unchanged. One line with the marker last. The
+// trailing `\n` ends the marker's comment.
+const UNDO_V53: &str = "ALTER TABLE pins DROP COLUMN marked_at; ALTER TABLE pins DROP COLUMN marked_on; ALTER TABLE pins DROP COLUMN marked_window; DROP TABLE shed_rounds; CREATE TABLE shed_rounds (pool_id TEXT NOT NULL, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, incarnation INTEGER NOT NULL, key_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, model TEXT NOT NULL, epoch INTEGER NOT NULL, round_at INTEGER NOT NULL, marked INTEGER NOT NULL, PRIMARY KEY (pool_id, account_id, key_id, session_id, agent_id, model)); -- rollback\n";
 // The reverse of the registry's version 52: the five fast burn columns. One line with the marker last. The trailing
 // `\n` ends the marker's comment.
 const UNDO_V52: &str = "ALTER TABLE pins DROP COLUMN burn_fast_input; ALTER TABLE pins DROP COLUMN burn_fast_cache_read; ALTER TABLE pins DROP COLUMN burn_fast_write_5m; ALTER TABLE pins DROP COLUMN burn_fast_write_1h; ALTER TABLE pins DROP COLUMN burn_fast_output; -- rollback\n";
@@ -900,7 +907,7 @@ fn an_affinity_rows_message_id_round_trips_and_a_row_from_before_the_column_read
     let before = affinity_row("claude-sonnet-5", "hash-1", "a");
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V52} {UNDO_V51} UPDATE meta SET value = '50' WHERE key = 'schema_version';"
+        "{UNDO_V53} {UNDO_V52} {UNDO_V51} UPDATE meta SET value = '50' WHERE key = 'schema_version';"
     ))
     .unwrap();
     conn.execute(
@@ -926,7 +933,7 @@ fn an_affinity_rows_message_id_round_trips_and_a_row_from_before_the_column_read
     drop(conn);
     let migrated =
         Store::open(&path, &storage_key).expect("the migration completes and the store opens");
-    assert_eq!(migrated.schema_version().unwrap(), 52);
+    assert_eq!(migrated.schema_version().unwrap(), 53);
     assert_eq!(
         migrated.load_routing().unwrap().affinity,
         vec![AffinityRow {
@@ -996,31 +1003,14 @@ fn shed_key(session_id: &str) -> PinKey {
     }
 }
 
-fn shed_pin(session_id: &str, epoch: u64, marked: bool) -> ShedPin {
-    ShedPin {
-        key: shed_key(session_id),
-        epoch,
-        marked,
-    }
-}
-
-/// The loaded rows as `(pool, account, session, epoch, round_at, marked)`, in a fixed order.
-fn loaded_rounds(store: &Store) -> Vec<(String, String, String, u64, i64, bool)> {
+/// The loaded rows as `(pool, account, incarnation, round_at)`, in a fixed order.
+fn loaded_rounds(store: &Store) -> Vec<(String, String, u64, i64)> {
     let mut rows: Vec<_> = store
         .load_routing()
         .unwrap()
         .shed_rounds
         .into_iter()
-        .map(|r| {
-            (
-                r.pool_id,
-                r.account_id,
-                r.session_id,
-                r.epoch,
-                r.round_at,
-                r.marked,
-            )
-        })
+        .map(|r| (r.pool_id, r.account_id, r.incarnation, r.round_at))
         .collect();
     rows.sort();
     rows
@@ -1029,67 +1019,37 @@ fn loaded_rounds(store: &Store) -> Vec<(String, String, String, u64, i64, bool)>
 fn round_row(
     pool: &str,
     account: &str,
-    session: &str,
-    epoch: u64,
+    incarnation: u64,
     round_at: i64,
-    marked: bool,
-) -> (String, String, String, u64, i64, bool) {
-    (
-        pool.into(),
-        account.into(),
-        session.into(),
-        epoch,
-        round_at,
-        marked,
-    )
+) -> (String, String, u64, i64) {
+    (pool.into(), account.into(), incarnation, round_at)
 }
 
 #[test]
-fn a_round_replaces_the_pool_s_and_account_s_rows_and_loads_back() {
+fn a_round_replaces_the_pools_row_on_the_account_and_loads_back() {
     let store = store_with(&["a", "b"]);
-    store
-        .replace_shed_round(
-            "p",
-            "a",
-            1,
-            1_000,
-            &[shed_pin("s1", 4, true), shed_pin("s2", 5, false)],
-        )
-        .unwrap();
+    store.replace_shed_round("p", "a", 1, 1_000).unwrap();
     // Another pool's round on the account and the pool's round on another account stand apart from it.
+    store.replace_shed_round("q", "a", 1, 1_500).unwrap();
+    store.replace_shed_round("p", "b", 1, 1_500).unwrap();
     store
-        .replace_shed_round("q", "a", 1, 1_500, &[shed_pin("s9", 9, true)])
-        .unwrap();
-    store
-        .replace_shed_round("p", "b", 1, 1_500, &[shed_pin("s8", 8, false)])
-        .unwrap();
-    store
-        .write_routing(|tx| {
-            tx.replace_shed_round(
-                "p",
-                "a",
-                1,
-                2_000,
-                &[shed_pin("s2", 5, true), shed_pin("s3", 6, false)],
-            )
-        })
+        .write_routing(|tx| tx.replace_shed_round("p", "a", 1, 2_000))
         .unwrap();
     assert_eq!(
         loaded_rounds(&store),
         vec![
-            round_row("p", "a", "s2", 5, 2_000, true),
-            round_row("p", "a", "s3", 6, 2_000, false),
-            round_row("p", "b", "s8", 8, 1_500, false),
-            round_row("q", "a", "s9", 9, 1_500, true),
+            round_row("p", "a", 1, 2_000),
+            round_row("p", "b", 1, 1_500),
+            round_row("q", "a", 1, 1_500),
         ],
-        "the second round of p on a replaced the first whole, s1 with it, and left the other rounds alone"
+        "the second round of p on a replaced the first and left the other rounds alone"
     );
     let row = store
         .load_routing()
         .unwrap()
         .shed_rounds
         .into_iter()
-        .find(|r| r.pool_id == "p" && r.account_id == "a" && r.session_id == "s2")
+        .find(|r| r.pool_id == "p" && r.account_id == "a")
         .unwrap();
     assert_eq!(
         row,
@@ -1097,70 +1057,64 @@ fn a_round_replaces_the_pool_s_and_account_s_rows_and_loads_back() {
             pool_id: "p".into(),
             account_id: "a".into(),
             incarnation: 1,
-            key_id: "k".into(),
-            session_id: "s2".into(),
-            agent_id: "main".into(),
-            model: "claude-sonnet-5".into(),
-            epoch: 5,
             round_at: 2_000,
-            marked: true,
         }
     );
 }
 
 #[test]
-fn a_pin_s_removal_or_replacement_clears_its_mark_and_keeps_the_round() {
+fn a_pins_mark_round_trips_leaves_with_the_pin_and_the_round_row_stays() {
     let store = store_with(&["a", "b"]);
-    let on_a = |session: &str, epoch: u64| PinRow {
-        epoch,
-        ..pin("k", session, "claude-sonnet-5", "a")
+    let marked = PinRow {
+        marked_at: Some(900),
+        marked_on: Some("a".into()),
+        marked_window: Some("five_hour".into()),
+        ..pin("k", "s1", "claude-sonnet-5", "a")
     };
-    for (session, epoch) in [("gone", 1), ("moved", 2), ("renewed", 3)] {
-        store.upsert_pin(&on_a(session, epoch)).unwrap();
-    }
-    store
-        .replace_shed_round(
-            "p",
-            "a",
-            1,
-            1_000,
-            &[
-                shed_pin("gone", 1, true),
-                shed_pin("moved", 2, true),
-                shed_pin("renewed", 3, true),
-            ],
-        )
-        .unwrap();
-    assert!(store.delete_pin(&shed_key("gone")).unwrap());
+    store.upsert_pin(&marked).unwrap();
+    store.replace_shed_round("p", "a", 1, 1_000).unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().pins,
+        vec![marked.clone()],
+        "the three mark columns read back as written"
+    );
+    // A renewal writes the row with its mark, a move or a heal writes it without one.
     store
         .write_routing(|tx| {
-            // A move lands the pin on b under a fresh epoch. A renewal keeps the pin's account and epoch.
             tx.upsert_pin(&PinRow {
-                account_id: "b".into(),
-                epoch: 7,
-                ..on_a("moved", 2)
-            })?;
-            tx.upsert_pin(&PinRow {
-                last_used_at: 900,
-                ..on_a("renewed", 3)
+                last_used_at: 950,
+                ..marked.clone()
             })
         })
         .unwrap();
     assert_eq!(
-        loaded_rounds(&store),
-        vec![
-            round_row("p", "a", "gone", 1, 1_000, false),
-            round_row("p", "a", "moved", 2, 1_000, false),
-            round_row("p", "a", "renewed", 3, 1_000, true),
-        ],
-        "the removed and the replaced pins' marks left with them, every row and its round time stayed, and the \
-         renewed pin kept its mark"
+        store.load_routing().unwrap().pins[0].marked_at,
+        Some(900),
+        "a write that carries the mark keeps it"
     );
-    store.upsert_pin(&on_a("renewed", 8)).unwrap();
+    store
+        .upsert_pin(&PinRow {
+            marked_at: None,
+            marked_on: None,
+            marked_window: None,
+            ..marked.clone()
+        })
+        .unwrap();
+    let cleared = store.load_routing().unwrap().pins;
     assert_eq!(
-        loaded_rounds(&store)[2],
-        round_row("p", "a", "renewed", 3, 1_000, false),
-        "a fresh pin under the key on the same account takes another epoch, so the old pin's mark leaves"
+        (
+            &cleared[0].marked_at,
+            &cleared[0].marked_on,
+            &cleared[0].marked_window
+        ),
+        (&None, &None, &None),
+        "a write without the mark clears it"
+    );
+    assert!(store.delete_pin(&shed_key("s1")).unwrap());
+    assert_eq!(
+        loaded_rounds(&store),
+        vec![round_row("p", "a", 1, 1_000)],
+        "the pin's removal leaves the round row, whose time the dwell still reads"
     );
 }
 
@@ -1171,19 +1125,15 @@ fn a_replaced_account_s_rounds_do_not_load() {
     seed_accounts(&store, &["a"]);
     assert_eq!(store.account("a").unwrap().unwrap().incarnation, 2);
     // A round formed against the deleted holder and written after the replacement took the id.
-    store
-        .replace_shed_round("p", "a", 1, 1_000, &[shed_pin("s1", 1, true)])
-        .unwrap();
+    store.replace_shed_round("p", "a", 1, 1_000).unwrap();
     assert!(
         store.load_routing().unwrap().shed_rounds.is_empty(),
         "the previous holder's round is never read back"
     );
-    store
-        .replace_shed_round("p", "a", 2, 2_000, &[shed_pin("s1", 1, true)])
-        .unwrap();
+    store.replace_shed_round("p", "a", 2, 2_000).unwrap();
     assert_eq!(
         loaded_rounds(&store),
-        vec![round_row("p", "a", "s1", 1, 2_000, true)],
+        vec![round_row("p", "a", 2, 2_000)],
         "the replacement's own round loads"
     );
 }
@@ -1191,12 +1141,8 @@ fn a_replaced_account_s_rounds_do_not_load() {
 #[test]
 fn a_deleted_account_takes_its_round_rows() {
     let store = store_with(&["a", "b"]);
-    store
-        .replace_shed_round("p", "a", 1, 1_000, &[shed_pin("s1", 1, true)])
-        .unwrap();
-    store
-        .replace_shed_round("p", "b", 1, 1_000, &[shed_pin("s2", 2, true)])
-        .unwrap();
+    store.replace_shed_round("p", "a", 1, 1_000).unwrap();
+    store.replace_shed_round("p", "b", 1, 1_000).unwrap();
     store.delete_account("a", "test").unwrap();
     // The purge with no cut counts every row the table still holds.
     assert_eq!(
@@ -1209,32 +1155,17 @@ fn a_deleted_account_takes_its_round_rows() {
 #[test]
 fn rounds_past_the_cut_are_purged_and_newer_ones_stay() {
     let store = store_with(&["a", "b"]);
-    store
-        .replace_shed_round(
-            "p",
-            "a",
-            1,
-            1_000,
-            &[shed_pin("s1", 1, true), shed_pin("s2", 2, false)],
-        )
-        .unwrap();
-    store
-        .replace_shed_round("q", "a", 1, 5_000, &[shed_pin("s3", 3, true)])
-        .unwrap();
-    store
-        .replace_shed_round("p", "b", 1, 4_000, &[shed_pin("s4", 4, false)])
-        .unwrap();
+    store.replace_shed_round("p", "a", 1, 1_000).unwrap();
+    store.replace_shed_round("q", "a", 1, 5_000).unwrap();
+    store.replace_shed_round("p", "b", 1, 4_000).unwrap();
     assert_eq!(
         store.purge_shed_rounds_before(4_000).unwrap(),
-        2,
-        "both rows of the round at 1,000 are past the cut"
+        1,
+        "the round at 1,000 is past the cut"
     );
     assert_eq!(
         loaded_rounds(&store),
-        vec![
-            round_row("p", "b", "s4", 4, 4_000, false),
-            round_row("q", "a", "s3", 3, 5_000, true),
-        ],
+        vec![round_row("p", "b", 1, 4_000), round_row("q", "a", 1, 5_000)],
         "a round at the cut or after it stays"
     );
     assert_eq!(
@@ -1243,10 +1174,7 @@ fn rounds_past_the_cut_are_purged_and_newer_ones_stay() {
             .unwrap(),
         1
     );
-    assert_eq!(
-        loaded_rounds(&store),
-        vec![round_row("q", "a", "s3", 3, 5_000, true)]
-    );
+    assert_eq!(loaded_rounds(&store), vec![round_row("q", "a", 1, 5_000)]);
 }
 
 #[test]

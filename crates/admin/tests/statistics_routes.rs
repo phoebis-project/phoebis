@@ -1001,6 +1001,9 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
                 static_hash: None,
                 tail_hash: None,
                 lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+                marked_at: None,
+                marked_on: None,
+                marked_window: None,
             })
             .unwrap();
     }
@@ -1091,6 +1094,9 @@ async fn the_sessions_route_answers_500_when_an_accounts_tier_cannot_be_read() {
             static_hash: None,
             tail_hash: None,
             lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+            marked_at: None,
+            marked_on: None,
+            marked_window: None,
         })
         .unwrap();
     let parts = common::admin_parts_full_on(store).await;

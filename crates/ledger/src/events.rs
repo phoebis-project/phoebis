@@ -22,9 +22,9 @@ use crate::LedgerDb;
 /// Rows read per mirror tick; a registry busier than this per tick is caught up on the next.
 const MIRROR_BATCH: usize = 500;
 
-/// `None` for the four variants that land as no row of their own here: a `Decision` and a `CacheMapWritten`, which
+/// `None` for the five variants that land as no row of their own here: a `Decision` and a `CacheMapWritten`, which
 /// the mirror maps to the ledger's own records, an `AccountStateChanged`, a transition the mirror's account watch
-/// reads from the registry, and a `ReservationExpired`, which has no row.
+/// reads from the registry, and a `MarkCleared` and a `ReservationExpired`, which have no row.
 pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
     let model_of = |scope: &str| scope.strip_prefix("model:").map(str::to_string);
     let row = match event {
@@ -325,6 +325,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
         RouterEvent::Decision { .. }
         | RouterEvent::CacheMapWritten { .. }
         | RouterEvent::AccountStateChanged { .. }
+        | RouterEvent::MarkCleared { .. }
         | RouterEvent::ReservationExpired { .. } => return None,
     };
     Some(row)
@@ -964,18 +965,23 @@ mod tests {
             session_id: "s1".into(),
             agent_id: "main".into(),
             model: "m".into(),
-            round: ShedRoundFacts {
+            round: Box::new(ShedRoundFacts {
+                trigger: "lead",
                 window: "seven_day".into(),
                 utilization: 0.5,
-                elapsed_share: 0.1,
-                ahead: 0.4,
-                threshold: 0.2,
-                margin: 0.2,
+                projection: None,
+                horizon: None,
+                ceiling: 0.95,
+                elapsed_share: Some(0.1),
+                ahead: Some(0.4),
+                threshold: Some(0.2),
                 unit: "window_share",
-                burn_window_seconds: 600,
-                shed_share: 0.5,
+                burn_average_seconds: 600,
+                shed_cap: 0.5,
                 burn_sum: 5.0,
+                excess: 3.0,
                 target: 2.5,
+                removed: 4.0,
                 warm_sessions: "when_needed",
                 pins: vec![ShedPinFacts {
                     key_id: "k".into(),
@@ -987,12 +993,19 @@ mod tests {
                     last_input_tokens: 1_000,
                     per_rewrite: Some(0.004),
                     marked: true,
+                    rewrite: Some(0.01),
+                    payback: Some(9.6),
+                    planned: Some("b".into()),
+                    runway_ms: Some(7_200_000),
+                    skip: None,
                     note: Some("current"),
                 }],
                 marks: vec![key.clone()],
+                outcome: "marked 1".into(),
+                reason: None,
                 dwell_seconds: 900,
                 dwell_until: 901_000,
-            },
+            }),
             at: 1_000,
         })
         .expect("a round row");
@@ -1014,18 +1027,25 @@ mod tests {
         );
         let detail = detail_of(&row);
         for (field, value) in [
+            ("trigger", json!("lead")),
             ("window", json!("seven_day")),
             ("utilization", json!(0.5)),
+            ("projection", json!(null)),
+            ("horizon", json!(null)),
+            ("ceiling", json!(0.95)),
             ("elapsed_share", json!(0.1)),
             ("ahead", json!(0.4)),
             ("threshold", json!(0.2)),
-            ("margin", json!(0.2)),
             ("unit", json!("window_share")),
-            ("burn_window_seconds", json!(600)),
-            ("shed_share", json!(0.5)),
+            ("burn_average_seconds", json!(600)),
+            ("shed_cap", json!(0.5)),
             ("burn_sum", json!(5.0)),
+            ("excess", json!(3.0)),
             ("target", json!(2.5)),
+            ("removed", json!(4.0)),
             ("warm_sessions", json!("when_needed")),
+            ("outcome", json!("marked 1")),
+            ("reason", json!(null)),
             ("dwell_seconds", json!(900)),
             ("dwell_until", json!(901_000)),
             ("persisted", json!(true)),
@@ -1037,6 +1057,7 @@ mod tests {
             json!([{
                 "key_id": "k", "session_id": "s1", "agent_id": "main", "model": "m", "cold": true,
                 "burn": 4.0, "last_input_tokens": 1_000, "per_rewrite": 0.004, "marked": true,
+                "rewrite": 0.01, "payback": 9.6, "planned": "b", "runway_ms": 7_200_000, "skip": null,
                 "note": "current"
             }]),
             "each pin is an object of one-value fields"

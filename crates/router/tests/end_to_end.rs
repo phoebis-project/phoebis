@@ -2931,6 +2931,9 @@ async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expi
                 static_hash: None,
                 tail_hash: None,
                 lane: String::new(),
+                marked_at: None,
+                marked_on: None,
+                marked_window: None,
             })
             .unwrap();
     }

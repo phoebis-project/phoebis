@@ -89,6 +89,22 @@ pub enum RouterEvent {
         source_request_id: Option<String>,
         at: i64,
     },
+    /// A shedding mark left a pin: the heal check found the trigger gone at the pin's request (`healed`, with the
+    /// healing projection), the pin moved off the account the mark was made on (`moved`), or the pin was released or
+    /// expired without a move (`released`). `account_id` is the account the pin sat on when the mark cleared.
+    MarkCleared {
+        account_id: String,
+        key_id: String,
+        session_id: String,
+        agent_id: String,
+        model: String,
+        reason: &'static str,
+        marked_at: i64,
+        marked_on: String,
+        marked_window: String,
+        projection: Option<f64>,
+        at: i64,
+    },
     OverageEnded {
         account_id: String,
         since: Option<i64>,
@@ -176,7 +192,8 @@ pub enum RouterEvent {
         session_id: String,
         agent_id: String,
         model: String,
-        round: ShedRoundFacts,
+        /// Boxed: the round's facts carry every pin of the round, and the broadcast copies the enum whole.
+        round: Box<ShedRoundFacts>,
         at: i64,
     },
     /// `blocked()` answered differently before and after a credits reading landed.
@@ -841,10 +858,10 @@ pub struct LoadCounts {
     /// Accounts with a reading, whatever the number of windows each carries.
     pub windows: usize,
     pub affinity_entries: usize,
-    /// Marked rows whose round lies within their pool's dwell at start, each on a pin the load carries under the
-    /// row's epoch.
+    /// Loaded pins whose mark stands: made on the account the pin sits on.
     pub shed_marks: usize,
-    /// Rows whose round lies past their pool's dwell at start, which the purge drops once no pool's dwell reads them.
+    /// Round rows whose time lies past their pool's dwell at start, which the purge drops once no pool's dwell reads
+    /// them.
     pub shed_rounds_stale: usize,
 }
 
@@ -856,7 +873,6 @@ impl LoadCounts {
                 .pool(&row.pool_id)
                 .is_some_and(|pool| now - row.round_at < shed_dwell_ms(pool))
         };
-        let holds = mark_holds(load);
         LoadCounts {
             pins: load.pins.len(),
             windows: load
@@ -866,11 +882,7 @@ impl LoadCounts {
                 .collect::<HashSet<_>>()
                 .len(),
             affinity_entries: load.affinity.len(),
-            shed_marks: load
-                .shed_rounds
-                .iter()
-                .filter(|row| within_dwell(row) && holds(row))
-                .count(),
+            shed_marks: load.pins.iter().filter(|pin| mark_holds(pin)).count(),
             shed_rounds_stale: load
                 .shed_rounds
                 .iter()
@@ -1975,8 +1987,7 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
                 account_id,
                 incarnation,
                 round_at,
-                pins,
-            } => tx.replace_shed_round(pool_id, account_id, *incarnation, *round_at, pins)?,
+            } => tx.replace_shed_round(pool_id, account_id, *incarnation, *round_at)?,
             StateWrite::UpsertAffinity(rows) => tx.upsert_affinity(rows)?,
             StateWrite::UpsertCooldown(row) => tx.upsert_cooldown(row)?,
             StateWrite::UpsertCredits(row) => {
@@ -2031,9 +2042,8 @@ fn apply_one(store: &Store, write: &StateWrite) -> Result<Marks, StoreError> {
             account_id,
             incarnation,
             round_at,
-            pins,
         } => store
-            .replace_shed_round(pool_id, account_id, *incarnation, *round_at, pins)
+            .replace_shed_round(pool_id, account_id, *incarnation, *round_at)
             .map(|()| none()),
         StateWrite::UpsertAffinity(rows) => store.upsert_affinity(rows).map(|()| none()),
         StateWrite::UpsertCooldown(row) => store.upsert_cooldown(row).map(|()| none()),
@@ -2090,6 +2100,27 @@ fn cache_map_written(report: &AffinityReport, rows: &[AffinityRow]) -> RouterEve
         entries,
         at: report.now,
     }
+}
+
+/// The `mark_cleared` of a pin that left its account without a move, when its mark stood: a release, an expiry or a
+/// fail-over's invalidation. `None` for an unmarked pin.
+fn released_mark(row: &PinRow, at: i64) -> Option<RouterEvent> {
+    if !mark_holds(row) {
+        return None;
+    }
+    Some(RouterEvent::MarkCleared {
+        account_id: row.account_id.clone(),
+        key_id: row.key_id.clone(),
+        session_id: row.session_id.clone(),
+        agent_id: row.agent_id.clone(),
+        model: row.model.clone(),
+        reason: "released",
+        marked_at: row.marked_at?,
+        marked_on: row.marked_on.clone()?,
+        marked_window: row.marked_window.clone().unwrap_or_default(),
+        projection: None,
+        at,
+    })
 }
 
 /// A pin event as the decision names it: a move with its reason, an expiry with the first reason the task read
@@ -2295,7 +2326,7 @@ impl Task {
                     let after = self.state.pin(key).cloned();
                     let now = request.now;
                     let selected = matches!(result, SelectResult::Selected(_));
-                    match (before, after) {
+                    match (before.as_ref(), after) {
                         (None, Some(new)) if selected => {
                             match self
                                 .invalidated
@@ -2389,6 +2420,34 @@ impl Task {
                     }
                 }
                 record.outcome.pin_events = pin_events.iter().filter_map(pin_event_facts).collect();
+                // The mark the selection cleared (a heal, or the move that consumed it), else the one a pin released
+                // or expired here carried: the pin left without a move, so its mark left with it.
+                let mark = pin_key.as_ref().and_then(|key| {
+                    let cleared = record.outcome.mark_cleared.as_ref();
+                    let account_id = before.as_ref().map(|old| old.account_id.clone())?;
+                    match cleared {
+                        Some(facts) => Some(RouterEvent::MarkCleared {
+                            account_id,
+                            key_id: key.key_id.clone(),
+                            session_id: key.session_id.clone(),
+                            agent_id: key.agent_id.clone(),
+                            model: key.model.clone(),
+                            reason: facts.reason,
+                            marked_at: facts.marked_at,
+                            marked_on: facts.marked_on.clone(),
+                            marked_window: facts.marked_window.clone(),
+                            projection: facts.projection,
+                            at: request.now,
+                        }),
+                        None if pin_events
+                            .iter()
+                            .any(|event| matches!(event, RouterEvent::PinExpired { .. })) =>
+                        {
+                            released_mark(before.as_ref()?, request.now)
+                        }
+                        None => None,
+                    }
+                });
                 let round = shed_round.map(|round| RouterEvent::SheddingRound {
                     account_id: round.account_id,
                     pool_id: record.request.pool_id.clone(),
@@ -2397,7 +2456,7 @@ impl Task {
                     session_id: round.pin.session_id,
                     agent_id: round.pin.agent_id,
                     model: round.pin.model,
-                    round: round.facts,
+                    round: Box::new(round.facts),
                     at: request.now,
                 });
                 self.emit(RouterEvent::Decision {
@@ -2405,7 +2464,7 @@ impl Task {
                     record: Box::new(record),
                     at: request.now,
                 });
-                for event in pin_events.into_iter().chain(round) {
+                for event in pin_events.into_iter().chain(mark).chain(round) {
                     self.emit(event);
                 }
                 let (cancel, ticket) = match &result {
@@ -2512,13 +2571,14 @@ impl Task {
                 session_id,
                 reply,
             } => {
-                // The account a pin names is only readable while it is still held, so the rows come first.
-                let held: HashMap<PinKey, String> = self
+                // The account and the mark a pin names are only readable while it is still held, so the rows come
+                // first.
+                let held: HashMap<PinKey, PinRow> = self
                     .state
                     .pins()
                     .into_iter()
                     .filter(|p| p.key_id == key_id && p.session_id == session_id)
-                    .map(|p| (p.key(), p.account_id))
+                    .map(|p| (p.key(), p))
                     .collect();
                 // Every agent's pin of the session leaves together: the session's next request starts fresh
                 // wherever each of its agents lands, not only its main turn's.
@@ -2526,15 +2586,18 @@ impl Task {
                 let count = gone.len();
                 let now = (self.clock)();
                 for key in &gone {
-                    if let Some(account_id) = held.get(key) {
+                    if let Some(row) = held.get(key) {
                         self.emit(RouterEvent::PinReleased {
                             key_id: key.key_id.clone(),
                             session_id: key.session_id.clone(),
                             agent_id: key.agent_id.clone(),
                             model: key.model.clone(),
-                            account_id: account_id.clone(),
+                            account_id: row.account_id.clone(),
                             at: now,
                         });
+                        if let Some(event) = released_mark(row, now) {
+                            self.emit(event);
+                        }
                     }
                 }
                 self.write(gone.into_iter().map(StateWrite::DeletePin).collect());
@@ -2918,15 +2981,21 @@ impl Task {
                     return;
                 }
                 pin.model = self.state.canonical(&pin.model).to_string();
+                let key = PinKey {
+                    key_id: pin.key_id.clone(),
+                    session_id: pin.session_id.clone(),
+                    agent_id: pin.agent_id.clone(),
+                    model: pin.model.clone(),
+                };
+                // The row leaves with the invalidation, so its mark is read before it.
+                let row = self.state.pin(&key).cloned();
                 if self.state.invalidate_pin(&pin, &account_id) {
-                    let key = PinKey {
-                        key_id: pin.key_id,
-                        session_id: pin.session_id,
-                        agent_id: pin.agent_id,
-                        model: pin.model,
-                    };
+                    let now = (self.clock)();
                     self.invalidated
-                        .insert(key.clone(), (account_id.clone(), "mark", (self.clock)()));
+                        .insert(key.clone(), (account_id.clone(), "mark", now));
+                    if let Some(event) = row.as_ref().and_then(|row| released_mark(row, now)) {
+                        self.emit(event);
+                    }
                     self.write(vec![StateWrite::DeletePin(key)]);
                 }
             }
@@ -2950,16 +3019,16 @@ impl Task {
                 if self.state.renewed_since_placement(&key) {
                     return;
                 }
-                let Some(account_id) = self
+                let Some(current) = self
                     .state
                     .pin(&key)
                     .filter(|current| current.epoch == pin.epoch)
-                    .map(|current| current.account_id.clone())
+                    .cloned()
                 else {
                     return;
                 };
                 if self.superseded(
-                    &account_id,
+                    &current.account_id,
                     incarnation,
                     lifecycle_generation,
                     credential_generation,
@@ -2969,15 +3038,19 @@ impl Task {
                 // Nothing enters `invalidated`: the pin never served, so the session's next request is a fresh
                 // placement rather than a move away from it.
                 self.state.remove_pin(&key);
+                let now = (self.clock)();
                 self.emit(RouterEvent::PinExpired {
                     key_id: key.key_id.clone(),
                     session_id: key.session_id.clone(),
                     agent_id: key.agent_id.clone(),
                     model: key.model.clone(),
-                    account_id,
+                    account_id: current.account_id.clone(),
                     reasons: vec!["client_error"],
-                    at: (self.clock)(),
+                    at: now,
                 });
+                if let Some(event) = released_mark(&current, now) {
+                    self.emit(event);
+                }
                 self.write(vec![StateWrite::DeletePin(key)]);
             }
             Report::PinRenewed {
@@ -3459,12 +3532,12 @@ impl Task {
                 at: now,
             });
         }
-        // The account a pin names is only readable while it is still held, so the rows come first.
-        let held: HashMap<PinKey, String> = self
+        // The account and the mark a pin names are only readable while it is still held, so the rows come first.
+        let held: HashMap<PinKey, PinRow> = self
             .state
             .pins()
             .into_iter()
-            .map(|p| (p.key(), p.account_id))
+            .map(|p| (p.key(), p))
             .collect();
         let purged = self.state.purge(&snapshot, now);
         tracing::debug!(
@@ -3484,16 +3557,19 @@ impl Task {
             });
         }
         for (key, reason) in &purged.pins {
-            if let Some(account_id) = held.get(key) {
+            if let Some(row) = held.get(key) {
                 self.emit(RouterEvent::PinExpired {
                     key_id: key.key_id.clone(),
                     session_id: key.session_id.clone(),
                     agent_id: key.agent_id.clone(),
                     model: key.model.clone(),
-                    account_id: account_id.clone(),
+                    account_id: row.account_id.clone(),
                     reasons: vec![*reason],
                     at: now,
                 });
+                if let Some(event) = released_mark(row, now) {
+                    self.emit(event);
+                }
             }
         }
         let restored = !std::mem::replace(&mut self.purged, true);
@@ -3954,7 +4030,6 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             account_id,
             incarnation,
             round_at,
-            pins,
         } => one(
             DeferredKey::ShedRound {
                 pool_id: pool_id.clone(),
@@ -3965,7 +4040,6 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
                 account_id,
                 incarnation,
                 round_at,
-                pins,
             },
         ),
         StateWrite::UpsertAffinity(rows) => Ok(rows

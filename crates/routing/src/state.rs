@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use phoebis_store::{
     AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, CreditsRow, OverageRow,
-    PinBurn, PinKey, PinRow, PoolMember, PoolRow, RekeyWrite, ResolutionRow, RoutingLoad, ShedPin,
-    ShedRoundRow, StateCause, WindowRow,
+    PinBurn, PinKey, PinRow, PoolMember, PoolRow, RekeyWrite, ResolutionRow, RoutingLoad,
+    StateCause, WindowRow,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -257,14 +257,13 @@ pub enum StateWrite {
     /// One resolution landing, committed as one transaction so the store never holds moved rows without the
     /// spelling row that finds them after a restart.
     Rekey(RekeyWrite),
-    /// A pool's shedding round on an account, every pin of it with its epoch and its mark: it replaces the pool's
-    /// and account's previous round whole, so the marks and the dwell survive a restart.
+    /// A pool's shedding round on an account: the round's time, which replaces the pool's previous one on the account
+    /// so the dwell survives a restart. The marks travel on the pin rows the round writes beside it.
     ShedRound {
         pool_id: String,
         account_id: String,
         incarnation: u64,
         round_at: i64,
-        pins: Vec<ShedPin>,
     },
     UpsertAffinity(Vec<AffinityRow>),
     UpsertCooldown(CooldownRow),
@@ -593,31 +592,6 @@ pub fn warm(pin: &PinRow, now: i64) -> bool {
     now - pin.last_refresh_at < pin.cache_ttl_ms
 }
 
-/// The pins a round marks, in the round's order: never the last unmarked pin, never an unpriced pin, nothing for
-/// a zero target.
-pub fn shed_marks(ordered: &[(PinRow, Option<f64>)], target: f64) -> Vec<PinKey> {
-    let mut marks = Vec::new();
-    if target.is_nan() || target <= 0.0 {
-        return marks;
-    }
-    let mut marked = 0.0;
-    for (pin, burn) in ordered {
-        // The last unmarked pin stays whatever the target still asks, so no round takes all of an account's
-        // burn; an indivisible pin may carry the marked burn past the target, and the round stops there.
-        if marked >= target || marks.len() + 1 >= ordered.len() {
-            break;
-        }
-        // An unpriced burn moves the marked sum nowhere, so marking the pin would shed a session on a guess: it
-        // stays, and it still counts as one of the account's pins for the last-pin rule.
-        let Some(burn) = burn else {
-            continue;
-        };
-        marks.push(pin.key());
-        marked += burn;
-    }
-    marks
-}
-
 /// Past this age a permit or a ticket is a guard whose drop never reached the table: the relay bounds a
 /// stream's silence, not its length, so a request older than the longest turn a client runs is one the table
 /// gives up waiting on.
@@ -865,62 +839,18 @@ impl Drop for AccountTicket {
     }
 }
 
-/// When a shedding round ran, and the pins it marked.
-type ShedRound = (i64, HashSet<PinKey>);
-
-/// Whether a loaded row's mark still stands: the row is marked and the load carries its pin under the row's account
-/// and epoch. A mark whose pin moved, was released or was made again under another epoch before the restart stays
-/// spent.
-pub(crate) fn mark_holds(load: &RoutingLoad) -> impl Fn(&ShedRoundRow) -> bool + '_ {
-    let pins: HashMap<(&str, &str, &str, &str), (&str, u64)> = load
-        .pins
-        .iter()
-        .map(|p| {
-            (
-                (
-                    p.key_id.as_str(),
-                    p.session_id.as_str(),
-                    p.agent_id.as_str(),
-                    p.model.as_str(),
-                ),
-                (p.account_id.as_str(), p.epoch),
-            )
-        })
-        .collect();
-    move |row: &ShedRoundRow| {
-        row.marked
-            && pins.get(&(
-                row.key_id.as_str(),
-                row.session_id.as_str(),
-                row.agent_id.as_str(),
-                row.model.as_str(),
-            )) == Some(&(row.account_id.as_str(), row.epoch))
-    }
+/// Whether the pin's mark stands: `marked_at` set and `marked_on` its current account. A row carrying a mark made on
+/// another account was moved by a write that kept the members, and that mark no longer stands.
+pub(crate) fn mark_holds(pin: &PinRow) -> bool {
+    pin.marked_at.is_some() && pin.marked_on.as_deref() == Some(pin.account_id.as_str())
 }
 
-/// The loaded rounds by pool and account, each with the marks that still stand, and each account's stamp: the newest
-/// round of any pool on it, so after a restart the cool check still reads a sibling pool's round inside its own dwell,
-/// as it did before.
-fn rounds_of(load: &RoutingLoad) -> (HashMap<(String, String), ShedRound>, HashMap<String, i64>) {
-    let holds = mark_holds(load);
-    let mut rounds: HashMap<(String, String), ShedRound> = HashMap::new();
-    let mut newest: HashMap<String, i64> = HashMap::new();
-    for row in &load.shed_rounds {
-        let round = rounds
-            .entry((row.pool_id.clone(), row.account_id.clone()))
-            .or_insert_with(|| (row.round_at, HashSet::new()));
-        if holds(row) {
-            round.1.insert(PinKey {
-                key_id: row.key_id.clone(),
-                session_id: row.session_id.clone(),
-                agent_id: row.agent_id.clone(),
-                model: row.model.clone(),
-            });
-        }
-        let stamp = newest.entry(row.account_id.clone()).or_insert(row.round_at);
-        *stamp = (*stamp).max(row.round_at);
-    }
-    (rounds, newest)
+/// The loaded rounds by pool and account: each row's time, what the dwell between rounds reads.
+fn rounds_of(load: &RoutingLoad) -> HashMap<(String, String), i64> {
+    load.shed_rounds
+        .iter()
+        .map(|row| ((row.pool_id.clone(), row.account_id.clone()), row.round_at))
+        .collect()
 }
 
 /// A `funding_required` account's retry: the instant one request may try it again, the incarnation the mark landed
@@ -962,10 +892,6 @@ pub struct RoutingState {
     /// The ledger's last-answered spend per pool member and budgeted period, by `(pool_id, account_id, period)`;
     /// memory only.
     member_spend: HashMap<(String, String, BudgetPeriod), MemberSpend>,
-    /// When the newest round ran on each account: what a move's cool check reads, so no move prefers a destination
-    /// just shed from. A stamp of its own, since the rounds are keyed by pool and an account that moved pools keeps
-    /// the round its former pool ran.
-    newest_shed: HashMap<String, i64>,
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
     pins: HashMap<PinKey, PinRow>,
@@ -987,23 +913,15 @@ pub struct RoutingState {
     /// The ledger's share pricer, handed in by the task as `rates` is. Until then one that prices nothing, so a
     /// selection books no reservation and a burn reads empty.
     share: SharePricer,
-    /// The latest shedding round on each account, by the id of the pool that ran it and the account id.
-    shed_rounds: HashMap<(String, String), ShedRound>,
+    /// When the latest shedding round ran on each account, by the id of the pool that ran it and the account id: the
+    /// stamp the dwell between rounds reads. The marks live on the pin rows.
+    shed_rounds: HashMap<(String, String), i64>,
 }
 
 impl RoutingState {
     pub fn from_load(load: RoutingLoad) -> RoutingState {
-        // A loaded round names the epochs of pins deleted since, and a mark is read back by its epoch, so none of
-        // them is handed out again.
-        let next_epoch = load
-            .pins
-            .iter()
-            .map(|p| p.epoch)
-            .chain(load.shed_rounds.iter().map(|row| row.epoch))
-            .max()
-            .unwrap_or(0)
-            + 1;
-        let (shed_rounds, newest_shed) = rounds_of(&load);
+        let next_epoch = load.pins.iter().map(|p| p.epoch).max().unwrap_or(0) + 1;
+        let shed_rounds = rounds_of(&load);
         let mut affinity_map = AffinityMap::from_rows(load.affinity);
         for resolution in &load.resolutions {
             affinity_map.learn_resolution(&resolution.spelling, &resolution.dated_id);
@@ -1050,7 +968,6 @@ impl RoutingState {
             funding_retries: HashMap::new(),
             in_flight: InFlight::default(),
             member_spend: HashMap::new(),
-            newest_shed,
             next_epoch,
             overage: load
                 .overage
@@ -1128,20 +1045,16 @@ impl RoutingState {
         self.pins.get(&canonical)
     }
 
-    /// A fresh pin under a key another pin held (a release that lands the session elsewhere) takes the old one
-    /// off its account, so it spends that pin's mark as a removal does and starts unrenewed; a renewal keeps the
-    /// epoch, the mark, and the renewal.
+    /// A fresh pin under a key another pin held (a release that lands the session elsewhere) takes the old one off
+    /// its account with its mark and starts unrenewed. A renewal keeps the epoch and the renewal, and the row it
+    /// writes carries the mark as the caller read it.
     pub(crate) fn put_pin(&mut self, mut pin: PinRow) {
         pin.model = self.canonical(&pin.model).to_string();
         let key = pin.key();
         let epoch = pin.epoch;
         match self.pins.insert(key.clone(), pin) {
             Some(replaced) if replaced.epoch == epoch => {}
-            Some(replaced) => {
-                self.spend_mark(&replaced);
-                self.renewed.remove(&key);
-            }
-            None => {
+            _ => {
                 self.renewed.remove(&key);
             }
         }
@@ -1202,24 +1115,12 @@ impl RoutingState {
         self.take_pin(&key)
     }
 
-    /// The one way a pin leaves the map: a pin that left its account, by a move, a fail-over, an expiry, a
-    /// release or the purge, spends its mark there, so coming back inside the dwell does not shed it on a round
-    /// that marked it before it left.
+    /// The one way a pin leaves the map, by a move, a fail-over, an expiry, a release or the purge. The row leaves
+    /// with its mark, which the caller reads off the answer to say what cleared it.
     fn take_pin(&mut self, key: &PinKey) -> Option<PinRow> {
         let pin = self.pins.remove(key)?;
         self.renewed.remove(key);
-        self.spend_mark(&pin);
         Some(pin)
-    }
-
-    fn spend_mark(&mut self, pin: &PinRow) {
-        // The account's rounds are walked rather than the pin's pool resolved through a snapshot this state does
-        // not hold; the walk also spends a mark left in the round of a pool the key moved out of inside its dwell.
-        for ((_, account_id), (_, marks)) in self.shed_rounds.iter_mut() {
-            if account_id == &pin.account_id {
-                marks.remove(&pin.key());
-            }
-        }
     }
 
     /// The next index into `cohort` for a pool's tier under round robin. The key carries the cohort because
@@ -1989,42 +1890,59 @@ impl RoutingState {
         shares
     }
 
-    /// Whether `pool_id`'s latest round on the pin's current account, run within `dwell_ms`, marked it. A pin
-    /// marked on one account and moved keeps its key, so the round read is the one of the account it now sits on.
-    pub fn shed_marked(&self, pool_id: &str, key: &PinKey, now: i64, dwell_ms: i64) -> bool {
-        let Some(pin) = self.pin(key) else {
-            return false;
-        };
-        self.shed_rounds
-            .get(&(pool_id.to_string(), pin.account_id.clone()))
-            .is_some_and(|(at, marks)| now - at < dwell_ms && marks.contains(&pin.key()))
+    /// Whether the pin under the key carries a standing mark: `marked_at` set and `marked_on` its current account.
+    pub fn shed_marked(&self, key: &PinKey) -> bool {
+        self.pin(key).is_some_and(mark_holds)
+    }
+
+    /// The pins on the account whose mark stands, in key order, for the round's `standing` skip.
+    pub fn marked_pins(&self, account_id: &str) -> Vec<&PinRow> {
+        let mut pins: Vec<&PinRow> = self
+            .pins
+            .values()
+            .filter(|p| p.account_id == account_id && mark_holds(p))
+            .collect();
+        pins.sort_by(|a, b| {
+            (&a.key_id, &a.session_id, &a.agent_id, &a.model).cmp(&(
+                &b.key_id,
+                &b.session_id,
+                &b.agent_id,
+                &b.model,
+            ))
+        });
+        pins
+    }
+
+    /// Marks the pin under the key on the account it sits on, at `at`, for the trigger's `window`, and answers the row
+    /// as marked for the write.
+    pub(crate) fn mark_pin(&mut self, key: &PinKey, at: i64, window: &str) -> Option<PinRow> {
+        let pin = self.pins.get_mut(key)?;
+        pin.marked_at = Some(at);
+        pin.marked_on = Some(pin.account_id.clone());
+        pin.marked_window = Some(window.to_string());
+        Some(pin.clone())
+    }
+
+    /// Clears the mark of the pin under the key and answers the row as cleared for the write.
+    pub(crate) fn clear_mark(&mut self, key: &PinKey) -> Option<PinRow> {
+        let pin = self.pins.get_mut(key)?;
+        pin.marked_at = None;
+        pin.marked_on = None;
+        pin.marked_window = None;
+        Some(pin.clone())
     }
 
     /// When `pool_id`'s latest round on the account ran.
     pub fn last_shed(&self, pool_id: &str, account_id: &str) -> Option<i64> {
         self.shed_rounds
             .get(&(pool_id.to_string(), account_id.to_string()))
-            .map(|(at, _)| *at)
+            .copied()
     }
 
-    /// When the newest round of any pool on the account ran, from the account's own stamp.
-    pub fn newest_shed(&self, account_id: &str) -> Option<i64> {
-        self.newest_shed.get(account_id).copied()
-    }
-
-    /// Writes the pool's round and moves the account's stamp to `at`.
-    pub(crate) fn record_shed(
-        &mut self,
-        pool_id: &str,
-        account_id: &str,
-        at: i64,
-        marks: Vec<PinKey>,
-    ) {
-        self.shed_rounds.insert(
-            (pool_id.to_string(), account_id.to_string()),
-            (at, marks.into_iter().collect()),
-        );
-        self.newest_shed.insert(account_id.to_string(), at);
+    /// Writes the pool's round on the account at `at`.
+    pub(crate) fn record_shed(&mut self, pool_id: &str, account_id: &str, at: i64) {
+        self.shed_rounds
+            .insert((pool_id.to_string(), account_id.to_string()), at);
     }
 
     /// A late failure from account A must not remove a newer pin on account B, so both have to match.
@@ -2120,9 +2038,7 @@ impl RoutingState {
                     lane: relaned(&pin.lane, spelling, dated_id),
                     ..pin
                 };
-                if let Some(replaced) = self.pins.insert(dated_key.clone(), moved.clone()) {
-                    self.spend_mark(&replaced);
-                }
+                self.pins.insert(dated_key.clone(), moved.clone());
                 if renewed {
                     self.renewed.insert(dated_key.clone());
                 } else {
@@ -2281,23 +2197,11 @@ impl RoutingState {
         self.round_robin.retain(|(pool_id, _, cohort), _| {
             snapshot.pool(pool_id).is_some() && cohort.split(',').all(|id| !absent(id))
         });
-        // A pool's marks are read within its own dwell alone, and a pool that left the registry has no round to
-        // read. The account's newest round is read by the one pool holding the account, so its stamp stays until
-        // that pool's dwell has passed.
-        self.shed_rounds.retain(|(pool_id, _), (at, _)| {
+        // A round's time is read within its pool's dwell alone, and a pool that left the registry has no round to
+        // read. The marks live on the pins and leave with them, so the purge drops none here.
+        self.shed_rounds.retain(|(pool_id, _), at| {
             snapshot
                 .pool(pool_id)
-                .is_some_and(|pool| now - *at < shed_dwell_ms(pool))
-        });
-        self.newest_shed.retain(|account_id, at| {
-            snapshot
-                .pools()
-                .find(|pool| {
-                    snapshot
-                        .members(&pool.id)
-                        .iter()
-                        .any(|m| &m.account_id == account_id)
-                })
                 .is_some_and(|pool| now - *at < shed_dwell_ms(pool))
         });
         let ttl_of = |key_id: &str| -> Option<i64> {
@@ -2430,16 +2334,11 @@ mod tests {
             static_hash: None,
             tail_hash: None,
             lane: crate::lane_key("m", "standard", "none", "-"),
+            marked_at: None,
+            marked_on: None,
+            marked_window: None,
         };
         (pin, Some(burn))
-    }
-
-    fn unpriced(session: &str) -> (PinRow, Option<f64>) {
-        (burning(session, 0.0).0, None)
-    }
-
-    fn sessions(marks: &[PinKey]) -> Vec<&str> {
-        marks.iter().map(|k| k.session_id.as_str()).collect()
     }
 
     /// A report of one message boundary under `model`, as a completed answer on account "a" files it.
@@ -2554,74 +2453,6 @@ mod tests {
         assert!(
             state.fast_burns().is_empty(),
             "the fast usage leaves with the pin"
-        );
-    }
-
-    #[test]
-    fn a_round_marks_in_order_to_the_share_and_never_the_last_pin_or_anything_for_a_zero_target() {
-        let four = [
-            burning("cold-3", 3.0),
-            burning("warm-4", 4.0),
-            burning("warm-2", 2.0),
-            burning("warm-1", 1.0),
-        ];
-        assert_eq!(
-            sessions(&shed_marks(&four, 0.5 * 10.0)),
-            ["cold-3", "warm-4"],
-            "marked in the round's order until the marked burn, 7 of 10, reaches half"
-        );
-        assert!(
-            shed_marks(&[burning("only", 100.0)], 0.5 * 100.0).is_empty(),
-            "a one-pin account sheds nothing"
-        );
-        assert_eq!(
-            sessions(&shed_marks(
-                &[burning("cold-1", 1.0), burning("warm-9", 9.0)],
-                0.5 * 10.0
-            )),
-            ["cold-1"],
-            "the warm pin is the last unmarked one, whatever the target still asks"
-        );
-        let idle = [
-            burning("a", 0.0),
-            burning("b", 0.0),
-            burning("c", 0.0),
-            burning("d", 0.0),
-        ];
-        assert!(
-            shed_marks(&idle, 0.5 * 0.0).is_empty(),
-            "no burn in the window is a zero target"
-        );
-        assert!(
-            shed_marks(&four, 0.0 * 10.0).is_empty(),
-            "a share of 0 is a zero target"
-        );
-    }
-
-    #[test]
-    fn an_unpriced_pin_adds_nothing_to_the_marked_burn_is_never_marked_and_still_counts_as_a_pin() {
-        let mixed = [
-            burning("cold-3", 3.0),
-            unpriced("cold-guess"),
-            burning("warm-4", 4.0),
-            unpriced("warm-guess"),
-        ];
-        assert_eq!(
-            sessions(&shed_marks(&mixed, 0.5 * 7.0)),
-            ["cold-3", "warm-4"],
-            "the target is half the priced burn, and the unpriced pins are skipped rather than marked"
-        );
-        assert_eq!(
-            sessions(&shed_marks(
-                &[burning("cold-5", 5.0), unpriced("guess")],
-                0.5 * 5.0
-            )),
-            ["cold-5"],
-            "the unpriced pin is the last unmarked one, so the priced pin can be marked"
-        );
-        assert!(
-            shed_marks(&[unpriced("a"), unpriced("b"), unpriced("c")], 1.0).is_empty(),
-            "a positive target the loop reaches marks no unpriced pin"
         );
     }
 
@@ -3548,6 +3379,30 @@ mod tests {
                 .burn_shares("a", &|_| true, "t", 0, 1_800_000)
                 .is_empty(),
             "an unpriced pin adds nothing"
+        );
+    }
+
+    #[test]
+    fn burn_shares_decays_a_pins_share_from_its_last_fold_by_the_average_constant() {
+        // One pin folded one average constant ago: its share reads as stored times e to the minus one.
+        let (pin, _) = burning("aging", 10_000.0);
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![PinRow {
+                burn_at: Some(0),
+                ..pin
+            }],
+            ..RoutingLoad::default()
+        });
+        state.set_share(input_rates());
+        let shares = state.burn_shares("a", &|_| true, "t", 1_800_000, 1_800_000);
+        assert!(
+            close(shares[FIVE_HOUR], 0.01 * (-1.0f64).exp()),
+            "the share decays by one factor over one constant: {shares:?}"
+        );
+        let fresh = state.burn_shares("a", &|_| true, "t", 0, 1_800_000);
+        assert!(
+            close(fresh[FIVE_HOUR], 0.01),
+            "no time passed, no decay: {fresh:?}"
         );
     }
 

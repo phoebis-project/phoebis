@@ -64,6 +64,11 @@ pub struct PinRow {
     /// The lane of the request that created the pin, stamped again by each request that refreshed or colded it;
     /// `""` on a pin written before pins carried a lane, which adopts the next request's lane.
     pub lane: String,
+    /// The round's mark: when it was made, the account it was made on and the window whose trigger made it. It
+    /// stands while `marked_on` is the pin's account, and nothing but a move, a release or a heal clears it.
+    pub marked_at: Option<i64>,
+    pub marked_on: Option<String>,
+    pub marked_window: Option<String>,
 }
 
 impl PinRow {
@@ -241,29 +246,14 @@ fn affinity_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<AffinityRow> {
     })
 }
 
-/// One pin of a pool's latest shedding round on an account, as the registry keeps it: the pin's epoch at the round
-/// and the account's incarnation fence the mark to the pin and the holder it was made on.
+/// One pool's latest round on an account: the stamp the dwell between rounds reads. The marks live on the pins, and
+/// the account's incarnation fences the row to the holder the round ran on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShedRoundRow {
     pub pool_id: String,
     pub account_id: String,
     pub incarnation: u64,
-    pub key_id: String,
-    pub session_id: String,
-    pub agent_id: String,
-    pub model: String,
-    pub epoch: u64,
     pub round_at: i64,
-    pub marked: bool,
-}
-
-/// One pin of a round as the write names it: its key, its epoch at the round, and whether the round marked it.
-/// It takes the derives `StateWrite` (`Clone, Debug, PartialEq`) needs of what it carries.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ShedPin {
-    pub key: PinKey,
-    pub epoch: u64,
-    pub marked: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -295,7 +285,7 @@ impl Store {
             overage: tx.prepare("SELECT account_id, in_use, since, reset, observed_at, source, incarnation FROM overage_state ORDER BY account_id")?
                 .query_map([], |r| Ok(OverageRow { account_id: r.get(0)?, in_use: r.get(1)?, since: r.get(2)?, reset: r.get(3)?, observed_at: r.get(4)?, source: r.get(5)?, incarnation: r.get::<_, i64>(6)? as u64 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
-            pins: tx.prepare(&format!("SELECT key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS} FROM pins ORDER BY key_id, session_id, agent_id, model"))?
+            pins: tx.prepare(&format!("SELECT key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS}, marked_at, marked_on, marked_window FROM pins ORDER BY key_id, session_id, agent_id, model"))?
                 .query_map([], |r| Ok(PinRow {
                     key_id: r.get(0)?, session_id: r.get(1)?, agent_id: r.get(2)?, model: r.get(3)?, account_id: r.get(4)?,
                     epoch: r.get::<_, i64>(5)? as u64, created_at: r.get(6)?, last_used_at: r.get(7)?,
@@ -305,6 +295,7 @@ impl Store {
                     shed_from: r.get(14)?, shed_at: r.get(15)?, static_hash: r.get(16)?, tail_hash: r.get(17)?,
                     lane: r.get(18)?, burn: burn_from(r, 19)?, burn_banded: burn_from(r, 24)?,
                     burn_fast: burn_from(r, 29)?,
+                    marked_at: r.get(34)?, marked_on: r.get(35)?, marked_window: r.get(36)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             resolutions: tx.prepare("SELECT spelling, dated_id, resolved_at FROM model_resolutions ORDER BY spelling")?
@@ -314,13 +305,12 @@ impl Store {
                 .query_map([], affinity_of)?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             // As with the windows, a previous holder's round is never loaded.
-            shed_rounds: tx.prepare("SELECT r.pool_id, r.account_id, r.incarnation, r.key_id, r.session_id, r.agent_id, r.model, r.epoch, r.round_at, r.marked \
+            shed_rounds: tx.prepare("SELECT r.pool_id, r.account_id, r.incarnation, r.round_at \
                  FROM shed_rounds r JOIN accounts ON accounts.id = r.account_id AND accounts.incarnation = r.incarnation \
-                 ORDER BY r.pool_id, r.account_id, r.round_at")?
+                 ORDER BY r.pool_id, r.account_id")?
                 .query_map([], |r| Ok(ShedRoundRow {
                     pool_id: r.get(0)?, account_id: r.get(1)?, incarnation: r.get::<_, i64>(2)? as u64,
-                    key_id: r.get(3)?, session_id: r.get(4)?, agent_id: r.get(5)?, model: r.get(6)?,
-                    epoch: r.get::<_, i64>(7)? as u64, round_at: r.get(8)?, marked: r.get(9)?,
+                    round_at: r.get(3)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             // A row of a previous holder of the id is never loaded: the replacement starts with no windows.
@@ -374,7 +364,6 @@ impl Store {
         Ok(value)
     }
 
-    /// One transaction, since the pin's write clears a shedding mark it consumes beside it.
     pub fn upsert_pin(&self, pin: &PinRow) -> Result<(), StoreError> {
         self.routing_commit(|conn| in_transaction(conn, |tx| upsert_pin_on(tx, pin)))
     }
@@ -432,19 +421,18 @@ impl Store {
         self.routing_commit(|conn| in_transaction(conn, |tx| purge_stale_windows_on(tx)))
     }
 
-    /// Deletes the pool's and account's rows and inserts the round's in one transaction, so a crash between two
-    /// rounds leaves the previous round whole. `incarnation` is the account's at the round.
+    /// Writes the pool's round on the account, replacing the one before it. `incarnation` is the account's at the
+    /// round.
     pub fn replace_shed_round(
         &self,
         pool_id: &str,
         account_id: &str,
         incarnation: u64,
         round_at: i64,
-        pins: &[ShedPin],
     ) -> Result<(), StoreError> {
         self.routing_commit(|conn| {
             in_transaction(conn, |tx| {
-                replace_shed_round_on(tx, pool_id, account_id, incarnation, round_at, pins)
+                replace_shed_round_on(tx, pool_id, account_id, incarnation, round_at)
             })
         })
     }
@@ -517,9 +505,8 @@ impl RoutingTx<'_> {
         account_id: &str,
         incarnation: u64,
         round_at: i64,
-        pins: &[ShedPin],
     ) -> Result<(), StoreError> {
-        replace_shed_round_on(self.tx, pool_id, account_id, incarnation, round_at, pins)
+        replace_shed_round_on(self.tx, pool_id, account_id, incarnation, round_at)
     }
 
     pub fn set_state_if_generations(
@@ -593,26 +580,11 @@ fn burn_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<PinBurn> {
     })
 }
 
-// A mark belongs to the pin it was made on: a pin landing under another account or epoch is a move, a fail-over or a
-// fresh pin under the key, and the mark leaves in the write that moved it, as `take_pin` and `put_pin` spend it in
-// memory. The row and its `round_at` stay, since the round's dwell still gates the account.
 fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
     conn.execute(
-        "UPDATE shed_rounds SET marked = 0 WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4 \
-         AND (account_id <> ?5 OR epoch <> ?6)",
-        params![
-            pin.key_id,
-            pin.session_id,
-            pin.agent_id,
-            pin.model,
-            pin.account_id,
-            pin.epoch as i64
-        ],
-    )?;
-    conn.execute(
         &format!(
-            "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS}) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34) \
+            "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS}, marked_at, marked_on, marked_window) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37) \
              ON CONFLICT(key_id, session_id, agent_id, model) DO UPDATE SET \
                account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, \
                last_used_at = excluded.last_used_at, key_generation = excluded.key_generation, \
@@ -627,7 +599,8 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
                burn_banded_write_1h = excluded.burn_banded_write_1h, burn_banded_write_5m = excluded.burn_banded_write_5m, \
                burn_fast_cache_read = excluded.burn_fast_cache_read, burn_fast_input = excluded.burn_fast_input, \
                burn_fast_output = excluded.burn_fast_output, burn_fast_write_1h = excluded.burn_fast_write_1h, \
-               burn_fast_write_5m = excluded.burn_fast_write_5m"
+               burn_fast_write_5m = excluded.burn_fast_write_5m, marked_at = excluded.marked_at, \
+               marked_on = excluded.marked_on, marked_window = excluded.marked_window"
         ),
         params![
             pin.key_id,
@@ -663,17 +636,16 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
             pin.burn_fast.input,
             pin.burn_fast.output,
             pin.burn_fast.write_1h,
-            pin.burn_fast.write_5m
+            pin.burn_fast.write_5m,
+            pin.marked_at,
+            pin.marked_on,
+            pin.marked_window
         ],
     )?;
     Ok(())
 }
 
 fn delete_pin_on(conn: &Connection, key: &PinKey) -> Result<bool, StoreError> {
-    conn.execute(
-        "UPDATE shed_rounds SET marked = 0 WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4",
-        params![key.key_id, key.session_id, key.agent_id, key.model],
-    )?;
     Ok(conn.execute(
         "DELETE FROM pins WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4",
         params![key.key_id, key.session_id, key.agent_id, key.model],
@@ -815,30 +787,11 @@ fn replace_shed_round_on(
     account_id: &str,
     incarnation: u64,
     round_at: i64,
-    pins: &[ShedPin],
 ) -> Result<(), StoreError> {
     conn.execute(
-        "DELETE FROM shed_rounds WHERE pool_id = ?1 AND account_id = ?2",
-        params![pool_id, account_id],
+        "INSERT OR REPLACE INTO shed_rounds (pool_id, account_id, incarnation, round_at) VALUES (?1, ?2, ?3, ?4)",
+        params![pool_id, account_id, incarnation as i64, round_at],
     )?;
-    let mut stmt = conn.prepare(
-        "INSERT INTO shed_rounds (pool_id, account_id, incarnation, key_id, session_id, agent_id, model, epoch, round_at, marked) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-    )?;
-    for pin in pins {
-        stmt.execute(params![
-            pool_id,
-            account_id,
-            incarnation as i64,
-            pin.key.key_id,
-            pin.key.session_id,
-            pin.key.agent_id,
-            pin.key.model,
-            pin.epoch as i64,
-            round_at,
-            pin.marked
-        ])?;
-    }
     Ok(())
 }
 

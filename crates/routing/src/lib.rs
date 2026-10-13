@@ -22,11 +22,11 @@ pub use phoebis_store::canonical_id as canonical_model;
 pub use record::{
     BudgetFacts, By, CacheMapEntry, CandidateFacts, ChainFacts, CooldownFacts, CreditsFacts,
     DecisionRecord, DecisionSummary, ExhaustionFacts, Fact, FactEntity, FactValue, HoldOutcome,
-    LaneFacts, ObstacleFacts, Outcome, OverageFacts, PaceFacts, PinEventFacts,
-    PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts,
-    RefusedRequest, RequestFacts, RequestFlags, Score, Settings, ShedPinFacts, ShedRoundFacts,
-    SummaryFact, TermFacts, WalkStep, WarmthFacts, WindowFacts, PARTITION_VALUES, RECORD_VERSION,
-    WALK_STEPS,
+    LaneFacts, MarkClearedFacts, ObstacleFacts, Outcome, OverageFacts, PaceFacts,
+    PinEventFacts, PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup,
+    RefusalFacts, RefusedRequest, RequestFacts, RequestFlags, Score, Settings, ShedPinFacts,
+    ShedRoundFacts, SummaryFact, TermFacts, WalkStep, WarmthFacts, WindowFacts, PARTITION_VALUES,
+    RECORD_VERSION, WALK_STEPS,
 };
 pub use resolve::{resolve, Candidate, ResolveError};
 pub use select::{
@@ -35,17 +35,17 @@ pub use select::{
     HoldFacts, MigrateReason, Placement, Refusal, SelectRequest,
     SelectResult, Selection, SelectionTrace, ShedRoundRecord, Skipped, Warmth, WarmthCause,
     BUDGET_WINDOW, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MIGRATE_BAND,
-    MODEL_REJECTED_REASON, REFRESHING_CLASSES,
+    MODEL_REJECTED_REASON, PAYBACK_FACTOR, REFRESHING_CLASSES,
 };
 pub use snapshot::{KeyRefusal, Presented, RegistrySnapshot};
 pub use state::{
     budget_deadline, burn_average_ms, burn_decayed, ceiling, cooldown_holds, is_plan_window,
-    shed_cap, shed_dwell_ms, shed_marks, warm, weekly_lead_margin, AccountTicket, BurnUnit,
-    CreditsState, EvidenceSource, InFlight, KeyPermit, LongContextRates, MemberSpend,
-    OverageEvidence, PinRef, PinUsage, Purged, RateTable, Rates, Reservation, RoutingState,
-    SharePricer, StateWrite, UtilizationSample, WindowReading, WindowSource, BUCKET_LIFE_MS,
-    BUCKET_TTL_MS, DEFAULT_WINDOW_CEILING, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR,
-    IN_FLIGHT_RECLAIM_MS, MAX_BUCKETS_PER_ACCOUNT, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    shed_cap, shed_dwell_ms, warm, weekly_lead_margin, AccountTicket, BurnUnit, CreditsState,
+    EvidenceSource, InFlight, KeyPermit, LongContextRates, MemberSpend, OverageEvidence, PinRef,
+    PinUsage, Purged, RateTable, Rates, Reservation, RoutingState, SharePricer, StateWrite,
+    UtilizationSample, WindowReading, WindowSource, BUCKET_LIFE_MS, BUCKET_TTL_MS,
+    DEFAULT_WINDOW_CEILING, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
+    MAX_BUCKETS_PER_ACCOUNT, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 pub use task::{
     credits_from_usage, sample_from_usage, spawn, BandWeight, BurnRates, LoadCounts, ReloadError,
