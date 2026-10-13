@@ -2225,13 +2225,18 @@ function BurnCharts({
   const planCard = (w: PlanWindow) => {
     const drawn = w === PLAN_WINDOWS[2] ? planned.filter(({ l }) => l.weekPerHour !== null) : planned;
     const legend = [
-      ...drawn.map(({ l }) => ({
-        color: colorOf(l),
-        label: nameOf(l),
-        shape: 'line' as const,
-        title: withEstimate(w.band && l.fiveHourPeak !== null ? `Highest hour ${figureOf(w, l.fiveHourPeak, false, 'full')}` : '', l.estimated) || undefined,
-        value: figureOf(w, w.perHour(l), l.estimated, 'short'),
-      })),
+      ...drawn.map(({ i, l }) => {
+        // Per window, as the line's dots read it, so a model week the fold filled at zero takes no mark from estimated
+        // 5-hour buckets.
+        const marked = rows.some((r) => w.marked(r, i));
+        return {
+          color: colorOf(l),
+          label: nameOf(l),
+          shape: 'line' as const,
+          title: withEstimate(w.band && l.fiveHourPeak !== null ? `Highest hour ${figureOf(w, l.fiveHourPeak, false, 'full')}` : '', marked) || undefined,
+          value: figureOf(w, w.perHour(l), marked, 'short'),
+        };
+      }),
       // One entry for every figure the cost model cannot price on the window, whichever line it fell on. Muted, since
       // it draws no line of its own.
       ...(drawn.some(({ l }) => w.unpriced(l)) ? [{ color: ink.muted, label: 'model unlisted', shape: 'line' as const, title: MODEL_UNLISTED_HINT, value: w.word }] : []),

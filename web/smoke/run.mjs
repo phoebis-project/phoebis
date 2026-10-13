@@ -12934,6 +12934,54 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         ok: [...marked].some((a) => subscribed.includes(a)) && [...subscribed].some((a) => !marked.has(a)) && lines.length === 2 * subscribed.length && wrong.length === 0,
         missing: [`estimated ${[...marked].join(',')}`, ...wrong.map((l) => JSON.stringify(l))],
       });
+      // The model week card marks a figure by the line's week slots alone, a slot whose bucket both priced an estimate
+      // and answered a model week, so a line estimated on its 5-hour buckets alone reads its week figure bare. Read per
+      // line off the mock's own answer under the key grouping, the page's default, and the account grouping. Each
+      // estimated bucket of a line the story draws on the week card also answers a week, so a stubbed answer of two
+      // hours, the estimated one off the week, stands in for the line whose estimates miss its week.
+      const weekRead = [];
+      const readWeek = (by, answer) => {
+        const holder = (group) => (by === 'key' ? /^(.+)@(\d+)$/.exec(group) : null);
+        const labelFor = (group) => (holder(group) === null ? group : earlierHolderLabel(holder(group)[1], Number(holder(group)[2])));
+        const slots = new Map();
+        for (const p of answer.points) {
+          const slot = slots.get(`${p.group} ${p.at}`) ?? { estimated: false, label: labelFor(p.group), week: false };
+          slot.estimated ||= p.estimated;
+          slot.week ||= p.modelWeekEquivalent !== null;
+          slots.set(`${p.group} ${p.at}`, slot);
+        }
+        const estimatedLines = new Set([...slots.values()].filter((s) => s.estimated).map((s) => s.label));
+        const weekMarked = new Set([...slots.values()].filter((s) => s.estimated && s.week).map((s) => s.label));
+        for (const li of legendItems('Model week per hour').filter((x) => !MUTED.includes(labelOf(x)))) {
+          weekRead.push({ by, estimated: estimatedLines.has(labelOf(li)), label: labelOf(li), marked: weekMarked.has(labelOf(li)), title: li.getAttribute('title') ?? '', value: valueOf(li) });
+        }
+      };
+      for (const by of ['key', 'account']) {
+        await burnGroup(by);
+        readWeek(by, await api.getAnalyticsBurn({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() }, by));
+      }
+      const [offWeek, onWeek] = [11, 12].map((h) => new Date(Date.UTC(2026, 8, 16, h)).toISOString());
+      const stubbed = {
+        bucketSeconds: 3_600,
+        points: [
+          burnPoint({ at: offWeek, estimated: true, fiveHourEquivalent: 0.02, group: 'secondary', sevenDayEquivalent: 0.002, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share' }),
+          burnPoint({ at: onWeek, fiveHourEquivalent: 0.01, group: 'secondary', modelWeekEquivalent: 0.003, sevenDayEquivalent: 0.001, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share' }),
+        ],
+      };
+      api.getAnalyticsBurn = async () => stubbed;
+      await burnGroup('key');
+      await burnGroup('account');
+      readWeek('stubbed', stubbed);
+      const stubbedFiveHour = legendItems('5-hour per hour').filter((li) => labelOf(li) === 'secondary').map(valueOf);
+      delete api.getAnalyticsBurn;
+      await burnGroup('key');
+      await burnGroup('account');
+      const wrongWeek = weekRead.filter((l) => (l.marked ? !l.value.startsWith('~') || !l.title.endsWith(`${ESTIMATED_TITLE}.`) : l.value.startsWith('~') || l.title.includes(ESTIMATED_TITLE)));
+      results.push({
+        name: "/analytics the model week card's legend marks a line's figure only where an estimated bucket answered a week, so a line estimated on its 5-hour buckets alone reads its week figure bare",
+        ok: weekRead.some((l) => l.by === 'stubbed' && l.label === 'secondary' && l.estimated && !l.marked) && stubbedFiveHour.length === 1 && stubbedFiveHour[0].startsWith('~') && wrongWeek.length === 0,
+        missing: [`stubbed 5-hour ${JSON.stringify(stubbedFiveHour)}`, ...weekRead.filter((l) => l.estimated || wrongWeek.includes(l)).map((l) => JSON.stringify(l))],
+      });
     }
     // The story's Fable traffic gives its accounts a model week of their own, which its own card charts.
     const week = lineLabels('Model week per hour');
