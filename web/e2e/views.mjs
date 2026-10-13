@@ -3219,18 +3219,26 @@ async function diagnosticsFilters(theme) {
   await loadRequests();
 }
 
-/** The address `barRow` reads a view's chip line on, five chips on its own dimensions. A view without one is measured at rest. */
+/**
+ * The address `barRow` reads a view's chip line on, a chip on each of its own dimensions up to five. A view without
+ * one has no dimension and is measured at rest.
+ */
 const BAR_CHIPS = {
+  '/accounts': '?status=cooldown',
   '/analytics': '?accounts=primary&keys=laptop&models=claude-opus-5&pools=jobs&probes=1',
+  '/keys': '?pools=all,jobs&status=active',
   '/requests': '?accounts=primary&keys=laptop&models=claude-opus-5&pools=jobs&statuses=200',
   '/routing-log': '?accounts=primary&keys=laptop&kinds=moved,held,shedding_round,wind_down_started&models=claude-opus-5&pools=jobs',
 };
 /** A view whose row draws no search holds its slots under this width at rest, far from a second line. */
 const ROW_BOUND = {
-  // The measured 730 px row plus margin, since the spec's 700 summed control widths estimated before they landed.
+  // The row measured 730 px with its range and Group by select, past the Routing log's 700, so the bound is that measure
+  // plus margin.
   '/analytics': 760,
   '/routing-log': 700,
 };
+/** The views whose bar draws no range: the bar is first on the page and the view's head or tiles follow it. */
+const CARD_VIEWS = ['/accounts', '/keys', '/pools', '/quota', '/sessions'];
 /** A span from 23:00 the day before the pass's clock to 01:00 on its day, the Custom pill's widest words. */
 const MIDNIGHT = (origin) => {
   const day = new Date(origin).toISOString().slice(0, 10);
@@ -3243,9 +3251,10 @@ const MIDNIGHT = (origin) => {
  * on the Analytics sticky bar, whose 8 px of padding above and below and hairline add 17), every row child 32 px at one
  * top (a segmented's pills 28 inside their group), the chips 26 with the word in --ink-2 and the values in --ink, one
  * line (scrollWidth equal to clientWidth) at 1280 by 800 and 1440 by 900 at rest, with the view's chips and, on a
- * ranged view, with a span across midnight, and the row against the first card's head. The row's `width`, its slots'
- * widths and the gaps between them, holds under the view's ROW_BOUND at rest. On Analytics the Group by select reads
- * the Add filter button's height and top. Records to `measurements`.
+ * ranged view, with a span across midnight, and the row against the first card's head. On a card view the element
+ * after the bar and the tiles stand under the bar's bottom. The row's `width`, its slots' widths and the gaps between
+ * them, holds under the view's ROW_BOUND at rest. On Analytics the Group by select reads the Add filter button's height
+ * and top. Records to `measurements`.
  */
 async function barRow(theme, view) {
   const say = (what) => failures.push(`${theme} ${view} bar: ${what}`);
@@ -3282,8 +3291,10 @@ async function barRow(theme, view) {
         head: head ? Math.round(box(head).top) : null,
         inks: { ink: ink('--ink'), ink2: ink('--ink-2') },
         line: line ? { client: line.clientWidth, scroll: line.scrollWidth } : null,
+        next: bar.nextElementSibling ? Math.round(box(bar.nextElementSibling).top) : null,
         pills: [...(row.querySelectorAll('.segmented button') ?? [])].map((b) => Math.round(box(b).height)),
         row: { client: row.clientWidth, height: Math.round(box(row).height), scroll: row.scrollWidth, top: Math.round(box(row).top), width: Math.round(box(row).width) },
+        tiles: document.querySelector('.stat-grid') ? Math.round(box(document.querySelector('.stat-grid')).top) : null,
         width: Math.round(slots.reduce((sum, el) => sum + box(el).width, 0) + (parseFloat(getComputedStyle(row).columnGap) || 0) * Math.max(0, slots.length - 1)),
       };
     });
@@ -3296,6 +3307,10 @@ async function barRow(theme, view) {
     if (new Set(got.children.map((c) => c.top)).size > 1) say(`${at}: the row's children stand at ${JSON.stringify(got.children.map((c) => c.top))}, not one top`);
     if (got.pills.some((h) => h !== 28)) say(`${at}: the pills measure ${JSON.stringify(got.pills)}, not 28`);
     if (got.head !== null && got.head < got.bottom) say(`${at}: the first card's head stands at ${got.head}, above the bar's bottom ${got.bottom}`);
+    if (CARD_VIEWS.includes(view)) {
+      if (got.next === null || got.next < got.bottom) say(`${at}: the element after the bar stands at ${got.next ?? 'none'}, not under the bar's bottom ${got.bottom}`);
+      if (got.tiles !== null && got.tiles < got.bottom) say(`${at}: the tiles stand at ${got.tiles}, above the bar's bottom ${got.bottom}`);
+    }
     if (sticky) failures.push(...compare(got.groupBy, got.addFilter, ['height', 'top'], `${theme} ${view} bar: ${at}: the Group by select against the Add filter button`));
     const rest = sticky ? 49 : 32;
     if (!chipped) {
@@ -4958,8 +4973,8 @@ const compare = (mine, neighbour, keys, what) => {
 };
 
 /**
- * The identity card's subscription end editor on an OAuth account: its date field is the box of the status filter
- * beside the list (the page's other plain control; the label editor's field takes the heading's type), its checkbox
+ * The identity card's subscription end editor on an OAuth account: its date field is the box of the Sort select in
+ * the bar (the page's other plain control, where the label editor's field takes the heading's type), its checkbox
  * label the field label's type, its Save the size of the Edit end button it opened from, and opening it moves no row
  * of the card. Ticking the box prefills a date. The router's seed has only an API-key account, which has no
  * editor, so there the check stands down; the mock's first account is an OAuth one.
@@ -5000,7 +5015,7 @@ async function subscriptionEndForm(theme) {
     return {
       ends: box(ends),
       fieldLabel: type(card?.querySelector('.field .field__label')),
-      filter: box(document.querySelector('select[aria-label="Status filter"]')),
+      sort: box(document.querySelector('.filter-bar select[aria-label="Sort"]')),
       prefill: ends?.value ?? null,
       tickLabel: type(card?.querySelector('label.row .field__label')),
     };
@@ -5011,7 +5026,7 @@ async function subscriptionEndForm(theme) {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(read.prefill ?? '')) say(`ticking Cancelled left the end ${JSON.stringify(read.prefill)} rather than the derived date`);
   for (const finding of [
     // A select keeps room for its chevron, so the padding is left out.
-    ...compare(read.ends, read.filter, ['background', 'border', 'font', 'height', 'radius'], 'the Ends field against the status filter'),
+    ...compare(read.ends, read.sort, ['background', 'border', 'font', 'height', 'radius'], 'the Ends field against the Sort select'),
     ...compare(save, editButton, ['font', 'height', 'padding', 'radius'], "the editor's Save against the Edit end button"),
   ]) say(finding);
   if (read.tickLabel !== read.fieldLabel) say(`the Cancelled label reads ${read.tickLabel} against the Ends label's ${read.fieldLabel}`);
@@ -5316,30 +5331,38 @@ async function keyDialogGeometry(theme) {
   await atRest();
 }
 
-/** The toolbar's Pool select against the Status select beside it: the same box and type. */
+/**
+ * The Keys bar's pool chip against the status chip beside it on an address that holds both, the pool the table's first
+ * key sits in, since the page drops a pool the router does not hold: the same box, type and border at the chips' 26 px.
+ * Read after the view's shot, and the bare page loads again after.
+ */
 async function keysPoolSelect(theme) {
-  const read = await page.evaluate(() => {
-    const box = (el) => {
-      if (!el) return null;
-      const s = getComputedStyle(el);
-      return { backgroundColor: s.backgroundColor, borderRadius: s.borderRadius, fontSize: s.fontSize, height: el.getBoundingClientRect().height, paddingLeft: s.paddingLeft, paddingRight: s.paddingRight };
-    };
-    return { pool: box(document.querySelector('.table-toolbar select[aria-label="Pool"]')), status: box(document.querySelector('select[aria-label="Status"]')) };
-  });
-  measurements.push(`${theme} /keys Pool select ${JSON.stringify(read)}`);
-  if (!read.pool) {
-    failures.push(`${theme} /keys: the toolbar draws no Pool select`);
-    return;
+  const load = async (search) => {
+    await page.goto(`${base}/keys${search}`);
+    await booted();
+    await advance(LOAD_MS);
+    await page.waitForSelector('.filter-bar', { timeout: 15_000 }).catch(() => {});
+  };
+  const pool = await page.evaluate(() => document.querySelector('.card--table tbody tr td:nth-child(3)')?.textContent?.trim() ?? '');
+  await load(`?${new URLSearchParams({ pools: pool, status: 'active' })}`);
+  const read = await chipBoxes(['pool', 'status']);
+  measurements.push(`${theme} /keys pool chip ${JSON.stringify(read)}`);
+  if (!read.pool) failures.push(`${theme} /keys: the bar draws no pool chip`);
+  else {
+    failures.push(...compare(read.pool, read.status, ['border', 'font', 'height', 'padding', 'radius'], `${theme} /keys: the pool chip against the status chip`));
+    if (read.pool.height !== 26) failures.push(`${theme} /keys: the pool chip is ${read.pool.height} px, not 26`);
   }
-  failures.push(...compare(read.pool, read.status, ['backgroundColor', 'borderRadius', 'fontSize', 'height', 'paddingLeft', 'paddingRight'], `${theme} /keys: the Pool select against the Status select`));
+  await load('');
+  await atRest();
 }
 
 /**
- * The Sessions head at 1280 by 800, where the disclosure wraps, and at 1440 by 900, where it does not: closed, the head
- * stays under 60 px and the disclosure ends the lead's paragraph, at most two lines, on the sentence's last line where
- * both fit and flush left on the next line where they do not; opened, the paragraph lands 6 px under the lead and
- * above the tiles. Cost reference stays one line at the head's top right in both states. The heights and Cost
- * reference's place are recorded per viewport, and the head is left closed at the pass's viewport for the shot.
+ * The Sessions head under the bar at 1280 by 800, where the disclosure wraps, and at 1440 by 900, where it does not:
+ * closed, the head starts under the bar's bottom and stays under 60 px, and the disclosure ends the lead's paragraph, at
+ * most two lines, on the sentence's last line where both fit and flush left on the next line where they do not.
+ * Opened, the paragraph lands 6 px under the lead and above the tiles. Cost reference stays one line at the head's top
+ * right in both states. The heights, the bar's bottom against the head's top and Cost reference's place are recorded
+ * per viewport, and the head is left closed at the pass's viewport for the shot.
  */
 async function sessionsLead(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -5388,6 +5411,7 @@ async function sessionsLead(theme) {
         lead: box(lead),
         lineHeight: lead ? parseFloat(getComputedStyle(lead).lineHeight) : null,
         line,
+        bar: box(document.querySelector('.filter-bar')),
         para: box(para),
         tiles: box(document.querySelector('.stat-grid')),
         words,
@@ -5412,6 +5436,7 @@ async function sessionsLead(theme) {
     const after = await read();
     measurements.push(
       `${theme} /sessions lead ${where} ${JSON.stringify({
+        bar: closed.bar && closed.head ? { bottom: px(closed.bar.bottom), head: px(closed.head.top) } : null,
         closed: px(closed.head?.height),
         cost: { closed: at(closed.cost), open: at(open.cost) },
         gap: open.para && open.lead ? px(open.para.top - open.lead.bottom) : null,
@@ -5419,6 +5444,7 @@ async function sessionsLead(theme) {
       })}`,
     );
     if (closed.head === null || closed.head.height >= 60) say(`${where} the closed head is ${px(closed.head?.height) ?? 'not'}px tall, not under 60px`);
+    if (closed.bar === null || closed.head === null || closed.bar.bottom > closed.head.top) say(`${where} the bar ends at ${px(closed.bar?.bottom) ?? 'none'}px, not above the head's top at ${px(closed.head?.top) ?? 'none'}px`);
     if (closed.para === null || closed.para.height !== 0 || closed.expanded !== 'false') say(`${where} the closed head shows the paragraph (${px(closed.para?.height)}px, aria-expanded ${closed.expanded})`);
     const { button: b, lead: p, line, lineHeight, words } = closed;
     if (b === null || p === null || line === null || lineHeight === null || words === null) say(`${where} the lead has no sentence, button or paragraph to measure`);
@@ -6210,7 +6236,6 @@ try {
       if (view.path === '/keys') {
         await tableColumns(theme, 'keys', '.card--table table', ['Name', 'Models', 'Status']);
         await keyBadges(theme);
-        await keysPoolSelect(theme);
         await keyAccessSelects(theme);
         await keyDialogGeometry(theme);
         await keysPageMenus(theme);
@@ -6276,6 +6301,9 @@ try {
       if (view.path === '/routing-log') await kindsPopoverInside(theme);
       if (view.path === '/sessions') await forkLink(theme);
       if (view.path === '/settings') await copyFallback(theme);
+      // The pool chip's measure and the bar's load their addresses themselves and leave the bare view.
+      if (view.path === '/keys') await keysPoolSelect(theme);
+      if (CARD_VIEWS.includes(view.path)) await barRow(theme, view.path);
     }
   }
   // Only the mock bundle routes the fixture path.

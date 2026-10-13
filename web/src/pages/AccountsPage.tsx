@@ -1,46 +1,54 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError } from '@/api';
-import type { Account, AccountStatus, PairingPreview, PairingSession, QuotaHistory } from '@/api/types';
+import type { Account, PairingPreview, PairingSession, QuotaHistory } from '@/api/types';
 import { useSession } from '@/app/session';
 import { CatalogDialog } from '@/components/CatalogDialog';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
 import { CoolingDown } from '@/components/CoolingDown';
 import { FastLane } from '@/components/FastLane';
+import { FilterBar } from '@/components/FilterBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, SearchInput, Segmented, Select, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
+import { ACCOUNTS_CODEC } from '@/lib/address';
+import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
 import { accountPatchOf, advancesOwnToken, derivedId, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
-import { useAsync, useNow } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
+import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
+import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { joinTrend } from '@/lib/trend';
 
-type SortKey = 'name' | 'reset' | 'status' | 'usage';
+/** The Status dimension's options, in the labels' order. */
+const STATUS_OPTIONS = { status: ACCOUNT_STATUSES.map((s) => ({ label: STATUS_LABEL[s], value: s })) };
 /** A save the router refused, as the editor's callout draws it. `stale` marks a row that moved under the editor. */
 type EditorRefusal = { message: string; stale: boolean };
 const END_HINT = "Prefilled from the plan's start and its monthly renewal. Correct it from the date the plan's billing settings show. An annual plan is marked cancelled in its final month only.";
 
 export function AccountsPage() {
   const { accountId } = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
+  const { address, filters, update } = useQueryFilters(ACCOUNTS_CODEC);
   const [addOpen, setAddOpen] = useState(false);
   const [pairing, setPairing] = useState<{ start: PairingTarget; label: string; repair: boolean } | null>(null);
   const [detailBusy, setDetailBusy] = useState(false);
-  const accounts = useAsync(() => api.listAccounts(), [], { paused: addOpen || pairing !== null || detailBusy, refreshMs: 30_000 });
+  const [intervalMs, setIntervalMs] = useState(5_000);
+  const [barOpen, setBarOpen] = useState(false);
+  // A save in flight or an editor open in the detail holds the list as a dialog does.
+  const dialogOpen = addOpen || pairing !== null || detailBusy;
+  const accounts = useAsync(() => api.listAccounts(), [], { paused: dialogOpen || barOpen, refreshMs: intervalMs });
   const now = useNow();
-  const [query, setQuery] = useState('');
-  const [status, setStatus] = useState<'all' | AccountStatus>('all');
-  const [sort, setSort] = useState<SortKey>('name');
   const { notify } = useSession();
 
   const list = useMemo(() => {
+    const { search, sort, status } = filters;
     const rows = (accounts.data ?? []).filter((a) => {
       if (status !== 'all' && a.status !== status) return false;
-      const q = query.trim().toLowerCase();
+      const q = search.trim().toLowerCase();
       return !q || a.label.toLowerCase().includes(q) || (a.email ?? '').toLowerCase().includes(q) || (a.plan ?? '').toLowerCase().includes(q);
     });
     const nextReset = (a: Account) => Math.min(...a.windows.flatMap((w) => (w.resetsAt === null ? [] : [Date.parse(w.resetsAt)])).filter((t) => t > now), Number.POSITIVE_INFINITY);
@@ -51,7 +59,7 @@ export function AccountsPage() {
       if (sort === 'status') return a.status.localeCompare(b.status);
       return a.label.localeCompare(b.label);
     });
-  }, [accounts.data, query, status, sort, now]);
+  }, [accounts.data, filters, now]);
 
   const selected = accounts.data?.find((a) => a.id === accountId) ?? null;
   // The row a confirmed pairing created: the read that lists it lands after the URL names it, so the redirect below
@@ -63,36 +71,43 @@ export function AccountsPage() {
       if (!created.reading) setCreated({ ...created, reading: true });
     } else if (created.reading) setCreated(null);
   }
-  // A deleted account's URL names a row the reloaded list no longer holds, which leads to the first one as a bare
-  // /accounts does rather than to a detail that never loads.
+  // A bare /accounts, and a deleted account's URL that names a row the reloaded list no longer holds, lead to the
+  // router's first account the list shows, so the detail never opens on a row the filters hide. Where they hide every
+  // row it is the router's first. The query and the hash go along, since the address hook keeps the location for its
+  // own writes alone.
+  const first = accounts.data?.find((a) => list.includes(a)) ?? accounts.data?.[0];
   useEffect(() => {
     if (created !== null && accountId === created.id) return;
-    if (accounts.data && !selected && accounts.data.length) navigate(`/accounts/${accounts.data[0].id}`, { replace: true });
-  }, [accounts.data, accountId, created, navigate, selected]);
+    if (accounts.data && !selected && first !== undefined) navigate({ hash: location.hash, pathname: `/accounts/${first.id}`, search: location.search }, { replace: true });
+  }, [accounts.data, accountId, created, first, location.hash, location.search, navigate, selected]);
 
   return (
     <div className="accounts">
-      <aside className="accounts__list">
-        <SearchInput placeholder="Search accounts" value={query} onChange={(e) => setQuery(e.target.value)} />
-        <div className="accounts__filters">
-          <Select value={status} onChange={(e) => setStatus(e.target.value as 'all' | AccountStatus)} aria-label="Status filter">
-            <option value="all">All statuses</option>
-            {(Object.keys(STATUS_LABEL) as AccountStatus[]).map((s) => (
-              <option key={s} value={s}>
-                {STATUS_LABEL[s]}
-              </option>
-            ))}
-          </Select>
-          <Select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} aria-label="Sort">
+      <FilterBar
+        address={address}
+        count={`${list.length} ${list.length === 1 ? 'account' : 'accounts'}`}
+        dimensions={ACCOUNTS_DIMENSIONS}
+        filters={filters}
+        onOpenChange={setBarOpen}
+        options={STATUS_OPTIONS}
+        placeholder="Search accounts"
+        refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: accounts.reload, paused: dialogOpen ? 'dialog' : barOpen ? 'menu' : null, refreshTitle: 'Reads the list again now' }}
+        update={update}
+      >
+        <label className="row">
+          <span className="muted">Sort</span>
+          <Select value={filters.sort} onChange={(e) => update({ sort: e.target.value })} aria-label="Sort">
             <option value="name">Name</option>
             <option value="reset">Soonest reset</option>
             <option value="usage">Most used</option>
             <option value="status">Status</option>
           </Select>
-        </div>
-        <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setAddOpen(true)} className="accounts__add">
+        </label>
+        <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setAddOpen(true)}>
           Add account
         </Button>
+      </FilterBar>
+      <aside className="accounts__list">
         <ul className="account-rows">
           {!accounts.data
             ? accounts.error
@@ -170,7 +185,7 @@ export function AccountsPage() {
           notify(`Paired ${preview.email}`);
           if (start !== null && 'id' in start) {
             setCreated({ id: start.id, reading: false });
-            navigate(`/accounts/${start.id}`);
+            navigate({ hash: location.hash, pathname: `/accounts/${start.id}`, search: location.search });
           }
         }}
       />
@@ -179,9 +194,11 @@ export function AccountsPage() {
 }
 
 function AccountRow({ account, active, now }: { account: Account; active: boolean; now: number }) {
+  // The row keeps the list's query and hash, so opening an account leaves the filters standing.
+  const location = useLocation();
   return (
     <li>
-      <Link to={`/accounts/${account.id}`} className={`account-row ${active ? 'is-active' : ''}`}>
+      <Link to={{ hash: location.hash, pathname: `/accounts/${account.id}`, search: location.search }} className={`account-row ${active ? 'is-active' : ''}`}>
         <div className="account-row__head">
           <span className="account-row__name">{account.label}</span>
           {account.plan && <Badge tone="neutral">{account.plan}</Badge>}

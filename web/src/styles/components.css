@@ -692,44 +692,6 @@ textarea.input {
 }
 
 /* Multi select */
-.mselect {
-  position: relative;
-  display: inline-flex;
-}
-
-.mselect__trigger {
-  display: inline-flex;
-  gap: 8px;
-  align-items: center;
-  padding: 7px 10px;
-  color: var(--ink-2);
-  background: var(--surface);
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--radius-sm);
-}
-
-.mselect.has-value .mselect__trigger {
-  color: var(--ink);
-  border-color: var(--accent);
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-}
-
-.mselect__clear {
-  display: inline-flex;
-  align-items: center;
-  padding: 0 8px;
-  color: var(--ink-3);
-  background: var(--surface);
-  border: 1px solid var(--accent);
-  border-left: 0;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-}
-
-.mselect__clear:hover {
-  color: var(--ink);
-  background: var(--surface-3);
-}
-
 .mselect__list,
 .menu__list {
   position: absolute;

@@ -5,6 +5,16 @@ shell first (the login screen, the sidebar, the theme switch and the expert view
 sidebar's order, each with its screenshot, what the view shows, what each control does and the dialogs it opens. The
 mechanism behind a view lives on its own page, which each section links.
 
+Every list view (Accounts, Analytics, Keys, Pools, Quota, Requests, the Routing log and Sessions) opens on one filter
+bar, which draws the slots the view has in one order: the range pills, the search, Add filter, the view's own controls
+with its primary action last, and at the right edge the split Refresh button and the count of what the view lists. Add
+filter opens a popover over the view's filters, and each filter in force stands as a chip on a line under the bar. The
+Refresh button's body reads the view again now, and its dropdown sets auto reload to Off, 5 s, 10 s, 30 s or 1 min, 5 s
+when a view opens and off on Requests and the Routing log. Auto reload waits while the tab is hidden, while a drawer, a
+dialog or a menu is open and on an older page, with a muted mark and the cause in the dropdown's hover. The filters, the
+search and the range live in the view's address, so a reload or a shared link keeps them, and the interval stays with
+the open page.
+
 ## The shell
 
 The login screen asks for the admin secret in one field, "Admin secret", with the button "Log in", which reads
@@ -84,11 +94,13 @@ Agents, Busy, Idle and Parked. What each figure means is on [Statistics](statist
 ![The Quota view: the Quota windows section](assets/quota-windows-light.png#only-light)
 ![The Quota view: the Quota windows section](assets/quota-windows-dark.png#only-dark)
 
-The Quota view covers the subscription accounts alone, since an API-key account has no quota window. Its head counts
-them, `{n} accounts`, and those needing attention, `{n} need attention`, and offers "Refresh all", whose hover reads
-"reads the endpoint now unless the account is backing off, and records the reading as the scheduled poll does". A
-section bar shows one of two sections at a time: Accounts, where the view opens, and Quota windows, which a link or a
-reload with `#quota-windows` lands on. The readings are the ledger's [quota samples](statistics.md#quota-samples).
+The Quota view covers the subscription accounts alone, since an API-key account has no quota window. Its bar offers
+"Refresh all", whose hover reads "reads the endpoint now unless the account is backing off, and records the reading as
+the scheduled poll does", and at the right edge the split Refresh button, whose body reads the account list again
+("Reads the list again now"), and the count of the accounts, `{n} accounts`, followed in the critical ink by those
+needing attention, `, {n} need attention`. Auto reload starts at 5 s. A section bar shows one of two sections at a time:
+Accounts, where the view opens, and Quota windows, which a link or a reload with `#quota-windows` lands on. The readings
+are the ledger's [quota samples](statistics.md#quota-samples).
 
 Accounts draws a card per account, sorted "Default order" or "Soonest recovery", every card with the same slots in the
 same order: the header with the label (the email on hover) and the status badge, one row per window ("5h", "7d" and
@@ -121,14 +133,18 @@ instant it resets. Lanes ending together compete for the same days."
 ![The Accounts view: the list with the selected account's detail](assets/accounts-light.png#only-light)
 ![The Accounts view: the list with the selected account's detail](assets/accounts-dark.png#only-dark)
 
-The list pane offers "Search accounts", a status filter with "All statuses" and the six status labels, the sort Name,
-Soonest reset, Most used or Status, and "Add account". The six labels, with the state each stands for, are Cooling
-down (`cooldown`), Needs funding (`funding_required`), Paused (`paused`), Needs re-auth (`reauth_required`), Ready
-(`ready`) and Not paired (`unpaired`). A row reads the label, the email, `pool {id}` or "no pool", "Overage" while
-requests bill as extra usage and "extra usage on" while it is enabled and unused. The pane reads "The router holds no
-account yet" with "Add account" before the first account, "No accounts match" with "Clear the search or the status
-filter." under a filter, and "No account to show" until a row is selected. What the states mean and how an account
-moves between them is on [Pairing an account](pairing.md).
+The bar above the list and the detail offers "Search accounts", Add filter with the Status filter ("All statuses" and
+the six status labels, its chip reading such as "status: Paused"), the Sort select with Name, Soonest reset, Most used
+or Status, and "Add account", and at the right edge the split Refresh button and the count of the rows the list shows,
+`{n} accounts`. The search, the sort and the status live in the page's address, so a link or a reload keeps them, and
+they stay while an account opens. Auto reload starts at 5 s and waits while a dialog or an editor of the detail is open,
+or while its save runs. The six labels, with the state each stands for, are Cooling down (`cooldown`), Needs funding
+(`funding_required`), Paused (`paused`), Needs re-auth (`reauth_required`), Ready (`ready`) and Not paired (`unpaired`).
+A row reads the label, the email, `pool {id}` or "no pool", "Overage" while requests bill as extra usage and "extra
+usage on" while it is enabled and unused. The pane reads "The router holds no account yet" with "Add account" before the
+first account, "No accounts match" with "Clear the search or the status filter." under a filter, and "No account to
+show" until a row is selected. What the states mean and how an account moves between them is on [Pairing an
+account](pairing.md).
 
 The detail opens on the account's label with "Edit label", its email and its badges: the status, `quarantined` while
 the last refresh's outcome is uncertain, `cooldown ends {ago}`, "Overage active" and "Routing paused", with `Overage
@@ -188,9 +204,11 @@ flow, the states and the `curl` form are on [Pairing an account](pairing.md).
 ![The Pools view: the jobs pool exhausted at its budget](assets/pools-light.png#only-light)
 ![The Pools view: the jobs pool exhausted at its budget](assets/pools-dark.png#only-dark)
 
-The view opens on "A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per
-session, and fail over when a member hits a rate limit." and "Create pool", then the tiles Pools, Accounts in pools,
-Keys, "Requests, 24h" and "Cost, 24h". Every field's meaning is on [Pools, keys and routing](routing.md#pools).
+The view opens on its bar, "Create pool" with the split Refresh button and the count `{n} pools` at the right edge, then
+"A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per session, and fail over
+when a member hits a rate limit." on a line of its own, then the tiles Pools, Accounts in pools, Keys, "Requests, 24h"
+and "Cost, 24h". Auto reload starts at 5 s and waits while the pool dialog is open. Every field's meaning is on [Pools,
+keys and routing](routing.md#pools).
 
 Each card carries the pool's name, its status badge (active, degraded, disabled or exhausted), its keys as a link
 ("No keys yet", "1 key", `{n} keys`, or "Keys unavailable" when the keys read failed), an edit button and "Delete".
@@ -272,9 +290,12 @@ buckets under [The return rate by idle age](keepalive.md#the-return-rate-by-idle
 ![The Keys view](assets/keys-light.png#only-light)
 ![The Keys view](assets/keys-dark.png#only-dark)
 
-The view opens on the tiles Keys, Active, Lifetime requests and Lifetime cost, and the card "Lifetime cost by key"
-("Relative spend across all keys"), a bar per key. The table's toolbar offers "Search keys", the status filter All
-statuses, Active, Disabled, Expired or Revoked, the pool filter "All pools", and "Create key". The columns are Name,
+The view opens on its bar: "Search keys", Add filter with the Pool and Status filters, "Create key", and at the right
+edge the split Refresh button and the count of the keys the table lists, `{n} keys`. Status offers All statuses, Active,
+Disabled, Expired or Revoked, and Pool takes any number of pools as one chip, such as "pool: jobs, all". The search and
+the filters live in the page's address, so the pool card's key count link lands on its pool's keys. Auto reload starts
+at 5 s and waits while a dialog or a row's menu is open. The tiles Keys, Active, Lifetime requests and Lifetime cost
+follow, and the card "Lifetime cost by key" ("Relative spend across all keys"), a bar per key. The columns are Name,
 Prefix, Pool, Models, "Usage, 7d", Expiry and Status, and each row ends in its menu. Under the name a row notes the
 capture setting, `bodies captured, {h}h` or `bodies not captured`, with "inherited" where the key follows its pool and
 "keepalive off" for a key opted out of cache warming. Models reads `{n} rules`, with
@@ -502,30 +523,32 @@ no session, and its subtitle says so.
 ![The Sessions view: the tiles and the table with a fork badge](assets/sessions-light.png#only-light)
 ![The Sessions view: the tiles and the table with a fork badge](assets/sessions-dark.png#only-dark)
 
-The view opens on "Every session within the session expiry, with the account each model is pinned to and each agent's
-cache-warming recipe." with the disclosure "How pins and recipes work", whose paragraph says what a pin and a recipe
-are, and a "Cost reference" link that opens the dialog on Plan rates. The tiles read Sessions (`{n} of {max}`, the
-engine's cap), Agents (`{n} of {max}` with `{n} busy, {n} idle, {n} parked`, less the subagents the mod released while
-their session lives, which draw no line and keep their slot until the session leaves, named on hover), Retained
-(`{n} MiB of {max} MiB`, "prompts kept for probes"), "Cache probes, 24h" (a bar by outcome and `{n} ok ({pct}), {n}
-migrated, {n} held, {n} skipped, {n} failed`), "Expired between turns, 24h" ("misses cache warming exists to prevent")
-and "Bus gaps" ("times the keepalive engine missed bus events"). A tile whose read failed draws a dash with the reason
-on hover, and Try again under the tiles reads them again. The view reads its sessions every 15 seconds and its tiles
-once a minute. The probes and the recipe are explained on [Keepalive](keepalive.md), the mod's words under
-[The mod](keepalive.md#the-mod) and the recipe's states under [The five states](keepalive.md#the-five-states).
+The view opens on its bar, the Columns control with the split Refresh button and the session count, `{n} sessions`, at
+the right edge. The head under it reads "Every session within the session expiry, with the account each model is pinned
+to and each agent's cache-warming recipe." with the disclosure "How pins and recipes work", whose paragraph says what a
+pin and a recipe are, and a "Cost reference" link that opens the dialog on Plan rates. The tiles read Sessions (`{n} of
+{max}`, the engine's cap), Agents (`{n} of {max}` with `{n} busy, {n} idle, {n} parked`, less the subagents the mod
+released while their session lives, which draw no line and keep their slot until the session leaves, named on hover),
+Retained (`{n} MiB of {max} MiB`, "prompts kept for probes"), "Cache probes, 24h" (a bar by outcome and `{n} ok ({pct}),
+{n} migrated, {n} held, {n} skipped, {n} failed`), "Expired between turns, 24h" ("misses cache warming exists to
+prevent") and "Bus gaps" ("times the keepalive engine missed bus events"). A tile whose read failed draws a dash with
+the reason on hover, and Try again under the tiles reads them again. Auto reload starts at 5 s and reads the sessions,
+the recipes and the tiles at that one interval, and it waits while a row's menu or the Release question is open. The
+probes and the recipe are explained on [Keepalive](keepalive.md), the mod's words under [The mod](keepalive.md#the-mod)
+and the recipe's states under [The five states](keepalive.md#the-five-states).
 
 The card "Sessions" ("One row per session. Open a row for the cache-warming recipe each agent carries") offers "Expand
-all" or "Collapse all" and the Columns control. The Session column is always drawn, and the ten others are Key,
-Model, Account, Last used, Requests, Last request, Agents, Companion, Cache warming and Next probe, with
-Agents, Last request and Next probe hidden by default. The session cell cuts a long id with an ellipsis,
-whole on hover.
-A session that branched from another conversation at depth 2 or deeper carries a fork
-badge under its id, `fork, on another account` or `fork, same account` where the session it branched from is listed
-with a pinned account, and `fork at 3` otherwise, with the base, the depth and the base's account on hover, and
-following the badge scrolls to the base's row. Companion reads the mod's state, `reporting` with how long ago the
-person was last seen at the terminal, `silent` or `none`. Cache warming reads the pin state badge, `busy`, `idle`,
-`parked`, `released` or `unknown`, with the recipe summary, or "no recipe". Next probe reads the instant, "pending" or
-"not scheduled". Before the first session the card reads "No live sessions" with "A session appears here on its first
+all" or "Collapse all". The Session column is always drawn, and the ten others, which the bar's Columns control shows
+or hides, are Key, Model, Account, Last used, Requests, Last request, Agents, Companion, Cache warming
+and Next probe, with Agents, Last request and Next probe hidden by default. The session cell cuts a long
+id with an ellipsis, whole on hover.
+A session that branched from another conversation at depth 2 or deeper carries
+a fork badge under its id, `fork, on another account` or `fork, same account` where the session it branched from is
+listed with a pinned account, and `fork at 3` otherwise, with the base, the depth and the base's account on hover, and
+following the badge scrolls to the base's row. Companion reads the mod's state, `reporting` with how long ago the person
+was last seen at the terminal, `silent` or `none`. Cache warming reads the pin state badge, `busy`, `idle`, `parked`,
+`released` or `unknown`, with the recipe summary, or "no recipe". Next probe reads the instant, "pending" or "not
+scheduled". Before the first session the card reads "No live sessions" with "A session appears here on its first
 request, or as soon as the keepalive mod registers it, and drops off once it passes the session expiry."
 
 A row's menu offers "View in analytics" and "View in requests" once the session has ledgered traffic, "View in routing

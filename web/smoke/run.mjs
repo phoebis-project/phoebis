@@ -72,18 +72,18 @@ const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_0
 
 const results = [];
 /**
- * Mounts `path` on the frozen clock and counts `method`'s calls across two 30-second ticks: one read per period, and
- * none from a real wait, which the frozen clock never lets fire a timer.
+ * Mounts `path` on the frozen clock and counts `method`'s calls across two ticks of the page's period: one read per
+ * period, and none from a real wait, which the frozen clock never lets fire a timer.
  */
-async function readsAgain(path, method) {
+async function readsAgain(path, method, periodMs) {
   const page = await mount(path, { now: CLOCK_ORIGIN });
   const spy = countCalls(method);
-  tick(30_000);
+  tick(periodMs);
   await page.settle();
   const once = spy.calls.length;
-  tick(30_000);
+  tick(periodMs);
   await page.settle();
-  results.push({ name: `${path} reads again every 30 seconds`, ok: once === 1 && spy.calls.length === 2, missing: [`${method}: ${once} after one period, ${spy.calls.length} after two`] });
+  results.push({ name: `${path} reads again every ${periodMs / 1000} seconds`, ok: once === 1 && spy.calls.length === 2, missing: [`${method}: ${once} after one period, ${spy.calls.length} after two`] });
   spy.restore();
   page.unmount();
 }
@@ -880,10 +880,13 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
     reads.push({ afterPosts: refreshed.length, blocks: rows.flatMap((a) => (a.usage ? [a.usage.accountId] : [])).sort() });
     return rows;
   };
+  // The page reads on the live clock at its 5 s interval, so auto reload is off while the reads are counted.
+  await chooseInterval(m, 'Off');
   [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Refresh all')?.click();
   await m.settle(1_200);
   api.refreshUsage = refreshUsage;
   api.listAccounts = listAccounts;
+  await chooseInterval(m, '5 s');
   results.push({
     name: '/quota Refresh all refreshes every subscription account, then reads every card again',
     ok: JSON.stringify(refreshed.sort()) === JSON.stringify(subscriptions) && JSON.stringify(reads) === JSON.stringify([{ afterPosts: subscriptions.length, blocks: subscriptions }]),
@@ -894,7 +897,9 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   // The story holds more than one subscription account, so the plural is what this can read, and the count comes from
   // the list rather than a literal.
   const subscriptions = (await api.listAccounts()).filter((a) => a.kind === 'oauth');
-  const count = m.container.querySelector('.quota-meta span')?.textContent ?? 'no count';
+  // The bar's count slot, read without its attention part, which the critical ink's span carries.
+  const slot = m.container.querySelector('.filter-bar__count');
+  const count = slot ? [...slot.childNodes].filter((n) => !(n instanceof window.HTMLElement && n.classList.contains('filter-bar__count--critical'))).map((n) => n.textContent).join('') : 'no count';
   results.push({ name: '/quota counts the subscription accounts with the noun that number takes', ok: count === `${subscriptions.length} accounts`, missing: [count, `${subscriptions.length} subscription accounts listed`] });
   // The route reads through the poll's path, so the button says it reads the endpoint unless the account's hold
   // answers.
@@ -1236,8 +1241,8 @@ m.unmount();
   });
   failed.unmount();
 }
-await readsAgain('/quota', 'listAccounts');
-await readsAgain('/', 'getOverview');
+await readsAgain('/quota', 'listAccounts', 5_000);
+await readsAgain('/', 'getOverview', 30_000);
 {
   const page = await mount('/', { now: CLOCK_ORIGIN });
   const line = () => page.container.querySelector('.dash__asof');
@@ -1427,15 +1432,32 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   results.push({ name: '/accounts no action buttons below header', ok: below.length === 0, missing: below });
   const dangers = [...(head?.querySelectorAll('.btn--danger') ?? [])].map((b) => b.textContent?.trim());
   results.push({ name: '/accounts Disconnect and Delete account are danger, and Delete account is last', ok: dangers.join('|') === 'Disconnect|Delete account' && head?.querySelector('.detail__actions')?.lastElementChild?.textContent?.trim() === 'Delete account', missing: dangers });
-  const statuses = [...(m.container.querySelector('select[aria-label="Status filter"]')?.options ?? [])].map((o) => o.value);
-  results.push({ name: '/accounts the status filter offers only the statuses the router reports', ok: statuses.length > 1 && !statuses.includes('disabled'), missing: statuses });
   {
-    // The filters can hide every account the router holds, which is not the empty registry and says so.
-    const search = m.container.querySelector('input[placeholder="Search accounts"]');
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    // The Status step of Add filter lists the statuses the router reports after the choice that clears it, and a pick
+    // writes the status to the address, narrows the rows and stands as a chip until its x clears it.
+    const box = await addFilter(m, 'Status');
+    const statuses = boxOptions().map((o) => o.textContent?.trim() ?? '');
+    const cooling = (await api.listAccounts()).filter((a) => a.status === 'cooldown').map((a) => a.id);
+    boxOptions().find((o) => o.textContent?.trim() === 'Cooling down')?.click();
+    await m.settle(300);
+    // A row's link carries the page's query, so its id is the path's last segment.
+    const picked = { chip: chipRead(m, 'status'), rows: [...m.container.querySelectorAll('a.account-row')].map((a) => (a.getAttribute('href') ?? '').split(/[?#]/)[0].split('/').pop()), status: new URLSearchParams(m.location().search).get('status') };
+    await removeChip(m, 'status');
+    results.push({
+      name: '/accounts the status filter offers only the statuses the router reports and writes the one picked to the address',
+      ok: box !== null && statuses[0] === 'All statuses' && statuses.length > 2 && !statuses.includes('Disabled') && cooling.length > 0 && picked.status === 'cooldown' && picked.chip === 'status: Cooling down' && JSON.stringify(picked.rows.sort()) === JSON.stringify([...cooling].sort()) && m.location().search === '' && chipOf(m, 'status') === undefined,
+      missing: [box === null ? 'no Status step' : statuses.join(', '), JSON.stringify(picked), `cooling ${cooling.join(',')}`, m.location().search],
+    });
+  }
+  {
+    // The filters can hide every account the router holds, which is not the empty registry and says so. The bar's field
+    // commits on a pause, on Enter or on blur, so Enter commits each value.
+    const search = barSearch(m);
     const type = async (value) => {
-      setter.call(search, value);
-      search?.dispatchEvent(new window.Event('input', { bubbles: true }));
+      if (search) {
+        setInput(search, value);
+        pressKey('Enter', search);
+      }
       await m.settle(150);
     };
     await type('zzzz');
@@ -2230,9 +2252,9 @@ m.unmount();
   });
   await api.renameAccount('primary', 'primary');
   await api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: null });
-  // The list's own 30-second read takes the put-back row in, and the confirmation down, so the end editor opens on the
-  // stored row with no toast left over.
-  tick(30_000);
+  // The list's own read at its 5 s auto reload takes the put-back row in, and the confirmation down, so the end editor
+  // opens on the stored row with no toast left over.
+  tick(5_000);
   await page.settle(400);
 
   opened = (await primary())?.revision ?? null;
@@ -2417,8 +2439,8 @@ m.unmount();
     page.container.querySelector(`a.account-row[href="/accounts/${id}"]`)?.click();
     await page.settle(400);
   };
-  // Closes whatever editor a run left open and puts both rows back on one token, which the list's own 30-second read
-  // takes in, so the next run's editors open on the stored rows.
+  // Closes whatever editor a run left open and puts both rows back on one token, which the list's own read at its 5 s
+  // auto reload takes in, so the next run's editors open on the stored rows.
   const reset = async () => {
     titleButton('Cancel')?.click();
     identityButton('Cancel')?.click();
@@ -2428,7 +2450,7 @@ m.unmount();
       await api.updateAccount(id, { cancelled: false, subscriptionEndsAt: null });
     }
     const token = await level();
-    tick(30_000);
+    tick(5_000);
     await page.settle(400);
     return token;
   };
@@ -2695,7 +2717,7 @@ m.unmount();
   });
   page.unmount();
 }
-await readsAgain('/accounts', 'listAccounts');
+await readsAgain('/accounts', 'listAccounts', 5_000);
 
 // Picks an Analytics tab on the given mount and lets its section's reads land; a check reads its counts afterwards.
 const tab = async (page, label) => {
@@ -3285,8 +3307,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request. Off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an API-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Cost reference', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a1c4e', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool. Rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
   const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="shared"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
-  const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
-  results.push({ name: '/pools keys section is not a multi-select', ok: keysMulti.length === 0, missing: keysMulti });
+  // A multi-select is the option list's listbox, which the Keys group would carry.
+  const keysGroup = group(dlg, 'Keys');
+  const keysMulti = [...(keysGroup?.querySelectorAll('[role="listbox"][aria-multiselectable]') ?? [])].map((l) => l.getAttribute('aria-label') ?? 'a listbox');
+  results.push({ name: '/pools keys section is not a multi-select', ok: keysGroup !== undefined && keysMulti.length === 0, missing: keysGroup === undefined ? ['no Keys group'] : keysMulti });
 
   // Grouped dialog: a two-level rail beside one group at a time, one heading per group.
   const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
@@ -5435,7 +5459,9 @@ localStorage.removeItem('phoebis.expertView');
   q = await mount('/keys?edit=laptop&group=access');
   await q.settle(200);
   const enabled = () => group(dialogOf(q), 'Access')?.querySelector('button[role="switch"][aria-label="Enabled"]');
-  const opened = [enabled()?.getAttribute('aria-checked') ?? 'no switch', q.container.querySelectorAll('.table-toolbar select[aria-label="Pool"] option').length];
+  // The dialog's own Pool select lists the pools the page has read, none while the read is held. Add filter's Pool step
+  // would take the focus the check reads in the dialog.
+  const opened = [enabled()?.getAttribute('aria-checked') ?? 'no switch', group(dialogOf(q), 'Key')?.querySelectorAll('select option').length ?? 'no Key group'];
   enabled()?.click();
   await q.settle(100);
   const switched = enabled()?.getAttribute('aria-checked') ?? 'no switch';
@@ -5445,7 +5471,7 @@ localStorage.removeItem('phoebis.expertView');
   const visible = dialogOf(q)?.querySelector('section.dialog-group:not([hidden])');
   results.push({
     name: '/keys a pool list that lands after the dialog query opened the dialog keeps the edit, the group and the focus',
-    ok: heldPools.calls.length > 0 && JSON.stringify(opened) === '["true",1]' && switched === 'false' && enabled()?.getAttribute('aria-checked') === 'false' && shown(q) === 'Access' && !!visible && visible.contains(document.activeElement),
+    ok: heldPools.calls.length > 0 && JSON.stringify(opened) === '["true",0]' && switched === 'false' && enabled()?.getAttribute('aria-checked') === 'false' && shown(q) === 'Access' && !!visible && visible.contains(document.activeElement),
     missing: [`held ${heldPools.calls.length}`, `opened ${JSON.stringify(opened)}`, `switched ${switched}`, `after release ${enabled()?.getAttribute('aria-checked') ?? 'no switch'}`, shown(q), focused()],
   });
   q.unmount();
@@ -5454,20 +5480,15 @@ localStorage.removeItem('phoebis.expertView');
   const heldKeys = deferNextCall('listKeys');
   q = await mount('/keys?edit=laptop&group=access');
   await q.settle(200);
-  const statusSelect = q.container.querySelector('.table-toolbar select[aria-label="Status"]');
-  if (statusSelect) {
-    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(statusSelect, 'active');
-    statusSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
-  }
-  await q.settle(100);
-  const beforeList = [titleOf(q), q.location().search];
+  const statusPicked = await pick(q, 'Status', 'Active');
+  const beforeList = [titleOf(q), q.location().search, chipRead(q, 'status')];
   heldKeys.release();
   heldKeys.restore();
   await q.settle(300);
   results.push({
     name: '/keys a status chosen before the key list lands keeps the dialog query, and the dialog then opens on its group',
-    ok: heldKeys.calls.length > 0 && JSON.stringify(beforeList) === JSON.stringify(['no dialog', '?status=active&edit=laptop&group=access']) && titleOf(q) === `Edit ${laptop}` && shown(q) === 'Access' && q.location().search === '?status=active',
-    missing: [`held ${heldKeys.calls.length}`, JSON.stringify(beforeList), titleOf(q), shown(q), q.location().search],
+    ok: statusPicked && heldKeys.calls.length > 0 && JSON.stringify(beforeList) === JSON.stringify(['no dialog', '?status=active&edit=laptop&group=access', 'status: Active']) && titleOf(q) === `Edit ${laptop}` && shown(q) === 'Access' && q.location().search === '?status=active',
+    missing: [`picked ${statusPicked}`, `held ${heldKeys.calls.length}`, JSON.stringify(beforeList), titleOf(q), shown(q), q.location().search],
   });
   q.unmount();
   q = await mount('/keys?edit=nope');
@@ -6000,8 +6021,10 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     ok: badgeOf('batch') === 'disabled' && active === String(rows.filter(([, badge]) => badge === 'active').length),
     missing: [badgeOf('batch'), active, JSON.stringify(rows)],
   });
-  const select = m.container.querySelector('.table-toolbar select');
-  results.push({ name: '/keys the status filter offers disabled', ok: [...(select?.options ?? [])].map((o) => o.value).includes('disabled'), missing: [...(select?.options ?? [])].map((o) => o.value) });
+  await addFilter(m, 'Status');
+  const statuses = boxOptions().map((o) => o.textContent?.trim() ?? '');
+  await closeBoxes(m);
+  results.push({ name: '/keys the status filter offers disabled', ok: statuses.includes('Disabled'), missing: statuses });
 }
 {
   // The story gives notebook one request in its life, so its bar takes the singular.
@@ -6009,8 +6032,8 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   const count = bar?.querySelector('.hbars__head .num .muted')?.textContent?.trim();
   results.push({ name: '/keys a key with one lifetime request reads 1 request', ok: count === '1 request', missing: [count ?? 'no notebook bar'] });
 }
-// The Pool select is the address: `?pools=<id>` filters the rows, All pools clears it, and an unknown id reads as All
-// pools and leaves the address.
+// The Pool chip is the address: `?pools=<id>` filters the rows, the chip's x clears it, and an unknown id draws no chip
+// and leaves the address.
 {
   // The /pools checks above move a key into jobs and create one in all, so every count is the store's at this point.
   const stored = await api.listKeys();
@@ -6018,66 +6041,65 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   // A filter that keeps every row, or none, would pass the cell reads without filtering anything.
   const narrows = (id) => inPool(id) > 0 && inPool(id) < stored.length;
   const poolCells = (page) => [...page.container.querySelectorAll('.card--table tbody tr td:nth-child(3)')].map((td) => td.textContent?.trim());
-  const select = (page) => page.container.querySelector('.table-toolbar select[aria-label="Pool"]');
   let k = await mount('/keys?pools=jobs');
-  results.push({ name: "/keys?pools=jobs lists the pool's keys alone with the Pool select on jobs", ok: narrows('jobs') && poolCells(k).length === inPool('jobs') && poolCells(k).every((c) => c === 'jobs') && select(k)?.value === 'jobs', missing: [`expected ${inPool('jobs')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select'] });
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-  const choosePool = async (page, id) => {
-    const target = select(page);
-    if (!target) return;
-    setter.call(target, id);
-    target.dispatchEvent(new window.Event('change', { bubbles: true }));
-    await page.settle(200);
-  };
-  await choosePool(k, '');
-  results.push({ name: '/keys All pools lists every key and leaves /keys', ok: !!select(k) && poolCells(k).length === stored.length && k.location().pathname === '/keys' && k.location().search === '', missing: [`${poolCells(k).length} of ${stored.length}`, JSON.stringify(k.location())] });
-  await choosePool(k, 'all');
-  results.push({ name: '/keys the pool named all filters to its own keys and stays in the address', ok: narrows('all') && poolCells(k).length === inPool('all') && poolCells(k).every((c) => c === 'all') && select(k)?.value === 'all' && k.location().search === '?pools=all', missing: [`expected ${inPool('all')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select', k.location().search] });
+  results.push({ name: "/keys?pools=jobs lists the pool's keys alone with the Pool chip on jobs", ok: narrows('jobs') && poolCells(k).length === inPool('jobs') && poolCells(k).every((c) => c === 'jobs') && chipRead(k, 'pool') === 'pool: jobs', missing: [`expected ${inPool('jobs')} of ${stored.length}`, ...poolCells(k), chipRead(k, 'pool')] });
+  await removeChip(k, 'pool');
+  results.push({ name: "/keys the Pool chip's x lists every key and leaves /keys", ok: chipOf(k, 'pool') === undefined && poolCells(k).length === stored.length && k.location().pathname === '/keys' && k.location().search === '', missing: [`${poolCells(k).length} of ${stored.length}`, chipRead(k, 'pool'), JSON.stringify(k.location())] });
+  const pickedAll = await pick(k, 'Pool', 'all');
+  await closeBoxes(k);
+  results.push({ name: '/keys the pool named all filters to its own keys and stays in the address', ok: pickedAll && narrows('all') && poolCells(k).length === inPool('all') && poolCells(k).every((c) => c === 'all') && chipRead(k, 'pool') === 'pool: all' && k.location().search === '?pools=all', missing: [`picked ${pickedAll}`, `expected ${inPool('all')} of ${stored.length}`, ...poolCells(k), chipRead(k, 'pool'), k.location().search] });
   k.unmount();
   k = await mount('/keys?pools=all');
-  results.push({ name: "/keys?pools=all lists the all pool's keys alone with the Pool select on it", ok: narrows('all') && poolCells(k).length === inPool('all') && poolCells(k).every((c) => c === 'all') && select(k)?.value === 'all' && k.location().search === '?pools=all', missing: [`expected ${inPool('all')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select', k.location().search] });
+  results.push({ name: "/keys?pools=all lists the all pool's keys alone with the Pool chip on it", ok: narrows('all') && poolCells(k).length === inPool('all') && poolCells(k).every((c) => c === 'all') && chipRead(k, 'pool') === 'pool: all' && k.location().search === '?pools=all', missing: [`expected ${inPool('all')} of ${stored.length}`, ...poolCells(k), chipRead(k, 'pool'), k.location().search] });
   k.unmount();
   k = await mount('/keys?pools=nope');
-  results.push({ name: '/keys?pools=nope leaves All pools and clears the address', ok: select(k)?.value === '' && poolCells(k).length === stored.length && k.location().search === '', missing: [select(k)?.value ?? 'no select', `${poolCells(k).length} of ${stored.length}`, k.location().search] });
+  results.push({ name: '/keys?pools=nope draws no Pool chip and clears the address', ok: chipOf(k, 'pool') === undefined && poolCells(k).length === stored.length && k.location().search === '', missing: [chipRead(k, 'pool'), `${poolCells(k).length} of ${stored.length}`, k.location().search] });
   k.unmount();
   // Until the pools land the page cannot tell a known id from an unknown one, so it takes the address at its word: the
   // key count link lands on the pool's rows from the first render, never on every key.
-  // The select holds an option for the id meanwhile, since one it lacks would read All pools beside filtered rows.
-  const options = (page) => [...(select(page)?.options ?? [])].map((o) => [o.value, o.textContent]);
+  // The Pool step holds an option for the id meanwhile, so the chip reads the id beside the filtered rows.
+  const poolOptions = async (page) => {
+    await addFilter(page, 'Pool');
+    const labels = boxOptions().map((o) => o.textContent?.trim() ?? '');
+    await closeBoxes(page);
+    return labels;
+  };
   const jobsName = (await api.listPools()).find((p) => p.id === 'jobs')?.name;
+  const poolNames = (await api.listPools()).map((p) => p.name);
   const heldPools = deferNextCall('listPools');
   k = await mount('/keys?pools=jobs');
   const waiting = poolCells(k);
   const waitingSearch = k.location().search;
-  const waitingSelect = [select(k)?.value ?? 'no select', options(k)];
+  const waitingChip = [chipRead(k, 'pool'), await poolOptions(k)];
   heldPools.release();
   heldPools.restore();
   await k.settle(300);
+  const loadedOptions = await poolOptions(k);
   results.push({
-    name: "/keys?pools=jobs lists the pool's keys alone with the Pool select on jobs while the pools are still loading",
+    name: "/keys?pools=jobs lists the pool's keys alone with the Pool chip on jobs while the pools are still loading",
     ok:
       narrows('jobs') &&
       heldPools.calls.length > 0 &&
       waiting.length === inPool('jobs') &&
       waiting.every((c) => c === 'jobs') &&
       waitingSearch === '?pools=jobs' &&
-      JSON.stringify(waitingSelect) === JSON.stringify(['jobs', [['', 'All pools'], ['jobs', 'jobs']]]) &&
+      JSON.stringify(waitingChip) === JSON.stringify(['pool: jobs', ['jobs']]) &&
       poolCells(k).length === inPool('jobs') &&
-      select(k)?.value === 'jobs' &&
-      JSON.stringify(options(k).filter(([value]) => value === 'jobs')) === JSON.stringify([['jobs', jobsName]]) &&
+      chipRead(k, 'pool') === `pool: ${jobsName}` &&
+      JSON.stringify(loadedOptions) === JSON.stringify(poolNames) &&
       k.location().search === '?pools=jobs',
-    missing: [`expected ${inPool('jobs')} of ${stored.length}`, `held ${heldPools.calls.length}`, `loading ${waiting.join(',')}`, waitingSearch, JSON.stringify(waitingSelect), `loaded ${poolCells(k).join(',')}`, select(k)?.value ?? 'no select', JSON.stringify(options(k)), k.location().search],
+    missing: [`expected ${inPool('jobs')} of ${stored.length}`, `held ${heldPools.calls.length}`, `loading ${waiting.join(',')}`, waitingSearch, JSON.stringify(waitingChip), `loaded ${poolCells(k).join(',')}`, chipRead(k, 'pool'), JSON.stringify(loadedOptions), k.location().search],
   });
   k.unmount();
   failNextCall('listPools', '/admin/pools', 'the pool store is unavailable');
   k = await mount('/keys?pools=jobs');
   const failed = poolCells(k);
-  const failedValue = select(k)?.value ?? 'no select';
-  await choosePool(k, '');
+  const failedChip = chipRead(k, 'pool');
+  await removeChip(k, 'pool');
   results.push({
-    name: '/keys?pools=jobs after a failed pool read keeps the rows filtered and the Pool select on jobs, and All pools clears both',
-    ok: narrows('jobs') && failed.length === inPool('jobs') && failed.every((c) => c === 'jobs') && failedValue === 'jobs' && select(k)?.value === '' && poolCells(k).length === stored.length && k.location().search === '',
-    missing: [`expected ${inPool('jobs')} of ${stored.length}`, `failed ${failed.join(',')}`, failedValue, select(k)?.value ?? 'no select', `cleared ${poolCells(k).length}`, k.location().search],
+    name: '/keys?pools=jobs after a failed pool read keeps the rows filtered and the Pool chip on jobs, and its x clears both',
+    ok: narrows('jobs') && failed.length === inPool('jobs') && failed.every((c) => c === 'jobs') && failedChip === 'pool: jobs' && chipOf(k, 'pool') === undefined && poolCells(k).length === stored.length && k.location().search === '',
+    missing: [`expected ${inPool('jobs')} of ${stored.length}`, `failed ${failed.join(',')}`, failedChip, chipRead(k, 'pool'), `cleared ${poolCells(k).length}`, k.location().search],
   });
   k.unmount();
   k = await mount('/keys?pools=jobs&edit=batch&group=models');
@@ -6184,7 +6206,8 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     results.push({ name: '/keys dialog body repeats the groups', ok: JSON.stringify(headings) === JSON.stringify(railLabels), missing: headings });
     results.push({ name: '/keys the key dialog carries no subtitle', ok: dlg !== null && dlg.querySelector('.dialog__subtitle') === null, missing: [dlg?.querySelector('.dialog__subtitle')?.textContent ?? ''] });
   }
-  results.push({ name: '/keys pool field is a single select', ok: dlg?.querySelector('select') !== null && ![...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].some((b) => b.textContent?.startsWith('Pool')), missing: [] });
+  // A multi-select is the option list's listbox, which the Key group's Pool field would carry beside its select.
+  results.push({ name: '/keys pool field is a single select', ok: dlg?.querySelector('select') !== null && group(dlg, 'Key')?.querySelector('[role="listbox"][aria-multiselectable]') === null, missing: [] });
   {
     const poolSelect = dlg?.querySelector('select');
     const values = [...(poolSelect?.options ?? [])].map((o) => o.value);
@@ -6739,7 +6762,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
 m.unmount();
 localStorage.removeItem('phoebis.expertView');
 
-await readsAgain('/keys', 'listKeys');
+await readsAgain('/keys', 'listKeys', 5_000);
 {
   // The key dialog resets its fields whenever the pool list changes, so a read landing under it would wipe the name.
   const typeName = async (page, value) => {
@@ -6765,7 +6788,7 @@ await readsAgain('/keys', 'listKeys');
 
   const late = await mount('/keys', { now: CLOCK_ORIGIN });
   const held = deferNextCall('listPools');
-  tick(30_000);
+  tick(5_000);
   await typeName(late, 'Laptop 2');
   held.release();
   await late.settle();
@@ -6803,7 +6826,7 @@ await readsAgain('/keys', 'listKeys');
   const trigger = page.container.querySelector('tbody .menu__trigger');
   const period = async () => {
     const from = spy.calls.length;
-    tick(30_000);
+    tick(5_000);
     await page.settle();
     return spy.calls.length - from;
   };
@@ -13781,21 +13804,20 @@ results.push({ name: '/keepalive redirects to /sessions', ok: m.text().includes(
 m.unmount();
 
 {
-  // The tiles' figures move slowly and the sessions do not, so the page reads the overview once a minute and the list
-  // every 15 seconds, which keeps a session that is still sending requests on it.
+  // The page reads the overview, the recipes and the sessions again at its one auto reload interval, 5 s at the start,
+  // which keeps a session that is still sending requests on it, and the accounts, keys, pools and settings once.
   const page = await mount('/sessions', { now: CLOCK_ORIGIN });
-  const overview = countCalls('getKeepaliveOverview');
-  const listed = countCalls('listSessions');
+  const spies = Object.fromEntries(['getKeepaliveOverview', 'listKeepaliveRecipes', 'listSessions', 'listAccounts', 'listKeys', 'listPools', 'getSettings'].map((name) => [name, countCalls(name)]));
   for (let i = 0; i < 4; i += 1) {
-    tick(15_000);
+    tick(5_000);
     await page.settle();
   }
-  overview.restore();
-  listed.restore();
+  const counts = Object.fromEntries(Object.entries(spies).map(([name, spy]) => [name, spy.calls.length]));
+  for (const spy of Object.values(spies)) spy.restore();
   results.push({
-    name: '/sessions reads the overview once a minute and the sessions every 15 seconds',
-    ok: overview.calls.length === 1 && listed.calls.length === 4,
-    missing: [`getKeepaliveOverview ${overview.calls.length}`, `listSessions ${listed.calls.length}`],
+    name: '/sessions reads the overview, the recipes and the sessions at the one interval and the other reads once',
+    ok: JSON.stringify(counts) === JSON.stringify({ getKeepaliveOverview: 4, listKeepaliveRecipes: 4, listSessions: 4, listAccounts: 0, listKeys: 0, listPools: 0, getSettings: 0 }),
+    missing: [JSON.stringify(counts)],
   });
   page.unmount();
 }
@@ -14435,18 +14457,17 @@ m.unmount();
   {
     const name = '/keys reads the pool, search and status from the address, and a status change keeps the others and the hash';
     const page = await mount('/keys?pools=all&search=lap&status=active#laptop');
-    const status = page.container.querySelector('.table-toolbar select[aria-label="Status"]');
     const read = {
-      pool: page.container.querySelector('.table-toolbar select[aria-label="Pool"]')?.value ?? null,
+      pool: chipRead(page, 'pool'),
       rows: [...page.container.querySelectorAll('.card--table tbody tr')].map((tr) => tr.id),
-      search: page.container.querySelector('.table-toolbar input[type="search"]')?.value ?? null,
-      status: status?.value ?? null,
+      search: barSearch(page)?.value ?? null,
+      status: chipRead(page, 'status'),
     };
-    if (status) await chooseIn(page, status, 'all');
+    const picked = await pick(page, 'Status', 'All statuses');
     const after = page.location();
     results.push({
       name,
-      ok: read.pool === 'all' && read.search === 'lap' && read.status === 'active' && read.rows.includes('laptop') && after.search === '?pools=all&search=lap' && after.hash === '#laptop',
+      ok: read.pool === 'pool: all' && read.search === 'lap' && read.status === 'status: Active' && read.rows.includes('laptop') && picked && chipOf(page, 'status') === undefined && after.search === '?pools=all&search=lap' && after.hash === '#laptop',
       missing: [JSON.stringify(read), JSON.stringify(after)],
     });
     page.unmount();
@@ -14488,6 +14509,177 @@ m.unmount();
     results.push({ name, ok: first !== undefined && JSON.stringify(read) === JSON.stringify({ last: first.id, select: first.id, title: `Processed rules for ${first.name}` }), missing: [`first ${first?.id}`, JSON.stringify(read)] });
     page.unmount();
   }
+}
+
+// The five card views on the filter bar: the slots, the address of the two that filter, auto reload at 5 s with its
+// pauses, and the count. Each mounts on the pinned clock, so only a check's own ticks fire the auto reload.
+const CARD_VIEWS = [
+  ['/accounts', 'listAccounts'],
+  ['/keys', 'listKeys'],
+  ['/pools', 'listPools'],
+  ['/quota', 'listAccounts'],
+  ['/sessions', 'listSessions'],
+];
+{
+  // The Accounts list's search, sort and status are its address: a link lands on the filtered rows, the redirect to the
+  // router's first account the list shows and a row's link keep the query and the hash, and a remount reads the same.
+  const name = '/accounts keeps its search, sort and status in the address and a remount reads them';
+  const QUERY = '?search=operator&sort=usage&status=cooldown';
+  const usage = (a) => Math.max(0, ...a.windows.map((w) => w.utilization));
+  const matching = (await api.listAccounts()).filter((a) => a.status === 'cooldown' && [a.label, a.email ?? '', a.plan ?? ''].some((t) => t.toLowerCase().includes('operator')));
+  const wanted = [...matching].sort((a, b) => usage(b) - usage(a)).map((a) => a.id);
+  // Under this sort the list's first row is not the router's first match, so the landing tells the redirect's rule apart
+  // from landing on the top row.
+  const landing = matching[0]?.id;
+  const other = wanted.find((id) => id !== landing);
+  const read = (page) => ({
+    chip: chipRead(page, 'status'),
+    count: page.container.querySelector('.filter-bar__count')?.textContent ?? null,
+    rows: [...page.container.querySelectorAll('a.account-row')].map((a) => (a.getAttribute('href') ?? '').split(/[?#]/)[0].split('/').pop()),
+    search: barSearch(page)?.value ?? null,
+    sort: page.container.querySelector('.filter-bar select[aria-label="Sort"]')?.value ?? null,
+  });
+  let page = await mount(`/accounts${QUERY}#top`, { now: CLOCK_ORIGIN });
+  const landed = { ...read(page), at: page.location() };
+  [...page.container.querySelectorAll('a.account-row')].find((a) => (a.getAttribute('href') ?? '').split(/[?#]/)[0] === `/accounts/${other}`)?.click();
+  await page.settle(300);
+  const clicked = page.location();
+  page.unmount();
+  page = await mount(`${clicked.pathname}${clicked.search}${clicked.hash}`, { now: CLOCK_ORIGIN });
+  const remounted = { ...read(page), at: page.location() };
+  page.unmount();
+  const view = { chip: 'status: Cooling down', count: `${wanted.length} accounts`, rows: wanted, search: 'operator', sort: 'usage' };
+  results.push({
+    name,
+    ok:
+      wanted.length >= 2 &&
+      wanted[0] !== landing &&
+      JSON.stringify(landed) === JSON.stringify({ ...view, at: { hash: '#top', pathname: `/accounts/${landing}`, search: QUERY } }) &&
+      JSON.stringify(clicked) === JSON.stringify({ hash: '#top', pathname: `/accounts/${other}`, search: QUERY }) &&
+      JSON.stringify(remounted) === JSON.stringify({ ...view, at: clicked }),
+    missing: [`wanted ${wanted.join(',')}, landing on ${landing}`, `landed ${JSON.stringify(landed)}`, `clicked ${JSON.stringify(clicked)}`, `remounted ${JSON.stringify(remounted)}`],
+  });
+}
+{
+  const name = '/keys two pools in the address draw one chip and filter to both';
+  const stored = await api.listKeys();
+  const both = stored.filter((k) => k.poolId === 'jobs' || k.poolId === 'all');
+  const page = await mount('/keys?pools=jobs,all', { now: CLOCK_ORIGIN });
+  const cells = [...page.container.querySelectorAll('.card--table tbody tr td:nth-child(3)')].map((td) => td.textContent?.trim() ?? '');
+  const chips = [...page.container.querySelectorAll('.chip--filter')].map((c) => c.textContent?.trim() ?? '');
+  page.unmount();
+  results.push({
+    name,
+    ok: both.length > 0 && both.length < stored.length && JSON.stringify(chips) === JSON.stringify(['pool: jobs, all']) && cells.length === both.length && cells.includes('jobs') && cells.includes('all') && cells.every((c) => c === 'jobs' || c === 'all'),
+    missing: [JSON.stringify(chips), `${cells.length} rows of ${both.length} in jobs or all, ${stored.length} listed`, ...new Set(cells)],
+  });
+}
+{
+  const name = 'the five card views mount the bar first with their slots in order and no empty slot';
+  // A slot by what it shows: the search by its placeholder, a labeled select by its label, a control by its name, and
+  // the right edge by the split Refresh button and the count it holds.
+  const slotOf = (el) => {
+    if (el.classList.contains('search')) return `search: ${el.querySelector('input')?.getAttribute('placeholder') ?? 'no placeholder'}`;
+    if (el.classList.contains('filter-bar__edge')) return `edge: ${[...el.children].map((c) => (c.classList.contains('refresh-control') ? 'Refresh' : c.classList.contains('filter-bar__count') && (c.textContent ?? '') !== '' ? 'count' : c.className)).join(', ')}`;
+    if (el.tagName === 'LABEL') return `${el.querySelector('.muted')?.textContent?.trim() ?? 'no label'} ${el.querySelector('select') ? 'select' : 'no select'}`;
+    return el.getAttribute('aria-label') ?? (el.textContent?.trim() || 'an empty slot');
+  };
+  const SLOTS = {
+    '/accounts': ['search: Search accounts', 'Add filter', 'Sort select', 'Add account', 'edge: Refresh, count'],
+    '/keys': ['search: Search keys', 'Add filter', 'Create key', 'edge: Refresh, count'],
+    '/pools': ['Create pool', 'edge: Refresh, count'],
+    '/quota': ['Refresh all', 'edge: Refresh, count'],
+    '/sessions': ['Columns', 'edge: Refresh, count'],
+  };
+  const read = {};
+  for (const [path] of CARD_VIEWS) {
+    const page = await mount(path, { now: CLOCK_ORIGIN });
+    const bar = page.container.querySelector('.filter-bar');
+    const holder = bar?.parentElement;
+    read[path] = { first: holder?.firstElementChild === bar && holder?.matches(path === '/accounts' ? '.accounts' : '.stack') === true, slots: [...(bar?.querySelector(':scope > .filter-bar__row')?.children ?? [])].map(slotOf) };
+    page.unmount();
+  }
+  results.push({
+    name,
+    ok: Object.entries(SLOTS).every(([path, slots]) => read[path].first && JSON.stringify(read[path].slots) === JSON.stringify(slots)),
+    missing: Object.entries(read).map(([path, r]) => `${path} ${JSON.stringify(r)}`),
+  });
+}
+{
+  const name = 'the five card views start auto reload at 5 s and read again at the tick';
+  const read = [];
+  for (const [path, method] of CARD_VIEWS) {
+    const page = await mount(path, { now: CLOCK_ORIGIN });
+    const at = { title: intervalPart(page)?.getAttribute('title') ?? null, word: intervalWord(page) };
+    const spy = countCalls(method);
+    tick(5_000);
+    await page.settle();
+    read.push({ path, reads: spy.calls.length, ...at });
+    spy.restore();
+    page.unmount();
+  }
+  results.push({ name, ok: read.length === 5 && read.every((r) => r.word === '5 s' && r.title === 'Auto reload every 5 s' && r.reads === 1), missing: read.map((r) => JSON.stringify(r)) });
+}
+{
+  const name = '/keys an open dialog or an open interval menu pauses auto reload and the title names it';
+  const page = await mount('/keys', { now: CLOCK_ORIGIN });
+  const spy = countCalls('listKeys');
+  const state = () => ({ state: page.container.querySelector('.refresh-control')?.getAttribute('data-state') ?? null, title: intervalPart(page)?.getAttribute('title') ?? null });
+  [...page.container.querySelectorAll('.filter-bar button')].find((b) => b.textContent?.trim() === 'Create key')?.click();
+  await page.settle(200);
+  const dialog = { open: openDialogs(page).length, ...state() };
+  tick(5_000);
+  await page.settle();
+  dialog.reads = spy.calls.length;
+  buttonIn(openDialogs(page).pop(), 'Cancel')?.click();
+  await page.settle(200);
+  // The last answer is a full period old when the dialog closes, so the page reads at once.
+  const closed = { open: openDialogs(page).length, reads: spy.calls.length, ...state() };
+  intervalPart(page)?.click();
+  await page.settle(100);
+  const menu = { open: document.querySelector('.popover[role="menu"]') !== null, ...state() };
+  const from = spy.calls.length;
+  tick(5_000);
+  await page.settle();
+  menu.reads = spy.calls.length - from;
+  await closeBoxes(page);
+  const after = { open: document.querySelector('.popover[role="menu"]') !== null, ...state() };
+  spy.restore();
+  page.unmount();
+  results.push({
+    name,
+    ok:
+      JSON.stringify(dialog) === JSON.stringify({ open: 1, state: 'paused', title: 'Auto reload every 5 s, paused while a dialog is open', reads: 0 }) &&
+      JSON.stringify(closed) === JSON.stringify({ open: 0, reads: 1, state: 'on', title: 'Auto reload every 5 s' }) &&
+      JSON.stringify(menu) === JSON.stringify({ open: true, state: 'paused', title: 'Auto reload every 5 s, paused while a menu is open', reads: 0 }) &&
+      JSON.stringify(after) === JSON.stringify({ open: false, state: 'on', title: 'Auto reload every 5 s' }),
+    missing: [JSON.stringify(dialog), JSON.stringify(closed), JSON.stringify(menu), JSON.stringify(after)],
+  });
+}
+{
+  const name = "the count slot reads the view's words";
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const [accounts, keys, pools] = [await api.listAccounts(), await api.listKeys(), await api.listPools()];
+  const read = {};
+  for (const [path] of CARD_VIEWS) {
+    const page = await mount(path, { now: CLOCK_ORIGIN });
+    const slot = page.container.querySelector('.filter-bar__count');
+    read[path] = { critical: slot?.querySelector('.filter-bar__count--critical')?.textContent ?? null, sessions: page.container.querySelectorAll('.sessions-table tbody tr.srow').length, text: slot?.textContent ?? null };
+    page.unmount();
+  }
+  const attention = read['/quota'].critical ?? '';
+  results.push({
+    name,
+    ok:
+      read['/accounts'].text === plural(accounts.length, 'account', 'accounts') &&
+      read['/keys'].text === plural(keys.length, 'key', 'keys') &&
+      read['/pools'].text === plural(pools.length, 'pool', 'pools') &&
+      read['/sessions'].sessions > 0 &&
+      read['/sessions'].text === plural(read['/sessions'].sessions, 'session', 'sessions') &&
+      /^, \d+ needs? attention$/.test(attention) &&
+      read['/quota'].text === `${plural(accounts.filter((a) => a.kind === 'oauth').length, 'account', 'accounts')}${attention}`,
+    missing: Object.entries(read).map(([path, r]) => `${path} ${JSON.stringify(r)}`),
+  });
 }
 
 m = await mount('/sessions');
@@ -14853,7 +15045,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
         };
       });
     const badgeWords = (f) => `fork, ${f.relation}`;
-    const titleOf = (f) => `Branched from session ${f.session.forkedFrom} at depth ${f.session.forkDepth} on ${accountLabel.get(f.base?.accountId ?? '') ?? 'no base account'}. Follow to its row`;
+    const titleOf = (f) => `Branched from session ${f.session.forkedFrom} at depth ${f.session.forkDepth} on ${accountLabel.get(f.base?.accountId ?? '') ?? 'no base account'}. Go to its row`;
     // A fork whose row holds no pin claims no relation, so the two pinned ones carry the words read here.
     const related = forks.filter((f) => f.session.pinned);
     const wrongFork = related.filter((f) => f.relation === null || f.link?.textContent?.trim() !== badgeWords(f) || !f.link.classList.contains('badge--accent') || f.title !== titleOf(f) || f.description !== f.title);
@@ -14883,7 +15075,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     {
       // A released or expired pin leaves the last ledgered request's account on the row, so the relation reads only
       // while both pins are live: with the base's pin taken away and its account still listed, the badge keeps the
-      // neutral words and still follows to the row.
+      // neutral words and still leads to the row.
       const base = same?.base ?? null;
       const forked = same?.session ?? null;
       const { listSessions } = api;
@@ -14903,8 +15095,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
         words: badge?.textContent?.trim() ?? null,
       };
       results.push({
-        name: "/sessions a fork whose base lost its pin keeps the neutral badge with its follow description while the base's account is still listed",
-        ok: forked !== null && base !== null && read.baseAccount === base.accountId && read.words === `fork at ${forked.forkDepth}` && read.title === `Branched from session ${forked.forkedFrom} at depth ${forked.forkDepth}. Follow to its row` && read.description === read.title && read.href === `#${baseRowIn?.id}`,
+        name: "/sessions a fork whose base lost its pin keeps the neutral badge and the link to its row while the base's account is still listed",
+        ok: forked !== null && base !== null && read.baseAccount === base.accountId && read.words === `fork at ${forked.forkDepth}` && read.title === `Branched from session ${forked.forkedFrom} at depth ${forked.forkDepth}. Go to its row` && read.description === read.title && read.href === `#${baseRowIn?.id}`,
         missing: [JSON.stringify(read), baseRowIn?.id ?? 'no base row'],
       });
       api.listSessions = listSessions;
@@ -16534,56 +16726,31 @@ m.unmount();
   // before it, so the real time the clicks' reads take moves none of the story's relative times the earlier checks
   // read. The checked marks read the address back, so a row that handed its options over one change at a time would
   // leave fewer of them checked than the list holds, which the checked count catches. The address term reads that the
-  // page wrote the picker's own key with every value. A view on the filter bar opens each list in Add filter's values
-  // step and reads its chip, and a view that still draws the multi-selects reads their triggers.
+  // page wrote the picker's own key with every value. Each list opens in Add filter's values step, and its chip reads
+  // what the list holds.
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const barred = (page) => page.container.querySelector('.filter-bar') !== null;
-  const filterOf = (page, label) =>
-    barred(page)
-      ? filterBox()?.querySelector('.popover__title')?.textContent?.trim() === label
-        ? (filterBox()?.querySelector('.option-list') ?? undefined)
-        : undefined
-      : [...page.container.querySelectorAll('.filters .mselect')].find((d) => {
-          const shown = d.querySelector('.mselect__trigger')?.textContent?.trim() ?? '';
-          return shown === label || shown.startsWith(`${label} (`);
-        });
-  const openList = async (page, label) => {
-    if (barred(page)) await addFilter(page, label);
-    else {
-      filterOf(page, label)?.querySelector('.mselect__trigger')?.click();
-      await page.settle(150);
-    }
-  };
-  const closeList = async (page, label) => {
-    if (barred(page)) await closeBoxes(page);
-    else {
-      filterOf(page, label)?.querySelector('.mselect__trigger')?.click();
-      await page.settle(100);
-    }
-  };
+  const filterOf = (page, label) => (filterBox()?.querySelector('.popover__title')?.textContent?.trim() === label ? (filterBox()?.querySelector('.option-list') ?? undefined) : undefined);
+  const openList = async (page, label) => addFilter(page, label);
+  const closeList = async (page) => closeBoxes(page);
   const read = (page, label, key) => {
     const filter = filterOf(page, label);
     const head = filter?.querySelector('.mselect__option--all');
     // A preset row sets its members, so the choices are the options alone.
     const choices = [...(filter?.querySelectorAll(`${CHOICE}:not(.mselect__option--preset)`) ?? [])];
-    const chip = barred(page) ? chipOf(page, label.toLowerCase()) : undefined;
+    const chip = chipOf(page, label.toLowerCase());
     return {
       address: new URLSearchParams(page.location().search).get(key)?.split(',') ?? null,
       checked: choices.filter((o) => o.getAttribute('aria-selected') === 'true').map((o) => o.textContent?.trim() ?? ''),
       choices: choices.map((o) => o.textContent?.trim() ?? ''),
       first: head != null && filter?.querySelector('[role="option"]') === head,
       head: head ? { checked: head.getAttribute('aria-checked'), selected: head.getAttribute('aria-selected'), text: head.textContent?.trim() } : null,
-      set: barred(page) ? chip !== undefined : filter?.classList.contains('has-value') === true,
+      set: chip !== undefined,
       title: chip?.getAttribute('title') ?? null,
-      trigger: barred(page) ? (chip?.textContent?.trim() ?? `no ${label} chip`) : (filter?.querySelector('.mselect__trigger')?.textContent?.trim() ?? `no ${label} filter`),
+      trigger: chip?.textContent?.trim() ?? `no ${label} chip`,
     };
   };
-  /**
-   * The words a picker shows with `checked` on: a chip's word, three of its values and "+N" with every label in its
-   * title, a status by its code alone, or a trigger's count.
-   */
-  const summary = (page, label, checked) => {
-    if (!barred(page)) return { title: null, trigger: `${label} (${checked.length})` };
+  /** The words a picker's chip shows with `checked` on: its word, three of its values and "+N" with every label in its title, a status by its code alone. */
+  const summary = (label, checked) => {
     const values = label === 'Status' ? checked.map((c) => c.split(' ')[0]) : checked;
     return { title: checked.join(', '), trigger: `${label.toLowerCase()}: ${values.slice(0, 3).join(', ')}${values.length > 3 ? ` +${values.length - 3}` : ''}` };
   };
@@ -16643,7 +16810,7 @@ m.unmount();
           everyKind(none)
         );
       };
-      const wanted = summary(page, label, all.checked);
+      const wanted = summary(label, all.checked);
       results.push({
         name,
         ok:
@@ -16661,7 +16828,6 @@ m.unmount();
               all.trigger === wanted.trigger &&
               all.title === wanted.title &&
               all.address?.length === all.choices.length &&
-              (barred(page) || none.trigger === label) &&
               !none.set &&
               none.address === null &&
               none.checked.length === 0 &&
@@ -16686,7 +16852,7 @@ m.unmount();
           const under = read(page, label, key);
           await type('');
           const whole = read(page, label, key);
-          const words = summary(page, label, whole.checked);
+          const words = summary(label, whole.checked);
           results.push({
             name: queryName,
             ok:
@@ -16699,21 +16865,16 @@ m.unmount();
               sameSet(whole.checked, shown.choices) &&
               whole.head?.checked === 'mixed' &&
               whole.address !== null &&
-              (barred(page) || sameSet(whole.address, shown.choices)) &&
               whole.address.length === shown.choices.length &&
               whole.trigger === words.trigger &&
               whole.title === words.title,
             missing: [`shown ${shown.choices.join(',')}`, `under the query: ${brief(under)}`, `whole list: ${brief(whole)}, checked ${whole.checked.join(',')}, address ${whole.address?.join(',')}`, `wanted ${JSON.stringify(words)}`],
           });
-          if (barred(page)) await removeChip(page, label.toLowerCase());
-          else {
-            filterOf(page, label)?.querySelector('.mselect__clear')?.click();
-            await page.settle(700);
-          }
+          await removeChip(page, label.toLowerCase());
         }
       }
       // Clearing leaves the list open, so it is closed before the next picker opens.
-      await closeList(page, label);
+      await closeList(page);
     }
     page.unmount();
   }

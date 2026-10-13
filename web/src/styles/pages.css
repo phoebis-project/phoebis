@@ -453,25 +453,6 @@
 }
 
 /* Quota */
-.quota-meta {
-  display: inline-flex;
-  gap: 10px;
-  align-items: center;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-}
-
-.quota-meta__sep {
-  width: 3px;
-  height: 3px;
-  background: var(--ink-3);
-  border-radius: 50%;
-}
-
-.quota-meta__attention {
-  color: var(--critical-ink);
-}
-
 .quota-section {
   display: flex;
   flex-direction: column;
@@ -1214,6 +1195,11 @@
   align-items: start;
 }
 
+/* The bar spans the list and the detail, so both columns read under it. */
+.accounts > .filter-bar {
+  grid-column: 1 / -1;
+}
+
 .accounts__list {
   position: sticky;
   top: 72px;
@@ -1226,16 +1212,6 @@
   background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
-}
-
-.accounts__filters {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.accounts__add {
-  justify-content: center;
 }
 
 .account-rows {
@@ -1751,19 +1727,6 @@
   display: block;
   height: 100%;
   border-radius: 0 4px 4px 0;
-}
-
-.table-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-  padding: 12px 14px;
-}
-
-.table-toolbar .search {
-  flex: 1;
-  min-width: 200px;
 }
 
 .secret {
@@ -2711,44 +2674,6 @@
   padding: 5px 12px 5px 0;
 }
 
-.filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-
-/* Analytics scrolls far enough that the range and the filters have to stay reachable, so its bar rides under the topbar. */
-.filters--sticky {
-  position: sticky;
-  top: 52px;
-  z-index: 5;
-  padding: 8px 0;
-  background: color-mix(in srgb, var(--page) 92%, transparent);
-  backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--hairline);
-}
-
-.filters__search {
-  min-width: 260px;
-}
-
-.filters .search {
-  flex: 1 1 260px;
-}
-
-/* Fixed rather than flexible: a growing field pushes the analytics bar onto a second row at common widths. */
-.filters__session {
-  width: 232px;
-}
-
-.filters__cols {
-  position: relative;
-  display: flex;
-  gap: 8px;
-  margin-left: auto;
-}
-
 /* The list views' bar: a 32 px row that never wraps, the search the one slot that yields, and the chip line under it. */
 .filter-bar {
   display: flex;
@@ -2783,6 +2708,18 @@
 .filter-bar__count {
   font-size: 12.5px;
   white-space: nowrap;
+}
+
+.filter-bar__count--critical {
+  color: var(--critical-ink);
+}
+
+/* A phone's window is narrower than a row's controls, so there the row wraps rather than scroll the page sideways. */
+@media (max-width: 720px) {
+  .filter-bar__row {
+    flex-wrap: wrap;
+    height: auto;
+  }
 }
 
 .filter-bar--sticky {

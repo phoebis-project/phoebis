@@ -17,7 +17,6 @@ export { GroupBy, GroupsButton } from '@/components/GroupBy';
 export { RangeControl } from '@/components/RangeControl';
 export { RefreshControl } from '@/components/RefreshControl';
 export { ChartTooltip } from '@/components/charts/Tooltip';
-export { MultiSelect } from '@/components/ui/MultiSelect';
 export { OptionList } from '@/components/ui/OptionList';
 export { PATTERN_GRAMMAR, PatternInput } from '@/components/ui/PatternInput';
 export { Popover, PopoverHost } from '@/components/ui/Popover';

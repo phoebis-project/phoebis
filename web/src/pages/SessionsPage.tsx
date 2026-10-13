@@ -4,6 +4,7 @@ import { api } from '@/api';
 import type { Account, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, Pool, RecipeState, Session } from '@/api/types';
 import { useSession } from '@/app/session';
 import { HELD_PROBE_HINT, MIGRATED_PROBE_HINT } from '@/components/charts/theme';
+import { FilterBar } from '@/components/FilterBar';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Tile } from '@/components/ui/Tile';
@@ -190,24 +191,27 @@ function parkDetail(a: KeepaliveRecipe, now: number): string {
 }
 
 export function SessionsPage() {
-  // The router keeps a session while it is used, so the list is read again rather than aged on this clock alone:
-  // a session still sending requests would otherwise drop off once its first-read activity crossed the expiry. The
-  // overview's day of rollups moves slowly and a minute's lag on its live counts is fine for a summary, so it is read
-  // once a minute.
-  const tick = useNow(15_000);
-  const overviewTick = useNow(60_000);
+  const [intervalMs, setIntervalMs] = useState(5_000);
+  const [barOpen, setBarOpen] = useState(false);
+  const [pending, setPending] = useState<Row | null>(null);
+  // The rows whose menu is open, by row: an answer landing under an open menu could add or drop rows beneath it.
+  const [openMenus, setOpenMenus] = useState<ReadonlySet<string>>(() => new Set());
+  const pauseCause = pending !== null ? 'dialog' : openMenus.size > 0 || barOpen ? 'menu' : null;
+  const reread = { paused: pauseCause !== null, refreshMs: intervalMs };
+  // The router keeps a session while it is used, so the list is read again rather than aged on this clock alone: a
+  // session still sending requests would otherwise drop off once its first-read activity crossed the expiry. The
+  // overview and the recipes read on the same interval, so the tiles and the hidden lines move with the rows.
   const accounts = useAsync(() => api.listAccounts(), []);
   const keys = useAsync(() => api.listKeys(), []);
-  const overview = useAsync(() => api.getKeepaliveOverview(), [overviewTick]);
+  const overview = useAsync(() => api.getKeepaliveOverview(), [], reread);
   const pools = useAsync(() => api.listPools(), []);
-  const recipes = useAsync(() => api.listKeepaliveRecipes(), [tick]);
-  const sessions = useAsync(() => api.listSessions(), [tick]);
+  const recipes = useAsync(() => api.listKeepaliveRecipes(), [], reread);
+  const sessions = useAsync(() => api.listSessions(), [], reread);
   const settings = useAsync(() => api.getSettings(), []);
   const now = useNow(5_000);
   const navigate = useNavigate();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [visible, setVisible] = useState<Set<SessionColumnId>>(() => new Set(SESSION_COLUMNS.map((c) => c.id).filter((id) => !HIDDEN_BY_DEFAULT.includes(id))));
-  const [pending, setPending] = useState<Row | null>(null);
   const { notify } = useSession();
   // The base row the last fork link led to, marked until another fork link is followed.
   const [current, setCurrent] = useState<string | null>(null);
@@ -266,8 +270,36 @@ export function SessionsPage() {
   // The expand gutter, the Session column and the menu are drawn whatever the control hides.
   const columns = visible.size + 3;
 
+  const menuChange = (id: string, open: boolean) =>
+    setOpenMenus((s) => {
+      const next = new Set(s);
+      if (open) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+
   return (
     <div className="stack">
+      <FilterBar
+        address="/sessions"
+        count={`${(rows ?? []).length} ${(rows ?? []).length === 1 ? 'session' : 'sessions'}`}
+        filters={{}}
+        onOpenChange={setBarOpen}
+        refresh={{
+          intervalMs,
+          onIntervalChange: setIntervalMs,
+          onRefresh: () => {
+            overview.reload();
+            recipes.reload();
+            sessions.reload();
+          },
+          paused: pauseCause,
+          refreshTitle: 'Reads the list again now',
+        }}
+        update={() => undefined}
+      >
+        <ColumnsControl columns={SESSION_COLUMNS} visible={visible} onChange={setVisible} />
+      </FilterBar>
       <div className="page-head">
         <div className="page-head__lead">
           <p className="page-head__meta">
@@ -287,9 +319,9 @@ export function SessionsPage() {
 
       <div className="stat-grid stat-grid--caps">
         <Tile label="Sessions" value={o ? <span className="nowrap">{`${fmtInt(o.limits.sessions.count)} of ${fmtInt(o.limits.sessions.max)}`}</span> : null} note={sessionsNote} error={overviewError} />
-        {/* The overview is read once a minute and the recipes every 15 seconds, so the figure can trail the hidden
-            lines by a read, which is accepted. Only a line the recipes list carries comes off, so a record that never
-            drew a line is never subtracted. */}
+        {/* The overview and the recipes are two reads that land apart, so the figure can trail the hidden lines by a
+            read, which is accepted. Only a line the recipes list carries comes off, so a record that never drew a line
+            is never subtracted. */}
         <Tile
           label="Agents"
           value={
@@ -349,14 +381,9 @@ export function SessionsPage() {
         subtitle="One row per session. Open a row for the cache-warming recipe each agent carries"
         actions={
           rows && rows.length > 0 ? (
-            <>
-              <Button size="sm" onClick={() => setExpanded(allOpen ? new Set() : new Set(rows.map((r) => rowKey(r.session))))} aria-pressed={allOpen}>
-                {allOpen ? 'Collapse all' : 'Expand all'}
-              </Button>
-              <div className="filters__cols">
-                <ColumnsControl columns={SESSION_COLUMNS} visible={visible} onChange={setVisible} />
-              </div>
-            </>
+            <Button size="sm" onClick={() => setExpanded(allOpen ? new Set() : new Set(rows.map((r) => rowKey(r.session))))} aria-pressed={allOpen}>
+              {allOpen ? 'Collapse all' : 'Expand all'}
+            </Button>
           ) : undefined
         }
       >
@@ -422,6 +449,7 @@ export function SessionsPage() {
                     forkBase={row.session.forkedFrom === null ? null : rowDomId({ ...row.session, sessionId: row.session.forkedFrom })}
                     listedRows={listedRows}
                     onFollowFork={followFork}
+                    onMenuChange={(open) => menuChange(rowKey(row.session), open)}
                     onOpen={(path) => navigate(path)}
                     onRelease={() => setPending(row)}
                     visible={visible}
@@ -460,6 +488,7 @@ function SessionRows({
   forkBase,
   listedRows,
   onFollowFork,
+  onMenuChange,
   onOpen,
   onRelease,
   visible,
@@ -473,6 +502,7 @@ function SessionRows({
   listedRows: ReadonlyMap<string, Row>;
   now: number;
   onFollowFork: (id: string) => void;
+  onMenuChange: (open: boolean) => void;
   onOpen: (path: string) => void;
   onRelease: () => void;
   onToggle: () => void;
@@ -653,6 +683,7 @@ function SessionRows({
         <td className="col-fit" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
           <Menu
             label={`Actions for session ${shortId(session.sessionId, SESSION_CHARS)}${session.historical ? ', deleted holder' : ''}`}
+            onOpenChange={onMenuChange}
             items={[
               { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(analyticsHref(trafficSession, session)) },
               { label: 'View in requests', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(requestsHref(trafficSession, session)) },
@@ -775,8 +806,8 @@ function ForkBadge({
     base === null
       ? `Branched from session ${from}${at}, which this list does not hold`
       : relation === null
-        ? `Branched from session ${from}${at}. Follow to its row`
-        : `Branched from session ${from}${at} on ${baseAccount?.label}. Follow to its row`;
+        ? `Branched from session ${from}${at}. Go to its row`
+        : `Branched from session ${from}${at} on ${baseAccount?.label}. Go to its row`;
   const described = useDescription(title);
   const hosted = described && !described.sibling ? described.id : undefined;
   // The badge sits under the session id, so it names the relation or the depth alone, and the title the base.

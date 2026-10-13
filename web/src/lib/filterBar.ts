@@ -207,8 +207,12 @@ export const KEYS_DIMENSIONS: Dimension[] = [
   { anyLabel: 'All statuses', defaultValue: 'all', field: 'status', group: 'Keys', kind: 'choice', label: 'Status', word: 'status' },
 ];
 
+/** Accounts. The status choice's none is `all`, the codec's default. */
+export const ACCOUNTS_DIMENSIONS: Dimension[] = [{ anyLabel: 'All statuses', defaultValue: 'all', field: 'status', group: 'Accounts', kind: 'choice', label: 'Status', word: 'status' }];
+
 /** The codec keys that are no dimension: `range`, `rows` and `search` everywhere, and per view the keys named here. */
-export const NOT_DIMENSIONS: Record<'analytics' | 'keys' | 'requests' | 'routingLog', readonly string[]> = {
+export const NOT_DIMENSIONS: Record<'accounts' | 'analytics' | 'keys' | 'requests' | 'routingLog', readonly string[]> = {
+  accounts: ['range', 'rows', 'search', 'sort'],
   analytics: ['burn', 'by', 'groups', 'key', 'range', 'rows', 'search', 'unit'],
   keys: ['range', 'rows', 'search'],
   requests: ['range', 'rows', 'search'],

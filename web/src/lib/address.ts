@@ -1,6 +1,7 @@
 import { REQUEST_KIND_VALUES } from '@/api/decode';
 import type { AnalyticsGroupBy, BurnGroup, KeyStatus, RequestKind } from '@/api/types';
 import { COST_UNITS } from './analytics';
+import { ACCOUNT_STATUSES } from './quota';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -266,6 +267,22 @@ export const KEYS_CODEC = codecOf<KeysAddress>({
   pools: list('pools'),
   search: text('search'),
   status: { default: 'all', kind: 'choice', name: 'status', values: KEY_STATUSES },
+});
+
+export interface AccountsAddress {
+  search: string;
+  /** The list's order: `name` the default, `reset` the soonest reset, `usage` the most used, `status`. */
+  sort: string;
+  /** `all` the default, else an account status. */
+  status: string;
+}
+
+const ACCOUNT_SORTS = ['name', 'reset', 'usage', 'status'] as const;
+
+export const ACCOUNTS_CODEC = codecOf<AccountsAddress>({
+  search: text('search'),
+  sort: { default: 'name', kind: 'choice', name: 'sort', values: ACCOUNT_SORTS },
+  status: { default: 'all', kind: 'choice', name: 'status', values: ['all', ...ACCOUNT_STATUSES] },
 });
 
 export interface ModelsAddress {
