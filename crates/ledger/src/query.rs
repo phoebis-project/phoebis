@@ -107,6 +107,10 @@ pub type RequestWithAttempts = (RequestRecord, Vec<AttemptRecord>);
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct RequestFilter {
     pub text: Option<String>,
+    /// Keep the one request whose id equals the value, literally.
+    pub request: Option<String>,
+    /// Keep the requests whose session id equals the value, literally.
+    pub session: Option<String>,
     pub keys: Vec<String>,
     pub pools: Vec<String>,
     /// Keep the requests whose serving attempt, the last one, ran on an account in the list: the account the
@@ -298,6 +302,14 @@ pub fn list_requests(
         args.push(Box::new(format!("%{}%", literal_like(text))));
         let n = args.len();
         clauses.push(format!("(id LIKE ?{n} ESCAPE '\\' OR session_id LIKE ?{n} ESCAPE '\\' OR key_id LIKE ?{n} ESCAPE '\\' OR model LIKE ?{n} ESCAPE '\\' OR error_code LIKE ?{n} ESCAPE '\\' OR EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id AND (a.account_id LIKE ?{n} ESCAPE '\\' OR a.upstream_request_id LIKE ?{n} ESCAPE '\\' OR a.upstream_message_id LIKE ?{n} ESCAPE '\\')))"));
+    }
+    if let Some(request) = filter.request.as_deref().filter(|r| !r.is_empty()) {
+        args.push(Box::new(request.to_string()));
+        clauses.push(format!("id = ?{}", args.len()));
+    }
+    if let Some(session) = filter.session.as_deref().filter(|s| !s.is_empty()) {
+        args.push(Box::new(session.to_string()));
+        clauses.push(format!("session_id = ?{}", args.len()));
     }
     key_lifetimes(&filter.keys, live, &mut args, &mut clauses);
     in_list_or_null("pool_id", &filter.pools, &mut args, &mut clauses);
@@ -617,10 +629,6 @@ pub const DECISION_KINDS: &[&str] = &["exhausted", "held", "moved", "placed", "r
 /// The pseudo-kind that names a probe's decision of any kind in `kinds`.
 pub const PROBE_KIND: &str = "probe";
 
-/// The one event kind the default set leaves out beside the probe decisions: the purge writes it per conversation
-/// root on every tick, so it would bury the decisions it follows unless asked for.
-const HIDDEN_EVENT_KIND: &str = "warm_prefix_expired";
-
 /// The decision kinds that sent the request upstream, and so have an attempt that answered for them: the same three
 /// as `COMPLETING_ATTEMPT` names.
 const DISPATCHING_KINDS: &[&str] = &["moved", "placed", "renewed"];
@@ -636,8 +644,8 @@ pub struct RoutingLogFilter {
     pub pools: Vec<String>,
     pub accounts: Vec<String>,
     pub models: Vec<String>,
-    /// `None` is the default set (every decision kind with `probe` 0, every event kind but `warm_prefix_expired`).
-    /// `Some` is exactly the kinds named, `probe` the pseudo-kind for a probe decision of any kind.
+    /// `None` is every decision and event kind, the probe decisions among them. `Some` is exactly the kinds named,
+    /// `probe` the pseudo-kind for a probe decision of any kind.
     pub kinds: Option<Vec<String>>,
 }
 
@@ -899,25 +907,22 @@ fn decision_statement(filter: &RoutingLogFilter) -> Option<LogStatement> {
             "(d.account_id IN ({marks}) OR d.from_account_id IN ({marks}))"
         ));
     }
-    match &filter.kinds {
-        None => statement.clauses.push("d.probe = 0".into()),
-        Some(kinds) => {
-            let named: Vec<String> = kinds
-                .iter()
-                .filter(|k| DECISION_KINDS.contains(&k.as_str()))
-                .cloned()
-                .collect();
-            let probes = kinds.iter().any(|k| k == PROBE_KIND);
-            let mut of_kind = Vec::new();
-            in_list("d.kind", &named, &mut statement.args, &mut of_kind);
-            let clause = match (of_kind.pop(), probes) {
-                (None, false) => return None,
-                (None, true) => "d.probe = 1".to_string(),
-                (Some(kind), false) => format!("{kind} AND d.probe = 0"),
-                (Some(kind), true) => format!("(({kind} AND d.probe = 0) OR d.probe = 1)"),
-            };
-            statement.clauses.push(clause);
-        }
+    if let Some(kinds) = &filter.kinds {
+        let named: Vec<String> = kinds
+            .iter()
+            .filter(|k| DECISION_KINDS.contains(&k.as_str()))
+            .cloned()
+            .collect();
+        let probes = kinds.iter().any(|k| k == PROBE_KIND);
+        let mut of_kind = Vec::new();
+        in_list("d.kind", &named, &mut statement.args, &mut of_kind);
+        let clause = match (of_kind.pop(), probes) {
+            (None, false) => return None,
+            (None, true) => "d.probe = 1".to_string(),
+            (Some(kind), false) => format!("{kind} AND d.probe = 0"),
+            (Some(kind), true) => format!("(({kind} AND d.probe = 0) OR d.probe = 1)"),
+        };
+        statement.clauses.push(clause);
     }
     Some(statement)
 }
@@ -931,26 +936,21 @@ fn event_statement(filter: &RoutingLogFilter) -> Option<LogStatement> {
         &mut statement.args,
         &mut statement.clauses,
     );
-    match &filter.kinds {
-        None => statement
-            .clauses
-            .push(format!("e.kind != '{HIDDEN_EVENT_KIND}'")),
-        Some(kinds) => {
-            let named: Vec<String> = kinds
-                .iter()
-                .filter(|k| EVENT_KINDS.contains(&k.as_str()))
-                .cloned()
-                .collect();
-            if named.is_empty() {
-                return None;
-            }
-            in_list(
-                "e.kind",
-                &named,
-                &mut statement.args,
-                &mut statement.clauses,
-            );
+    if let Some(kinds) = &filter.kinds {
+        let named: Vec<String> = kinds
+            .iter()
+            .filter(|k| EVENT_KINDS.contains(&k.as_str()))
+            .cloned()
+            .collect();
+        if named.is_empty() {
+            return None;
         }
+        in_list(
+            "e.kind",
+            &named,
+            &mut statement.args,
+            &mut statement.clauses,
+        );
     }
     Some(statement)
 }

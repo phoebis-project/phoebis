@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '@/api';
 import { effectiveLabel } from '@/api/decode';
@@ -18,10 +18,23 @@ const TABS: { label: string; value: CostTab }[] = [
   { label: 'API prices', value: 'api-prices' },
 ];
 
-/** The "Cost reference" link; the dialog opens on `tab`. */
-export function CostReferenceLink({ tab }: { tab: CostTab }) {
+/**
+ * The "Cost reference" link, whose dialog opens on `tab`. `onOpenChange` hears the dialog open and close, for a page
+ * whose auto reload waits while a dialog is open.
+ */
+export function CostReferenceLink({ onOpenChange, tab }: { onOpenChange?: (open: boolean) => void; tab: CostTab }) {
   const [open, setOpen] = useState(false);
   const [shown, setShown] = useState<CostTab>(tab);
+  // A link unmounted with its dialog open reports it closed, so the page's pause does not outlive the dialog.
+  const openChange = useRef(onOpenChange);
+  useLayoutEffect(() => {
+    openChange.current = onOpenChange;
+  });
+  useEffect(() => {
+    if (!open) return;
+    openChange.current?.(true);
+    return () => openChange.current?.(false);
+  }, [open]);
   // Read on every opening, so the dialog shows the tables in force, and never while it is closed.
   const settings = useAsync(() => (open ? api.getSettings() : Promise.resolve(null)), [open]);
   const close = () => setOpen(false);

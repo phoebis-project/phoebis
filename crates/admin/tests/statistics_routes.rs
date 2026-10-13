@@ -4073,13 +4073,14 @@ async fn the_routing_log_refuses_an_unknown_kind_a_bad_time_a_bad_cursor_and_a_l
 }
 
 #[tokio::test]
-async fn an_empty_kinds_reads_as_the_default_set() {
+async fn an_empty_kinds_reads_as_every_kind() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     routed(&parts, &cookie).await;
     let now = common::NOW;
     decide(&parts, "r1", 1, 1, now - 3_000).await;
-    // Outside the default set, so an empty `kinds=` read as every kind would answer it.
+    // A warm prefix expiry, the kind a narrower set would drop, so the row proves an absent and an emptied kinds read
+    // one set, every kind.
     parts
         .ledger
         .record(routing_event(now - 2_000, "warm_prefix_expired"));
@@ -4093,7 +4094,7 @@ async fn an_empty_kinds_reads_as_the_default_set() {
         &parts.app,
         &format!("/admin/routing-log?{window}"),
         &cookie,
-        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 2),
+        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 3),
     )
     .await;
     let emptied = json(

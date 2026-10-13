@@ -166,6 +166,16 @@ export function instant(ms: number, now: number): string {
   return `${new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${fmtShortTime(at)}`;
 }
 
+/** A custom span's words: the times alone inside one local calendar day, the date before each time across days. */
+export function spanText(fromMs: number, toMs: number): string {
+  const from = new Date(fromMs);
+  const to = new Date(toMs);
+  const sameDay = from.getFullYear() === to.getFullYear() && from.getMonth() === to.getMonth() && from.getDate() === to.getDate();
+  const day = (d: Date) => d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+  const time = (d: Date) => fmtShortTime(d.toISOString());
+  return sameDay ? `${time(from)} to ${time(to)}` : `${day(from)} ${time(from)} to ${day(to)} ${time(to)}`;
+}
+
 export function fmtDate(isoTime: string): string {
   return new Date(isoTime).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
 }

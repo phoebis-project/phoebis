@@ -5,16 +5,19 @@ import { slug } from '@/api/http';
 import type { ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useChartInk } from '@/components/charts/useChartInk';
+import { FilterBar } from '@/components/FilterBar';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { Tile } from '@/components/ui/Tile';
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { KEYS_CODEC, type KeysAddress } from '@/lib/address';
 import { anchorOf } from '@/lib/attention';
 import { clock } from '@/lib/clock';
+import { KEYS_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
+import type { PauseCause } from '@/lib/follow';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
 import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, sortKeys, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
-import { useAsync, useCommittedText, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
+import { useAsync, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { scrollToElement } from '@/lib/scroll';
 
 const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
@@ -34,6 +37,12 @@ const MODES: { label: string; value: ModelRulesMode }[] = [
 const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previous secret. A session that registered a companion and sent no request since counts as switched.';
 /** The note under the Status badge. The fill column cuts it, so its title opens with the whole of it. */
 const retiredNote = (sessions: number) => `${sessions} ${sessions === 1 ? 'session' : 'sessions'} still on the previous secret`;
+const STATUS_OPTIONS = [
+  { label: 'Active', value: 'active' },
+  { label: 'Disabled', value: 'disabled' },
+  { label: 'Expired', value: 'expired' },
+  { label: 'Revoked', value: 'revoked' },
+];
 
 export function KeysPage() {
   const now = useNow();
@@ -42,7 +51,7 @@ export function KeysPage() {
   const navigate = useNavigate();
   const pageRef = useRef<HTMLDivElement>(null);
   const landed = useRef<string | null>(null);
-  const { filters } = useQueryFilters(KEYS_CODEC);
+  const { address, filters } = useQueryFilters(KEYS_CODEC);
   const status = filters.status as 'all' | KeyStatus;
   // The dialog's one-shot `edit` and `group` wait in the address until the key list loads, so a filter written before
   // then carries them through. Written at once, as the hook writes.
@@ -56,7 +65,6 @@ export function KeysPage() {
     const next = params.toString();
     navigate({ hash: location.hash, pathname: location.pathname, search: next ? `?${next}` : '' }, { flushSync: true, replace: true });
   };
-  const search = useCommittedText(filters.search, (next) => update({ search: next }));
   // An effect's write: `update` flushes at once, which React cannot do inside an effect, so these replace the address
   // the router's usual way.
   const replaceFromEffect = useCallback(
@@ -73,10 +81,13 @@ export function KeysPage() {
   const { notify } = useSession();
   // The rows whose menu is open, by key id: an answer landing under an open menu could add or drop rows beneath it.
   const [openMenus, setOpenMenus] = useState<ReadonlySet<string>>(() => new Set());
+  const [intervalMs, setIntervalMs] = useState(5_000);
+  const [barOpen, setBarOpen] = useState(false);
   // The key dialog resets its fields whenever the pool list changes, so a refresh landing under it would wipe them.
   const paused = dialog !== null || created !== null || confirm !== null || openMenus.size > 0;
-  const keys = useAsync(() => api.listKeys(), [], { paused, refreshMs: 30_000 });
-  const pools = useAsync(() => api.listPools(), [], { paused, refreshMs: 30_000 });
+  const pauseCause: PauseCause | null = dialog !== null || created !== null || confirm !== null ? 'dialog' : openMenus.size > 0 || barOpen ? 'menu' : null;
+  const keys = useAsync(() => api.listKeys(), [], { paused: paused || barOpen, refreshMs: intervalMs });
+  const pools = useAsync(() => api.listPools(), [], { paused: paused || barOpen, refreshMs: intervalMs });
 
   // The address opens the dialog on a named group once the key list has loaded; the entry is then replaced by the
   // bare route, so closing the dialog, a reload or Back does not open it again.
@@ -100,14 +111,13 @@ export function KeysPage() {
 
   const poolList = useMemo(() => pools.data ?? [], [pools.data]);
   const poolById = useMemo(() => new Map(poolList.map((p) => [p.id, p])), [poolList]);
-  // The pool filter is the address: the select reads `?pools=<id>` and writes it back, so a reload keeps the filter and
-  // the pool card's key count link lands on it. Until the pools are read the address filters as written, so the rows
-  // match it during the read and after a failed one, and the select holds an option for the id: without one it would
-  // read All pools beside the filtered rows, and choosing All pools would change nothing. An id no pool carries reads
-  // as All pools and leaves the address once the pools have loaded; while a dialog query is still in the address, its
-  // own effect goes first. All pools is the empty string, which no pool id can be, since a pool may be named `all`.
+  // The pool filter is the address: the Pool chip reads `?pools=<id>,<id>` and writes it back, so a reload keeps the
+  // filter and the pool card's key count link lands on it. Until the pools are read the address filters as written, so
+  // the rows match it during the read and after a failed one, and the Pool list holds an option for each id, which the
+  // chip prints. An id no pool carries leaves the filter once the pools have loaded, and the address with it when no
+  // listed id is left. While a dialog query is still in the address, its own effect goes first.
   const poolIds = useMemo(() => filters.pools.filter((id) => pools.data === null || poolById.has(id)), [filters.pools, poolById, pools.data]);
-  const poolFilter = poolIds[0] ?? '';
+  const poolOptions = useMemo(() => [...poolList.map((p) => ({ label: p.name, value: p.id })), ...filters.pools.filter((id) => !poolById.has(id)).map((id) => ({ label: id, value: id }))], [filters.pools, poolById, poolList]);
   useEffect(() => {
     if (filters.pools.length === 0 || !pools.data || poolIds.length > 0) return;
     if (new URLSearchParams(location.search).has('edit')) return;
@@ -170,6 +180,31 @@ export function KeysPage() {
 
   return (
     <div className="stack" ref={pageRef}>
+      <FilterBar
+        address={address}
+        count={keys.data === null ? '' : `${rows.length} ${rows.length === 1 ? 'key' : 'keys'}`}
+        dimensions={KEYS_DIMENSIONS}
+        disabled={notLoadedReason('pools', 'pool', pools)}
+        filters={filters}
+        onOpenChange={setBarOpen}
+        options={{ pools: poolOptions, status: STATUS_OPTIONS }}
+        placeholder="Search keys"
+        refresh={{
+          intervalMs,
+          onIntervalChange: setIntervalMs,
+          onRefresh: () => {
+            keys.reload();
+            pools.reload();
+          },
+          paused: pauseCause,
+          refreshTitle: 'Reads the list again now',
+        }}
+        update={update}
+      >
+        <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, key: null })}>
+          Create key
+        </Button>
+      </FilterBar>
       <div className="stat-grid">
         <Tile label="Keys" value={totals ? fmtInt(totals.keys) : null} />
         <Tile label="Active" value={totals ? fmtInt(totals.active) : null} />
@@ -205,28 +240,6 @@ export function KeysPage() {
         </Card>
 
         <Card padded={false} className="card--table">
-          <div className="table-toolbar">
-            <SearchInput placeholder="Search keys" value={search.draft} onChange={(e) => search.onChange(e.target.value)} onBlur={search.onBlur} onKeyDown={search.onKeyDown} />
-            <Select value={status} onChange={(e) => update({ status: e.target.value })} aria-label="Status">
-              <option value="all">All statuses</option>
-              <option value="active">Active</option>
-              <option value="disabled">Disabled</option>
-              <option value="expired">Expired</option>
-              <option value="revoked">Revoked</option>
-            </Select>
-            <Select value={poolFilter} onChange={(e) => update({ pools: e.target.value ? [e.target.value] : [] })} aria-label="Pool">
-              <option value="">All pools</option>
-              {pools.data === null && poolFilter !== '' && <option value={poolFilter}>{poolFilter}</option>}
-              {poolList.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </Select>
-            <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, key: null })} style={{ marginLeft: 'auto' }}>
-              Create key
-            </Button>
-          </div>
           <div className="table-wrap">
             <table className="table">
               <thead>

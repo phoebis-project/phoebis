@@ -417,9 +417,8 @@ pub(crate) struct RoutingLogQuery {
     pub keys: Option<String>,
     /// A comma list of decision kinds, `exhausted`, `held`, `moved`, `placed`, `refused`, `renewed`, the
     /// pseudo-kind `probe` for a keepalive probe's decision of any kind, and event kinds, the `kind` list of
-    /// `GET /admin/requests/{id}`. Absent, the set is every decision that is not a probe's and every event but
-    /// `warm_prefix_expired`. Present, it replaces that set whole, so `kinds=probe` lists the probes alone, and an
-    /// empty `kinds=` reads as absent, the default set.
+    /// `GET /admin/requests/{id}`. Absent, the set is every decision and event kind. Present, it names exactly the
+    /// kinds listed, so `kinds=probe` lists the probes alone, and an empty `kinds=` reads as absent.
     pub kinds: Option<String>,
     /// 1 to 200, default 25.
     pub limit: Option<u32>,
@@ -468,7 +467,7 @@ pub(crate) async fn list(
         (Ok(from), Ok(to)) => (from.unwrap_or(now - HOUR_MS), to.unwrap_or(now)),
         (Err(error), _) | (_, Err(error)) => return failure(StatusCode::BAD_REQUEST, &error),
     };
-    // An emptied list reads as an absent one, the default set, as the emptied fields below do.
+    // An emptied list reads as an absent one, every kind, as the emptied fields below read as absent.
     let kinds = Some(list_param(&q, "kinds")).filter(|kinds| !kinds.is_empty());
     if let Some(unknown) = kinds.iter().flatten().find(|kind| {
         let kind = kind.as_str();

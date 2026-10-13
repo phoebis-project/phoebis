@@ -33,14 +33,16 @@ export { anchorTier, bandFactor, bandRuns, familyOrder, fullWindowsAWeek, inBand
 // The strip's model and its buttons' names, so a card check spells the stations a record draws and the names a reader
 // hears from the derivation the strip reads.
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';
-export { earlierHolderLabel, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, shortModel } from '@/lib/format';
+export { earlierHolderLabel, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, shortModel, spanText } from '@/lib/format';
 // The pace mark's offset and the end it runs to, so the check and the meter place it by one arithmetic.
 export { endOf, remainingTimeShare } from '@/lib/quota';
 // A request's native unit, so a check picks the rows it reads by the rule the Cost cell draws them by.
 export { costUnitOf } from '@/lib/requests';
+// The drawer's widenings, so a check reads the drawer's links against the addresses the page builds them from.
+export { requestsWiden } from '@/lib/requestsLink';
 export { fmtWindows, ringFigures } from '@/lib/rings';
 // The walk's words, so a card check reads a popover's column and its title as the console words them.
-export { keyWord, STEP_NAME } from '@/lib/routingLog';
+export { ALL_KINDS, keyWord, STEP_NAME } from '@/lib/routingLog';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;
 export const requestEvents = REQUEST_EVENTS;
 export const requests = REQUESTS;

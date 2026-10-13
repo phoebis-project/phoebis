@@ -62,6 +62,7 @@
   align-items: center;
   padding: 3px 9px;
   font-size: 12.5px;
+  line-height: 18px;
   background: var(--surface-2);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
@@ -109,6 +110,85 @@
   align-items: center;
   gap: 6px;
   min-height: 26px;
+}
+
+/* The bar's chip line: one line, never wrapping, under the controls' row. */
+.chip-line {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* The fold reads each chip at its own width, which a chip shrunk to fit the line would hide. */
+.chip-line > * {
+  flex: none;
+}
+
+/* After "+N more" every chip stands, so the line wraps as it must. */
+.chip-line.is-expanded {
+  flex-wrap: wrap;
+}
+
+.chip-line .link-btn {
+  font-size: 12.5px;
+}
+
+.chip--filter {
+  max-width: 240px;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* An author display beats the hidden attribute's UA rule, so a chip the fold hides says so again here. */
+.chip--filter[hidden] {
+  display: none;
+}
+
+/* Two classes, so the body outranks `.chip--removable button` (one class and a type), which styles the x alone. */
+.chip--filter .chip__body {
+  display: inline-flex;
+  gap: 4px;
+  min-width: 0;
+  padding: 3px 0 3px 9px;
+  color: var(--ink);
+  line-height: 18px;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+
+.chip--filter .chip__body:hover {
+  background: none;
+}
+
+/* The values give way to a narrow chip, so the word keeps one line rather than wrapping beside them. */
+.chip--filter .chip__word {
+  flex: none;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+/* The ellipsis draws on the values span, never on the inline-flex body. */
+.chip--filter .chip__values {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The pill clips at its round end, so the x stands as far in from it as the body's text stands from the start. */
+.chip--filter .chip__remove {
+  margin-right: 8px;
+}
+
+/* The pill clips what passes its edge, so a focused button's ring draws inside it. */
+.chip--filter button:focus-visible {
+  outline-offset: -2px;
+}
+
+.chip--more {
+  border-style: dashed;
 }
 
 .link-btn {
@@ -373,25 +453,6 @@
 }
 
 /* Quota */
-.quota-meta {
-  display: inline-flex;
-  gap: 10px;
-  align-items: center;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-}
-
-.quota-meta__sep {
-  width: 3px;
-  height: 3px;
-  background: var(--ink-3);
-  border-radius: 50%;
-}
-
-.quota-meta__attention {
-  color: var(--critical-ink);
-}
-
 .quota-section {
   display: flex;
   flex-direction: column;
@@ -1134,6 +1195,11 @@
   align-items: start;
 }
 
+/* The bar spans the list and the detail, so both columns read under it. */
+.accounts > .filter-bar {
+  grid-column: 1 / -1;
+}
+
 .accounts__list {
   position: sticky;
   top: 72px;
@@ -1146,16 +1212,6 @@
   background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
-}
-
-.accounts__filters {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.accounts__add {
-  justify-content: center;
 }
 
 .account-rows {
@@ -1673,19 +1729,6 @@
   border-radius: 0 4px 4px 0;
 }
 
-.table-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-  padding: 12px 14px;
-}
-
-.table-toolbar .search {
-  flex: 1;
-  min-width: 200px;
-}
-
 .secret {
   display: flex;
   gap: 10px;
@@ -1831,6 +1874,11 @@
   .requests.has-drawer {
     grid-template-columns: minmax(0, 1fr) 400px;
   }
+}
+
+/* The bar spans the list and the drawer, so its row keeps one line while the drawer narrows the list's column. */
+.requests > .filter-bar {
+  grid-column: 1 / -1;
 }
 
 /* The cells sit 8 px apart, so the fit columns leave the Client fill, which floors at sixteen characters, as much of the
@@ -2104,10 +2152,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.routing-log__id {
-  width: 132px;
 }
 
 /* The decision card spans the open row's tint, so its candidate table is the log's card less 16 px either side. The
@@ -2630,37 +2674,48 @@
   padding: 5px 12px 5px 0;
 }
 
-.routing-log__scope {
+/* The list views' bar: a 32 px row, the search the one slot that yields, and the chip line under it. A row narrower
+   than its slots wraps the trailing ones to a second line rather than run past the page. */
+.filter-bar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-  align-items: center;
-  padding: 10px 14px;
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-  border-radius: var(--radius);
+  flex-direction: column;
+  gap: 8px;
 }
 
-.routing-log__widen {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: baseline;
-}
-
-.routing-log__clear {
-  margin-left: auto;
-}
-
-.filters {
+.filter-bar__row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  min-height: 32px;
 }
 
-/* Analytics scrolls far enough that the range and the filters have to stay reachable, so its bar rides under the topbar. */
-.filters--sticky {
+.filter-bar__row > * {
+  flex: none;
+}
+
+.filter-bar__row .search {
+  flex: 1 1 auto;
+  min-width: 160px;
+}
+
+.filter-bar__edge {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-left: auto;
+}
+
+.filter-bar__count {
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.filter-bar__count--critical {
+  color: var(--critical-ink);
+}
+
+.filter-bar--sticky {
   position: sticky;
   top: 52px;
   z-index: 5;
@@ -2670,45 +2725,11 @@
   border-bottom: 1px solid var(--hairline);
 }
 
-.filters__search {
-  min-width: 260px;
-}
-
-.filters .search {
-  flex: 1 1 260px;
-}
-
-/* Fixed rather than flexible: a growing field pushes the analytics bar onto a second row at common widths. */
-.filters__session {
-  width: 232px;
-}
-
-.filters__groups {
-  resize: vertical;
-  min-width: 220px;
-  font-size: inherit;
-}
-
-.filters__cols {
-  position: relative;
-  display: flex;
-  gap: 8px;
-  margin-left: auto;
-}
-
 .cols-popover {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 20;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 4px 14px;
   padding: 10px 12px;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
 }
 
 .cols-popover label {
@@ -2716,6 +2737,17 @@
   gap: 8px;
   align-items: center;
   white-space: nowrap;
+}
+
+/* The Groups popover's field keeps the box's 8 px inset, as the Custom range popover's fields do. */
+.groups-popover {
+  padding: 4px 8px 8px;
+}
+
+.groups-popover__field {
+  resize: vertical;
+  min-width: 220px;
+  font-size: inherit;
 }
 
 .pager {
@@ -2736,8 +2768,8 @@
 .pager__nav button {
   display: inline-grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   color: var(--ink-2);
   background: none;
   border: 1px solid var(--hairline);
@@ -2771,6 +2803,15 @@
   padding: 14px 16px;
   background: var(--surface);
   border-bottom: 1px solid var(--hairline);
+}
+
+/* Beside the head's actions the 400 and 440 px drawers leave the line too little room, so it breaks between its links
+   rather than inside one. */
+.drawer__widen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  font-size: 12.5px;
 }
 
 .drawer__title {
@@ -3652,7 +3693,7 @@
 
 .cost-ref__tokens .input {
   width: 76px;
-  padding: 4px 4px 4px 8px;
+  padding: 5px 4px 5px 8px;
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
 }
@@ -4074,22 +4115,13 @@
   white-space: normal;
 }
 
-.filters__range {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.filters__range .input {
-  width: auto;
-  padding: 5px 8px;
-  font-size: 12.5px;
-}
-
-.filters__sep {
-  width: 1px;
-  height: 22px;
-  background: var(--hairline-strong);
+/* The Custom range popover's fields keep the head's and the foot's 8 px inset, so they line up with its title and its
+   buttons. */
+.range-control__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 8px;
 }
 
 .metric-pair {

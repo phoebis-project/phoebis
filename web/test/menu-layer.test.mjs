@@ -10,7 +10,7 @@ for (const key of ['document', 'navigator', 'HTMLElement', 'Element', 'Node', 'g
 globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
-const { act, createElement: h, createRoot, Menu, MultiSelect, useState } = await import('./dist/ui.js');
+const { act, AddFilter, ChipLine, createElement: h, createRoot, Menu, useState } = await import('./dist/ui.js');
 
 // jsdom lays nothing out, so the boxes the placement reads are stood in: a clipping wrap whose 80 px client box is too
 // short for the 141 px list on either side of any row, and each row's menu 40 px below the one before it, read from
@@ -79,7 +79,43 @@ const statuses = [
   { label: '429 Rate limited', value: '429' },
   { label: '529 Overloaded', value: '529' },
 ];
-const filter = (props) => h('div', null, h(MultiSelect, { label: 'Status', onChange() {}, options: statuses, value: [], ...props }), h('button', { type: 'button' }, 'Outside'));
+// Past twelve options a list opens onto its search field, so the long list has thirteen.
+const codes = [
+  ['200', 'OK'],
+  ['201', 'Created'],
+  ['204', 'No Content'],
+  ['400', 'Bad Request'],
+  ['401', 'Unauthorized'],
+  ['403', 'Forbidden'],
+  ['404', 'Not Found'],
+  ['409', 'Conflict'],
+  ['413', 'Payload Too Large'],
+  ['429', 'Rate limited'],
+  ['500', 'Internal Server Error'],
+  ['503', 'Service Unavailable'],
+  ['529', 'Overloaded'],
+].map(([value, words]) => ({ label: `${value} ${words}`, value }));
+const STATUS = { field: 'statuses', group: 'Outcome', kind: 'list', label: 'Status', word: 'status' };
+const MODEL = { field: 'models', group: 'Outcome', kind: 'list', label: 'Model', word: 'model' };
+/** Add filter over the Status list beside the Outside button, its filters held as a page holds them. */
+function Filter({ options }) {
+  const [filters, setFilters] = useState({ statuses: [] });
+  const [buttonRef] = useState(() => ({ current: null }));
+  return h(
+    'div',
+    null,
+    h(AddFilter, { buttonRef, dimensions: [STATUS], edit: null, filters, onEditDone() {}, options: { statuses: options }, update: (patch) => setFilters((f) => ({ ...f, ...patch })) }),
+    h('button', { type: 'button' }, 'Outside'),
+  );
+}
+const filter = (options = statuses) => h(Filter, { options });
+const addFilterButton = (container) => [...container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add filter');
+const filterBox = () => document.querySelector('.popover .add-filter');
+/** Opens Add filter and steps into the Status list. */
+const openStatus = (container) => {
+  act(() => addFilterButton(container).click());
+  act(() => [...document.querySelectorAll('.popover .add-filter__row')].find((r) => r.firstElementChild?.textContent?.trim() === 'Status').click());
+};
 
 test('a floating menu stays open across a render that moves nothing and closes when a re-sort moves its row', () => {
   const m = mounted(table(['a', 'b', 'c']));
@@ -157,24 +193,24 @@ test('a floating menu takes focus in its portalled list and answers the same key
 // Safari, and Firefox on macOS, give a clicked button no focus, so a click on an item blurs the list with no element
 // named; closing on that would close the list before the click lands.
 test('a menu and a filter list stay open on a blur that names no element', () => {
-  const m = mounted(h('div', null, loose(actions), filter({})));
+  const m = mounted(h('div', null, loose(actions), filter()));
   act(() => m.container.querySelector('.menu__trigger').click());
   const menuFocused = m.container.querySelector('.menu__list')?.contains(document.activeElement) === true;
   act(() => document.activeElement.blur());
   assert.ok(menuFocused && m.container.querySelector('.menu__list'), 'the menu took focus and stays open');
   act(() => m.container.querySelector('.menu__trigger').click());
-  act(() => m.container.querySelector('.mselect__trigger').click());
-  const filterFocused = m.container.querySelector('.mselect__list')?.contains(document.activeElement) === true;
+  openStatus(m.container);
+  const filterFocused = filterBox()?.querySelector('.option-list')?.contains(document.activeElement) === true;
   act(() => document.activeElement.blur());
-  assert.ok(filterFocused && m.container.querySelector('.mselect__list'), 'the filter list took focus and stays open');
+  assert.ok(filterFocused && filterBox()?.querySelector('.option-list'), 'the filter list took focus and stays open');
 });
 
-test('a filter list opens onto its search field, the arrows move between it and the options, Escape closes it onto its trigger and a Tab out closes it', () => {
-  const m = mounted(filter({ searchable: true }));
-  const opener = m.container.querySelector('.mselect__trigger');
-  act(() => opener.click());
-  const search = m.container.querySelector('.mselect__search');
-  assert.ok(search && document.activeElement === search, 'opening focuses the search field');
+test('Add filter opens a long list onto its search field, the arrows move between it and the options, Escape closes it onto Add filter and a Tab out closes it', () => {
+  const m = mounted(filter(codes));
+  const opener = addFilterButton(m.container);
+  openStatus(m.container);
+  const search = filterBox()?.querySelector('.mselect__search');
+  assert.ok(search && document.activeElement === search, 'opening the list focuses its search field');
   const end = press('End');
   assert.ok(document.activeElement === search && !end.defaultPrevented, 'Home and End stay with the search field, where they move the caret');
   const moves = ['ArrowDown', 'ArrowDown', 'End', 'Home', 'ArrowUp'].map((key) => {
@@ -183,32 +219,50 @@ test('a filter list opens onto its search field, the arrows move between it and 
   });
   assert.deepEqual(moves, ['Select all', '200 OK', '529 Overloaded', 'Select all', 'the search field'], 'ArrowDown leaves the search field for the Select all row at the head, End and Home reach the ends, ArrowUp from the row comes back');
   const escape = press('Escape');
-  assert.equal(m.container.querySelector('.mselect__list'), null, 'Escape closes the list');
-  assert.ok(document.activeElement === opener, 'Escape gives focus back to the trigger');
+  assert.equal(filterBox(), null, 'Escape closes the list');
+  assert.ok(document.activeElement === opener, 'Escape gives focus back to Add filter');
   assert.ok(escape.defaultPrevented && !atDocument.includes('Escape'), 'the list takes the key');
-  act(() => opener.click());
+  openStatus(m.container);
   act(() => outside(m.container).focus());
-  assert.equal(m.container.querySelector('.mselect__list'), null, 'a Tab out of the list closes it');
+  assert.equal(filterBox(), null, 'a Tab out of the list closes it');
 });
 
-test('a closed filter lets Escape through from its trigger and from its clear button, a button of its own beside the trigger that hands focus to the trigger as it clears', () => {
+test("a closed Add filter lets Escape through from its button, and a chip's x hands focus to the next chip or to Add filter as it clears", () => {
   function Held() {
-    const [value, setValue] = useState(['200']);
-    return h(MultiSelect, { label: 'Status', onChange: setValue, options: statuses, value });
+    const [filters, setFilters] = useState({ models: ['opus'], statuses: ['200'] });
+    const [buttonRef] = useState(() => ({ current: null }));
+    const chips = [STATUS, MODEL]
+      .filter((d) => filters[d.field].length > 0)
+      .map((d) => ({ field: d.field, label: d.word, mono: false, text: `${d.word}: ${filters[d.field].join(', ')}`, title: filters[d.field].join(', '), values: filters[d.field].join(', ') }));
+    const update = (patch) => setFilters((f) => ({ ...f, ...patch }));
+    return h(
+      'div',
+      null,
+      h(AddFilter, { buttonRef, dimensions: [STATUS, MODEL], edit: null, filters, onEditDone() {}, options: { models: [{ label: 'opus', value: 'opus' }], statuses }, update }),
+      h(ChipLine, { addFilterRef: buttonRef, address: JSON.stringify(filters), chips, onClearAll() {}, onOpen() {}, onRemove: (field) => update({ [field]: [] }) }),
+    );
   }
   const m = mounted(h(Held));
-  const opener = m.container.querySelector('.mselect__trigger');
-  const clear = m.container.querySelector('.mselect__clear');
-  assert.ok(clear?.tagName === 'BUTTON' && clear.previousElementSibling === opener && m.container.querySelector('button [role="button"]') === null, 'the clear control is a button after the trigger, not inside it');
+  const opener = addFilterButton(m.container);
+  const removes = () => [...m.container.querySelectorAll('.chip__remove')];
+  assert.deepEqual(
+    removes().map((b) => b.getAttribute('aria-label')),
+    ['Remove status filter', 'Remove model filter'],
+    'each chip carries its x, a button of its own beside the body',
+  );
   act(() => opener.focus());
-  const fromTrigger = press('Escape');
-  act(() => clear.focus());
-  const fromClear = press('Escape');
-  assert.ok(!fromTrigger.defaultPrevented && !fromClear.defaultPrevented, 'no handler takes the key');
-  assert.deepEqual(atDocument, ['Escape', 'Escape'], "a drawer's Escape listener hears the key while the list is closed");
-  act(() => clear.click());
-  assert.equal(m.container.querySelector('.mselect__clear'), null, 'the cleared filter draws no clear button');
-  assert.ok(document.activeElement === opener, 'focus goes to the trigger rather than leave with the clear button');
+  const fromButton = press('Escape');
+  act(() => removes()[0].focus());
+  const fromChip = press('Escape');
+  assert.ok(!fromButton.defaultPrevented && !fromChip.defaultPrevented, 'no handler takes the key');
+  assert.deepEqual(atDocument, ['Escape', 'Escape'], "a drawer's Escape listener hears the key while Add filter is closed");
+  act(() => removes()[0].click());
+  assert.equal(m.container.querySelectorAll('.chip--filter').length, 1, 'the cleared filter draws no chip');
+  assert.ok(document.activeElement === m.container.querySelector('.chip--filter .chip__body'), 'focus goes to the chip that stood after it rather than leave with the x');
+  act(() => removes()[0].focus());
+  act(() => removes()[0].click());
+  assert.equal(m.container.querySelector('.chip--filter'), null, 'the last cleared filter leaves no chip');
+  assert.ok(document.activeElement === opener, 'with no chip left, focus goes to Add filter');
 });
 
 test('an open menu answers its keys from the trigger too', () => {

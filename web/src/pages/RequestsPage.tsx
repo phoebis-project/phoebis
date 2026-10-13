@@ -2,29 +2,31 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
 import { iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
-import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, RequestKind, RequestLog, RequestOutcome, RequestPage, RequestQuery, Usage } from '@/api/types';
+import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, RequestLog, RequestOutcome, RequestPage, RequestQuery, Usage } from '@/api/types';
 import { type Paging, useFollow } from '@/app/useFollow';
 import { BodyViewer } from '@/components/BodyViewer';
 import { Chips } from '@/components/ChipView';
+import { FilterBar } from '@/components/FilterBar';
 import { PhaseWaterfall } from '@/components/PhaseWaterfall';
 import { TokenBar } from '@/components/TokenBar';
 import { AttemptCount } from '@/components/ui/AttemptTrail';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
-import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
-import { PatternInput } from '@/components/ui/PatternInput';
-import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
-import { addressWindow, REQUEST_RANGES, REQUESTS_CODEC, type RequestsAddress } from '@/lib/address';
+import type { Option } from '@/components/ui/OptionList';
+import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconX } from '@/components/ui/icons';
+import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, KeyValue, Select, Skeleton } from '@/components/ui/primitives';
+import { addressWindow, RANGE_PRESETS, REQUESTS_CODEC, type RequestsAddress } from '@/lib/address';
 import { autoModeLabel } from '@/lib/autoMode';
 import { bodyLines, bodyText } from '@/lib/bodies';
 import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION } from '@/lib/dimensions';
-import { FOLLOW_OVERRUN } from '@/lib/follow';
-import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, toLocalInput, tokensTotal } from '@/lib/format';
-import { useAsync, useCommittedText, useNow, useQueryFilters } from '@/lib/hooks';
+import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
+import { effectiveInterval, FOLLOW_OVERRUN, readEnd, spanEnded } from '@/lib/follow';
+import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
+import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, NO_SHARE_TITLE } from '@/lib/requests';
+import { requestsWiden } from '@/lib/requestsLink';
 import { type Chip, logHref, requestLink } from '@/lib/routingLog';
 import { StatusBadge } from './DashboardPage';
 
@@ -180,9 +182,9 @@ function keyOptions(keys: ApiKey[] | null, selected: string[]): Option[] {
   return [...keys.map((k) => ({ label: k.name, value: k.id })), ...earlier];
 }
 
-/** The route's order, which a Follow merge keeps: newest first, and the higher id first at one instant. */
+/** The route's order, which a poll's merge keeps: newest first, and the higher id first at one instant. */
 const newestFirst = (a: RequestLog, b: RequestLog) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
-/** The route answers its rows as `requests`, and Follow reads a list's as `rows`. */
+/** The route answers its rows as `requests`, and the poll reads a list's as `rows`. */
 const listed = (page: RequestPage) => ({ nextCursor: page.nextCursor, rows: page.requests });
 
 export function RequestsPage() {
@@ -202,7 +204,7 @@ export function RequestsPage() {
   // filter, Reset, a link) drops them in the render that brings it, with no reset of their own to render apart and read
   // the old filters once more without the cursor. The stale entry is replaced in that same render, so changing a
   // filter back does not return to the page left behind under it.
-  // `to` holds the range's end a walk from Follow's overrun reads under, the end its cursor came from.
+  // `to` holds the range's end a walk from the poll's overrun reads under, the end its cursor came from.
   const [paging, setPaging] = useState<Paging>({ for: address, stack: [] });
   if (paging.for !== address) setPaging({ for: address, stack: [] });
   const cursor = paging.for === address ? paging.cursor : undefined;
@@ -211,44 +213,38 @@ export function RequestsPage() {
   // The range ends where the list was loaded, so a cursor page is read against the window its cursor came from;
   // Refresh moves the end to now.
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
-  const [follow, setFollow] = useState(false);
+  // Off on the logs until the reader picks an interval, and page state, so a link or a reload opens the log off.
+  const [intervalMs, setIntervalMs] = useState(0);
+  const [barOpen, setBarOpen] = useState(false);
+  const rangeTakenAt = useRangeTakenAt(filters.range);
   const update = (patch: Partial<Filters>) => {
     const next = { ...filters, ...patch };
     replace({ ...next, rows: String(next.rows) });
   };
-  const search = useCommittedText(filters.search, (next) => update({ search: next }));
 
   // A custom range names its own window, which Refresh reads again rather than moving it to now.
   const custom = filters.range.preset === 'custom';
-  const span = useMemo(() => addressWindow(filters.range, REQUEST_RANGES, '24h', loadedAt), [filters.range, loadedAt]);
+  const span = useMemo(() => addressWindow(filters.range, RANGE_PRESETS, '24h', loadedAt), [filters.range, loadedAt]);
+  const ended = spanEnded(custom, span.to, rangeTakenAt);
+  const polledMs = effectiveInterval(intervalMs, ended);
   const query = useMemo<RequestQuery>(
     // Probes are off the log unless they are what the filter asks for.
-    () => ({ accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, requestClasses: filters.requestClasses, search: filters.search, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: iso(pagedTo ?? span.to), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
-    [filters, cursor, span, pagedTo],
+    () => ({ accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, request: filters.request || undefined, requestClasses: filters.requestClasses, search: filters.search, session: filters.session || undefined, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: iso(readEnd(custom, span.to, pagedTo ?? span.to)), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
+    [filters, cursor, custom, span, pagedTo],
   );
-  // Custom starts from the window the list shows, so the choice holds.
-  const chooseRange = (value: string) => update({ range: value === 'custom' ? { from: iso(span.from), preset: 'custom', to: iso(span.to) } : { from: '', preset: value, to: '' } });
-  // A bound that would end the span before it starts writes nothing, since the address would read that pair as the
-  // preset.
-  const setBound = (bound: 'from' | 'to', local: string) => {
-    const ms = Date.parse(local);
-    if (Number.isNaN(ms)) return;
-    const next = bound === 'from' ? { from: ms, to: span.to } : { from: span.from, to: Math.min(ms, clock.now()) };
-    if (next.from >= next.to) return;
-    update({ range: { from: iso(next.from), preset: 'custom', to: iso(next.to) } });
-  };
   const requests = useAsync(() => api.listRequests(query), [query]);
-  // The open drawer reads one of the rows, so the poll waits for it to close.
-  const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed, toggleFollow } = useFollow<RequestLog>({
+  // The open drawer reads one of the rows, and an open menu or popover under the bar stands over the list, so the poll
+  // waits for either to close.
+  const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed } = useFollow<RequestLog>({
     address,
     compare: newestFirst,
     error: requests.error,
     identity: (r) => r.id,
+    intervalMs: polledMs,
     list: requests.data && listed(requests.data),
-    on: follow && cursor === undefined && !requestId,
     paging,
-    read: (c, to) => api.listRequests({ ...query, cursor: c, to: iso(to) }).then(listed),
-    setFollow,
+    paused: Boolean(requestId) || barOpen,
+    read: (c, to) => api.listRequests({ ...query, cursor: c, to: iso(readEnd(custom, span.to, to)) }).then(listed),
     setPaging,
     stale: requests.stale,
   });
@@ -259,121 +255,60 @@ export function RequestsPage() {
     setFollowed(null);
     setLoadedAt(clock.now());
   };
-  // The page size is how the operator reads the log rather than what it narrows to, so Reset keeps it.
-  const active = REQUESTS_CODEC.toParams({ ...read, rows: DEFAULTS.rows }).toString() !== '';
+  // The page size is how the operator reads the log rather than what it narrows to, so Reset filters keeps it.
   const reset = () => replace({ ...DEFAULTS, rows: read.rows });
+  const options: Record<string, Option[]> = {
+    accounts: (accounts.data ?? []).map((a) => ({ label: a.label, value: a.id })),
+    agentTypes: AGENT_TYPES.map((v) => ({ label: v, value: v })),
+    cacheMissReasons: missReasonOptions(rows, filters.cacheMissReasons),
+    efforts: [...EFFORT_LEVELS, NO_EFFORT, OTHER_DIMENSION].map((v) => ({ label: v, value: v })),
+    keys: keyOptions(keys.data, filters.keys),
+    kind: [
+      { label: 'Inference', value: 'inference' },
+      { label: 'Count tokens', value: 'count_tokens' },
+      { label: 'Probe', value: 'probe' },
+    ],
+    models: (catalog.data ?? []).map((m) => ({ label: m.id, value: m.id })),
+    outcomes: REQUEST_OUTCOME_VALUES.map((o) => ({ label: REQUEST_OUTCOME_LABEL[o], value: o })),
+    pools: (pools.data ?? []).map((p) => ({ label: p.name, value: p.id })),
+    requestClasses: requestClassOptions(rows, filters.requestClasses),
+    speeds: [
+      { label: 'fast', value: 'fast' },
+      { label: 'standard', value: 'standard' },
+    ],
+    statuses: statusOptions(rows, filters.statuses),
+    turnOrigins: TURN_ORIGINS.map((v) => ({ label: v, value: v })),
+  };
+  const disabled = { ...notLoadedReason('keys', 'key', keys), ...notLoadedReason('pools', 'pool', pools), ...notLoadedReason('accounts', 'account', accounts), ...notLoadedReason('models', 'model', catalog) };
   const selected = requestId ? rows.find((r) => r.id === requestId) ?? null : null;
   const shown = requestId ? new Set<ColumnId>(COMPACT) : visible;
   const fills = COLUMNS.some((c) => shown.has(c.id) && 'fill' in c && c.fill);
 
   return (
     <div className={`requests ${requestId ? 'has-drawer' : ''}`}>
+      <FilterBar
+        address={address}
+        count={rows.length > 0 ? `${fmtInt(rows.length)} shown${nextCursor ? ', more available' : ''}` : requests.data === null ? '' : 'No rows'}
+        dimensions={REQUESTS_DIMENSIONS}
+        disabled={disabled}
+        filters={filters}
+        onOpenChange={setBarOpen}
+        options={options}
+        placeholder="Search id, session, key, account, model, error, message id"
+        range={{ now: clock.now, window: span }}
+        refresh={{
+          disabled: ended ? 'A custom range that has ended has nothing new to read' : undefined,
+          intervalMs,
+          onIntervalChange: setIntervalMs,
+          onRefresh: refresh,
+          paused: requestId ? 'request' : barOpen ? 'menu' : cursor !== undefined ? 'olderPage' : null,
+          refreshTitle: custom ? `Rows from ${fmtTime(filters.range.from)} to ${fmtTime(filters.range.to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(iso(loadedAt))}. Refresh reads up to now`,
+        }}
+        update={update}
+      >
+        <ColumnsControl columns={COLUMNS} visible={visible} onChange={setVisible} />
+      </FilterBar>
       <div className="stack">
-        <div className="filters">
-          <SearchInput placeholder="Search id, session, key, account, model, error, message id" value={search.draft} onChange={(e) => search.onChange(e.target.value)} onBlur={search.onBlur} onKeyDown={search.onKeyDown} className="filters__search" />
-          <Select value={filters.range.preset} onChange={(e) => chooseRange(e.target.value)} aria-label="Date range">
-            {REQUEST_RANGES.map((r) => (
-              <option key={r.name} value={r.name}>
-                {r.label}
-              </option>
-            ))}
-            <option value="custom" title={custom ? `${filters.range.from} to ${filters.range.to}` : undefined}>
-              Custom range
-            </option>
-          </Select>
-          {custom && (
-            <>
-              <Input type="datetime-local" aria-label="From" value={toLocalInput(span.from)} onChange={(e) => setBound('from', e.target.value)} />
-              <Input type="datetime-local" aria-label="To" value={toLocalInput(span.to)} onChange={(e) => setBound('to', e.target.value)} />
-            </>
-          )}
-          <MultiSelect
-            label="Keys"
-            options={keyOptions(keys.data, filters.keys)}
-            value={filters.keys}
-            onChange={(v) => update({ keys: v })}
-            disabled={keys.data === null && keys.error !== null}
-            description={keys.error ? `The key list did not load: ${keys.error}` : undefined}
-            mono
-          />
-          <MultiSelect
-            label="Pools"
-            options={(pools.data ?? []).map((p) => ({ label: p.name, value: p.id }))}
-            value={filters.pools}
-            onChange={(v) => update({ pools: v })}
-            disabled={pools.data === null && pools.error !== null}
-            description={pools.error ? `The pool list did not load: ${pools.error}` : undefined}
-            mono
-          />
-          <MultiSelect
-            label="Accounts"
-            options={(accounts.data ?? []).map((a) => ({ label: a.label, value: a.id }))}
-            value={filters.accounts}
-            onChange={(v) => update({ accounts: v })}
-            disabled={accounts.data === null && accounts.error !== null}
-            description={accounts.error ? `The account list did not load: ${accounts.error}` : undefined}
-          />
-          <MultiSelect
-            label="Models"
-            options={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))}
-            value={filters.models}
-            onChange={(v) => update({ models: v })}
-            disabled={catalog.data === null && catalog.error !== null}
-            description={catalog.error ? `The model list did not load: ${catalog.error}` : undefined}
-            searchable
-            mono
-          />
-          <PatternInput label="Client pattern" value={filters.client} onCommit={(v) => update({ client: v })} />
-          <PatternInput label="User agent pattern" value={filters.agent} onCommit={(v) => update({ agent: v })} />
-          <MultiSelect label="Status" options={statusOptions(rows, filters.statuses)} value={filters.statuses} onChange={(v) => update({ statuses: v })} />
-          <MultiSelect
-            label="Outcome"
-            options={REQUEST_OUTCOME_VALUES.map((o) => ({ label: REQUEST_OUTCOME_LABEL[o], value: o }))}
-            value={filters.outcomes}
-            onChange={(v) => update({ outcomes: outcomesOf(v) })}
-          />
-          <MultiSelect label="Cache miss reason" options={missReasonOptions(rows, filters.cacheMissReasons)} value={filters.cacheMissReasons} onChange={(v) => update({ cacheMissReasons: v })} />
-          <MultiSelect label="Agent type" options={AGENT_TYPES.map((v) => ({ label: v, value: v }))} value={filters.agentTypes} onChange={(v) => update({ agentTypes: v })} mono />
-          <MultiSelect label="Turn origin" options={TURN_ORIGINS.map((v) => ({ label: v, value: v }))} value={filters.turnOrigins} onChange={(v) => update({ turnOrigins: v })} mono />
-          <MultiSelect label="Effort" options={[...EFFORT_LEVELS, NO_EFFORT, OTHER_DIMENSION].map((v) => ({ label: v, value: v }))} value={filters.efforts} onChange={(v) => update({ efforts: v })} mono />
-          <MultiSelect label="Request class" options={requestClassOptions(rows, filters.requestClasses)} value={filters.requestClasses} onChange={(v) => update({ requestClasses: v })} mono />
-          <Select value={filters.kind} onChange={(e) => update({ kind: e.target.value as '' | RequestKind })} aria-label="Kind">
-            <option value="">Any kind</option>
-            <option value="inference">Inference</option>
-            <option value="count_tokens">Count tokens</option>
-            <option value="probe">Probe</option>
-          </Select>
-          <MultiSelect
-            label="Speed"
-            options={[
-              { label: 'fast', value: 'fast' },
-              { label: 'standard', value: 'standard' },
-            ]}
-            value={filters.speeds}
-            onChange={(v) => update({ speeds: v })}
-            mono
-          />
-          <label className="row">
-            <Toggle checked={filters.held} onChange={(v) => update({ held: v })} label="Held only" />
-            <span className="secondary">Held only</span>
-          </label>
-          {active ? (
-            <button type="button" className="link-btn" onClick={reset}>
-              Reset
-            </button>
-          ) : null}
-          <div className="filters__cols">
-            <label className="row">
-              <Toggle checked={follow} onChange={toggleFollow} label="Follow" />
-              <span className="secondary">Follow</span>
-            </label>
-            <Button size="sm" icon={<IconRefresh size={14} />} onClick={refresh} title={custom ? `Rows from ${fmtTime(filters.range.from)} to ${fmtTime(filters.range.to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(iso(loadedAt))}. Refresh reads up to now`}>
-              Refresh
-            </Button>
-            <ColumnsControl columns={COLUMNS} visible={visible} onChange={setVisible} />
-          </div>
-        </div>
-
         {overrun !== null && (
           <div className="callout callout--warning requests__overrun" role="status">
             {FOLLOW_OVERRUN}
@@ -518,10 +453,6 @@ export function RequestsPage() {
                 ))}
               </Select>
             </label>
-            <span className="muted num">
-              {rows.length === 0 ? 'No rows' : `${fmtInt(rows.length)} shown`}
-              {nextCursor ? ', more available' : ''}
-            </span>
             <div className="pager__nav">
               <button type="button" onClick={resetPaging} disabled={stack.length === 0} aria-label="First page">
                 <IconChevronsLeft size={15} />
@@ -539,14 +470,14 @@ export function RequestsPage() {
 
       {requestId && (
         <Descriptions>
-          <RequestDrawer request={selected} requestId={requestId} now={now} onClose={() => navigate({ pathname: '/requests', search: location.search })} />
+          <RequestDrawer request={selected} requestId={requestId} now={now} rows={read.rows} onClose={() => navigate({ pathname: '/requests', search: location.search })} />
         </Descriptions>
       )}
     </div>
   );
 }
 
-function RequestDrawer({ request, requestId, now, onClose }: { now: number; onClose: () => void; request: RequestLog | null; requestId: string }) {
+function RequestDrawer({ request, requestId, now, onClose, rows }: { now: number; onClose: () => void; request: RequestLog | null; requestId: string; rows: string }) {
   // The drawer reads the request on every open, and draws the list's own row whenever the page holds it.
   const detail = useAsync(() => api.getRequest(requestId), [requestId]);
   // A load that is pending or has failed leaves the answer to the request before it in hand, so only an answer
@@ -577,6 +508,18 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
           {r && (
             <p className="muted" title={fmtAbsolute(r.at)}>
               {fmtTime(r.at)}, {fmtRelative(r.at, now)}
+            </p>
+          )}
+          {/* Each link writes a fresh Requests address, which leaves this request's route, so the drawer closes on the
+              widened list. */}
+          {r && (
+            <p className="drawer__widen muted">
+              Widen to
+              {requestsWiden(r, now, rows).map((w) => (
+                <Link key={w.label} to={w.href} title={w.title ?? undefined}>
+                  {w.label}
+                </Link>
+              ))}
             </p>
           )}
         </div>

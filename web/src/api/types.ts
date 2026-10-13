@@ -778,9 +778,13 @@ export interface RequestQuery {
   models?: string[];
   outcomes?: RequestOutcome[];
   poolIds?: string[];
+  /** The one request whose id equals the value. */
+  request?: string;
   /** The class as the rollups fold it: the class, `-` or `other`. */
   requestClasses?: string[];
   search?: string;
+  /** The requests whose session id equals the value. */
+  session?: string;
   /** `fast`, `standard`: the serving attempt's speed, else `fast` for a request that asked for it. */
   speeds?: string[];
   statuses?: number[];

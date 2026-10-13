@@ -1,8 +1,9 @@
 import { iso } from '@/api/decode';
-import type { AnalyticsGroupBy } from '@/api/types';
-import { REQUESTS_CODEC, type RequestsAddress } from './address';
+import type { AnalyticsGroupBy, RequestLog } from '@/api/types';
+import { type RangeValue, REQUESTS_CODEC, type RequestsAddress } from './address';
 import { OTHER_DIMENSION, foldRequestClass } from './dimensions';
 import { matchesPattern } from './pattern';
+import { aroundRequest, aroundSubject, clockMinute, type LogWindow } from './routingLog';
 
 export interface RequestsLinkInput {
   /** The reason the count is under, any name the beta sent. */
@@ -84,7 +85,7 @@ export function linkedKeyIds(selected: string[], sessionKey: string | null): str
  * The Requests address for a count of the cache miss reasons panel: `cache_miss_reasons` set to the reason, the window
  * as two ISO instants (the start of the hour holding the panel's start to one millisecond before the hour ceiling of
  * its end, capped at now, or the exact window for a session view), the page's selections as `accounts`, `keys`,
- * `models` and `pools`, the class pattern as `client`, a session id as `search`, and a breakdown row's group as its
+ * `models` and `pools`, the class pattern as `client`, a session id as `session`, and a breakdown row's group as its
  * own filter: `accounts`, `client`, `efforts`, `keys`, `kind`, `models`, `pools`, `request_classes` or `speeds`. A
  * client group keyed `other`, or keyed with a class the rollups would fold, answers no address, and outside the client
  * grouping neither does a class pattern that matches `other`.
@@ -106,7 +107,7 @@ export function requestsLink({ count, filters, group, reason, window }: Requests
     models: filters.models,
     pools: filters.poolIds,
     range: { from: iso(from), preset: 'custom', to: iso(to) },
-    search: filters.sessionId ?? '',
+    session: filters.sessionId ?? '',
   };
   // The row is one value inside the page's selection of its own dimension, so it takes that selection's place.
   if (group !== undefined && group.by !== 'all') {
@@ -117,4 +118,35 @@ export function requestsLink({ count, filters, group, reason, window }: Requests
   }
   const probes = group?.by === 'kind' && group.key === 'probe';
   return { href: `/requests?${REQUESTS_CODEC.toParams(address)}`, title: filters.includeProbes && !probes ? LISTED_WITHOUT_PROBES : LISTED };
+}
+
+/** One link of the drawer's "Widen to" line. */
+export interface Widening {
+  href: string;
+  label: 'this account' | 'this minute' | 'this session';
+  /** The session or account id the link widens to, none for the minute. */
+  title: string | null;
+}
+
+/**
+ * The drawer's three widenings in the order narrow to wide, each a fresh Requests address from the codec's defaults
+ * with the page size kept: this minute over `clockMinute`, this session over `aroundSubject` with the session, this
+ * account over `aroundRequest` with the account. The windows are the Routing log's own, so one widening reads one span
+ * on either view. A request without a session or an account omits that link, and one still running reads as a moment.
+ * Each window's end is capped at `now`, or at the request's end where that is later.
+ */
+export function requestsWiden(request: Pick<RequestLog, 'accountId' | 'at' | 'durationMs' | 'id' | 'sessionId'>, now: number, rows: string): Widening[] {
+  const at = Date.parse(request.at);
+  const finished = request.durationMs === null ? null : at + request.durationMs;
+  // A row the list read after the page's clock sample is newer than it, and a window capped there would leave the
+  // request out, or put this minute's end before its start.
+  const cap = Math.max(now, finished ?? at);
+  const defaults = { ...REQUESTS_CODEC.fromParams(new URLSearchParams()), rows };
+  const over = (link: LogWindow): RangeValue => ('range' in link ? { from: '', preset: link.range, to: '' } : { from: iso(link.from), preset: 'custom', to: iso(link.to) });
+  const href = (address: RequestsAddress) => `/requests?${REQUESTS_CODEC.toParams(address)}`;
+  return [
+    { href: href({ ...defaults, range: over(clockMinute(at, cap)) }), label: 'this minute', title: null },
+    ...(request.sessionId === null ? [] : [{ href: href({ ...defaults, range: over(aroundSubject(at, cap)), session: request.sessionId }), label: 'this session' as const, title: request.sessionId }]),
+    ...(request.accountId === null ? [] : [{ href: href({ ...defaults, accounts: [request.accountId], range: over(aroundRequest(at, finished, cap)) }), label: 'this account' as const, title: request.accountId }]),
+  ];
 }

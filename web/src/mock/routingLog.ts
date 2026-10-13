@@ -1837,8 +1837,6 @@ const EVENT_KINDS: readonly string[] = [
   'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
   'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset', 'window_spent',
 ];
-/** The one event kind the route's default set leaves out beside the probe decisions. */
-const HIDDEN_EVENT_KIND = 'warm_prefix_expired';
 
 /** The route's merged order: newest first, a decision before an event at one instant. */
 const cursorOf = (row: RoutingLogPage['rows'][number]) => (row.type === 'decision' ? `${Date.parse(row.at)}:1:${row.requestId}/${row.seq}` : `${Date.parse(row.at)}:0:${row.id}`);
@@ -1865,9 +1863,9 @@ const order = (a: RoutingLogPage['rows'][number], b: RoutingLogPage['rows'][numb
 };
 
 /**
- * The merged page by the route's rules. The range runs from an hour back by default. The default kinds are every
- * decision but a probe's and every event but a warm prefix's expiry, and `kinds` names exactly what it lists, `probe`
- * for a probe's decision of any kind. `accounts` matches a decision's source too. `limit + 1` rows are read so a cursor
+ * The merged page by the route's rules. The range runs from an hour back by default. An absent `kinds` is every
+ * decision and event, the probe decisions among them, and `kinds` names exactly what it lists, `probe` for a probe's
+ * decision of any kind. `accounts` matches a decision's source too. `limit + 1` rows are read so a cursor
  * is offered only when a next page exists, and the counts come under a request filter.
  */
 export function listRoutingLog(query: RoutingLogQuery, now: number): RoutingLogPage {
@@ -1887,7 +1885,7 @@ export function listRoutingLog(query: RoutingLogQuery, now: number): RoutingLogP
       inList(query.poolIds, s.poolId) &&
       inList(query.models, s.model) &&
       (!query.accountIds?.length || query.accountIds.some((id) => id === s.accountId || id === s.fromAccountId)) &&
-      (kinds === undefined ? !s.probe : (kinds.includes(s.kind) && !s.probe) || (kinds.includes('probe') && s.probe)),
+      (kinds === undefined || (kinds.includes(s.kind) && !s.probe) || (kinds.includes('probe') && s.probe)),
   );
   const events = ROUTING_EVENTS.filter(
     (e) =>
@@ -1898,7 +1896,7 @@ export function listRoutingLog(query: RoutingLogQuery, now: number): RoutingLogP
       inList(query.poolIds, e.poolId) &&
       inList(query.models, e.model) &&
       inList(query.accountIds, e.accountId) &&
-      (kinds === undefined ? e.kind !== HIDDEN_EVENT_KIND : kinds.includes(e.kind)),
+      (kinds === undefined || kinds.includes(e.kind)),
   );
   const merged = [...decisions, ...events].sort(order);
   const rest = query.cursor ? merged.filter((row) => after(row, query.cursor!)) : merged;
