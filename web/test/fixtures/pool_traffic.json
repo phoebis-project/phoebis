@@ -2,184 +2,334 @@
   "route": "GET /admin/pools/main/traffic?range=24h",
   "body": {
     "pool_id": "main",
-    "from": -85400000,
-    "to": 1000000,
+    "from": 1791634600000,
+    "to": 1791721000000,
     "bucket_seconds": 3600,
     "buckets": [
       {
-        "at": -86400000,
+        "at": 1791633600000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -82800000,
+        "at": 1791637200000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -79200000,
+        "at": 1791640800000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -75600000,
+        "at": 1791644400000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -72000000,
+        "at": 1791648000000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -68400000,
+        "at": 1791651600000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -64800000,
+        "at": 1791655200000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -61200000,
+        "at": 1791658800000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -57600000,
+        "at": 1791662400000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -54000000,
+        "at": 1791666000000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -50400000,
+        "at": 1791669600000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -46800000,
+        "at": 1791673200000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -43200000,
+        "at": 1791676800000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -39600000,
+        "at": 1791680400000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -36000000,
+        "at": 1791684000000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -32400000,
+        "at": 1791687600000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -28800000,
+        "at": 1791691200000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -25200000,
+        "at": 1791694800000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -21600000,
+        "at": 1791698400000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -18000000,
+        "at": 1791702000000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -14400000,
+        "at": 1791705600000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -10800000,
+        "at": 1791709200000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -7200000,
+        "at": 1791712800000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
-        "cost_usd": 0.0
+        "cost_usd": 0.0,
+        "billed_usd": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
+        "estimated": false
       },
       {
-        "at": -3600000,
+        "at": 1791716400000,
+        "requests": 3,
+        "failed": 1,
+        "tokens": 7200,
+        "cost_usd": 0.0142,
+        "billed_usd": 0.0071,
+        "equivalent": {
+          "five_hour": 0.00003525,
+          "seven_day": 5.875e-6
+        },
+        "estimated": false
+      },
+      {
+        "at": 1791720000000,
         "requests": 3,
         "failed": 1,
         "tokens": 5400,
-        "cost_usd": 0.0142
-      },
-      {
-        "at": 0,
-        "requests": 3,
-        "failed": 1,
-        "tokens": 5400,
-        "cost_usd": 0.0107
+        "cost_usd": 0.0107,
+        "billed_usd": 0.0036,
+        "equivalent": {
+          "five_hour": 0.00003525,
+          "seven_day": 5.875e-6
+        },
+        "estimated": false
       }
     ]
   }

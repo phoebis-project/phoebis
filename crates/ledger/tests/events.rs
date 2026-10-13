@@ -1395,8 +1395,9 @@ async fn a_clock_reset_that_passed_while_the_router_was_down_lands_once_at_the_s
     let _ledger = phoebis_ledger::spawn(
         db.clone(),
         Arc::new(phoebis_ledger::Pricing::new(
-            phoebis_ledger::PriceTable::shipped(),
+            phoebis_ledger::PriceRevisions::shipped(),
         )),
+        Arc::new(phoebis_ledger::PlanTables::shipped()),
         store,
         &phoebis_bus::Bus::new(),
         router.clone(),
@@ -1470,8 +1471,9 @@ async fn the_start_row_dates_the_gap_from_the_previous_run_whatever_the_mirror_f
     let _ledger = phoebis_ledger::spawn(
         db.clone(),
         Arc::new(phoebis_ledger::Pricing::new(
-            phoebis_ledger::PriceTable::shipped(),
+            phoebis_ledger::PriceRevisions::shipped(),
         )),
+        Arc::new(phoebis_ledger::PlanTables::shipped()),
         store.clone(),
         &phoebis_bus::Bus::new(),
         router.clone(),
@@ -1565,8 +1567,9 @@ async fn a_quarantine_the_start_lands_after_the_mirrors_baseline_is_mirrored() {
     let _ledger = phoebis_ledger::spawn(
         db.clone(),
         Arc::new(phoebis_ledger::Pricing::new(
-            phoebis_ledger::PriceTable::shipped(),
+            phoebis_ledger::PriceRevisions::shipped(),
         )),
+        Arc::new(phoebis_ledger::PlanTables::shipped()),
         store.clone(),
         &phoebis_bus::Bus::new(),
         router,

@@ -1556,8 +1556,13 @@ pub(crate) struct PricingSource {
     /// `shipped`, or `file` when that path was read.
     #[schema(example = "shipped")]
     pub source: String,
-    /// The table's date.
+    /// The date of the revision in force.
     pub effective: String,
+    /// How many revisions the file lists.
+    pub revisions: usize,
+    /// The date of the first revision dated after the one in force, which takes effect at that date's midnight UTC,
+    /// null when none is.
+    pub next: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -1615,7 +1620,8 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         .into_iter()
         .map(|(kind, n)| (kind.to_string(), n))
         .collect::<indexmap::IndexMap<String, u64>>();
-    let prices = state.pricing.current();
+    let revisions = state.pricing.revisions();
+    let prices = revisions.in_force(now);
     Json(System {
         version: env!("CARGO_PKG_VERSION").into(),
         profile: state.profile.name.to_string(),
@@ -1667,13 +1673,21 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         pricing: PricingSources {
             api_prices: PricingSource {
                 path: state.settings.api_prices_path.clone(),
-                source: prices.source.clone(),
+                source: revisions.source.clone(),
                 effective: prices.effective.clone(),
+                revisions: revisions.len(),
+                next: revisions.pending(now).map(|t| t.effective.clone()),
             },
             subscription_costs: PricingSource {
                 path: state.settings.subscription_costs_path.clone(),
                 source: state.tables.source.clone(),
-                effective: state.tables.costs.effective.clone(),
+                effective: state.tables.revisions.in_force(now).effective.clone(),
+                revisions: state.tables.revisions.len(),
+                next: state
+                    .tables
+                    .revisions
+                    .pending(now)
+                    .map(|t| t.effective.clone()),
             },
         },
         gaps: gaps.iter().map(crate::requests::event_json).collect(),
@@ -1815,6 +1829,11 @@ pub(crate) struct AccountContext {
 pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
+    // The end of the current hour rather than `hour_ceil(now)`, which is `now` itself on the hour's first millisecond
+    // and would leave out the hour a request just landed in.
+    let to = hour + 3_600;
+    let prices = state.pricing.revisions();
+    let tables = state.tables.clone();
     let ledger = state
         .ledger
         .db()
@@ -1822,10 +1841,24 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
             Ok((
                 phoebis_ledger::latest_quota(c, now)?,
                 phoebis_ledger::latest_extra_usage(c, now)?,
-                phoebis_ledger::request_totals(c, "account_id", hour - 24 * 3_600)?,
-                phoebis_ledger::request_totals(c, "account_id", hour - 7 * 24 * 3_600)?,
+                phoebis_ledger::request_totals(
+                    c,
+                    "account_id",
+                    hour - 24 * 3_600,
+                    to,
+                    &prices,
+                    &tables,
+                )?,
+                phoebis_ledger::request_totals(
+                    c,
+                    "account_id",
+                    hour - 7 * 24 * 3_600,
+                    to,
+                    &prices,
+                    &tables,
+                )?,
                 // Lifetime: `i64::MIN` sits at or below the earliest hour the rollups can hold, so every row clears it.
-                phoebis_ledger::request_totals(c, "account_id", i64::MIN)?,
+                phoebis_ledger::request_totals(c, "account_id", i64::MIN, to, &prices, &tables)?,
             ))
         })
         .await;

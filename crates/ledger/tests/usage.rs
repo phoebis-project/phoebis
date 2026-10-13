@@ -12,7 +12,8 @@ use common::*;
 use fake_upstream::{FakeUpstream, Rule};
 use http_body_util::BodyExt;
 use phoebis_ledger::{
-    key_usage_windows, AttemptRecord, LedgerConfig, LedgerDb, RequestRecord, KEY_RANGE_PREDICATE,
+    key_usage_windows, AttemptRecord, LedgerConfig, LedgerDb, PlanTables, PriceRevisions,
+    RequestRecord, Speed, KEY_RANGE_PREDICATE,
 };
 use phoebis_store::{ApiKeyRow, RulesMode, Store};
 use tower::ServiceExt;
@@ -29,7 +30,6 @@ fn used(id: &str) -> AttemptRecord {
         output_tokens: Some(10),
         cache_read_tokens: Some(50),
         cache_write_5m_tokens: Some(20),
-        estimated_usd: Some(0.5),
         ..Default::default()
     }
 }
@@ -114,16 +114,40 @@ fn a_window_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
     // Rows an hour old, planted under the generation the builders stamp, so the day window is every row the
     // reading key filed under the id.
     let day = |id: &str| {
-        db.read_blocking(|c| key_usage_windows(c, id, 0, 10_000))
-            .map(|(day, _)| day)
-            .unwrap()
+        db.read_blocking(|c| {
+            key_usage_windows(
+                c,
+                id,
+                0,
+                10_000,
+                &PriceRevisions::shipped(),
+                &PlanTables::shipped(),
+            )
+        })
+        .map(|(day, _)| day)
+        .unwrap()
     };
 
     let k1 = day("k1");
     assert_eq!((k1.requests, k1.succeeded, k1.failed), (4, 3, 1));
     assert_eq!(k1.tokens.input, 300);
     assert_eq!(k1.tokens.cache_write, 60);
-    assert!((k1.cost_usd - 1.5).abs() < 1e-9);
+    // The window prices each row's counts on the shipped list at the entry in force at its hour, the one in force when
+    // its request arrived.
+    let used_usd = |model: &str| {
+        PriceRevisions::shipped()
+            .in_force(1_000)
+            .estimate(model, Speed::Standard, 100, 50, 20, 0, 10)
+            .expect("the shipped list carries the model")
+            .0
+    };
+    let want = 2.0 * used_usd("claude-sonnet-5") + used_usd("claude-opus-5");
+    assert!(want > 0.0);
+    assert!(
+        (k1.cost_usd - want).abs() < 1e-9,
+        "{} against {want}",
+        k1.cost_usd
+    );
     assert_eq!(
         k1.models
             .iter()
@@ -174,7 +198,16 @@ fn the_day_window_is_the_tail_of_the_weeks_own_rows() {
     }
 
     let (day, week) = db
-        .read_blocking(|c| key_usage_windows(c, "k1", 0, now))
+        .read_blocking(|c| {
+            key_usage_windows(
+                c,
+                "k1",
+                0,
+                now,
+                &PriceRevisions::shipped(),
+                &PlanTables::shipped(),
+            )
+        })
         .unwrap();
     assert_eq!(
         (day.requests, week.requests),
@@ -206,7 +239,16 @@ fn the_windows_read_the_presenting_keys_generation_alone_and_start_where_their_n
     db.insert_request(&earlier, &[used("r1")], None).unwrap();
     db.insert_request(&current, &[used("r2")], None).unwrap();
     let (day, week) = db
-        .read_blocking(|c| key_usage_windows(c, "k1", 2_000, now))
+        .read_blocking(|c| {
+            key_usage_windows(
+                c,
+                "k1",
+                2_000,
+                now,
+                &PriceRevisions::shipped(),
+                &PlanTables::shipped(),
+            )
+        })
         .unwrap();
     assert_eq!(
         (day.requests, week.requests),
@@ -220,7 +262,16 @@ fn the_windows_read_the_presenting_keys_generation_alone_and_start_where_their_n
         "nothing is left out of the window: the row it shares an hour with is another generation's"
     );
     let (day, _) = db
-        .read_blocking(|c| key_usage_windows(c, "k1", 1_000, now))
+        .read_blocking(|c| {
+            key_usage_windows(
+                c,
+                "k1",
+                1_000,
+                now,
+                &PriceRevisions::shipped(),
+                &PlanTables::shipped(),
+            )
+        })
         .unwrap();
     assert_eq!(
         day.requests, 1,
@@ -362,7 +413,13 @@ async fn the_usage_route_answers_the_callers_own_key_and_refuses_the_rest() {
     }])
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
-    let app = phoebis_ledger::usage_router(h.db.clone(), h.router.clone(), clock_of(&h));
+    let app = phoebis_ledger::usage_router(
+        h.db.clone(),
+        h.router.clone(),
+        clock_of(&h),
+        h.pricing.clone(),
+        Arc::new(PlanTables::shipped()),
+    );
 
     let (status, headers, body) = get(&app, None).await;
     assert_eq!(status, 401);
@@ -422,7 +479,13 @@ async fn a_second_key_sees_its_own_usage_and_not_the_firsts() {
     }])
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
-    let app = phoebis_ledger::usage_router(h.db.clone(), h.router.clone(), clock_of(&h));
+    let app = phoebis_ledger::usage_router(
+        h.db.clone(),
+        h.router.clone(),
+        clock_of(&h),
+        h.pricing.clone(),
+        Arc::new(PlanTables::shipped()),
+    );
     const LAPTOP: &str = "phoebis-laptop";
     h.store
         .insert_api_key(
@@ -510,7 +573,13 @@ fn desktop_row(store: &Store) -> ApiKeyRow {
 async fn the_route_reads_the_generation_of_the_key_that_presented_the_secret() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
-    let app = phoebis_ledger::usage_router(h.db.clone(), h.router.clone(), clock_of(&h));
+    let app = phoebis_ledger::usage_router(
+        h.db.clone(),
+        h.router.clone(),
+        clock_of(&h),
+        h.pricing.clone(),
+        Arc::new(PlanTables::shipped()),
+    );
 
     let now = h.clock.load(Ordering::SeqCst);
     // The store stamps the key from the wall clock, so the live generation is read back rather than assumed.
@@ -569,7 +638,13 @@ async fn a_deleted_keys_usage_stays_with_it() {
     }])
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
-    let app = phoebis_ledger::usage_router(h.db.clone(), h.router.clone(), clock_of(&h));
+    let app = phoebis_ledger::usage_router(
+        h.db.clone(),
+        h.router.clone(),
+        clock_of(&h),
+        h.pricing.clone(),
+        Arc::new(PlanTables::shipped()),
+    );
     // The store stamps the key from the wall clock, so the live generation is read back rather than assumed.
     let first = generation_of(&h.store, "desktop");
 
@@ -631,11 +706,18 @@ async fn a_deleted_keys_usage_stays_with_it() {
 
     let now = h.clock.load(Ordering::SeqCst);
     assert_eq!(
-        h.db.read(move |c| key_usage_windows(c, "desktop", first, now + 1))
-            .await
-            .unwrap()
-            .1
-            .requests,
+        h.db.read(move |c| key_usage_windows(
+            c,
+            "desktop",
+            first,
+            now + 1,
+            &PriceRevisions::shipped(),
+            &PlanTables::shipped()
+        ))
+        .await
+        .unwrap()
+        .1
+        .requests,
         1,
         "the history stays under the generation that spent it"
     );
@@ -645,7 +727,13 @@ async fn a_deleted_keys_usage_stays_with_it() {
 async fn an_earlier_holders_unstamped_rows_are_not_the_new_keys_own() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
-    let app = phoebis_ledger::usage_router(h.db.clone(), h.router.clone(), clock_of(&h));
+    let app = phoebis_ledger::usage_router(
+        h.db.clone(),
+        h.router.clone(),
+        clock_of(&h),
+        h.pricing.clone(),
+        Arc::new(PlanTables::shipped()),
+    );
     let now = h.clock.load(Ordering::SeqCst);
     // A row written before the column existed, under an id whose holder was gone when the stamp ran.
     h.db.insert_request(
@@ -678,7 +766,13 @@ async fn a_ledger_the_route_cannot_read_is_refused_in_the_relays_error_shape() {
             Ok(())
         })
         .unwrap();
-    let app = phoebis_ledger::usage_router(unreadable, h.router.clone(), clock_of(&h));
+    let app = phoebis_ledger::usage_router(
+        unreadable,
+        h.router.clone(),
+        clock_of(&h),
+        h.pricing.clone(),
+        Arc::new(PlanTables::shipped()),
+    );
 
     let (status, headers, body) = get(&app, Some(KEY)).await;
     assert_eq!(status, 500);
@@ -731,7 +825,13 @@ async fn the_usage_page_is_html_when_accept_prefers_it_and_escapes_the_label() {
     }])
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
-    let app = phoebis_ledger::usage_router(h.db.clone(), h.router.clone(), clock_of(&h));
+    let app = phoebis_ledger::usage_router(
+        h.db.clone(),
+        h.router.clone(),
+        clock_of(&h),
+        h.pricing.clone(),
+        Arc::new(PlanTables::shipped()),
+    );
 
     let row = h.store.api_key("desktop").unwrap().unwrap();
     h.store

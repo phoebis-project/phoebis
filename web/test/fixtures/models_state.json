@@ -9,16 +9,16 @@
             "account_id": "business",
             "scope": "model:claude-haiku-4-5-20251001",
             "reason": "model_rejected",
-            "until": 2800000,
+            "until": 1791722800000,
             "window": "model_rejection",
-            "set_at": 1000000
+            "set_at": 1791721000000
           }
         ]
       }
     ],
     "rejections": [
       {
-        "at": -2599700,
+        "at": 1791717400300,
         "account_id": "business",
         "key_id": "desktop",
         "session_id": "s1",
@@ -30,7 +30,7 @@
     ],
     "permits": [
       {
-        "at": -2599650,
+        "at": 1791717400350,
         "account_id": "direct",
         "key_id": "desktop",
         "session_id": "s1",

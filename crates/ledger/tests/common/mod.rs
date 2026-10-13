@@ -9,7 +9,9 @@ use axum::body::Body;
 use axum::http::Request;
 use fake_upstream::FakeUpstream;
 use phoebis_bus::Bus;
-use phoebis_ledger::{spawn, Ledger, LedgerConfig, LedgerDb, Metrics, PriceTable, Pricing};
+use phoebis_ledger::{
+    spawn, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables, PriceRevisions, Pricing,
+};
 use phoebis_oauth::Clock;
 use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
@@ -278,11 +280,12 @@ pub async fn harness_on(
         Duration::from_secs(5),
     ));
     let bus = Bus::new();
-    let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
+    let pricing = Arc::new(Pricing::new(PriceRevisions::shipped()));
     let metrics = Arc::new(Metrics::new());
     let ledger = spawn(
         db.clone(),
         pricing.clone(),
+        Arc::new(PlanTables::shipped()),
         store.clone(),
         &bus,
         router_handle.clone(),
@@ -445,3 +448,48 @@ pub fn json_200() -> fake_upstream::Respond {
             .to_vec(),
     }
 }
+
+/// The rollup table as version 33 held it, rebuilt over a file the current schema built: the band, the tier and the
+/// wasted counts out and the eight dollar columns back at zero, so a replay from an earlier version runs the older
+/// rebuilds, which name the dollar columns, and then migration 34 over the table it was written for. SQLite cannot
+/// drop a primary-key column in place, so the table is rebuilt as the migrations rebuild it.
+pub const VERSION_33_ROLLUPS: &str = "CREATE TABLE rollups_hourly_v33 (hour INTEGER NOT NULL, key_id TEXT NOT NULL, \
+     key_generation INTEGER NOT NULL DEFAULT 0, pool_id TEXT NOT NULL, account_id TEXT NOT NULL, \
+     canonical_model TEXT NOT NULL, kind TEXT NOT NULL, user_agent TEXT NOT NULL, client TEXT NOT NULL DEFAULT '-', \
+     effort TEXT NOT NULL DEFAULT 'none', request_class TEXT NOT NULL DEFAULT '-', \
+     speed TEXT NOT NULL DEFAULT 'standard', funding TEXT NOT NULL DEFAULT 'plan', requests INTEGER NOT NULL, \
+     succeeded INTEGER NOT NULL, rate_limited INTEGER NOT NULL, failed INTEGER NOT NULL, exhausted INTEGER NOT NULL, \
+     rejected INTEGER NOT NULL, attempts INTEGER NOT NULL, failovers INTEGER NOT NULL, cache_hits INTEGER NOT NULL, \
+     cache_misses INTEGER NOT NULL, uncached_requests INTEGER NOT NULL, input_tokens INTEGER NOT NULL, \
+     cache_read_tokens INTEGER NOT NULL, cache_write_5m_tokens INTEGER NOT NULL, \
+     cache_write_1h_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, \
+     thinking_tokens INTEGER NOT NULL DEFAULT 0, web_search_requests INTEGER NOT NULL DEFAULT 0, \
+     web_fetch_requests INTEGER NOT NULL DEFAULT 0, estimated_usd REAL NOT NULL, input_usd REAL NOT NULL, \
+     cache_read_usd REAL NOT NULL, cache_write_usd REAL NOT NULL, output_usd REAL NOT NULL, \
+     kept_warm_requests INTEGER NOT NULL, kept_warm_tokens INTEGER NOT NULL, saved_usd_gross REAL NOT NULL, \
+     probe_cost_usd REAL NOT NULL, probe_migrated INTEGER NOT NULL, wasted_probes INTEGER NOT NULL, \
+     wasted_probe_usd REAL NOT NULL, wasted_probe_reasons_json TEXT NOT NULL, \
+     probes_skipped INTEGER NOT NULL DEFAULT 0, ttfb_hist BLOB NOT NULL, ttfc_hist BLOB NOT NULL, \
+     duration_hist BLOB NOT NULL, output_tps_hist BLOB NOT NULL, errors_json TEXT NOT NULL, \
+     cache_miss_reasons_json TEXT NOT NULL, incomplete INTEGER NOT NULL DEFAULT 0, \
+     probes_held INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (hour, key_id, key_generation, pool_id, account_id, \
+     canonical_model, kind, user_agent, client, effort, request_class, speed, funding)); \
+     INSERT INTO rollups_hourly_v33 (hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, \
+     user_agent, client, effort, request_class, speed, funding, requests, succeeded, rate_limited, failed, exhausted, \
+     rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, \
+     cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, \
+     web_fetch_requests, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, \
+     kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, \
+     wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, \
+     cache_miss_reasons_json, incomplete, probes_held) SELECT hour, key_id, key_generation, pool_id, account_id, \
+     canonical_model, kind, user_agent, client, effort, request_class, speed, funding, requests, succeeded, \
+     rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, \
+     input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, \
+     web_search_requests, web_fetch_requests, 0.0, 0.0, 0.0, 0.0, 0.0, kept_warm_requests, kept_warm_tokens, 0.0, \
+     0.0, probe_migrated, wasted_probes, 0.0, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, \
+     duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held \
+     FROM rollups_hourly; \
+     DROP TABLE rollups_hourly; \
+     ALTER TABLE rollups_hourly_v33 RENAME TO rollups_hourly; \
+     CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_generation, hour); \
+     CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, account_id, hour);";

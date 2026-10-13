@@ -1,8 +1,8 @@
 {
   "route": "GET /admin/analytics/accounts?range=24h",
   "body": {
-    "from": -85400000,
-    "to": 1000000,
+    "from": 1791634600000,
+    "to": 1791721000000,
     "accounts": [
       {
         "account_id": "business",
@@ -20,7 +20,7 @@
         },
         "hours": [
           {
-            "hour": -3600000,
+            "hour": 1791716400000,
             "utilization_5h_max": 0.4,
             "utilization_7d_max": null,
             "utilization_7d_oi_max": null,
@@ -36,7 +36,7 @@
             }
           },
           {
-            "hour": 0,
+            "hour": 1791720000000,
             "utilization_5h_max": 0.4,
             "utilization_7d_max": null,
             "utilization_7d_oi_max": null,
@@ -48,27 +48,27 @@
             "windows": {
               "five_hour": {
                 "utilization": 0.62,
-                "reset_at": 4600000,
+                "reset_at": 1791724600000,
                 "lead": -0.1744444444444444,
-                "sampled_at": 900000
+                "sampled_at": 1791720900000
               },
               "seven_day": {
                 "utilization": 0.41,
-                "reset_at": 87400000,
+                "reset_at": 1791807400000,
                 "lead": -0.4469775132275133,
-                "sampled_at": 900000
+                "sampled_at": 1791720900000
               },
               "seven_day_fable": {
                 "utilization": 0.12,
-                "reset_at": 87400000,
+                "reset_at": 1791807400000,
                 "lead": -0.7369775132275133,
-                "sampled_at": 900000
+                "sampled_at": 1791720900000
               },
               "seven_day_opus": {
                 "utilization": 0.03,
-                "reset_at": 87400000,
+                "reset_at": 1791807400000,
                 "lead": -0.8269775132275132,
-                "sampled_at": 900000
+                "sampled_at": 1791720900000
               }
             }
           }
@@ -90,7 +90,7 @@
         },
         "hours": [
           {
-            "hour": -3600000,
+            "hour": 1791716400000,
             "utilization_5h_max": 0.4,
             "utilization_7d_max": null,
             "utilization_7d_oi_max": null,
@@ -106,7 +106,7 @@
             }
           },
           {
-            "hour": 0,
+            "hour": 1791720000000,
             "utilization_5h_max": 0.4,
             "utilization_7d_max": null,
             "utilization_7d_oi_max": null,

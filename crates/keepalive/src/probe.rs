@@ -10,7 +10,7 @@ use axum::body::Body;
 use axum::http::{header, Request};
 use bytes::{Bytes, BytesMut};
 use http_body_util::BodyExt;
-use phoebis_ledger::{PlanTables, PriceTable};
+use phoebis_ledger::{prompt_tokens, Band, PlanTables, PriceTable, Speed};
 use phoebis_relay::RelayOutcome;
 use phoebis_routing::BUDGET_WINDOW;
 use phoebis_store::AccountKind;
@@ -22,7 +22,7 @@ use crate::engine::{
     UnansweredProbe, Verdict, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
-use crate::savings::{probe_cost, probe_dollars, settlement_unit, unpriced_reason};
+use crate::savings::{answered_speed, probe_cost, settlement_unit, typed, unpriced_reason};
 use crate::usage::{ProbeUsage, MAX_USAGE_BYTES};
 
 /// The engine's own bound on one exchange. A probe with `max_tokens = 0` answers in seconds; the relay's idle
@@ -54,6 +54,9 @@ pub(crate) struct ProbeResult {
     /// The relay's id of the exchange, which the probe's ledger request row carries. `None` for an answer the relay
     /// never built.
     pub request_id: Option<String>,
+    /// The instant the relay received the probe's request, off `RelayOutcome::received_at`: the hour and the price
+    /// revision the probe's request row files under. `None` for an answer the relay never built.
+    pub received_at: Option<i64>,
     pub account: Option<String>,
     /// The relay's own code for an answer it built itself, `accounts_at_cap`, `accounts_exhausted` and
     /// `accounts_unavailable` among them; `None` for an upstream answer forwarded as it came.
@@ -140,7 +143,7 @@ pub(crate) fn covers(migrated: bool, usage: &ProbeUsage, expected: u64) -> bool 
     }
 }
 
-/// What one probe cost and how it ended, from the job and the exchange alone. Whether the recipe it ran for
+/// The counts one probe used and how it ended, from the job and the exchange alone. Whether the recipe it ran for
 /// still exists changes nothing here: the upstream served it, so the pool's spend, the metrics, and the ledger
 /// carry it either way.
 #[derive(Clone, Debug, PartialEq)]
@@ -148,8 +151,8 @@ pub struct ProbeRecord {
     pub account: String,
     pub agent_id: String,
     pub canonical_model: String,
-    pub cost_usd: f64,
-    /// The recipe carried `speed: "fast"`, so its ledger rows file under speed `fast`.
+    /// The recipe carried `speed: "fast"`, the speed its migration mark files under. The probe's cost and its waste
+    /// file under the speed its answer reported, `answered_speed` of `usage`.
     pub fast: bool,
     /// Whether the probe's answer reported overage in use, the fact its request row files under: the credit row
     /// keys the same funding, and the settlement unit follows the same side.
@@ -163,6 +166,17 @@ pub struct ProbeRecord {
     pub outcome: ProbeOutcome,
     pub pool_id: String,
     pub usage: ProbeUsage,
+    /// The instant the relay received the probe's request, the one its request row files under, so the settlement
+    /// keys the same hour and prices at the same revision whenever the answer lands. The instant the engine sent the
+    /// request, on the same clock, where the relay built no answer.
+    pub at: i64,
+    /// The probe's prompt-length band, `table.band_of(model, prompt_tokens(input, read, write_5m, write_1h))` on the
+    /// revision in force at `at`, read from the answer's counts.
+    pub band: Band,
+    /// The account tier the settlement read at the exchange, which a probe settling in the window share reads from
+    /// the store: its settlement's credit row keys the tier the probe ran under. `None` for a probe that settles in
+    /// dollars and for an account whose tier could not be read.
+    pub tier: Option<String>,
 }
 
 /// What the fenced half did with the result.
@@ -173,11 +187,9 @@ pub(crate) enum Applied {
 }
 
 /// The unit a probe settles in: the one `settlement_unit` decides, or dollars where the share it names cannot be
-/// priced. Only the unit is kept, since the credit reads its presence and the ledger the probe's dollars.
-#[allow(clippy::too_many_arguments)]
+/// priced. Only the unit is kept, since the credit reads its presence and the ledger prices the probe's counts.
 fn settled_unit(
     default_unit: SavingsUnit,
-    table: &PriceTable,
     tables: &PlanTables,
     tier: Option<&str>,
     account: &str,
@@ -185,16 +197,16 @@ fn settled_unit(
     usage: ProbeUsage,
     at: i64,
 ) -> SavingsUnit {
-    let unit = settlement_unit(default_unit, tables, tier, canonical_model);
+    let unit = settlement_unit(default_unit, tables, tier, canonical_model, at);
     if unit == SavingsUnit::WindowShare
-        && probe_cost(unit, table, tables, tier, canonical_model, usage, at).is_none()
+        && probe_cost(tables, tier, canonical_model, usage, at).is_none()
     {
         // `settlement_unit` reads `priced`, which asks exactly what `share_at` needs (a weight on the window and a
         // capacity for the tier), so this branch is unreachable. It stays as the defensive read of a `None`.
         tracing::debug!(
             account,
             model = canonical_model,
-            unpriced = unpriced_reason(tables, canonical_model),
+            unpriced = unpriced_reason(tables, canonical_model, at),
             "a probe the cost model cannot price on the window share settles in dollars"
         );
         return SavingsUnit::Usd;
@@ -252,10 +264,13 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         .header(header::CONTENT_LENGTH, job.recipe.body.len())
         .body(Body::from(job.recipe.body.clone()));
     let marker = crate::probe_marker(&job.key.0, job.key_generation);
+    // Read before the send, so an exchange the relay never answered keys the instant the relay would have received it.
+    let sent = engine.now();
     let exchange = match request {
         Err(_) => Exchange::Answered(ProbeResult {
             status: 0,
             request_id: None,
+            received_at: None,
             account: None,
             error_code: None,
             body: None,
@@ -281,6 +296,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                 ProbeResult {
                     status,
                     request_id: outcome.as_ref().map(|o| o.request_id.clone()),
+                    received_at: outcome.as_ref().map(|o| o.received_at),
                     account: outcome
                         .as_ref()
                         .map(|o| o.account_id.clone())
@@ -306,18 +322,28 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         }
     };
     let now = engine.now();
-    let table = engine.parts.pricing.current();
+    // The relay files the probe's request row at its receipt, on the revision in force then, so the record keys that
+    // instant and the settlement prices beside the row even when the answer lands past an hour's end or a revision's
+    // start. The completion stays the clock the schedule reads.
+    let at = match &exchange {
+        Exchange::Answered(result) => result.received_at.unwrap_or(sent),
+        Exchange::Cancelled | Exchange::TimedOut => sent,
+    };
+    let revisions = engine.parts.pricing.revisions();
+    let table = revisions.in_force(at);
     let tables = engine.parts.tables.clone();
     let (record, applied) = {
         let mut inner = engine.lock();
-        let record = inner.probe_record(&job, &exchange, &table);
+        let mut record = inner.probe_record(&job, &exchange, table, at);
         // The serving account's kind decides the unit this probe's cost settles in. It rides the relay's answer, so
         // a registry write mid-exchange never changes which account this probe is charged against, and an answer the
         // relay never built names no account: its probe settles in dollars and the credit path never matches it.
         let in_overage = record.in_overage;
         let funding = record.kind.map(|kind| Funding::of(kind, in_overage));
-        // A fast replay draws usage credits whatever the account's funding, so it settles in dollars.
-        let default_unit = if job.recipe.fast {
+        // A fast answer draws usage credits whatever the account's funding, so it settles in dollars. The answer's
+        // speed decides rather than the recipe's: a fast recipe answered at standard speed spent the plan, as its
+        // request row files it.
+        let default_unit = if answered_speed(record.usage) == Speed::Fast {
             SavingsUnit::Usd
         } else {
             funding.map(Funding::unit).unwrap_or(SavingsUnit::Usd)
@@ -342,15 +368,15 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             })
             .flatten()
             .and_then(|s| s.tier);
+        record.tier = tier.clone();
         let unit = settled_unit(
             default_unit,
-            &table,
             &tables,
             tier.as_deref(),
             &record.account,
             &record.canonical_model,
             record.usage,
-            now,
+            at,
         );
         let covered_unit = funding.map(|_| unit);
         let applied = inner.apply_probe(&job, exchange, &record, covered_unit, now);
@@ -376,7 +402,8 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
 }
 
 impl Inner {
-    /// The immutable half: the outcome the exchange had and what it cost at the canonical model's list prices.
+    /// The immutable half: the outcome the exchange had, the counts it used and their prompt-length band on `table`,
+    /// the price revision in force at `at`, the relay's receipt of the probe.
     /// A migrated probe is one the relay served on an account other than the job's; it is priced like any other
     /// and reported as migrated.
     pub(crate) fn probe_record(
@@ -384,12 +411,12 @@ impl Inner {
         job: &ProbeJob,
         exchange: &Exchange,
         table: &PriceTable,
+        at: i64,
     ) -> ProbeRecord {
         let mut record = ProbeRecord {
             account: job.account.clone().unwrap_or_else(|| "-".to_string()),
             agent_id: job.agent_id.clone(),
             canonical_model: job.canonical_model.clone(),
-            cost_usd: 0.0,
             fast: job.recipe.fast,
             in_overage: false,
             key: job.key.clone(),
@@ -398,6 +425,9 @@ impl Inner {
             outcome: ProbeOutcome::Failed,
             pool_id: job.pool_id.clone(),
             usage: ProbeUsage::default(),
+            at,
+            band: Band::Standard,
+            tier: None,
         };
         let result = match exchange {
             Exchange::Cancelled => {
@@ -421,11 +451,16 @@ impl Inner {
         }
         if let Some(usage) = result.body.as_deref().and_then(ProbeUsage::parse) {
             record.usage = usage;
-            // The ledger's probe-cost column is dollars whatever funded the account, so this always prices
-            // through the price table, at the cells the answer's own `usage.speed` selects. The funding unit is
-            // decided once the serving account's kind is known, back in `run_job`. Dollars read neither a tier nor
-            // the settlement instant.
-            record.cost_usd = probe_dollars(table, &job.canonical_model, usage);
+            let counts = typed(usage);
+            record.band = table.band_of(
+                &job.canonical_model,
+                prompt_tokens(
+                    counts.input,
+                    counts.cache_read,
+                    counts.write_5m,
+                    counts.write_1h,
+                ),
+            );
         }
         if result
             .account
@@ -522,7 +557,10 @@ impl Inner {
                             canonical_model: job.canonical_model.clone(),
                             account: Some(record.account.clone()),
                             fast: job.recipe.fast,
-                            cost: record.cost_usd,
+                            usage: record.usage,
+                            tier: record.tier.clone(),
+                            at: record.at,
+                            band: record.band,
                             entry_expires: job.started + ttl,
                             kind: record.kind,
                             in_overage: record.in_overage,
@@ -544,8 +582,11 @@ impl Inner {
                 canonical_model: job.canonical_model.clone(),
                 account: Some(record.account.clone()),
                 label,
-                cost: record.cost_usd,
-                fast: job.recipe.fast,
+                usage: record.usage,
+                tier: record.tier.clone(),
+                at: record.at,
+                band: record.band,
+                speed: answered_speed(record.usage),
                 kind: record.kind,
                 in_overage: record.in_overage,
             });
@@ -610,7 +651,10 @@ impl Inner {
         let ttl = record.usage.ttl_ms(previous_ms, requested_ms);
         agent.unanswered.push(UnansweredProbe {
             id: result.request_id.clone().unwrap_or_default(),
-            cost: record.cost_usd,
+            usage: record.usage,
+            tier: record.tier.clone(),
+            at: record.at,
+            band: record.band,
             unit: covered_unit,
             account: Some(record.account.clone()),
             fast: job.recipe.fast,
@@ -961,6 +1005,7 @@ mod tests {
 
     use crate::config::KeepaliveTiming;
     use crate::engine::{Agent, Session};
+    use phoebis_ledger::PriceRevisions;
 
     use super::*;
 
@@ -1031,6 +1076,7 @@ mod tests {
         Exchange::Answered(ProbeResult {
             status: 503,
             request_id: Some("p".into()),
+            received_at: Some(2_000),
             account: None,
             error_code: Some(phoebis_relay::LEDGER_BEHIND.into()),
             body: None,
@@ -1066,7 +1112,12 @@ mod tests {
                 }
             }
             let exchange = held_answer();
-            let record = inner.probe_record(&job, &exchange, &PriceTable::shipped());
+            let record = inner.probe_record(
+                &job,
+                &exchange,
+                PriceRevisions::shipped().in_force(2_000),
+                2_000,
+            );
             assert_eq!(record.outcome, ProbeOutcome::Held, "{orphaned_by}");
             let applied = inner.apply_probe(&job, exchange, &record, None, 2_000);
             assert_eq!(applied, Applied::Orphaned, "{orphaned_by}");
@@ -1301,32 +1352,6 @@ mod tests {
         );
     }
 
-    /// A table pricing a model the shipped cost model has no weight for, so `settled_unit` must fall all the way
-    /// back to dollars rather than naming a share nothing can price.
-    fn table_pricing_an_unlisted_model() -> PriceTable {
-        PriceTable {
-            version: "test".into(),
-            effective: "test".into(),
-            source: "test".into(),
-            models: [(
-                "unlisted-model".to_string(),
-                phoebis_ledger::ModelRow {
-                    standard: phoebis_ledger::ModelPrice {
-                        input: 2.0,
-                        cache_write_5m: 2.5,
-                        cache_write_1h: 4.0,
-                        cache_read: 0.2,
-                        output: 10.0,
-                    },
-                    fast: None,
-                    long_context: None,
-                },
-            )]
-            .into_iter()
-            .collect(),
-        }
-    }
-
     const MAX_20X: Option<&str> = Some("default_claude_max_20x");
     /// 1970-01-01 00:00 UTC, a Wednesday afternoon in the band's zone and outside its hours.
     const OFF_BAND: i64 = 0;
@@ -1342,7 +1367,6 @@ mod tests {
 
     #[test]
     fn a_plan_funded_probe_on_an_unlisted_model_settles_in_dollars() {
-        let table = table_pricing_an_unlisted_model();
         let tables = PlanTables::shipped();
         let usage = ProbeUsage {
             write: 2_000,
@@ -1351,7 +1375,6 @@ mod tests {
         };
         let unit = settled_unit(
             SavingsUnit::WindowShare,
-            &table,
             &tables,
             MAX_20X,
             "o",
@@ -1370,15 +1393,18 @@ mod tests {
     // units, and the band holds 0.5 of it.
     #[test]
     fn a_plan_funded_probe_on_a_listed_model_settles_in_five_hour_share() {
-        let table = phoebis_ledger::test_tables::api_prices();
-        let tables = phoebis_ledger::test_tables::subscription_costs();
+        // The first cost entry alone, so the September instant below reads its figures.
+        let tables = PlanTables {
+            revisions: phoebis_ledger::test_tables::first_entry_costs(),
+            path: None,
+            source: "test".to_string(),
+        };
         let one_input = ProbeUsage {
             input: 1,
             ..ProbeUsage::default()
         };
         let unit = settled_unit(
             SavingsUnit::WindowShare,
-            &table,
             &tables,
             MAX_20X,
             "o",
@@ -1387,18 +1413,8 @@ mod tests {
             OFF_BAND,
         );
         assert_eq!(unit, SavingsUnit::WindowShare);
-        let share = |at: i64| {
-            probe_cost(
-                unit,
-                &table,
-                &tables,
-                MAX_20X,
-                "claude-opus-5-5",
-                one_input,
-                at,
-            )
-            .unwrap()
-        };
+        let share =
+            |at: i64| probe_cost(&tables, MAX_20X, "claude-opus-5-5", one_input, at).unwrap();
         let cost = share(OFF_BAND);
         assert!(
             (cost - 2.0 / 100.0).abs() < 1e-12,
@@ -1413,11 +1429,9 @@ mod tests {
 
     #[test]
     fn a_plan_funded_probe_on_an_account_without_a_tier_settles_in_dollars() {
-        let table = PriceTable::shipped();
         let tables = PlanTables::shipped();
         let unit = settled_unit(
             SavingsUnit::WindowShare,
-            &table,
             &tables,
             None,
             "o",
@@ -1433,24 +1447,22 @@ mod tests {
     }
 
     #[test]
-    fn a_plan_funded_probe_on_a_model_without_a_weight_settles_in_dollars() {
-        // The test table leaves Opus 5 without a weight; the test price table lists it.
-        let table = phoebis_ledger::test_tables::api_prices();
+    fn a_plan_funded_probe_on_a_model_of_no_weighted_tier_settles_in_dollars() {
+        // The test table places Mystery 2 in a tier with no weighted model, so nothing weighs it.
         let tables = phoebis_ledger::test_tables::subscription_costs();
         let unit = settled_unit(
             SavingsUnit::WindowShare,
-            &table,
             &tables,
             MAX_20X,
             "o",
-            "claude-opus-5",
+            "claude-mystery-2",
             million_input(),
             OFF_BAND,
         );
         assert_eq!(
             unit,
             SavingsUnit::Usd,
-            "Opus 5 has no weight, so the share is unpriced and the dollar unit governs"
+            "Mystery 2 has no weight to read, so the share is unpriced and the dollar unit governs"
         );
     }
 

@@ -10,7 +10,7 @@ use phoebis_ledger::{dashboard, latest_quota};
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
-use crate::openapi::{ErrorBody, HourPointView};
+use crate::openapi::{HourPointView, LedgerFailure, SharedEquivalentView};
 use crate::requests::{request_summary, RequestSummary, ShareContext};
 use crate::AdminState;
 
@@ -28,12 +28,21 @@ pub(crate) struct Dashboard {
     pub tokens_cached_24h: u64,
     /// The window's estimated cost in dollars.
     pub cost_24h: f64,
+    /// The dollars of the window's billed rows alone (fast mode, overage and API key accounts), a part of
+    /// `cost_24h`.
+    pub billed_24h: f64,
+    /// The window's plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served
+    /// them.
+    pub equivalent_24h: SharedEquivalentView,
+    /// Whether a plan-funded row of the window priced at its model tier's latest weight, for a model the cost model
+    /// does not weight.
+    pub estimated_24h: bool,
     /// The requests that did not succeed over the requests, null with no request.
     pub error_rate_24h: Option<f64>,
     /// The window's most frequent error code, null with none.
     pub top_error_code: Option<String>,
-    /// The window's 24 hours, oldest first: each hour's start as `at`, and its `cost`, `errors` (the requests that
-    /// did not succeed), `requests` and `tokens`.
+    /// The window's 24 hours, oldest first: each hour's start as `at`, and its `billed`, `cost`, `equivalent`,
+    /// `errors` (the requests that did not succeed), `requests` and `tokens`.
     pub hourly: Vec<HourPointView>,
     /// One row per recent request and attempt.
     pub recent: Vec<RequestSummary>,
@@ -71,16 +80,20 @@ pub(crate) struct DashboardSessions {
     tag = "Dashboard",
     responses(
         (status = 200, description = "The dashboard.", body = Dashboard),
-        (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
+        (status = 500, response = LedgerFailure),
     ),
 )]
 pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let now = (state.clock)();
-    let shares = match ShareContext::read(&state) {
-        Ok(shares) => shares,
-        Err(refusal) => return refusal,
-    };
-    let board = match dashboard(state.ledger.db(), now).await {
+    let shares = ShareContext::read(&state);
+    let board = match dashboard(
+        state.ledger.db(),
+        now,
+        &state.pricing.revisions(),
+        &state.tables,
+    )
+    .await
+    {
         Ok(board) => board,
         Err(e) => return ledger_failure(e),
     };
@@ -107,6 +120,9 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
         tokens_24h: board.tokens_24h,
         tokens_cached_24h: board.tokens_cached_24h,
         cost_24h: board.cost_24h,
+        billed_24h: board.billed_24h,
+        equivalent_24h: (&board.equivalent_24h).into(),
+        estimated_24h: board.estimated_24h,
         error_rate_24h: board.error_rate_24h,
         top_error_code: board.top_error_code,
         hourly: board
@@ -114,7 +130,9 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
             .iter()
             .map(|h| HourPointView {
                 at: h.at,
+                billed: h.billed,
                 cost: h.cost,
+                equivalent: (&h.equivalent).into(),
                 errors: h.errors,
                 requests: h.requests,
                 tokens: h.tokens,

@@ -1,12 +1,12 @@
-//! The ten conditions, read fresh on every call: the account states and the pools from the registry, the refresh
-//! runs from the store, the parked records and the ledger's degraded state from the ledger, the routing state
-//! writer's and the listeners' pairs from the router, the poll's standing from the usage service, and the exhaustions
-//! and drift refusals from the request outcomes the bus arm keeps.
+//! The eleven conditions, read fresh on every call: the account states and the pools from the registry, the refresh
+//! runs from the store, the parked records, the ledger's degraded state and the unweighted models its landing saw from
+//! the ledger, the routing state writer's and the listeners' pairs from the router, the poll's standing from the usage
+//! service, and the exhaustions and drift refusals from the request outcomes the bus arm keeps.
 
 use std::collections::{HashMap, HashSet};
 
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome};
-use phoebis_ledger::{polled, ParkedSummary};
+use phoebis_ledger::{polled, ParkedSummary, UnweightedModel};
 use phoebis_oauth::UsageService;
 use phoebis_routing::RouterHandle;
 use phoebis_store::{
@@ -53,7 +53,7 @@ const RELEASE_VERSION_MAX_BYTES: usize = 32;
 /// back), a listener serving a pair whose replacement did not load (the next start would refuse the files as they
 /// stand), an account that serves nothing until the operator acts, an account's credential about to lapse, the
 /// router's own certificate about to lapse, priced records the ledger file keeps until the next start or a replay
-/// lands them, windows that read stale.
+/// lands them, windows that read stale, and a model whose window share is an estimate while nothing is broken.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     PoolExhausted,
@@ -66,6 +66,7 @@ pub enum Kind {
     CertificateExpiring,
     LedgerRecordParked,
     PollBackoff,
+    ModelUnweighted,
 }
 
 impl Kind {
@@ -81,6 +82,7 @@ impl Kind {
             Kind::CertificateExpiring => "certificate_expiring",
             Kind::LedgerRecordParked => "ledger_record_parked",
             Kind::PollBackoff => "poll_backoff",
+            Kind::ModelUnweighted => "model_unweighted",
         }
     }
 }
@@ -93,6 +95,8 @@ pub enum SubjectKind {
     /// One of the process's own components: the ledger or the routing state writer, a listener's pair by its key
     /// (`proxy.tls`, `admin.tls`), or `-` for a parked record served under no pool.
     Router,
+    /// A model by its undated id.
+    Model,
 }
 
 impl SubjectKind {
@@ -102,12 +106,13 @@ impl SubjectKind {
             SubjectKind::Client => "client",
             SubjectKind::Pool => "pool",
             SubjectKind::Router => "router",
+            SubjectKind::Model => "model",
         }
     }
 }
 
-/// What a condition is about: the account's or the pool's id and label, the client version as both, or the router's
-/// own component as both.
+/// What a condition is about: the account's or the pool's id and label, the client version as both, the router's own
+/// component as both, or a model's undated id as both.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Subject {
     pub kind: SubjectKind,
@@ -145,6 +150,14 @@ impl Subject {
             kind: SubjectKind::Router,
             id: component.into(),
             label: component.into(),
+        }
+    }
+
+    fn model(model: &str) -> Subject {
+        Subject {
+            kind: SubjectKind::Model,
+            id: model.into(),
+            label: model.into(),
         }
     }
 }
@@ -379,7 +392,7 @@ pub(crate) fn refresh_runs(
 /// their `refresh_runs`, and the parked rows, before it takes the reader's state, and a read that fails fails the
 /// whole answer, since a series answered without its evidence could clear a real alarm. `parked` is `None` where no
 /// ledger is built, and `ledger_record_parked` then has no series. `pairs` is `None` where no listener is built, and
-/// neither certificate kind then has a series.
+/// neither certificate kind then has a series. `unweighted` is the ledger's map, empty where no ledger is built.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn conditions(
     state: &mut ReaderState,
@@ -388,6 +401,7 @@ pub(crate) fn conditions(
     router: &RouterHandle,
     ledger_degraded: bool,
     parked: Option<&[ParkedSummary]>,
+    unweighted: &[UnweightedModel],
     pairs: Option<&[PairFacts]>,
     usage: Option<&UsageService>,
     now: i64,
@@ -623,6 +637,26 @@ pub(crate) fn conditions(
                 }),
             ));
         }
+    }
+    // A model belongs to no pool card. A model a revision weighted keeps its entry, so its series reads 0.
+    for entry in unweighted {
+        out.push(Condition {
+            kind: Kind::ModelUnweighted,
+            subject: Subject::model(&entry.model),
+            holds: entry.since.is_some(),
+            since: entry.since,
+            pools: Vec::new(),
+            link: Some(Link {
+                page: "models",
+                id: entry.model.clone(),
+            }),
+            detail: json!({
+                "model": entry.model,
+                "requests": entry.requests,
+                "tier": entry.tier,
+                "weight_of": entry.weight_of,
+            }),
+        });
     }
     // A cleared state, a deleted account and an account that changed kind all lose their first-seen time, so the
     // next holding read dates the state afresh.

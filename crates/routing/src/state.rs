@@ -14,7 +14,7 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 
 use crate::affinity::{AffinityMap, PurgedEntry};
-use crate::listing::{row_for, snapshot_date};
+use crate::listing::{row_for, snapshot_date, tier_segment};
 use crate::select::{affinity_ttl_ms, seconds_ms};
 use crate::task::BurnRates;
 use crate::windows::window_for;
@@ -448,11 +448,15 @@ fn priced(count: f64, rate: Option<f64>) -> Option<f64> {
 }
 
 /// A price per token by model and token type; `long_context` the second set of the models priced by prompt length,
-/// and `fallback` prices a model the table does not list.
+/// `tiers` the rates of a model the table does not list by the model tier its id names, and `fallback` prices any
+/// other model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RateTable {
     pub rows: HashMap<String, Rates>,
     pub long_context: HashMap<String, LongContextRates>,
+    /// Keyed by model tier name, the key `listing::tier_segment` reads off an id. Empty for a table that prices by
+    /// listed model alone.
+    pub tiers: HashMap<String, Rates>,
     pub fallback: Rates,
 }
 
@@ -462,6 +466,7 @@ impl RateTable {
         RateTable {
             rows: HashMap::new(),
             long_context: HashMap::new(),
+            tiers: HashMap::new(),
             fallback: Rates {
                 input: Some(1.0),
                 cache_read: Some(1.0),
@@ -474,7 +479,8 @@ impl RateTable {
 
     /// The row `listing::row_for` finds in `rows` (the exact id before the undated one, as the ledger's `entry`
     /// resolves it), at its `long_context` rates when that same key carries them and `prompt_tokens` is above
-    /// their `over`, else at its own; `fallback` when `rows` has no key for the model.
+    /// their `over`, else at its own. A model `rows` has no key for reads the `tiers` row of the model tier its id
+    /// names (`listing::tier_segment`), else `fallback`.
     pub fn rates_for(&self, canonical_model: &str, prompt_tokens: u64) -> Rates {
         // One key wins for both maps, the exact id before the undated one as the ledger's `entry` resolves it, so
         // a dated row without the block never prices at the undated row's long-context rates.
@@ -482,7 +488,12 @@ impl RateTable {
             self.rows.get_key_value(k).map(|(key, _)| key)
         });
         let Some(key) = key else {
-            return self.fallback;
+            // The ledger prices an id no file lists through the model tier its id names, so the shed ranks its
+            // pin by the same estimate rather than last.
+            return tier_segment(canonical_model)
+                .and_then(|tier| self.tiers.get(tier))
+                .copied()
+                .unwrap_or(self.fallback);
         };
         match self.long_context.get(key) {
             Some(long) if prompt_tokens > long.over => long.rates,
@@ -2476,6 +2487,7 @@ mod tests {
                 },
             )]),
             long_context: HashMap::new(),
+            tiers: HashMap::new(),
             fallback: RateTable::unit().fallback,
         };
         let input_only = PinBurn {
@@ -2564,6 +2576,7 @@ mod tests {
             .into_iter()
             .collect(),
             long_context: HashMap::new(),
+            tiers: HashMap::new(),
             fallback: flat(1.0),
         };
         let usage = PinUsage {
@@ -2592,6 +2605,48 @@ mod tests {
     }
 
     #[test]
+    fn an_unlisted_id_reads_the_row_of_the_model_tier_its_id_names_before_the_fallback() {
+        let flat = |r: f64| Rates {
+            input: Some(r),
+            cache_read: Some(r),
+            write_5m: Some(r),
+            write_1h: Some(r),
+            output: Some(r),
+        };
+        let table = RateTable {
+            rows: HashMap::from([("claude-opus-5-5".to_string(), flat(1.0))]),
+            long_context: HashMap::new(),
+            tiers: HashMap::from([("opus".to_string(), flat(2.0))]),
+            fallback: flat(10.0),
+        };
+        assert_eq!(
+            table.rates_for("claude-opus-5-5", 0),
+            flat(1.0),
+            "a listed row wins over its model tier"
+        );
+        assert_eq!(
+            table.rates_for("claude-opus-9", 0),
+            flat(2.0),
+            "an unlisted id reads the model tier it names"
+        );
+        assert_eq!(
+            table.rates_for("claude-opus-9-20270101", 0),
+            flat(2.0),
+            "a dated unlisted id reads the model tier its undated id names"
+        );
+        assert_eq!(
+            table.rates_for("claude-sonnet-9", 0),
+            flat(10.0),
+            "a model tier without a row reads the fallback"
+        );
+        assert_eq!(
+            table.rates_for("gpt-5", 0),
+            flat(10.0),
+            "an id naming no model tier reads the fallback"
+        );
+    }
+
+    #[test]
     fn a_long_context_row_prices_a_prompt_over_its_threshold_at_its_own_rates() {
         let flat = |r: f64| Rates {
             input: Some(r),
@@ -2614,6 +2669,7 @@ mod tests {
                     rates: flat(5.0),
                 },
             )]),
+            tiers: HashMap::new(),
             fallback: flat(10.0),
         };
         let one = PinUsage {

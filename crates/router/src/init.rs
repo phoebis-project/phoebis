@@ -429,8 +429,8 @@ fn fills(plan: &Plan) -> Vec<Fill> {
     let (key_file, tables) = if plan.container {
         (PathBuf::from(CONTAINER_KEY_FILE), plan.data_dir.clone())
     } else {
-        // The service recipe installs the price table beside the bootstrap file, since the loader's relative defaults
-        // would resolve against whatever directory starts the process.
+        // The two table paths point beside the bootstrap file, where an operator's revision list goes, since the
+        // loader's relative defaults would resolve against whatever directory starts the process.
         (
             plan.key_file.clone(),
             parent_of(&plan.config_path).to_path_buf(),

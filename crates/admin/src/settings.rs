@@ -85,7 +85,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let crate::pricing::Envelopes {
         api_prices,
         subscription_costs,
-    } = crate::pricing::table_envelopes(&state.pricing.current(), &state.tables);
+    } = crate::pricing::table_envelopes(&state.pricing.revisions(), &state.tables, (state.clock)());
     Json(Settings {
         about: About {
             profile: s.profile.clone(),

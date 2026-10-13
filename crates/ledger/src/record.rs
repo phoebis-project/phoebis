@@ -128,12 +128,10 @@ pub struct AttemptRecord {
     pub ratelimit_7d_oi_reset: Option<i64>,
     pub overage_in_use: Option<bool>,
     pub overage_utilization: Option<f64>,
-    pub estimated_usd: Option<f64>,
-    pub input_usd: Option<f64>,
-    pub cache_read_usd: Option<f64>,
-    pub cache_write_usd: Option<f64>,
-    pub output_usd: Option<f64>,
-    pub pricing_version: Option<String>,
+    /// The serving account's rate-limit tier as the router's registry snapshot held it when the request landed,
+    /// `None` for an api_key account and for an oauth account whose profile has not been read. Written once, so a
+    /// row reads the tier the account had and a later change moves nothing.
+    pub tier: Option<String>,
     pub thinking_tokens: Option<u64>,
     pub web_search_requests: Option<u64>,
     pub web_fetch_requests: Option<u64>,
@@ -153,8 +151,8 @@ pub struct AttemptRecord {
 }
 
 impl AttemptRecord {
-    /// Whether the attempt carries any of the five priced token counts: what `price_attempts` prices, and what
-    /// a retried leg's earlier, answer-less passes lack.
+    /// Whether the attempt carries any of the five priced token counts: what the fold sums and a reader prices, and
+    /// what a retried leg's earlier, answer-less passes lack.
     pub fn has_usage(&self) -> bool {
         self.input_tokens.is_some()
             || self.output_tokens.is_some()
@@ -325,10 +323,12 @@ pub struct ExtraUsageSampleRecord {
     pub source: String,
 }
 
-/// What the keepalive engine adds to one rollup row: the credit of a kept-warm request, the cost of a probe, or
+/// What the keepalive engine adds to one rollup row: the credit of a kept-warm request, a probe's migration mark, or
 /// the settlement of a stopped recipe. Never a request counter: those come from the request rows alone.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct KeepaliveDelta {
+    /// The row's instant. On a settlement it is the probe's exchange instant rather than the settlement's clock, so
+    /// the row and its price keys are the probe's.
     pub at: i64,
     pub key_id: String,
     pub key_generation: i64,
@@ -340,13 +340,21 @@ pub struct KeepaliveDelta {
     pub kept_warm_request_id: Option<String>,
     pub kept_warm_requests: u64,
     pub kept_warm_tokens: u64,
-    pub saved_usd_gross: f64,
-    pub probe_cost_usd: f64,
     pub probe_migrated: u64,
     pub probes_skipped: u64,
     pub wasted_probes: u64,
-    pub wasted_probe_usd: f64,
+    /// The wasted probe's five token counts, what `wasted_probe_usd` priced, priced when read.
+    pub wasted_input_tokens: u64,
+    pub wasted_cache_read_tokens: u64,
+    pub wasted_cache_write_5m_tokens: u64,
+    pub wasted_cache_write_1h_tokens: u64,
+    pub wasted_output_tokens: u64,
     pub wasted_probe_reasons: std::collections::BTreeMap<String, u64>,
+    /// The account tier the settlement read, which keys the credit row. `None` files under `-`.
+    pub tier: Option<String>,
+    /// A settled probe's prompt-length band, read at its exchange against the revision in force then, so its wasted
+    /// counts price at the cells the probe ran at. `None` (standard) for a credit, a probe row or a skip.
+    pub band: Option<crate::pricing::Band>,
     /// The serving account's kind as the engine read it once the probe's answer landed, which files an api_key
     /// account's credit under `billed` beside its request row. `None` for a kept-warm credit, a skip or a
     /// settlement, and for a probe whose account left the registry before its answer landed.
@@ -355,8 +363,9 @@ pub struct KeepaliveDelta {
     /// keys the same funding. `None` for a kept-warm credit, a skip or a settlement, which have no probe of their
     /// own and file under `plan`, or under `fast` for a fast recipe.
     pub overage_in_use: Option<bool>,
-    /// The recipe's speed, which keys the credit row: `fast` for `Some(Speed::Fast)`, `standard` otherwise, so
-    /// the derived `Default`'s `None` files standard.
+    /// The speed that keys the credit row, the recipe's for a credit, a skip or a migration mark and the probe answer's
+    /// for a settlement: `fast` for `Some(Speed::Fast)`, `standard` otherwise, so the derived `Default`'s `None` files
+    /// standard.
     pub speed: Option<crate::pricing::Speed>,
 }
 

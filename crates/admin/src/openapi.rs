@@ -303,6 +303,30 @@ pub(crate) struct TrafficBucketView {
     pub failed: u64,
     pub tokens: u64,
     pub cost_usd: f64,
+    /// The dollars of the billed rows alone (fast mode, overage and API key accounts), a part of `cost_usd`.
+    pub billed_usd: f64,
+    /// The plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
+    pub equivalent: SharedEquivalentView,
+    /// Whether a plan-funded row of the bucket priced at its model tier's latest weight, for a model the cost model
+    /// does not weight.
+    pub estimated: bool,
+}
+
+/// A figure as the share of a Max 20x account's 5-hour and 7-day windows.
+#[derive(Default, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SharedEquivalentView {
+    pub five_hour: f64,
+    pub seven_day: f64,
+}
+
+impl From<&phoebis_ledger::SharedEquivalent> for SharedEquivalentView {
+    fn from(equivalent: &phoebis_ledger::SharedEquivalent) -> Self {
+        SharedEquivalentView {
+            five_hour: equivalent.five_hour,
+            seven_day: equivalent.seven_day,
+        }
+    }
 }
 
 /// One model's list prices, each cell per million tokens.
@@ -356,10 +380,16 @@ pub(crate) struct SubscriptionCostsView {
     pub capacity: BTreeMap<String, CapacityView>,
     pub peak: PeakView,
     pub type_multiplier: TypeMultiplierView,
-    /// Units per plain input token, keyed by undated model id. Null prices nothing.
+    /// Units per plain input token, keyed by undated model id. A null weight, like a model left out, prices at the
+    /// weight of its model tier's latest weighted model as an estimate, and a model of no model tier, or of one with
+    /// no weighted model, prices nothing.
     pub model_weight: BTreeMap<String, Option<f64>>,
     pub model_windows: BTreeMap<String, ModelWindowView>,
     pub overrides: BTreeMap<String, OverrideView>,
+    /// The model tiers in display order.
+    pub tier_order: Vec<String>,
+    /// Undated model id to the name of its model tier in `tier_order`.
+    pub model_tier: BTreeMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -462,8 +492,9 @@ pub(crate) struct BreakdownRow {
     /// `output_config.effort`), `none` for a request that asked for none, or `other` for a level the API does not
     /// name. Under `group_by=user_agent` the agent's first product token cut to 64 bytes, `other` for an agent
     /// without one, and `-` for a request that sent none. Under `group_by=client` the request's client class, `-`
-    /// for a row folded before the class was recorded. Under `group_by=speed` the speed the last attempt's answer
-    /// reported, `fast` or `standard`, and a request no answer named a speed for files under `fast` when it asked
+    /// for a row folded before the class was recorded. Under `group_by=speed` the speed the attempts' answers
+    /// reported, `fast` or `standard`, `standard` for an answer that named none whatever the request asked for. A
+    /// request no attempt answered files under the speed its last attempt reported, else under `fast` when it asked
     /// for `fast` and under `standard` otherwise.
     pub key: String,
     /// Under `group_by=key` an earlier holder's rows read `<id> (deleted, created 2026-09-14 09:31 UTC)`, the
@@ -506,12 +537,13 @@ pub(crate) struct BreakdownRow {
     pub wasted_probes: u64,
     pub wasted_probe_usd: f64,
     pub wasted_probe_reasons: BTreeMap<String, u64>,
-    /// Under `group_by=account`, a subscription account's plan-funded rows priced at their hour under the
-    /// account's current tier and summed, keyed by the account's window ids (`five_hour`, `seven_day` and the
-    /// model's own week where the model has one), the probe rows joining under the `include_probes` rule, and a
-    /// window absent where a row could not be priced on it. Null for an API key account's group, for a
-    /// subscription account whose tier is unknown, for an account the registry no longer holds, and under every
-    /// grouping but `account`.
+    /// Where each group holds one account's rows, under `group_by=account` or with an `accounts` filter naming
+    /// exactly one account, a subscription account's plan-funded rows priced at their hour under the account tier
+    /// each row recorded when it landed and summed, keyed by the account's window ids (`five_hour`, `seven_day` and
+    /// the model's own week where the model has one), the probe rows joining under the `include_probes` rule, and a
+    /// window absent where a row could not be priced on it. Null for a group whose rows recorded no tier (an API key
+    /// account's group, a subscription account whose profile was not yet read), and under every grouping but
+    /// `account` without such a filter, since shares of different accounts' windows do not add.
     pub cost_shares: Option<BTreeMap<String, f64>>,
     /// Each `read` and `write`, keyed and summed as `cost_shares` and null under the same rule, the probe rows
     /// joining under the `include_probes` rule.
@@ -519,10 +551,28 @@ pub(crate) struct BreakdownRow {
     /// Each `cost` and `wasted`, keyed and summed as `cost_shares` and null under the same rule, the probe rows
     /// always joining.
     pub probe_shares: Option<BTreeMap<String, ProbeShareView>>,
-    /// The plan-funded requests the shares were summed over, null where `cost_shares` is.
+    /// The plan-funded requests the shares and the equivalent were summed over, under every grouping.
     pub plan_requests: Option<u64>,
-    /// The plan-funded output tokens the shares were summed over, null where `cost_shares` is.
+    /// The plan-funded output tokens the shares and the equivalent were summed over, under every grouping.
     pub plan_output_tokens: Option<u64>,
+    /// The plan-funded rows priced as the share of a Max 20x account's windows, whatever tier served them, keyed as
+    /// `cost_shares` and summed under every grouping, the probe rows joining under the `include_probes` rule, and a
+    /// window absent where a row could not be priced on it.
+    pub cost_equivalent: BTreeMap<String, f64>,
+    /// Each `read` and `write`, keyed and summed as `cost_equivalent`.
+    pub cache_equivalent: BTreeMap<String, CacheEquivalentView>,
+    /// Each `cost` and `wasted`, keyed and summed as `cost_equivalent`, the probe rows always joining.
+    pub probe_equivalent: BTreeMap<String, ProbeEquivalentView>,
+    /// The dollars of the billed rows alone (fast mode, overage and API key accounts), a part of `cost_usd`.
+    pub billed_usd: f64,
+    /// `billed_usd` by token kind.
+    pub billed: CostSplitView,
+    /// The plan-funded rows' 7-day equivalent by token kind, `input`, `cache_read`, `cache_write` and `output`,
+    /// which sum to `cost_equivalent`'s `seven_day`. Empty where that window is.
+    pub equivalent_split: BTreeMap<String, f64>,
+    /// Whether a plan-funded row of the group priced at its model tier's latest weight, for a model the cost model
+    /// does not weight.
+    pub estimated: bool,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -604,6 +654,22 @@ pub(crate) struct ProbeShareView {
     pub wasted: Option<f64>,
 }
 
+/// The read and write halves of a window's equivalent.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CacheEquivalentView {
+    pub read: f64,
+    pub write: f64,
+}
+
+/// The probe rows' equivalent of a window and the wasted probes' own counts priced on it, 0 where none was wasted.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProbeEquivalentView {
+    pub cost: f64,
+    pub wasted: f64,
+}
+
 /// One bucket of the series: the groups of the bucket, each a breakdown row.
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -617,7 +683,11 @@ pub(crate) struct SeriesPointView {
 #[serde(deny_unknown_fields)]
 pub(crate) struct HourPointView {
     pub at: i64,
+    /// The dollars of the hour's billed rows alone (fast mode, overage and API key accounts), a part of `cost`.
+    pub billed: f64,
     pub cost: f64,
+    /// The hour's plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
+    pub equivalent: SharedEquivalentView,
     pub errors: u64,
     pub requests: u64,
     pub tokens: u64,
