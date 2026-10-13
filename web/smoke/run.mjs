@@ -13131,6 +13131,14 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         ok: weekEntries.every((e) => e.listed === e.marked) && weekEntries.some((e) => e.by === 'stubbed' && !e.listed) && stubbedFiveHourEntry,
         missing: [JSON.stringify(weekEntries), `stubbed 5-hour entry ${stubbedFiveHourEntry}`],
       });
+      // The route answers no model week alike for a bucket off every such model and for one it could not price, so
+      // the stubbed line's figure is its one answered hour, never halved by the gap, and the entry's title says so.
+      const stubbedWeek = weekRead.find((l) => l.by === 'stubbed' && l.label === 'secondary');
+      results.push({
+        name: "/analytics the model week card's legend reads a line's figure over the buckets that answered a week and says so in its title",
+        ok: stubbedWeek?.value === equivalentShort('seven_day_fable', 0.003) && stubbedWeek.title === 'The mean per hour of the buckets that answered a model week',
+        missing: [JSON.stringify(stubbedWeek)],
+      });
     }
     // The story's Fable traffic gives its accounts a model week of their own, which its own card charts.
     const week = lineLabels('Model week per hour');

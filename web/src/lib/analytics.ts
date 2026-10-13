@@ -81,8 +81,9 @@ export interface BurnLine {
   unpriced: { fiveHour: boolean; sevenDay: boolean };
   usdPerMinute: number;
   /**
-   * The range's model week figure per hour over the buckets, a bucket with traffic and none on a model with a week of
-   * its own reading zero. Null for a line that never ran on such a model.
+   * The range's model week figure per hour over the buckets that answered one. The route answers none alike for a
+   * bucket off every model with a week of its own and for one it could not price, so a gap is left out rather than read
+   * as zero. Null for a line that never ran on such a model.
    */
   weekPerHour: number | null;
 }
@@ -121,12 +122,10 @@ export interface BurnRow {
   tokens: number[];
   uncached: number[];
   usd: number[];
-  /** The model week's figure per hour, null where no row of the bucket ran on a model with a week of its own. */
+  /** The model week's figure per hour, null where no row of the bucket ran on a model with a week of its own or the
+   *  route could not price one there. */
   week: (number | null)[];
-  /**
-   * Per slot, whether a point of the bucket carried a model week figure: the line's fold fills the other slots with
-   * zero, which no estimate priced.
-   */
+  /** Per slot, whether a point of the bucket carried a model week figure, so a gap marks no estimate. */
   weekAnswered: boolean[];
 }
 
@@ -621,20 +620,17 @@ export function foldBurn(
     // A window the line never priced traffic on stays null in every slot, idle ones included, so its legend reads a
     // dash. One it priced counts an idle slot (no token of any type) as zero, and a slot with tokens and no figure
     // stays null. An idle slot's own figure never makes the window priced: a failed request's row carries no token and
-    // a listed model prices it at zero. The model week counts every slot without a figure as zero once the line priced
-    // it, since a bucket off such a model spent none of it.
-    const foldWindow = (read: (r: BurnRow) => (number | null)[], gaps: 'all' | 'idle') => {
-      const priced = rows.some((r) => (gaps === 'all' || r.tokens[i] > 0) && read(r)[i] !== null);
-      for (const r of rows) {
-        if (gaps === 'idle' && r.tokens[i] === 0) read(r)[i] = priced ? 0 : null;
-        else if (gaps === 'all' && read(r)[i] === null) read(r)[i] = priced ? 0 : null;
-      }
+    // a listed model prices it at zero. The model week fills no slot: a null there is either a bucket off every model
+    // with a week of its own or one the route could not price, which the route does not tell apart, so it stays a gap.
+    const foldWindow = (read: (r: BurnRow) => (number | null)[], gaps: 'none' | 'idle') => {
+      const priced = rows.some((r) => (gaps === 'none' || r.tokens[i] > 0) && read(r)[i] !== null);
+      if (gaps === 'idle') for (const r of rows) if (r.tokens[i] === 0) read(r)[i] = priced ? 0 : null;
       const figures = rows.flatMap((r) => (read(r)[i] === null ? [] : [{ value: read(r)[i] as number, weight: weightOf(r) }]));
       return { perHour: priced ? weighedMean(figures) : null, unpriced: rows.some((r) => slotUnpriced(read(r)[i], r.tokens[i])) };
     };
     const fiveHour = foldWindow((r) => r.fiveHour, 'idle');
     const sevenDay = foldWindow((r) => r.sevenDay, 'idle');
-    const week = foldWindow((r) => r.week, 'all');
+    const week = foldWindow((r) => r.week, 'none');
     const peaks = rows.filter((r) => r.setsScale).map((r) => r.fiveHour[i]).filter((v): v is number => v !== null);
     // Under the shares only a window-share line can lack a figure for want of a row, and under the equivalents every
     // line can.

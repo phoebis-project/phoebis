@@ -387,8 +387,10 @@ test('the plan cards read the 20x equivalents under any grouping, and the model 
   const { lines, rows } = d.foldBurn([p(0, 'desktop', { modelWeekEquivalent: 0.008 }), p(1, 'desktop'), p(0, 'laptop')], 'key', 3_600, NONE, d.MAX_BURN_LINES, undefined, undefined, { figure: 'equivalent' });
   const [desktop, laptop] = ['desktop', 'laptop'].map((k) => lines.findIndex((l) => l.key === k));
   assert.deepEqual(rows.map((r) => [r.fiveHour[desktop], r.sevenDay[desktop]]), [[0.02, 0.004], [0.02, 0.004]], 'the equivalents per hour, which no account tier reads');
-  assert.deepEqual(rows.map((r) => r.week[desktop]), [0.008, 0], 'a bucket with traffic and none on a model with a week of its own reads zero there once the line priced the week');
-  assert.ok(Math.abs(lines[desktop].weekPerHour - 0.004) < 1e-12);
+  // The route answers null alike for a bucket off every model with a week and for one it could not price there, so
+  // the fold keeps the gap and the figure is the mean of the buckets that answered one.
+  assert.deepEqual(rows.map((r) => r.week[desktop]), [0.008, null], 'a bucket that answered no model week stays a gap');
+  assert.ok(Math.abs(lines[desktop].weekPerHour - 0.008) < 1e-12);
   assert.deepEqual([rows.map((r) => r.week[laptop]), lines[laptop].weekPerHour], [[null, null], null], 'a line that never ran on such a model has no week to chart');
   assert.deepEqual([rows[1].fiveHour[laptop], lines[laptop].unpriced], [0, { fiveHour: false, sevenDay: false }], 'an idle bucket reads zero on a window the line priced');
   const unpriced = d.foldBurn([p(0, 'desktop', { fiveHourEquivalent: null, sevenDayEquivalent: null })], 'key', 3_600, NONE, d.MAX_BURN_LINES, undefined, undefined, { figure: 'equivalent' });
@@ -414,10 +416,11 @@ test('under the request class grouping a filter naming one account sizes both cl
   assert.deepEqual(fold(NONE), [['conversation', 'unknown'], ['overhead', 'unknown']], 'an account whose tier the cost model does not size reads tier unknown on both');
 });
 
-test("the model week's rows say which slots the route answered, so a zero the fold filled in marks no estimate", () => {
+test("the model week's rows say which slots the route answered, so a gap marks no estimate", () => {
   const p = (at, over) => point(at * HOUR, 'desktop', { estimated: true, fiveHourEquivalent: 0.02, modelWeekEquivalent: null, sevenDayEquivalent: 0.004, tokens: 100, uncachedTokens: 100, ...over });
-  const { rows } = d.foldBurn([p(0, { modelWeekEquivalent: 0.008 }), p(1)], 'key', 3_600, NONE, d.MAX_BURN_LINES, undefined, undefined, { figure: 'equivalent' });
-  assert.deepEqual(rows.map((r) => [r.week[0], r.weekAnswered[0], r.estimated[0]]), [[0.008, true, true], [0, false, true]], 'the second bucket ran on no model with a week of its own, so its zero is the fold\'s');
+  const { lines, rows } = d.foldBurn([p(0, { modelWeekEquivalent: 0.008 }), p(1)], 'key', 3_600, NONE, d.MAX_BURN_LINES, undefined, undefined, { figure: 'equivalent' });
+  assert.deepEqual(rows.map((r) => [r.week[0], r.weekAnswered[0], r.estimated[0]]), [[0.008, true, true], [null, false, true]], 'the second bucket answered no model week, so it stays a gap, unanswered');
+  assert.ok(Math.abs(lines[0].weekPerHour - 0.008) < 1e-12, 'and the figure per hour is the answered bucket\'s alone, never halved by the gap');
 });
 
 test('the key grouping names an earlier holder of a key id as the breakdown does', () => {

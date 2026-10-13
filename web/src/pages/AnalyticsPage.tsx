@@ -2070,6 +2070,8 @@ const TIER_UNKNOWN_HINT = 'No tier on file, or one the cost model does not size,
 const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model of no known tier, or on a tier the cost model has no capacity for on that window, prices no share there and draws no point';
 // "Model tier", since the tier unknown entries beside it name the account tier.
 const ESTIMATED_HINT = 'A bucket whose model has no measured weight and reads the latest weighed model of its model tier';
+// The route answers no model week alike for a bucket off every such model and for one it could not price.
+const WEEK_MEAN_HINT = 'The mean per hour of the buckets that answered a model week';
 const NO_ACCOUNT: ReadonlySet<string> = new Set();
 const PARTIAL_NOTE = 'The last bucket is partial, rated over the part of its width it covers';
 
@@ -2250,7 +2252,7 @@ function BurnCharts({
           color: colorOf(l),
           label: nameOf(l),
           shape: 'line' as const,
-          title: withEstimate(w.band && l.fiveHourPeak !== null ? `Highest hour ${figureOf(w, l.fiveHourPeak, false, 'full')}` : '', marked) || undefined,
+          title: withEstimate(w === PLAN_WINDOWS[2] ? WEEK_MEAN_HINT : w.band && l.fiveHourPeak !== null ? `Highest hour ${figureOf(w, l.fiveHourPeak, false, 'full')}` : '', marked) || undefined,
           value: figureOf(w, w.perHour(l), marked, 'short'),
         };
       }),
