@@ -41,6 +41,13 @@ pub(crate) fn typed(usage: ProbeUsage) -> PinUsage {
     }
 }
 
+/// The speed a probe's answer reported, `Standard` when it named none, as the ledger reads the speed of the probe's own
+/// request row: the cells that row prices at and the funding it files under, which a fast recipe's answer can leave at
+/// standard.
+pub(crate) fn answered_speed(usage: ProbeUsage) -> Speed {
+    usage.speed.unwrap_or(Speed::Standard)
+}
+
 /// `row` when the cost model in force at `at` gives the model no weight on the 5-hour window, neither its own nor its
 /// model tier's latest, else `tier`: the only two reasons left, since the loader refuses an anchor tier without a
 /// capacity on either window and a weighted model prices every type.
@@ -77,7 +84,8 @@ pub(crate) fn settlement_unit(
 
 /// One delta of a recipe's key. An account the recipe never reached takes the ledger's reserved id, which is
 /// what every reader groups an unattributed row under; an empty string would read as an account of its own. A
-/// fast recipe's delta files under speed `fast`, beside the fast requests it keeps warm.
+/// `fast` delta files under speed `fast`: a credit, a skip or a migration mark at its recipe's speed, beside the fast
+/// requests the recipe keeps warm, and a settlement at its probe's answer's, beside the probe's own request row.
 #[allow(clippy::too_many_arguments)]
 fn delta(
     at: i64,
@@ -167,8 +175,8 @@ impl Engine {
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
-    /// One wasted probe, filed under the funding its own cost row took: the kind it was served under, its answer's
-    /// overage and its speed. The row keys the probe's own exchange (its instant, its band and the account tier it ran
+    /// One wasted probe, filed under the funding its own cost row took: the kind it was served under and its answer's
+    /// overage and speed. The row keys the probe's own exchange (its instant, its band and the account tier it ran
     /// under) rather than the settlement's clock, so a settlement filed hours or a day later prices its counts at the
     /// cells and the revision the probe ran at.
     pub(crate) fn record_settlement(&self, settlement: Settlement) {
@@ -180,7 +188,7 @@ impl Engine {
             settlement.account.as_deref(),
             &settlement.canonical_model,
             "probe",
-            settlement.fast,
+            settlement.speed == Speed::Fast,
         );
         let counts = typed(settlement.usage);
         d.wasted_probes = 1;

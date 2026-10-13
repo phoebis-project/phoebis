@@ -363,8 +363,9 @@ pub struct KeepaliveDelta {
     /// keys the same funding. `None` for a kept-warm credit, a skip or a settlement, which have no probe of their
     /// own and file under `plan`, or under `fast` for a fast recipe.
     pub overage_in_use: Option<bool>,
-    /// The recipe's speed, which keys the credit row: `fast` for `Some(Speed::Fast)`, `standard` otherwise, so
-    /// the derived `Default`'s `None` files standard.
+    /// The speed that keys the credit row, the recipe's for a credit, a skip or a migration mark and the probe answer's
+    /// for a settlement: `fast` for `Some(Speed::Fast)`, `standard` otherwise, so the derived `Default`'s `None` files
+    /// standard.
     pub speed: Option<crate::pricing::Speed>,
 }
 

@@ -2754,6 +2754,89 @@ async fn a_long_context_probe_settled_wasted_the_next_day_files_under_its_own_ho
     );
 }
 
+/// A probe keys the relay's receipt of its request, the instant its request row files under: a Haiku 5.5 probe the
+/// relay received a minute before midnight on January 31 and answered after it, when the second entry raises the
+/// threshold above its prompt, files its request row and its settlement in the January hour under `long`, so its waste
+/// prices at the January long-context cells its cost does.
+#[tokio::test]
+async fn a_probe_answered_across_a_revision_boundary_files_its_cost_and_its_waste_at_its_receipt() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        pricing: phoebis_ledger::test_tables::api_prices(),
+        ..RigSpec::default()
+    })
+    .await;
+    const HAIKU: &str = "claude-haiku-5-5";
+    let february = phoebis_ledger::effective_instant("2026-02-01").expect("a date");
+    assert_eq!(
+        r.pricing.in_force(february).band_of(HAIKU, 2_000),
+        phoebis_ledger::Band::Standard,
+        "February's threshold holds the probe's prompt"
+    );
+    // A request at 23:54:30 UTC on January 31, so its probe is due at 23:59, the session started again past the jump.
+    r.advance(february - 330_000 - r.now());
+    r.event(Event {
+        event: "session_start".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let body = BODY.replace("claude-sonnet-4-5", HAIKU);
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(probe_answer(2_000, 0))),
+    );
+    r.advance_attended(270_000);
+    r.engine.step().await;
+    wait_for(Duration::from_secs(5), || {
+        (r.up.requests().len() == 2).then_some(())
+    })
+    .await;
+    let received = r.now();
+    assert!(
+        received < february,
+        "the relay received the probe on January 31"
+    );
+    r.advance_attended(february + 30_000 - received);
+    r.up.release();
+    r.engine.wait_idle().await;
+    r.pump(None).await;
+    assert_eq!(
+        r.status("main").unanswered,
+        1,
+        "the probe landed after midnight"
+    );
+    r.state("main", "released");
+    let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
+    let mut keyed: Vec<(i64, &str, u64, u64)> = rows
+        .iter()
+        .filter(|row| row.kind == "probe")
+        .map(|row| (row.hour, row.band.as_str(), row.requests, row.wasted_probes))
+        .collect();
+    keyed.sort();
+    assert_eq!(
+        keyed,
+        [
+            (hour_of(received), "long", 0, 1),
+            (hour_of(received), "long", 1, 0)
+        ],
+        "the settlement keys its request row's hour and band"
+    );
+    let long = r.pricing.in_force(received).models[HAIKU]
+        .long_context
+        .as_ref()
+        .expect("the test list prices Haiku 5.5 by prompt length")
+        .clone();
+    let january = 2_000.0 * long.cells.cache_read / 1_000_000.0;
+    let (cost, wasted) = read_dollars(&r, &rows);
+    assert!(
+        (cost - january).abs() < 1e-12 && (wasted - january).abs() < 1e-12,
+        "the cost and the waste at the January long-context cache read: {cost} and {wasted} against {january}"
+    );
+}
+
 /// A probe costs at the cells its own prompt selects: on a row priced by prompt length, a probe whose answer reads
 /// back more than the threshold costs at the long-context cache read.
 #[tokio::test]

@@ -11,7 +11,7 @@ use phoebis_bus::{
     spawn_subscriber, AccountSelected, Bus, Delivery, Event as BusEvent, Outcome, Phase,
     RequestComplete, RequestObserved, ResponseChunk, ResponseHead,
 };
-use phoebis_ledger::{Band, Ledger, Metrics, PlanTables, Pricing};
+use phoebis_ledger::{Band, Ledger, Metrics, PlanTables, Pricing, Speed};
 use phoebis_oauth::Clock;
 use phoebis_relay::{CacheTtlPolicy, Relay};
 use phoebis_routing::{budget_deadline, listing, MemberSpend, RegistrySnapshot, RouterHandle};
@@ -852,8 +852,9 @@ pub(crate) struct Settlement {
     /// probe's hour and prices its counts at the cells and the revision the probe ran at.
     pub at: i64,
     pub band: Band,
-    /// The stopped recipe carried `speed: "fast"`, so the settlement files under speed `fast`.
-    pub fast: bool,
+    /// The speed the probe's answer reported, `answered_speed` of its usage, so the waste prices at the cells and files
+    /// under the funding its own cost row took even when a fast recipe's answer came back at standard speed.
+    pub speed: Speed,
     /// The kind the probe was served under and whether its answer reported overage, as the probe's own cost row
     /// took them, so the waste files under the same funding word whatever the registry holds now.
     pub kind: Option<AccountKind>,
@@ -989,7 +990,7 @@ impl Kept {
             tier: self.tier,
             at: self.at,
             band: self.band,
-            fast: self.fast,
+            speed: crate::savings::answered_speed(self.usage),
             kind: self.kind,
             in_overage: self.in_overage,
         }

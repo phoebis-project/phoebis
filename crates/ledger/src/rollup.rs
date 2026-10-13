@@ -914,8 +914,8 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
             STANDARD_SPEED
         },
         // A credit files beside its probe's request row, in the order `funding_of` reads an attempt: `billed` on an
-        // api_key account, `fast` for a fast recipe (whose request row `deltas_of` keys `fast` whatever the overage
-        // flag), else the overage fact the probe's answer reported, else `plan`.
+        // api_key account, `fast` for a fast delta (a fast answer's request row `deltas_of` keys `fast` whatever the
+        // overage flag), else the overage fact the probe's answer reported, else `plan`.
         if delta.account_kind == Some(AccountKind::ApiKey) {
             BILLED_FUNDING
         } else if delta.speed == Some(Speed::Fast) {

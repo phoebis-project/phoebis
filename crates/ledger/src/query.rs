@@ -1938,7 +1938,7 @@ struct ShareSums {
     cache: IndexMap<&'static str, CacheSum>,
     probe_cost: IndexMap<&'static str, WindowSum>,
     /// The wasted probes' own counts priced on each window. A settlement files under the funding its probe's own
-    /// row took, so an overage probe's waste files under `overage`, a fast recipe's under `fast`, and neither
+    /// row took, so an overage probe's waste files under `overage`, a fast answer's under `fast`, and neither
     /// reaches the plan's windows.
     wasted: IndexMap<&'static str, WindowSum>,
     /// The wasted probes the group's plan-funded rows count: while none is recorded, `ProbeShare.wasted` reads `None`

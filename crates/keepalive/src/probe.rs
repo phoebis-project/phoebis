@@ -10,7 +10,7 @@ use axum::body::Body;
 use axum::http::{header, Request};
 use bytes::{Bytes, BytesMut};
 use http_body_util::BodyExt;
-use phoebis_ledger::{prompt_tokens, Band, PlanTables, PriceTable};
+use phoebis_ledger::{prompt_tokens, Band, PlanTables, PriceTable, Speed};
 use phoebis_relay::RelayOutcome;
 use phoebis_routing::BUDGET_WINDOW;
 use phoebis_store::AccountKind;
@@ -22,7 +22,7 @@ use crate::engine::{
     UnansweredProbe, Verdict, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
-use crate::savings::{probe_cost, settlement_unit, typed, unpriced_reason};
+use crate::savings::{answered_speed, probe_cost, settlement_unit, typed, unpriced_reason};
 use crate::usage::{ProbeUsage, MAX_USAGE_BYTES};
 
 /// The engine's own bound on one exchange. A probe with `max_tokens = 0` answers in seconds; the relay's idle
@@ -54,6 +54,9 @@ pub(crate) struct ProbeResult {
     /// The relay's id of the exchange, which the probe's ledger request row carries. `None` for an answer the relay
     /// never built.
     pub request_id: Option<String>,
+    /// The instant the relay received the probe's request, off `RelayOutcome::received_at`: the hour and the price
+    /// revision the probe's request row files under. `None` for an answer the relay never built.
+    pub received_at: Option<i64>,
     pub account: Option<String>,
     /// The relay's own code for an answer it built itself, `accounts_at_cap`, `accounts_exhausted` and
     /// `accounts_unavailable` among them; `None` for an upstream answer forwarded as it came.
@@ -148,7 +151,8 @@ pub struct ProbeRecord {
     pub account: String,
     pub agent_id: String,
     pub canonical_model: String,
-    /// The recipe carried `speed: "fast"`, so its ledger rows file under speed `fast`.
+    /// The recipe carried `speed: "fast"`, the speed its migration mark files under. The probe's cost and its waste
+    /// file under the speed its answer reported, `answered_speed` of `usage`.
     pub fast: bool,
     /// Whether the probe's answer reported overage in use, the fact its request row files under: the credit row
     /// keys the same funding, and the settlement unit follows the same side.
@@ -162,10 +166,12 @@ pub struct ProbeRecord {
     pub outcome: ProbeOutcome,
     pub pool_id: String,
     pub usage: ProbeUsage,
-    /// The exchange's instant: the row the settlement files and the revision it prices at are the probe's.
+    /// The instant the relay received the probe's request, the one its request row files under, so the settlement
+    /// keys the same hour and prices at the same revision whenever the answer lands. The instant the engine sent the
+    /// request, on the same clock, where the relay built no answer.
     pub at: i64,
     /// The probe's prompt-length band, `table.band_of(model, prompt_tokens(input, read, write_5m, write_1h))` on the
-    /// revision in force at the exchange.
+    /// revision in force at `at`, read from the answer's counts.
     pub band: Band,
     /// The account tier the settlement read at the exchange, which a probe settling in the window share reads from
     /// the store: its settlement's credit row keys the tier the probe ran under. `None` for a probe that settles in
@@ -258,10 +264,13 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         .header(header::CONTENT_LENGTH, job.recipe.body.len())
         .body(Body::from(job.recipe.body.clone()));
     let marker = crate::probe_marker(&job.key.0, job.key_generation);
+    // Read before the send, so an exchange the relay never answered keys the instant the relay would have received it.
+    let sent = engine.now();
     let exchange = match request {
         Err(_) => Exchange::Answered(ProbeResult {
             status: 0,
             request_id: None,
+            received_at: None,
             account: None,
             error_code: None,
             body: None,
@@ -287,6 +296,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                 ProbeResult {
                     status,
                     request_id: outcome.as_ref().map(|o| o.request_id.clone()),
+                    received_at: outcome.as_ref().map(|o| o.received_at),
                     account: outcome
                         .as_ref()
                         .map(|o| o.account_id.clone())
@@ -312,19 +322,28 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         }
     };
     let now = engine.now();
+    // The relay files the probe's request row at its receipt, on the revision in force then, so the record keys that
+    // instant and the settlement prices beside the row even when the answer lands past an hour's end or a revision's
+    // start. The completion stays the clock the schedule reads.
+    let at = match &exchange {
+        Exchange::Answered(result) => result.received_at.unwrap_or(sent),
+        Exchange::Cancelled | Exchange::TimedOut => sent,
+    };
     let revisions = engine.parts.pricing.revisions();
-    let table = revisions.in_force(now);
+    let table = revisions.in_force(at);
     let tables = engine.parts.tables.clone();
     let (record, applied) = {
         let mut inner = engine.lock();
-        let mut record = inner.probe_record(&job, &exchange, table, now);
+        let mut record = inner.probe_record(&job, &exchange, table, at);
         // The serving account's kind decides the unit this probe's cost settles in. It rides the relay's answer, so
         // a registry write mid-exchange never changes which account this probe is charged against, and an answer the
         // relay never built names no account: its probe settles in dollars and the credit path never matches it.
         let in_overage = record.in_overage;
         let funding = record.kind.map(|kind| Funding::of(kind, in_overage));
-        // A fast replay draws usage credits whatever the account's funding, so it settles in dollars.
-        let default_unit = if job.recipe.fast {
+        // A fast answer draws usage credits whatever the account's funding, so it settles in dollars. The answer's
+        // speed decides rather than the recipe's: a fast recipe answered at standard speed spent the plan, as its
+        // request row files it.
+        let default_unit = if answered_speed(record.usage) == Speed::Fast {
             SavingsUnit::Usd
         } else {
             funding.map(Funding::unit).unwrap_or(SavingsUnit::Usd)
@@ -357,7 +376,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             &record.account,
             &record.canonical_model,
             record.usage,
-            now,
+            at,
         );
         let covered_unit = funding.map(|_| unit);
         let applied = inner.apply_probe(&job, exchange, &record, covered_unit, now);
@@ -383,8 +402,8 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
 }
 
 impl Inner {
-    /// The immutable half: the outcome the exchange had, the counts it used and their prompt-length band on the price
-    /// revision in force at the exchange.
+    /// The immutable half: the outcome the exchange had, the counts it used and their prompt-length band on `table`,
+    /// the price revision in force at `at`, the relay's receipt of the probe.
     /// A migrated probe is one the relay served on an account other than the job's; it is priced like any other
     /// and reported as migrated.
     pub(crate) fn probe_record(
@@ -392,7 +411,7 @@ impl Inner {
         job: &ProbeJob,
         exchange: &Exchange,
         table: &PriceTable,
-        now: i64,
+        at: i64,
     ) -> ProbeRecord {
         let mut record = ProbeRecord {
             account: job.account.clone().unwrap_or_else(|| "-".to_string()),
@@ -406,7 +425,7 @@ impl Inner {
             outcome: ProbeOutcome::Failed,
             pool_id: job.pool_id.clone(),
             usage: ProbeUsage::default(),
-            at: now,
+            at,
             band: Band::Standard,
             tier: None,
         };
@@ -567,7 +586,7 @@ impl Inner {
                 tier: record.tier.clone(),
                 at: record.at,
                 band: record.band,
-                fast: job.recipe.fast,
+                speed: answered_speed(record.usage),
                 kind: record.kind,
                 in_overage: record.in_overage,
             });
@@ -1057,6 +1076,7 @@ mod tests {
         Exchange::Answered(ProbeResult {
             status: 503,
             request_id: Some("p".into()),
+            received_at: Some(2_000),
             account: None,
             error_code: Some(phoebis_relay::LEDGER_BEHIND.into()),
             body: None,

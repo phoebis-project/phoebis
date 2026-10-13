@@ -9,6 +9,10 @@
 //! never used an older band: taking an older band out of their rows would subtract what was never added. The pass in
 //! progress is a row of `meta` of its own, written by every page's transaction, so a start that fails after a page
 //! committed resumes after that page rather than subtracting its old deltas a second time.
+//!
+//! A threshold move re-bands the request rows alone. The wasted-probe counts and the probes the keepalive still holds
+//! keep the band they settled or were recorded in, which leaves the waste of a probe whose prompt falls between the old
+//! and the new threshold, inside the retained window, priced at the band it settled in.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -265,10 +269,10 @@ fn first_difference(old: &PriceRevisions, new: &PriceRevisions, floor: i64) -> O
         .collect();
     instants.sort_unstable();
     instants.dedup();
+    // Through the exact id, then the undated one, as `band_of` resolves a row: a dated row added or removed moves the
+    // dated id onto or off its undated row's threshold, which a lookup by the exact id alone reads as no change.
     let threshold = |table: &PriceTable, model: &str| {
-        table
-            .models
-            .get(model)
+        phoebis_routing::listing::row_for(model, |key| table.models.get(key))
             .and_then(|row| row.long_context.as_ref())
             .map(|long| long.over)
     };
@@ -515,25 +519,37 @@ mod tests {
         );
     }
 
+    const DATED: &str = "claude-haiku-5-5-20260101";
+
+    /// `list(Some(over))` with a row of its own for `DATED`: Haiku 5.5's cells without the long-context block.
+    fn with_dated(over: u64) -> PriceRevisions {
+        let mut table = list(Some(over)).in_force(NEW_YEAR).clone();
+        let mut row = table.models[HAIKU].clone();
+        row.long_context = None;
+        table.models.insert(DATED.into(), row);
+        PriceRevisions::new(vec![table], "test").expect("one entry")
+    }
+
+    /// `haiku` on `DATED`.
+    fn on_dated(id: &str, received_at: i64, prompt: u64) -> (RequestRecord, Vec<AttemptRecord>) {
+        let (mut request, attempts) = haiku(id, received_at, prompt);
+        request.model = DATED.into();
+        request.canonical_model = DATED.into();
+        (request, attempts)
+    }
+
     /// A dated id the file lists without a long-context block, beside its undated id with one, bands by its own row,
     /// so a threshold that moves on the undated id leaves the dated id's request where it landed.
     #[test]
     fn a_dated_row_without_a_block_keeps_its_band_when_its_undated_rows_threshold_moves() {
-        const DATED: &str = "claude-haiku-5-5-20260101";
-        let with_dated = |over: u64| {
-            let mut table = list(Some(over)).in_force(NEW_YEAR).clone();
-            let mut row = table.models[HAIKU].clone();
-            row.long_context = None;
-            table.models.insert(DATED.into(), row);
-            PriceRevisions::new(vec![table], "test").expect("one entry")
-        };
         let db = LedgerDb::open_in_memory().unwrap();
         let (first, now) = (NEW_YEAR + DAY, NEW_YEAR + 2 * DAY);
         assert_eq!(refold_bands(&db, &with_dated(1_000), 0, first).unwrap(), 0);
-        let (mut request, attempts) = haiku("r", first + 1_000, 1_500);
-        request.model = DATED.into();
-        request.canonical_model = DATED.into();
-        land(&db, &(request, attempts), &with_dated(1_000));
+        land(
+            &db,
+            &on_dated("r", first + 1_000, 1_500),
+            &with_dated(1_000),
+        );
         let before = bands(&db);
         assert_eq!(
             before,
@@ -550,6 +566,56 @@ mod tests {
             "no request moved"
         );
         assert_eq!(bands(&db), before);
+    }
+
+    /// Removing a dated row without a long-context block hands the dated id to its undated row's threshold, which an
+    /// unchanged undated row leaves where it was: the pass still re-folds the dated id's request above it.
+    #[test]
+    fn removing_a_dated_row_without_a_block_refolds_its_requests_under_the_undated_threshold() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        let (first, now) = (NEW_YEAR + DAY, NEW_YEAR + 2 * DAY);
+        assert_eq!(refold_bands(&db, &with_dated(1_000), 0, first).unwrap(), 0);
+        let received = first + 1_000;
+        land(&db, &on_dated("r", received, 1_500), &with_dated(1_000));
+        assert_eq!(
+            refold_bands(&db, &list(Some(1_000)), 0, now).unwrap(),
+            1,
+            "the dated id's request moved"
+        );
+        assert_eq!(
+            bands(&db),
+            [(
+                crate::rollup::hour_of(received),
+                LONG_BAND.to_string(),
+                1,
+                1_500
+            )]
+        );
+    }
+
+    /// Adding a dated row without a long-context block takes the dated id off its undated row's threshold, so the
+    /// pass re-folds the dated id's request that landed above it.
+    #[test]
+    fn adding_a_dated_row_without_a_block_refolds_its_requests_out_of_the_undated_threshold() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        let (first, now) = (NEW_YEAR + DAY, NEW_YEAR + 2 * DAY);
+        assert_eq!(refold_bands(&db, &list(Some(1_000)), 0, first).unwrap(), 0);
+        let received = first + 1_000;
+        land(&db, &on_dated("r", received, 1_500), &list(Some(1_000)));
+        assert_eq!(
+            refold_bands(&db, &with_dated(1_000), 0, now).unwrap(),
+            1,
+            "the dated id's request moved"
+        );
+        assert_eq!(
+            bands(&db),
+            [(
+                crate::rollup::hour_of(received),
+                STANDARD_BAND.to_string(),
+                1,
+                1_500
+            )]
+        );
     }
 
     /// A first start writes the mark with `since` at its clock and moves nothing, and the same list again moves

@@ -343,12 +343,13 @@ requests and tokens a probe kept off a cache miss on any model the request named
 row's counts priced when read, at the dearest listed cells for a model the price table does not know, and
 `probe_migrated` counts a probe that landed on a different account than the recipe's. `wasted_probes` counts the probes
 settled wasted by one of the reasons above, and `wasted_probe_reasons` counts them by the reason. The wasted probes'
-five token counts sit on the hourly rollup beside their count, priced the same way. Each wasted probe files under the
-funding its own cost row took, from the kind of the account that served it and whether its answer reported overage in
-use, so the wasted part of a probe share reads the plan-funded probes' waste against their own cost. `probes_skipped`
-counts a due probe a gate or a lapsed entry withheld rather than sending, for example because a cooldown already held
-the recipe. `probes_held` counts a probe the router refused with `503 ledger_behind` while its ledger caught up and sent
-again, outside the failed probes since no account answered it.
+five token counts sit on the hourly rollup beside their count, priced the same way. Each wasted probe files beside its
+own cost row, in the hour the relay received the probe and under the funding that row took (the kind of the account
+that served it, the speed its answer reported and whether its answer reported overage in use), so the wasted part of a
+probe share reads the plan-funded probes' waste against their own cost. `probes_skipped` counts a due probe a gate or a
+lapsed entry withheld rather than sending, for example because a cooldown already held the recipe. `probes_held` counts
+a probe the router refused with `503 ledger_behind` while its ledger caught up and sent again, outside the failed probes
+since no account answered it.
 
 `GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`failed`, `held`, `migrated`, `ok`,
 `skipped`), and per pool into the probes served, the requests they kept warm and the wasted probes by reason, beside the
