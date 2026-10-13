@@ -22,11 +22,32 @@ The sidebar reads the brand "Phoebis Router" over the views in this order: Dashb
 Models, Requests, Analytics, Sessions, Settings. Under them a group headed "Diagnostics" holds Routing log, shown while
 the expert view is on or while the open view is a diagnostics view, so a link into the log opens it whatever the mode
 and leaves the mode as you set it. The sidebar's foot carries the "Expert view" switch and the router's version as
-`v{version}`. The top bar reads the open view's title (the document title is `{title} - Phoebis Router`), "Log out",
-and the theme switch "Theme" with Light, Dark and System, stored under `phoebis.theme` (`system` until you pick one).
-The time format lives under `phoebis.timeFormat` (`24h` by default). Both are browser preferences, which the Settings
-view's Appearance card also sets, and nothing in the shell changes a router setting. On a narrow window a menu button
-opens the sidebar over the view.
+`v{version}`. The top bar reads the open view's title (the document title is `{title} - Phoebis Router`), the "Unit"
+switch with its legend's button, "Log out", and the theme switch "Theme" with Light, Dark and System, stored under
+`phoebis.theme` (`system` until you pick one). The time format lives under `phoebis.timeFormat` (`24h` by default). The
+unit, the theme and the time format are browser preferences, which the Settings view's Appearance card also sets, and
+nothing in the shell changes a router setting. On a narrow window a menu button opens the sidebar over the view.
+
+The "Unit" switch sets the unit the Dashboard, Pools, Keys, Requests and Analytics views price a request in, stored
+under `phoebis.unit` (`native` until you pick one). Its button "What the units mean" opens the legend, which closes on
+Escape or a click outside it, with one line per position in the switch's order:
+
+- Native: "Each request in the unit its funding pays in: a subscription request as 20x window equivalents, an API key,
+  overage or fast-mode request in dollars."
+- All in dollars: "Every request in dollars at the API price list, a subscription request at its dollar equivalent."
+- Billed dollars: "The overage, fast-mode and API key requests alone, the dollars the account holder is charged."
+- Window shares: "A subscription account's requests as shares of its own 5-hour, 7-day and model-week windows. Reads
+  where one account is named, since shares of different accounts' windows do not add."
+- Dollar equivalent: "The subscription requests alone at the API price list."
+
+The legend ends on what a 20x window equivalent is: the share of a Max 20x account's window the same tokens would spend,
+the cost model's unit over the Max 20x capacity, so figures of different account tiers compare and add. The 5-hour
+column carries the peak band's weight, the 7-day column the week's factor, and a model week its own capacity factor. A
+figure marked `~` is an estimate: its model has no measured weight and reads the latest weighed model of its model tier,
+and its hover reads "Estimated at the model tier's latest weighted model". On a narrow window the switch reads the short
+labels `All $`, `Billed $`, `Shares` and `Equivalent $`, and at a phone's width the legend's button leaves the top bar
+and stays on the Settings view's Unit row. The cost model behind the equivalents is on [Plan
+meter](statistics.md#plan-meter).
 
 The expert view, whose switch carries the title "Shows every field of the pool and key dialogs, the advanced ones
 included.", is stored in the browser under `phoebis.expertView` and starts off. With it on, the pool dialog's rail
@@ -49,14 +70,19 @@ otherwise. An item with no such place (a drift refusal that named no key, a park
 deleted since, one of the router's own writers, a page unknown to the console) stays a plain badge. The conditions are
 the ones the `phoebis_attention` gauge exports ([Conditions and gauges](statistics.md#conditions-and-gauges)), and the
 pool exhausted item opens the [routing log](#routing-log) on the pool's exhausted decisions from the moment the
-condition began. A parked ledger record adds "Replay parked records", which answers `Landed {n}, {n} still parked`.
+condition began. The model weight estimated item opens the [Models](#models) view. A parked ledger record adds "Replay
+parked records", which answers `Landed {n}, {n} still parked`.
 
 Four tiles follow, each with a sparkline over the last 24 hours: "Requests, 24h" with `{n} per hour`, "Tokens, 24h"
-with `{pct} served from cache`, "Estimated cost, 24h" with `{usd} per hour`, and "Error rate, 24h" with "No requests",
-`Most common: {code}` or "No errors". Under them a line says when the figures were read, `As of {ago}`, by the oldest
-of the page's reads, or names the read whose last refresh failed and why: `Last refresh of the {read} failed: {error}.
-Showing data as of {ago}`, the read being the 24-hour figures, the accounts, the recent requests, the sessions or the
-settings.
+with `{pct} served from cache`, "Estimated cost, 24h" in the top bar's unit, and "Error rate, 24h" with "No requests",
+`Most common: {code}` or "No errors". Under Native the cost tile reads the subscription traffic's 20x 5-hour equivalent
+over the billed dollars, a side with no traffic left out, with `{usd} billed per hour` under them, or the equivalent per
+hour while no request was billed. Under All in dollars and Billed dollars it reads those dollars with `{usd} per hour`,
+under Dollar equivalent the subscription traffic's dollars at the API price list, and under Window shares a dash with
+the note "shares do not add across accounts", since the tile sums every account. An estimated figure carries the `~` and
+the estimate's hover. Under the tiles a line says when the figures were read, `As of {ago}`, by the oldest of the page's
+reads, or names the read whose last refresh failed and why: `Last refresh of the {read} failed: {error}. Showing data as
+of {ago}`, the read being the 24-hour figures, the accounts, the recent requests, the sessions or the settings.
 
 Two rings, "5h remaining" and "7d remaining", show how much of the pooled 5-hour and 7-day capacity is left, under the
 subtitle "Subscription accounts, 5-hour window, weighed by tier" (and its 7-day twin), the first with a "Cost
@@ -73,9 +99,12 @@ cycling past eight accounts, and an account the registry does not list draws mut
 "Accounts" draws one small card per account, linking to its detail, with the status badge, the email, "Overage active"
 while requests bill as extra usage, the cooldown line, and "API key" for an API-key account. "Recent requests" ("Last
 10 across every pool", with "All requests" opening the Requests view) lists Time, Key, Account, Model, Status, TTFB,
-Tokens and Cost, the status badge reading `×{n}` for a request of several attempts. "Sessions" ("Sticky pins and
-cache-warming agents", with "Open") reads the active pins as `active pins across {n} accounts` and the agents as
-Agents, Busy, Idle and Parked. What each figure means is on [Statistics](statistics.md).
+Tokens and Cost, the status badge reading `×{n}` for a request of several attempts. Cost reads a request's dollars
+under the three dollar positions, its account's shares under Window shares as the Requests view's column does, and
+under Native a subscription request's 20x 5-hour equivalent alone, with the other windows, the dollar equivalent and
+the price list and cost model in force on hover. Where the table runs wider than its card it scrolls inside it.
+"Sessions" ("Sticky pins and cache-warming agents", with "Open") reads the active pins as `active pins across {n}
+accounts` and the agents as Agents, Busy, Idle and Parked. What each figure means is on [Statistics](statistics.md).
 
 ## Quota
 
@@ -190,7 +219,10 @@ flow, the states and the `curl` form are on [Pairing an account](pairing.md).
 
 The view opens on "A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per
 session, and fail over when a member hits a rate limit." and "Create pool", then the tiles Pools, Accounts in pools,
-Keys, "Requests, 24h" and "Cost, 24h". Every field's meaning is on [Pools, keys and routing](routing.md#pools).
+Keys, "Requests, 24h" and "Cost, 24h". "Cost, 24h" and each card's Cost 24h read in the top bar's unit: under Native the
+day's subscription traffic as its 20x 7-day equivalent over its billed dollars, a side with no traffic left out, and
+under Window shares a dash, except on a card whose one member is a subscription account, which reads that account's
+share of its own 7-day window. Every field's meaning is on [Pools, keys and routing](routing.md#pools).
 
 Each card carries the pool's name, its status badge (active, degraded, disabled or exhausted), its keys as a link
 ("No keys yet", "1 key", `{n} keys`, or "Keys unavailable" when the keys read failed), an edit button and "Delete".
@@ -273,17 +305,19 @@ buckets under [The return rate by idle age](keepalive.md#the-return-rate-by-idle
 ![The Keys view](assets/keys-dark.png#only-dark)
 
 The view opens on the tiles Keys, Active, Lifetime requests and Lifetime cost, and the card "Lifetime cost by key"
-("Relative spend across all keys"), a bar per key. The table's toolbar offers "Search keys", the status filter All
-statuses, Active, Disabled, Expired or Revoked, the pool filter "All pools", and "Create key". The columns are Name,
-Prefix, Pool, Models, "Usage, 7d", Expiry and Status, and each row ends in its menu. Under the name a row notes the
-capture setting, `bodies captured, {h}h` or `bodies not captured`, with "inherited" where the key follows its pool and
-"keepalive off" for a key opted out of cache warming. Models reads `{n} rules`, with
-"(replace)" where they replace the pool's, or "Pool rules" or "No rules". Expiry reads the date or "Never". Status
-carries the key's state with `used {ago}` and, after a rotation, `{n} sessions still on the previous secret`. The menu
-offers Edit, Rotate (`Rotate {name}`), Revoke (`Revoke {name}`: "Requests with this key are rejected immediately. Its
-history stays in the ledger.") and Delete (`Delete {name}`: "Removes the key and detaches its request history from the
-key name. This cannot be undone."). Before the first key the table reads "No keys yet" with "Create key". What a key's
-settings mean is on [Keys](routing.md#keys).
+("Relative spend across all keys"), a bar per key. Lifetime cost, each bar's figure and the cost line under a key's
+"Usage, 7d" read in the top bar's unit: under Native a key's subscription traffic as its 20x 7-day equivalent beside its
+billed dollars, a side with no traffic left out, and under Window shares a dash, since a key spans its pool's accounts.
+The table's toolbar offers "Search keys", the status filter All statuses, Active, Disabled, Expired or Revoked, the pool
+filter "All pools", and "Create key". The columns are Name, Prefix, Pool, Models, "Usage, 7d", Expiry and Status, and
+each row ends in its menu. Under the name a row notes the capture setting, `bodies captured, {h}h` or `bodies not
+captured`, with "inherited" where the key follows its pool and "keepalive off" for a key opted out of cache warming.
+Models reads `{n} rules`, with "(replace)" where they replace the pool's, or "Pool rules" or
+"No rules". Expiry reads the date or "Never". Status carries the key's state with `used {ago}` and, after a rotation,
+`{n} sessions still on the previous secret`. The menu offers Edit, Rotate (`Rotate {name}`), Revoke (`Revoke {name}`:
+"Requests with this key are rejected immediately. Its history stays in the ledger.") and Delete (`Delete {name}`:
+"Removes the key and detaches its request history from the key name. This cannot be undone."). Before the first key the
+table reads "No keys yet" with "Create key". What a key's settings mean is on [Keys](routing.md#keys).
 
 "Create key" and Rotate end on the dialog "Key created" or "Key rotated", which shows the secret once with a copy
 button under "Copy the secret now. The router stores only a hash, so it cannot be shown again." and "Set it as
@@ -344,12 +378,15 @@ Status reads the code with the outcome
 word beside it where the request did not succeed (`canceled`, `exhausted`, `failed`, `incomplete` or `rejected`). One
 row is one client request however many attempts it took: Attempts reads `2 attempts` with the trail of account and
 status on hover, nothing for a request of one attempt, and a `held {time}` badge for a request that waited for a slot
-while every account was at its cap. Cost reads window shares for a request a subscription window paid, each with its
-window's short word (`0.12% Fable week` over `0.42% 5h`, the full labels on hover), and dollars for an overage, fast
-mode or API-key request. The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous and Next,
-holds the requests up to the moment you opened it so paging does not shift, and Refresh brings it up to now. An empty
-table reads "No requests match" with "Widen the date range or clear a filter." What each figure means is on
-[Statistics](statistics.md).
+while every account was at its cap. Cost reads in the top bar's unit. Under Native a request a subscription window paid
+reads its 20x 5-hour equivalent over its 20x 7-day one (`1.47% 20x 5h` over `0.244% 20x 7d`), with every window, the
+model week among them, and the dollar equivalent on hover. Under the four other positions it reads its account's own
+window shares, each with its window's short word (`0.12% Fable week` over `0.42% 5h`, the full labels on hover). An
+overage, fast mode or API-key request reads dollars under every position, and a figure an estimate priced leads with
+`~`, its hover adding "Estimated at the model tier's latest weighted model". The table pages by "Rows" (10, 25, 50 or
+100, 25 by default) with First, Previous and Next, holds the requests up to the moment you opened it so paging does not
+shift, and Refresh brings it up to now. An empty table reads "No requests match" with "Widen the date range or clear a
+filter." What each figure means is on [Statistics](statistics.md).
 
 Follow, off by default, reads the list every 5 seconds with the range ending now, takes every row that arrived since
 the read before, up to eight pages, and lands a new row at the top in the accent tint until the next read. Past eight
@@ -368,8 +405,10 @@ Selecting a row opens the "Request details" drawer, with the request's id and ti
 - Phases: a waterfall over Received, Selected, Written, Head, First content, Stream end and Finished, a phase the
   ledger holds no instant for reading "not measured".
 - Usage: Input (uncached), Cache read, "Cache write, 5m", "Cache write, 1h", "Output, thinking", "Output, plain",
-  Server tool calls and Estimated cost in the request's native unit, a subscription request's shares with their dollar
-  equivalent.
+  Server tool calls and Estimated cost in the top bar's unit: a subscription request's 20x equivalents under Native, or
+  its account's window shares under the four other positions, one chip per window with the dollar equivalent after them,
+  and a billed request's dollars. Its hover names the serving account's tier (`Account tier {tier}`) and the price list
+  and cost model in force when the request arrived (`Priced at the API prices of {date} and the cost model of {date}`).
 - Request: Session, Agent, Client with the request class badge, User agent (such as
   `claude-cli/2.1.269 (external, cli)`), Key, Pool, Kind, and one `Attempt {n}` row per attempt with the upstream's
   request id and, on the answer that served, its message id.
@@ -389,17 +428,18 @@ A request the ledger does not hold reads "Request not found" with "It may have a
 ![The Analytics view: the Traffic tab](assets/analytics-dark.png#only-dark)
 
 The sticky filter bar offers the range 1h, 24h, 7d, 30d or Custom (From and To, "End must be after start." while the
-pair is wrong), "Group by" with Account, Client, Key, Effort, Kind, Model, Pool, Request class, Speed or User agent, the
-multi-selects Key, Pool, Account and Model, "Client pattern" and "User agent pattern" in the Requests view's grammar, a
-"User agent groups" box with one pattern per line, where each pattern names a group and every other agent groups under
-`other` (`claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups), a "Session" id filter, and the switch "Include cache
-probes". The user agent grouping reads the agent's first product token, `claude-cli/2.1.269` for `claude-cli/2.1.269
-(external, cli)`. Filtered to one session the view sums the request log instead of the hourly rollups and says so, over
-the first 10,000 requests of the range. Under that filter the Cost split reads "Cost split is not available for a
-session view.", the Write cost vs read cost legend reads a dash for each cost, and Cache warming reads "Cache warming
-figures are not available for a session view." with "not in the request log" under its probe tiles, since a request row
-carries one cost total and no probe or kept-warm fact. The range, the grouping, every filter, the client groups, the
-probes switch, the burn grouping and the cost unit live in the page's address. The section bar under it shows one
+pair is wrong), "Group by" with Account, Client, Key, Effort, Kind, Model, Pool, Request class, Speed, User agent or
+"Session (Burn only)", the multi-selects Key, Pool, Account and Model, "Client pattern" and "User agent pattern" in the
+Requests view's grammar, a "User agent groups" box with one pattern per line, where each pattern names a group and every
+other agent groups under `other` (`claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups), a "Session" id filter, and
+the switch "Include cache probes". The user agent grouping reads the agent's first product token, `claude-cli/2.1.269`
+for `claude-cli/2.1.269 (external, cli)`. Filtered to one session the view sums the request log instead of the hourly
+rollups and says so, over the first 10,000 requests of the range. Under that filter the Cost split reads "Cost split is
+not available for a session view.", the Write cost vs read cost legend reads a dash for each cost, and Cache warming
+reads "Cache warming figures are not available for a session view." with "not in the request log" under its probe tiles,
+since a request row carries one cost total and no probe or kept-warm fact. The range, the grouping, every filter, the
+client groups and the probes switch live in the page's address. A link that carries `unit` sets the top bar's Unit
+switch to that position and leaves the address, so a shared link opens on its unit. The section bar under it shows one
 section at a time, Traffic, Burn, Latency, Cache, Cost, Cache warming or Accounts, and a range with nothing reads "No
 traffic in this range." What each figure means is on [Statistics](statistics.md).
 
@@ -408,14 +448,21 @@ Exhausted), Errors by code, Failovers, Migration rewrites with Moves by reason, 
 the table Traffic by the chosen group with Requests, OK, Rate limited, Failed, Incomplete, Exhausted, Rejected, Error
 rate, Failovers, Search and Fetch.
 
-Burn has its own grouping, Account, Key, Session or Request class, under "Burn groups by account, key, session or
-request class alone. The plan shares read under Account, since shares of different accounts' windows do not add." It
-draws Spend per minute (dollars alone, a subscription account's among them for its fast-mode and
-overage answers) and, grouped by account, Plan per hour, the share of each subscription account's 5-hour window solid
-and of its 7-day window dashed, with the peak band's hours shaded behind the 5-hour lines and a note whose "Cost
-reference" link opens the dialog on Tiers and peak band. It closes on Member budgets, Pool, Account, Spent, Budget and
-Period ends, one row per budget a member carries, a member at its budget marked and one the ledger has not reported on
-reading "not reported".
+Burn follows the page's grouping, and "Session (Burn only)" groups it by session while every other section keeps the key
+grouping, since no rollup carries a session. Of the filters, the Accounts filter and the user agent groups alone apply
+to it, which its head says while another filter is set. Plan per hour draws three cards, "5-hour per hour", "7-day per
+hour" and "Model week per hour", the last while a group's traffic ran on a model with a week of its own, each with one
+line per group. Under Window shares a line is the share of a subscription account's own window, which reads under the
+account grouping or with one account named in the Accounts filter, and under every other position it is the group's
+subscription traffic per hour in 20x equivalents of the window. The 5-hour card shades the peak band's hours behind its
+lines, and each card's note carries a "Cost reference" link that opens the dialog on Tiers and peak band. A hollow dot
+marks a bucket whose model has no measured weight and reads the latest weighed model of its model tier, with an
+"estimated" entry in the legend and a `~` on the legend's and the tooltip's figures. A bucket whose traffic ran on a
+model of no known tier, or on a tier the cost model has no capacity for on that window, prices no share there and draws
+no point, under a "model unlisted" entry, and under Window shares an account whose tier the cost model does not size
+reads "tier unknown". Spend per minute charts the dollars alone, a subscription account's among them for its fast-mode
+and overage answers. The section closes on Member budgets, Pool, Account, Spent, Budget and Period ends, one row per
+budget a member carries, a member at its budget marked and one the ledger has not reported on reading "not reported".
 
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-light.png#only-light)
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-dark.png#only-dark)
@@ -428,27 +475,44 @@ tok/s p50.
 Cache reads `{pct} hit ratio, {n} expired between turns, {pct} of input read from cache` and draws Tokens (Uncached
 input, Cache read, Cache write 5m, Cache write 1h, Thinking, Output), Hit ratio and cached share, Write cost vs read
 cost, Misses by reason with its per-group table, Cache by model (Reads, Writes 5m, Writes 1h, Hit ratio, Cached share,
-Read cost, Write cost) and Placements by rung (Rung, Placements, Hits, Hit share, Tokens read, Tokens promised). Every
-count in Misses by reason but the expired column links to the Requests view on those requests with the page's filters
-carried over, and a count the Requests view cannot list exactly stays plain with the reason on hover.
+Read cost, Write cost) and Placements by rung (Rung, Placements, Hits, Hit share, Tokens read, Tokens promised). Write
+cost vs read cost and Cache by model's Read cost and Write cost read in the top bar's unit. Under Native they read the
+subscription requests' 20x 7-day equivalent, the card's subtitle naming the billed requests' dollars and each Cache by
+model cell carrying them on a line under it, and the card draws the billed dollars while no subscription request is in
+range. Under the three dollar positions they read the position's dollars, and under Window shares the named account's
+7-day shares, the card reading "Shares of one account's windows alone: name one account in the Accounts filter." and
+Cache by model dashes under the same note while no account is named. Every count in Misses by reason but the expired
+column links to the Requests view on those requests with the page's filters carried over, and a count the Requests view
+cannot list exactly stays plain with the reason on hover.
 
-Cost shares the "Unit" control with Cache and Cache warming: four positions, All in dollars (the default), Billed
-dollars, Window shares and Dollar equivalent, kept in the address as `unit`. Under a dollar unit Cost draws the tiles
-Estimated cost, Billed dollars or Dollar equivalent, Cost per request and Cost per 1k output tokens, then Cost by the
-chosen group as a chart and a table (Requests, Cost, Input, Cache read, Cache write, Output, Per request, Per 1k
-output). Under Window shares, which reads under the account grouping alone, the tiles read Window share, Per request
-and Per 1k output, and the table Plan requests, 5-hour, 7-day, the model week, Per request and Per 1k output. Every
-position draws Fast mode spend and the Cost split (Input, Cache read, Cache write, Output). The prices behind the
-dollars are on [Pricing](statistics.md#pricing), and the cost model behind the shares on
-[Plan meter](statistics.md#plan-meter).
+Cost reads in the top bar's unit. Under Native the tiles read Cost, the subscription requests' 20x 7-day equivalent
+beside the billed requests' dollars, a side with no requests left out, and Cost per request and Cost per 1k output
+tokens the same two ways. Cost by the chosen group stacks the equivalent per bucket with "Billed by {group}" beside it
+in dollars, the Cost split draws a ring per side by token kind, the subscription requests' with its 7-day equivalent in
+the center and the billed requests' in dollars, and the table reads Requests, Cost, 20x 5-hour, the model week's 20x
+column, Per request and Per 1k output, its Cost the 20x 7-day equivalent, and Cost, Per request and Per 1k output each
+with the billed dollars on a line under the equivalent. Under All in dollars, Billed dollars and Dollar equivalent Cost
+draws the tiles Estimated cost, Billed dollars or Dollar equivalent, Cost per request and Cost per 1k output tokens,
+then Cost by the chosen group as a chart and a table (Requests, Cost, Input, Cache read, Cache write, Output, Per
+request, Per 1k output) and the Cost split as one ring in dollars (Input, Cache read, Cache write, Output). Under Window
+shares, which reads under the account grouping or with one account named in the Accounts filter, the tiles read Window
+share, Per request and Per 1k output, the chart one line per group, the table Plan requests, 5-hour, 7-day, the model
+week, Per request and Per 1k output, and the Cost split the whole in dollars. Every position draws Fast mode spend, and
+an estimated figure carries the `~` and the estimate's hover. The prices behind the dollars are on
+[Pricing](statistics.md#pricing), and the cost model behind the shares and the equivalents on [Plan
+meter](statistics.md#plan-meter).
 
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-light.png#only-light)
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-dark.png#only-dark)
 
 Cache warming draws the tiles Probe cost and Kept warm, Probes by outcome (OK, Migrated, Held, Skipped, Failed), Wasted
 probes (Wasted probes, Wasted cost, Share of probe cost), Kept-warm requests, Kept-warm tokens and Cache warming by
-pool (Probes OK, Held, Skipped, Failed, Kept-warm requests, Kept-warm tokens, Probe cost). What a probe is and when it
-counts as wasted is on [Keepalive](keepalive.md).
+pool (Probes OK, Held, Skipped, Failed, Kept-warm requests, Kept-warm tokens, Probe cost). Probe cost, Wasted cost,
+Share of probe cost and the by-pool Probe cost read in the top bar's unit: under Native the plan probes' 20x 7-day
+equivalent over the billed probes' dollars, under the three dollar positions the position's probes in dollars, and under
+Window shares the named account's share of its 7-day window, a dash under "Shares of one account's windows alone: name
+one account in the Accounts filter." while none is named. What a probe is and when it counts as wasted is on
+[Keepalive](keepalive.md).
 
 Accounts draws Peak 5-hour utilization, then Window usage and Pace under a "Window" switch whose positions are the
 windows the range sampled, 5-hour, 7-day, 7-day Fable and "7-day, extra usage". Pace reads "The lead over pace per
@@ -510,10 +574,13 @@ The "Cost reference" link opens the dialog "Cost reference" under "What a millio
 price, and as a share of a subscription window." on three tabs, Tiers and peak band, Plan rates and API prices. The
 Sessions view's head and the pool dialog's Warm sessions hint open it on Plan rates, the pool dialog's Write cost hint
 on API prices, and the subtitle of the Dashboard's 5-hour ring and the note of the Burn section's Plan per hour chart
-on Tiers and peak band. Its footer names each table in force as a chip, `API prices, effective {date}, shipped` (or
-`file`) and `Subscription cost model, effective {date}, shipped` (or `file`), the hover naming the key and the path
-that set it or would replace it at the next start (`stats.api_prices_path`, `stats.subscription_costs_path`). The
-console has no import control: a table is replaced by a file at that path, read at the next start.
+on Tiers and peak band. It opens on the entries in force now. Its footer carries a "Revision" select over both files'
+revision dates, newest first, a date not yet in force marked `(next)`, and choosing a date redraws every tab at the
+entry each file had in force on that date, or at a file's first entry when the date comes before it. A single date
+across the two files shows no select. The footer names each table's entry as a chip, `API prices, effective {date},
+shipped` (or `file`) and `Subscription cost model, effective {date}, shipped` (or `file`), the hover naming the key and
+the path that set it or would replace it at the next start (`stats.api_prices_path`, `stats.subscription_costs_path`).
+The console has no import control: a table is replaced by a file at that path, read at the next start.
 
 ![The cost reference dialog on Plan rates](assets/cost-reference-plan-rates-light.png#only-light)
 ![The cost reference dialog on Plan rates](assets/cost-reference-plan-rates-dark.png#only-dark)
@@ -526,13 +593,19 @@ them in, whether the band runs now and until when, the next change of the local 
 factor. Plan rates draws the share of a tier's 5-hour and 7-day window that a token count of each type spends, per
 model, for a request completing outside or inside the band, with a tier chooser (the anchor tier Max 20x first), the
 band control and a token field in millions with quick picks for 100k, 1M and 10M, a weight column per model, a Fable
-week row under a Fable model's 7-day group, a warning tint on a cell past a full window, and the models the cost model
-does not weigh after a divider. API prices draws the dollar list prices per million tokens, input, cache read, cache
-write 5m, cache write 1h and output, with a fast-mode row under each model that serves fast mode and a row under each
-model priced by prompt length, under the caption "USD per million tokens at list price" and its note "An API-key
-account pays these. A subscription account pays them in overage and for fast-mode answers." Both tables list the
-models family by family, newest first, in the order the shipped files keep. The price rows, the weights and how a
-probe is priced are on [Pricing](statistics.md#pricing).
+week row under a Fable model's 7-day group, and a warning tint on a cell past a full window. A model the cost model does
+not weigh, on a model tier with a weighed model, reads that tier's latest weighed model, each of its cells marked with a
+`~` and its weight cell reading `estimated, as {model}`, and the caption adds "A ~ marks an estimate: the model reads
+the latest weighed model of its model tier." A model of no model tier, or of one with no weighed model, keeps its dashes
+and reads "not weighed". API prices draws the dollar list prices per million tokens, input, cache read, cache write 5m,
+cache write 1h and output, with a fast-mode row under each model that serves fast mode and a row under each model priced
+by prompt length, under the caption "USD per million tokens at list price" and its note "An API-key account pays these.
+A subscription account pays them in overage and for fast-mode answers." Both tables show one row per model tier, its
+newest model, in the cost model's `tier_order` with `model_tier` naming each model's tier and a model of no tier last,
+and fold the older models under one row at the table's foot that names their count, `{n} older models`, and expands to
+them in the same order. The fold is shared by both tables and starts closed at each opening. The price rows, the weights
+and how a probe is priced are on [Pricing](statistics.md#pricing), which lists the shipped revision in force, and the
+dialog shows an earlier entry under the Revision select.
 
 ## Settings
 
@@ -540,12 +613,15 @@ probe is priced are on [Pricing](statistics.md#pricing).
 ![The Settings view: Appearance, About and the client block](assets/settings-dark.png#only-dark)
 
 "Appearance" ("Stored in this browser only.") sets the Theme, Light, Dark or System ("System follows the operating
-system preference."), and the Time format, 12h or 24h ("Applies to every timestamp and axis tick."), the two browser
-preferences the shell reads. "About" lists Version, Profile, Metrics listener, Ledger path, API prices path and
-Subscription costs path (each as the path or "not configured", then `effective {date}` for its table, the last reading
-`{problem}` in the date's place while the cost model reports a problem), Storage path, and Admin secret as "configured"
-or "not configured", each path's hover naming the bootstrap key that sets it, and closes on "The values the
-configuration file sets are on the installation page, and `phoebis check-config` prints this router's."
+system preference."), the Time format, 12h or 24h ("Applies to every timestamp and axis tick."), and the Unit, which
+mirrors the top bar's switch with a legend button of its own ("The unit every view prices a request in. Native reads a
+subscription request as 20x window equivalents and a billed request in dollars."), the three browser preferences the
+shell reads. "About" lists Version, Profile, Metrics listener, Ledger path, API prices path and Subscription costs path
+(each as the path or "not configured", then its table's entry in force, its revision count and the next date while one
+is pending, as `effective {date}, {n} revisions, next {date}`, the last reading `{problem}` in their place while the
+cost model reports a problem), Storage path, and Admin secret as "configured" or "not configured", each path's hover
+naming the bootstrap key that sets it, and closes on "The values the configuration file sets are on the installation
+page, and `phoebis check-config` prints this router's."
 
 "Downstream client configuration" ("Put it in the env block of the client's settings file or export it in the shell
 that launches the client, and replace the token with a key from the Keys page.") shows the seven lines that point

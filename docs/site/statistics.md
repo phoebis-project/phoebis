@@ -200,7 +200,9 @@ figures of different account tiers compare and add, with an `estimated` flag bes
 the 5-hour window with the peak band's weight, the 7-day window with the week's factor, and a model week over its
 capacity factor, and the dashboard, key and pool routes answer the first two. One million plain input tokens of Opus 5.5
 are 2,200,000 units, 1.47% of a 20x 5-hour window outside the band and 0.244% of a 20x 7-day window, and the same
-request on a Pro account reads 29.3% of its own 5-hour window.
+request on a Pro account reads 29.3% of its own 5-hour window. The console reads the 20x equivalent under the top bar's
+Unit switch, whose default Native position shows a subscription request in it and a billed request in dollars ([The
+shell](console.md#the-shell)).
 
 The capacities the shipped file carries, in units per window, keyed by the tier the profile reports (a Pro
 subscription reports `default_claude_ai`):
@@ -255,11 +257,12 @@ Fable request's share of it is twice its 7-day share.
 
 A model without a weight of its own reads the weight of the latest weighed model of its model tier as an estimate: the
 prediction charges it, the shedding round ranks its pin by that estimate, and every route that answers its figure
-answers `estimated` true beside it. Once the model has served a plan-funded request since the start, the ledger raises
-the `model_unweighted` attention item for the `phoebis_attention` gauge, and `GET /admin/attention` leaves the item out,
-because a console that reads an unknown kind would show it as an exhausted pool. A model of no model tier, or of a model
-tier with no weighed model, prices no share: the prediction adds no charge, the shedding round ranks the pin after every
-priced one, the analytics list the share under model unlisted and the cost reference shows a dash. An account tier
+answers `estimated` true beside it, which the console draws as a `~` before the figure. Once the model has served a
+plan-funded request since the start, the ledger raises the `model_unweighted` attention item for the `phoebis_attention`
+gauge, `GET /admin/attention` answers it, and the console lists it on the dashboard's attention line with a link to the
+[Models](console.md#models) view ([Conditions and gauges](#conditions-and-gauges)). A model of no model tier, or of a
+model tier with no weighed model, prices no share: the prediction adds no charge, the shedding round ranks the pin after
+every priced one, the analytics list the share under model unlisted and the cost reference shows a dash. An account tier
 without a capacity on a window prices no share there either, and the prediction adds no charge on that window. The
 shedding round ranks that tier's pins like any other, on the anchor tier's rates, and in the analytics an account on a
 tier the file lacks reads tier unknown, while a window the file leaves `null` on a listed tier reads model unlisted. A
@@ -448,6 +451,7 @@ again at the first read.
 | `certificate_expiring` | the listener key | a pair with more than 30 days left is loaded |
 | `ledger_record_parked` | the pool, or `-` for a record without one | the next start or the Replay button lands them |
 | `poll_backoff` | the polled account | a poll answers clean |
+| `model_unweighted` | the model | a later subscription request on the model is priced at a cost model entry that weighs it, or the router restarts |
 
 **`pool_exhausted`** holds while a request of the pool has ended exhausted and none of the pool's requests has
 succeeded since. It is fed by the request bus. An `incomplete` answer neither raises nor clears it. The detail names the
@@ -509,6 +513,14 @@ id with nothing to open. The item dates from the oldest row, and the detail coun
 **`poll_backoff`** holds once the usage poll has been backing off from the endpoint's 429 answers on the account for
 thirty minutes, counted from the run's first 429. The detail gives when the run started, when the next attempt comes,
 and how many 429s the endpoint answered in a row.
+
+**`model_unweighted`** holds while a model the cost model does not weigh has served plan-funded requests since the
+start, each priced at the weight of the latest weighed model of its model tier and marked estimated wherever its figure
+shows ([Plan meter](#plan-meter)). The ledger keeps the run in memory, so it starts over at a restart, and the next
+plan-funded request on the model raises it again. A later plan-funded request priced at a cost model entry that weighs
+the model clears it. The subject is the model, the dashboard's line reads the item as "Model weight estimated", and it
+opens the [Models](console.md#models) view. It dates from the run's first request, and the detail names the model, its
+model tier, the model whose weight stands in and the requests served since.
 
 A threshold is a Prometheus rule over the gauge:
 
