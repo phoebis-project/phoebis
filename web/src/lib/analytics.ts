@@ -231,13 +231,13 @@ const SHARED_WINDOWS = ['five_hour', 'seven_day'];
  * each window summed over the groups, since every group is the one account's. A window carried as null is left out,
  * and so is a shared window that a group `required` to carry it lacks, since a partial sum would read as the
  * account's. A model week sums where a group carries one, a group off such a model carrying none. Null where no group
- * answered a map.
+ * answered a map, and where a required group answered none, whatever the others priced.
  */
 export function oneAccountShares<T>(groups: AnalyticsGroup[], read: (g: AnalyticsGroup) => Record<string, T | null> | null, add: (a: T, b: T) => T, required: (g: AnalyticsGroup) => boolean = () => false): Record<string, T> | null {
-  const maps = groups.flatMap((g) => {
-    const map = read(g);
-    return map === null ? [] : [{ map, required: required(g) }];
-  });
+  // The required test runs over every group before a missing map drops one, or the others would read as the whole.
+  const answered = groups.map((g) => ({ map: read(g), required: required(g) }));
+  if (answered.some((a) => a.map === null && a.required)) return null;
+  const maps = answered.flatMap((a) => (a.map === null ? [] : [{ map: a.map, required: a.required }]));
   if (maps.length === 0) return null;
   const out: Record<string, T> = {};
   const left = new Set<string>();

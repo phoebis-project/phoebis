@@ -616,6 +616,16 @@ test("one named account's shares sum over the groups the route answered them on,
   assert.deepEqual(probes, { seven_day: { cost: 0.25, wasted: 0.125 } }, 'a group without probes adds none, whatever its plan requests');
 });
 
+test("one named account's whole is unavailable where a group with plan usage answered no share map, in either order", () => {
+  const priced = accountGroup({ costShares: { five_hour: 0.25, seven_day: 0.125 } });
+  const unmapped = accountGroup({ costShares: null });
+  assert.ok(unmapped.planRequests > 0 && unmapped.planOutputTokens > 0, 'the captured group holds plan rows with tokens');
+  for (const [what, groups] of [['priced first', [priced, unmapped]], ['unmapped first', [unmapped, priced]]]) {
+    assert.equal(d.oneAccountShares(groups, (x) => x.costShares, (a, b) => a + b, d.planRowsRequired), null, `${what}: the priced group's shares are not the account's whole`);
+  }
+  assert.equal(d.oneAccountGroupOf(priced, [priced, unmapped]).costShares, null, 'and the whole the page reads is unavailable');
+});
+
 test("the named account's whole leaves out a probe window that a group with probes priced none on", () => {
   const base = accountGroup();
   const probed = (probeShares, ok) => accountGroup({ probeShares, probes: { ...base.probes, failed: 0, held: 0, ok, skipped: 0 } });
