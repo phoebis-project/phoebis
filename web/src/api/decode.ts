@@ -555,7 +555,7 @@ function decodeRecordCandidate(v: unknown): RecordCandidate {
     enabled: bool(c.enabled), fit: strOrNull(c.fit), inFlight: num(c.in_flight), inFlightCap: num(c.in_flight_cap), inOverage: bool(c.in_overage), incarnation: num(c.incarnation), kind: str(c.kind) === 'api_key' ? 'api_key' : 'oauth',
     obstacle: orNull(c.obstacle, (o) => ({ name: str(o.name), reason: strOrNull(o.reason), until: isoOrNull(o.until), window: strOrNull(o.window) })),
     overage: orNull(c.overage, (o) => ({ observedAt: isoOr(o.observed_at, epoch), reset: isoOrNull(o.reset), since: isoOr(o.since, epoch), source: str(o.source) })),
-    pace: orNull(c.pace, (p) => ({ burn: num(p.burn), deadline: isoOrNull(p.deadline), end: isoOrNull(p.end), hours: numOrNull(p.hours), remaining: num(p.remaining), reset: isoOrNull(p.reset), score: num(p.score), window: strOrNull(p.window) })),
+    pace: orNull(c.pace, (p) => ({ burn: numOrNull(p.burn), deadline: isoOrNull(p.deadline), end: isoOrNull(p.end), hours: numOrNull(p.hours), remaining: num(p.remaining), reset: isoOrNull(p.reset), score: num(p.score), window: strOrNull(p.window) })),
     partition: strOrNull(c.partition), planTier: strOrNull(c.plan_tier),
     prefix: { content: prefixEntryOf(prefix.content), contentMatch: prefixEntryOf(prefix.content_match), static: prefixEntryOf(prefix.static), staticMatch: prefixEntryOf(prefix.static_match), withMain: bool(prefix.with_main) },
     priority: num(c.priority), rank: numOrNull(c.rank), runwayMs: numOrNull(c.runway_ms), score: numOrNull(c.score), state: str(c.state),
@@ -564,7 +564,7 @@ function decodeRecordCandidate(v: unknown): RecordCandidate {
     windows: Object.fromEntries(
       Object.entries(rec(c.windows)).map(([name, w]) => {
         const x = rec(w);
-        return [name, { ageMs: num(x.age_ms), ahead: numOrNull(x.ahead), horizon: isoOrNull(x.horizon), observedAt: isoOr(x.observed_at, epoch), projection: numOrNull(x.projection), reserved: num(x.reserved), reset: isoOrNull(x.reset), source: str(x.source), utilization: num(x.utilization) }];
+        return [name, { ageMs: num(x.age_ms), ahead: numOrNull(x.ahead), horizon: isoOrNull(x.horizon), observedAt: isoOr(x.observed_at, epoch), projection: numOrNull(x.projection), reserved: numOrNull(x.reserved), reset: isoOrNull(x.reset), source: str(x.source), utilization: num(x.utilization) }];
       }),
     ),
   };

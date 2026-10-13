@@ -133,6 +133,45 @@ function narrowedSetOf(r) {
   return r.candidates.filter((c) => (among ? among.has(c.accountId) : c.obstacle === null));
 }
 
+/**
+ * The members a placement's fit reads: the set the spent and cap partitions left, or the whole set the cap holds for
+ * a slot when every member is at it. A Fable request's spent member drops unless the pool funds it.
+ */
+function fitReadOf(set, pool, r) {
+  const spent = (c) => ['five_hour', 'seven_day', 'seven_day_fable'].some((w) => (c.windows[w]?.utilization ?? 0) >= 1);
+  const funded = (c) => pool.overagePolicy === 'allow' && c.credits !== null && c.credits.blocked === null;
+  const left = r.request.canonicalModel.includes('fable') ? set.filter((c) => !spent(c) || funded(c)) : set;
+  const free = left.filter((c) => r.request.flags.count || c.inFlight < c.inFlightCap);
+  return new Set(free.length > 0 ? free : left);
+}
+
+/**
+ * A fresh session's fit on a member as a placement reads it: an account ending inside five hours never fits, an
+ * API-key member fits while its worst bucket has room, and on every plan window the model draws the body's rewrite
+ * must land under the ceiling and the account's burn with the fresh prior must not carry it there before the
+ * horizon. The story's hand-written placements price the prior, a drawn one none.
+ */
+function freshFitOf(d, c, r, pool) {
+  const at = Date.parse(r.request.at);
+  const end = c.term?.endsAt ? Date.parse(c.term.endsAt) : null;
+  if (end !== null && end < at + 5 * HOUR) return 'ending';
+  if (c.kind === 'api_key') return (c.windows.worst_bucket?.utilization ?? 0) < 1 ? 'fits' : 'least_bad';
+  const prior = d.STORY_IDS.has(r.requestId) ? d.PRIOR_BURN : {};
+  let lands = true;
+  let every = true;
+  for (const [w, share] of Object.entries(d.rewriteOf(r.request.bodyTokens ?? 0, r.request.canonicalModel))) {
+    const x = c.windows[w];
+    if (!x || x.projection === null || x.horizon === null) continue;
+    const room = pool.windowCeiling - x.utilization - (x.reserved ?? 0) - share;
+    const burn = (c.burn[w] ?? 0) + (prior[w] ?? 0);
+    if (room <= 0) {
+      lands = false;
+      every = false;
+    } else if (burn > 0 && (room / burn) * HOUR < Date.parse(x.horizon) - at) every = false;
+  }
+  return every ? 'fits' : lands ? 'rewrite_only' : 'least_bad';
+}
+
 // One load at a time, since each pins the clock its bundle reads while it loads.
 let loading = Promise.resolve();
 
@@ -829,11 +868,30 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const d = s.lib;
     const records = await decisionsOf(s);
     let seen = 0;
+    let fitted = 0;
+    let unfit = 0;
     for (const r of records) {
       const steps = r.walk.map((w) => w.step);
       if (!steps.some((x) => x.startsWith('rung:'))) continue;
       const set = narrowedSetOf(r);
-      const expected = d.partitionsOf(set.map((c) => ({ ...c })), d.poolById.get(r.request.poolId), d.requestById.get(r.requestId), moving(r));
+      const pool = d.poolById.get(r.request.poolId);
+      // A move's destinations carry its gate's fit. A placement's fit is computed here over the members the spent and
+      // cap partitions left, and the members they dropped read none, so the no-fit count follows the computed fits.
+      let members = set.map((c) => ({ ...c }));
+      // A drawn token count and a drawn cohort hold read no fit: the generator draws their account without one, and
+      // neither takes a slot the cap could keep that choice by.
+      const unread = !d.STORY_IDS.has(r.requestId) && (r.request.flags.count || r.outcome.kind === 'held');
+      if (unread) assert.ok(set.every((c) => c.fit === null), `${r.requestId}/${r.seq} reads a fit`);
+      else if (!moving(r)) {
+        const read = fitReadOf(set, pool, r);
+        members = set.map((c) => ({ ...c, fit: read.has(c) ? freshFitOf(d, c, r, pool) : null }));
+        for (const [i, c] of set.entries()) {
+          assert.equal(c.fit, members[i].fit, `${r.requestId}/${r.seq}: ${c.accountId} reads fit ${c.fit}`);
+          if (read.has(c)) fitted += 1;
+          if (read.has(c) && c.fit !== 'fits' && !d.STORY_IDS.has(r.requestId)) unfit += 1;
+        }
+      }
+      const expected = d.partitionsOf(members, pool, d.requestById.get(r.requestId), moving(r));
       for (const w of r.walk.filter((x) => x.step === 'partitions')) {
         seen += 1;
         assert.deepEqual(w.facts.map((f) => [f.key, f.value]), expected.map((f) => [f.key, f.value]), `${r.requestId}/${r.seq}`);
@@ -847,6 +905,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       }
     }
     assert.ok(seen > 10);
+    assert.ok(fitted > 10 && unfit > 0, `${fitted} members read a fit, ${unfit} of the drawn placements' not fitting`);
 
     const read = (id, keys) => {
       const w = records.find((r) => `${r.requestId}/${r.seq}` === id)?.walk.find((x) => x.step === 'partitions');
@@ -977,6 +1036,86 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const [reason, fits] of Object.entries(movesByReasonAndFit)) assert.equal(sum(Object.values(fits), (n) => n), moves[reason], reason);
     const shapes = new Set(Object.values(movesByReasonAndFit).map((fits) => JSON.stringify(Object.keys(fits).sort())));
     assert.ok(shapes.size > 1, `the reasons read ${[...shapes].join(', ')}`);
+  });
+
+  test(`a fired rule's destinations are its gate's answer in the set's order, the shed rule's narrowed to the longest runway, at ${at}`, async () => {
+    const s = await story;
+    const records = await decisionsOf(s);
+    const destinationsOf = (r) => r.walk.find((w) => w.step.startsWith('move:') && w.verdict === 'fired')?.facts.find((f) => f.key === 'destinations')?.value;
+    const runway = (c) => c.runwayMs ?? Number.POSITIVE_INFINITY;
+    const longest = (list) => list.filter((c) => runway(c) === Math.max(...list.map(runway)));
+    const free = (c) => c.inFlight < c.inFlightCap;
+    const seen = { other: 0, shed: 0 };
+    for (const r of records) {
+      const line = r.walk.find((w) => w.step.startsWith('move:') && w.verdict === 'fired');
+      if (!line) continue;
+      const readIds = new Set(r.walk.find((w) => w.step === 'fit').facts.filter((f) => f.key === 'verdict').map((f) => f.accountId));
+      const read = r.candidates.filter((c) => readIds.has(c.accountId));
+      const fits = read.filter((c) => c.fit === 'fits' && free(c));
+      const rewriteOnly = read.filter((c) => c.fit === 'rewrite_only' && free(c));
+      const shed = line.step === 'move:shed';
+      const want = fits.length > 0 ? (shed ? longest(fits) : fits) : shed ? [] : rewriteOnly.length > 0 ? longest(rewriteOnly) : read.filter((c) => c.fit !== 'ending');
+      assert.deepEqual(destinationsOf(r), want.map((c) => c.accountId), `${r.requestId}/${r.seq}`);
+      seen[shed ? 'shed' : 'other'] += 1;
+    }
+    assert.ok(seen.shed > 0 && seen.other > 0, JSON.stringify(seen));
+    // The Overflow workspace fits with no end to its runway, the longest of all, but sits at its cap through the round
+    // and the move, so both take primary.
+    const move = records.find((r) => r.requestId === 'req_868264bc-611');
+    const overflow = move.candidates.find((c) => c.accountId === 'overflow');
+    assert.deepEqual([destinationsOf(move), overflow.fit, overflow.runwayMs, overflow.inFlight === overflow.inFlightCap], [['primary'], 'fits', null, true]);
+    const round = (await logOf(s)).find((row) => row.type === 'event' && row.kind === 'shedding_round' && row.requestId === 'req_1eaa9bc1-a18');
+    const planner = records.find((r) => r.requestId === 'req_1eaa9bc1-a18');
+    const cap = planner.candidates.find((c) => c.accountId === 'overflow');
+    assert.deepEqual([round.detail.pins.filter((p) => p.marked).map((p) => p.planned), cap.inFlight === cap.inFlightCap], [['primary', 'primary'], true]);
+  });
+
+  test(`every shedding round's pin reads its burn per token of its last prompt to seven digits, at ${at}`, async () => {
+    const s = await story;
+    const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round');
+    assert.ok(rounds.length > 0);
+    for (const e of rounds) {
+      for (const p of e.detail.pins) {
+        const want = p.burn / p.last_input_tokens;
+        assert.ok(p.per_rewrite > 0 && Math.abs(p.per_rewrite - want) <= want * 1e-6, `${e.requestId}: ${p.session_id} reads ${p.per_rewrite}, not ${want}`);
+      }
+    }
+  });
+
+  test(`a booking a request ended without usage expires once at the request's end, with the cause its end carries, at ${at}`, async () => {
+    const s = await story;
+    const records = await decisionsOf(s);
+    const expired = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'reservation_expired');
+    // A later placement or move, a failover's among them, replaces the request's booking, and a renewal leaves it.
+    const booked = new Map();
+    for (const r of [...records].sort((x, y) => x.seq - y.seq)) if (r.outcome.kind === 'placed' || r.outcome.kind === 'moved') booked.set(r.requestId, r.outcome.reservation === null ? null : r);
+    const causeOf = (r) =>
+      r.outcome === 'canceled' ? 'canceled' : r.outcome === 'exhausted' ? 'exhausted' : r.outcome === 'incomplete' || r.errorCode === 'stream_undecodable' ? 'transport_error' : 'refused';
+    const want = s.requests.filter((r) => r.outcome !== 'succeeded' && booked.get(r.id)).map((r) => {
+      const last = r.attempts[r.attempts.length - 1];
+      return [r.id, Date.parse(last.startedAt) + (last.durationMs ?? 0), booked.get(r.id).request.attempt, causeOf(r)];
+    });
+    const read = expired.map((e) => [e.requestId, Date.parse(e.at), e.detail.attempt, e.detail.cause]);
+    const order = (x, y) => x[0].localeCompare(y[0]);
+    assert.deepEqual(read.sort(order), want.sort(order));
+    assert.ok(new Set(read.map((x) => x[3])).size > 1, `the causes read ${[...new Set(read.map((x) => x[3]))].join(', ')}`);
+  });
+
+  test(`the three routing conditions are the trailing day's fold of the routing log, one item per subject in the route's order, at ${at}`, async () => {
+    const s = await story;
+    const day = (await logOf(s)).filter((row) => row.type === 'event' && Date.parse(row.at) >= s.now - DAY && Date.parse(row.at) <= s.now).sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
+    const oauth = new Set(s.accounts.filter((a) => a.kind === 'oauth').map((a) => a.id));
+    const spent = day.filter((e) => e.kind === 'window_spent' && oauth.has(e.accountId));
+    const landed = day.filter((e) => e.kind === 'pin_migrated' && oauth.has(e.accountId) && spent.some((w) => w.accountId === e.accountId && Date.parse(w.at) >= Date.parse(e.at) && Date.parse(w.at) - Date.parse(e.at) <= HOUR));
+    const rounds = day.filter((e) => e.kind === 'shedding_round' && e.detail.outcome === 'nothing_to_mark' && e.detail.reason === 'no_runway');
+    const firsts = (kind, events, subject) => [...new Set(events.map(subject))].map((id) => [kind, id, Date.parse(events.find((e) => subject(e) === id).at)]);
+    const kinds = ['wall_reached', 'destination_spent', 'shed_no_runway'];
+    const want = [...firsts('wall_reached', spent, (e) => e.accountId), ...firsts('destination_spent', landed, (e) => e.accountId), ...firsts('shed_no_runway', rounds, (e) => e.poolId)].sort(
+      (x, y) => kinds.indexOf(x[0]) - kinds.indexOf(y[0]) || x[2] - y[2] || x[1].localeCompare(y[1]),
+    );
+    const read = s.attention.filter((i) => kinds.includes(i.kind)).map((i) => [i.kind, i.subject.id, Date.parse(i.since)]);
+    assert.deepEqual(read, want);
+    assert.deepEqual(read.map((x) => `${x[0]} ${x[1]}`), ['wall_reached nightly', 'wall_reached secondary', 'destination_spent nightly', 'shed_no_runway all']);
   });
 
   test(`every plan-funded row of a weighted model carries non-null shares and no API key, overage or fast row carries one, at ${at}`, async () => {

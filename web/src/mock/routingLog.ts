@@ -29,7 +29,7 @@ const drawnWindows = (model: string): string[] => (model.includes('fable') ? [..
 const round3 = (x: number) => Math.round(x * 1_000) / 1_000;
 const round5 = (x: number) => Math.round(x * 100_000) / 100_000;
 /** A rewrite of `tokens` per plan window the model draws, in window share. */
-const rewriteOf = (tokens: number, model: string): Record<string, number> =>
+export const rewriteOf = (tokens: number, model: string): Record<string, number> =>
   Object.fromEntries(drawnWindows(model).map((w) => [w, round5(tokens * WRITE_SHARE[w] * familyWeight(model))]));
 /** The tokens a request's body carries, the relay's estimate a fresh session's rewrite is priced from. */
 const bodyTokensOf = (r: RequestLog) => r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h;
@@ -37,7 +37,7 @@ const bodyTokensOf = (r: RequestLog) => r.usage.input + r.usage.cacheRead + r.us
  * A fresh session's burn per hour: the pool's warm pins' median as the story's hour reads it. The drawn day's
  * decisions read no burn at all, so they book the rewrite alone.
  */
-const PRIOR_BURN: Record<string, number> = { five_hour: 0.01, seven_day: 0.0012, seven_day_fable: 0.0024 };
+export const PRIOR_BURN: Record<string, number> = { five_hour: 0.01, seven_day: 0.0012, seven_day_fable: 0.0024 };
 const WINDOW_OF: Record<string, string> = { '5h': 'five_hour', '7d': 'seven_day', '7d_fable': 'seven_day_fable' };
 
 // The in-flight counts draw from a stream of their own, so no other draw of the story moves.
@@ -119,7 +119,6 @@ interface RoundPin {
   marked: boolean;
   model: string;
   note: string | null;
-  planned: string | null;
   sessionId: string;
   skip: string | null;
 }
@@ -425,8 +424,8 @@ interface FitRead {
 }
 
 const runwayOf = (c: Pick<RecordCandidate, 'runwayMs'>) => c.runwayMs ?? Number.POSITIVE_INFINITY;
-/** The longest runway first, an unbounded one before every bounded one, ties kept in the set's order. */
-const longestFirst = (a: RecordCandidate, b: RecordCandidate) => (runwayOf(a) === runwayOf(b) ? 0 : runwayOf(a) > runwayOf(b) ? -1 : 1);
+/** The candidates with the longest runway, an unbounded one longest of all, ties kept in the set's order. */
+const longestOf = <T extends Pick<RecordCandidate, 'runwayMs'>>(list: T[]): T[] => list.filter((c) => runwayOf(c) === Math.max(...list.map(runwayOf)));
 
 /**
  * The router's fit of a pin on a candidate, over the plan windows the model draws: each window's runway is the time
@@ -462,7 +461,7 @@ function fitOf(c: RecordCandidate, at: number, ceiling: number, model: string, t
     projections.push(fact(`projection_${w}`, x.projection, 'percent'));
     rewrites.push(fact(`rewrite_${w}`, rewrite[w] ?? 0, 'percent'));
     reserved.push(fact(`reserved_${w}`, x.reserved, 'percent'));
-    const predicted = x.utilization + x.reserved;
+    const predicted = x.utilization + (x.reserved ?? 0);
     const burn = (c.burn[w] ?? 0) + (pinBurn[w] ?? 0);
     const landed = predicted + (rewrite[w] ?? 0) < ceiling;
     lands = lands && landed;
@@ -499,9 +498,10 @@ interface Move {
  * Step 4 as the engine walks it for a live pin, each rule on the facts the record holds: `no` with the fact that kept
  * it, or `fired` with its destinations and the gate's fit table after it, `not_run` for every rule after it. A rule
  * whose reason holds with no sibling to take the pin says so and the walk goes on. A destination is an eligible
- * sibling holding allowance, and the gate answers the fitting ones by their runway, else the one whose rewrite lands
- * with the longest runway, else the whole set, a member at its cap in neither of the first two. The shed rule takes
- * fitting destinations alone, and the spent rule holds a request whose spent window resets within the retry bound.
+ * sibling holding allowance, and the gate answers the fitting ones, else those whose rewrite lands with the longest
+ * runway, else the whole set, a member at its cap in neither of the first two, each in the set's order for the
+ * strategy to pick from. The shed rule takes the fitting destinations with the longest runway alone, and the spent
+ * rule holds a request whose spent window resets within the retry bound.
  */
 function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, source: RecordCandidate | undefined, pin: RecordPin): Move {
   const r = spec.request;
@@ -527,17 +527,20 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
       return read;
     });
     // The story names where a move lands, so a rival the gate would answer ahead of it reads full, as the cap passes
-    // it over.
+    // it over: a better order, or a longer runway where the order narrows to the longest.
     const chosen = spec.kind === 'moved' ? reached.find((c) => c.accountId === spec.accountId) : undefined;
     if (chosen) {
       const order = (c: RecordCandidate) => (c.fit === 'fits' ? 0 : c.fit === 'rewrite_only' ? 1 : 2);
-      for (const c of reached) if (c !== chosen && (order(c) < order(chosen) || (order(c) === 1 && order(chosen) === 1))) c.inFlight = c.inFlightCap;
+      const narrows = (c: RecordCandidate) => order(c) === 1 || (order(c) === 0 && fitsOnly);
+      for (const c of reached) if (c !== chosen && (order(c) < order(chosen) || (order(c) === order(chosen) && narrows(c) && runwayOf(c) > runwayOf(chosen)))) c.inFlight = c.inFlightCap;
     }
     const open = (c: RecordCandidate) => c.inFlight < c.inFlightCap;
-    const fits = reached.filter((c) => c.fit === 'fits' && open(c)).sort(longestFirst);
-    const rewriteOnly = reached.filter((c) => c.fit === 'rewrite_only' && open(c)).sort(longestFirst).slice(0, 1);
+    // Each order keeps the set's order for the strategy to pick from. The shed rule and the rewrite-only order narrow
+    // to the longest runway, ties kept.
+    const fits = reached.filter((c) => c.fit === 'fits' && open(c));
+    const rewriteOnly = longestOf(reached.filter((c) => c.fit === 'rewrite_only' && open(c)));
     const left = reached.filter((c) => c.fit !== 'ending');
-    const [verdict, answered] = fits.length ? ['fits', fits] : fitsOnly ? ['none', []] : rewriteOnly.length ? ['rewrite_only', rewriteOnly] : left.length ? ['least_bad', left] : ['none', []];
+    const [verdict, answered] = fits.length ? ['fits', fitsOnly ? longestOf(fits) : fits] : fitsOnly ? ['none', []] : rewriteOnly.length ? ['rewrite_only', rewriteOnly] : left.length ? ['least_bad', left] : ['none', []];
     return { answered, step: step('fit', verdict, reads.flatMap((x) => x.facts)) };
   };
   // The rule fires where the gate answers a sibling it keeps holding allowance. Otherwise its line says it found
@@ -722,24 +725,35 @@ function capTheRivals(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed)
   if (!winner || spec.request.kind === 'count_tokens') return;
   const top = pool.strategy === 'pace' ? winner.pace?.score : undefined;
   const outscores = (c: RecordCandidate) => top !== undefined && c.pace !== null && c.pace.score > top;
-  const unfit = winner.fit !== null && winner.fit !== 'fits';
+  // A move's gate reads its own fits later in the walk, so only a placement's choice is held to the fresh fit here.
+  const fits = (c: RecordCandidate) => spec.kind === 'placed' && freshFitOf(spec, c, pool).verdict === 'fits';
+  const unfit = spec.kind === 'placed' && !fits(winner);
   for (const c of candidates) {
     if (c === winner || c.obstacle !== null || c.accountId === spec.from) continue;
     const picked = !spec.rung && (tierBefore(c.tier, winner.tier) || (tierKey(c.tier) === tierKey(winner.tier) && outscores(c)));
-    if (picked || (unfit && c.fit === 'fits')) c.inFlight = c.inFlightCap;
+    if (picked || (unfit && fits(c))) c.inFlight = c.inFlightCap;
   }
 }
 
+/** The burn a fresh session brings: the prior on the story's hand-written decisions, none on a drawn one. */
+const priorOf = (spec: Spec) => (spec.story ? PRIOR_BURN : {});
+
+/** A fresh session's fit on a member, the body's rewrite with the prior's burn. */
+const freshFitOf = (spec: Spec, c: RecordCandidate, pool: PoolSeed) => fitOf(c, spec.at, pool.windowCeiling, spec.request.canonicalModel, bodyTokensOf(spec.request), priorOf(spec), false);
+
 /**
- * The no-fit partition's reading of a story placement's eligible members with a fresh session's prior. A drawn
- * placement reads none, since its account was drawn with its request rather than picked past the gate, so its
- * partition keeps every member.
+ * The no-fit partition's reading of a placement's members, drawn or written by hand, as the engine reads it: every
+ * member the spent and cap partitions left, or the whole set the cap holds for a slot, and none of the members they
+ * dropped. A drawn token count and a drawn cohort hold read none: the request generator draws their account without
+ * the fit, and neither takes a slot the cap could keep that choice by.
  */
 function readPlacementFits(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed): void {
-  if (!spec.story) return;
-  for (const c of candidates) {
-    if (c.obstacle !== null) continue;
-    const read = fitOf(c, spec.at, pool.windowCeiling, spec.request.canonicalModel, bodyTokensOf(spec.request), PRIOR_BURN, false);
+  const r = spec.request;
+  if (!spec.story && (r.kind === 'count_tokens' || spec.kind === 'held')) return;
+  const left = candidates.filter((c) => c.obstacle === null && keepsSpent(c, pool, r));
+  const free = left.filter((c) => r.kind === 'count_tokens' || c.inFlight < c.inFlightCap);
+  for (const c of free.length > 0 ? free : left) {
+    const read = freshFitOf(spec, c, pool);
     c.fit = read.verdict;
     c.runwayMs = read.runwayMs;
     c.binding = read.binding;
@@ -751,6 +765,13 @@ const spentForFable = (utilization: (window: string) => number | null | undefine
 
 /** One reading of whether extra usage funds a spent member, so the partition and a run-out's servable set agree. */
 const fundedBy = (pool: PoolSeed, credits: RecordCandidate['credits']) => pool.overagePolicy === 'allow' && credits !== null && credits.blocked === null;
+
+/**
+ * Whether the spent partition keeps a member: a request of a model with no week of its own never drops one, and a
+ * Fable request keeps a spent member only where an `allow` pool reads its extra usage unblocked. A member without a
+ * credits reading is not funded.
+ */
+const keepsSpent = (c: RecordCandidate, pool: PoolSeed, r: RequestLog) => !r.canonicalModel.includes('fable') || !spentForFable((w) => c.windows[w]?.utilization) || fundedBy(pool, c.credits);
 
 /**
  * The four partitions' facts in the engine's order, and the members left after them, which the step's verdict reads.
@@ -766,11 +787,8 @@ function narrowed(set: RecordCandidate[], pool: PoolSeed, r: RequestLog, moving:
     } else facts.push(left.length > 0 ? fact(key, 'fell_through') : fact(key, 0));
   };
   if (r.canonicalModel.includes('fable')) {
-    // A spent member is out rather than passed over, so this partition never falls through. An `allow` pool keeps one
-    // whose extra usage the record reads as unblocked, and a member without a credits reading is not funded.
-    const spent = (c: RecordCandidate) => spentForFable((w) => c.windows[w]?.utilization);
-    const funded = (c: RecordCandidate) => fundedBy(pool, c.credits);
-    const kept = left.filter((c) => !spent(c) || funded(c));
+    // A spent member is out rather than passed over, so this partition never falls through.
+    const kept = left.filter((c) => keepsSpent(c, pool, r));
     facts.push(fact('spent', left.length - kept.length));
     left = kept;
   } else facts.push(fact('spent', 'off'));
@@ -846,8 +864,8 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
   const candidates = spec.kind === 'refused' ? [] : candidatesOf(spec, pool);
   // A hold for a spent window's reset ends the walk at the spent rule, so it reads no placement's partitions.
   const resetHold = spec.kind === 'held' && spec.hold?.place === 'reset';
-  if ((spec.kind === 'placed' || spec.kind === 'held' || spec.kind === 'exhausted') && !resetHold) readPlacementFits(spec, candidates, pool);
   if (spec.kind === 'placed' || spec.kind === 'moved') capTheRivals(spec, candidates, pool);
+  if ((spec.kind === 'placed' || spec.kind === 'held' || spec.kind === 'exhausted') && !resetHold) readPlacementFits(spec, candidates, pool);
   const portable = r.client !== 'other';
   const pinKey = pinKeyOf(r);
   const pinning = pool.affinityTtlSeconds > 0 && r.sessionId !== null && (typeof spec.pin === 'object' || spec.pin === 'none');
@@ -1307,10 +1325,10 @@ const sessionId = (prefix: string) => REQUESTS.find((r) => r.sessionId?.startsWi
  * and the walk stops before the current pin.
  */
 const ROUND_PINS: RoundPin[] = [
-  { agentId: 'main', burn: 0.0034, cold: true, keyId: 'desktop', lastInputTokens: 22_000, marked: true, model: 'claude-sonnet-4-6', note: null, planned: 'primary', sessionId: sessionId('0d588de5'), skip: null },
-  { agentId: 'e90b', burn: 0.0142, cold: false, keyId: 'desktop', lastInputTokens: 88_000, marked: true, model: 'claude-sonnet-4-6', note: null, planned: 'primary', sessionId: sessionId('c64358b5'), skip: null },
-  { agentId: 'e90b', burn: 0.0052, cold: false, keyId: 'desktop', lastInputTokens: 41_000, marked: false, model: 'claude-sonnet-4-6', note: 'current', planned: null, sessionId: sessionId('407dd39b'), skip: null },
-  { agentId: 'c21e', burn: 0.0071, cold: false, keyId: 'desktop', lastInputTokens: 64_000, marked: false, model: 'claude-sonnet-4-6', note: null, planned: null, sessionId: sessionId('76ddb35b'), skip: null },
+  { agentId: 'main', burn: 0.0034, cold: true, keyId: 'desktop', lastInputTokens: 22_000, marked: true, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('0d588de5'), skip: null },
+  { agentId: 'e90b', burn: 0.0142, cold: false, keyId: 'desktop', lastInputTokens: 88_000, marked: true, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('c64358b5'), skip: null },
+  { agentId: 'e90b', burn: 0.0052, cold: false, keyId: 'desktop', lastInputTokens: 41_000, marked: false, model: 'claude-sonnet-4-6', note: 'current', sessionId: sessionId('407dd39b'), skip: null },
+  { agentId: 'c21e', burn: 0.0071, cold: false, keyId: 'desktop', lastInputTokens: 64_000, marked: false, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('76ddb35b'), skip: null },
 ];
 
 /**
@@ -1319,8 +1337,8 @@ const ROUND_PINS: RoundPin[] = [
  * primary's.
  */
 const NO_RUNWAY_PINS: RoundPin[] = [
-  { agentId: 'main', burn: 0.052, cold: true, keyId: 'desktop', lastInputTokens: 43_000, marked: false, model: 'claude-sonnet-4-6', note: null, planned: null, sessionId: sessionId('bcc805b6'), skip: 'no_runway' },
-  { agentId: 'main', burn: 0.033, cold: false, keyId: 'desktop', lastInputTokens: 52_300, marked: false, model: 'claude-sonnet-5-5', note: 'current', planned: null, sessionId: sessionId('d7167642'), skip: 'no_runway' },
+  { agentId: 'main', burn: 0.052, cold: true, keyId: 'desktop', lastInputTokens: 43_000, marked: false, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('bcc805b6'), skip: 'no_runway' },
+  { agentId: 'main', burn: 0.033, cold: false, keyId: 'desktop', lastInputTokens: 52_300, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: sessionId('d7167642'), skip: 'no_runway' },
 ];
 
 const roundOfPins = (pins: RoundPin[]): ShedRound => ({ marks: pins.filter((p) => p.marked).map((p) => ({ agentId: p.agentId, keyId: p.keyId, model: p.model, sessionId: p.sessionId })), pins });
@@ -1339,6 +1357,9 @@ function storySpecs(): Spec[] {
   const placedStatic: Placement = { depth: 2, prefixTokens: 31_200, rung: 'static' };
   // Secondary's sessions burn its 5-hour window at their sum while the round runs and its marks are pending.
   const roundBurn = { secondary: { five_hour: round5(ROUND_PINS.reduce((n, p) => n + p.burn, 0)) } };
+  // The Overflow workspace sits at its in-flight cap through the round and the move. With a free slot an API-key
+  // sibling fits with no end to its runway, the longest of all, so the shed rule would plan and move both marks there.
+  const overflowFull = { overflow: 16 };
   // Nightly's last minute before its spent window resets, as the reset hold reads it.
   const spentNightly = (when: number) => oauthWindows('nightly', when, () => OLDER_FACTOR).map((w) => (w.id === '5h' ? { ...w, utilization: 1 } : w));
   return [
@@ -1348,11 +1369,12 @@ function storySpecs(): Spec[] {
     at('req_0b7c2d94-e61', 1, 1, t(10, 59, 30), 'renewed', 'secondary', { pin: live('probe', 31_000, 'untouched') }),
     // Secondary's 5-hour window opened at 10:42 and runs hot, so its projection to the reset reads past the pool's
     // ceiling: this renewal runs the round, which marks two pins.
-    at('req_1eaa9bc1-a18', 1, 1, t(11, 0), 'renewed', 'secondary', { burns: roundBurn, pin: live('continues_pin', 30_000), round: roundOfPins(ROUND_PINS) }),
+    at('req_1eaa9bc1-a18', 1, 1, t(11, 0), 'renewed', 'secondary', { burns: roundBurn, inFlight: overflowFull, pin: live('continues_pin', 30_000), round: roundOfPins(ROUND_PINS) }),
     // A marked pin moves at its next request inside the dwell, to the sibling where it fits.
     at('req_868264bc-611', 1, 1, t(11, 8, 30), 'moved', 'primary', {
       burns: roundBurn,
       from: 'secondary',
+      inFlight: overflowFull,
       pin: live('continues_pin', 560_000),
       pinFigures: { burn: { five_hour: 0.0142, seven_day: 0.0016 }, tokens: 88_000 },
       prefix: { secondary: { content: message('c64358b5', 10, 72_000, t(11, 8, 30), t(11, 6, 2), FIVE_MINUTES), contentMatch: null } },
@@ -1580,16 +1602,26 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
   const round = roundOf(roundOfPins(pins), Number(value('excess')), pool);
   // A planned move books its rewrite and its burn on the destination for the rest of the walk, as the router's plan does.
   const planned = new Map<string, RecordCandidate>();
+  const scoreOf = (c: RecordCandidate) => c.pace?.score ?? 0;
+  // A mark's destination as its own move would read it: a free eligible sibling holding allowance that the pin fits
+  // to the horizon, narrowed to the longest runway, the pool's strategy breaking a tie by tier and then by score.
   const read = (p: RoundPin) => {
-    if (p.planned === null) return { rewrite: null, runway: null };
-    const base = planned.get(p.planned) ?? structuredClone(record.candidates.find((c) => c.accountId === p.planned)!);
-    const burn = { [window]: p.burn };
-    const fit = fitOf(base, at, pool.windowCeiling, p.model, p.lastInputTokens, burn, true);
+    if (!p.marked) return { planned: null, rewrite: null, runway: null };
+    const windows = drawnWindows(p.model);
+    const siblings = record.candidates.filter((c) => c.obstacle === null && c.accountId !== accountId && c.inFlight < c.inFlightCap && (c.kind === 'api_key' || windows.every((w) => (c.windows[w]?.utilization ?? 0) < 1)));
+    const reads = siblings.map((c) => {
+      const base = planned.get(c.accountId) ?? structuredClone(c);
+      return { base, fit: fitOf(base, at, pool.windowCeiling, p.model, p.lastInputTokens, { [window]: p.burn }, true) };
+    });
+    const tied = longestOf(reads.filter((x) => x.fit.verdict === 'fits').map((x) => ({ ...x, runwayMs: x.fit.runwayMs })));
+    const ranked = [...tied].sort((x, y) => (tierBefore(x.base.tier, y.base.tier) ? -1 : tierBefore(y.base.tier, x.base.tier) ? 1 : pool.strategy === 'pace' ? scoreOf(y.base) - scoreOf(x.base) : 0));
+    const chosen = ranked[0];
+    if (!chosen) return { planned: null, rewrite: null, runway: null };
     const rewrite = rewriteOf(p.lastInputTokens, p.model);
-    for (const [w, x] of Object.entries(rewrite)) if (base.windows[w]) base.windows[w].reserved = round5(base.windows[w].reserved + x);
-    base.burn = { ...base.burn, [window]: (base.burn[window] ?? 0) + p.burn };
-    planned.set(p.planned, base);
-    return { rewrite: rewrite[window] ?? null, runway: fit.runwayMs };
+    for (const [w, x] of Object.entries(rewrite)) if (chosen.base.windows[w]) chosen.base.windows[w].reserved = round5((chosen.base.windows[w].reserved ?? 0) + x);
+    chosen.base.burn = { ...chosen.base.burn, [window]: (chosen.base.burn[window] ?? 0) + p.burn };
+    planned.set(chosen.base.accountId, chosen.base);
+    return { planned: chosen.base.accountId, rewrite: rewrite[window] ?? null, runway: chosen.fit.runwayMs };
   };
   return {
     accountId,
@@ -1609,8 +1641,8 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
       pins: pins.map((p) => {
         const figures = read(p);
         return {
-          agent_id: p.agentId, burn: p.burn, cold: p.cold, key_id: p.keyId, last_input_tokens: p.lastInputTokens, marked: p.marked, model: p.model, note: p.note, per_rewrite: round5(p.burn / p.lastInputTokens),
-          planned: p.planned, rewrite: figures.rewrite, runway_ms: figures.runway, session_id: p.sessionId, skip: p.skip,
+          agent_id: p.agentId, burn: p.burn, cold: p.cold, key_id: p.keyId, last_input_tokens: p.lastInputTokens, marked: p.marked, model: p.model, note: p.note, per_rewrite: Number((p.burn / p.lastInputTokens).toPrecision(7)),
+          planned: figures.planned, rewrite: figures.rewrite, runway_ms: figures.runway, session_id: p.sessionId, skip: p.skip,
         };
       }),
       projection: source?.projection ?? null,
@@ -1642,18 +1674,28 @@ function markCleared(): EventSeed[] {
 }
 
 /**
- * The bookings a request's end released with no usage to replace them: an attempt the upstream refused ends its
- * booking when its answer lands.
+ * The words a request's end reports for its booking when no usage replaced it: a client gone before the answer, the
+ * router out of accounts, a stream that broke, or an answer the upstream refused.
+ */
+const endCauseOf = (r: RequestLog) => (r.outcome === 'canceled' ? 'canceled' : r.outcome === 'exhausted' ? 'exhausted' : r.outcome === 'incomplete' || r.errorCode === 'stream_undecodable' ? 'transport_error' : 'refused');
+
+/**
+ * The bookings a request's end released with no usage to replace them, one per request at its end. A later placement
+ * or move, a failover's among them, replaces the request's booking, and a renewal books none and leaves it.
  */
 function expiredReservations(): EventSeed[] {
-  return [...DECISIONS.values()].flatMap((record) => {
-    const booked = record.outcome.reservation;
-    const r = requestById.get(record.requestId);
-    const attempt = r?.attempts[record.request.attempt - 1];
-    if (!booked || !attempt || attempt.upstreamStatus === 200 || attempt.upstreamStatus === null) return [];
-    const ended = Date.parse(attempt.startedAt) + (attempt.durationMs ?? 0);
-    const detail = { age_ms: ended - Date.parse(record.request.at), attempt: record.request.attempt, cause: 'refused', shares: booked.rewrite };
-    return [{ accountId: booked.accountId, at: iso(ended), detail, kind: 'reservation_expired', requestId: record.requestId }];
+  const booked = new Map<string, DecisionRecord | null>();
+  for (const record of [...DECISIONS.values()].sort((x, y) => x.seq - y.seq)) {
+    if (record.outcome.kind === 'placed' || record.outcome.kind === 'moved') booked.set(record.requestId, record.outcome.reservation === null ? null : record);
+  }
+  return [...booked.values()].flatMap((record) => {
+    const booking = record?.outcome.reservation;
+    const r = record ? requestById.get(record.requestId) : undefined;
+    const last = r?.attempts[r.attempts.length - 1];
+    if (!record || !booking || !r || !last || r.outcome === 'succeeded') return [];
+    const ended = Date.parse(last.startedAt) + (last.durationMs ?? 0);
+    const detail = { age_ms: ended - Date.parse(record.request.at), attempt: record.request.attempt, cause: endCauseOf(r), shares: booking.rewrite };
+    return [{ accountId: booking.accountId, at: iso(ended), detail, kind: 'reservation_expired', requestId: record.requestId }];
   });
 }
 

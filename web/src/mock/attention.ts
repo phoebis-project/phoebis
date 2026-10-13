@@ -1,5 +1,5 @@
 import type { AttentionItem } from '@/api/types';
-import { accountById } from './accounts';
+import { ACCOUNTS, accountById } from './accounts';
 import { KEYS, POOLS } from './pools';
 import { REQUESTS } from './requests';
 import { ROUTING_EVENTS } from './routingLog';
@@ -75,19 +75,37 @@ function roundsWithoutRunway(poolId: string): Pick<AttentionItem, 'detail' | 'si
   return { detail: { accounts: sorted(rounds.map((e) => e.accountId)), rounds: rounds.length, setting: ['window_ceiling'], setting_values: { window_ceiling: ceiling } }, since: rounds[0].at };
 }
 
-const secondaryWalls = walls('secondary');
-const nightlyMoves = spentDestination('nightly');
-const allRounds = roundsWithoutRunway('all');
+const CONDITION_ORDER: AttentionItem['kind'][] = ['wall_reached', 'destination_spent', 'shed_no_runway'];
 
 /**
- * One item per kind but a failed certificate reload, on the story's accounts, pools, keys and proxy listener, in the
- * route's order: jobs exhausted from the runner's first request after its one member spent the day's budget, a client
- * build refused on the laptop key, the routing state writer keeping its writes in memory, legacy's lapsed credential,
- * the Overflow workspace out of funding as its account reads, legacy's refreshes failing, the proxy listener's
- * certificate 12 days from its end, a priced record of the jobs pool's one member parked in the ledger file, the
- * backoff secondary's poll is in, secondary's wall after the 11:00 round, nightly spent after the least-bad move onto
- * it, and the all pool's round that found no destination with runway. The three routing conditions read the routing
- * log's events as the ledger folds them.
+ * The three routing conditions as the reader builds them, one per subject the fold holds: every OAuth account for the
+ * walls and the spent destinations, every pool for the rounds without runway. The route lists them by kind, then by
+ * when each began, then by subject.
+ */
+const CONDITIONS: AttentionItem[] = [
+  ...ACCOUNTS.filter((a) => a.kind === 'oauth').flatMap((a) => {
+    const held = walls(a.id);
+    return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), ...held, kind: 'wall_reached' as const }] : [];
+  }),
+  ...ACCOUNTS.filter((a) => a.kind === 'oauth').flatMap((a) => {
+    const held = spentDestination(a.id);
+    return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), ...held, kind: 'destination_spent' as const }] : [];
+  }),
+  ...POOLS.flatMap((p) => {
+    const held = roundsWithoutRunway(p.id);
+    return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...held, kind: 'shed_no_runway' as const, link: { id: p.id, page: 'pools' as const }, pools: [p.id], subject: { id: p.id, label: p.name, type: 'pool' as const } }] : [];
+  }),
+].sort((x, y) => CONDITION_ORDER.indexOf(x.kind) - CONDITION_ORDER.indexOf(y.kind) || Date.parse(x.since) - Date.parse(y.since) || x.subject.id.localeCompare(y.subject.id));
+
+/**
+ * One item per kind but a failed certificate reload and a wall, which holds on two accounts, on the story's accounts,
+ * pools, keys and proxy listener, in the route's order: jobs exhausted from the runner's first request after its one
+ * member spent the day's budget, a client build refused on the laptop key, the routing state writer keeping its writes
+ * in memory, legacy's lapsed credential, the Overflow workspace out of funding as its account reads, legacy's refreshes
+ * failing, the proxy listener's certificate 12 days from its end, a priced record of the jobs pool's one member parked
+ * in the ledger file, the backoff secondary's poll is in, nightly's wall at 12:01 and secondary's after the 11:00
+ * round, nightly spent after the least-bad move onto it, and the all pool's round that found no destination with
+ * runway. The three routing conditions read the routing log's events as the ledger folds them.
  */
 export const ATTENTION: AttentionItem[] = [
   ...(jobsExhausted
@@ -166,9 +184,5 @@ export const ATTENTION: AttentionItem[] = [
     kind: 'poll_backoff',
     since: secondaryPoll?.backoffSince ?? ago(42 * MINUTE),
   },
-  ...(secondaryWalls ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount('secondary'), ...secondaryWalls, kind: 'wall_reached' as const }] : []),
-  ...(nightlyMoves ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount('nightly'), ...nightlyMoves, kind: 'destination_spent' as const }] : []),
-  ...(allRounds
-    ? [{ ...ATTENTION_ITEM_SAMPLE, ...allRounds, kind: 'shed_no_runway' as const, link: { id: 'all', page: 'pools' as const }, pools: ['all'], subject: { id: 'all', label: 'all', type: 'pool' as const } }]
-    : []),
+  ...CONDITIONS,
 ];

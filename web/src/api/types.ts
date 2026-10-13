@@ -19,7 +19,7 @@ export interface RateLimitWindow {
   periodHours: number;
   /** Observed as of `observedAt`; may be stale for accounts that cannot refresh. */
   observedAt: string;
-  /** The prediction plus the burn to `horizon`; null for a window with no reading or an account in no pool. */
+  /** The prediction plus the burn to `horizon`. Null for a window with no reading or an account in no pool. */
   projection: number | null;
   /** Null while the sampler has seen a utilization but no reset time for this window. */
   resetsAt: string | null;
@@ -335,7 +335,10 @@ export interface PoolMember {
   budgetMonthlyUsd: number | null;
   /** The router's end for a member at a budget: the latest end among the budgets reached; null while none is. */
   budgetUntil: string | null;
-  /** The 7-day window's share the sessions on the member burn per hour, null on an API-key member. */
+  /**
+   * The 7-day window's share the sessions on the member burn per hour, null on an API-key member or one with no 7-day
+   * reading.
+   */
   burn: number | null;
   eligible: MemberEligibility;
   kind: AccountKind;
@@ -1060,8 +1063,11 @@ export interface RecordCandidate {
   kind: 'api_key' | 'oauth';
   obstacle: { name: string; reason: string | null; until: string | null; window: string | null } | null;
   overage: { observedAt: string; reset: string | null; since: string; source: string } | null;
-  /** `score` is the spare rate: the remaining share per hour less `burn`, the account's burn on `window`. */
-  pace: { burn: number; deadline: string | null; end: string | null; hours: number | null; remaining: number; reset: string | null; score: number; window: string | null } | null;
+  /**
+   * `score` is the spare rate: the remaining share per hour less `burn`, the account's burn on `window`. `burn` is null
+   * on a version 1 record, which read none.
+   */
+  pace: { burn: number | null; deadline: string | null; end: string | null; hours: number | null; remaining: number; reset: string | null; score: number; window: string | null } | null;
   partition: string | null;
   planTier: string | null;
   /**
@@ -1078,8 +1084,11 @@ export interface RecordCandidate {
   term: { cancelled: boolean; ended: boolean; endsAt: string | null; since: string | null; trialEndsAt: string | null; windingDown: boolean } | null;
   tier: [number, number, number];
   verdict: string;
-  /** `projection` and `horizon` are null where nothing is projected, and `reserved` sums the live reservations. */
-  windows: Record<string, { ageMs: number; ahead: number | null; horizon: string | null; observedAt: string; projection: number | null; reserved: number; reset: string | null; source: string; utilization: number }>;
+  /**
+   * `projection` and `horizon` are null where nothing is projected, and `reserved` sums the live reservations, null on
+   * a version 1 record, which booked none.
+   */
+  windows: Record<string, { ageMs: number; ahead: number | null; horizon: string | null; observedAt: string; projection: number | null; reserved: number | null; reset: string | null; source: string; utilization: number }>;
 }
 
 /** One step of the rule walk in the engine's order, with the facts it read. */
@@ -1128,7 +1137,7 @@ export interface RecordOutcome {
   hold: RecordHold | null;
   inOverage: boolean;
   kind: DecisionKind;
-  /** The shed mark this decision cleared, with the healing projection on `healed`; null when it cleared none. */
+  /** The shed mark this decision cleared, null when it cleared none. `projection` is the reading that healed it. */
   markCleared: { markedAt: string; markedOn: string; markedWindow: string; projection: number | null; reason: string } | null;
   /** In the routing task's emit order: two for a replaced expired pin, `pin_expired` then `pin_created`. */
   pinEvents: { kind: string; reason: string | null }[];

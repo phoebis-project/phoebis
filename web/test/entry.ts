@@ -37,4 +37,6 @@ export { burnOf, groupsOf } from '@/mock/analytics';
 export { cellsFor, PRICES } from '@/mock/catalog';
 export { poolById } from '@/mock/pools';
 export { ALL_ROLLUPS, costSplitOf, requestById, rollups } from '@/mock/requests';
+export { STORY_IDS } from '@/mock/requests';
 export { partitionsOf, placementFactOf } from '@/mock/routingLog';
+export { PRIOR_BURN, rewriteOf } from '@/mock/routingLog';

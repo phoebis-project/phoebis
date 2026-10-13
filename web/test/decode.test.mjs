@@ -476,8 +476,10 @@ test('a candidate decodes its fit figures and an outcome its reservation and its
   assert.deepEqual([c.binding, c.burn, c.fit, c.runwayMs, c.pace.burn], ['five_hour', { five_hour: 0.073, seven_day: 0.0085 }, 'rewrite_only', 7_800_000, 0.0085]);
   assert.deepEqual([c.windows.five_hour.projection, c.windows.five_hour.horizon, c.windows.five_hour.reserved], [0.993, new Date(reset).toISOString(), 0.104]);
   const { binding: _b, burn: _u, fit: _f, runway_ms: _r, ...older } = wire;
-  const [v1] = d.decodeDecisionRecord({ ...body, candidates: [{ ...older, pace: { ...wire.pace, burn: undefined } }], version: 1 }).candidates;
-  assert.deepEqual([v1.binding, v1.burn, v1.fit, v1.runwayMs, v1.pace.burn], [null, {}, null, null, 0], 'a version 1 candidate shows no fit and no runway');
+  const unbooked = Object.fromEntries(Object.entries(wire.windows).map(([name, { reserved: _x, ...w }]) => [name, w]));
+  const [v1] = d.decodeDecisionRecord({ ...body, candidates: [{ ...older, pace: { ...wire.pace, burn: undefined }, windows: unbooked }], version: 1 }).candidates;
+  assert.deepEqual([v1.binding, v1.burn, v1.fit, v1.runwayMs, v1.pace.burn], [null, {}, null, null, null], 'a version 1 candidate shows no fit, no runway and no burn');
+  assert.ok(Object.keys(v1.windows).length > 0 && Object.values(v1.windows).every((w) => w.reserved === null), 'a version 1 window reads no reservation');
   // The pick writes a burn fact after each score fact, which the walk decodes as it decodes every fact.
   const facts = [
     { account_id: null, key: 'strategy', unit: null, value: 'pace' },
