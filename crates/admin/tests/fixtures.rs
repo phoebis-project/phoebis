@@ -155,10 +155,10 @@ const POOL_ROUTE: &str = "PATCH /admin/pools/{id}";
 
 /// The route's answer to every bound the console holds and to one past it: the keepalive policy's, the pool
 /// engine's with its in-flight cap, and the model rule count's.
-/// The burn window and the source dwell are probed at their floor and at their week's ceiling. A probe that sends
-/// another field beside the probed one names it under `with`, so a replay sends the same body. An admitted probe is
-/// written back at once from the list read taken before the probes, so each probe meets the seeded pool, as the
-/// captures after these do.
+/// The burn average, the shed dwell, the window ceiling and the shed cap are probed at both edges of their bounds. A
+/// probe that sends another field beside the probed one names it under `with`, so a replay sends the same body. An
+/// admitted probe is written back at once from the list read taken before the probes, so each probe meets the seeded
+/// pool, as the captures after these do.
 async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
     let pools = json(get(app, "/admin/pools", Some(cookie)).await).await;
     let pool = pools["pools"]
@@ -170,12 +170,12 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
         .clone();
 
     // Each row: the path, the route, the field as the route names it, the value, the body, its restore, and the
-    // other fields the body sends.
+    // other fields the body sends. The value is JSON, since the fractions' bounds are not whole.
     type Row = (
         &'static str,
         &'static str,
         String,
-        u64,
+        Value,
         Value,
         Value,
         Option<Value>,
@@ -196,7 +196,7 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
                 "/admin/pools/main",
                 POOL_ROUTE,
                 format!("keepalive.{field}"),
-                value,
+                j!(value),
                 j!({ "keepalive": { field: value } }),
                 j!({ "keepalive": { field: pool["keepalive"][field] } }),
                 None,
@@ -204,8 +204,8 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
         }
     }
     for (field, values) in [
-        ("burn_window_seconds", &[60, 59, 604_800, 604_801][..]),
-        ("source_dwell_seconds", &[60, 59, 604_800, 604_801]),
+        ("burn_average_seconds", &[600_u64, 599, 7_200, 7_201][..]),
+        ("shed_dwell_seconds", &[300, 299, 7_200, 7_201]),
         ("retry_in_place_seconds", &[0, 300, 301]),
         ("overage_move_grace_minutes", &[0, 300, 301]),
         ("wind_down_minutes", &[0, 10_080, 10_081]),
@@ -216,21 +216,37 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
                 "/admin/pools/main",
                 POOL_ROUTE,
                 field.into(),
-                value,
+                j!(value),
                 j!({ field: value }),
                 j!({ field: pool[field] }),
                 None,
             ));
         }
     }
-    for count in [256, 257] {
+    for (field, values) in [
+        ("window_ceiling", [0.5, 0.49, 1.0, 1.01]),
+        ("shed_cap", [0.1, 0.09, 1.0, 1.01]),
+    ] {
+        for value in values {
+            table.push((
+                "/admin/pools/main",
+                POOL_ROUTE,
+                field.into(),
+                j!(value),
+                j!({ field: value }),
+                j!({ field: pool[field] }),
+                None,
+            ));
+        }
+    }
+    for count in [256_usize, 257] {
         let rule = j!({ "pattern": "claude-haiku-*", "not": true });
         table.push((
             "/admin/pools/main",
             POOL_ROUTE,
             "model_rules".into(),
-            count,
-            j!({ "model_rules": vec![rule; count as usize] }),
+            j!(count),
+            j!({ "model_rules": vec![rule; count] }),
             j!({ "model_rules": pool["model_rules"] }),
             None,
         ));
@@ -413,7 +429,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
             trial_ends_at: None,
         },
     ).unwrap();
-    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"members":[{"account_id":"business","priority":0,"budget_monthly_usd":30.0},{"account_id":"direct","priority":1,"budget_monthly_usd":50.0}],"keepalive":{"enabled":true},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
+    // A cap under a quarter, so the pool answers one warning and the console draws a non-empty list.
+    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"shed_cap":0.2,"members":[{"account_id":"business","priority":0,"budget_monthly_usd":30.0},{"account_id":"direct","priority":1,"budget_monthly_usd":50.0}],"keepalive":{"enabled":true},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
     let created = json(post(app, "/admin/keys", r#"{"id":"desktop","label":"Desktop","pool_id":"main","model_rules":[{"pattern":"claude-opus-*","not":true}],"model_rules_mode":"extend"}"#, Some(&cookie)).await).await;
     let key_secret = created["secret"]
         .as_str()
@@ -1813,7 +1830,9 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
         .unwrap();
     assert!(matches!(refused.result, SelectResult::Refused(_)));
 
-    // The kinds no report or route of this harness writes, each as its writer builds it.
+    // The kinds no report or route of this harness writes, each as its writer builds it: the harness's router prices
+    // no burn, so it marks no pin and books no reservation, and the round, its mark leaving with the pin's move and a
+    // booking its request ended without usage are seeded here.
     let at = |minute: i64| hour_ago + minute * 60_000;
     let routed = [
         RouterEvent::SheddingRound {
@@ -1866,6 +1885,31 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
                 dwell_until: at(2) + 900_000,
             }),
             at: at(2),
+        },
+        RouterEvent::MarkCleared {
+            account_id: "business".into(),
+            key_id: "desktop".into(),
+            session_id: "s0".into(),
+            agent_id: "main".into(),
+            model: "claude-sonnet-5".into(),
+            reason: "moved",
+            marked_at: at(2),
+            marked_on: "business".into(),
+            marked_window: "five_hour".into(),
+            projection: None,
+            at: at(7),
+        },
+        RouterEvent::ReservationExpired {
+            account_id: "direct".into(),
+            request_id: "r-failover".into(),
+            attempt: 1,
+            cause: "canceled",
+            shares: std::collections::BTreeMap::from([
+                ("five_hour".to_string(), 0.004),
+                ("seven_day".to_string(), 0.0007),
+            ]),
+            age_ms: 42_000,
+            at: at(18),
         },
         RouterEvent::WarmPrefixExpired {
             account_id: "direct".into(),

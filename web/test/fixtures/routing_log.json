@@ -1,10 +1,10 @@
 {
-  "route": "GET /admin/routing-log?from=2026-10-11T11:16:40Z&to=2026-10-11T12:17:40Z&kinds=exhausted,held,moved,placed,refused,renewed,probe,account_state_changed,budget_period_ended,budget_reached,catalog_changed,cooldown_cleared,cooldown_set,fast_credits_changed,ledger_gap,model_permitted,model_rejected,overage_ended,overage_started,pin_created,pin_expired,pin_migrated,pin_released,poll_backoff_ended,poll_backoff_started,refresh_failed,refresh_succeeded,refresh_uncertain,registry_changed,router_started,shedding_round,warm_prefix_expired,wind_down_started,window_reset,window_spent&limit=200",
+  "route": "GET /admin/routing-log?from=2026-10-11T11:16:40Z&to=2026-10-11T12:17:40Z&kinds=exhausted,held,moved,placed,refused,renewed,probe,account_state_changed,budget_period_ended,budget_reached,catalog_changed,cooldown_cleared,cooldown_set,fast_credits_changed,ledger_gap,mark_cleared,model_permitted,model_rejected,overage_ended,overage_started,pin_created,pin_expired,pin_migrated,pin_released,poll_backoff_ended,poll_backoff_started,refresh_failed,refresh_succeeded,refresh_uncertain,registry_changed,reservation_expired,router_started,shedding_round,warm_prefix_expired,wind_down_started,window_reset,window_spent&limit=200",
   "body": {
     "rows": [
       {
         "type": "event",
-        "id": 37,
+        "id": 39,
         "at": 1791721060000,
         "kind": "router_started",
         "account_id": null,
@@ -309,6 +309,12 @@
         },
         "fact": [
           {
+            "key": "runway",
+            "value": "unbounded",
+            "unit": "text",
+            "entity": null
+          },
+          {
             "key": "pick",
             "value": "only candidate",
             "unit": "text",
@@ -441,7 +447,9 @@
         "hold": {
           "account_id": "business",
           "cohort": null,
-          "bound_ms": 60000
+          "bound_ms": 60000,
+          "reason": "cap",
+          "until": null
         },
         "exhaustion": null,
         "refusal": null,
@@ -609,7 +617,9 @@
         "hold": {
           "account_id": "direct",
           "cohort": null,
-          "bound_ms": 60000
+          "bound_ms": 60000,
+          "reason": "cap",
+          "until": null
         },
         "exhaustion": null,
         "refusal": null,
@@ -665,7 +675,9 @@
         "hold": {
           "account_id": "business",
           "cohort": null,
-          "bound_ms": 60000
+          "bound_ms": 60000,
+          "reason": "cap",
+          "until": null
         },
         "exhaustion": null,
         "refusal": null,
@@ -913,7 +925,10 @@
           "agent_id": "main",
           "from_account": "business",
           "epoch": 5,
-          "reason": "spent"
+          "reason": "spent",
+          "fit": "fits",
+          "runway_ms": null,
+          "binding": null
         }
       },
       {
@@ -1106,8 +1121,7 @@
             "strategy": "pace",
             "affinity_ttl_seconds": 600,
             "overage_policy": "prefer_plan",
-            "shed_ahead_of_pace": null,
-            "select_below_utilization": null,
+            "window_ceiling": 0.95,
             "model_rules": [
               {
                 "pattern": "claude-haiku-*",
@@ -1116,14 +1130,14 @@
             ],
             "body_capture_hours": 24,
             "prefer_subscription": true,
-            "shed_share": 0.5,
-            "burn_window_seconds": 600,
-            "source_dwell_seconds": 900,
+            "shed_cap": 0.2,
+            "burn_average_seconds": 1800,
+            "shed_dwell_seconds": 900,
+            "load_shedding": true,
             "migrate_when_spent": true,
             "warm_sessions": "when_needed",
             "retry_in_place_seconds": 60,
             "in_flight_cap": 16,
-            "pace_floor": 0.05,
             "overage_move_grace_minutes": 30,
             "wind_down_minutes": 30,
             "cache_ttl": {},
@@ -1153,7 +1167,30 @@
       },
       {
         "type": "event",
-        "id": 36,
+        "id": 24,
+        "at": 1791718480000,
+        "kind": "reservation_expired",
+        "account_id": "direct",
+        "key_id": null,
+        "pool_id": null,
+        "session_id": null,
+        "agent_id": null,
+        "model": null,
+        "request_id": "r-failover",
+        "actor": null,
+        "detail": {
+          "attempt": 1,
+          "cause": "canceled",
+          "shares": {
+            "five_hour": 0.004,
+            "seven_day": 0.0007
+          },
+          "age_ms": 42000
+        }
+      },
+      {
+        "type": "event",
+        "id": 38,
         "at": 1791718420000,
         "kind": "registry_changed",
         "account_id": null,
@@ -1177,7 +1214,7 @@
       },
       {
         "type": "event",
-        "id": 35,
+        "id": 37,
         "at": 1791718360000,
         "kind": "refresh_uncertain",
         "account_id": "business",
@@ -1195,7 +1232,7 @@
       },
       {
         "type": "event",
-        "id": 34,
+        "id": 36,
         "at": 1791718300000,
         "kind": "refresh_failed",
         "account_id": "business",
@@ -1213,7 +1250,7 @@
       },
       {
         "type": "event",
-        "id": 33,
+        "id": 35,
         "at": 1791718240000,
         "kind": "refresh_succeeded",
         "account_id": "business",
@@ -1232,7 +1269,7 @@
       },
       {
         "type": "event",
-        "id": 32,
+        "id": 34,
         "at": 1791718180000,
         "kind": "account_state_changed",
         "account_id": "business",
@@ -1252,7 +1289,7 @@
       },
       {
         "type": "event",
-        "id": 31,
+        "id": 33,
         "at": 1791718120000,
         "kind": "ledger_gap",
         "account_id": null,
@@ -1270,7 +1307,7 @@
       },
       {
         "type": "event",
-        "id": 30,
+        "id": 32,
         "at": 1791718060000,
         "kind": "budget_period_ended",
         "account_id": "business",
@@ -1289,7 +1326,7 @@
       },
       {
         "type": "event",
-        "id": 29,
+        "id": 31,
         "at": 1791718000000,
         "kind": "budget_reached",
         "account_id": "business",
@@ -1310,7 +1347,7 @@
       },
       {
         "type": "event",
-        "id": 28,
+        "id": 30,
         "at": 1791717940000,
         "kind": "catalog_changed",
         "account_id": "business",
@@ -1333,7 +1370,7 @@
       },
       {
         "type": "event",
-        "id": 27,
+        "id": 29,
         "at": 1791717880000,
         "kind": "poll_backoff_ended",
         "account_id": "business",
@@ -1352,7 +1389,29 @@
       },
       {
         "type": "event",
-        "id": 26,
+        "id": 23,
+        "at": 1791717820000,
+        "kind": "mark_cleared",
+        "account_id": "business",
+        "key_id": "desktop",
+        "pool_id": null,
+        "session_id": "s0",
+        "agent_id": "main",
+        "model": "claude-sonnet-5",
+        "request_id": null,
+        "actor": null,
+        "detail": {
+          "agent_id": "main",
+          "reason": "moved",
+          "marked_at": 1791717520000,
+          "marked_on": "business",
+          "marked_window": "five_hour",
+          "projection": null
+        }
+      },
+      {
+        "type": "event",
+        "id": 28,
         "at": 1791717760000,
         "kind": "poll_backoff_started",
         "account_id": "business",
@@ -1373,7 +1432,7 @@
       },
       {
         "type": "event",
-        "id": 25,
+        "id": 27,
         "at": 1791717700000,
         "kind": "window_reset",
         "account_id": "business",
@@ -1394,7 +1453,7 @@
       },
       {
         "type": "event",
-        "id": 24,
+        "id": 26,
         "at": 1791717640000,
         "kind": "wind_down_started",
         "account_id": "business",
@@ -1413,7 +1472,7 @@
       },
       {
         "type": "event",
-        "id": 23,
+        "id": 25,
         "at": 1791717580000,
         "kind": "warm_prefix_expired",
         "account_id": "direct",
@@ -1454,15 +1513,16 @@
         "detail": {
           "window": "five_hour",
           "utilization": 0.71,
-          "elapsed_share": 0.5,
-          "ahead": 0.21,
-          "threshold": 0.15,
-          "margin": 0.06,
+          "projection": 0.99,
+          "horizon": 1791719920000,
+          "ceiling": 0.95,
           "unit": "window_share",
-          "burn_window_seconds": 900,
-          "shed_share": 0.5,
+          "burn_average_seconds": 900,
+          "shed_cap": 0.5,
           "burn_sum": 0.12,
+          "excess": 0.06,
           "target": 0.06,
+          "removed": 0.07,
           "warm_sessions": "when_needed",
           "pins": [
             {
@@ -1475,6 +1535,10 @@
               "last_input_tokens": 48100,
               "per_rewrite": 0.004,
               "marked": true,
+              "rewrite": 0.005,
+              "planned": "personal",
+              "runway_ms": 5400000,
+              "skip": null,
               "note": null
             }
           ],
@@ -1486,6 +1550,8 @@
               "model": "claude-sonnet-5"
             }
           ],
+          "outcome": "marked 1",
+          "reason": null,
           "dwell_seconds": 900,
           "dwell_until": 1791718420000,
           "persisted": true

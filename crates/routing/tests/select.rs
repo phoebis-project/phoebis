@@ -86,7 +86,9 @@ struct Pool {
     subagent_placement: SubagentPlacement,
     session_placement: SessionPlacement,
     min_shared_prefix_tokens: u64,
-    shed_ahead: Option<f64>,
+    window_ceiling: f64,
+    /// The row's `shedding.load_shedding`, named beside the ceiling so a case reads its switch at a glance.
+    load_shedding: bool,
     members: Vec<(&'static str, u32)>,
     prefer_subscription: bool,
     kinds: Vec<(&'static str, AccountKind)>,
@@ -104,7 +106,8 @@ impl Default for Pool {
             subagent_placement: SubagentPlacement::ByCohort,
             session_placement: SessionPlacement::ByStrategy,
             min_shared_prefix_tokens: 20_000,
-            shed_ahead: None,
+            window_ceiling: 0.95,
+            load_shedding: true,
             members: vec![("a", 0), ("b", 0), ("c", 0)],
             prefer_subscription: false,
             kinds: vec![],
@@ -198,9 +201,12 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             strategy: pool.strategy,
             affinity_ttl_seconds: pool.affinity,
             overage_policy: pool.policy,
-            shed_ahead_of_pace: pool.shed_ahead,
+            window_ceiling: pool.window_ceiling,
             prefer_subscription: pool.prefer_subscription,
-            shedding: pool.shedding,
+            shedding: Shedding {
+                load_shedding: pool.load_shedding,
+                ..pool.shedding
+            },
             failover: pool.failover,
             affinity: Affinity {
                 mode: pool.mode,
@@ -1061,8 +1067,11 @@ fn a_pin_on_a_depleted_account_is_renewed_rather_than_moved() {
 #[test]
 fn a_round_with_no_fitting_destination_marks_nothing_and_records_no_runway() {
     let s = tiered(Pool {
-        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
+        shedding: Shedding {
+            burn_average_seconds: 600,
+            ..Shedding::default()
+        },
         ..Pool::default()
     });
     // Two cold pins burning 0.5 of the window an hour, so a at 0.94 projects to 1.44 and a round runs, and the burn
@@ -2995,7 +3004,6 @@ fn a_rounds_fitting_destinations_order_by_the_longest_runway_and_then_by_the_str
     // The stored margin column stands until the settings migration drops it, and a set margin shows that nothing
     // reads it: b's week below runs far ahead of its pace and c's behind.
     let s = tiered(Pool {
-        shed_ahead: Some(0.2),
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         ..Pool::default()
     });
@@ -3576,7 +3584,6 @@ fn an_unknown_seven_day_reading_drops_nothing() {
 #[test]
 fn a_spent_window_moves_a_pin_back_to_the_account_that_shed_it_inside_the_dwell() {
     let s = tiered(Pool {
-        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
@@ -4937,7 +4944,7 @@ fn shedding_pools(keys: &[(&str, &str)], members: &[(&str, &str, u32)]) -> Regis
         strategy: Strategy::Priority,
         prefer_subscription: false,
         shedding: Shedding {
-            source_dwell_seconds: 900,
+            shed_dwell_seconds: 900,
             ..Shedding::default()
         },
         ..PoolRow::for_tests(id)
@@ -4976,7 +4983,7 @@ fn with_dwells(s: &RegistrySnapshot, dwells: &[(&str, u64)]) -> RegistrySnapshot
             .cloned()
             .map(|mut pool| {
                 if let Some(&(_, seconds)) = dwells.iter().find(|(id, _)| *id == pool.id) {
-                    pool.shedding.source_dwell_seconds = seconds;
+                    pool.shedding.shed_dwell_seconds = seconds;
                 }
                 pool
             })
@@ -5331,7 +5338,6 @@ fn the_blocker_passes_an_account_far_ahead_of_its_weekly_pace_and_keeps_its_othe
     scenario(
         Pool {
             members: vec![("a", 1), ("b", 0)],
-            shed_ahead: Some(0.8),
             ..Pool::default()
         },
         &|st| {
@@ -11236,7 +11242,6 @@ fn a_drain_move_prefers_a_fitting_sibling() {
 #[test]
 fn a_spent_move_lands_on_an_untiered_sibling_that_reads_least_bad() {
     let s = snapshot(Pool {
-        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
@@ -11320,7 +11325,6 @@ fn an_api_key_sibling_fits_while_its_bucket_holds_room() {
     let run = |bucket: f64, cooling: bool| -> Decided {
         let s = snapshot_with_terms(
             Pool {
-                shed_ahead: Some(0.2),
                 ..b_outranks_c_pool(vec![("b", AccountKind::ApiKey)])
             },
             tier_terms(&["a", "c"]),
@@ -11747,7 +11751,7 @@ fn the_shedding_round_orders_cold_pins_first_then_warm_by_burn_over_rewrite_and_
 }
 
 #[test]
-fn an_unpriced_pin_is_never_marked_and_stays_out_of_the_shed_share_sum() {
+fn an_unpriced_pin_is_never_marked_and_stays_out_of_the_rounds_burn_sum() {
     let s = tiered(shedding_pool(Shedding::default()));
     let guess = |session: &str, warm: bool| PinRow {
         model: "claude-guess".into(),
@@ -11863,7 +11867,6 @@ fn a_pin_on_a_model_the_share_table_does_not_list_burns_nothing_and_is_never_mar
 #[test]
 fn a_move_consumes_the_mark_so_a_pin_returning_inside_the_dwell_renews_in_place() {
     let s = tiered(Pool {
-        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         ..Pool::default()
     });
@@ -12023,7 +12026,6 @@ fn from_load_restores_each_pools_round_time_and_the_marks_from_the_pin_rows() {
 #[test]
 fn a_pin_that_fails_over_off_its_account_leaves_its_mark_with_the_row() {
     let s = tiered(Pool {
-        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         ..Pool::default()
     });
@@ -12216,8 +12218,9 @@ fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
         "0.94 with nothing burning stays under the ceiling"
     );
 
-    let unshared = tiered(shedding_pool(Shedding {
-        shed_share: 0.0,
+    // A cap at its floor bounds the target at a tenth of the burn, which the heaviest pin alone covers.
+    let floored = tiered(shedding_pool(Shedding {
+        shed_cap: 0.1,
         ..Shedding::default()
     }));
     let mut st = rounding(
@@ -12228,20 +12231,31 @@ fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
             .collect(),
     );
     over_a_fitting_b(&mut st, T - 500);
-    assert_eq!(
-        landed(
-            select(
-                &mut st,
-                &unshared,
-                &auxiliary(&unshared, "cold-a", T),
-                &mut rng()
-            )
-            .0
-        ),
-        ("a".into(), None),
-        "a cap of 0 bounds the target at nothing"
+    let d = decide(
+        &mut st,
+        &floored,
+        &auxiliary(&floored, "cold-a", T),
+        &mut rng(),
     );
-    assert!(["cold-a", "cold-b", "cold-c", "cold-d"]
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "a cap at its floor still moves the heaviest pin"
+    );
+    let round = d.shed_round.expect("the round ran").facts;
+    assert!(
+        (round.target - 0.1 * round.burn_sum).abs() < 1e-12 && round.target < round.excess,
+        "the cap, not the excess, sets the target: {round:?}"
+    );
+    assert_eq!(
+        round
+            .marks
+            .iter()
+            .map(|m| m.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["cold-a"]
+    );
+    assert!(["cold-b", "cold-c", "cold-d"]
         .iter()
         .all(|session| !marked(&st, session)));
 }
@@ -12412,7 +12426,7 @@ fn a_shed_pin_never_returns_to_the_account_that_shed_it_within_the_dwell_even_wh
 fn a_compacted_request_on_a_warm_pin_is_first_in_the_order_on_that_request() {
     // A small share: the round marks exactly the first pin in its order.
     let s = tiered(shedding_pool(Shedding {
-        shed_share: 0.1,
+        shed_cap: 0.1,
         ..Shedding::default()
     }));
     let pins = || {
@@ -12576,7 +12590,7 @@ fn a_plan_quota_rounds_mark_moves_a_standard_request_of_the_pin_and_never_a_fast
 fn a_lane_changed_pin_sorts_among_the_cold_ones_in_the_shed_round() {
     // A small share: the round marks exactly the first pin in its order.
     let s = tiered(shedding_pool(Shedding {
-        shed_share: 0.1,
+        shed_cap: 0.1,
         ..Shedding::default()
     }));
     let pins = || {
@@ -13091,7 +13105,10 @@ fn the_shed_line_names_the_projection_and_horizon_of_every_window_the_trigger_re
 #[test]
 fn a_round_fires_on_the_seven_day_projection_over_the_ceiling_and_prices_its_pins_in_the_weeks_share(
 ) {
-    let s = tiered(shedding_pool(Shedding::default()));
+    let s = tiered(shedding_pool(Shedding {
+        burn_average_seconds: 600,
+        ..Shedding::default()
+    }));
     let mut st = two_pins_on_a();
     // The 5-hour window at 0.1 with no reset projects 0.35 at its horizon, under the ceiling. The week at 0.93 takes
     // the pins' 0.05 / 6 an hour over the five hours to its horizon to 0.9717, over it, so the round reads the week.
@@ -14272,7 +14289,6 @@ fn a_four_member_record_serializes_under_twelve_kilobytes() {
         &snapshot_over(
             Pool {
                 strategy: Strategy::Pace,
-                shed_ahead: Some(0.8),
                 members: vec![("a", 0), ("b", 0), ("c", 1), ("d", 1)],
                 failover: Failover {
                     in_flight_cap: 1,
@@ -14902,7 +14918,6 @@ fn a_pace_pick_names_its_gap_over_the_runner_up() {
 fn a_move_whose_destination_failed_the_gate_reads_its_verdict_and_runway_on_the_row() {
     let s = snapshot_over_terms(
         Pool {
-            shed_ahead: Some(0.8),
             members: vec![("a", 0), ("b", 1), ("c", 2), ("d", 3)],
             ..Pool::default()
         },
@@ -15753,7 +15768,7 @@ fn a_spent_move_books_the_pins_last_prompt_as_its_rewrite_and_its_own_decayed_bu
         members: vec![("a", 0), ("b", 1)],
         shedding: Shedding {
             migrate_when_spent: true,
-            burn_window_seconds: 1_800,
+            burn_average_seconds: 1_800,
             ..Shedding::default()
         },
         ..Pool::default()
@@ -16480,10 +16495,7 @@ fn a_spent_pin_waits_in_place_for_a_reset_inside_the_retry_bound_and_moves_past_
 
 #[test]
 fn the_shed_rule_takes_the_one_fitting_destination_with_the_longest_runway_or_none() {
-    let s = tiered(Pool {
-        shed_ahead: Some(0.8),
-        ..gate_pool()
-    });
+    let s = tiered(Pool { ..gate_pool() });
     let round = |b: f64, c: f64| {
         // Two cold pins on a, so the round marks s1, the heavier, whose burn reads the siblings' runways.
         let mut st = priced(vec![
@@ -17165,6 +17177,96 @@ fn a_standing_mark_counts_as_removed_and_is_skipped_standing() {
 }
 
 #[test]
+fn a_pool_with_load_shedding_off_runs_no_round_releases_its_marks_and_still_moves_a_spent_pin() {
+    let s = tiered(Pool {
+        load_shedding: false,
+        ..shedding_pool(Shedding::default())
+    });
+
+    // `a` projects over the ceiling, which fires a round on a pool with the switch on.
+    let mut st = two_pins_on_a();
+    over_a_fitting_b(&mut st, T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("a".into(), None),
+        "the pin renews in place"
+    );
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(shed.verdict, "not_run");
+    assert_eq!(fact(shed, "round"), &FactValue::Text("off".into()));
+    assert!(d.shed_round.is_none(), "no round ran");
+    assert_eq!(st.last_shed("p", "a"), None, "and none armed the dwell");
+    assert!(!marked(&st, "s1") && !marked(&st, "s0"), "no pin is marked");
+
+    // A mark written while the switch was on is released at the pin's next selection, ahead of the heal check: with
+    // `a` under the ceiling the heal check would clear it as healed, and the reason is the switch's all the same.
+    for (five_hour, reading) in [(0.94, "over the ceiling"), (0.5, "under the ceiling")] {
+        let marked_at = T - 300_000;
+        let mut st = rounding(vec![
+            PinRow {
+                marked_at: Some(marked_at),
+                marked_on: Some("a".into()),
+                marked_window: Some(FIVE_HOUR.into()),
+                ..burning("s1", "a", 4.0, false, T)
+            },
+            burning("s0", "a", 1.0, false, T),
+        ]);
+        st.record_sample("a", refreshing(five_hour, T + HOUR, T + 72 * HOUR, T));
+        st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+        let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+        assert_eq!(
+            landed(d.result.clone()),
+            ("a".into(), None),
+            "{reading}: the pin renews in place"
+        );
+        assert_eq!(
+            d.record.outcome.mark_cleared.as_ref().map(|m| (
+                m.reason,
+                m.marked_at,
+                m.marked_on.as_str(),
+                m.marked_window.as_str(),
+                m.projection
+            )),
+            Some(("released", marked_at, "a", "five_hour", None)),
+            "{reading}"
+        );
+        let pin = d.record.pin.as_ref().expect("the pin block");
+        assert_eq!(
+            (pin.marked, pin.marked_at),
+            (false, None),
+            "{reading}: the record's pin block reads the cleared row"
+        );
+        assert!(
+            d.writes.iter().any(|w| matches!(
+                w,
+                StateWrite::UpsertPin(row)
+                    if row.session_id == "s1"
+                        && row.marked_at.is_none()
+                        && row.marked_on.is_none()
+                        && row.marked_window.is_none()
+            )),
+            "{reading}: the cleared row is written: {:?}",
+            d.writes
+        );
+        assert!(!marked(&st, "s1"), "{reading}");
+        assert_eq!(d.record.outcome.kind, "renewed", "{reading}");
+    }
+
+    // The move off a spent account is its own toggle, so the switch leaves it running.
+    let mut st = rounding(vec![burning("s1", "a", 4.0, false, T)]);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    assert_eq!(line(&d.record, "move:spent").verdict, "fired");
+    assert_eq!(line(&d.record, "move:shed").verdict, "not_run");
+}
+
+#[test]
 fn a_mark_holds_past_the_dwell_heals_when_the_projection_reads_under_the_ceiling_and_stays_with_no_fitting_destination(
 ) {
     let s = tiered(shedding_pool(Shedding::default()));
@@ -17474,9 +17576,10 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
                 strategy: Strategy::Pace,
                 members: vec![("alder", 0), ("birch", 0), ("cedar", 0)],
                 shedding: Shedding {
-                    shed_share: 0.5,
-                    burn_window_seconds: AVERAGE_SECONDS,
-                    source_dwell_seconds: 900,
+                    load_shedding: true,
+                    shed_cap: 0.5,
+                    burn_average_seconds: AVERAGE_SECONDS,
+                    shed_dwell_seconds: 900,
                     migrate_when_spent: true,
                     warm_sessions: WarmSessions::WhenNeeded,
                 },

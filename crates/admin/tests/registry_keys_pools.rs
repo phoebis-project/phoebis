@@ -58,141 +58,6 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
         post(
             &app,
             "/admin/pools",
-            r#"{"id":"p2","label":"x","strategy":"pace","shed_ahead_of_pace":1.5}"#,
-            Some(&cookie)
-        )
-        .await
-        .status(),
-        400
-    );
-    let shedding = post(
-        &app,
-        "/admin/pools",
-        r#"{"id":"p4","label":"x","strategy":"pace","shed_ahead_of_pace":0.25}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(shedding.status(), 201);
-    assert_eq!(
-        json(shedding).await["shed_ahead_of_pace"].as_f64(),
-        Some(0.25)
-    );
-    let unset = patch(
-        &app,
-        "/admin/pools/p4",
-        r#"{"shed_ahead_of_pace":null}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(unset.status(), 200);
-    assert!(
-        json(unset).await["shed_ahead_of_pace"].is_null(),
-        "null turns shedding off"
-    );
-    assert_eq!(
-        delete(&app, "/admin/pools/p4", Some(&cookie))
-            .await
-            .status(),
-        204
-    );
-    for bound in ["0", "1"] {
-        assert_eq!(
-            post(
-                &app,
-                "/admin/pools",
-                &format!(
-                    r#"{{"id":"p5","label":"x","strategy":"pace","shed_ahead_of_pace":{bound}}}"#
-                ),
-                Some(&cookie)
-            )
-            .await
-            .status(),
-            201,
-            "shed_ahead_of_pace takes its bound {bound}"
-        );
-        assert_eq!(
-            delete(&app, "/admin/pools/p5", Some(&cookie))
-                .await
-                .status(),
-            204
-        );
-    }
-    assert_eq!(
-        post(
-            &app,
-            "/admin/pools",
-            r#"{"id":"p2","label":"x","strategy":"pace","select_below_utilization":1.5}"#,
-            Some(&cookie)
-        )
-        .await
-        .status(),
-        400
-    );
-    assert_eq!(
-        post(
-            &app,
-            "/admin/pools",
-            r#"{"id":"p2","label":"x","strategy":"pace","select_below_utilization":-0.1}"#,
-            Some(&cookie)
-        )
-        .await
-        .status(),
-        400
-    );
-    let refreshing = post(
-        &app,
-        "/admin/pools",
-        r#"{"id":"p3","label":"x","strategy":"pace","select_below_utilization":1}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(
-        refreshing.status(),
-        201,
-        "the bounds are closed as they are for shed_ahead_of_pace"
-    );
-    let body = json(refreshing).await;
-    assert_eq!(
-        (
-            body["strategy"].as_str(),
-            body["select_below_utilization"].as_f64()
-        ),
-        (Some("pace"), Some(1.0))
-    );
-    let lowered = patch(
-        &app,
-        "/admin/pools/p3",
-        r#"{"select_below_utilization":0}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(lowered.status(), 200);
-    assert_eq!(
-        json(lowered).await["select_below_utilization"].as_f64(),
-        Some(0.0)
-    );
-    let cleared = patch(
-        &app,
-        "/admin/pools/p3",
-        r#"{"select_below_utilization":null}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(cleared.status(), 200);
-    assert!(
-        json(cleared).await["select_below_utilization"].is_null(),
-        "and null turns the filter off again"
-    );
-    assert_eq!(
-        delete(&app, "/admin/pools/p3", Some(&cookie))
-            .await
-            .status(),
-        204
-    );
-    assert_eq!(
-        post(
-            &app,
-            "/admin/pools",
             r#"{"id":"p2","label":"x","strategy":"pace","body_capture_hours":100}"#,
             Some(&cookie)
         )
@@ -1696,6 +1561,67 @@ async fn a_pool_body_naming_the_header_switch_is_refused_as_an_unknown_field() {
     );
 }
 
+/// The shedding fields' names before the rename and the two that left, each with a value its field took.
+const OLD_POOL_FIELDS: [(&str, &str); 6] = [
+    ("burn_window_seconds", "600"),
+    ("pace_floor", "0.05"),
+    ("select_below_utilization", "0.8"),
+    ("shed_ahead_of_pace", "0.25"),
+    ("shed_share", "0.5"),
+    ("source_dwell_seconds", "900"),
+];
+
+#[tokio::test]
+async fn a_pool_body_naming_a_removed_or_renamed_field_is_refused_as_an_unknown_field() {
+    let (app, _up) = common::admin_app().await;
+    let app = &app;
+    let cookie = &login(app, "admin-secret").await;
+    let created = post(
+        app,
+        "/admin/pools",
+        r#"{"id":"eng","label":"Engine"}"#,
+        Some(cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let listed =
+        || async move { json(get(app, "/admin/pools", Some(cookie)).await).await["pools"].clone() };
+    let before = listed().await;
+    for (field, value) in OLD_POOL_FIELDS {
+        let refused = post(
+            app,
+            "/admin/pools",
+            &format!(r#"{{"id":"old","label":"Old","{field}":{value}}}"#),
+            Some(cookie),
+        )
+        .await;
+        assert_eq!(refused.status(), 400, "POST {field}");
+        assert_eq!(
+            json(refused).await["error"].as_str(),
+            Some("body must be a JSON object"),
+            "POST {field}"
+        );
+        let refused = patch(
+            app,
+            "/admin/pools/eng",
+            &format!(r#"{{"{field}":{value}}}"#),
+            Some(cookie),
+        )
+        .await;
+        assert_eq!(refused.status(), 400, "PATCH {field}");
+        assert_eq!(
+            json(refused).await["error"].as_str(),
+            Some("body must be a JSON object"),
+            "PATCH {field}"
+        );
+        assert_eq!(
+            listed().await,
+            before,
+            "a body naming {field} writes nothing"
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_pool_refuses_an_unknown_strategy_name_and_an_unknown_field() {
     let (app, _up) = common::admin_app().await;
@@ -2132,10 +2058,10 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
         post(
             &app,
             "/admin/pools",
-            r#"{"id":"eng","label":"Engine","shed_share":0.3,"burn_window_seconds":120,
-                "source_dwell_seconds":90,"migrate_when_spent":false,"warm_sessions":"always",
-                "retry_in_place_seconds":5,"in_flight_cap":4,"pace_floor":0.1,
-                "overage_move_grace_minutes":10,"wind_down_minutes":15}"#,
+            r#"{"id":"eng","label":"Engine","shed_cap":0.3,"burn_average_seconds":600,
+                "shed_dwell_seconds":300,"window_ceiling":0.8,"load_shedding":false,
+                "migrate_when_spent":false,"warm_sessions":"always","retry_in_place_seconds":5,
+                "in_flight_cap":4,"overage_move_grace_minutes":10,"wind_down_minutes":15}"#,
             Some(&cookie),
         )
         .await,
@@ -2143,26 +2069,28 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
     .await;
     assert_eq!(
         (
-            created["shed_share"].as_f64(),
-            created["burn_window_seconds"].as_u64(),
-            created["source_dwell_seconds"].as_u64(),
+            created["shed_cap"].as_f64(),
+            created["burn_average_seconds"].as_u64(),
+            created["shed_dwell_seconds"].as_u64(),
+            created["window_ceiling"].as_f64(),
+            created["load_shedding"].as_bool(),
             created["migrate_when_spent"].as_bool(),
             created["warm_sessions"].as_str(),
             created["retry_in_place_seconds"].as_u64(),
             created["in_flight_cap"].as_u64(),
-            created["pace_floor"].as_f64(),
             created["overage_move_grace_minutes"].as_u64(),
             created["wind_down_minutes"].as_u64(),
         ),
         (
             Some(0.3),
-            Some(120),
-            Some(90),
+            Some(600),
+            Some(300),
+            Some(0.8),
+            Some(false),
             Some(false),
             Some("always"),
             Some(5),
             Some(4),
-            Some(0.1),
             Some(10),
             Some(15),
         ),
@@ -2172,16 +2100,43 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
         created["moves_per_hour"].is_object(),
         "the pool card's figure is always an object, empty when nothing moved"
     );
+    let switched = json(
+        patch(
+            &app,
+            "/admin/pools/eng",
+            r#"{"load_shedding":true}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(switched["load_shedding"].as_bool(), Some(true));
     for (body, message) in [
-        (r#"{"shed_share":1.5}"#, "shed_share is between 0 and 1"),
-        (r#"{"shed_share":-0.1}"#, "shed_share is between 0 and 1"),
+        (r#"{"shed_cap":0.09}"#, "shed_cap is between 0.1 and 1.0"),
+        (r#"{"shed_cap":1.01}"#, "shed_cap is between 0.1 and 1.0"),
         (
-            r#"{"burn_window_seconds":59}"#,
-            "burn_window_seconds is at least 60",
+            r#"{"burn_average_seconds":599}"#,
+            "burn_average_seconds is between 600 and 7200",
         ),
         (
-            r#"{"source_dwell_seconds":59}"#,
-            "source_dwell_seconds is at least 60",
+            r#"{"burn_average_seconds":7201}"#,
+            "burn_average_seconds is between 600 and 7200",
+        ),
+        (
+            r#"{"shed_dwell_seconds":299}"#,
+            "shed_dwell_seconds is between 300 and 7200",
+        ),
+        (
+            r#"{"shed_dwell_seconds":7201}"#,
+            "shed_dwell_seconds is between 300 and 7200",
+        ),
+        (
+            r#"{"window_ceiling":0.49}"#,
+            "window_ceiling is between 0.5 and 1.0",
+        ),
+        (
+            r#"{"window_ceiling":1.01}"#,
+            "window_ceiling is between 0.5 and 1.0",
         ),
         (
             r#"{"warm_sessions":"sometimes"}"#,
@@ -2192,8 +2147,6 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
             "retry_in_place_seconds is 0 to 300",
         ),
         (r#"{"in_flight_cap":0}"#, "in_flight_cap is at least 1"),
-        (r#"{"pace_floor":-0.1}"#, "pace_floor is between 0 and 1"),
-        (r#"{"pace_floor":1.5}"#, "pace_floor is between 0 and 1"),
         (
             r#"{"overage_move_grace_minutes":301}"#,
             "overage_move_grace_minutes is 0 to 300",
@@ -2201,6 +2154,12 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
         (
             r#"{"wind_down_minutes":10081}"#,
             "wind_down_minutes is at most 10080 (one week)",
+        ),
+        // The two toggles take no bound: a value that is not a boolean fails the body's parse.
+        (r#"{"load_shedding":"off"}"#, "body must be a JSON object"),
+        (
+            r#"{"migrate_when_spent":"off"}"#,
+            "body must be a JSON object",
         ),
     ] {
         let refused = patch(&app, "/admin/pools/eng", body, Some(&cookie)).await;
@@ -2212,7 +2171,7 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
         patch(
             &app,
             "/admin/pools/eng",
-            r#"{"shed_share":0,"pace_floor":0,"burn_window_seconds":60,"source_dwell_seconds":60,
+            r#"{"shed_cap":0.1,"burn_average_seconds":600,"shed_dwell_seconds":300,"window_ceiling":0.5,
                 "retry_in_place_seconds":0,"in_flight_cap":1,"overage_move_grace_minutes":0,
                 "wind_down_minutes":0}"#,
             Some(&cookie),
@@ -2222,20 +2181,20 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
     .await;
     assert_eq!(
         (
-            low["shed_share"].as_f64(),
-            low["pace_floor"].as_f64(),
-            low["burn_window_seconds"].as_u64(),
-            low["source_dwell_seconds"].as_u64(),
+            low["shed_cap"].as_f64(),
+            low["burn_average_seconds"].as_u64(),
+            low["shed_dwell_seconds"].as_u64(),
+            low["window_ceiling"].as_f64(),
             low["retry_in_place_seconds"].as_u64(),
             low["in_flight_cap"].as_u64(),
             low["overage_move_grace_minutes"].as_u64(),
             low["wind_down_minutes"].as_u64(),
         ),
         (
-            Some(0.0),
-            Some(0.0),
-            Some(60),
-            Some(60),
+            Some(0.1),
+            Some(600),
+            Some(300),
+            Some(0.5),
             Some(0),
             Some(1),
             Some(0),
@@ -2243,13 +2202,13 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
         ),
         "every field's lower inclusive edge is accepted"
     );
-    // The three fields with an upper edge, accepted in a second patch.
+    // The fields with an upper edge, accepted in a second patch.
     let high = json(
         patch(
             &app,
             "/admin/pools/eng",
-            r#"{"shed_share":1,"pace_floor":1,"retry_in_place_seconds":300,
-                "overage_move_grace_minutes":300,"wind_down_minutes":10080}"#,
+            r#"{"shed_cap":1,"burn_average_seconds":7200,"shed_dwell_seconds":7200,"window_ceiling":1,
+                "retry_in_place_seconds":300,"overage_move_grace_minutes":300,"wind_down_minutes":10080}"#,
             Some(&cookie),
         )
         .await,
@@ -2257,19 +2216,29 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
     .await;
     assert_eq!(
         (
-            high["shed_share"].as_f64(),
-            high["pace_floor"].as_f64(),
+            high["shed_cap"].as_f64(),
+            high["burn_average_seconds"].as_u64(),
+            high["shed_dwell_seconds"].as_u64(),
+            high["window_ceiling"].as_f64(),
             high["retry_in_place_seconds"].as_u64(),
             high["overage_move_grace_minutes"].as_u64(),
             high["wind_down_minutes"].as_u64(),
         ),
-        (Some(1.0), Some(1.0), Some(300), Some(300), Some(10_080)),
+        (
+            Some(1.0),
+            Some(7_200),
+            Some(7_200),
+            Some(1.0),
+            Some(300),
+            Some(300),
+            Some(10_080)
+        ),
         "every field's upper inclusive edge is accepted"
     );
 }
 
 #[tokio::test]
-async fn a_burn_window_or_a_source_dwell_past_a_week_is_refused_and_writes_nothing() {
+async fn a_burn_average_or_a_shed_dwell_past_two_hours_is_refused_and_writes_nothing() {
     let (app, _up) = common::admin_app().await;
     let app = &app;
     let cookie = &login(app, "admin-secret").await;
@@ -2286,18 +2255,18 @@ async fn a_burn_window_or_a_source_dwell_past_a_week_is_refused_and_writes_nothi
     let before = listed().await;
     for (field, message) in [
         (
-            "burn_window_seconds",
-            "burn_window_seconds is at most 604800 (one week)",
+            "burn_average_seconds",
+            "burn_average_seconds is between 600 and 7200",
         ),
         (
-            "source_dwell_seconds",
-            "source_dwell_seconds is at most 604800 (one week)",
+            "shed_dwell_seconds",
+            "shed_dwell_seconds is between 300 and 7200",
         ),
     ] {
         let refused = post(
             app,
             "/admin/pools",
-            &format!(r#"{{"id":"wide","label":"Wide","{field}":604801}}"#),
+            &format!(r#"{{"id":"wide","label":"Wide","{field}":7201}}"#),
             Some(cookie),
         )
         .await;
@@ -2306,7 +2275,7 @@ async fn a_burn_window_or_a_source_dwell_past_a_week_is_refused_and_writes_nothi
         let refused = patch(
             app,
             "/admin/pools/eng",
-            &format!(r#"{{"{field}":604801}}"#),
+            &format!(r#"{{"{field}":7201}}"#),
             Some(cookie),
         )
         .await;
@@ -2314,40 +2283,40 @@ async fn a_burn_window_or_a_source_dwell_past_a_week_is_refused_and_writes_nothi
         assert_eq!(json(refused).await["error"].as_str(), Some(message));
         assert_eq!(listed().await, before, "a refused {field} writes nothing");
     }
-    let week = |pool: &serde_json::Value| {
+    let ceiling = |pool: &serde_json::Value| {
         (
-            pool["burn_window_seconds"].as_u64(),
-            pool["source_dwell_seconds"].as_u64(),
+            pool["burn_average_seconds"].as_u64(),
+            pool["shed_dwell_seconds"].as_u64(),
         )
     };
     let admitted = json(
         post(
             app,
             "/admin/pools",
-            r#"{"id":"week","label":"Week","burn_window_seconds":604800,"source_dwell_seconds":604800}"#,
+            r#"{"id":"long","label":"Long","burn_average_seconds":7200,"shed_dwell_seconds":7200}"#,
             Some(cookie),
         )
         .await,
     )
     .await;
     assert_eq!(
-        week(&admitted),
-        (Some(604_800), Some(604_800)),
+        ceiling(&admitted),
+        (Some(7_200), Some(7_200)),
         "a create at the ceiling is admitted"
     );
     let patched = json(
         patch(
             app,
             "/admin/pools/eng",
-            r#"{"burn_window_seconds":604800,"source_dwell_seconds":604800}"#,
+            r#"{"burn_average_seconds":7200,"shed_dwell_seconds":7200}"#,
             Some(cookie),
         )
         .await,
     )
     .await;
     assert_eq!(
-        week(&patched),
-        (Some(604_800), Some(604_800)),
+        ceiling(&patched),
+        (Some(7_200), Some(7_200)),
         "an update to the ceiling is admitted"
     );
 }
@@ -2865,10 +2834,10 @@ async fn a_patch_leaves_an_absent_engine_field_at_its_stored_value() {
     post(
         &app,
         "/admin/pools",
-        r#"{"id":"eng","label":"Engine","shed_share":0.3,"burn_window_seconds":120,
-            "source_dwell_seconds":90,"migrate_when_spent":false,"warm_sessions":"always",
-            "retry_in_place_seconds":5,"in_flight_cap":4,"pace_floor":0.1,
-            "overage_move_grace_minutes":10,"wind_down_minutes":15}"#,
+        r#"{"id":"eng","label":"Engine","shed_cap":0.3,"burn_average_seconds":900,
+            "shed_dwell_seconds":600,"window_ceiling":0.9,"load_shedding":false,
+            "migrate_when_spent":false,"warm_sessions":"always","retry_in_place_seconds":5,
+            "in_flight_cap":4,"overage_move_grace_minutes":10,"wind_down_minutes":15}"#,
         Some(&cookie),
     )
     .await;
@@ -2885,31 +2854,267 @@ async fn a_patch_leaves_an_absent_engine_field_at_its_stored_value() {
     assert_eq!(
         (
             edited["label"].as_str(),
-            edited["shed_share"].as_f64(),
-            edited["burn_window_seconds"].as_u64(),
-            edited["source_dwell_seconds"].as_u64(),
+            edited["shed_cap"].as_f64(),
+            edited["burn_average_seconds"].as_u64(),
+            edited["shed_dwell_seconds"].as_u64(),
+            edited["window_ceiling"].as_f64(),
+            edited["load_shedding"].as_bool(),
             edited["migrate_when_spent"].as_bool(),
             edited["warm_sessions"].as_str(),
             edited["retry_in_place_seconds"].as_u64(),
             edited["in_flight_cap"].as_u64(),
-            edited["pace_floor"].as_f64(),
             edited["overage_move_grace_minutes"].as_u64(),
             edited["wind_down_minutes"].as_u64(),
         ),
         (
             Some("Renamed"),
             Some(0.3),
-            Some(120),
-            Some(90),
+            Some(900),
+            Some(600),
+            Some(0.9),
+            Some(false),
             Some(false),
             Some("always"),
             Some(5),
             Some(4),
-            Some(0.1),
             Some(10),
             Some(15),
         ),
         "an unrelated patch leaves every engine field at what it was stored with"
+    );
+}
+
+/// One warning as a pool answer carries it.
+fn warning(code: &str, fields: &[&str], text: &str) -> serde_json::Value {
+    serde_json::json!({ "code": code, "fields": fields, "text": text })
+}
+
+#[tokio::test]
+async fn the_pool_answer_lists_each_warning_that_holds_and_none_that_does_not() {
+    let (first, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&first, "admin-secret").await;
+    // The cohort check reads the router's pins, which a router loads when it starts, so the pool, its key and the
+    // pins come first and a second app over the store reads them.
+    let created = post(
+        &first,
+        "/admin/pools",
+        r#"{"id":"cohort","label":"Cohort","in_flight_cap":1}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let created = post(
+        &first,
+        "/admin/keys",
+        r#"{"id":"k","label":"k","pool_id":"cohort"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    // Session s1 holds two agents over three pins, its main agent on two models, so its cohort is two agents.
+    for (agent, model) in [
+        ("main", "claude-opus-5"),
+        ("main", "claude-sonnet-5"),
+        ("sub-1", "claude-sonnet-5"),
+    ] {
+        store
+            .upsert_pin(&phoebis_store::PinRow {
+                key_id: "k".into(),
+                session_id: "s1".into(),
+                agent_id: agent.into(),
+                model: model.into(),
+                account_id: "business".into(),
+                epoch: 1,
+                created_at: common::NOW - 10_000,
+                last_used_at: common::NOW - 5,
+                key_generation: common::generation(&store, "k"),
+                incarnation: 1,
+                burn: phoebis_store::PinBurn::default(),
+                burn_at: None,
+                burn_banded: phoebis_store::PinBurn::default(),
+                burn_fast: phoebis_store::PinBurn::default(),
+                last_input_tokens: 0,
+                last_refresh_at: 0,
+                cache_ttl_ms: 300_000,
+                shed_from: None,
+                shed_at: None,
+                static_hash: None,
+                tail_hash: None,
+                lane: phoebis_routing::lane_key(model, "standard", "none", "-"),
+                marked_at: None,
+                marked_on: None,
+                marked_window: None,
+            })
+            .unwrap();
+    }
+    let (app, _up2, _store, _router2) = common::admin_parts_on(store.clone()).await;
+    let app = &app;
+    let cookie = &login(app, "admin-secret").await;
+    let listed = |id: &'static str| async move {
+        json(get(app, "/admin/pools", Some(cookie)).await).await["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == id)
+            .unwrap_or_else(|| panic!("{id} is listed"))["warnings"]
+            .clone()
+    };
+    assert_eq!(
+        listed("cohort").await,
+        serde_json::json!([warning(
+            "cap_under_cohort",
+            &["in_flight_cap"],
+            "The in-flight cap is under the largest live cohort of 2 agents, so subagents of one session wait for a \
+             slot they share."
+        )]),
+        "the cap of one is under the session's two agents"
+    );
+    let cleared = json(
+        patch(
+            app,
+            "/admin/pools/cohort",
+            r#"{"in_flight_cap":2}"#,
+            Some(cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        cleared["warnings"],
+        serde_json::json!([]),
+        "a cap at the cohort holds it"
+    );
+
+    for (id, body, clear, code, fields, text) in [
+        (
+            "affinity",
+            r#""affinity_ttl_seconds":600,"cache_ttl":{"inject_when_absent":true}"#,
+            r#"{"cache_ttl":{"inject_when_absent":false}}"#,
+            "affinity_under_cache_ttl",
+            &["affinity_ttl_seconds", "cache_ttl"][..],
+            "The session affinity ends before the cache TTL the pool injects, so a pin can expire while its cache is \
+             warm and the next request can land cold elsewhere.",
+        ),
+        (
+            "quarter",
+            r#""shed_cap":0.2"#,
+            r#"{"shed_cap":0.25}"#,
+            "cap_under_quarter",
+            &["shed_cap"][..],
+            "A shed cap under 25 percent removes at most a quarter of the burn per round, so a window far over the \
+             ceiling needs several rounds and dwells to come under it.",
+        ),
+        (
+            "low",
+            r#""window_ceiling":0.79"#,
+            r#"{"window_ceiling":0.8}"#,
+            "ceiling_low",
+            &["window_ceiling"][..],
+            "A ceiling under 80 percent leaves a fifth of every window unused and moves sessions that would have \
+             finished the window warm.",
+        ),
+        (
+            "wall",
+            r#""window_ceiling":1.0"#,
+            r#"{"window_ceiling":0.99}"#,
+            "ceiling_without_margin",
+            &["window_ceiling"][..],
+            "A ceiling at 100 percent leaves no margin for a stale reading or a large turn, so a session can reach \
+             the wall before the round or the gate reads it.",
+        ),
+        (
+            "off",
+            r#""load_shedding":false"#,
+            r#"{"load_shedding":true}"#,
+            "shedding_off",
+            &["load_shedding"][..],
+            "With load shedding off no round marks sessions on a member whose window would pass the ceiling, so a \
+             session stays until its window is spent or its account refuses it.",
+        ),
+        (
+            "stay",
+            r#""migrate_when_spent":false"#,
+            r#"{"migrate_when_spent":true}"#,
+            "spent_moves_off",
+            &["migrate_when_spent"][..],
+            "With spent moves off a session stays on a spent account until the upstream refuses it, so the \
+             destination gate never runs for that move.",
+        ),
+        (
+            "never",
+            r#""warm_sessions":"never""#,
+            r#"{"warm_sessions":"when_needed"}"#,
+            "warm_never",
+            &["warm_sessions"][..],
+            "With warm sessions never a round stops after the cold sessions, so the excess is covered only while \
+             cold sessions carry it.",
+        ),
+    ] {
+        let created = post(
+            app,
+            "/admin/pools",
+            &format!(r#"{{"id":"{id}","label":"{id}",{body}}}"#),
+            Some(cookie),
+        )
+        .await;
+        assert_eq!(created.status(), 201, "{id}");
+        let expected = serde_json::json!([warning(code, fields, text)]);
+        assert_eq!(
+            json(created).await["warnings"],
+            expected,
+            "the create answers {code}"
+        );
+        assert_eq!(listed(id).await, expected, "the list answers {code}");
+        let cleared = json(
+            patch(
+                app,
+                &format!("/admin/pools/{id}"),
+                clear,
+                Some(cookie),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            cleared["warnings"],
+            serde_json::json!([]),
+            "{clear} clears {code}"
+        );
+    }
+    let several = json(
+        post(
+            app,
+            "/admin/pools",
+            r#"{"id":"several","label":"Several","warm_sessions":"never","load_shedding":false,"shed_cap":0.2}"#,
+            Some(cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        several["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["code"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["cap_under_quarter", "shedding_off", "warm_never"],
+        "the checks that hold, sorted by code"
+    );
+    let plain = json(
+        post(
+            app,
+            "/admin/pools",
+            r#"{"id":"plain","label":"Plain"}"#,
+            Some(cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        plain["warnings"],
+        serde_json::json!([]),
+        "the defaults hold no warning"
     );
 }
 

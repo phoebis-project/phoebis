@@ -230,6 +230,11 @@ pub(crate) struct SummaryHold {
     pub account_id: String,
     pub cohort: Option<String>,
     pub bound_ms: i64,
+    /// `cap` for a hold on a slot, `reset` for a spent window about to reset.
+    #[schema(example = "cap")]
+    pub reason: String,
+    /// The instant a `reset` hold waits for, null under `cap`.
+    pub until: Option<i64>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -332,11 +337,10 @@ pub(crate) struct DecisionRecord {
     pub pin_reason: Option<String>,
     /// The values that entered the decision, each named by the `PoolRow` field it is read from: `strategy`,
     /// `prefer_subscription`, `overage_policy`, `affinity_ttl_seconds`, `affinity_mode`, `session_placement`,
-    /// `min_shared_prefix_tokens`, `subagent_placement`, `select_below_utilization`, `shed_ahead_of_pace`,
-    /// `migrate_when_spent`, `overage_move_grace_minutes`, `wind_down_minutes`, `shed_share`,
-    /// `burn_window_seconds`, `source_dwell_seconds`, `warm_sessions`, `in_flight_cap`, `retry_in_place_seconds`,
-    /// `pace_floor`, `pool_updated_at`. Null for a refusal whose key or pool the registry no longer
-    /// holds.
+    /// `min_shared_prefix_tokens`, `subagent_placement`, `window_ceiling`, `load_shedding`, `migrate_when_spent`,
+    /// `overage_move_grace_minutes`, `wind_down_minutes`, `shed_cap`, `burn_average_seconds`, `shed_dwell_seconds`,
+    /// `warm_sessions`, `in_flight_cap`, `retry_in_place_seconds`, `pool_updated_at`. Null for a
+    /// refusal whose key or pool the registry no longer holds.
     #[schema(value_type = Option<Object>)]
     pub settings: Option<Value>,
     /// One per pool member, eligible or not, in the pool's order: `account_id`, `incarnation`, `kind`,

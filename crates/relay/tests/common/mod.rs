@@ -126,7 +126,6 @@ pub struct PoolSpec {
     pub key_auto_mode_server: Option<bool>,
     pub model_rules: Vec<ModelRule>,
     pub overage_policy: OveragePolicy,
-    pub shed_ahead_of_pace: Option<f64>,
     pub strategy: Strategy,
 }
 
@@ -141,7 +140,6 @@ impl Default for PoolSpec {
             key_auto_mode_server: None,
             model_rules: Vec::new(),
             overage_policy: OveragePolicy::PreferPlan,
-            shed_ahead_of_pace: None,
             strategy: Strategy::Priority,
         }
     }
@@ -715,7 +713,6 @@ async fn build(
                     strategy: pool.strategy,
                     affinity_ttl_seconds: pool.affinity_ttl_seconds,
                     overage_policy: pool.overage_policy,
-                    shed_ahead_of_pace: pool.shed_ahead_of_pace,
                     model_rules: pool.model_rules,
                     prefer_subscription: false,
                     failover: pool.failover,

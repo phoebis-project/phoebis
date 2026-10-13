@@ -3,7 +3,7 @@
   "body": {
     "request_id": "r-static",
     "seq": 1,
-    "version": 1,
+    "version": 2,
     "request": {
       "request_id": "r-static",
       "attempt": 1,
@@ -38,7 +38,8 @@
       },
       "attempted": [],
       "holds": [],
-      "registry_revision": 42
+      "registry_revision": 50,
+      "body_tokens": 0
     },
     "pin": {
       "found": "none",
@@ -55,7 +56,10 @@
       "marked": false,
       "warmth": null,
       "warmth_cause": null,
-      "released": []
+      "released": [],
+      "marked_at": null,
+      "marked_on": null,
+      "marked_window": null
     },
     "pin_reason": null,
     "settings": {
@@ -67,20 +71,18 @@
       "session_placement": "by_warm_prefix",
       "min_shared_prefix_tokens": 20000,
       "subagent_placement": "by_strategy",
-      "select_below_utilization": null,
-      "shed_ahead_of_pace": null,
+      "window_ceiling": 0.95,
+      "load_shedding": true,
       "migrate_when_spent": true,
       "overage_move_grace_minutes": 30,
       "wind_down_minutes": 30,
-      "shed_share": 0.5,
-      "burn_window_seconds": 600,
-      "source_dwell_seconds": 900,
+      "shed_cap": 0.2,
+      "burn_average_seconds": 1800,
+      "shed_dwell_seconds": 900,
       "warm_sessions": "when_needed",
       "in_flight_cap": 16,
       "retry_in_place_seconds": 60,
-      "pace_floor": 0.05,
-      "migrate_band": 0.05,
-      "pool_updated_at": 1791721000039
+      "pool_updated_at": 1791721000047
     },
     "candidates": [
       {
@@ -107,7 +109,10 @@
             "source": "head",
             "observed_at": 1791720995000,
             "age_ms": 5000,
-            "ahead": null
+            "ahead": null,
+            "projection": null,
+            "horizon": null,
+            "reserved": 0.0
           },
           "fast_output": {
             "utilization": 0.08,
@@ -115,7 +120,10 @@
             "source": "head",
             "observed_at": 1791720995000,
             "age_ms": 5000,
-            "ahead": null
+            "ahead": null,
+            "projection": null,
+            "horizon": null,
+            "reserved": 0.0
           }
         },
         "allowance_known": false,
@@ -126,7 +134,8 @@
           "deadline": null,
           "hours": 168.0,
           "score": 0.005952380952380952,
-          "window": "seven_day"
+          "window": "seven_day",
+          "burn": 0.0
         },
         "budget": [
           {
@@ -183,7 +192,11 @@
         "partition": null,
         "rank": null,
         "score": null,
-        "verdict": "chosen"
+        "verdict": "chosen",
+        "runway_ms": null,
+        "fit": "fits",
+        "binding": null,
+        "burn": {}
       },
       {
         "account_id": "direct",
@@ -211,7 +224,8 @@
           "deadline": null,
           "hours": null,
           "score": 1.0,
-          "window": null
+          "window": null,
+          "burn": 0.0
         },
         "budget": [
           {
@@ -244,7 +258,11 @@
         "partition": null,
         "rank": null,
         "score": null,
-        "verdict": "not_needed"
+        "verdict": "not_needed",
+        "runway_ms": null,
+        "fit": "fits",
+        "binding": null,
+        "burn": {}
       }
     ],
     "walk": [
@@ -295,19 +313,13 @@
             "unit": null
           },
           {
-            "key": "above_ceiling",
-            "value": "off",
-            "account_id": null,
-            "unit": null
-          },
-          {
-            "key": "winding_down",
+            "key": "no_fit",
             "value": 0,
             "account_id": null,
             "unit": null
           },
           {
-            "key": "floor",
+            "key": "winding_down",
             "value": 0,
             "account_id": null,
             "unit": null
@@ -367,6 +379,18 @@
             "unit": null
           }
         ]
+      },
+      {
+        "step": "reserve",
+        "verdict": "none",
+        "facts": [
+          {
+            "key": "account_id",
+            "value": "business",
+            "account_id": "business",
+            "unit": null
+          }
+        ]
       }
     ],
     "outcome": {
@@ -401,6 +425,8 @@
       "refusal": null,
       "cohort_hold": null,
       "shed_marks": null,
+      "mark_cleared": null,
+      "reservation": null,
       "completion": {
         "status": 200,
         "cache_read_tokens": 500,

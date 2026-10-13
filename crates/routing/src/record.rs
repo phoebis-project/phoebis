@@ -196,18 +196,17 @@ pub struct Settings {
     pub session_placement: &'static str,
     pub min_shared_prefix_tokens: u64,
     pub subagent_placement: &'static str,
-    pub select_below_utilization: Option<f64>,
-    pub shed_ahead_of_pace: Option<f64>,
+    pub window_ceiling: f64,
+    pub load_shedding: bool,
     pub migrate_when_spent: bool,
     pub overage_move_grace_minutes: u32,
     pub wind_down_minutes: u32,
-    pub shed_share: f64,
-    pub burn_window_seconds: u64,
-    pub source_dwell_seconds: u64,
+    pub shed_cap: f64,
+    pub burn_average_seconds: u64,
+    pub shed_dwell_seconds: u64,
     pub warm_sessions: &'static str,
     pub in_flight_cap: u32,
     pub retry_in_place_seconds: u64,
-    pub pace_floor: f64,
     pub pool_updated_at: i64,
 }
 
@@ -481,7 +480,8 @@ pub struct Outcome {
 }
 
 /// A mark the decision cleared: `healed` when the heal check found the trigger gone at the pin's request, `moved` when
-/// the pin left the account the mark was made on.
+/// the pin left the account the mark was made on, `released` when the pool's load shedding was off at the pin's
+/// request.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct MarkClearedFacts {
     pub reason: &'static str,
@@ -879,18 +879,17 @@ pub(crate) fn settings_of(pool: &PoolRow) -> Settings {
         session_placement: pool.affinity.session_placement.as_str(),
         min_shared_prefix_tokens: pool.affinity.min_shared_prefix_tokens,
         subagent_placement: pool.affinity.subagent_placement.as_str(),
-        select_below_utilization: pool.select_below_utilization,
-        shed_ahead_of_pace: pool.shed_ahead_of_pace,
+        window_ceiling: pool.window_ceiling,
+        load_shedding: pool.shedding.load_shedding,
         migrate_when_spent: pool.shedding.migrate_when_spent,
         overage_move_grace_minutes: pool.failover.overage_move_grace_minutes,
         wind_down_minutes: pool.failover.wind_down_minutes,
-        shed_share: pool.shedding.shed_share,
-        burn_window_seconds: pool.shedding.burn_window_seconds,
-        source_dwell_seconds: pool.shedding.source_dwell_seconds,
+        shed_cap: pool.shedding.shed_cap,
+        burn_average_seconds: pool.shedding.burn_average_seconds,
+        shed_dwell_seconds: pool.shedding.shed_dwell_seconds,
         warm_sessions: pool.shedding.warm_sessions.as_str(),
         in_flight_cap: pool.failover.in_flight_cap,
         retry_in_place_seconds: pool.failover.retry_in_place_seconds,
-        pace_floor: pool.failover.pace_floor,
         pool_updated_at: pool.updated_at,
     }
 }
@@ -980,18 +979,17 @@ mod tests {
                 session_placement: "warm_prefix",
                 min_shared_prefix_tokens: 1_024,
                 subagent_placement: "with_main",
-                select_below_utilization: None,
-                shed_ahead_of_pace: Some(0.9),
+                window_ceiling: 0.95,
+                load_shedding: true,
                 migrate_when_spent: true,
                 overage_move_grace_minutes: 30,
                 wind_down_minutes: 60,
-                shed_share: 0.25,
-                burn_window_seconds: 600,
-                source_dwell_seconds: 900,
+                shed_cap: 0.5,
+                burn_average_seconds: 1_800,
+                shed_dwell_seconds: 900,
                 warm_sessions: "stop_after_cold",
                 in_flight_cap: 8,
                 retry_in_place_seconds: 10,
-                pace_floor: 0.0,
                 pool_updated_at: 100,
             }),
             candidates: vec![CandidateFacts {
@@ -1110,6 +1108,32 @@ mod tests {
             "the blocks follow the walk: what came in, the pin, the settings, the members, the steps, the answer"
         );
         assert_eq!(value["version"], 2);
+        assert_eq!(
+            keys(&value["settings"]),
+            [
+                "strategy",
+                "prefer_subscription",
+                "overage_policy",
+                "affinity_ttl_seconds",
+                "affinity_mode",
+                "session_placement",
+                "min_shared_prefix_tokens",
+                "subagent_placement",
+                "window_ceiling",
+                "load_shedding",
+                "migrate_when_spent",
+                "overage_move_grace_minutes",
+                "wind_down_minutes",
+                "shed_cap",
+                "burn_average_seconds",
+                "shed_dwell_seconds",
+                "warm_sessions",
+                "in_flight_cap",
+                "retry_in_place_seconds",
+                "pool_updated_at"
+            ],
+            "the settings, each named by the `PoolRow` field it is read from"
+        );
         let prefix = &value["candidates"][0]["prefix"];
         assert_eq!(
             keys(prefix),

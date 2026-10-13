@@ -248,7 +248,7 @@ pub enum StateWrite {
     DeleteAffinity(Vec<(String, String)>),
     DeleteCooldown(String, String),
     DeletePin(PinKey),
-    /// `before` is `now` less the longest `source_dwell_seconds` of the snapshot's pools, computed at the purge tick.
+    /// `before` is `now` less the longest `shed_dwell_seconds` of the snapshot's pools, computed at the purge tick.
     PurgeShedRounds {
         before: i64,
     },
@@ -352,8 +352,9 @@ impl SharePricer {
     }
 
     /// `rate(window, tier, canonical_model, burn, at)`: the share of `window` on `tier` a pin burning `burn` typed
-    /// tokens a second consumes per second at the band of `at`, `None` for a model the tables do not weight or a
-    /// window the tier has no capacity on. Every pricer prices nothing here until it is set.
+    /// tokens a second consumes per second at the band of `at`. A model without a weight of its own prices at its
+    /// model tier's latest weight, an estimate, and the rate is `None` for a model of no weighted model tier, a tier
+    /// the file lacks or a window the tier has no capacity on. Every pricer prices nothing here until it is set.
     pub fn with_rate(
         self,
         rate: impl Fn(&str, &str, &str, &PinBurn, i64) -> Option<f64> + Send + Sync + 'static,
@@ -628,33 +629,41 @@ pub struct Reservation {
     pub expires_at: i64,
 }
 
-/// The ceiling every plan window reads until the pool row carries one: one constant, read through one function, so
-/// the column is a one-line change here.
+/// The `window_ceiling` a pool is created with.
 pub const DEFAULT_WINDOW_CEILING: f64 = 0.95;
 
-/// The utilization of `window` on `pool` above which no move or placement lands and a round fires on the window.
-pub fn ceiling(_pool: &PoolRow, _window: &str) -> f64 {
-    DEFAULT_WINDOW_CEILING
+/// The utilization of `window` on `pool` above which no move or placement lands and a round fires on the window. The
+/// row holds one fraction for every plan window, read through this one function, so a ceiling per window is one
+/// column and one arm here.
+pub fn ceiling(pool: &PoolRow, _window: &str) -> f64 {
+    pool.window_ceiling
 }
 
 /// The share of an account's burn one shedding round removes at most.
 pub fn shed_cap(pool: &PoolRow) -> f64 {
-    pool.shedding.shed_share
+    pool.shedding.shed_cap
 }
 
 /// The time constant a pin's burn average decays with, in milliseconds.
 pub fn burn_average_ms(pool: &PoolRow) -> i64 {
-    seconds_ms(pool.shedding.burn_window_seconds)
+    seconds_ms(pool.shedding.burn_average_seconds)
 }
 
 /// `burn_average_ms` of the default preset, for a key whose pool left the registry.
 pub(crate) fn default_burn_average_ms() -> i64 {
-    seconds_ms(phoebis_store::Shedding::default().burn_window_seconds)
+    seconds_ms(phoebis_store::Shedding::default().burn_average_seconds)
 }
 
-/// How long a shedding round's marks hold and a source rests after one, in milliseconds.
+/// The pause between two shedding rounds on one account, and how long a shed pin keeps off the account that shed it,
+/// in milliseconds.
 pub fn shed_dwell_ms(pool: &PoolRow) -> i64 {
-    seconds_ms(pool.shedding.source_dwell_seconds)
+    seconds_ms(pool.shedding.shed_dwell_seconds)
+}
+
+/// Whether the pool runs shedding rounds. Off, the fit gate, the reservations, the projection and the move off a spent
+/// account still run, since the switch turns the round off and nothing else.
+pub fn load_shedding(pool: &PoolRow) -> bool {
+    pool.shedding.load_shedding
 }
 
 #[derive(Default)]

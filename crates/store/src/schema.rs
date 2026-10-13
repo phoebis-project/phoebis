@@ -83,11 +83,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (51, V51),
     (52, V52),
     (53, V53),
+    (54, V54),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 53;
+pub const SCHEMA_VERSION: u32 = 54;
 
 /// The version that bounds an account to one pool; a file below it is read for overlaps before it migrates.
 pub const ONE_POOL_VERSION: u32 = 47;
@@ -764,4 +765,30 @@ CREATE TABLE shed_rounds (
   round_at INTEGER NOT NULL,
   PRIMARY KEY (pool_id, account_id)
 );
+"#;
+
+// The shedding fields take the names of their meaning. The switch keeps the stored intent of the weekly lead it
+// replaces, a null lead being the operator's off, and changes no value, so it logs nothing. A stored value outside its
+// new bound is clamped and the clamp logged as a pool update, so the registry panel shows what the migration moved.
+const V54: &str = r#"
+ALTER TABLE pools RENAME COLUMN shed_share TO shed_cap;
+ALTER TABLE pools RENAME COLUMN burn_window_seconds TO burn_average_seconds;
+ALTER TABLE pools RENAME COLUMN source_dwell_seconds TO shed_dwell_seconds;
+ALTER TABLE pools ADD COLUMN load_shedding INTEGER NOT NULL DEFAULT 1;
+UPDATE pools SET load_shedding = CASE WHEN shed_ahead_of_pace IS NULL THEN 0 ELSE 1 END;
+ALTER TABLE pools DROP COLUMN shed_ahead_of_pace;
+ALTER TABLE pools DROP COLUMN select_below_utilization;
+ALTER TABLE pools DROP COLUMN pace_floor;
+ALTER TABLE pools ADD COLUMN window_ceiling REAL NOT NULL DEFAULT 0.95;
+INSERT INTO registry_changes (at, actor, kind, target, diff_json)
+  SELECT CAST(strftime('%s', 'now') AS INTEGER) * 1000, 'migration', 'pool_updated', id,
+         json_object('burn_average_seconds', MIN(MAX(burn_average_seconds, 600), 7200),
+                     'shed_cap', MIN(MAX(shed_cap, 0.1), 1.0),
+                     'shed_dwell_seconds', MIN(MAX(shed_dwell_seconds, 300), 7200))
+  FROM pools
+  WHERE burn_average_seconds NOT BETWEEN 600 AND 7200 OR shed_cap NOT BETWEEN 0.1 AND 1.0
+     OR shed_dwell_seconds NOT BETWEEN 300 AND 7200;
+UPDATE pools SET burn_average_seconds = MIN(MAX(burn_average_seconds, 600), 7200),
+                 shed_cap = MIN(MAX(shed_cap, 0.1), 1.0),
+                 shed_dwell_seconds = MIN(MAX(shed_dwell_seconds, 300), 7200);
 "#;

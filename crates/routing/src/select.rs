@@ -21,10 +21,10 @@ use crate::record::{
     TermFacts, WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION, WALK_STEPS,
 };
 use crate::state::{
-    budget_reached, burn_average_ms, burn_decayed, ceiling, mark_holds, plan_windows, shed_cap,
-    shed_dwell_ms, warm, BurnUnit, CreditsState, MemberSpend, PinRef, PinUsage, Reservation,
-    RoutingState, StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR,
-    IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    budget_reached, burn_average_ms, burn_decayed, ceiling, load_shedding, mark_holds,
+    plan_windows, shed_cap, shed_dwell_ms, warm, BurnUnit, CreditsState, MemberSpend, PinRef,
+    PinUsage, Reservation, RoutingState, StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT,
+    FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::windows::{window_for, MODEL_WINDOWS};
 use crate::{term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
@@ -1120,17 +1120,20 @@ fn run(
                 "live"
             };
             let mut marked = found == "live" && state.shed_marked(&key);
-            // The heal check: a live marked pin whose trigger reads gone at this request loses its mark here, ahead
-            // of the move rules, so the record's pin block and the renewal below read the cleared row.
+            // A live marked pin loses its mark here, ahead of the move rules, so the record's pin block and the
+            // renewal below read the cleared row: released when its pool turned the shedding off, which no projection
+            // can undo, so the switch is read before the heal check, else healed when its trigger reads gone.
             if marked {
-                if let Some(projection) = healed(state, snapshot, pool, &current, request.now) {
+                let cleared_as = if !load_shedding(pool) {
+                    Some(("released", None))
+                } else {
+                    healed(state, snapshot, pool, &current, request.now)
+                        .map(|projection| ("healed", Some(projection)))
+                };
+                if let Some((reason, projection)) = cleared_as {
                     if let Some(cleared) = state.clear_mark(&key) {
-                        rec.mark_cleared = Some(mark_cleared_of(
-                            &current,
-                            "healed",
-                            Some(projection),
-                            request.now,
-                        ));
+                        rec.mark_cleared =
+                            Some(mark_cleared_of(&current, reason, projection, request.now));
                         writes.push(StateWrite::UpsertPin(cleared.clone()));
                         current = cleared;
                         marked = false;
@@ -2782,6 +2785,12 @@ fn move_of<'a>(
         no_destination(rec, 3, facts, gate);
     }
 
+    // The switch turns the round off and nothing else: the rules above, the fit gate and the reservations ran as they
+    // do with it on.
+    if !load_shedding(pool) {
+        rec.step(RULES[4], "not_run", vec![Fact::text("round", "off")]);
+        return MoveVerdict::Stay;
+    }
     // The shed rule's one trigger: the projection at its horizon over the ceiling, tested on every plan window the
     // pool's pins on the account draw, in the windows' order, one round per selection at most. The line names every
     // projection it read whether or not one fired.

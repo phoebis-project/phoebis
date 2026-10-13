@@ -848,6 +848,11 @@ fn affinity_rows_land_together_replace_by_model_and_hash_and_delete_by_key() {
     );
 }
 
+// The reverse of the registry's version 54: the pools' three renamed columns take their old names back, the three
+// dropped ones return with their old types and defaults, and the ceiling and the switch leave, so the chains below
+// replay the older undos over the old names. One line with the marker last. The trailing `\n` ends the marker's
+// comment.
+const UNDO_V54: &str = "ALTER TABLE pools DROP COLUMN window_ceiling; ALTER TABLE pools DROP COLUMN load_shedding; ALTER TABLE pools ADD COLUMN shed_ahead_of_pace REAL; ALTER TABLE pools ADD COLUMN select_below_utilization REAL; ALTER TABLE pools ADD COLUMN pace_floor REAL NOT NULL DEFAULT 0.05; ALTER TABLE pools RENAME COLUMN shed_cap TO shed_share; ALTER TABLE pools RENAME COLUMN burn_average_seconds TO burn_window_seconds; ALTER TABLE pools RENAME COLUMN shed_dwell_seconds TO source_dwell_seconds; -- rollback\n";
 // The reverse of the registry's version 53: the three mark columns leave the pins and the rounds table is rebuilt as
 // version 46 left it, so the chains below replay `UNDO_V46` over it unchanged. One line with the marker last. The
 // trailing `\n` ends the marker's comment.
@@ -907,7 +912,7 @@ fn an_affinity_rows_message_id_round_trips_and_a_row_from_before_the_column_read
     let before = affinity_row("claude-sonnet-5", "hash-1", "a");
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V53} {UNDO_V52} {UNDO_V51} UPDATE meta SET value = '50' WHERE key = 'schema_version';"
+        "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} UPDATE meta SET value = '50' WHERE key = 'schema_version';"
     ))
     .unwrap();
     conn.execute(
@@ -933,7 +938,7 @@ fn an_affinity_rows_message_id_round_trips_and_a_row_from_before_the_column_read
     drop(conn);
     let migrated =
         Store::open(&path, &storage_key).expect("the migration completes and the store opens");
-    assert_eq!(migrated.schema_version().unwrap(), 53);
+    assert_eq!(migrated.schema_version().unwrap(), 54);
     assert_eq!(
         migrated.load_routing().unwrap().affinity,
         vec![AffinityRow {

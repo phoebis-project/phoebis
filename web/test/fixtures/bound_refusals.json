@@ -75,55 +75,55 @@
       },
       {
         "route": "PATCH /admin/pools/{id}",
-        "field": "burn_window_seconds",
-        "value": 60,
+        "field": "burn_average_seconds",
+        "value": 600,
         "status": 200
       },
       {
         "route": "PATCH /admin/pools/{id}",
-        "field": "burn_window_seconds",
-        "value": 59,
+        "field": "burn_average_seconds",
+        "value": 599,
         "status": 400,
-        "error": "burn_window_seconds is at least 60"
+        "error": "burn_average_seconds is between 600 and 7200"
       },
       {
         "route": "PATCH /admin/pools/{id}",
-        "field": "burn_window_seconds",
-        "value": 604800,
+        "field": "burn_average_seconds",
+        "value": 7200,
         "status": 200
       },
       {
         "route": "PATCH /admin/pools/{id}",
-        "field": "burn_window_seconds",
-        "value": 604801,
+        "field": "burn_average_seconds",
+        "value": 7201,
         "status": 400,
-        "error": "burn_window_seconds is at most 604800 (one week)"
+        "error": "burn_average_seconds is between 600 and 7200"
       },
       {
         "route": "PATCH /admin/pools/{id}",
-        "field": "source_dwell_seconds",
-        "value": 60,
+        "field": "shed_dwell_seconds",
+        "value": 300,
         "status": 200
       },
       {
         "route": "PATCH /admin/pools/{id}",
-        "field": "source_dwell_seconds",
-        "value": 59,
+        "field": "shed_dwell_seconds",
+        "value": 299,
         "status": 400,
-        "error": "source_dwell_seconds is at least 60"
+        "error": "shed_dwell_seconds is between 300 and 7200"
       },
       {
         "route": "PATCH /admin/pools/{id}",
-        "field": "source_dwell_seconds",
-        "value": 604800,
+        "field": "shed_dwell_seconds",
+        "value": 7200,
         "status": 200
       },
       {
         "route": "PATCH /admin/pools/{id}",
-        "field": "source_dwell_seconds",
-        "value": 604801,
+        "field": "shed_dwell_seconds",
+        "value": 7201,
         "status": 400,
-        "error": "source_dwell_seconds is at most 604800 (one week)"
+        "error": "shed_dwell_seconds is between 300 and 7200"
       },
       {
         "route": "PATCH /admin/pools/{id}",
@@ -206,6 +206,58 @@
         "field": "in_flight_cap",
         "value": 4294967296,
         "status": 400
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
+        "field": "window_ceiling",
+        "value": 0.5,
+        "status": 200
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
+        "field": "window_ceiling",
+        "value": 0.49,
+        "status": 400,
+        "error": "window_ceiling is between 0.5 and 1.0"
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
+        "field": "window_ceiling",
+        "value": 1.0,
+        "status": 200
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
+        "field": "window_ceiling",
+        "value": 1.01,
+        "status": 400,
+        "error": "window_ceiling is between 0.5 and 1.0"
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
+        "field": "shed_cap",
+        "value": 0.1,
+        "status": 200
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
+        "field": "shed_cap",
+        "value": 0.09,
+        "status": 400,
+        "error": "shed_cap is between 0.1 and 1.0"
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
+        "field": "shed_cap",
+        "value": 1.0,
+        "status": 200
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
+        "field": "shed_cap",
+        "value": 1.01,
+        "status": 400,
+        "error": "shed_cap is between 0.1 and 1.0"
       },
       {
         "route": "PATCH /admin/pools/{id}",

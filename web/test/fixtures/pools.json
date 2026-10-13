@@ -14,22 +14,21 @@
         "subagent_placement": "by_strategy",
         "session_placement": "by_strategy",
         "min_shared_prefix_tokens": 20000,
-        "shed_ahead_of_pace": null,
-        "select_below_utilization": null,
+        "window_ceiling": 0.95,
         "model_rules": [
           {
             "pattern": "claude-haiku-*",
             "not": true
           }
         ],
-        "shed_share": 0.5,
-        "burn_window_seconds": 600,
-        "source_dwell_seconds": 900,
+        "load_shedding": true,
+        "shed_cap": 0.2,
+        "burn_average_seconds": 1800,
+        "shed_dwell_seconds": 900,
         "migrate_when_spent": true,
         "warm_sessions": "when_needed",
         "retry_in_place_seconds": 60,
         "in_flight_cap": 16,
-        "pace_floor": 0.05,
         "overage_move_grace_minutes": 30,
         "wind_down_minutes": 30,
         "moves_per_hour": {
@@ -123,7 +122,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "ZFPxvgA5",
+            "prefix": "JZkFmCwM",
             "enabled": true
           }
         ],
@@ -462,6 +461,15 @@
               "seven_day": 5.875e-6
             },
             "estimated": false
+          }
+        ],
+        "warnings": [
+          {
+            "code": "cap_under_quarter",
+            "fields": [
+              "shed_cap"
+            ],
+            "text": "A shed cap under 25 percent removes at most a quarter of the burn per round, so a window far over the ceiling needs several rounds and dwells to come under it."
           }
         ]
       }

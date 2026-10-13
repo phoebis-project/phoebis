@@ -2677,7 +2677,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         output: 100,
         ..Default::default()
     };
-    // The default `burn_window_seconds` (no pool override above): a single renewal from a cold average is the
+    // The default `burn_average_seconds` (no pool override above): a single renewal from a cold average is the
     // usage spread over that window, weighed by the band at the renewal, read per hour on Max 20x.
     let share = tables
         .share_at(
@@ -2688,7 +2688,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
             burn_at,
         )
         .unwrap();
-    let expected_burn = share / 600.0 * 3_600.0;
+    let expected_burn = share / 1_800.0 * 3_600.0;
     assert!(
         (row["burn"].as_f64().unwrap() - expected_burn).abs() < 1e-12,
         "{row} against {expected_burn}"
@@ -2707,7 +2707,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         .into_iter()
         .find(|p| p.key_id == "desktop" && p.session_id == "burn-e2e")
         .expect("the pin the request created is on disk once the binary has stopped");
-    let per_second = |tokens: f64| tokens / 600.0;
+    let per_second = |tokens: f64| tokens / 1_800.0;
     let band = tables.band_factor(phoebis_routing::FIVE_HOUR, burn_at);
     assert_eq!(
         (pin.burn, pin.burn_at),
@@ -2740,7 +2740,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
             .rate_table()
             .price_burn("claude-opus-5", &pin.burn, pin.last_input_tokens)
             .unwrap()
-            - dollars / 600.0)
+            - dollars / 1_800.0)
             .abs()
             < 1e-12,
         "priced when read, the plain copy is the dollar rate the usage costs over the window"

@@ -39,6 +39,15 @@ fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
     )
 }
 
+/// `store` with pool `p`'s burn average at 600 s, for a case whose figures fold over it: the case's own window,
+/// whatever the stored default.
+fn averaged(store: Arc<Store>) -> Arc<Store> {
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.shedding.burn_average_seconds = 600;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    store
+}
+
 /// The pool `p` over `ids` and the key `k`, written into a store the caller opened.
 fn seed(store: Arc<Store>, kind: AccountKind, ids: &[&str]) -> Arc<Store> {
     for id in ids {
@@ -5449,7 +5458,7 @@ async fn a_late_fast_429_from_the_lane_the_session_left_never_deletes_its_standa
 #[tokio::test]
 async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_probes_usage_never_counts(
 ) {
-    let store = seeded(&["a"]);
+    let store = averaged(seeded(&["a"]));
     let now = Arc::new(AtomicI64::new(1_000));
     let config = RouterConfig {
         rates: quarter_dollar_rates(),
@@ -5505,7 +5514,7 @@ async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_pr
         })
         .await;
     let pins = handle.pins().await.unwrap();
-    // The pool's burn window is the default 600 s, and the second fold lands 60 s after the first.
+    // The pool's burn average is 600 s, and the second fold lands 60 s after the first.
     let window = 600.0_f64;
     let decay = (-60.0_f64 / window).exp();
     let expected = PinBurn {
@@ -5568,7 +5577,7 @@ async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_pr
 
 #[tokio::test]
 async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its_row_decay() {
-    let store = seeded(&["a"]);
+    let store = averaged(seeded(&["a"]));
     let now = Arc::new(AtomicI64::new(1_000));
     // The fast cells read twice the dollar ones, so the fast tokens price at a half beside the row's quarter.
     let rates = BurnRates {
@@ -5614,7 +5623,7 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
         .await;
     let pins = handle.pins().await.unwrap();
     let fast_burns = handle.fast_burns().await.unwrap();
-    // The pool's burn window is the default 600 s, and the fast fold lands 60 s after the standard one.
+    // The pool's burn average is 600 s, and the fast fold lands 60 s after the standard one.
     let window = 600.0_f64;
     let decayed = 600.0 / window * (-60.0_f64 / window).exp();
     let s1 = pins.iter().find(|p| p.session_id == "s1").unwrap();
@@ -5649,7 +5658,7 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
 
 #[tokio::test]
 async fn a_fast_renewal_is_written_with_the_pin_and_a_restart_reads_its_fast_usage_as_saved() {
-    let store = seeded(&["a"]);
+    let store = averaged(seeded(&["a"]));
     let now = Arc::new(AtomicI64::new(1_000));
     let (key, saved) = {
         let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
@@ -5673,7 +5682,7 @@ async fn a_fast_renewal_is_written_with_the_pin_and_a_restart_reads_its_fast_usa
         let (held, fast) = pin_and_fast_usage(&handle).await;
         assert!(
             (fast.input - 1.0).abs() < 1e-9,
-            "the 600 fast tokens over the default 600 s burn window: {fast:?}"
+            "the 600 fast tokens over the pool's 600 s burn average: {fast:?}"
         );
         (held.key(), fast)
     };
@@ -5733,7 +5742,7 @@ async fn a_fast_renewal_over_the_threshold_lands_in_the_fast_usage_and_prices_at
     // no later prompt of the pin reprices them.
     let rates = both_blocks_rates();
     let (s1, fast) = fast_renewed_over_the_threshold(&rates).await;
-    // The pool's burn window is the default 600 s.
+    // The pool's burn average is 600 s.
     let window = 600.0_f64;
     assert_eq!(
         s1.burn,
@@ -5804,7 +5813,7 @@ fn speed_renewal(pin: PinRef, now: i64, fast: bool, input: u64) -> Report {
 
 /// Session "s1" pinned at 1,000 under `rates`: the handle and the pin's reference for the renewals that follow.
 async fn pinned_under(rates: &BurnRates) -> (RouterHandle, PinRef) {
-    let store = seeded(&["a"]);
+    let store = averaged(seeded(&["a"]));
     let now = Arc::new(AtomicI64::new(1_000));
     let config = RouterConfig {
         rates: rates.clone(),
@@ -5844,7 +5853,7 @@ async fn dollar_burn(handle: &RouterHandle, rates: &BurnRates) -> f64 {
     rates.price_pin(BurnUnit::Usd, &pin, &fast).unwrap()
 }
 
-/// `tokens` folded at `now` onto an average last folded at `at`, over the pool's default 600 s burn window, as
+/// `tokens` folded at `now` onto an average last folded at `at`, over the pool's 600 s burn average, as
 /// the task folds a renewal: tokens a second.
 fn average_after(average: f64, at: Option<i64>, now: i64, tokens: f64) -> f64 {
     let window = 600.0;
@@ -5954,7 +5963,7 @@ async fn mixed_speed_renewals_across_the_threshold_sum_the_ordinary_burn_at_the_
 
 #[tokio::test]
 async fn the_burn_lands_in_the_store_with_the_input_size_and_the_ttl() {
-    let store = seeded(&["a"]);
+    let store = averaged(seeded(&["a"]));
     let now = Arc::new(AtomicI64::new(1_000));
     let config = RouterConfig {
         rates: quarter_dollar_rates(),
@@ -6673,7 +6682,7 @@ fn head_reading(at: i64, utilization: f64, reset: Option<i64>, request_id: &str)
 #[tokio::test]
 async fn a_shedding_round_emits_its_pins_and_marks_once() {
     use phoebis_routing::{PinKeyFacts, RouterEvent};
-    let store = shedding_store(&["a", "b"]);
+    let store = averaged(shedding_store(&["a", "b"]));
     with_tier(&store, "a");
     with_tier(&store, "b");
     let now = Arc::new(AtomicI64::new(1_000));
@@ -6950,7 +6959,7 @@ fn second_pool(store: &Store, dwell_seconds: u64) {
         .insert_pool(
             &PoolRow {
                 shedding: Shedding {
-                    source_dwell_seconds: dwell_seconds,
+                    shed_dwell_seconds: dwell_seconds,
                     ..Shedding::default()
                 },
                 ..PoolRow::for_tests("q")
@@ -7496,7 +7505,7 @@ async fn a_mark_a_round_makes_on_the_requests_own_pin_is_released_with_it_in_the
 async fn the_purge_tick_writes_the_round_cut_past_the_longest_dwell() {
     let store = seeded(&["a"]);
     let mut pool = store.pool("p").unwrap().unwrap();
-    pool.shedding.source_dwell_seconds = 600;
+    pool.shedding.shed_dwell_seconds = 600;
     store.update_pool(&pool, pool.updated_at, "test").unwrap();
     second_pool(&store, 1_800);
     // p's round is past p's own dwell and inside q's, the longest of the snapshot's pools, which sets the cut, and q's

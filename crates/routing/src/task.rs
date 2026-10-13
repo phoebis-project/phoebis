@@ -92,7 +92,8 @@ pub enum RouterEvent {
     },
     /// A shedding mark left a pin: the heal check found the trigger gone at the pin's request (`healed`, with the
     /// healing projection), the pin moved off the account the mark was made on (`moved`), or the pin was released or
-    /// expired without a move (`released`). `account_id` is the account the pin sat on when the mark cleared.
+    /// expired without a move or asked while its pool's load shedding was off (`released`). `account_id` is the account
+    /// the pin sat on when the mark cleared.
     MarkCleared {
         account_id: String,
         key_id: String,
