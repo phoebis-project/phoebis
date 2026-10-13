@@ -729,6 +729,15 @@ fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day
         spent(t + HOUR + 20 * MINUTE, "b", "head"),
         // `a` reached its wall on the router's own prediction, two hours after its round projected 0.97.
         spent(t + 2 * HOUR, "a", "predicted"),
+        // Just past each bound: d's window was spent a millisecond more than an hour after the move onto it, e's a
+        // millisecond before the move, and f's round projected a millisecond more than the window's length before
+        // f's wall. Each account reached its wall, and none of them holds a spent destination or a projection error.
+        moved(t + 30 * MINUTE, "d", "spent", Some("fits")),
+        spent(t + 30 * MINUTE + HOUR + 1, "d", "head"),
+        spent(t + 40 * MINUTE, "e", "head"),
+        moved(t + 40 * MINUTE + 1, "e", "shed", Some("fits")),
+        round(t + 2 * HOUR - 5 * HOUR - 1, "f", "marked 1", None, 0.9),
+        spent(t + 2 * HOUR, "f", "poll"),
     ] {
         db.insert_event(&row).unwrap();
     }
@@ -773,9 +782,34 @@ fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day
                 1,
                 now
             ),
+            (
+                "wall_reached",
+                "account",
+                "d",
+                None,
+                t + 30 * MINUTE + HOUR + 1,
+                1,
+                now
+            ),
+            (
+                "wall_reached",
+                "account",
+                "e",
+                None,
+                t + 40 * MINUTE,
+                1,
+                now
+            ),
+            ("wall_reached", "account", "f", None, t + 2 * HOUR, 1, now),
         ],
         "one row per subject, dated by its oldest qualifying event: {rows:?}"
     );
+    let unread_wall = serde_json::json!({
+        "projection_error": null,
+        "setting": wall_settings,
+        "walls": 1,
+        "windows": ["five_hour"],
+    });
     assert_eq!(
         rows.iter().map(|r| r.detail.clone()).collect::<Vec<_>>(),
         [
@@ -792,12 +826,10 @@ fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day
                 "walls": 1,
                 "windows": ["five_hour"],
             }),
-            serde_json::json!({
-                "projection_error": null,
-                "setting": wall_settings,
-                "walls": 1,
-                "windows": ["five_hour"],
-            }),
+            unread_wall.clone(),
+            unread_wall.clone(),
+            unread_wall.clone(),
+            unread_wall,
         ],
         "a wall with no round on its account inside the window's length before it has no projection error"
     );
@@ -807,6 +839,62 @@ fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day
             .unwrap(),
         Vec::new(),
         "a day later the trailing 24 hours hold none of the events, so every condition clears"
+    );
+}
+
+#[test]
+fn a_weekly_wall_reads_no_projection_error_from_a_round_on_the_five_hour_window() {
+    const HOUR: i64 = 3_600_000;
+    let t = 1_000 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    for row in [
+        // A 5-hour round an hour before `a`'s 7-day window was spent: its projection reads another window's share.
+        EventRecord {
+            at: t,
+            kind: "shedding_round".into(),
+            account_id: Some("a".into()),
+            pool_id: Some("p".into()),
+            detail: Some(
+                serde_json::json!({
+                    "window": "five_hour",
+                    "projection": 0.97,
+                    "outcome": "marked 1",
+                    "reason": null,
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        },
+        EventRecord {
+            at: t + HOUR,
+            kind: "window_spent".into(),
+            account_id: Some("a".into()),
+            detail: Some(
+                serde_json::json!({ "window": "seven_day", "source": "poll" }).to_string(),
+            ),
+            ..Default::default()
+        },
+    ] {
+        db.insert_event(&row).unwrap();
+    }
+    db.write(|c| {
+        let tx = c.transaction()?;
+        phoebis_ledger::fold_routing_conditions(&tx, t + 2 * HOUR)?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db
+        .read_blocking(phoebis_ledger::routing_conditions)
+        .unwrap();
+    let wall = rows
+        .iter()
+        .find(|r| r.kind == "wall_reached" && r.subject_id == "a")
+        .unwrap_or_else(|| panic!("no wall on a: {rows:?}"));
+    assert_eq!(
+        wall.detail["projection_error"],
+        serde_json::Value::Null,
+        "a projection is read against its own window's wall alone: {wall:?}"
     );
 }
 

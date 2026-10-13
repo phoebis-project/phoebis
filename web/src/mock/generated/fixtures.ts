@@ -6486,7 +6486,9 @@ export const FIXTURES: Record<string, Fixture> = {
             "setting": [
               "window_ceiling"
             ],
-            "setting_value": 0.95
+            "setting_values": {
+              "window_ceiling": 0.95
+            }
           }
         }
       ]
@@ -12738,8 +12740,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "per_rewrite": 0.004,
                 "marked": true,
                 "rewrite": 0.005,
-                "planned": "business",
-                "runway_ms": 5400000,
+                "planned": "direct",
+                "runway_ms": null,
                 "skip": null,
                 "note": null
               }

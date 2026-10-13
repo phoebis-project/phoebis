@@ -2307,7 +2307,7 @@ fn projections(
 }
 
 /// Every pin with its burn decayed to `now` by its pool's burn average (the default preset's for a key whose pool left
-/// the registry) and its runway on its own account, read once per account and pool.
+/// the registry) and its runway on its own account under that pool, read by `standing_runway` for each pin.
 fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) -> Vec<PinStanding> {
     state
         .pins()

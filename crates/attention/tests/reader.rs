@@ -1236,7 +1236,7 @@ async fn a_round_that_marked_nothing_for_want_of_runway_holds_the_condition_on_i
                 "accounts": ["business"],
                 "rounds": 1,
                 "setting": ["window_ceiling"],
-                "setting_value": 0.95,
+                "setting_values": { "window_ceiling": 0.95 },
             })
         ),
         "the condition dates from the round, opens the pool's card and carries the pool's ceiling beside its name"

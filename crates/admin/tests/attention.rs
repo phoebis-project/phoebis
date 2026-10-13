@@ -293,7 +293,7 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
                 "accounts": ["business"],
                 "rounds": 1,
                 "setting": ["window_ceiling"],
-                "setting_value": 0.9,
+                "setting_values": { "window_ceiling": 0.9 },
             },
         }),
         "a pool's condition carries the pool's ceiling beside the setting it names"
@@ -302,7 +302,7 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
         (
             &items[7]["link"],
             &items[7]["pools"],
-            items[7]["detail"].get("setting_value")
+            items[7]["detail"].get("setting_values")
         ),
         (
             &j!({ "page": "accounts", "id": "business" }),

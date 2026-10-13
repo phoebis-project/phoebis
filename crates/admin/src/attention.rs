@@ -27,15 +27,18 @@ pub(crate) struct AttentionItem {
     #[schema(example = "pool_exhausted")]
     pub kind: String,
     pub subject: AttentionSubject,
-    /// Null for a drift item whose refused request named no key, a router subject and a deleted pool.
+    /// Null for a drift item whose refused request named no key, a router subject, a deleted pool, and a routing
+    /// condition whose account or pool the registry no longer holds.
     pub link: Option<AttentionLink>,
     /// The pools the item belongs to: an account's memberships, a pool's own id, the pool of a drift item's key.
-    /// Empty for a router subject and a deleted pool.
+    /// Empty for a router subject, a deleted pool, and a routing condition whose account or pool the registry no
+    /// longer holds.
     pub pools: Vec<String>,
     /// Unix milliseconds: the start of the backoff run, the first failed attempt of a refresh run, the first
     /// exhaustion or refusal of a run, the oldest parked row, the refused certificate reload, 30 days before a
-    /// certificate's end, or for the two account states and a degraded writer the first read of this process that
-    /// saw the state.
+    /// certificate's end, the oldest qualifying event of the trailing 24 hours for `wall_reached`,
+    /// `destination_spent` and `shed_no_runway`, or for the two account states and a degraded writer the first read of
+    /// this process that saw the state.
     pub since: Option<i64>,
     /// `account` and `label`, or `account`, `failures`, `last_error` and `outcome`, or `account`, `backoff_since`,
     /// `next_attempt_at` and `rate_limited_in_a_row`, or `pool` and `key`, or `client_version`, `trigger` and `key`,
@@ -47,7 +50,7 @@ pub(crate) struct AttentionItem {
     /// `wall_reached` with `walls`, `windows` and `projection_error` (one less the projection of the newest shedding
     /// round on the account inside the window's length before the wall, null with none), `destination_spent` with
     /// `moves`, `fits` (the moves' destination fits with counts) and `windows`, and `shed_no_runway` with `rounds`,
-    /// `accounts` and `setting_value` (the pool's `window_ceiling`).
+    /// `accounts` and `setting_values` (the pool's value of each setting `setting` names).
     #[schema(value_type = Object)]
     pub detail: Value,
 }

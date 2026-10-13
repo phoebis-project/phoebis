@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome};
 use phoebis_ledger::{polled, ParkedSummary, RoutingCondition, UnweightedModel};
 use phoebis_oauth::UsageService;
-use phoebis_routing::{RegistrySnapshot, RouterHandle};
+use phoebis_routing::{shed_cap, RegistrySnapshot, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, PoolRow, ResolvedAttempt, Store, StoreError,
 };
@@ -681,10 +681,9 @@ pub(crate) fn conditions(
 
 /// The three conditions the ledger's hourly fold wrote: one per pool for `shed_no_runway` and one per OAuth account
 /// for `wall_reached` and `destination_spent`, each holding where a row names its subject, with the row's oldest event
-/// as `since` and its detail. A row whose pool the snapshot holds gains that pool's `window_ceiling` as
-/// `setting_value` beside the `setting` it names, since the ledger reads no registry. A subject the registry no longer
-/// holds keeps its row's condition, labeled by its id and opening nothing, until the fold's trailing day lets the row
-/// go.
+/// as `since` and its detail. A row whose pool the snapshot holds gains `setting_values`, that pool's value of each
+/// setting the row's `setting` names, since the ledger reads no registry. A subject the registry no longer holds keeps
+/// its row's condition, labeled by its id and opening nothing, until the fold's trailing day lets the row go.
 fn routing_conditions(
     snapshot: &RegistrySnapshot,
     accounts: &[AccountRow],
@@ -700,7 +699,21 @@ fn routing_conditions(
         };
         let mut detail = row.detail.clone();
         if let Some(pool) = row.pool_id.as_deref().and_then(|id| snapshot.pool(id)) {
-            detail["setting_value"] = json!(pool.window_ceiling);
+            let values: serde_json::Map<String, serde_json::Value> = detail["setting"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|name| {
+                    let name = name.as_str()?;
+                    let value = match name {
+                        "shed_cap" => shed_cap(pool),
+                        "window_ceiling" => pool.window_ceiling,
+                        _ => return None,
+                    };
+                    Some((name.to_string(), json!(value)))
+                })
+                .collect();
+            detail["setting_values"] = serde_json::Value::Object(values);
         }
         detail
     };

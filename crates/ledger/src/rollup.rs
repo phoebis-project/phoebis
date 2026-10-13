@@ -1091,8 +1091,8 @@ struct Held {
 /// `destination_spent` per account from the moves onto it that a spent window of any source followed within the hour,
 /// and `wall_reached` per account from its spent windows of any source, a predicted wall among them. `since` is the
 /// oldest qualifying event's time. A wall's `projection_error` is one less the projection of the newest round on the
-/// account inside the newest wall's window length before it, null with none. The ledger reads no registry, so a
-/// detail names its settings and the reader adds a pool's value.
+/// account's newest wall's window inside that window's length before the wall, null with none. The ledger reads no
+/// registry, so a detail names its settings and the reader adds a pool's values.
 pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), LedgerError> {
     struct Row {
         at: i64,
@@ -1218,7 +1218,8 @@ pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), Led
     }
     for (account, (since, count, windows, (newest, window))) in walls {
         // A round's projection that came true reads 1.0 at the wall, so the error is how far under the wall the newest
-        // round on the account projected it. A round a weekly window's length back can sit outside the trailing day.
+        // round on the account projected it, read on the wall's own window since a round projects the window that
+        // fired it. A round a weekly window's length back can sit outside the trailing day.
         let length = if window == FIVE_HOUR {
             FIVE_HOURS_MS
         } else {
@@ -1227,8 +1228,9 @@ pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), Led
         let projection: Option<f64> = tx
             .query_row(
                 "SELECT detail FROM events WHERE kind = 'shedding_round' AND account_id = ?1 \
-                 AND at >= ?2 AND at <= ?3 ORDER BY at DESC, rowid DESC LIMIT 1",
-                params![account, newest - length, newest],
+                 AND at >= ?2 AND at <= ?3 AND json_extract(detail, '$.window') = ?4 \
+                 ORDER BY at DESC, rowid DESC LIMIT 1",
+                params![account, newest - length, newest, window],
                 |r| r.get::<_, Option<String>>(0),
             )
             .optional()?

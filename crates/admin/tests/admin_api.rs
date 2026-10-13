@@ -3538,6 +3538,106 @@ async fn an_account_window_carries_its_projection_horizon_and_burn_and_null_wher
     }
 }
 
+/// The registry keeps an account in one pool, so the overlap is written past its index, as a registry from before
+/// that index holds it: the account route then reads the account's projections under the first of its pools by id.
+#[tokio::test]
+async fn an_account_in_two_pools_reads_its_windows_under_the_first_pool_by_id() {
+    use common::{generation, get, json, login, post, wait_json, NOW};
+    const HOUR: i64 = 3_600_000;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("registry.sqlite");
+    let store = std::sync::Arc::new(
+        phoebis_store::Store::open(&path, &phoebis_store::StorageKey::generate()).unwrap(),
+    );
+    let seed = common::admin_parts_full_on(store.clone()).await;
+    let seeding = login(&seed.app, "admin-secret").await;
+    // `alpha` holds `business` and no key, `beta` the key whose pin burns on `business`: under `alpha` the account's
+    // windows read no burn, under `beta` the pin's.
+    for body in [
+        r#"{"id":"alpha","label":"Alpha","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#,
+        r#"{"id":"beta","label":"Beta","strategy":"priority"}"#,
+    ] {
+        assert_eq!(
+            post(&seed.app, "/admin/pools", body, Some(&seeding))
+                .await
+                .status(),
+            201
+        );
+    }
+    post(
+        &seed.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"beta"}"#,
+        Some(&seeding),
+    )
+    .await;
+    name_the_tier(&store, "business", "default_claude_max_20x");
+    store
+        .upsert_pin(&phoebis_store::PinRow {
+            model: "claude-opus-5-5".into(),
+            ..burning_opus_pin(
+                "s1",
+                "business",
+                generation(&store, "desktop"),
+                NOW,
+                1_000.0,
+                1_000.0,
+            )
+        })
+        .unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "DROP INDEX pool_members_one_pool; \
+             INSERT INTO pool_members (pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd) \
+             VALUES ('beta', 'business', 0, NULL, NULL);",
+        )
+        .unwrap();
+    let parts = common::admin_parts_full_on_rated(store.clone(), round_rates).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    read_windows(
+        &parts,
+        "business",
+        &[
+            (phoebis_routing::FIVE_HOUR, 0.80, Some(NOW + 4 * HOUR)),
+            (phoebis_routing::SEVEN_DAY, 0.30, Some(NOW + 50 * HOUR)),
+        ],
+    )
+    .await;
+    let account = wait_json(&parts.app, "/admin/accounts/business", &cookie, |v| {
+        v["windows"].as_array().is_some_and(|w| {
+            w.iter()
+                .any(|w| w["id"] == "five_hour" && !w["burn"].is_null())
+        })
+    })
+    .await;
+    let five_hour = account["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == "five_hour")
+        .unwrap()
+        .clone();
+    // Each pool's own reading, so the account route's choice is the one the case pins.
+    let pools = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await;
+    let member_burn = |pool: &str| {
+        pools["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == pool)
+            .and_then(|p| p["members"][0]["burn"].as_f64())
+    };
+    assert!(
+        within(member_burn("alpha"), 0.0) && within(member_burn("beta"), 0.002),
+        "the two pools read the account's burn apart: {pools}"
+    );
+    assert!(
+        within(five_hour["burn"].as_f64(), 0.0) && within(five_hour["projection"].as_f64(), 0.80),
+        "the account reads under `alpha`, the first of its pools by id, which keeps no pin: {five_hour}"
+    );
+}
+
 #[tokio::test]
 async fn a_pool_member_answers_the_engines_pace_score_whatever_its_kind() {
     use common::{login, wait_json, NOW};
