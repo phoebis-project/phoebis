@@ -3996,20 +3996,29 @@
   height: 6px;
 }
 
-/* Every second model on --surface-2 over --surface, a model's sub-rows on its shade. The divider is one step
+/* The donor's id is the widest text the weight column draws, so it wraps beside its bar rather than widening the
+   table past the dialog. */
+.cost-ref__weight .cost-ref__val--estimated {
+  white-space: normal;
+}
+
+/* Every second model on --surface-2 over --surface, a model's sub-rows on its shade. The fold row is one step
    heavier, so it never reads as a stripe. A cell past a full window takes the warning tint in place of its stripe. */
 .cost-ref__tiers tr.is-alt td,
 .cost-ref__table tr.is-alt td {
   background: var(--surface-2);
 }
 
-.cost-ref__table tr.is-divider td {
-  padding-top: 10px;
-  padding-bottom: 4px;
+.cost-ref__table tr.cost-ref__fold td {
+  padding-top: 5px;
+  padding-bottom: 5px;
   font-size: 12px;
-  color: var(--ink-2);
-  white-space: normal;
   background: var(--surface-3);
+}
+
+.cost-ref__fold .link-btn {
+  padding: 0;
+  color: var(--ink-2);
 }
 
 .cost-ref__table tr td.is-full {
@@ -4030,8 +4039,7 @@
   backdrop-filter: blur(8px);
 }
 
-/* One shape for the three selects that share it, the page's group-by, Burn's group-by and the Unit select: a 160 px
-   select after its label. */
+/* The page's group-by: a 160 px select after its label. */
 .groupby-select {
   width: 160px;
 }

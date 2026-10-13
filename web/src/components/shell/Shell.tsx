@@ -43,7 +43,7 @@ export const PAGE_TITLES: Record<string, string> = {
 
 export function Shell() {
   const { pathname } = useLocation();
-  const { expertView, setExpertView, setTheme, setUnit, theme, unit } = useAppSettings();
+  const { expertView, setExpertView, setModelTiers, setTheme, setUnit, theme, unit } = useAppSettings();
   const narrow = useMediaQuery('(max-width: 900px)');
   const { done, logout, queue } = useSession();
   const settings = useAsync(() => api.getSettings(), []);
@@ -62,6 +62,11 @@ export function Shell() {
   useEffect(() => {
     document.title = `${title} - Phoebis Router`;
   }, [title]);
+
+  // The settings answer is the one the shell holds for every view, so the views' model orders read its tiers.
+  useEffect(() => {
+    if (settings.data) setModelTiers({ modelTier: settings.data.subscriptionCosts.modelTier, tierOrder: settings.data.subscriptionCosts.tierOrder });
+  }, [settings.data, setModelTiers]);
 
   return (
     <div className={`shell ${navOpen ? 'nav-open' : ''}`}>

@@ -406,9 +406,38 @@ test('a Follow poll stops at eight pages and names the cursor that reaches the r
   assert.equal(d.FOLLOW_OVERRUN, 'More rows arrived than Follow could fetch. Reload to read them.');
 });
 
-test('model ids order fable, opus, sonnet, haiku, newest version first', () => {
+// The two model tier members the shell hands the module, and the empty pair it holds before the settings answer.
+const SHIPPED_TIERS = { modelTier: {}, tierOrder: ['fable', 'opus', 'sonnet', 'haiku'] };
+const NO_TIERS = { modelTier: {}, tierOrder: [] };
+/** Runs `body` under `tiers`, then hands the module the empty pair again, so no case reads another's order. */
+const underTiers = (tiers, body) => {
+  d.setModelTiers(tiers);
+  try {
+    body();
+  } finally {
+    d.setModelTiers(NO_TIERS);
+  }
+};
+
+test("model ids order by the cost model's tier order, newest version first, a tier the order lacks last", () => {
   const ids = ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-opus-4-5-20251101', 'some-other-model'];
-  assert.deepEqual([...ids].sort(d.compareModels), ['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-5-20251101', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'some-other-model']);
+  underTiers(SHIPPED_TIERS, () => {
+    assert.deepEqual([...ids].sort(d.compareModels), ['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-5-20251101', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'some-other-model']);
+  });
+  underTiers({ modelTier: {}, tierOrder: ['haiku', 'fable'] }, () => {
+    assert.deepEqual([...ids].sort(d.compareModels), ['claude-haiku-4-5-20251001', 'claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-opus-4-5-20251101', 'some-other-model'], 'the two tiers the order names first, the rest by version and id');
+  });
+  // Before the settings answer, or under a cost model that names no tier, the version and the id alone.
+  assert.deepEqual([...ids].sort(d.compareModels), ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-opus-4-5-20251101', 'some-other-model']);
+});
+
+test("a model_tier entry orders a model among the tier it names, as the cost reference orders it, a dated id by its undated one", () => {
+  const tiers = { modelTier: { 'claude-opus-4-8': 'haiku' }, tierOrder: SHIPPED_TIERS.tierOrder };
+  const ids = ['claude-haiku-4-5-20251001', 'claude-opus-4-8-20260101', 'claude-sonnet-5', 'claude-opus-5', 'claude-haiku-5-5'];
+  underTiers(tiers, () => {
+    assert.deepEqual([...ids].sort(d.compareModels), ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-5-5', 'claude-opus-4-8-20260101', 'claude-haiku-4-5-20251001']);
+    assert.deepEqual([...ids].sort(d.compareModels), d.tierOrder(ids, tiers), 'one tier rule for both surfaces');
+  });
 });
 
 // The decision card's half of the vocabulary: the record's walk, candidates, folds and outcome, and the event detail.
@@ -867,10 +896,13 @@ test("a model rejection reads the until off its own request's cooldown row, what
   assert.equal(until(rejection({ requestId: null }), [cooldown({ requestId: null }, { source_request_id: null })]), undefined, 'a rejection that names no request reads no cooldown');
 });
 
-test('the catalog change lists its models fable, opus, sonnet, haiku, newest first', () => {
-  const pairs = Object.fromEntries(d.detailPairs(event('catalog_changed', { added: ['claude-haiku-4-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-opus-5-5'], count: 12, removed: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-sonnet-5'] }), NOW, []).map((p) => [p.label, texts(p.chips)]));
-  assert.deepEqual(pairs.Added, ['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-haiku-4-5']);
-  assert.deepEqual(pairs.Removed, ['claude-opus-4-5', 'claude-sonnet-5', 'claude-sonnet-4-5']);
+test("the catalog change lists its models in the cost model's tier order, newest first", () => {
+  const catalog = () => Object.fromEntries(d.detailPairs(event('catalog_changed', { added: ['claude-haiku-4-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-opus-5-5'], count: 12, removed: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-sonnet-5'] }), NOW, []).map((p) => [p.label, texts(p.chips)]));
+  underTiers(SHIPPED_TIERS, () => {
+    const pairs = catalog();
+    assert.deepEqual(pairs.Added, ['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-haiku-4-5']);
+    assert.deepEqual(pairs.Removed, ['claude-opus-4-5', 'claude-sonnet-5', 'claude-sonnet-4-5']);
+  });
 });
 
 test('the verdict line reads the cache pending only while the answer has not ended, and keys a landing depth by its rung', () => {

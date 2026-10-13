@@ -51,7 +51,7 @@ const ownWeightOf = (costs: SubscriptionCosts, model: string, window: string): n
   return byWindow !== undefined && own(byWindow, window) ? byWindow[window] : costs.modelWeight[key];
 };
 
-export const weightOf = (costs: SubscriptionCosts, model: string, window: string): number | null => ownWeightOf(costs, model, window);
+export const weightOf = (costs: SubscriptionCosts, model: string, window: string): number | null => weightOrFallback(costs, model, window)?.weight ?? null;
 
 /** The model's tier: its `model_tier` entry, else its undated id's, else the id's segment after `claude-` when
  *  `tier_order` names it. Named apart from routingLog's `tierOf`, the engine's account tier, which the test entry
@@ -180,10 +180,7 @@ export const shareIn = (costs: SubscriptionCosts, window: string, tier: string, 
 
 /** The share `usage` spends for a request completing at `at`; null where unpriced, and where the band's state at `at`
  *  cannot be read, since a share on an assumed state could read half what the ledger charges. */
-export const shareOf = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, at: number): number | null => {
-  const inside = inBand(costs, at);
-  return inside === null ? null : shareIn(costs, window, tier, model, usage, inside);
-};
+export const shareOf = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, at: number): number | null => shareOrFallback(costs, window, tier, model, usage, at)?.share ?? null;
 
 /** `shareOf` at `weightOrFallback`'s weight, the flag beside the share. */
 export const shareOrFallback = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, at: number): { estimated: boolean; share: number } | null => {
@@ -528,17 +525,17 @@ export const nextLocalChange = (costs: SubscriptionCosts, at: number, zone: stri
   return null;
 };
 
-const FAMILIES = ['fable', 'opus', 'sonnet', 'haiku'];
-const familyKey = (model: string): { rank: number; version: number[] } => {
-  const [, family = '', ...version] = undatedModel(model).split('-');
-  const rank = FAMILIES.indexOf(family);
-  return { rank: rank === -1 ? FAMILIES.length : rank, version: version.map((v) => Number.parseInt(v, 10) || 0) };
-};
+/** The numeric segments after the family in the undated id: `claude-opus-4-8` reads 4 and 8. */
+const versionKey = (model: string): number[] =>
+  undatedModel(model)
+    .split('-')
+    .slice(2)
+    .map((v) => Number.parseInt(v, 10) || 0);
 
 /** The newer version first, the numeric segments compared from the left, then the id. */
 function newestFirst(a: string, b: string): number {
-  const x = familyKey(a).version;
-  const y = familyKey(b).version;
+  const x = versionKey(a);
+  const y = versionKey(b);
   for (let i = 0; i < Math.max(x.length, y.length); i += 1) {
     const step = (y[i] ?? 0) - (x[i] ?? 0);
     if (step !== 0) return step;
@@ -546,9 +543,37 @@ function newestFirst(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
-/** The models family by family, Fable, Opus, Sonnet, Haiku, then any other, each family's newest version first: the
- *  order the shipped files keep, so a file kept in another order lists the same. */
-export const familyOrder = (models: string[]): string[] => [...models].sort((a, b) => familyKey(a).rank - familyKey(b).rank || newestFirst(a, b));
+/** The model's tier when the order names it. A tier the order lacks has no place to list at, so it reads as none. */
+const orderedTierOf = (tiers: ModelTiers, model: string): string | null => {
+  const tier = modelTierOf(tiers, model);
+  return tier !== null && tiers.tierOrder.includes(tier) ? tier : null;
+};
+
+/** Two models in the cost model's tier order, a model of no tier last, then by version descending and id: the one rule
+ *  the cost reference and the routing log list models by, so a new or renamed tier is a file edit. */
+export const compareByModelTier = (tiers: ModelTiers, a: string, b: string): number => {
+  const rank = (model: string) => {
+    const tier = orderedTierOf(tiers, model);
+    return tier === null ? tiers.tierOrder.length : tiers.tierOrder.indexOf(tier);
+  };
+  return rank(a) - rank(b) || newestFirst(a, b);
+};
+
+/** The models in the cost model's tier order, a model of no tier last, inside a tier by version descending then id. */
+export const tierOrder = (models: string[], costs: ModelTiers): string[] => [...models].sort((a, b) => compareByModelTier(costs, a, b));
+
+/** The same models grouped by tier in that order: each group's first model is the shown row, the rest fold. An id of
+ *  no tier is a group of its own, so it never folds as an older model of another. */
+export const tierGroups = (models: string[], costs: ModelTiers): { models: string[]; tier: string | null }[] => {
+  const groups: { models: string[]; tier: string | null }[] = [];
+  for (const model of tierOrder(models, costs)) {
+    const tier = orderedTierOf(costs, model);
+    const last = groups[groups.length - 1];
+    if (tier !== null && last?.tier === tier) last.models.push(model);
+    else groups.push({ models: [model], tier });
+  }
+  return groups;
+};
 
 /** The tier whose window is smallest among the sized tiers (Pro on the shipped file), the one the multiples
  *  are against. */

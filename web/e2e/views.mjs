@@ -5365,8 +5365,9 @@ async function sessionsLead(theme) {
 
 /**
  * The cost reference from Sessions, walked tab by tab at 1280 by 800 and at 1440 by 900: no table runs past its wrap,
- * every second model sits on --surface-2 against --surface with its sub-rows on its shade, and the plan rates'
- * divider sits on --surface-3. The mock pass writes each tab of the open dialog at 1280 by 800.
+ * every second model sits on --surface-2 against --surface with its sub-rows on its shade, the older models' fold row
+ * sits on --surface-3 with the stripes running on through it, and the footer's Revision select draws on one line
+ * inside the dialog. The mock pass writes each tab of the open dialog at 1280 by 800.
  */
 async function costReference(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -5380,6 +5381,76 @@ async function costReference(theme) {
     say(`the cost reference never drew its tables (${error instanceof Error ? error.message : String(error)})`);
     return;
   }
+  // One tab's tables and footer as drawn, read in the browser and checked against the rules above.
+  const measure = async (where, slug, size) => {
+    const read = await page.evaluate(() => {
+      const dlg = [...document.querySelectorAll('dialog[open]')].pop();
+      const panel = dlg.querySelector('.cost-ref__panel:not([hidden])');
+      const tone = (name) => {
+        const probe = document.createElement('div');
+        probe.style.background = `var(${name})`;
+        dlg.append(probe);
+        const color = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return color;
+      };
+      const tones = { surface: tone('--surface'), surface2: tone('--surface-2'), surface3: tone('--surface-3') };
+      // The color a cell reads on: its own background, else the first ancestor's that paints one.
+      const shade = (el) => {
+        for (let at = el; at; at = at.parentElement) {
+          const bg = getComputedStyle(at).backgroundColor;
+          if (bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return bg;
+        }
+        return null;
+      };
+      const tables = [...panel.querySelectorAll('table')].map((table) => {
+        const wrap = table.closest('.table-wrap') ?? table.parentElement;
+        const wrong = [];
+        let n = -1;
+        let alts = 0;
+        for (const row of table.querySelectorAll('tbody tr')) {
+          const name = row.children[0]?.textContent?.trim() ?? '';
+          const bg = shade(row.children[0]);
+          if (row.classList.contains('cost-ref__fold')) {
+            if (bg !== tones.surface3) wrong.push(`the fold row on ${bg}`);
+            continue;
+          }
+          if (!row.classList.contains('cost-ref__sub')) n += 1;
+          const want = n % 2 === 1 ? tones.surface2 : tones.surface;
+          if (n % 2 === 1) alts += 1;
+          if (bg !== want) wrong.push(`${name} on ${bg}, not ${want}`);
+        }
+        return { alts, overflow: Math.max(wrap.scrollWidth - wrap.clientWidth, Math.round(table.getBoundingClientRect().right - wrap.getBoundingClientRect().right)), rows: table.querySelectorAll('tbody tr').length, wrong };
+      });
+      const body = dlg.querySelector('.dialog__body');
+      const foot = dlg.querySelector('.dialog__foot');
+      const select = foot?.querySelector('select[aria-label="Revision"]');
+      const revision = (() => {
+        if (!select) return null;
+        const label = select.closest('label').getBoundingClientRect();
+        const box = select.getBoundingClientRect();
+        const frame = dlg.getBoundingClientRect();
+        return { height: Math.round(label.height), inside: label.left >= frame.left && label.right <= frame.right, overflow: foot.scrollWidth - foot.clientWidth, selectHeight: Math.round(box.height) };
+      })();
+      return { revision, sideways: body.scrollWidth - body.clientWidth, tables, tones };
+    });
+    measurements.push(`${theme} /sessions cost reference ${slug} ${size.width}x${size.height} ${JSON.stringify(read)}`);
+    if (read.tables.length === 0) say(`${where} draws no table`);
+    if (read.sideways > 0) say(`${where} scrolls ${read.sideways}px sideways`);
+    // A router's files may carry one date alone, which draws no select, and the mock's carry two.
+    if (read.revision === null) {
+      if (mock) say(`${where} draws no Revision select in the footer`);
+    } else {
+      if (!read.revision.inside) say(`${where}: the Revision select runs outside the dialog`);
+      if (read.revision.overflow > 0) say(`${where}: the footer runs ${read.revision.overflow}px past its width`);
+      if (read.revision.height > read.revision.selectHeight + 2) say(`${where}: the Revision label wraps to ${read.revision.height}px`);
+    }
+    for (const [i, t] of read.tables.entries()) {
+      if (t.overflow > 0) say(`${where}: table ${i + 1} runs ${t.overflow}px past its wrap`);
+      if (t.rows > 1 && t.alts === 0) say(`${where}: table ${i + 1} shades no second row`);
+      for (const w of t.wrong) say(`${where}: table ${i + 1} draws ${w}`);
+    }
+  };
   const TABS = [
     ['Tiers and peak band', 'tiers'],
     ['Plan rates', 'plan-rates'],
@@ -5395,60 +5466,20 @@ async function costReference(theme) {
       const where = `the cost reference's ${label} at ${size.width} by ${size.height}`;
       await dialog.getByRole('tab', { name: label, exact: true }).click();
       await settle();
-      const read = await page.evaluate(() => {
-        const dlg = [...document.querySelectorAll('dialog[open]')].pop();
-        const panel = dlg.querySelector('.cost-ref__panel:not([hidden])');
-        const tone = (name) => {
-          const probe = document.createElement('div');
-          probe.style.background = `var(${name})`;
-          dlg.append(probe);
-          const color = getComputedStyle(probe).backgroundColor;
-          probe.remove();
-          return color;
-        };
-        const tones = { surface: tone('--surface'), surface2: tone('--surface-2'), surface3: tone('--surface-3') };
-        // The color a cell reads on: its own background, else the first ancestor's that paints one.
-        const shade = (el) => {
-          for (let at = el; at; at = at.parentElement) {
-            const bg = getComputedStyle(at).backgroundColor;
-            if (bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return bg;
-          }
-          return null;
-        };
-        const tables = [...panel.querySelectorAll('table')].map((table) => {
-          const wrap = table.closest('.table-wrap') ?? table.parentElement;
-          const wrong = [];
-          let n = -1;
-          let alts = 0;
-          for (const row of table.querySelectorAll('tbody tr')) {
-            const name = row.children[0]?.textContent?.trim() ?? '';
-            const bg = shade(row.children[0]);
-            if (row.classList.contains('is-divider')) {
-              n = -1;
-              if (bg !== tones.surface3) wrong.push(`the divider on ${bg}`);
-              continue;
-            }
-            if (!row.classList.contains('cost-ref__sub')) n += 1;
-            const want = n % 2 === 1 ? tones.surface2 : tones.surface;
-            if (n % 2 === 1) alts += 1;
-            if (bg !== want) wrong.push(`${name} on ${bg}, not ${want}`);
-          }
-          return { alts, overflow: Math.max(wrap.scrollWidth - wrap.clientWidth, Math.round(table.getBoundingClientRect().right - wrap.getBoundingClientRect().right)), rows: table.querySelectorAll('tbody tr').length, wrong };
-        });
-        const body = dlg.querySelector('.dialog__body');
-        return { sideways: body.scrollWidth - body.clientWidth, tables, tones };
-      });
-      measurements.push(`${theme} /sessions cost reference ${slug} ${size.width}x${size.height} ${JSON.stringify(read)}`);
-      if (read.tables.length === 0) say(`${where} draws no table`);
-      if (read.sideways > 0) say(`${where} scrolls ${read.sideways}px sideways`);
-      for (const [i, t] of read.tables.entries()) {
-        if (t.overflow > 0) say(`${where}: table ${i + 1} runs ${t.overflow}px past its wrap`);
-        if (t.rows > 1 && t.alts === 0) say(`${where}: table ${i + 1} shades no second row`);
-        for (const w of t.wrong) say(`${where}: table ${i + 1} draws ${w}`);
-      }
+      await measure(where, slug, size);
       if (mock && size.width === 1280) {
         await atRest();
         await dialog.screenshot({ path: join(shots, theme, `cost-reference-${slug}.png`) });
+      }
+      // The older models show under the fold row too, the estimated weight cells among them, so the stripes and the
+      // width are read with them open, and the fold closes again for the next shot.
+      const fold = dialog.locator('.cost-ref__panel:not([hidden]) tr.cost-ref__fold button');
+      if ((await fold.count()) > 0) {
+        await fold.click();
+        await settle();
+        await measure(`${where} with the older models shown`, `${slug}-older`, size);
+        await fold.click();
+        await settle();
       }
     }
   }

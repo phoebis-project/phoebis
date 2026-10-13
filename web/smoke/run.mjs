@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierGroups, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -15635,8 +15635,11 @@ m.unmount();
 // own formatting, never against a literal.
 {
   const wired = decodeSettings(SETTINGS_WIRE);
-  const costs = wired.subscriptionCosts;
-  const prices = wired.apiPrices.models;
+  // The dialog draws each file's entry in force at its instant, here the mount's pinned clock.
+  const pricesAt = revisionAt(wired.apiPrices.revisions, CLOCK_ORIGIN);
+  const costsAt = revisionAt(wired.subscriptionCosts.revisions, CLOCK_ORIGIN);
+  const costs = costsAt.content;
+  const prices = pricesAt.models;
   const anchor = anchorTier(costs);
   const tiers = Object.keys(costs.capacity);
   // A Sunday evening in Los Angeles, outside the peak band, and the pinned clock, inside it.
@@ -15683,23 +15686,41 @@ m.unmount();
   const spinner = () => rates()?.querySelector('input[aria-label="Tokens, in millions"]');
   const caption = () => rates()?.querySelector('.cost-ref__caption b')?.textContent ?? '';
   const bodyRows = () => [...(rates()?.querySelectorAll('tbody tr') ?? [])];
-  const mainRows = () => bodyRows().filter((r) => !r.classList.contains('cost-ref__sub') && !r.classList.contains('is-divider'));
-  const rowOf = (model) => mainRows().find((r) => r.children[0]?.textContent?.trim() === model);
+  const isFold = (r) => r.classList.contains('cost-ref__fold');
+  const mainRows = () => bodyRows().filter((r) => !r.classList.contains('cost-ref__sub') && !isFold(r));
+  const nameOf = (r) => r.children[0]?.textContent?.trim();
+  const rowOf = (model) => mainRows().find((r) => nameOf(r) === model);
   const cellsOf = (row) => [...(row?.children ?? [])].slice(2).map((td) => td.textContent?.trim());
-  // Family by family whatever order the files keep, which the shipped files keep too.
-  const weighted = familyOrder(Object.keys(SETTINGS_WIRE.subscription_costs.content.model_weight).filter((model) => costs.modelWeight[model] !== null));
-  const unweighted = familyOrder(prices.map((p) => p.model).filter((model) => weightOf(costs, model, 'five_hour') === null));
+  const foldOf = (panel) => panel?.querySelector('tr.cost-ref__fold button') ?? null;
+  // Opens the shown tab's older models, which both model tables then show.
+  const openFold = async (pg, d) => {
+    const button = foldOf(shownPanel(d));
+    if (button?.getAttribute('aria-expanded') === 'false') {
+      button.click();
+      await pg.settle(200);
+    }
+  };
+  const CAPTION_NOTE = 'A shaded cell is more than one full window. A ~ marks an estimate: the model reads the latest weighed model of its model tier.';
+  // The cost model's models and the price file's, a dated price row under its undated id, tier by tier whatever order
+  // the files keep: each tier's newest model shown, the rest folded.
+  const listed = [...Object.keys(costs.modelWeight), ...prices.map((p) => p.model)].filter((model, i, all) => all.findIndex((m) => undatedModel(m) === undatedModel(model)) === i);
+  const groups = tierGroups(listed, costs);
+  const leaders = groups.map((g) => g.models[0]);
+  const older = groups.flatMap((g) => g.models.slice(1));
+  const models = [...leaders, ...older];
+  const estimatedOn = (model, window) => weightOrFallback(costs, model, window)?.estimated === true;
   const fiveHourWeight = (model) => weightOf(costs, model, 'five_hour');
-  const lightest = weighted.reduce((low, model) => (low === null || fiveHourWeight(model) < fiveHourWeight(low) ? model : low), null);
-  const expected = (model, tier, tokens, at) => WINDOWS.flatMap((w) => TYPES.map((t) => fmtShare(shareOf(costs, w, tier, model, usage(t, tokens), at))));
-  const wrongCells = (tier, tokens, at) => weighted.filter((model) => JSON.stringify(cellsOf(rowOf(model))) !== JSON.stringify(expected(model, tier, tokens, at))).map((model) => `${model}: ${JSON.stringify(cellsOf(rowOf(model)))} against ${JSON.stringify(expected(model, tier, tokens, at))}`);
+  const lightest = models.filter((model) => fiveHourWeight(model) !== null).reduce((low, model) => (low === null || fiveHourWeight(model) < fiveHourWeight(low) ? model : low), null);
+  const shareText = (model, window, share) => (share === null ? '-' : `${estimatedOn(model, window) ? '~' : ''}${fmtShare(share)}`);
+  const expected = (model, tier, tokens, at) => WINDOWS.flatMap((w) => TYPES.map((t) => shareText(model, w, shareOf(costs, w, tier, model, usage(t, tokens), at))));
+  const wrongCells = (tier, tokens, at) => models.filter((model) => JSON.stringify(cellsOf(rowOf(model))) !== JSON.stringify(expected(model, tier, tokens, at))).map((model) => `${model}: ${JSON.stringify(cellsOf(rowOf(model)))} against ${JSON.stringify(expected(model, tier, tokens, at))}`);
   {
-    const divider = bodyRows().findIndex((r) => r.classList.contains('is-divider'));
-    const names = (rows) => rows.filter((r) => !r.classList.contains('cost-ref__sub')).map((r) => r.children[0]?.textContent?.trim());
-    const above = names(bodyRows().slice(0, divider));
-    const below = names(bodyRows().slice(divider + 1));
+    const rows = bodyRows();
+    const fold = rows.findIndex(isFold);
+    const shown = rows.slice(0, fold).filter((r) => !r.classList.contains('cost-ref__sub')).map(nameOf);
+    const button = foldOf(rates());
     results.push({
-      name: "/sessions plan rates open on the anchor tier outside the band at one million tokens, the weighted models family by family and the unweighted ones under the divider in the same order",
+      name: "/sessions plan rates open on the anchor tier outside the band at one million tokens, one row per model tier in the cost model's order with its sub-rows, the older models under one collapsed row naming their count, and no divider",
       ok:
         JSON.stringify(pressed('Tier')) === JSON.stringify([planLabel(anchor)]) &&
         JSON.stringify(pressed('Peak band')) === JSON.stringify(['Outside']) &&
@@ -15707,15 +15728,30 @@ m.unmount();
         spinner()?.getAttribute('min') === '0.1' &&
         spinner()?.getAttribute('step') === '0.1' &&
         JSON.stringify(pressed('Token count')) === JSON.stringify(['1M']) &&
-        JSON.stringify(above) === JSON.stringify(weighted) &&
-        JSON.stringify(below) === JSON.stringify(unweighted) &&
-        bodyRows()[divider]?.textContent === 'Not weighed by the subscription cost model: a share on any window reads a dash, and the analytics list the traffic under model unlisted' &&
+        JSON.stringify(shown) === JSON.stringify(leaders) &&
+        older.length > 0 &&
+        fold === rows.length - 1 &&
+        button?.textContent === `${older.length} older models` &&
+        button.getAttribute('aria-expanded') === 'false' &&
+        !rows.some((r) => r.classList.contains('is-divider')) &&
         caption() === `Share of a ${planLabel(anchor)} window per 1M tokens` &&
-        (rates()?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === 'A shaded cell is more than one full window.',
-      missing: [JSON.stringify(pressed('Tier')), JSON.stringify(pressed('Peak band')), spinner()?.value ?? 'no spinner', JSON.stringify(pressed('Token count')), JSON.stringify(above), JSON.stringify(below), caption()],
+        (rates()?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === CAPTION_NOTE,
+      missing: [JSON.stringify(pressed('Tier')), JSON.stringify(pressed('Peak band')), spinner()?.value ?? 'no spinner', JSON.stringify(pressed('Token count')), JSON.stringify(shown), JSON.stringify(leaders), `fold at ${fold} of ${rows.length}`, button?.outerHTML ?? 'no fold', caption()],
     });
   }
-  results.push({ name: '/sessions plan rates price every 5-hour and 7-day cell of a weighted model by the share rule for a million tokens of its type', ok: weighted.length > 0 && wrongCells(anchor, 1_000_000, OUT).length === 0, missing: wrongCells(anchor, 1_000_000, OUT) });
+  // Every check below reads every model, so the older ones show from here on.
+  foldOf(rates())?.click();
+  await page.settle(200);
+  {
+    const rows = bodyRows();
+    const after = rows.slice(rows.findIndex(isFold) + 1).filter((r) => !r.classList.contains('cost-ref__sub')).map(nameOf);
+    results.push({
+      name: "/sessions plan rates' older-models row expands to the older models under it in the same tier order",
+      ok: foldOf(rates())?.getAttribute('aria-expanded') === 'true' && JSON.stringify(after) === JSON.stringify(older),
+      missing: [foldOf(rates())?.outerHTML ?? 'no fold', JSON.stringify(after), JSON.stringify(older)],
+    });
+  }
+  results.push({ name: '/sessions plan rates price every 5-hour and 7-day cell of every model by the share rule for a million tokens of its type, an estimated cell marked', ok: models.length > 0 && wrongCells(anchor, 1_000_000, OUT).length === 0, missing: wrongCells(anchor, 1_000_000, OUT) });
   {
     const fable = rowOf('claude-fable-5-1');
     const week = fable?.nextElementSibling;
@@ -15728,33 +15764,53 @@ m.unmount();
     });
   }
   {
-    const opus5 = rowOf('claude-opus-5');
     const heads = [...(rates()?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
-    const multiples = weighted.map((model) => rowOf(model)?.children[1]?.textContent?.trim());
-    const want = weighted.map((model) => `${figure(fiveHourWeight(model) / fiveHourWeight(lightest))}x`);
+    const own = models.filter((model) => fiveHourWeight(model) !== null && !estimatedOn(model, 'five_hour'));
+    const multiples = own.map((model) => rowOf(model)?.children[1]?.textContent?.trim());
+    const want = own.map((model) => `${figure(fiveHourWeight(model) / fiveHourWeight(lightest))}x`);
     results.push({
-      name: "/sessions plan rates dash every cell of a model the cost model does not weigh, and weigh each other model against the lightest on the 5-hour window",
-      ok: cellsOf(opus5).length === 10 && cellsOf(opus5).every((c) => c === '-') && opus5?.children[1]?.textContent === 'not weighed' && heads[1] === 'Weight, 5-hour window' && JSON.stringify(multiples) === JSON.stringify(want),
-      missing: [JSON.stringify(cellsOf(opus5)), heads[1] ?? 'no weight head', JSON.stringify(multiples), JSON.stringify(want)],
+      name: '/sessions plan rates weigh each model the cost model weighs against the lightest on the 5-hour window',
+      ok: heads[1] === 'Weight, 5-hour window' && own.length > 1 && JSON.stringify(multiples) === JSON.stringify(want),
+      missing: [heads[1] ?? 'no weight head', JSON.stringify(multiples), JSON.stringify(want)],
     });
   }
   {
-    // A model and its sub-rows share one stripe, and the stripes restart under the divider.
+    // A price row the cost model weighs through its model tier's latest, picked off the wire.
+    const model = prices.map((p) => p.model).find((m) => estimatedOn(m, 'five_hour'));
+    const row = rowOf(model);
+    const cells = cellsOf(row);
+    const titles = [...(row?.children ?? [])].slice(2).map((td) => td.getAttribute('title') ?? '');
+    const weight = row?.children[1];
+    results.push({
+      name: "/sessions plan rates mark every cell of a model priced at its model tier's latest weight with a tilde and the estimate's title, its weight cell naming the model it reads, and the caption says what the mark means",
+      ok:
+        model !== undefined &&
+        cells.length === 10 &&
+        cells.every((c) => c.startsWith('~')) &&
+        titles.every((t) => t.endsWith(`${ESTIMATED_TITLE}.`)) &&
+        (weight?.textContent ?? '').startsWith('estimated, as ') &&
+        weight?.querySelector('[title]')?.getAttribute('title') === ESTIMATED_TITLE &&
+        (rates()?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === CAPTION_NOTE,
+      missing: [String(model), JSON.stringify(cells), weight?.textContent ?? 'no weight cell', weight?.querySelector('[title]')?.getAttribute('title') ?? 'no title', ...titles.filter((t) => !t.endsWith(`${ESTIMATED_TITLE}.`))],
+    });
+  }
+  {
+    // A model and its sub-rows share one stripe, and the count runs on through the fold row, which takes none.
     const stripes = (rows) => {
       const wrong = [];
       let n = -1;
       for (const r of rows) {
-        if (r.classList.contains('is-divider')) {
-          n = -1;
+        if (isFold(r)) {
+          if (r.classList.contains('is-alt')) wrong.push('the fold row');
           continue;
         }
         if (!r.classList.contains('cost-ref__sub')) n += 1;
-        if (r.classList.contains('is-alt') !== (n % 2 === 1)) wrong.push(r.children[0]?.textContent?.trim() ?? '');
+        if (r.classList.contains('is-alt') !== (n % 2 === 1)) wrong.push(nameOf(r) ?? '');
       }
       return wrong;
     };
     const wrong = stripes(bodyRows());
-    results.push({ name: '/sessions plan rates shade every second model with its sub-rows and restart under the divider', ok: wrong.length === 0 && bodyRows().some((r) => r.classList.contains('is-alt')), missing: wrong });
+    results.push({ name: '/sessions plan rates shade every second model with its sub-rows, the count running on through the fold', ok: wrong.length === 0 && bodyRows().some(isFold) && bodyRows().some((r) => r.classList.contains('is-alt')), missing: wrong });
   }
   // A missing field fails the checks below rather than the run.
   const type = (input, text) => {
@@ -15780,15 +15836,19 @@ m.unmount();
   await page.settle(200);
   {
     const factor = bandFactor(costs, 'five_hour', CLOCK_ORIGIN);
-    const scaled = weighted.filter((model) => {
+    const scaled = models.filter((model) => {
       const cells = cellsOf(rowOf(model));
-      const five = TYPES.map((t) => fmtShare(shareOf(costs, 'five_hour', anchor, model, usage(t, 10_000_000), OUT) * factor));
+      const five = TYPES.map((t) => {
+        const share = shareOf(costs, 'five_hour', anchor, model, usage(t, 10_000_000), OUT);
+        return shareText(model, 'five_hour', share === null ? null : share * factor);
+      });
       return JSON.stringify(cells.slice(0, 5)) !== JSON.stringify(five);
     });
+    // Every row shows with the fold open, so the tinted cells and the shares past a full window count the same rows.
     const full = rates()?.querySelectorAll('td.is-full').length ?? 0;
-    // The Fable week's cells count too, priced on the model week its sub-row draws.
+    // A model week's cells count too, priced on the week its sub-row draws.
     const windowsOf = (model) => [...WINDOWS, ...(rowOf(model)?.nextElementSibling?.classList.contains('cost-ref__sub') ? ['seven_day_fable'] : [])];
-    const over = weighted.flatMap((model) => windowsOf(model).flatMap((w) => TYPES.map((t) => shareOf(costs, w, anchor, model, usage(t, 10_000_000), CLOCK_ORIGIN)))).filter((s) => s >= 1).length;
+    const over = models.flatMap((model) => windowsOf(model).flatMap((w) => TYPES.map((t) => shareOf(costs, w, anchor, model, usage(t, 10_000_000), CLOCK_ORIGIN)))).filter((s) => s !== null && s >= 1).length;
     results.push({
       name: '/sessions plan rates inside the band weigh the 5-hour cells by the band factor, name the band in the caption, and tint every cell past a full window',
       ok: factor > 1 && scaled.length === 0 && wrongCells(anchor, 10_000_000, CLOCK_ORIGIN).length === 0 && caption() === `Share of a ${planLabel(anchor)} window per 10M tokens, a request completing inside the peak band` && full === over && over > 0,
@@ -15810,8 +15870,13 @@ m.unmount();
   {
     const panel = shownPanel(dlg);
     const rows = [...(panel?.querySelectorAll('tbody tr') ?? [])];
-    const main = rows.filter((r) => !r.classList.contains('cost-ref__sub'));
+    const foldRow = rows.find(isFold);
+    const main = rows.filter((r) => !r.classList.contains('cost-ref__sub') && !isFold(r));
     const listed = main.map((r) => r.children[0]?.textContent?.trim());
+    const shownFirst = rows.slice(0, rows.indexOf(foldRow)).filter((r) => !r.classList.contains('cost-ref__sub')).map(nameOf);
+    const priceGroups = tierGroups(prices.map((p) => p.model), costs);
+    const priceOlder = priceGroups.flatMap((g) => g.models.slice(1));
+    const priceOrder = [...priceGroups.map((g) => g.models[0]), ...priceOlder];
     const cells = (row) => [...(row?.children ?? [])].slice(1).map((td) => td.textContent?.trim());
     const priced = (p) => [p.inputPerM, p.cacheReadPerM, p.cacheWrite5mPerM, p.cacheWrite1hPerM, p.outputPerM].map(usd);
     const wrong = prices.filter((p) => JSON.stringify(cells(main.find((r) => r.children[0]?.textContent?.trim() === p.model))) !== JSON.stringify(priced(p))).map((p) => p.model);
@@ -15829,12 +15894,18 @@ m.unmount();
     const haiku = main.find((r) => r.children[0]?.textContent?.trim() === 'claude-haiku-5-5');
     const long = prices.find((p) => p.model === 'claude-haiku-5-5')?.longContext ?? null;
     const prompt = haiku?.nextElementSibling;
-    const expectedSubs = familyOrder(prices.filter((p) => p.fast !== null || p.longContext !== null).map((p) => p.model))
-      .flatMap((model) => { const p = prices.find((x) => x.model === model); return [...(p.fast ? [model] : []), ...(p.longContext ? [model] : [])]; });
+    const expectedSubs = priceOrder.flatMap((model) => {
+      const p = prices.find((x) => x.model === model);
+      return [...(p.fast ? [model] : []), ...(p.longContext ? [model] : [])];
+    });
     results.push({
-      name: "/sessions API prices list the price file's models family by family at their cells, a fast-mode row under each model with fast cells and a prompt-length row under each model priced by prompt length",
+      name: "/sessions API prices list one row per model tier and the older models under the fold the plan rates opened, every model of the entry in force at its cells, a fast-mode row under each model with fast cells and a prompt-length row under each model priced by prompt length",
       ok:
-        JSON.stringify(listed) === JSON.stringify(familyOrder(Object.keys(SETTINGS_WIRE.api_prices.content.models))) &&
+        JSON.stringify(shownFirst) === JSON.stringify(priceGroups.map((g) => g.models[0])) &&
+        foldRow?.textContent === `${priceOlder.length} older models` &&
+        foldRow.querySelector('button')?.getAttribute('aria-expanded') === 'true' &&
+        JSON.stringify(listed) === JSON.stringify(priceOrder) &&
+        listed.length === prices.length &&
         wrong.length === 0 &&
         fast?.classList.contains('cost-ref__sub') === true &&
         fast.children[0]?.textContent === 'fast mode' &&
@@ -15848,7 +15919,7 @@ m.unmount();
         stripes.length === 0 &&
         (panel?.querySelector('.cost-ref__caption b')?.textContent ?? '') === 'USD per million tokens at list price' &&
         (panel?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === 'An API-key account pays these. A subscription account pays them in overage and for fast-mode answers.',
-      missing: [JSON.stringify(listed), ...wrong, JSON.stringify(cells(fast)), JSON.stringify(cells(prompt)), JSON.stringify(subs), ...stripes],
+      missing: [JSON.stringify(shownFirst), foldRow?.outerHTML ?? 'no fold', JSON.stringify(listed), ...wrong, JSON.stringify(cells(fast)), JSON.stringify(cells(prompt)), JSON.stringify(subs), ...stripes],
     });
     // A sub-row's first cell carries the hover, the row itself none.
     const titles = [fast?.children[0]?.getAttribute('title') ?? null, prompt?.children[0]?.getAttribute('title') ?? null];
@@ -15955,19 +16026,82 @@ m.unmount();
       missing: [changeLine, String(wantChange), byHand],
     });
   }
+  const revisionSelect = (d) => d?.querySelector('.dialog__foot select[aria-label="Revision"]') ?? null;
+  // Both files' dates, as the select lists them, the date in force the latest at or before the instant.
+  const union = [...wired.apiPrices.revisions, ...wired.subscriptionCosts.revisions].sort((a, b) => Date.parse(a.effectiveDate) - Date.parse(b.effectiveDate));
+  const inForceDate = revisionAt(union, CLOCK_ORIGIN).effective;
+  const titleOf = (source, key, path) => (source === 'shipped' ? `The table this release ships. A copy at ${key}${path === null ? '' : ` (${path})`} would replace it at the next start.` : `Read from ${path}, set by ${key}.`);
+  const chipsOf = (d) => [...(d?.querySelectorAll('.dialog__foot .chip') ?? [])].map((c) => [c.textContent, c.getAttribute('title')]);
   {
-    const chips = [...(dlg?.querySelectorAll('.dialog__foot .chip') ?? [])].map((c) => [c.textContent, c.getAttribute('title')]);
-    const titleOf = (source, key, path) => (source === 'shipped' ? `The table this release ships. A copy at ${key}${path === null ? '' : ` (${path})`} would replace it at the next start.` : `Read from ${path}, set by ${key}.`);
+    const chips = chipsOf(dlg);
     const want = [
-      [`API prices, effective ${effectiveLabel(wired.apiPrices.effective)}, ${wired.apiPrices.source}`, titleOf(wired.apiPrices.source, 'stats.api_prices_path', wired.storage.apiPricesPath)],
-      [`Subscription cost model, effective ${effectiveLabel(costs.effective)}, ${costs.source}`, titleOf(costs.source, 'stats.subscription_costs_path', wired.storage.subscriptionCostsPath)],
+      [`API prices, effective ${effectiveLabel(pricesAt.effective)}, ${wired.apiPrices.source}`, titleOf(wired.apiPrices.source, 'stats.api_prices_path', wired.storage.apiPricesPath)],
+      [`Subscription cost model, effective ${effectiveLabel(costsAt.effective)}, ${wired.subscriptionCosts.source}`, titleOf(wired.subscriptionCosts.source, 'stats.subscription_costs_path', wired.storage.subscriptionCostsPath)],
     ];
-    results.push({ name: "/sessions the cost reference's footer names each table's date and source, its key and path in the title", ok: JSON.stringify(chips) === JSON.stringify(want), missing: chips.map((c) => c.join(' | ')) });
+    const select = revisionSelect(dlg);
+    results.push({
+      name: "/sessions the cost reference's footer names the entry in force of each table, its date and source with its key and path in the title, beside a Revision select on the date in force",
+      ok: JSON.stringify(chips) === JSON.stringify(want) && select?.value === inForceDate && select.closest('label')?.textContent?.startsWith('Revision') === true,
+      missing: [...chips.map((c) => c.join(' | ')), select?.value ?? 'no select', inForceDate],
+    });
     // Every sentence the dialog draws, its titles among them, joins no two clauses with a semicolon.
     const said = [dlg?.textContent ?? '', ...[...(dlg?.querySelectorAll('[title]') ?? [])].map((el) => el.getAttribute('title') ?? '')].filter((t) => t.includes(';'));
     results.push({ name: '/sessions no sentence of the cost reference, its titles among them, carries a semicolon', ok: said.length === 0, missing: said.map((t) => t.slice(0, 160)) });
   }
+  {
+    // The earlier price entry, chosen on the select: every tab redraws at it, and the one cost entry stays.
+    const earlier = wired.apiPrices.revisions[0];
+    const later = pricesAt;
+    const tabText = async (label) => {
+      tabsOf(dlg).find((t) => t.textContent?.trim() === label)?.click();
+      await page.settle(200);
+      return shownPanel(dlg)?.querySelector('tbody')?.textContent ?? 'no table';
+    };
+    const ratesBefore = await tabText('Plan rates');
+    await changeSelect(page, revisionSelect(dlg), earlier.effective);
+    const ratesAfter = await tabText('Plan rates');
+    await tabText('API prices');
+    const rows = [...(shownPanel(dlg)?.querySelectorAll('tbody tr') ?? [])];
+    const main = rows.filter((r) => !r.classList.contains('cost-ref__sub') && !isFold(r));
+    const usdCells = (p) => [p.inputPerM, p.cacheReadPerM, p.cacheWrite5mPerM, p.cacheWrite1hPerM, p.outputPerM].map(usd);
+    const dropped = later.models.map((p) => p.model).filter((model) => !earlier.models.some((p) => p.model === model));
+    const changed = earlier.models.find((p) => {
+      const current = later.models.find((q) => q.model === p.model);
+      return current !== undefined && JSON.stringify(usdCells(current)) !== JSON.stringify(usdCells(p));
+    });
+    const drawn = [...(main.find((r) => nameOf(r) === changed?.model)?.children ?? [])].slice(1).map((td) => td.textContent?.trim());
+    const chip = chipsOf(dlg)[0]?.[0];
+    results.push({
+      name: '/sessions the Revision select redraws the API prices at an earlier entry, its models and cells, the chip naming it, and the plan rates at the one cost entry',
+      ok:
+        earlier.effective !== later.effective &&
+        revisionSelect(dlg)?.value === earlier.effective &&
+        main.length === earlier.models.length &&
+        dropped.length > 0 &&
+        dropped.every((model) => !main.some((r) => nameOf(r) === model)) &&
+        changed !== undefined &&
+        JSON.stringify(drawn) === JSON.stringify(usdCells(changed)) &&
+        chip === `API prices, effective ${effectiveLabel(earlier.effective)}, ${wired.apiPrices.source}` &&
+        wired.subscriptionCosts.revisions.length === 1 &&
+        ratesAfter === ratesBefore,
+      missing: [revisionSelect(dlg)?.value ?? 'no select', `${main.length} rows against ${earlier.models.length}`, JSON.stringify(dropped), changed?.model ?? 'no changed model', JSON.stringify(drawn), String(chip), String(ratesAfter === ratesBefore)],
+    });
+  }
   results.push({ name: '/sessions Close closes the cost reference', ok: await closeCost(page, dlg), missing: [] });
+  {
+    // A new opening starts folded, on the dates in force, whatever the last one chose.
+    linkIn(page.container.querySelector('.page-head'))?.click();
+    await page.settle(400);
+    const again = topDialog();
+    const rows = [...(shownPanel(again)?.querySelectorAll('tbody tr') ?? [])];
+    const button = foldOf(shownPanel(again));
+    results.push({
+      name: '/sessions a reopened cost reference reads its older models folded and the Revision select on the date in force',
+      ok: button?.getAttribute('aria-expanded') === 'false' && rows.length > 0 && isFold(rows[rows.length - 1]) && revisionSelect(again)?.value === inForceDate,
+      missing: [button?.outerHTML ?? 'no fold', String(rows.length), revisionSelect(again)?.value ?? 'no select'],
+    });
+    await closeCost(page, again);
+  }
   page.unmount();
 
   // The other five entry points, each on the tab it names.
@@ -16095,26 +16229,31 @@ m.unmount();
     });
   }
 
-  // On the test tables, Fable 5.1 with a null shared weight and a weight of 10 on the Fable week alone, and Opus 5 with
-  // a weight of 3 on the 7-day window alone: each lists above the divider and prices the window it is weighed on.
+  // On the test tables' entry in force at the pinned clock, Fable 5.1 with a null shared weight and a weight of 10 on
+  // the Fable week alone, and Opus 5 with a weight of 3 on the 7-day window alone: each prices the window it is weighed
+  // on, and Opus 5's 5-hour window reads its model tier's latest weight, marked. Fable 5.1 is its tier's one model, so
+  // no weight stands in for its shared windows.
   {
     const { getSettings } = api;
     const tables = JSON.parse(readFileSync(new URL('../test/fixtures/test_tables.json', import.meta.url), 'utf8')).body;
-    const content = structuredClone(tables.subscription_costs.content);
+    const envelope = structuredClone(tables.subscription_costs);
+    const inForce = revisionAt(decodeSettings({ ...SETTINGS_WIRE, subscription_costs: envelope }).subscriptionCosts.revisions, CLOCK_ORIGIN).effective;
+    const content = envelope.revisions.find((r) => r.effective === inForce).content;
     content.model_weight['claude-fable-5-1'] = null;
     content.overrides['claude-fable-5-1'] = { weight_by_window: { seven_day_fable: 10 } };
     content.overrides['claude-opus-5'] = { weight_by_window: { seven_day: 3 } };
-    const wired = decodeSettings({ ...SETTINGS_WIRE, api_prices: tables.api_prices, subscription_costs: { ...tables.subscription_costs, content } });
+    const wired = decodeSettings({ ...SETTINGS_WIRE, api_prices: tables.api_prices, subscription_costs: envelope });
+    const drawnCosts = revisionAt(wired.subscriptionCosts.revisions, CLOCK_ORIGIN).content;
     api.getSettings = async (...args) => ({ ...(await getSettings.apply(api, args)), apiPrices: wired.apiPrices, subscriptionCosts: wired.subscriptionCosts });
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
     linkIn(page.container.querySelector('.page-head'))?.click();
     await page.settle(400);
     const dlg = topDialog();
+    await openFold(page, dlg);
     const rows = [...(shownPanel(dlg)?.querySelectorAll('tbody tr') ?? [])];
-    const divider = rows.findIndex((r) => r.classList.contains('is-divider'));
-    const above = (row) => row !== undefined && rows.indexOf(row) < (divider === -1 ? rows.length : divider);
-    const rowOf = (model) => rows.find((r) => !r.classList.contains('cost-ref__sub') && r.children[0]?.textContent?.trim() === model);
+    const rowOf = (model) => rows.find((r) => !r.classList.contains('cost-ref__sub') && !isFold(r) && nameOf(r) === model);
     const cellsOf = (row) => [...(row?.children ?? [])].slice(2).map((td) => td.textContent?.trim());
+    const titlesOf = (row) => [...(row?.children ?? [])].slice(2).map((td) => td.getAttribute('title') ?? '');
     const weightIn = (row) => ({ text: row?.children[1]?.textContent?.trim(), title: row?.children[1]?.querySelector('[title]')?.getAttribute('title') });
     const fable = rowOf('claude-fable-5-1');
     const week = fable?.nextElementSibling;
@@ -16122,29 +16261,31 @@ m.unmount();
     const dashes = (n) => Array.from({ length: n }, () => '-');
     // A million tokens of each type, input, cache read, the two writes and output at multipliers 1, 0.1, 2, 2 and 10,
     // on the Max 20x week of 1000: Fable's 10 x m x 1e6 / 1000 / 0.5 on the Fable week, Opus 5's 3 x m x 1e6 / 1000.
+    // Opus 5's 5-hour cells read the entry's Opus 5.5 weight, outside the band the dialog opens on.
+    const fiveHour = TYPES.map((t) => `~${fmtShare(shareOf(drawnCosts, 'five_hour', anchorTier(drawnCosts), 'claude-opus-5', usage(t, 1_000_000), OUT))}`);
     const drawn = {
-      fable: { above: above(fable), cells: cellsOf(fable), weight: weightIn(fable) },
-      opus5: { above: above(opus5), cells: cellsOf(opus5), sub: opus5?.nextElementSibling?.classList.contains('cost-ref__sub') ?? false, weight: weightIn(opus5) },
+      fable: { cells: cellsOf(fable), weight: weightIn(fable) },
+      opus5: { cells: cellsOf(opus5), sub: opus5?.nextElementSibling?.classList.contains('cost-ref__sub') ?? false, titles: titlesOf(opus5), weight: weightIn(opus5) },
       week: { cells: cellsOf(week), label: week?.classList.contains('cost-ref__sub') ? week.children[0]?.textContent : 'no sub-row' },
     };
     await closeCost(page, dlg);
     page.unmount();
     api.getSettings = getSettings;
     results.push({
-      name: '/sessions plan rates list a model weighed by window alone above the divider, price the window it is weighed on, and read its weight cell by window',
+      name: "/sessions plan rates price a model weighed by window alone on the windows it weighs, read its weight cell by window, and fill a window it does not weigh at its model tier's latest, marked on those cells alone",
       ok:
-        drawn.fable.above &&
         JSON.stringify(drawn.fable.cells) === JSON.stringify(dashes(10)) &&
         drawn.fable.weight.text === 'by window' &&
         drawn.fable.weight.title === 'claude-fable-5-1 carries no shared weight, only a weight per window: 10 on the Fable week' &&
         drawn.week.label === 'Fable week' &&
         JSON.stringify(drawn.week.cells) === JSON.stringify([...Array(5).fill(''), fmtShare(20_000), fmtShare(2_000), fmtShare(40_000), fmtShare(40_000), fmtShare(200_000)]) &&
-        drawn.opus5.above &&
         !drawn.opus5.sub &&
-        JSON.stringify(drawn.opus5.cells) === JSON.stringify([...dashes(5), fmtShare(3_000), fmtShare(300), fmtShare(6_000), fmtShare(6_000), fmtShare(30_000)]) &&
+        JSON.stringify(drawn.opus5.cells) === JSON.stringify([...fiveHour, fmtShare(3_000), fmtShare(300), fmtShare(6_000), fmtShare(6_000), fmtShare(30_000)]) &&
+        drawn.opus5.titles.slice(0, 5).every((t) => t.endsWith(`${ESTIMATED_TITLE}.`)) &&
+        drawn.opus5.titles.slice(5).every((t) => t !== '' && !t.includes(ESTIMATED_TITLE)) &&
         drawn.opus5.weight.text === 'by window' &&
         drawn.opus5.weight.title === 'claude-opus-5 carries no shared weight, only a weight per window: 3 on the 7-day window',
-      missing: [JSON.stringify(drawn)],
+      missing: [JSON.stringify(drawn), JSON.stringify(fiveHour)],
     });
   }
 
@@ -16164,7 +16305,8 @@ m.unmount();
     const rows = [...(shownPanel(dlg)?.querySelectorAll('tbody tr') ?? [])];
     const haiku = rows.find((r) => !r.classList.contains('cost-ref__sub') && r.children[0]?.textContent?.trim() === 'claude-haiku-5-5');
     const prompt = haiku?.nextElementSibling;
-    const long = wired.apiPrices.models.find((p) => p.model === 'claude-haiku-5-5')?.longContext ?? null;
+    // The entry in force at the pinned clock, the one the dialog draws.
+    const long = revisionAt(wired.apiPrices.revisions, CLOCK_ORIGIN).models.find((p) => p.model === 'claude-haiku-5-5')?.longContext ?? null;
     const drawn = {
       cells: [...(prompt?.children ?? [])].slice(1).map((td) => td.textContent?.trim()),
       hasSub: haiku?.classList.contains('has-sub') ?? false,
@@ -16183,6 +16325,102 @@ m.unmount();
         JSON.stringify(drawn.cells) === JSON.stringify([long.inputPerM, long.cacheReadPerM, long.cacheWrite5mPerM, long.cacheWrite1hPerM, long.outputPerM].map(usd)) &&
         drawn.stripe,
       missing: [JSON.stringify(drawn)],
+    });
+  }
+
+  // A price row of no model tier, which no weight stands in for: a row of its own after the tiers, before the fold,
+  // every cell a dash.
+  {
+    const { getSettings } = api;
+    const model = 'claude-unlisted-1';
+    const add = (models) => [...models, { ...models[0], fast: null, longContext: null, model }];
+    api.getSettings = async (...args) => {
+      const settings = await getSettings.apply(api, args);
+      return { ...settings, apiPrices: { ...settings.apiPrices, models: add(settings.apiPrices.models), revisions: settings.apiPrices.revisions.map((r) => ({ ...r, models: add(r.models) })) } };
+    };
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    linkIn(page.container.querySelector('.page-head'))?.click();
+    await page.settle(400);
+    const dlg = topDialog();
+    const rows = [...(shownPanel(dlg)?.querySelectorAll('tbody tr') ?? [])];
+    const row = rows.find((r) => nameOf(r) === model);
+    const drawn = { before: row !== undefined && rows.indexOf(row) < rows.findIndex(isFold), cells: [...(row?.children ?? [])].slice(2).map((td) => td.textContent?.trim()), weight: row?.children[1]?.textContent?.trim() ?? 'no row' };
+    await closeCost(page, dlg);
+    page.unmount();
+    api.getSettings = getSettings;
+    results.push({
+      name: '/sessions plan rates list a price row of no model tier as a row of its own before the fold, dash every cell and read its weight cell not weighed',
+      ok: tierGroups([model], costs)[0]?.tier === null && drawn.before && drawn.cells.length === 10 && drawn.cells.every((c) => c === '-') && drawn.weight === 'not weighed',
+      missing: [JSON.stringify(drawn)],
+    });
+  }
+
+  // A pending price entry dated 2099, one model short so the tab tells it from the entry in force: the select lists it
+  // first, marked next and unselected, and the dialog opens on the entry in force.
+  {
+    const { getSettings } = api;
+    const pendingDate = '2099-01-01';
+    api.getSettings = async (...args) => {
+      const settings = await getSettings.apply(api, args);
+      const last = settings.apiPrices.revisions[settings.apiPrices.revisions.length - 1];
+      const pending = { effective: pendingDate, effectiveDate: new Date(Date.parse(pendingDate)).toISOString(), models: last.models.slice(1) };
+      return { ...settings, apiPrices: { ...settings.apiPrices, revisions: [...settings.apiPrices.revisions, pending] } };
+    };
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    linkIn(page.container.querySelector('.page-head'))?.click();
+    await page.settle(400);
+    const dlg = topDialog();
+    tabsOf(dlg).find((t) => t.textContent?.trim() === 'API prices')?.click();
+    await page.settle(200);
+    await openFold(page, dlg);
+    const select = revisionSelect(dlg);
+    const options = [...(select?.options ?? [])].map((o) => ({ selected: o.selected, text: o.textContent, value: o.value }));
+    const listed = [...(shownPanel(dlg)?.querySelectorAll('tbody tr') ?? [])].filter((r) => !r.classList.contains('cost-ref__sub') && !isFold(r)).length;
+    const chip = chipsOf(dlg)[0]?.[0];
+    await closeCost(page, dlg);
+    page.unmount();
+    api.getSettings = getSettings;
+    results.push({
+      name: '/sessions a pending price entry lists first on the Revision select marked next and unselected, and the dialog draws the entry in force',
+      ok:
+        select?.value === inForceDate &&
+        options[0]?.value === pendingDate &&
+        options[0].text === `${effectiveLabel(pendingDate)} (next)` &&
+        !options[0].selected &&
+        options.filter((o) => o.text.endsWith(' (next)')).length === 1 &&
+        listed === prices.length &&
+        chip === `API prices, effective ${effectiveLabel(pricesAt.effective)}, ${wired.apiPrices.source}`,
+      missing: [select?.value ?? 'no select', JSON.stringify(options), `${listed} rows against ${prices.length}`, String(chip)],
+    });
+  }
+
+  // Opened an hour before the earliest revision, the dialog reads the earliest entries, since a blank history reads
+  // worse than the first known table, and marks every date next.
+  {
+    const earliest = union[0];
+    const first = wired.apiPrices.revisions[0];
+    const page = await mount('/sessions', { now: Date.parse(earliest.effectiveDate) - 3_600_000 });
+    linkIn(page.container.querySelector('.page-head'))?.click();
+    await page.settle(400);
+    const dlg = topDialog();
+    tabsOf(dlg).find((t) => t.textContent?.trim() === 'API prices')?.click();
+    await page.settle(200);
+    await openFold(page, dlg);
+    const select = revisionSelect(dlg);
+    const options = [...(select?.options ?? [])].map((o) => o.textContent ?? '');
+    const listed = [...(shownPanel(dlg)?.querySelectorAll('tbody tr') ?? [])].filter((r) => !r.classList.contains('cost-ref__sub') && !isFold(r)).length;
+    const chip = chipsOf(dlg)[0]?.[0];
+    await closeCost(page, dlg);
+    page.unmount();
+    results.push({
+      name: '/sessions a cost reference opened before the earliest revision reads the earliest date on the Revision select, every date marked next, and draws the earliest entries',
+      ok:
+        select?.value === earliest.effective &&
+        options.length > 1 &&
+        options.every((o) => o.endsWith(' (next)')) &&
+        listed === first.models.length &&
+        chip === `API prices, effective ${effectiveLabel(first.effective)}, ${wired.apiPrices.source}`,
+      missing: [select?.value ?? 'no select', JSON.stringify(options), `${listed} rows against ${first.models.length}`, String(chip)],
     });
   }
 
@@ -16366,17 +16604,35 @@ m.unmount();
   // The settings answer feeds the shell's version line as well as the page, so a decoder that threw on the date would
   // blank both.
   const { getSettings } = api;
-  api.getSettings = () => Promise.resolve(decodeSettings({ ...SETTINGS_WIRE, api_prices: { ...SETTINGS_WIRE.api_prices, content: { ...SETTINGS_WIRE.api_prices.content, effective: 'v3' } } }));
-  const page = await mount('/settings');
+  // The file's one entry dated in free text, which no instant reads, so it stands as the entry in force.
+  const wire = SETTINGS_WIRE.api_prices;
+  const entry = { ...wire.revisions.find((r) => r.effective === wire.effective), content: { ...wire.content, effective: 'v3' }, effective: 'v3' };
+  api.getSettings = () => Promise.resolve(decodeSettings({ ...SETTINGS_WIRE, api_prices: { ...wire, content: entry.content, effective: 'v3', revisions: [entry] } }));
+  const page = await mount('/settings', { now: CLOCK_ORIGIN });
   const sidebar = page.container.querySelector('.sidebar')?.textContent ?? '';
   const about = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
   const row = [...(about?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'API prices path')?.querySelector('dd')?.textContent?.trim() ?? '';
-  results.push({ name: "/settings a free-text price file date shows as sent on its About row and still draws the sidebar version", ok: sidebar.includes(MOCK_VERSION) && row === `${SETTINGS_WIRE.storage.api_prices_path}, effective v3`, missing: [sidebar.slice(0, 120), row || 'no API prices path row'] });
+  results.push({ name: "/settings a free-text price file date shows as sent on its About row and still draws the sidebar version", ok: sidebar.includes(MOCK_VERSION) && row === `${SETTINGS_WIRE.storage.api_prices_path}, effective v3, 1 revision`, missing: [sidebar.slice(0, 120), row || 'no API prices path row'] });
   api.getSettings = getSettings;
   page.unmount();
 }
 
-m = await mount('/settings');
+{
+  // A pending entry: the row names the date in force, the count with the pending entry among it, and the next date.
+  const { getSettings } = api;
+  const wired = decodeSettings(SETTINGS_WIRE);
+  const pending = { effective: '2099-01-01', effectiveDate: new Date(Date.parse('2099-01-01')).toISOString(), models: [] };
+  api.getSettings = () => Promise.resolve({ ...wired, apiPrices: { ...wired.apiPrices, revisions: [...wired.apiPrices.revisions, pending] } });
+  const page = await mount('/settings', { now: CLOCK_ORIGIN });
+  const about = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+  const row = [...(about?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'API prices path')?.querySelector('dd')?.textContent?.trim() ?? '';
+  const want = `${SETTINGS_WIRE.storage.api_prices_path}, effective ${effectiveLabel(revisionAt(wired.apiPrices.revisions, CLOCK_ORIGIN).effective)}, ${wired.apiPrices.revisions.length + 1} revisions, next Jan 01, 2099`;
+  results.push({ name: '/settings a pending price entry reads on its About row after the date in force and the revision count as the next date', ok: row === want, missing: [row || 'no API prices path row', want] });
+  api.getSettings = getSettings;
+  page.unmount();
+}
+
+m = await mount('/settings', { now: CLOCK_ORIGIN });
 expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Unit', 'Admin secret', 'ANTHROPIC_BASE_URL=http://router.example.com:8080', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
@@ -16387,12 +16643,14 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   results.push({ name: "/settings the client block's subtitle names the settings file and the shell", ok: subtitle === "Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page.", missing: [subtitle ?? 'no subtitle'] });
   const about = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
   const rows = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
-  // Each cost file's row carries its table's date, read from the captured envelope through the page's own label. The
-  // three keepalive limits read on the Sessions page beside their counts, so About carries none of them.
+  // Each cost file's row carries its date in force and its revision count, read off the captured revisions through the
+  // page's own label. The three keepalive limits read on the Sessions page beside their counts, so About carries none
+  // of them.
   const wired = decodeSettings(SETTINGS_WIRE);
-  const priceRow = `API prices path=./api_prices.yaml, effective ${effectiveLabel(wired.apiPrices.effective)}`;
-  const costRow = `Subscription costs path=./subscription_costs.yaml, effective ${effectiveLabel(wired.subscriptionCosts.effective)}`;
-  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  const revisionsText = (revisions) => `effective ${effectiveLabel(revisionAt(revisions, CLOCK_ORIGIN).effective)}, ${revisions.length === 1 ? '1 revision' : `${revisions.length} revisions`}`;
+  const priceRow = `API prices path=./api_prices.yaml, ${revisionsText(wired.apiPrices.revisions)}`;
+  const costRow = `Subscription costs path=./subscription_costs.yaml, ${revisionsText(wired.subscriptionCosts.revisions)}`;
+  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
   const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
   results.push({
     name: '/settings each path line names its key in the configuration file and the admin secret line its variable',

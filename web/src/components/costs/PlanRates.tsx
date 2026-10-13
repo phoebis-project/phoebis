@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import type { ModelPrice, SubscriptionCosts } from '@/api/types';
 import { Segmented } from '@/components/ui/primitives';
-import { anchorTier, bandNow, familyOrder, isWeighted, modelWeeks, shareIn, tierCapacity, unreachableBand, weightedWindows, weightOf, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
-import { fmtShare, undatedModel, upperFirst } from '@/lib/format';
+import { anchorTier, bandNow, latestWeighted, modelTierOf, modelWeeks, shareIn, tierCapacity, tierGroups, unreachableBand, weightedWindows, weightOf, weightOrFallback, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
+import { ESTIMATED_TITLE, fmtShare, undatedModel, upperFirst, withEstimate } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
 import { nowLine } from './PeakBand';
 import { BandSwitch } from './WindowsByTier';
@@ -29,8 +29,24 @@ const dash = <span className="muted">-</span>;
 const weekLabel = (key: string) => `${upperFirst(key.slice('seven_day_'.length))} week`;
 const windowLabel = (window: string) => WINDOWS.find((w) => w.key === window)?.label ?? weekLabel(window);
 
-/** The share of a tier's windows a token count of each type spends, per model, outside or inside the band. */
-export function PlanRates({ costs, now, prices }: { costs: SubscriptionCosts; now: number; prices: ModelPrice[] }) {
+/** The row at a model table's foot that folds its older models: their count, and the disclosure that shows them. */
+export function FoldRow({ cols, count, onToggle, open }: { cols: number; count: number; onToggle: () => void; open: boolean }) {
+  return (
+    <tr className="cost-ref__fold">
+      <td colSpan={cols}>
+        <button type="button" className="link-btn" aria-expanded={open} onClick={onToggle}>
+          {count === 1 ? '1 older model' : `${count} older models`}
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+/**
+ * The share of a tier's windows a token count of each type spends, per model, outside or inside the band: one row per
+ * model tier with its newest model, the older models folded under a row of their own.
+ */
+export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { costs: SubscriptionCosts; now: number; olderOpen: boolean; onToggleOlder: () => void; prices: ModelPrice[] }) {
   const tiers = Object.keys(costs.capacity).filter((tier) => WINDOWS.some((w) => tierCapacity(costs, tier, w.key) !== null));
   const [tier, setTier] = useState(() => anchorTier(costs));
   const next = bandNow(costs, now);
@@ -47,13 +63,20 @@ export function PlanRates({ costs, now, prices }: { costs: SubscriptionCosts; no
   // A band that never flips offers one state alone, so the choice follows it.
   const chosen = unreachable === null ? inside : !unreachable.inside;
 
-  const weighted = familyOrder(Object.keys(costs.modelWeight).filter((model) => isWeighted(costs, model)));
-  const unweighted = familyOrder([
-    ...prices.map((p) => p.model).filter((model) => !isWeighted(costs, model)),
-    ...Object.keys(costs.modelWeight).filter((model) => !isWeighted(costs, model) && !prices.some((p) => undatedModel(p.model) === model)),
-  ]);
-  // The weight column reads the 5-hour window, so a model weighed on the week alone sets neither end of its scale.
-  const fiveHourWeighted = weighted.filter((model) => weightOf(costs, model, 'five_hour') !== null);
+  // The cost model's models and the price file's, a dated price row folded into the weight row of its undated id.
+  const seen = new Set<string>();
+  const models = [...Object.keys(costs.modelWeight), ...prices.map((p) => p.model)].filter((model) => {
+    const undated = undatedModel(model);
+    if (seen.has(undated)) return false;
+    seen.add(undated);
+    return true;
+  });
+  const groups = tierGroups(models, costs);
+  const shown = groups.map((g) => g.models[0]);
+  const older = groups.flatMap((g) => g.models.slice(1));
+  // The weight column reads the 5-hour window, so a model weighed on the week alone sets neither end of its scale. An
+  // estimated weight is its donor's, so it moves neither end.
+  const fiveHourWeighted = models.filter((model) => weightOf(costs, model, 'five_hour') !== null);
   const fiveHourWeight = (model: string) => weightOf(costs, model, 'five_hour') ?? 0;
   const lightest = fiveHourWeighted.reduce<string | null>((low, model) => (low === null || fiveHourWeight(model) < fiveHourWeight(low) ? model : low), null);
   const heaviest = Math.max(0, ...fiveHourWeighted.map(fiveHourWeight));
@@ -63,6 +86,7 @@ export function PlanRates({ costs, now, prices }: { costs: SubscriptionCosts; no
   /** `what` names the window in the cell's title: "5-hour window", "Fable week". */
   const cell = (model: string, window: string, what: string, type: (typeof TOKEN_TYPES)[number], i: number) => {
     const share = shareIn(costs, window, tier, model, { ...ZERO, [type.key]: tokens * 1_000_000 }, chosen);
+    const estimated = weightOrFallback(costs, model, window)?.estimated === true;
     const sep = i === 0 ? 'cost-ref__sep' : '';
     if (share === null) {
       return (
@@ -76,14 +100,16 @@ export function PlanRates({ costs, now, prices }: { costs: SubscriptionCosts; no
       <td
         key={`${window}-${type.key}`}
         className={`right num ${sep}${full ? ' is-full' : ''}`}
-        title={`${model}, ${type.label.toLowerCase()}: ${fmtTokens(tokens)} tokens spend ${fmtShare(share)} of a ${tierName} ${what}${full ? ', more than a full one' : ''}`}
+        title={withEstimate(`${model}, ${type.label.toLowerCase()}: ${fmtTokens(tokens)} tokens spend ${fmtShare(share)} of a ${tierName} ${what}${full ? ', more than a full one' : ''}`, estimated)}
       >
+        {estimated ? '~' : ''}
         {fmtShare(share)}
       </td>
     );
   };
   const weightCell = (model: string) => {
-    const windows = weightedWindows(costs, model);
+    // A window the model weighs itself keeps its own weight, so the estimate fills only the others.
+    const windows = weightedWindows(costs, model).filter((w) => weightOrFallback(costs, model, w)?.estimated === false);
     // A null shared weight under window weights has no one figure to scale, so the cell names each window's own.
     if (Object.prototype.hasOwnProperty.call(costs.modelWeight, model) && costs.modelWeight[model] === null && windows.length > 0) {
       const named = windows.map((w) => `${weightOf(costs, model, w)} on the ${windowLabel(w)}`).join(', ');
@@ -107,21 +133,25 @@ export function PlanRates({ costs, now, prices }: { costs: SubscriptionCosts; no
       );
     }
     const multiple = `${Number((weight / base).toPrecision(3))}x`;
+    // The one place the console names the model an estimate reads, from the table's own cost model.
+    const tierOfModel = modelTierOf(costs, model);
+    const donor = weightOrFallback(costs, model, 'five_hour')?.estimated === true && tierOfModel !== null ? latestWeighted(costs, tierOfModel) : null;
     return (
       <td>
-        <div className="cost-ref__weight" title={`${model}: ${multiple} the share of ${lightest} per token of the same type on the 5-hour window`}>
+        <div className="cost-ref__weight" title={donor === null ? `${model}: ${multiple} the share of ${lightest} per token of the same type on the 5-hour window` : ESTIMATED_TITLE}>
           <span className="cost-ref__track">
             <span className="cost-ref__bar" style={{ width: `${(weight / heaviest) * 100}%` }} />
           </span>
-          <span className="cost-ref__val">{multiple}</span>
+          <span className={`cost-ref__val${donor === null ? '' : ' cost-ref__val--estimated'}`}>{donor === null ? multiple : `estimated, as ${donor}`}</span>
         </div>
       </td>
     );
   };
-  // A model and its sub-rows share one stripe, and the stripes restart under the divider.
-  const rows = (models: string[]) =>
-    models.flatMap((model, n) => {
-      const alt = n % 2 ? 'is-alt' : '';
+  // A model and its sub-rows share one stripe, and the count runs on through the fold, so the stripes alternate
+  // whether the older models show or not.
+  const rows = (models: string[], from: number) =>
+    models.flatMap((model, i) => {
+      const alt = (from + i) % 2 ? 'is-alt' : '';
       const weeks = modelWeeks(costs, model).filter((week) => weightOf(costs, model, week) !== null);
       return [
         <tr key={model} className={`${alt}${weeks.length ? ' has-sub' : ''}`}>
@@ -183,7 +213,7 @@ export function PlanRates({ costs, now, prices }: { costs: SubscriptionCosts; no
         <b>
           Share of a {tierName} window per {fmtTokens(tokens)} tokens{chosen ? ', a request completing inside the peak band' : ''}
         </b>
-        <span className="muted">A shaded cell is more than one full window.</span>
+        <span className="muted">A shaded cell is more than one full window. A ~ marks an estimate: the model reads the latest weighed model of its model tier.</span>
       </div>
       <div className="table-wrap cost-ref__wrap">
         <table className="table cost-ref__table">
@@ -208,13 +238,9 @@ export function PlanRates({ costs, now, prices }: { costs: SubscriptionCosts; no
             </tr>
           </thead>
           <tbody>
-            {rows(weighted)}
-            {unweighted.length > 0 && (
-              <tr className="is-divider">
-                <td colSpan={cols}>Not weighed by the subscription cost model: a share on any window reads a dash, and the analytics list the traffic under model unlisted</td>
-              </tr>
-            )}
-            {rows(unweighted)}
+            {rows(shown, 0)}
+            {older.length > 0 && <FoldRow cols={cols} count={older.length} onToggle={onToggleOlder} open={olderOpen} />}
+            {olderOpen && rows(older, shown.length)}
           </tbody>
         </table>
       </div>
