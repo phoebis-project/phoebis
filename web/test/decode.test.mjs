@@ -42,7 +42,7 @@ test('an account decodes with its windows, plan, pool, and models', () => {
   assert.equal(d.decodeAccount({ ...body, pool: null }).pool, null, 'an account in no pool answers a null pool');
   assert.equal(d.decodeAccount({ ...body, pool: undefined }).pool, null, 'a row without the member reads as in no pool');
   assert.equal(a.extraUsage.monthlyLimitCredits, 5000);
-  assert.equal(a.requests.lifetime, 5);
+  assert.equal(a.requests.lifetime, fixture('account').requests.lifetime, 'the lifetime count reads as the route answers it');
   // The fixture seeds one live model-scoped cooldown so the key-models and models-state fixtures have a row.
   assert.equal(a.status, 'cooldown');
   assert.equal(a.email, 'test@example.invalid');
@@ -227,7 +227,7 @@ test('keys carry status, totals, and the created secret stays out of the row', (
   assert.deepEqual(k.modelRules, [{ not: true, pattern: 'claude-opus-*' }]);
   assert.equal(k.modelRulesMode, 'extend');
   assert.equal(k.longContextTwins, true);
-  assert.equal(k.lifetime.requests, 5);
+  assert.equal(k.lifetime.requests, fixture('keys').keys[0].lifetime.requests);
   assert.equal(k.usage7d.tokens > 0, true);
   const wire = fixture('keys').keys[0];
   const read = (u) => ({ billedUsd: u.billed_usd, equivalent: { fiveHour: u.equivalent.five_hour, sevenDay: u.equivalent.seven_day }, estimated: u.estimated });
@@ -862,7 +862,7 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   // An earlier holder's label is built at decode time in the host's zone, so the rows are read under a pinned one.
   const rows = inZone('UTC', () => fixture('analytics_breakdown').rows.map(d.decodeAnalyticsGroup));
   const desktop = rows.find((g) => g.key === 'desktop');
-  assert.equal(desktop.requests, 5);
+  assert.equal(desktop.requests, fixture('analytics_breakdown').rows.find((g) => g.key === 'desktop').requests);
   const earlier = rows.find((g) => g.key.startsWith('desktop@'));
   assert.equal(earlier.label, 'desktop (deleted, created Oct 11, 2026, 12:15)');
   assert.equal(earlier.requests, 1);
@@ -873,8 +873,9 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   assert.equal(desktop.keyCreatedAt, null, 'the live key carries no creation instant');
   assert.equal(desktop.histograms.ttfbMs.length, 64);
   assert.equal(typeof desktop.percentiles.ttfbMs.p50, 'number');
-  assert.equal(desktop.cacheMissReasons.none, 5);
-  assert.equal(desktop.tokens.thinking, 240);
+  const desktopWire = fixture('analytics_breakdown').rows.find((g) => g.key === 'desktop');
+  assert.equal(desktop.cacheMissReasons.none, desktopWire.cache_miss_reasons.none);
+  assert.equal(desktop.tokens.thinking, desktopWire.tokens.thinking);
   assert.equal(desktop.wastedProbeReasons.idle_limit, 0);
   assert.equal('savings' in desktop, false, 'the group carries the probe figures and no savings member');
   assert.equal(desktop.errors.upstream_error, 1);
@@ -1382,7 +1383,7 @@ test('a sum of groups adds the 20x equivalents per window, the billed side and t
   const rows = d.decodeRequestPage(fixture('requests')).requests;
   const [folded] = d.foldGroups(rows, 'all');
   const [first, second] = fixture('analytics_breakdown').rows;
-  const a = d.decodeAnalyticsGroup({ ...first, probe_equivalent: { five_hour: { cost: 0.25, wasted: 0.125 } } });
+  const a = d.decodeAnalyticsGroup({ ...first, estimated: false, probe_equivalent: { five_hour: { cost: 0.25, wasted: 0.125 } } });
   const b = d.decodeAnalyticsGroup({ ...second, estimated: true, probe_equivalent: { five_hour: { cost: 0.5, wasted: 0 }, seven_day: { cost: 0.05, wasted: 0 } } });
   const keys = (...maps) => [...new Set(maps.flatMap((m) => Object.keys(m)))];
   const close = (got, want, what) => assert.ok(typeof got === 'number' && Math.abs(got - want) <= Math.abs(want) * 1e-12, `${what}: ${got} against ${want}`);
@@ -1596,7 +1597,7 @@ test('the dashboard reads its billed dollars, its 20x equivalents and its estima
 test('the dashboard, sessions, recipes, and overview decode', () => {
   const o = d.decodeDashboard(fixture('dashboard'));
   assert.equal(o.hourly.length, 24);
-  assert.equal(o.requests24h, 6);
+  assert.equal(o.requests24h, fixture('dashboard').requests_24h);
   const sessions = fixture('sessions').sessions.map(d.decodeSession);
   const s1 = sessions.find((s) => s.sessionId === 's1');
   assert.ok(sessions.every((s) => typeof s.keyGeneration === 'number' && typeof s.historical === 'boolean'), 'every session says which generation of its key owns it and whether that holder is gone');
@@ -1995,6 +1996,20 @@ test("an attention item of a state writer or a parked record decodes under its o
   });
   const writer = d.decodeAttention({ detail: { component: 'routing' }, kind: 'writer_degraded', link: null, pools: [], since: 1_000_000, subject: { id: 'routing', label: 'routing', type: 'router' } });
   assert.deepEqual([writer.kind, writer.link, writer.pools, writer.subject], ['writer_degraded', null, [], { id: 'routing', label: 'routing', type: 'router' }], "the router's own component opens nothing and belongs to no pool");
+});
+
+test("an unweighted model's attention item decodes under its own kind, a model subject opening the Models page, read off the route's capture", () => {
+  const raw = fixture('attention').items.find((i) => i.kind === 'model_unweighted');
+  assert.ok(raw, 'the capture holds the unweighted model item');
+  assert.deepEqual(d.decodeAttention(raw), {
+    detail: raw.detail,
+    kind: 'model_unweighted',
+    link: { id: raw.link.id, page: 'models' },
+    pools: [],
+    since: new Date(raw.since).toISOString(),
+    subject: { id: raw.subject.id, label: raw.subject.label, type: 'model' },
+  });
+  assert.deepEqual(Object.keys(raw.detail).sort(), ['model', 'requests', 'tier', 'weight_of'], 'the detail names the model, its plan requests, its model tier and the model whose weight prices it');
 });
 
 test('an attention item with a spelling the console does not know reads the worst kind, a pool subject and no link', () => {

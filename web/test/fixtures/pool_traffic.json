@@ -320,16 +320,16 @@
       },
       {
         "at": 1791720000000,
-        "requests": 3,
+        "requests": 4,
         "failed": 1,
-        "tokens": 5400,
+        "tokens": 7200,
         "cost_usd": 0.0107,
         "billed_usd": 0.0036,
         "equivalent": {
-          "five_hour": 0.00003525,
-          "seven_day": 5.875e-6
+          "five_hour": 0.00006110000000000001,
+          "seven_day": 0.000010183333333333331
         },
-        "estimated": false
+        "estimated": true
       }
     ]
   }

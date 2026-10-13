@@ -104,9 +104,9 @@
           "priority": 0
         },
         "requests": {
-          "last_24h": 5,
-          "last_7d": 5,
-          "lifetime": 5
+          "last_24h": 6,
+          "last_7d": 6,
+          "lifetime": 6
         },
         "usage": {
           "error": null,

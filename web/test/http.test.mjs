@@ -493,7 +493,8 @@ test('the attention read is one GET, and its failures reach no toast, since the 
   const calls = stub(() => answer(200, body));
   const items = await new HttpApi().getAttention();
   assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['GET', '/admin/attention']]);
-  assert.deepEqual(items.map((i) => [i.kind, i.subject.id, i.link]), [['pool_exhausted', 'main', { id: 'main', page: 'pools' }], ['ledger_record_parked', 'main', { id: 'main', page: 'pools' }]]);
+  assert.deepEqual(items.map((i) => [i.kind, i.subject.id, i.link]), body.items.map((i) => [i.kind, i.subject.id, { id: i.link.id, page: i.link.page }]), 'every captured kind decodes as itself, its link whole');
+  assert.ok(items.some((i) => i.kind === 'model_unweighted'), "the capture's unweighted model among them");
   stub(() => answer(500, { error: 'the store is unavailable' }));
   await assert.rejects(new HttpApi().getAttention(), (e) => e instanceof ApiError && e.status === 500 && e.message === 'the store is unavailable');
   stub(() => Promise.reject(new TypeError('fetch failed')));

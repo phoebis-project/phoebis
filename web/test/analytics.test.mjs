@@ -761,7 +761,7 @@ test('an equivalent cell names its window, carries the mark of an estimate and r
 });
 
 test("the Cost section's head reads each position off one group of plan and billed rows", () => {
-  const g = accountGroup();
+  const g = accountGroup({ estimated: false });
   assert.ok(g.planRequests > 0 && g.requests > g.planRequests && g.billedUsd > 0 && g.costEquivalent.seven_day > 0, 'the captured group holds rows of both fundings');
   const equivalent = d.fmtEquivalent('seven_day', g.costEquivalent.seven_day);
   const billed = d.fmtUsd(g.billedUsd);
@@ -791,12 +791,12 @@ test('native marks an estimated equivalent and leaves out a side with no rows, a
   assert.deepEqual(marked.tile.figures, [{ text: `~${equivalent}`, word: 'subscription' }, { text: billed, word: 'billed' }]);
   assert.equal(marked.estimated, true);
   for (const unit of ['all', 'usd', 'equivalent']) assert.equal(d.costHeadOf(unit, g).estimated, false, `${unit} reads dollars, which no estimate prices`);
-  const plan = d.costHeadOf('native', accountGroup({ billedUsd: 0, requests: g.planRequests }));
+  const plan = d.costHeadOf('native', accountGroup({ billedUsd: 0, estimated: false, requests: g.planRequests }));
   assert.deepEqual([plan.tile.figures, plan.meta], [[{ text: equivalent, word: 'subscription' }], `${equivalent} in range`], 'a sum of plan rows alone reads the equivalent alone');
   const billedOnly = d.costHeadOf('native', accountGroup({ costEquivalent: {}, estimated: true, planRequests: 0 }));
   assert.deepEqual([billedOnly.tile.figures, billedOnly.meta, billedOnly.estimated], [[{ text: billed, word: 'billed' }], `${billed} in range`, false], 'a sum of billed rows alone reads the dollars alone, with no mark');
   // A fold of request rows counts no plan request outside the account grouping, so its figures tell the sides apart.
-  const folded = d.costHeadOf('native', accountGroup({ planRequests: null }));
+  const folded = d.costHeadOf('native', accountGroup({ estimated: false, planRequests: null }));
   assert.equal(folded.meta, `${equivalent} and ${billed} in range`);
 });
 

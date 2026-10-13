@@ -873,26 +873,26 @@
             "key": "desktop",
             "label": "desktop",
             "key_id": "desktop",
-            "requests": 3,
-            "succeeded": 2,
+            "requests": 4,
+            "succeeded": 3,
             "rate_limited": 0,
             "failed": 1,
             "exhausted": 0,
             "rejected": 0,
-            "attempts": 3,
+            "attempts": 4,
             "failovers": 0,
             "incomplete": 0,
-            "cache_hits": 3,
+            "cache_hits": 4,
             "cache_misses": 0,
             "uncached": 0,
             "expired_between_turns": 0,
             "tokens": {
-              "cache_read": 1500,
+              "cache_read": 2000,
               "cache_write_1h": 0,
-              "cache_write_5m": 600,
-              "output": 300,
-              "thinking": 120,
-              "uncached_input": 3000,
+              "cache_write_5m": 800,
+              "output": 400,
+              "thinking": 160,
+              "uncached_input": 4000,
               "web_fetch": 0,
               "web_search": 0
             },
@@ -907,7 +907,7 @@
               "upstream_error": 1
             },
             "cache_miss_reasons": {
-              "none": 3
+              "none": 4
             },
             "histograms": {
               "duration_ms": [
@@ -948,7 +948,7 @@
                 0,
                 0,
                 0,
-                3,
+                4,
                 0,
                 0,
                 0,
@@ -1005,7 +1005,7 @@
                 0,
                 0,
                 0,
-                3,
+                4,
                 0,
                 0,
                 0,
@@ -1069,7 +1069,7 @@
                 0,
                 0,
                 0,
-                3,
+                4,
                 0,
                 0,
                 0,
@@ -1140,7 +1140,7 @@
                 0,
                 0,
                 0,
-                3,
+                4,
                 0,
                 0,
                 0,
@@ -1219,20 +1219,20 @@
             "cost_shares": null,
             "cache_shares": null,
             "probe_shares": null,
-            "plan_requests": 2,
-            "plan_output_tokens": 200,
+            "plan_requests": 3,
+            "plan_output_tokens": 300,
             "cost_equivalent": {
-              "five_hour": 0.00003525,
-              "seven_day": 5.875e-6
+              "five_hour": 0.00006110000000000001,
+              "seven_day": 0.000010183333333333331
             },
             "cache_equivalent": {
               "five_hour": {
-                "read": 2.5e-7,
-                "write": 5e-6
+                "read": 4.333333333333334e-7,
+                "write": 8.666666666666668e-6
               },
               "seven_day": {
-                "read": 4.1666666666666676e-8,
-                "write": 8.333333333333333e-7
+                "read": 7.222222222222222e-8,
+                "write": 1.4444444444444445e-6
               }
             },
             "probe_equivalent": {},
@@ -1244,12 +1244,12 @@
               "output": 0.001
             },
             "equivalent_split": {
-              "input": 3.3333333333333333e-6,
-              "cache_read": 4.1666666666666676e-8,
-              "cache_write": 8.333333333333333e-7,
-              "output": 1.6666666666666669e-6
+              "input": 5.777777777777778e-6,
+              "cache_read": 7.222222222222222e-8,
+              "cache_write": 1.4444444444444445e-6,
+              "output": 2.888888888888889e-6
             },
-            "estimated": false
+            "estimated": true
           }
         ]
       }

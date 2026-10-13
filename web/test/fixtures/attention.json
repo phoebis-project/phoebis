@@ -44,6 +44,26 @@
           "count": 1,
           "pool": "main"
         }
+      },
+      {
+        "kind": "model_unweighted",
+        "subject": {
+          "type": "model",
+          "id": "claude-opus-99",
+          "label": "claude-opus-99"
+        },
+        "link": {
+          "page": "models",
+          "id": "claude-opus-99"
+        },
+        "pools": [],
+        "since": 1791720940000,
+        "detail": {
+          "model": "claude-opus-99",
+          "requests": 1,
+          "tier": "opus",
+          "weight_of": "claude-opus-5-5"
+        }
       }
     ]
   }
