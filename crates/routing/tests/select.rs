@@ -5,10 +5,10 @@ use phoebis_routing::{
     DecisionRecord, EvidenceSource, Exhaustion, FactEntity, FactValue, HoldFacts, HoldOutcome,
     LaneFacts, LongContextRates, MemberSpend, MigrateReason,
     OverageEvidence, PinKeyFacts, PinRef, Placement, RateTable, Rates, RefusalFacts,
-    RefusedRequest, RegistrySnapshot, RequestFlags, RoutingState, SelectRequest, SelectResult,
-    SharePricer, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading,
-    WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
-    MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    RefusedRequest, RegistrySnapshot, RequestFlags, Reservation, RoutingState, SelectRequest,
+    SelectResult, SharePricer, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause,
+    WindowReading, WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
+    IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -12728,8 +12728,21 @@ fn a_renewal_records_five_no_move_lines_and_their_facts() {
             ("move:drain", "no"),
             ("move:shed", "no"),
             ("renew", "renewed"),
+            ("reserve", "none"),
         ]
     );
+    assert_eq!(d.record.version, 2);
+    assert_eq!(d.record.request.body_tokens, Some(0));
+    assert_eq!(
+        line(&d.record, "reserve")
+            .facts
+            .iter()
+            .map(|f| (f.key, f.value.clone(), f.account_id.as_deref()))
+            .collect::<Vec<_>>(),
+        [("account_id", FactValue::Text("a".into()), Some("a"))],
+        "a renewal books nothing and names the account alone"
+    );
+    assert_eq!(d.record.outcome.reservation, None);
     assert_eq!(
         fact(line(&d.record, "move:spent"), "holds_allowance"),
         &FactValue::Bool(true)
@@ -12853,6 +12866,27 @@ fn a_spent_move_records_the_fit_table_and_the_cap_filter() {
     assert_eq!(
         fact_of(line(&d.record, "cap_filter"), "in_flight", "c"),
         &FactValue::Text("0/16".into())
+    );
+    // The move books the body's million tokens on c until the usage replaces them.
+    let reserve = d.record.walk.last().expect("a walk");
+    assert_eq!((reserve.step, reserve.verdict), ("reserve", "booked"));
+    assert_eq!(fact(reserve, "account_id"), &FactValue::Text("c".into()));
+    assert!(close(number(fact(reserve, "reserved_five_hour")), 0.1));
+    assert!(close(
+        number(fact(reserve, "reserved_seven_day")),
+        1_000_000.0 / 60_000_000.0
+    ));
+    assert_eq!(
+        fact(reserve, "expires_at"),
+        &FactValue::Int(T + 1_000 + IN_FLIGHT_RECLAIM_MS)
+    );
+    assert_eq!(
+        d.record
+            .outcome
+            .reservation
+            .as_ref()
+            .map(|r| (r.account_id.as_str(), r.expires_at)),
+        Some(("c", T + 1_000 + IN_FLIGHT_RECLAIM_MS))
     );
     assert_eq!(d.record.outcome.kind, "moved");
     assert_eq!(d.record.outcome.rule, Some("spent"));
@@ -13365,7 +13399,7 @@ fn a_source_ending_inside_the_weeks_horizon_projects_to_its_end_and_runs_no_roun
 
 #[test]
 fn a_static_placement_records_the_three_rung_lines_and_the_partitions() {
-    let s = snapshot(Pool {
+    let s = tiered(Pool {
         members: vec![("a", 0), ("b", 1)],
         failover: Failover {
             in_flight_cap: 1,
@@ -13374,6 +13408,7 @@ fn a_static_placement_records_the_three_rung_lines_and_the_partitions() {
         ..Pool::default()
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.set_share(ratio_pricer());
     seed_affinity(
         &st,
         vec![
@@ -13382,8 +13417,53 @@ fn a_static_placement_records_the_three_rung_lines_and_the_partitions() {
         ],
     );
     let _busy = st.in_flight().dispatched("b", 1_000);
-    let d = decide(&mut st, &s, &static_req(&s, &["s1", "s2"]), &mut rng());
+    let d = decide(
+        &mut st,
+        &s,
+        &SelectRequest {
+            body_tokens: 200_000,
+            ..static_req(&s, &["s1", "s2"])
+        },
+        &mut rng(),
+    );
     assert_eq!(picked(&d.result), "a");
+    assert_eq!(d.record.version, 2);
+    assert_eq!(d.record.request.body_tokens, Some(200_000));
+    // The fresh subagent books its body as one five-minute write on the account the rung placed it on.
+    assert_eq!(
+        &steps(&d.record)[d.record.walk.len() - 2..],
+        &[("rung:static", "match"), ("reserve", "booked")]
+    );
+    let reserve = line(&d.record, "reserve");
+    assert_eq!(fact(reserve, "account_id"), &FactValue::Text("a".into()));
+    assert!(close(number(fact(reserve, "reserved_five_hour")), 0.02));
+    assert!(close(
+        number(fact(reserve, "reserved_seven_day")),
+        200_000.0 / 60_000_000.0
+    ));
+    assert_eq!(
+        fact(reserve, "expires_at"),
+        &FactValue::Int(2_000 + IN_FLIGHT_RECLAIM_MS)
+    );
+    assert_eq!(fact(reserve, "attempt"), &FactValue::Int(1));
+    for written in &reserve.facts {
+        assert_eq!(written.account_id.as_deref(), Some("a"), "{written:?}");
+        let unit = match written.key {
+            "account_id" => None,
+            "expires_at" => Some("time"),
+            "attempt" => Some("count"),
+            key if key.starts_with("reserved_") => Some("percent"),
+            key if key.starts_with("burn_") => Some("percent_per_hour"),
+            key => panic!("{key} is no fact of the reserve step"),
+        };
+        assert_eq!(written.unit, unit, "{}", written.key);
+    }
+    let booked = d.record.outcome.reservation.as_ref().expect("the booking");
+    assert_eq!(
+        (booked.account_id.as_str(), booked.expires_at),
+        ("a", 2_000 + IN_FLIGHT_RECLAIM_MS)
+    );
+    assert!(close(booked.rewrite[FIVE_HOUR], 0.02));
     let content = line(&d.record, "rung:content");
     assert_eq!(
         (content.verdict, fact(content, "reason")),
@@ -13473,6 +13553,14 @@ fn a_hold_records_its_place_and_bound() {
     );
     assert_eq!(fact(hold, "account_id"), &FactValue::Text("b".into()));
     assert_eq!(fact(hold, "bound_ms"), &FactValue::Int(60_000));
+    let reserve = line(&d.record, "reserve");
+    assert_eq!(
+        (reserve.verdict, reserve.facts.len()),
+        ("none", 1),
+        "a hold books nothing"
+    );
+    assert_eq!(fact(reserve, "account_id"), &FactValue::Text("b".into()));
+    assert_eq!(d.record.outcome.reservation, None);
     assert_eq!(d.record.outcome.kind, "held");
     assert_eq!(
         d.record.outcome.hold,
@@ -13537,6 +13625,12 @@ fn an_exhaustion_records_the_obstacles_in_the_order_weighed() {
     assert_eq!(line(&d.record, "pick").verdict, "none");
     let exhausted = line(&d.record, "exhausted");
     assert_eq!(exhausted.verdict, "exhausted");
+    let reserve = line(&d.record, "reserve");
+    assert_eq!(
+        (reserve.verdict, reserve.facts.len()),
+        ("none", 0),
+        "an exhaustion books nothing and lands on no account"
+    );
     assert_eq!(
         fact(exhausted, "obstacles"),
         &FactValue::List(vec![
@@ -13877,6 +13971,19 @@ fn the_candidate_table_fills_tier_pace_and_budget_for_every_member() {
             observed_at: T - 500,
         }],
     );
+    // Another request's booking on b, which b's 5-hour reading carries until its usage lands.
+    st.book_reservation(
+        "r-0",
+        Reservation {
+            account_id: "b".into(),
+            attempt: 1,
+            pin: None,
+            booked_at: T - 1_000,
+            rewrite: [(FIVE_HOUR.to_string(), 0.05)].into_iter().collect(),
+            burn: Default::default(),
+            expires_at: T - 1_000 + IN_FLIGHT_RECLAIM_MS,
+        },
+    );
     let d = decide(
         &mut st,
         &s,
@@ -13884,6 +13991,28 @@ fn the_candidate_table_fills_tier_pace_and_budget_for_every_member() {
         &mut rng(),
     );
     assert_eq!(d.record.candidates.len(), 4);
+    for member in &d.record.candidates {
+        for (window, facts) in &member.windows {
+            let booked = if member.account_id == "b" && window == FIVE_HOUR {
+                0.05
+            } else {
+                0.0
+            };
+            assert!(
+                close(facts.reserved, booked),
+                "{} {window}: {}",
+                member.account_id,
+                facts.reserved
+            );
+        }
+    }
+    assert!(
+        close(
+            candidate(&d.record, "b").windows[FIVE_HOUR].utilization,
+            0.45
+        ),
+        "the reading the booking moved"
+    );
     for member in &d.record.candidates {
         let pace = member
             .pace
@@ -16262,7 +16391,13 @@ fn a_spent_pin_waits_in_place_for_a_reset_inside_the_retry_bound_and_moves_past_
     );
     assert_eq!(
         summary_facts(&d),
-        vec![("reset", FactValue::Int(T + 30_000), Some("time"))]
+        vec![("until", FactValue::Int(T + 30_000), Some("time"))]
+    );
+    let reserve = line(&d.record, "reserve");
+    assert_eq!(
+        (reserve.verdict, fact(reserve, "account_id")),
+        ("none", &FactValue::Text("a".into())),
+        "a wait in place books nothing"
     );
     // Past the reset the window reads as refunded and the pin renews in place.
     let (result, _) = select(
@@ -16440,6 +16575,11 @@ fn a_spent_pins_wait_runs_to_the_end_of_a_cooldown_that_outlasts_the_reset() {
     assert_eq!(
         d.record.outcome.hold.as_ref().and_then(|hold| hold.until),
         Some(T + 45_000)
+    );
+    assert_eq!(
+        summary_facts(&d),
+        vec![("until", FactValue::Int(T + 45_000), Some("time"))],
+        "the row names the wait's end, which the walk's reset does not"
     );
     // Past the cooldown's end the account serves again and the pin renews in place.
     let (result, _) = select(
@@ -17221,4 +17361,546 @@ fn a_mark_on_the_week_heals_when_the_seven_day_projection_reads_under_the_ceilin
         "a projection at the ceiling fires nothing: {:?}",
         shed.facts
     );
+}
+
+/// The replay's weight of a cache-read token against a cache-write token. A cached read costs a small fraction of a
+/// write, and at this weight the replayed subagent's 40 000 cache-read tokens a second burn 0.072 of the 5-hour window
+/// an hour, near the 0.07 that subagent burned.
+const CACHE_READ_WEIGHT: f64 = 0.005;
+
+/// The replay's pricer on `TIER`, out of band: one cache-write token a ten-millionth of the 5-hour window, a
+/// sixty-millionth of the 7-day window and twice that of the Fable week, the same ratios per token a second for a
+/// burn, and a cache-read token at `CACHE_READ_WEIGHT` of a write.
+fn replay_pricer() -> SharePricer {
+    fn per_token(window: &str, tier: &str) -> Option<f64> {
+        if tier != TIER {
+            return None;
+        }
+        match window {
+            FIVE_HOUR => Some(10_000_000.0),
+            SEVEN_DAY => Some(60_000_000.0),
+            SEVEN_DAY_FABLE => Some(30_000_000.0),
+            _ => None,
+        }
+    }
+    SharePricer::new(|window, tier, _, usage, _| {
+        per_token(window, tier).map(|per| (usage.write_5m + usage.write_1h) as f64 / per)
+    })
+    .with_rate(|window, tier, _, burn, _| {
+        per_token(window, tier).map(|per| {
+            (burn.input
+                + burn.output
+                + burn.write_5m
+                + burn.write_1h
+                + CACHE_READ_WEIGHT * burn.cache_read)
+                / per
+        })
+    })
+}
+
+/// A pin of the replay: `seeded_pin`'s row of `session` under `agent` and `model` on `account`, burning `cache_read`
+/// tokens a second in both copies as its last fold at `folded` left them, last used and refreshed at `used`, with
+/// `last_input_tokens` of prompt.
+#[allow(clippy::too_many_arguments)]
+fn replay_pin(
+    session: &str,
+    agent: &str,
+    model: &str,
+    account: &str,
+    cache_read: f64,
+    last_input_tokens: u64,
+    folded: i64,
+    used: i64,
+) -> PinRow {
+    let burn = PinBurn {
+        cache_read,
+        ..PinBurn::default()
+    };
+    PinRow {
+        agent_id: agent.into(),
+        model: model.into(),
+        lane: lane_key(model, "standard", "none", "-"),
+        burn,
+        burn_banded: burn,
+        burn_at: Some(folded),
+        last_input_tokens,
+        last_used_at: used,
+        last_refresh_at: used,
+        ..seeded_pin(session, account, used)
+    }
+}
+
+#[test]
+fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
+    const FABLE: &str = "claude-fable-5-1";
+    const OPUS: &str = "claude-opus-5";
+    const SESSION: &str = "58cef59e";
+    const SUBAGENT: &str = "a6245382";
+    const HEAVY: [&str; 2] = ["3d1f7a90", "c27b4e15"];
+    const LIGHT: &str = "7e9a0c42";
+    const DAY: i64 = 24 * HOUR;
+    let s = {
+        let mut load = load_of(
+            Pool {
+                strategy: Strategy::Pace,
+                members: vec![("alder", 0), ("birch", 0), ("cedar", 0)],
+                shedding: Shedding {
+                    shed_share: 0.5,
+                    burn_window_seconds: 1_800,
+                    source_dwell_seconds: 900,
+                    migrate_when_spent: true,
+                    warm_sessions: WarmSessions::WhenNeeded,
+                },
+                ..Pool::default()
+            },
+            &[],
+        );
+        let template = load.accounts[0].clone();
+        load.accounts = ["alder", "birch", "cedar"]
+            .map(|id| AccountRow {
+                id: id.into(),
+                label: id.into(),
+                ..template.clone()
+            })
+            .to_vec();
+        load.terms = [
+            ("alder", None),
+            ("birch", Some(T + 8 * DAY)),
+            ("cedar", None),
+        ]
+        .map(|(id, ends_at)| SubscriptionTerm {
+            account_id: id.into(),
+            since: None,
+            trial_ends_at: None,
+            cancelled: false,
+            ends_at,
+            tier: Some(TIER.into()),
+        })
+        .to_vec();
+        RegistrySnapshot::from_load(load, [0; 32], 0, 1)
+    };
+    let turn =
+        |session: &str, agent: &str, model: &str, request_id: &str, now: i64| SelectRequest {
+            request_id: request_id.into(),
+            ..select_request(&s, "k", Some(session), model, agent, true, &[], now)
+        };
+    let key = |session: &str, agent: &str, model: &str| PinKey {
+        key_id: "k".into(),
+        session_id: session.into(),
+        agent_id: agent.into(),
+        model: model.into(),
+    };
+    let subagent_key = key(SESSION, SUBAGENT, OPUS);
+    // The rows as the replay needs them, loaded before the subagent's turn at T + 70 min. Each average carries its last
+    // fold within the replay, as the routing task's folds would leave it: the subagent's at that turn, after which it
+    // idles, the two Fable sessions' at their end, T + 220 min, and the main turn's a minute before its turn. The Fable
+    // sessions ran heavier over the first hour, which the charges before T + 70 min carry, and from there they burn
+    // 20 000 tokens a second, under the subagent. Their last turns land a minute before T + 85 min, so they read warm
+    // there. The light pin runs on the fast lane, which draws usage credits and no plan window.
+    let mut st = loaded(vec![
+        replay_pin(
+            SESSION,
+            SUBAGENT,
+            OPUS,
+            "cedar",
+            40_000.0,
+            813_365,
+            T + 70 * MINUTE,
+            T + 69 * MINUTE,
+        ),
+        replay_pin(
+            HEAVY[0],
+            "main",
+            FABLE,
+            "cedar",
+            20_000.0,
+            750_000,
+            T + 220 * MINUTE,
+            T + 84 * MINUTE,
+        ),
+        replay_pin(
+            HEAVY[1],
+            "main",
+            FABLE,
+            "cedar",
+            20_000.0,
+            700_000,
+            T + 220 * MINUTE,
+            T + 84 * MINUTE,
+        ),
+        PinRow {
+            lane: lane_key(FABLE, "fast", "none", "-"),
+            burn: PinBurn::default(),
+            burn_banded: PinBurn::default(),
+            burn_fast: PinBurn {
+                cache_read: 5_000.0,
+                ..PinBurn::default()
+            },
+            ..replay_pin(
+                LIGHT,
+                "main",
+                FABLE,
+                "cedar",
+                0.0,
+                60_000,
+                T + 84 * MINUTE,
+                T + 84 * MINUTE,
+            )
+        },
+        replay_pin(
+            SESSION,
+            "main",
+            FABLE,
+            "alder",
+            14_000.0,
+            870_174,
+            T + 271 * MINUTE,
+            T + 271 * MINUTE,
+        ),
+    ]);
+    st.set_share(replay_pricer());
+    let reading = |utilization: f64, reset: i64| WindowReading {
+        utilization,
+        reset: Some(reset),
+        observed_at: T,
+        source: WindowSource::Poll,
+    };
+    let alder_fable_reset = T + 6 * DAY + 272 * MINUTE;
+    st.record_sample(
+        "cedar",
+        with_fable(weekly(0.04, 0.3, 4, T), 0.73, Some(T + WEEK_MS * 4 / 10))
+            .with(FIVE_HOUR, reading(0.04, T + 5 * HOUR)),
+    );
+    st.record_sample(
+        "birch",
+        with_fable(weekly(0.40, 0.3, 5, T), 0.61, Some(T + WEEK_MS * 5 / 10))
+            .with(FIVE_HOUR, reading(0.40, T + 3 * HOUR)),
+    );
+    st.record_sample(
+        "alder",
+        with_fable(weekly(0.70, 0.5, 6, T), 0.97, Some(alder_fable_reset))
+            .with(FIVE_HOUR, reading(0.70, T + 4 * HOUR)),
+    );
+    let charge = |st: &mut RoutingState, minute: i64, share: f64| {
+        st.charge("cedar", T + minute * MINUTE, &[(FIVE_HOUR, share)]);
+    };
+    let cedar_five_hour = |st: &RoutingState, now: i64| five_hour(st, "cedar", now);
+    let holds_allowance = |record: &DecisionRecord| {
+        assert_eq!(
+            fact(line(record, "move:spent"), "holds_allowance"),
+            &FactValue::Bool(true),
+            "cedar holds the allowance of every window its pins draw"
+        );
+    };
+
+    // T + 70 min: 0.36 used, the subagent's 0.072 an hour and the Fable pins' 0.036 each over the 230 minutes to the
+    // reset add 0.552, and 0.912 stays under the ceiling. The weeks at their five-hour horizon read 0.42 and 0.85.
+    charge(&mut st, 30, 0.16);
+    charge(&mut st, 60, 0.16);
+    let at_70 = decide(
+        &mut st,
+        &s,
+        &turn(SESSION, SUBAGENT, OPUS, "r-70", T + 70 * MINUTE),
+        &mut rng(),
+    );
+    assert_eq!(landed(at_70.result.clone()), ("cedar".into(), None));
+    holds_allowance(&at_70.record);
+    let shed = line(&at_70.record, "move:shed");
+    assert_eq!(shed.verdict, "no");
+    let projection = number(fact(shed, "projection_five_hour"));
+    assert!(
+        close(projection, 0.912) && projection < 0.95,
+        "{projection}"
+    );
+    assert!(
+        shed.facts.iter().all(|f| f.key != "trigger"),
+        "{:?}",
+        shed.facts
+    );
+
+    // T + 85 min: 0.56 used. The idle subagent's average has decayed to 0.0437 an hour, still over each Fable pin's
+    // 0.036, and the 215 minutes to the reset add 0.4145: 0.9745 crosses the ceiling, an excess of 0.0068 an hour. A
+    // heavy Fable pin's turn runs the round. The subagent, idle and cold, leads the order, birch fits it to every
+    // horizon while alder's runway falls short of alder's reset, and its 0.0437 covers the excess: it is the one mark,
+    // and the requesting pin renews in place.
+    charge(&mut st, 75, 0.10);
+    charge(&mut st, 80, 0.10);
+    let at_85 = decide(
+        &mut st,
+        &s,
+        &turn(HEAVY[0], "main", FABLE, "r-85", T + 85 * MINUTE),
+        &mut rng(),
+    );
+    assert_eq!(landed(at_85.result.clone()), ("cedar".into(), None));
+    holds_allowance(&at_85.record);
+    let shed = line(&at_85.record, "move:shed");
+    assert_eq!(
+        shed.verdict, "no",
+        "the requesting pin is not the one marked"
+    );
+    assert_eq!(fact(shed, "round"), &FactValue::Text("ran".into()));
+    assert_eq!(fact(shed, "trigger"), &FactValue::Text("five_hour".into()));
+    let projection = number(fact(shed, "projection_five_hour"));
+    assert!((projection - 0.9745).abs() < 1e-3, "{projection}");
+    assert!(number(fact(shed, "excess")) > 0.0);
+    assert_eq!(
+        fact(shed, "marks"),
+        &FactValue::List(vec![format!("k/{SESSION}/{SUBAGENT}/{OPUS}")])
+    );
+    assert_eq!(
+        fact(shed, "skipped"),
+        &FactValue::List(vec![format!("k/{LIGHT}/main/{FABLE}: fast_lane")])
+    );
+    assert_eq!(fact(shed, "marked"), &FactValue::Bool(false));
+    let round = at_85
+        .shed_round
+        .as_ref()
+        .expect("the round ran")
+        .facts
+        .clone();
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .filter(|p| p.marked)
+            .map(|p| (p.agent_id.as_str(), p.planned.as_deref()))
+            .collect::<Vec<_>>(),
+        [(SUBAGENT, Some("birch"))]
+    );
+    assert_eq!(
+        at_85.record.outcome.shed_marks,
+        Some(vec![PinKeyFacts {
+            key_id: "k".into(),
+            session_id: SESSION.into(),
+            agent_id: SUBAGENT.into(),
+            model: OPUS.into(),
+        }])
+    );
+    assert_eq!(
+        st.marked_pins("cedar")
+            .iter()
+            .map(|p| p.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        [SUBAGENT]
+    );
+
+    // T + 85 min + 963 s: 0.66 used, the subagent's average down to 0.0256 an hour, and 199 minutes to the reset add
+    // 0.3235: 0.9835 still reads over the ceiling, so the mark stands past the dwell and the subagent moves. The round
+    // past the dwell marks nothing, the standing mark covering its excess, and birch's runway is the longer of the two
+    // that fit.
+    charge(&mut st, 90, 0.05);
+    charge(&mut st, 95, 0.05);
+    let returned = T + 85 * MINUTE + 963_000;
+    let back = decide(
+        &mut st,
+        &s,
+        &turn(SESSION, SUBAGENT, OPUS, "r-101", returned),
+        &mut rng(),
+    );
+    holds_allowance(&back.record);
+    assert!(back.record.pin.as_ref().is_some_and(|pin| pin.marked));
+    assert_eq!(
+        landed(back.result.clone()),
+        ("birch".into(), Some(MigrateReason::Shed))
+    );
+    assert_eq!(line(&back.record, "move:shed").verdict, "fired");
+    let fit = line(&back.record, "fit");
+    assert_eq!(fit.verdict, "fits");
+    assert_eq!(
+        fact_of(fit, "verdict", "birch"),
+        &FactValue::Text("fits".into())
+    );
+    assert_eq!(candidate(&back.record, "birch").fit, Some("fits"));
+    // The usage of the subagent's first turn on birch replaces its booking.
+    let booking = st
+        .release_reservation("r-101")
+        .expect("the move booked on birch");
+    let shares: Vec<(&str, f64)> = booking
+        .rewrite
+        .iter()
+        .map(|(w, share)| (w.as_str(), *share))
+        .collect();
+    st.charge("birch", returned + 30_000, &shares);
+
+    // T + 201 min, the first anchor: 0.87 used.
+    charge(&mut st, 150, 0.11);
+    charge(&mut st, 200, 0.10);
+    assert!(close(cedar_five_hour(&st, T + 201 * MINUTE), 0.87));
+    // T + 220 min: the two Fable sessions end.
+    for session in HEAVY {
+        st.release_session("k", session);
+    }
+    // T + 271 min 14 s: the poll reads alder's Fable week spent, its reset six days out.
+    st.record_sample(
+        "alder",
+        with_fable(
+            UtilizationSample {
+                observed_at: T + 271 * MINUTE + 14_000,
+                ..Default::default()
+            },
+            1.0,
+            Some(alder_fable_reset),
+        ),
+    );
+    // T + 272 min, the second anchor: 0.96 used.
+    charge(&mut st, 240, 0.05);
+    charge(&mut st, 270, 0.04);
+    assert!(close(cedar_five_hour(&st, T + 272 * MINUTE), 0.96));
+
+    // T + 272 min + 53 s: the main turn leaves alder under the spent rule. Cedar's 0.96 plus the rewrite's 0.087
+    // passes the ceiling with the rewrite alone, and birch, past its reset, fits: one rewrite, on birch.
+    let main_turn = T + 272 * MINUTE + 53_000;
+    let birch_before = five_hour(&st, "birch", main_turn);
+    let main = decide(
+        &mut st,
+        &s,
+        &turn(SESSION, "main", FABLE, "r-main", main_turn),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(main.result.clone()),
+        ("birch".into(), Some(MigrateReason::Spent))
+    );
+    let spent = line(&main.record, "move:spent");
+    assert_eq!(spent.verdict, "fired");
+    assert_eq!(
+        fact(spent, "destinations"),
+        &FactValue::List(vec!["birch".into()])
+    );
+    let fit = line(&main.record, "fit");
+    assert_eq!(
+        fact_of(fit, "verdict", "cedar"),
+        &FactValue::Text("least_bad".into())
+    );
+    assert_eq!(
+        fact_of(fit, "verdict", "birch"),
+        &FactValue::Text("fits".into())
+    );
+    assert!(main.record.walk.iter().all(|w| w.step != "cool"));
+    let rewrite = 870_174.0 / 10_000_000.0;
+    assert!(close(
+        five_hour(&st, "birch", main_turn) - birch_before,
+        rewrite
+    ));
+    assert!(
+        close(cedar_five_hour(&st, main_turn), 0.96),
+        "cedar takes no rewrite"
+    );
+    assert_eq!(
+        st.pin(&subagent_key).map(|p| p.account_id.as_str()),
+        Some("birch"),
+        "the subagent moved once, at its own turn"
+    );
+
+    // One second later a fresh subagent of the session is placed.
+    let fresh = decide(
+        &mut st,
+        &s,
+        &SelectRequest {
+            body_tokens: 200_000,
+            ..turn(SESSION, "c4d5e6f7", OPUS, "r-fresh", main_turn + 1_000)
+        },
+        &mut rng(),
+    );
+    assert!(matches!(fresh.result, SelectResult::Selected(_)));
+
+    // What the records write: version 2, the request's body estimate, a reserve station on every walk, and the
+    // booking the fresh subagent finds on birch.
+    for (record, body_tokens) in [
+        (&at_70.record, 0),
+        (&at_85.record, 0),
+        (&back.record, 0),
+        (&main.record, 0),
+        (&fresh.record, 200_000),
+    ] {
+        assert_eq!(record.version, 2);
+        assert_eq!(record.request.body_tokens, Some(body_tokens));
+    }
+    for renewal in [&at_70.record, &at_85.record] {
+        let reserve = line(renewal, "reserve");
+        assert_eq!(reserve.verdict, "none", "a renewal books nothing");
+        assert_eq!(
+            reserve
+                .facts
+                .iter()
+                .map(|f| (f.key, f.value.clone(), f.account_id.as_deref()))
+                .collect::<Vec<_>>(),
+            [("account_id", FactValue::Text("cedar".into()), Some("cedar"))]
+        );
+        assert_eq!(renewal.outcome.reservation, None);
+    }
+    // The subagent's move books its rewrite and its idle burn, now 0.0256 of the window an hour.
+    let reserve = line(&back.record, "reserve");
+    assert_eq!(reserve.verdict, "booked");
+    assert_eq!(
+        fact(reserve, "account_id"),
+        &FactValue::Text("birch".into())
+    );
+    assert!(close(
+        number(fact(reserve, "reserved_five_hour")),
+        813_365.0 / 10_000_000.0
+    ));
+    assert!((number(fact(reserve, "burn_five_hour")) - 0.0256).abs() < 1e-4);
+    assert_eq!(
+        fact(reserve, "expires_at"),
+        &FactValue::Int(returned + IN_FLIGHT_RECLAIM_MS)
+    );
+    assert_eq!(fact(reserve, "attempt"), &FactValue::Int(1));
+    let booked = back
+        .record
+        .outcome
+        .reservation
+        .as_ref()
+        .expect("the move's booking");
+    assert_eq!(
+        (booked.account_id.as_str(), booked.expires_at),
+        ("birch", returned + IN_FLIGHT_RECLAIM_MS)
+    );
+    assert_eq!(booked.rewrite, booking.rewrite);
+    // The main turn's booking: the rewrite's share per window, the burn per hour.
+    assert_eq!(
+        &steps(&main.record)[main.record.walk.len() - 2..],
+        &[("pick", "chosen"), ("reserve", "booked")]
+    );
+    let reserve = line(&main.record, "reserve");
+    for (key, share) in [
+        ("reserved_five_hour", rewrite),
+        ("reserved_seven_day", 870_174.0 / 60_000_000.0),
+        ("reserved_seven_day_fable", 870_174.0 / 30_000_000.0),
+    ] {
+        assert!(close(number(fact(reserve, key)), share), "{key}");
+        assert_eq!(
+            reserve
+                .facts
+                .iter()
+                .find(|f| f.key == key)
+                .and_then(|f| f.unit),
+            Some("percent")
+        );
+    }
+    let live = st.reservation("r-main").expect("the main turn's booking");
+    assert_eq!(
+        main.record.outcome.reservation.as_ref().map(|r| (
+            r.account_id.as_str(),
+            &r.rewrite,
+            r.expires_at
+        )),
+        Some(("birch", &live.rewrite, live.expires_at))
+    );
+    let burn = &main.record.outcome.reservation.as_ref().unwrap().burn;
+    for (window, per_second) in &live.burn {
+        assert!(close(burn[window], per_second * 3_600.0), "{window}");
+    }
+    assert!(close(
+        number(fact(reserve, "burn_five_hour")),
+        live.burn[FIVE_HOUR] * 3_600.0
+    ));
+    // The fresh subagent reads the main turn's share on birch's 5-hour window, and nothing on cedar.
+    let birch = candidate(&fresh.record, "birch");
+    assert!(close(birch.windows[FIVE_HOUR].reserved, rewrite));
+    assert!(close(
+        candidate(&fresh.record, "cedar").windows[FIVE_HOUR].reserved,
+        0.0
+    ));
+    assert_eq!(line(&fresh.record, "reserve").verdict, "booked");
 }

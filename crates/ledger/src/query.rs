@@ -581,6 +581,7 @@ pub const EVENT_KINDS: &[&str] = &[
     "cooldown_set",
     "fast_credits_changed",
     "ledger_gap",
+    "mark_cleared",
     "model_permitted",
     "model_rejected",
     "overage_ended",
@@ -595,6 +596,7 @@ pub const EVENT_KINDS: &[&str] = &[
     "refresh_succeeded",
     "refresh_uncertain",
     "registry_changed",
+    "reservation_expired",
     "router_started",
     "shedding_round",
     "warm_prefix_expired",
@@ -1147,7 +1149,7 @@ fn count_of(
     Ok(count as u64)
 }
 
-/// Record v1 decoded from its frame with `outcome.completion` merged in, or `None` when the row is absent.
+/// Record v2 decoded from its frame with `outcome.completion` merged in, or `None` when the row is absent.
 pub fn decision_record(
     conn: &Connection,
     request_id: &str,

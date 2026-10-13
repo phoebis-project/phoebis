@@ -294,7 +294,7 @@ pub(crate) struct Counts {
 }
 
 /// The record of the request's decision `seq`, counted from 1 in the order the router answered it: a hold and the
-/// placement after its wait are two decisions of one attempt. Record v1 decoded, with `request_id` and `seq` ahead
+/// placement after its wait are two decisions of one attempt. Record v2 decoded, with `request_id` and `seq` ahead
 /// of it. The record holds what the engine read, in the order it read it, and what it wrote. Every entity is its
 /// id, and no credential, token or message content is in it.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -302,7 +302,7 @@ pub(crate) struct Counts {
 pub(crate) struct DecisionRecord {
     pub request_id: String,
     pub seq: u32,
-    /// 1.
+    /// 2.
     pub version: u32,
     /// `request_id`, `attempt`, `seq`, `at`, `key_id`, `key_generation`, `pool_id`, `routing_session_id`,
     /// `agent_id`, `parent_agent_id`, `client_class`, `request_class`, `canonical_model`, `lane` (`speed`,
@@ -310,7 +310,8 @@ pub(crate) struct DecisionRecord {
     /// `identity` (`rung`, `root`, `depth`, `account_id`), `chain` (`static_boundaries` and `boundaries`, the
     /// chains' lengths, and `static_hash`), `attempted` (the accounts already tried), `holds` (each `account_id`,
     /// `cohort`, `held_ms`, `attempt`, `seq` (the decision that held), `ran_out` (the wait's bound ran out with no
-    /// slot freed)), `registry_revision`.
+    /// slot freed)), `registry_revision`, `body_tokens` (the relay's estimate of the body's prompt tokens, which a
+    /// fresh session's rewrite reads, null on a refusal).
     ///
     /// A refusal's `request` block reads what the refusal site held. A refusal of the router's own carries the
     /// request's `parent_agent_id`, `request_class`, `lane`, `flags` (a keepalive probe's `flags.probe` among
@@ -321,8 +322,9 @@ pub(crate) struct DecisionRecord {
     /// The pin as the selection found it: `found` (`live`, `expired_idle`, `left_pool` or `none`), `account_id`,
     /// `epoch`, `incarnation`, `created_at`, `last_used_at`, `last_refresh_at`, `idle_ms`, `refresh_age_ms`,
     /// `lane`, `shed` (`from`, `at`), `marked`, `warmth` (`refresh`, `cold` or `untouched`), `warmth_cause`,
-    /// `released` (the reasons a pin was let go). Null for a request that pins nothing, with `pin_reason` beside
-    /// it.
+    /// `released` (the reasons a pin was let go), `marked_at`, `marked_on` and `marked_window` (the shedding mark the
+    /// row carries: when it was made, the account and the window whose trigger made it, null without one). Null for a
+    /// request that pins nothing, with `pin_reason` beside it.
     #[schema(value_type = Option<Object>)]
     pub pin: Option<Value>,
     /// `not_looked_up` for a refusal, which precedes the pin lookup, or `pinning_off`.
@@ -333,17 +335,19 @@ pub(crate) struct DecisionRecord {
     /// `min_shared_prefix_tokens`, `subagent_placement`, `select_below_utilization`, `shed_ahead_of_pace`,
     /// `migrate_when_spent`, `overage_move_grace_minutes`, `wind_down_minutes`, `shed_share`,
     /// `burn_window_seconds`, `source_dwell_seconds`, `warm_sessions`, `in_flight_cap`, `retry_in_place_seconds`,
-    /// `pace_floor`, `migrate_band`, `pool_updated_at`. Null for a refusal whose key or pool the
-    /// registry no longer holds.
+    /// `pace_floor`, `pool_updated_at`. Null for a refusal whose key or pool the registry no longer
+    /// holds.
     #[schema(value_type = Option<Object>)]
     pub settings: Option<Value>,
     /// One per pool member, eligible or not, in the pool's order: `account_id`, `incarnation`, `kind`,
     /// `plan_tier`, `enabled`, `state`, `priority`, `tier` (`[group, priority, overage_bit]`), `in_overage`,
     /// `overage` (`since`, `reset`, `source`, `observed_at`), `in_flight`, `in_flight_cap`, `windows` (by window
     /// name, each `utilization`, `reset`, `source` (`head`, `poll`, `predicted` or `stored`), `observed_at`,
-    /// `age_ms`, `ahead`), `allowance_known`, `pace` (`remaining`, `reset`, `end`, `deadline`, `hours`, `score`,
-    /// `window` (the window the score read, `seven_day` or the model's week such as `seven_day_fable`, null for an
-    /// API key member), under Pace alone), `budget` (each `period`, `budget_usd`, `spent_usd`, `period_start`,
+    /// `age_ms`, `ahead`, `projection` and `horizon` (the projection at the window's horizon, a plan window's alone),
+    /// `reserved` (the live bookings' rewrite the prediction carries)), `allowance_known`, `pace` (`remaining`,
+    /// `reset`, `end`, `deadline`, `hours`, `score`, `window` (the window the score read, `seven_day` or the model's
+    /// week such as `seven_day_fable`, null for an API key member), `burn` (the burn the score subtracts, share per
+    /// hour), under Pace alone), `budget` (each `period`, `budget_usd`, `spent_usd`, `period_start`,
     /// `period_end`, `observed_at`), `cooldowns` (each `scope`, `reason`, `window`, `until`, `blocking`),
     /// `credits` (`enabled`, `disabled_reason`, `utilization`, `observed_at`, `blocked`), `term` (`since`,
     /// `trial_ends_at`, `cancelled`, `ends_at`, `winding_down`, `ended`), `prefix` (per rung the deepest entry the
@@ -353,7 +357,9 @@ pub(crate) struct DecisionRecord {
     /// four `with_main`), `obstacle` (`name`, `reason` (a cooldown's or a credits refusal's reason, and for
     /// `budget` the period of the reached budget that ends last, `day` or `month`), `window`, `until`),
     /// `partition`, `rank`, `score`, `verdict` (`chosen`, `renewed`, `held_on`, `source`, `destination`,
-    /// `eligible`, `ranked`, `out` or `not_needed`).
+    /// `eligible`, `ranked`, `out` or `not_needed`), `runway_ms`, `fit` (`ending`, `fits`, `least_bad` or
+    /// `rewrite_only`) and `binding` (the request's fit where a move's gate or the `no_fit` partition read it, the
+    /// runway null when unbounded), `burn` (the pins' burn by plan window, share per hour).
     #[schema(value_type = Vec<Object>)]
     pub candidates: Vec<Value>,
     /// The steps in the order the engine ran them, each `step`, `verdict` and `facts`, each fact `key`, `value`,
@@ -362,9 +368,12 @@ pub(crate) struct DecisionRecord {
     pub walk: Vec<Value>,
     /// `kind`, `account_id`, `from_account_id`, `upstream_model`, `tier`, `strategy`, `rule`, `rung` (`rung`,
     /// `depth`, `prefix_tokens`), `in_overage`, `pin_written` (`action`, `epoch`, `lane`, `refresh_stamped`,
-    /// `hashes_stamped`), `pin_events` (each `kind`, `reason`), `hold` (`account_id`, `cohort`, `bound_ms`),
-    /// `exhaustion` (`kind`, `deadline`, `window`, `reason`, `obstacle`), `refusal` (`kind`, `code`, `reason`),
-    /// `cohort_hold`, `shed_marks`, `completion`.
+    /// `hashes_stamped`), `pin_events` (each `kind`, `reason`), `hold` (`account_id`, `cohort`, `bound_ms`,
+    /// `reason` (`cap` or `reset`), `until` (the end of a reset's wait)), `exhaustion` (`kind`, `deadline`, `window`,
+    /// `reason`, `obstacle`), `refusal` (`kind`, `code`, `reason`), `cohort_hold`, `shed_marks`, `mark_cleared`
+    /// (`reason`, `marked_at`, `marked_on`, `marked_window`, `projection`), `reservation` (`account_id`, `rewrite` and
+    /// `burn` by plan window, the burn per hour, `expires_at`, null for a decision that booked nothing),
+    /// `completion`.
     ///
     /// A refusal's `code` is its structured word beside the display `reason`: `disabled`, `expired`,
     /// `pool_disabled`, `pool_missing`, `replaced`, `revoked` or `unknown` for a key refusal, `model_not_allowed`

@@ -127,6 +127,13 @@
       ]
     },
     {
+      "step": "reserve",
+      "verdicts": [
+        "booked",
+        "none"
+      ]
+    },
+    {
       "step": "rung:content",
       "verdicts": [
         "match",

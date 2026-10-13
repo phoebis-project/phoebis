@@ -143,6 +143,11 @@ pub enum RouterEvent {
         to_account: String,
         epoch: u64,
         reason: String,
+        /// The destination's fit as the move read it: the verdict (`fits`, `rewrite_only`, `least_bad`), the runway
+        /// on the binding window (`None` for an unbounded one) and that window.
+        fit: Option<&'static str>,
+        runway_ms: Option<i64>,
+        binding: Option<String>,
         at: i64,
     },
     PinReleased {
@@ -182,8 +187,9 @@ pub enum RouterEvent {
         entries: Vec<CacheMapEntry>,
         at: i64,
     },
-    /// A shedding round that ran on `account_id` for a request of `pool_id`: the reading that fired it as the lead
-    /// over pace, the round's unit, its pins in the round's order and the marks it made.
+    /// A shedding round that ran on `account_id` for a request of `pool_id`: the projection that fired it, on the first
+    /// plan window whose projection at its horizon read over the ceiling, the round's unit, its pins in the round's
+    /// order and the marks it made.
     SheddingRound {
         account_id: String,
         pool_id: String,
@@ -1421,6 +1427,10 @@ struct Task {
     reset_announced: HashMap<(String, String), i64>,
     revision: u64,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
+    /// The reset each account and window's predicted wall was announced for, `None` for a 5-hour window open past its
+    /// reset: a charge or a booking announces a wall once per reset, and the sample that confirms it names the same
+    /// reset and announces nothing.
+    spent_announced: HashMap<(String, String), Option<i64>>,
     state: RoutingState,
     store: Arc<Store>,
     /// The rotation each slot's last touch was stamped under, beside its timestamp: a touch under a different
@@ -1558,6 +1568,7 @@ pub fn spawn(
         reset_announced: HashMap::new(),
         revision: 1,
         snapshot,
+        spent_announced: HashMap::new(),
         state,
         store,
         touched_at: HashMap::new(),
@@ -2123,6 +2134,35 @@ fn released_mark(row: &PinRow, at: i64) -> Option<RouterEvent> {
     })
 }
 
+/// The fit of a move's destination as the decision's candidate table holds it: what the move's gate read there, or
+/// the fresh placement's fit for a fail-over's landing. `None` throughout for a member the table does not list.
+fn destination_fit(
+    record: &DecisionRecord,
+    account_id: &str,
+) -> (Option<&'static str>, Option<i64>, Option<String>) {
+    record
+        .candidates
+        .iter()
+        .find(|candidate| candidate.account_id == account_id)
+        .map_or((None, None, None), |candidate| {
+            (
+                candidate.fit,
+                candidate.runway_ms,
+                candidate.binding.clone(),
+            )
+        })
+}
+
+/// Whether two readings' resets name one reset, within `RESET_SLACK_MS` as `announce_reset` compares them. A window
+/// open past its reset names none until the next reading does, so two such readings are one cycle.
+fn same_reset(a: Option<i64>, b: Option<i64>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a.abs_diff(b) <= RESET_SLACK_MS.unsigned_abs(),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 /// A pin event as the decision names it: a move with its reason, an expiry with the first reason the task read
 /// against the pin.
 fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
@@ -2359,6 +2399,8 @@ impl Task {
                                     // entry it left behind names the account the request left.
                                     record.outcome.from_account_id = Some(from.clone());
                                     summary.rule = Some(reason);
+                                    let (fit, runway_ms, binding) =
+                                        destination_fit(&record, &new.account_id);
                                     pin_events.push(RouterEvent::PinMigrated {
                                         key_id: k.clone(),
                                         session_id: s.clone(),
@@ -2368,6 +2410,9 @@ impl Task {
                                         to_account: new.account_id.clone(),
                                         epoch: new.epoch,
                                         reason: reason.into(),
+                                        fit,
+                                        runway_ms,
+                                        binding,
                                         at: now,
                                     });
                                 }
@@ -2408,6 +2453,8 @@ impl Task {
                                         at: now,
                                     });
                                 } else {
+                                    let (fit, runway_ms, binding) =
+                                        destination_fit(&record, &new.account_id);
                                     pin_events.push(RouterEvent::PinMigrated {
                                         key_id: k.clone(),
                                         session_id: s.clone(),
@@ -2417,6 +2464,9 @@ impl Task {
                                         to_account: new.account_id.clone(),
                                         epoch: new.epoch,
                                         reason: reason.into(),
+                                        fit,
+                                        runway_ms,
+                                        binding,
                                         at: now,
                                     });
                                 }
@@ -2467,6 +2517,12 @@ impl Task {
                         None => None,
                     }
                 });
+                // What the selection booked, read before the record leaves on the broadcast.
+                let booked = record
+                    .outcome
+                    .reservation
+                    .as_ref()
+                    .map(|booked| (booked.account_id.clone(), booked.rewrite.clone()));
                 let round = shed_round.map(|round| RouterEvent::SheddingRound {
                     account_id: round.account_id,
                     pool_id: record.request.pool_id.clone(),
@@ -2485,6 +2541,21 @@ impl Task {
                 });
                 for event in pin_events.into_iter().chain(mark).chain(round) {
                     self.emit(event);
+                }
+                if let Some((account_id, rewrite)) = booked {
+                    for (window, share) in rewrite {
+                        let Some(after) = self.state.predicted(&account_id, &window, request.now)
+                        else {
+                            continue;
+                        };
+                        self.predicted_spent(
+                            &account_id,
+                            &window,
+                            after.utilization - share,
+                            &request.request_id,
+                            request.now,
+                        );
+                    }
                 }
                 let (cancel, ticket) = match &result {
                     // Charged here, in the one place selections are serialized, so the count the next selection
@@ -3289,7 +3360,17 @@ impl Task {
                     .into_iter()
                     .filter_map(|(w, s)| s.map(|s| (w, s)))
                     .collect();
+                let before: Vec<(&str, f64)> = shares
+                    .iter()
+                    .filter_map(|(window, _)| {
+                        let reading = self.state.predicted(&account_id, window, at)?;
+                        Some((*window, reading.utilization))
+                    })
+                    .collect();
                 self.state.charge(&account_id, at, &shares);
+                for (window, before) in before {
+                    self.predicted_spent(&account_id, window, before, &request_id, at);
+                }
             }
             Report::AccountState {
                 account_id,
@@ -3681,7 +3762,15 @@ impl Task {
                 });
             }
         }
-        if stored.is_none_or(|stored| stored.utilization < 1.0) && reading.utilization >= 1.0 {
+        // The prediction may have announced this wall already: the reading then names the reset it did.
+        let announced = self
+            .spent_announced
+            .get(&(account_id.to_string(), window.to_string()))
+            .is_some_and(|announced| same_reset(*announced, reading.reset));
+        if stored.is_none_or(|stored| stored.utilization < 1.0)
+            && reading.utilization >= 1.0
+            && !announced
+        {
             self.emit(RouterEvent::WindowSpent {
                 account_id: account_id.to_string(),
                 window: window.to_string(),
@@ -3692,6 +3781,43 @@ impl Task {
                 at: now,
             });
         }
+    }
+
+    /// Announces the window spent when the router's own figure took its prediction from `before`, under 1.0, to 1.0 or
+    /// above: a charge, or a booking the usage has not replaced yet. Once per account, window and reset, so a later
+    /// charge of the same cycle announces nothing.
+    fn predicted_spent(
+        &mut self,
+        account_id: &str,
+        window: &str,
+        before: f64,
+        request_id: &str,
+        at: i64,
+    ) {
+        let Some(reading) = self.state.predicted(account_id, window, at) else {
+            return;
+        };
+        if before >= 1.0 || reading.utilization < 1.0 {
+            return;
+        }
+        let key = (account_id.to_string(), window.to_string());
+        if self
+            .spent_announced
+            .get(&key)
+            .is_some_and(|announced| same_reset(*announced, reading.reset))
+        {
+            return;
+        }
+        self.spent_announced.insert(key, reading.reset);
+        self.emit(RouterEvent::WindowSpent {
+            account_id: account_id.to_string(),
+            window: window.to_string(),
+            utilization: reading.utilization,
+            reset: reading.reset,
+            source: WindowSource::Predicted,
+            source_request_id: Some(request_id.to_string()),
+            at,
+        });
     }
 
     /// Whether `reset_at` is a reset not yet announced for the account and window, recording it when it is: the

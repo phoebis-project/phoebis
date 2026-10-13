@@ -8524,3 +8524,204 @@ async fn a_request_dropped_before_its_selection_answer_is_read_releases_the_book
     assert!(close(read(&handle, "a", FIVE_HOUR).await, 0.5));
     assert!(!an_expiry_among(&mut events));
 }
+
+/// The next `WindowSpent` on `events`, every other event passed over.
+async fn next_spent(
+    events: &mut tokio::sync::broadcast::Receiver<phoebis_routing::RouterEvent>,
+) -> phoebis_routing::RouterEvent {
+    loop {
+        let event = next_event(events).await;
+        if matches!(event, phoebis_routing::RouterEvent::WindowSpent { .. }) {
+            return event;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_charge_or_a_reservation_that_predicts_a_spent_window_emits_window_spent_with_the_source_predicted_once_per_reset(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(2_000));
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            share: a_tenth_per_million_written(),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let reset = 10 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.99, Some(reset)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    // The 200 000 token body books 0.02, which takes the 0.99 reading past the wall before any usage lands.
+    handle
+        .select(placement(&handle, "r-1", "s1", 2_000))
+        .await
+        .unwrap();
+    match next_spent(&mut events).await {
+        RouterEvent::WindowSpent {
+            account_id,
+            window,
+            utilization,
+            reset: spent_reset,
+            source,
+            source_request_id,
+            at,
+        } => {
+            assert_eq!(
+                (
+                    account_id.as_str(),
+                    window.as_str(),
+                    spent_reset,
+                    source,
+                    source_request_id.as_deref(),
+                    at
+                ),
+                (
+                    "a",
+                    FIVE_HOUR,
+                    Some(reset),
+                    WindowSource::Predicted,
+                    Some("r-1"),
+                    2_000
+                )
+            );
+            assert!(close(Some(utilization), 1.01), "{utilization}");
+        }
+        other => panic!("{other:?}"),
+    }
+    // The usage replaces the booking and its charge crosses the wall again inside the same cycle, and the head that
+    // reads the window spent names the same reset a half second off, as a head's whole seconds do.
+    handle.report(usage_of("r-1", 1, 2_500)).await;
+    handle
+        .report(head_reading(3_000, 1.0, Some(reset + 500), "r-2"))
+        .await;
+    handle.samples().await.unwrap();
+    let quiet = drained(&mut events).await;
+    assert!(
+        !quiet
+            .iter()
+            .any(|event| matches!(event, RouterEvent::WindowSpent { .. })),
+        "one announcement per reset: {quiet:?}"
+    );
+    // Past the reset the window opens with the router's own charges, and a charge that spends it is a new cycle.
+    now.store(reset + 2_000, Ordering::SeqCst);
+    handle
+        .report(Report::Usage {
+            account_id: "a".into(),
+            at: reset + 2_000,
+            canonical_model: "claude-sonnet-5".into(),
+            incarnation: 1,
+            usage: PinUsage {
+                input: 10_000_000,
+                ..PinUsage::default()
+            },
+            fast: false,
+            request_id: "r-3".into(),
+            attempt: 1,
+        })
+        .await;
+    match next_spent(&mut events).await {
+        RouterEvent::WindowSpent {
+            utilization,
+            reset: spent_reset,
+            source,
+            source_request_id,
+            ..
+        } => {
+            assert_eq!(
+                (spent_reset, source, source_request_id.as_deref()),
+                (None, WindowSource::Predicted, Some("r-3")),
+                "the open window names no reset until the next reading does"
+            );
+            assert!(close(Some(utilization), 1.0), "{utilization}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_pin_migrated_event_carries_the_destinations_fit_runway_and_binding() {
+    use phoebis_routing::{FactValue, MigrateReason, RouterEvent};
+    let store = shedding_store(&["a", "b"]);
+    with_tier(&store, "a");
+    with_tier(&store, "b");
+    store
+        .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    // a is spent with no reset to wait for, so the spent rule moves s1. On b at 0.5 the pin's 0.1 of the window an
+    // hour reaches the ceiling in about four and a half hours, short of the five-hour horizon: the rewrite lands and
+    // the runway falls short, so b reads `rewrite_only` with the 5-hour window binding.
+    handle.report(windows("a", 1.0, 0.3, AT)).await;
+    handle.report(windows("b", 0.5, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s1"), AT))
+                .await
+                .unwrap()
+        ),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    let (_, record) = next_decision(&mut events).await;
+    let row: Vec<&phoebis_routing::Fact> = record
+        .walk
+        .iter()
+        .find(|step| step.step == "fit")
+        .expect("the spent rule's fit table")
+        .facts
+        .iter()
+        .filter(|fact| fact.account_id.as_deref() == Some("b"))
+        .collect();
+    let of = |key: &str| {
+        row.iter()
+            .find(|fact| fact.key == key)
+            .map(|fact| fact.value.clone())
+    };
+    let migrated = loop {
+        if let event @ RouterEvent::PinMigrated { .. } = next_event(&mut events).await {
+            break event;
+        }
+    };
+    let RouterEvent::PinMigrated {
+        to_account,
+        fit,
+        runway_ms,
+        binding,
+        ..
+    } = migrated
+    else {
+        unreachable!()
+    };
+    assert_eq!(to_account, "b");
+    assert_eq!(
+        (fit, binding.as_deref()),
+        (Some("rewrite_only"), Some("five_hour"))
+    );
+    assert!(
+        runway_ms.is_some_and(|ms| ms > 0 && ms < 5 * HOUR),
+        "{runway_ms:?}"
+    );
+    assert_eq!(
+        (
+            fit.map(|fit| FactValue::Text(fit.into())),
+            runway_ms.map(FactValue::Int),
+            binding.map(FactValue::Text)
+        ),
+        (of("verdict"), of("runway_ms"), of("binding")),
+        "the event names the destination's row of the move's fit table"
+    );
+}

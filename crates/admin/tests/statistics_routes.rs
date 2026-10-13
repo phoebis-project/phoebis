@@ -3383,7 +3383,7 @@ async fn a_decision_seq_that_is_no_sequence_number_answers_400() {
 }
 
 #[tokio::test]
-async fn a_decision_record_answers_record_v1_with_its_completion() {
+async fn a_decision_record_answers_record_v2_with_its_completion() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     routed(&parts, &cookie).await;
@@ -3416,7 +3416,7 @@ async fn a_decision_record_answers_record_v1_with_its_completion() {
         (
             &serde_json::json!("r1"),
             &serde_json::json!(1),
-            &serde_json::json!(1)
+            &serde_json::json!(2)
         )
     );
     assert_eq!(record["outcome"]["kind"], "placed");

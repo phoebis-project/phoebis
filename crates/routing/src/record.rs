@@ -1,4 +1,4 @@
-//! Record v1: the exact log of one routing decision, what the engine read in the order it read it and what it
+//! Record v2: the exact log of one routing decision, what the engine read in the order it read it and what it
 //! wrote. It travels beside the attempt's `SelectionTrace`, which the analytics keep reading. Nothing a rollup
 //! reads lives here alone. A word from a fixed vocabulary is a `&'static str`, an entity is its id, and a field
 //! the decision did not reach serializes as `null`.
@@ -11,7 +11,7 @@ use crate::select::{ClientClass, CohortHold, HoldFacts, Placement, SelectRequest
 use crate::state::Tier;
 use crate::RegistrySnapshot;
 
-pub const RECORD_VERSION: u32 = 1;
+pub const RECORD_VERSION: u32 = 2;
 
 /// Every step id the engine records with the verdict words it writes, in the ids' order, the two steps the refusal
 /// record writes by hand (`admission`, `selection`) and the fit table it appends whole (`fit`) included. The
@@ -35,6 +35,7 @@ pub const WALK_STEPS: &[(&str, &[&str])] = &[
     ("pin", &["match", "none"]),
     ("probe", &["answered", "passed"]),
     ("renew", &["renewed"]),
+    ("reserve", &["booked", "none"]),
     ("rung:content", &["match", "none"]),
     ("rung:static", &["match", "none", "not_run"]),
     ("rung:with_main", &["match", "none", "not_run"]),
@@ -82,6 +83,9 @@ pub struct RequestFacts {
     pub attempted: Vec<String>,
     pub holds: Vec<HoldFacts>,
     pub registry_revision: u64,
+    /// The relay's estimate of the body's prompt tokens, which a fresh session's rewrite and booking read: `Some` on
+    /// every selection the engine ran, `None` on a refusal, whose request carries no estimate.
+    pub body_tokens: Option<u64>,
 }
 
 /// The request's cache lane split from its `lane_key` spelling.
@@ -273,6 +277,8 @@ pub struct WindowFacts {
     /// The projection at the window's horizon and the horizon, filled for a plan window of a subscription member.
     pub projection: Option<f64>,
     pub horizon: Option<i64>,
+    /// The live reservations' rewrite on the window, summed: what `predicted` added to the reading.
+    pub reserved: f64,
 }
 
 /// `end`, `deadline` and `hours` are `None` and `burn` is 0 for an api_key member, which Pace scores by its remaining
@@ -470,6 +476,8 @@ pub struct Outcome {
     pub shed_marks: Option<Vec<PinKeyFacts>>,
     /// The mark this decision cleared, `None` when none stood or it stands on.
     pub mark_cleared: Option<MarkClearedFacts>,
+    /// What the selection booked on the chosen account, `None` for an outcome that books nothing.
+    pub reservation: Option<ReservationFacts>,
 }
 
 /// A mark the decision cleared: `healed` when the heal check found the trigger gone at the pin's request, `moved` when
@@ -509,6 +517,18 @@ pub struct HoldOutcome {
     /// The instant the request waits for under `reset`: the later of the spent window's reset and the end of the
     /// account's cooldown. `None` under `cap`.
     pub until: Option<i64>,
+}
+
+/// The booking a move or a placement made on its destination, as the `reserve` step states it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct ReservationFacts {
+    pub account_id: String,
+    /// The rewrite's share per plan window, what the destination's prediction carries until the usage replaces it.
+    pub rewrite: BTreeMap<String, f64>,
+    /// The pin's burn per plan window in share per hour, the unit `CandidateFacts.burn` states, converted from the
+    /// share per second the booking holds.
+    pub burn: BTreeMap<String, f64>,
+    pub expires_at: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -755,6 +775,7 @@ impl DecisionRecord {
                 attempted: request.attempted.clone(),
                 holds: request.holds.clone(),
                 registry_revision: snapshot.revision,
+                body_tokens: None,
             },
             pin: None,
             pin_reason: Some("not_looked_up"),
@@ -790,6 +811,7 @@ impl DecisionRecord {
                 cohort_hold: None,
                 shed_marks: None,
                 mark_cleared: None,
+                reservation: None,
             },
         };
         let fact = if refusal.kind == "client" {
@@ -926,6 +948,7 @@ mod tests {
                 attempted: Vec::new(),
                 holds: Vec::new(),
                 registry_revision: 7,
+                body_tokens: Some(1_200),
             },
             pin: Some(PinFacts {
                 found: "live",
@@ -995,6 +1018,7 @@ mod tests {
                         ahead: Some(-0.1),
                         projection: None,
                         horizon: None,
+                        reserved: 0.0,
                     },
                 )]),
                 allowance_known: true,
@@ -1054,6 +1078,7 @@ mod tests {
                 cohort_hold: None,
                 shed_marks: None,
                 mark_cleared: None,
+                reservation: None,
             },
         }
     }
@@ -1084,7 +1109,7 @@ mod tests {
             ],
             "the blocks follow the walk: what came in, the pin, the settings, the members, the steps, the answer"
         );
-        assert_eq!(value["version"], 1);
+        assert_eq!(value["version"], 2);
         let prefix = &value["candidates"][0]["prefix"];
         assert_eq!(
             keys(prefix),

@@ -22,9 +22,9 @@ use crate::LedgerDb;
 /// Rows read per mirror tick; a registry busier than this per tick is caught up on the next.
 const MIRROR_BATCH: usize = 500;
 
-/// `None` for the five variants that land as no row of their own here: a `Decision` and a `CacheMapWritten`, which
-/// the mirror maps to the ledger's own records, an `AccountStateChanged`, a transition the mirror's account watch
-/// reads from the registry, and a `MarkCleared` and a `ReservationExpired`, which have no row.
+/// `None` for the three variants that land as no row of their own here: a `Decision` and a `CacheMapWritten`, which
+/// the mirror maps to the ledger's own records, and an `AccountStateChanged`, a transition the mirror's account watch
+/// reads from the registry.
 pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
     let model_of = |scope: &str| scope.strip_prefix("model:").map(str::to_string);
     let row = match event {
@@ -125,6 +125,9 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             to_account,
             epoch,
             reason,
+            fit,
+            runway_ms,
+            binding,
             at,
         } => EventRecord {
             at: *at,
@@ -134,8 +137,49 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             session_id: Some(session_id.clone()),
             model: Some(model.clone()),
             detail: Some(
-                json!({ "agent_id": agent_id, "from_account": from_account, "epoch": epoch, "reason": reason })
-                    .to_string(),
+                json!({
+                    "agent_id": agent_id,
+                    "from_account": from_account,
+                    "epoch": epoch,
+                    "reason": reason,
+                    "fit": fit,
+                    "runway_ms": runway_ms,
+                    "binding": binding,
+                })
+                .to_string(),
+            ),
+            agent_id: Some(agent_id.clone()),
+            ..Default::default()
+        },
+        RouterEvent::MarkCleared {
+            account_id,
+            key_id,
+            session_id,
+            agent_id,
+            model,
+            reason,
+            marked_at,
+            marked_on,
+            marked_window,
+            projection,
+            at,
+        } => EventRecord {
+            at: *at,
+            kind: "mark_cleared".into(),
+            account_id: Some(account_id.clone()),
+            key_id: Some(key_id.clone()),
+            session_id: Some(session_id.clone()),
+            model: Some(model.clone()),
+            detail: Some(
+                json!({
+                    "agent_id": agent_id,
+                    "reason": reason,
+                    "marked_at": marked_at,
+                    "marked_on": marked_on,
+                    "marked_window": marked_window,
+                    "projection": projection,
+                })
+                .to_string(),
             ),
             agent_id: Some(agent_id.clone()),
             ..Default::default()
@@ -156,6 +200,24 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             model: Some(model.clone()),
             detail: Some(json!({ "agent_id": agent_id }).to_string()),
             agent_id: Some(agent_id.clone()),
+            ..Default::default()
+        },
+        RouterEvent::ReservationExpired {
+            account_id,
+            request_id,
+            attempt,
+            cause,
+            shares,
+            age_ms,
+            at,
+        } => EventRecord {
+            at: *at,
+            kind: "reservation_expired".into(),
+            account_id: Some(account_id.clone()),
+            detail: Some(
+                json!({ "attempt": attempt, "cause": cause, "shares": shares, "age_ms": age_ms }).to_string(),
+            ),
+            request_id: Some(request_id.clone()),
             ..Default::default()
         },
         RouterEvent::SheddingRound {
@@ -324,9 +386,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
         },
         RouterEvent::Decision { .. }
         | RouterEvent::CacheMapWritten { .. }
-        | RouterEvent::AccountStateChanged { .. }
-        | RouterEvent::MarkCleared { .. }
-        | RouterEvent::ReservationExpired { .. } => return None,
+        | RouterEvent::AccountStateChanged { .. } => return None,
     };
     Some(row)
 }
@@ -765,6 +825,9 @@ mod tests {
             to_account: "b".into(),
             epoch: 7,
             reason: "cooldown".into(),
+            fit: Some("rewrite_only"),
+            runway_ms: Some(5_400_000),
+            binding: Some("five_hour".into()),
             at: 5,
         })
         .expect("a pin row");
@@ -795,6 +858,15 @@ mod tests {
                 detail["reason"].as_str()
             ),
             (Some("main"), Some("a"), Some(7), Some("cooldown"))
+        );
+        assert_eq!(
+            (&detail["fit"], &detail["runway_ms"], &detail["binding"]),
+            (
+                &json!("rewrite_only"),
+                &json!(5_400_000),
+                &json!("five_hour")
+            ),
+            "the destination's fit as the move read it"
         );
         assert_eq!(
             e.agent_id.as_deref(),
@@ -1240,6 +1312,84 @@ mod tests {
                 "deepest": {"tier": "message", "depth": 3, "prefix_tokens": 1_200, "ttl_ms": 300_000,
                     "account_id": "a"},
                 "lane": "m|standard|none|-", "cause": "ttl"
+            })
+        );
+
+        let row = event_of(&RouterEvent::MarkCleared {
+            account_id: "a".into(),
+            key_id: "k".into(),
+            session_id: "s1".into(),
+            agent_id: "sub-1".into(),
+            model: "m".into(),
+            reason: "healed",
+            marked_at: 1_000,
+            marked_on: "a".into(),
+            marked_window: "five_hour".into(),
+            projection: Some(0.91),
+            at: 6_000,
+        })
+        .expect("a mark row");
+        assert_eq!(
+            (row.at, columns(&row)),
+            (
+                6_000,
+                (
+                    "mark_cleared",
+                    Some("a"),
+                    None,
+                    Some("k"),
+                    Some("s1"),
+                    Some("sub-1"),
+                    Some("m"),
+                    None
+                )
+            )
+        );
+        assert_eq!(
+            detail_of(&row),
+            json!({
+                "agent_id": "sub-1", "reason": "healed", "marked_at": 1_000, "marked_on": "a",
+                "marked_window": "five_hour", "projection": 0.91
+            })
+        );
+
+        let row = event_of(&RouterEvent::ReservationExpired {
+            account_id: "a".into(),
+            request_id: "r3".into(),
+            attempt: 2,
+            cause: "canceled",
+            shares: [
+                ("five_hour".to_string(), 0.104),
+                ("seven_day".to_string(), 0.012),
+            ]
+            .into_iter()
+            .collect(),
+            age_ms: 4_500,
+            at: 7_000,
+        })
+        .expect("a reservation row");
+        assert_eq!(
+            (row.at, columns(&row)),
+            (
+                7_000,
+                (
+                    "reservation_expired",
+                    Some("a"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("r3")
+                )
+            ),
+            "the request whose booking left names the row"
+        );
+        assert_eq!(
+            detail_of(&row),
+            json!({
+                "attempt": 2, "cause": "canceled", "shares": {"five_hour": 0.104, "seven_day": 0.012},
+                "age_ms": 4_500
             })
         );
 

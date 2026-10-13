@@ -24,9 +24,9 @@ pub use record::{
     DecisionRecord, DecisionSummary, ExhaustionFacts, Fact, FactEntity, FactValue, HoldOutcome,
     LaneFacts, MarkClearedFacts, ObstacleFacts, Outcome, OverageFacts, PaceFacts,
     PinEventFacts, PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup,
-    RefusalFacts, RefusedRequest, RequestFacts, RequestFlags, Score, Settings, ShedPinFacts,
-    ShedRoundFacts, SummaryFact, TermFacts, WalkStep, WarmthFacts, WindowFacts, PARTITION_VALUES,
-    RECORD_VERSION, WALK_STEPS,
+    RefusalFacts, RefusedRequest, RequestFacts, RequestFlags, ReservationFacts, Score, Settings,
+    ShedPinFacts, ShedRoundFacts, SummaryFact, TermFacts, WalkStep, WarmthFacts, WindowFacts,
+    PARTITION_VALUES, RECORD_VERSION, WALK_STEPS,
 };
 pub use resolve::{resolve, Candidate, ResolveError};
 pub use select::{

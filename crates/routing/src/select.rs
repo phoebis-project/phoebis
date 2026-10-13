@@ -17,8 +17,8 @@ use crate::record::{
     CreditsFacts, DecisionRecord, DecisionSummary, ExhaustionFacts, Fact, FactEntity, FactValue,
     HoldOutcome, LaneFacts, MarkClearedFacts, ObstacleFacts, Outcome, OverageFacts,
     PaceFacts, PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts,
-    RequestFacts, RequestFlags, Score, ShedPinFacts, ShedRoundFacts, SummaryFact, TermFacts,
-    WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION, WALK_STEPS,
+    RequestFacts, RequestFlags, ReservationFacts, Score, ShedPinFacts, ShedRoundFacts, SummaryFact,
+    TermFacts, WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION, WALK_STEPS,
 };
 use crate::state::{
     budget_reached, burn_average_ms, burn_decayed, ceiling, mark_holds, plan_windows, shed_cap,
@@ -922,8 +922,26 @@ pub fn decide(
     request: &SelectRequest,
     rng: &mut impl Rng,
 ) -> Decided {
-    let mut rec = Recorder::default();
+    // Sized once for the longest walk, so a decision appends its steps without growing the vector.
+    let mut rec = Recorder {
+        walk: Vec::with_capacity(WALK_STEPS.len()),
+        ..Recorder::default()
+    };
     let (result, writes) = run(state, snapshot, request, rng, &mut rec);
+    // The reserve station draws on every walk. A placement and a move record it where they book, and an answer that
+    // never reached the booking states here that it booked nothing, naming the account it landed or waits on.
+    if rec.walk.iter().all(|step| step.step != "reserve") {
+        let account = match &result {
+            SelectResult::Selected(selection) => Some(selection.account.id.as_str()),
+            SelectResult::Held { account_id, .. } => Some(account_id.as_str()),
+            SelectResult::Exhausted(_) | SelectResult::Refused(_) => None,
+        };
+        rec.step(
+            "reserve",
+            "none",
+            account.map(account_fact).into_iter().collect(),
+        );
+    }
     let pool = snapshot
         .key(&request.key_id)
         .and_then(|k| snapshot.pool(&k.pool_id));
@@ -1006,6 +1024,8 @@ struct Recorder {
     mark_cleared: Option<MarkClearedFacts>,
     pick: Option<Pick>,
     renewal: Option<Renewal>,
+    /// What the selection booked, for the outcome.
+    reservation: Option<ReservationFacts>,
 }
 
 /// The pin a renewal kept, as the summary's renewal fact reads it: whether it was cold on this request, the cause
@@ -1746,25 +1766,29 @@ fn run(
                 request.now,
             );
             if !(rewrite.is_empty() && burn.is_empty()) {
-                state.book_reservation(
-                    &request.request_id,
-                    Reservation {
-                        account_id: chosen.account_id.clone(),
-                        attempt: request.attempt,
-                        pin: session.map(|session| PinKey {
-                            key_id: request.key_id.clone(),
-                            session_id: session.to_string(),
-                            agent_id: request.agent_id.clone(),
-                            model: request.canonical_model.clone(),
-                        }),
-                        booked_at: request.now,
-                        rewrite,
-                        burn,
-                        expires_at: request.now + IN_FLIGHT_RECLAIM_MS,
-                    },
-                );
+                let reservation = Reservation {
+                    account_id: chosen.account_id.clone(),
+                    attempt: request.attempt,
+                    pin: session.map(|session| PinKey {
+                        key_id: request.key_id.clone(),
+                        session_id: session.to_string(),
+                        agent_id: request.agent_id.clone(),
+                        model: request.canonical_model.clone(),
+                    }),
+                    booked_at: request.now,
+                    rewrite,
+                    burn,
+                    expires_at: request.now + IN_FLIGHT_RECLAIM_MS,
+                };
+                let (step, facts) = reserve_step(&reservation);
+                rec.step(step.step, step.verdict, step.facts);
+                rec.reservation = Some(facts);
+                state.book_reservation(&request.request_id, reservation);
             }
         }
+    }
+    if rec.reservation.is_none() {
+        rec.step("reserve", "none", vec![account_fact(&chosen.account_id)]);
     }
 
     // Step 7: a fresh pin with a fresh epoch. A token count touches no cache, so it creates none: a pin it left
@@ -2213,8 +2237,8 @@ pub(crate) fn fit_of(
     read
 }
 
-/// The record's key for a per-window fact of the fit table or the shed line, spelled once per plan window since a
-/// fact's key is static. `None` for a window the table does not name.
+/// The record's key for a per-window fact of the fit table, the shed line or the reserve step, spelled once per plan
+/// window since a fact's key is static. `None` for a window the table does not name.
 fn fit_key(kind: &str, window: &str) -> Option<&'static str> {
     Some(match (kind, window) {
         ("horizon", FIVE_HOUR) => "horizon_five_hour",
@@ -2229,6 +2253,9 @@ fn fit_key(kind: &str, window: &str) -> Option<&'static str> {
         ("reserved", FIVE_HOUR) => "reserved_five_hour",
         ("reserved", SEVEN_DAY) => "reserved_seven_day",
         ("reserved", SEVEN_DAY_FABLE) => "reserved_seven_day_fable",
+        ("burn", FIVE_HOUR) => "burn_five_hour",
+        ("burn", SEVEN_DAY) => "burn_seven_day",
+        ("burn", SEVEN_DAY_FABLE) => "burn_seven_day_fable",
         _ => return None,
     })
 }
@@ -2272,6 +2299,55 @@ pub(crate) fn fit_step(reads: &[(String, FitRead)], verdict: &'static str) -> Wa
         verdict,
         facts,
     }
+}
+
+/// The `reserve` step of a booking and the outcome's copy of it: the account, the rewrite's share per plan window,
+/// the burn per hour, the expiry and the wire attempt that booked it, every fact about the account.
+fn reserve_step(reservation: &Reservation) -> (WalkStep, ReservationFacts) {
+    let account_id = reservation.account_id.as_str();
+    let burn: BTreeMap<String, f64> = reservation
+        .burn
+        .iter()
+        .map(|(window, share)| (window.clone(), share * 3_600.0))
+        .collect();
+    let mut facts = vec![account_fact(account_id)];
+    for (window, share) in &reservation.rewrite {
+        if let Some(key) = fit_key("reserved", window) {
+            facts.push(Fact::number(key, *share).unit("percent").about(account_id));
+        }
+    }
+    for (window, share) in &burn {
+        if let Some(key) = fit_key("burn", window) {
+            facts.push(
+                Fact::number(key, *share)
+                    .unit("percent_per_hour")
+                    .about(account_id),
+            );
+        }
+    }
+    facts.push(
+        Fact::int("expires_at", reservation.expires_at)
+            .unit("time")
+            .about(account_id),
+    );
+    facts.push(
+        Fact::count("attempt", u64::from(reservation.attempt))
+            .unit("count")
+            .about(account_id),
+    );
+    (
+        WalkStep {
+            step: "reserve",
+            verdict: "booked",
+            facts,
+        },
+        ReservationFacts {
+            account_id: reservation.account_id.clone(),
+            rewrite: reservation.rewrite.clone(),
+            burn,
+            expires_at: reservation.expires_at,
+        },
+    )
 }
 
 fn account_end(snapshot: &RegistrySnapshot, account_id: &str, now: i64) -> Option<i64> {
@@ -2713,7 +2789,6 @@ fn move_of<'a>(
     let tier = snapshot.tier(source).unwrap_or_default();
     let projections = projections_of(state, snapshot, pool, source, tier, now);
     let windows = trigger_windows(state, snapshot, pool, source);
-    rec.trigger_windows = windows.clone();
     let mut facts = Vec::new();
     for window in &windows {
         let (Some(projection), Some(at), Some(until)) = (
@@ -2727,7 +2802,9 @@ fn move_of<'a>(
         facts.push(Fact::int(until, projection.horizon).unit("time"));
     }
     facts.push(Fact::number("ceiling", ceiling(pool, FIVE_HOUR)).unit("percent"));
-    let Some(trigger) = trigger_of(pool, &projections, &windows, now) else {
+    let trigger = trigger_of(pool, &projections, &windows, now);
+    rec.trigger_windows = windows;
+    let Some(trigger) = trigger else {
         rec.step(RULES[4], "no", facts);
         return MoveVerdict::Stay;
     };
@@ -4483,6 +4560,7 @@ fn window_facts(
     reading: &WindowReading,
     ahead: Option<f64>,
     projection: Option<&Projection>,
+    reserved: f64,
     now: i64,
 ) -> WindowFacts {
     WindowFacts {
@@ -4494,6 +4572,7 @@ fn window_facts(
         ahead,
         projection: projection.map(|p| p.at_horizon),
         horizon: projection.map(|p| p.horizon),
+        reserved,
     }
 }
 
@@ -4567,7 +4646,13 @@ fn candidate_facts(
                 });
                 windows.insert(
                     name.to_string(),
-                    window_facts(&reading, ahead, projections.get(name), now),
+                    window_facts(
+                        &reading,
+                        ahead,
+                        projections.get(name),
+                        state.reserved(id, name),
+                        now,
+                    ),
                 );
             }
         }
@@ -4575,12 +4660,15 @@ fn candidate_facts(
     if let Some(reading) = sample.and_then(|s| s.worst_bucket(now)) {
         windows.insert(
             "worst_bucket".to_string(),
-            window_facts(&reading, None, None, now),
+            window_facts(&reading, None, None, 0.0, now),
         );
     }
     for name in [FAST_INPUT, FAST_OUTPUT] {
         if let Some(reading) = sample.and_then(|s| s.reading(name)) {
-            windows.insert(name.to_string(), window_facts(&reading, None, None, now));
+            windows.insert(
+                name.to_string(),
+                window_facts(&reading, None, None, 0.0, now),
+            );
         }
     }
     let budget = snapshot
@@ -4715,6 +4803,7 @@ fn request_facts(request: &SelectRequest, pool_id: String) -> RequestFacts {
         attempted: request.attempted.clone(),
         holds: request.holds.clone(),
         registry_revision: request.revision,
+        body_tokens: Some(request.body_tokens),
     }
 }
 
@@ -4742,6 +4831,7 @@ fn finish(
         mark_cleared,
         pick,
         renewal,
+        reservation,
     } = rec;
     let key = snapshot.key(&request.key_id);
     let settings = pool.zip(key).map(|(pool, _)| settings_of(pool));
@@ -4763,6 +4853,7 @@ fn finish(
         cohort_hold: cohort_hold(&request.holds),
         shed_marks: shed_round.as_ref().map(|round| round.facts.marks.clone()),
         mark_cleared,
+        reservation,
     };
     let mut skipped = 0;
     match result {
@@ -5001,12 +5092,14 @@ impl Readings<'_> {
                     (by, self.placement_fact())
                 }
             },
-            // A wait for a reset names the reset, since no slot and no pick explain it.
+            // A wait for a reset names the wait's end, since no slot and no pick explain it. The end is the later of
+            // the reset and a blocking cooldown's end, so the fact is named for the wait: the walk's `move:spent`
+            // line keeps the reset itself.
             "held" => match outcome.hold.as_ref().filter(|hold| hold.reason == "reset") {
                 Some(hold) => (
                     by("hold", "reset"),
                     hold.until
-                        .map(|until| summary_fact("reset", FactValue::Int(until), "time"))
+                        .map(|until| summary_fact("until", FactValue::Int(until), "time"))
                         .into_iter()
                         .collect(),
                 ),

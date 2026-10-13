@@ -7132,7 +7132,7 @@ fn a_record_read_decodes_the_frame_and_composes_the_completion() {
         serde_json::Value::Object(answer),
         "the frame decoded, its completion the answering attempt's after the retry in place"
     );
-    assert_eq!(record["version"], 1);
+    assert_eq!(record["version"], 2);
     assert_eq!(
         read("r2", 1).expect("the hold is stored")["outcome"]["completion"],
         serde_json::Value::Null,

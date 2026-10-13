@@ -583,6 +583,268 @@ fn two_agents_pin_created_rows_differ_in_their_detail() {
     );
 }
 
+#[test]
+fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically() {
+    use phoebis_ledger::EVENT_KINDS;
+    use phoebis_routing::{CacheMapEntry, CreditsState, PinKeyFacts, ShedRoundFacts, WindowSource};
+    const KINDS: [&str; 30] = [
+        "account_state_changed",
+        "budget_period_ended",
+        "budget_reached",
+        "catalog_changed",
+        "cooldown_cleared",
+        "cooldown_set",
+        "fast_credits_changed",
+        "ledger_gap",
+        "mark_cleared",
+        "model_permitted",
+        "model_rejected",
+        "overage_ended",
+        "overage_started",
+        "pin_created",
+        "pin_expired",
+        "pin_migrated",
+        "pin_released",
+        "poll_backoff_ended",
+        "poll_backoff_started",
+        "refresh_failed",
+        "refresh_succeeded",
+        "refresh_uncertain",
+        "registry_changed",
+        "reservation_expired",
+        "router_started",
+        "shedding_round",
+        "warm_prefix_expired",
+        "wind_down_started",
+        "window_reset",
+        "window_spent",
+    ];
+    assert_eq!(EVENT_KINDS, KINDS);
+    assert!(
+        EVENT_KINDS.windows(2).all(|pair| pair[0] < pair[1]),
+        "alphabetical, each kind once"
+    );
+    let pin = |key: &str| PinKeyFacts {
+        key_id: key.into(),
+        session_id: "s".into(),
+        agent_id: "main".into(),
+        model: "m".into(),
+    };
+    let credits = CreditsState {
+        enabled: true,
+        disabled_reason: None,
+        utilization: None,
+        observed_at: 1,
+        incarnation: 1,
+    };
+    // Every variant the router broadcasts but a decision, whose record the routing log reads as a decision row.
+    let events = [
+        RouterEvent::AccountStateChanged {
+            account_id: "a".into(),
+            to: AccountState::Ready,
+            incarnation: 1,
+            revision: 1,
+            cause: StateCause::Operator,
+            detail: None,
+            at: 1,
+        },
+        RouterEvent::CacheMapWritten {
+            request_id: "r".into(),
+            seq: 1,
+            attempt: 1,
+            entries: Vec::new(),
+            at: 1,
+        },
+        RouterEvent::CooldownCleared {
+            account_id: "a".into(),
+            scope: "account".into(),
+            cause: "expired",
+            at: 1,
+        },
+        RouterEvent::CooldownSet {
+            account_id: "a".into(),
+            scope: "account".into(),
+            until: 2,
+            reason: "rate_limit".into(),
+            window: "five_hour".into(),
+            source_request_id: None,
+            at: 1,
+        },
+        RouterEvent::FastCreditsChanged {
+            account_id: "a".into(),
+            before: None,
+            after: credits,
+            blocked_before: None,
+            blocked_after: None,
+            at: 1,
+        },
+        RouterEvent::MarkCleared {
+            account_id: "a".into(),
+            key_id: "k".into(),
+            session_id: "s".into(),
+            agent_id: "main".into(),
+            model: "m".into(),
+            reason: "moved",
+            marked_at: 1,
+            marked_on: "a".into(),
+            marked_window: "five_hour".into(),
+            projection: None,
+            at: 1,
+        },
+        RouterEvent::OverageEnded {
+            account_id: "a".into(),
+            since: None,
+            at: 1,
+        },
+        RouterEvent::OverageStarted {
+            account_id: "a".into(),
+            at: 1,
+        },
+        RouterEvent::PinCreated {
+            key_id: "k".into(),
+            session_id: "s".into(),
+            agent_id: "main".into(),
+            model: "m".into(),
+            account_id: "a".into(),
+            epoch: 1,
+            at: 1,
+        },
+        RouterEvent::PinExpired {
+            key_id: "k".into(),
+            session_id: "s".into(),
+            agent_id: "main".into(),
+            model: "m".into(),
+            account_id: "a".into(),
+            reasons: Vec::new(),
+            at: 1,
+        },
+        RouterEvent::PinMigrated {
+            key_id: "k".into(),
+            session_id: "s".into(),
+            agent_id: "main".into(),
+            model: "m".into(),
+            from_account: "a".into(),
+            to_account: "b".into(),
+            epoch: 2,
+            reason: "spent".into(),
+            fit: Some("fits"),
+            runway_ms: None,
+            binding: None,
+            at: 1,
+        },
+        RouterEvent::PinReleased {
+            key_id: "k".into(),
+            session_id: "s".into(),
+            agent_id: "main".into(),
+            model: "m".into(),
+            account_id: "a".into(),
+            at: 1,
+        },
+        RouterEvent::ReservationExpired {
+            account_id: "a".into(),
+            request_id: "r".into(),
+            attempt: 1,
+            cause: "timeout",
+            shares: Default::default(),
+            age_ms: 1,
+            at: 1,
+        },
+        RouterEvent::SheddingRound {
+            account_id: "a".into(),
+            pool_id: "p".into(),
+            request_id: "r".into(),
+            key_id: "k".into(),
+            session_id: "s".into(),
+            agent_id: "main".into(),
+            model: "m".into(),
+            round: Box::new(ShedRoundFacts {
+                window: "five_hour".into(),
+                utilization: 0.5,
+                projection: 0.97,
+                horizon: 2,
+                ceiling: 0.95,
+                unit: "window_share",
+                burn_average_seconds: 1_800,
+                shed_cap: 0.5,
+                burn_sum: 0.1,
+                excess: 0.01,
+                target: 0.01,
+                removed: 0.02,
+                warm_sessions: "when_needed",
+                pins: Vec::new(),
+                marks: vec![pin("k")],
+                outcome: "marked 1".into(),
+                reason: None,
+                dwell_seconds: 900,
+                dwell_until: 900_001,
+            }),
+            at: 1,
+        },
+        RouterEvent::WarmPrefixExpired {
+            account_id: "a".into(),
+            key_id: "k".into(),
+            root: "s".into(),
+            model: "m".into(),
+            lane: "m|standard|none|-".into(),
+            entries: 1,
+            deepest: CacheMapEntry {
+                tier: "message",
+                depth: 1,
+                prefix_tokens: 1_000,
+                ttl_ms: 300_000,
+                account_id: "a".into(),
+            },
+            cause: "ttl",
+            at: 1,
+        },
+        RouterEvent::WindDownStarted {
+            account_id: "a".into(),
+            pool_id: "p".into(),
+            ends_at: 2,
+            wind_down_minutes: 30,
+            end_source: "ends_at",
+            restored: false,
+            at: 1,
+        },
+        RouterEvent::WindowReset {
+            account_id: "a".into(),
+            window: "five_hour".into(),
+            utilization_before: 0.5,
+            reset_at: 1,
+            next_reset: None,
+            observed: "clock",
+            restored: false,
+            at: 1,
+        },
+        RouterEvent::WindowSpent {
+            account_id: "a".into(),
+            window: "five_hour".into(),
+            utilization: 1.0,
+            reset: None,
+            source: WindowSource::Predicted,
+            source_request_id: Some("r".into()),
+            at: 1,
+        },
+    ];
+    let answered: Vec<String> = events
+        .iter()
+        .filter_map(event_of)
+        .map(|row| row.kind)
+        .collect();
+    for kind in &answered {
+        assert!(
+            EVENT_KINDS.contains(&kind.as_str()),
+            "{kind} is written but not listed"
+        );
+    }
+    for kind in ["mark_cleared", "reservation_expired"] {
+        assert!(
+            answered.iter().any(|answered| answered == kind),
+            "{kind} has no row: {answered:?}"
+        );
+    }
+}
+
 /// The account rows the mirror wrote, in order: each kind with its detail.
 async fn account_rows(h: &Harness) -> Vec<(String, serde_json::Value)> {
     h.db.events(0, i64::MAX, 100)
