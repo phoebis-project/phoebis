@@ -1438,13 +1438,15 @@ fn migration_54_renames_the_pool_fields_and_clamps_a_value_outside_its_bound() {
     let store = Store::open(&path, &key).unwrap();
     store.insert_pool(&pool("low"), "test").unwrap();
     store.insert_pool(&pool("lead"), "test").unwrap();
+    store.insert_pool(&pool("week"), "test").unwrap();
     drop(store);
     // A registry at 53: `low` holds a cap and a burn window under the new floors and no weekly lead, `lead` a lead
-    // that is a number.
+    // that is a number, `week` a burn window of a week, past the new ceiling.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
         "{UNDO_V54} UPDATE pools SET shed_share = 0.05, burn_window_seconds = 120, shed_ahead_of_pace = NULL WHERE id = 'low'; \
          UPDATE pools SET shed_ahead_of_pace = 0.2 WHERE id = 'lead'; \
+         UPDATE pools SET burn_window_seconds = 604800 WHERE id = 'week'; \
          UPDATE meta SET value = '53' WHERE key = 'schema_version';"
     ))
     .unwrap();
@@ -1510,29 +1512,57 @@ fn migration_54_renames_the_pool_fields_and_clamps_a_value_outside_its_bound() {
     );
     assert_eq!(row("lead").4, 1, "a lead that was a number reads on");
     assert_eq!(
-        logged(&conn),
-        before + 1,
-        "the clamp writes one change row and the switch's mapping none"
+        row("week").1,
+        7_200,
+        "a week-long burn window clamps to the average's ceiling"
     );
-    let (actor, kind, target, diff): (String, String, String, String) = conn
-        .query_row(
-            "SELECT actor, kind, target, diff_json FROM registry_changes ORDER BY id DESC LIMIT 1",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    assert_eq!(
+        logged(&conn),
+        before + 2,
+        "the clamp writes one change row per clamped pool and the switch's mapping none"
+    );
+    let mut statement = conn
+        .prepare(
+            "SELECT actor, kind, target, diff_json FROM registry_changes WHERE actor = 'migration' ORDER BY target",
         )
         .unwrap();
+    let changes: Vec<(String, String, String, serde_json::Value)> = statement
+        .query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                serde_json::from_str(&r.get::<_, String>(3)?).unwrap(),
+            ))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
     assert_eq!(
-        (actor.as_str(), kind.as_str(), target.as_str()),
-        ("migration", "pool_updated", "low")
-    );
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&diff).unwrap(),
-        serde_json::json!({
-            "burn_average_seconds": 600,
-            "shed_cap": 0.1,
-            "shed_dwell_seconds": 900
-        }),
-        "the row is the partial image of the three bounded fields after the clamp"
+        changes,
+        [
+            (
+                "migration".to_string(),
+                "pool_updated".to_string(),
+                "low".to_string(),
+                serde_json::json!({
+                    "burn_average_seconds": 600,
+                    "shed_cap": 0.1,
+                    "shed_dwell_seconds": 900
+                })
+            ),
+            (
+                "migration".to_string(),
+                "pool_updated".to_string(),
+                "week".to_string(),
+                serde_json::json!({
+                    "burn_average_seconds": 7_200,
+                    "shed_cap": 0.5,
+                    "shed_dwell_seconds": 900
+                })
+            ),
+        ],
+        "each row is the partial image of the three bounded fields after the clamp"
     );
 }
 

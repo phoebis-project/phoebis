@@ -1021,7 +1021,8 @@ fn warnings_of(row: &PoolRow, cohort: usize) -> Vec<PoolWarning> {
     })
     .max()
     .unwrap_or(0);
-    if cache_ttl.inject_when_absent && row.affinity_ttl_seconds < longest_ttl {
+    // The relay injects only under a policy that is on, so an injection switch on a policy that is off injects nothing.
+    if cache_ttl.enabled && cache_ttl.inject_when_absent && row.affinity_ttl_seconds < longest_ttl {
         warnings.push(warning(
             "affinity_under_cache_ttl",
             &["affinity_ttl_seconds", "cache_ttl"],

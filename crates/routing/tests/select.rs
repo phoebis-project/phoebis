@@ -87,7 +87,8 @@ struct Pool {
     session_placement: SessionPlacement,
     min_shared_prefix_tokens: u64,
     window_ceiling: f64,
-    /// The row's `shedding.load_shedding`, named beside the ceiling so a case reads its switch at a glance.
+    /// The row's switch, the one source of it: the helper writes it over `shedding.load_shedding`, which a case leaves
+    /// alone, so the switch a case sets is the one it runs with.
     load_shedding: bool,
     members: Vec<(&'static str, u32)>,
     prefer_subscription: bool,
@@ -3001,8 +3002,7 @@ fn an_explicitly_chosen_strategy_orders_the_api_key_group_itself() {
 #[test]
 fn a_rounds_fitting_destinations_order_by_the_longest_runway_and_then_by_the_strategy_whatever_the_weeks_read(
 ) {
-    // The stored margin column stands until the settings migration drops it, and a set margin shows that nothing
-    // reads it: b's week below runs far ahead of its pace and c's behind.
+    // b's week below runs far ahead of its pace and c's behind.
     let s = tiered(Pool {
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         ..Pool::default()
@@ -5333,8 +5333,7 @@ fn the_blocker_passes_an_account_far_ahead_of_its_weekly_pace_and_keeps_its_othe
         assert_eq!(sel.trace.placement.is_some(), expected == "a", "{why}");
     };
     // The 7-day window at 0.8 with no reset runs 0.8 ahead of its pace, which refuses nothing: the static prefix
-    // places the request on a. The stored margin column stands until the settings migration drops it, and a set
-    // margin shows that nothing reads it.
+    // places the request on a.
     scenario(
         Pool {
             members: vec![("a", 1), ("b", 0)],
@@ -16495,7 +16494,7 @@ fn a_spent_pin_waits_in_place_for_a_reset_inside_the_retry_bound_and_moves_past_
 
 #[test]
 fn the_shed_rule_takes_the_one_fitting_destination_with_the_longest_runway_or_none() {
-    let s = tiered(Pool { ..gate_pool() });
+    let s = tiered(gate_pool());
     let round = |b: f64, c: f64| {
         // Two cold pins on a, so the round marks s1, the heavier, whose burn reads the siblings' runways.
         let mut st = priced(vec![
@@ -17576,12 +17575,12 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
                 strategy: Strategy::Pace,
                 members: vec![("alder", 0), ("birch", 0), ("cedar", 0)],
                 shedding: Shedding {
-                    load_shedding: true,
                     shed_cap: 0.5,
                     burn_average_seconds: AVERAGE_SECONDS,
                     shed_dwell_seconds: 900,
                     migrate_when_spent: true,
                     warm_sessions: WarmSessions::WhenNeeded,
+                    ..Shedding::default()
                 },
                 ..Pool::default()
             },

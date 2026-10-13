@@ -1850,11 +1850,11 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
                 horizon: at(2) + 2_400_000,
                 ceiling: 0.95,
                 unit: "window_share",
-                burn_average_seconds: 900,
-                shed_cap: 0.5,
+                burn_average_seconds: 1_800,
+                shed_cap: 0.2,
                 burn_sum: 0.12,
                 excess: 0.06,
-                target: 0.06,
+                target: 0.024,
                 removed: 0.07,
                 warm_sessions: "when_needed",
                 pins: vec![phoebis_routing::ShedPinFacts {
@@ -1900,7 +1900,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             at: at(7),
         },
         RouterEvent::ReservationExpired {
-            account_id: "direct".into(),
+            account_id: "business".into(),
             request_id: "r-failover".into(),
             attempt: 1,
             cause: "canceled",

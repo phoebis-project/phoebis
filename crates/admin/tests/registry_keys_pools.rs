@@ -2987,15 +2987,6 @@ async fn the_pool_answer_lists_each_warning_that_holds_and_none_that_does_not() 
 
     for (id, body, clear, code, fields, text) in [
         (
-            "affinity",
-            r#""affinity_ttl_seconds":600,"cache_ttl":{"inject_when_absent":true}"#,
-            r#"{"cache_ttl":{"inject_when_absent":false}}"#,
-            "affinity_under_cache_ttl",
-            &["affinity_ttl_seconds", "cache_ttl"][..],
-            "The session affinity ends before the cache TTL the pool injects, so a pin can expire while its cache is \
-             warm and the next request can land cold elsewhere.",
-        ),
-        (
             "quarter",
             r#""shed_cap":0.2"#,
             r#"{"shed_cap":0.25}"#,
@@ -3080,6 +3071,35 @@ async fn the_pool_answer_lists_each_warning_that_holds_and_none_that_does_not() 
             serde_json::json!([]),
             "{clear} clears {code}"
         );
+    }
+    // The affinity check runs while the policy injects, which takes the policy on and its injection on: the affinity
+    // at the longest of the four TTLs clears it, and with the affinity under it again, the policy turned off does.
+    let affinity = || {
+        serde_json::json!([warning(
+            "affinity_under_cache_ttl",
+            &["affinity_ttl_seconds", "cache_ttl"],
+            "The session affinity ends before the cache TTL the pool injects, so a pin can expire while its cache is \
+             warm and the next request can land cold elsewhere."
+        )])
+    };
+    let created = post(
+        app,
+        "/admin/pools",
+        r#"{"id":"affinity","label":"affinity","affinity_ttl_seconds":600,
+            "cache_ttl":{"enabled":true,"inject_when_absent":true}}"#,
+        Some(cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    assert_eq!(json(created).await["warnings"], affinity());
+    assert_eq!(listed("affinity").await, affinity());
+    for (body, expected) in [
+        (r#"{"affinity_ttl_seconds":3600}"#, serde_json::json!([])),
+        (r#"{"affinity_ttl_seconds":600}"#, affinity()),
+        (r#"{"cache_ttl":{"enabled":false}}"#, serde_json::json!([])),
+    ] {
+        let patched = json(patch(app, "/admin/pools/affinity", body, Some(cookie)).await).await;
+        assert_eq!(patched["warnings"], expected, "{body}");
     }
     let several = json(
         post(

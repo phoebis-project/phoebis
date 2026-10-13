@@ -2498,8 +2498,9 @@ impl Task {
                     }
                 }
                 record.outcome.pin_events = pin_events.iter().filter_map(pin_event_facts).collect();
-                // The mark the selection cleared (a heal, or the move that consumed it), else the one a pin released
-                // or expired here carried: the pin left without a move, so its mark left with it.
+                // The mark the selection cleared (a heal, the move that consumed it, or the pool's switch turned off),
+                // else the one a pin released or expired here carried: the pin left without a move, so its mark left
+                // with it.
                 let mark = pin_key.as_ref().and_then(|key| {
                     let cleared = record.outcome.mark_cleared.as_ref();
                     let account_id = before.as_ref().map(|old| old.account_id.clone())?;
