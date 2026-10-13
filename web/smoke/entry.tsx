@@ -20,7 +20,7 @@ export { call };
 // The fold the Cost section sums its groups by, so a check reads the totals the page draws from one derivation.
 export { sumGroups } from '@/api/fold';
 export { AttentionRows } from '@/components/AttentionRows';
-export { CACHE_MODEL_SHARE_NOTE, CACHE_SHARE_NOTE, NATIVE_SUBSET, SHARE_NOTE } from '@/lib/analytics';
+export { GROUPED_SHARE_NOTE, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, SHARE_NOTE } from '@/lib/analytics';
 // The model item's sentence, so the attention line's check reads its title against the story's own detail.
 export { ATTENTION_REFRESH_MS, attentionDetail } from '@/lib/attention';
 export { default as React } from 'react';

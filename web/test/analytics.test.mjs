@@ -588,11 +588,17 @@ test('the address carries a unit as text and a bare address none', () => {
   assert.equal(d.ANALYTICS_CODEC.toParams({ ...bare, unit: 'share' }).toString(), 'unit=share');
 });
 
-test("one account's shares read from the account filter under the account grouping alone", () => {
-  assert.equal(d.oneAccountOf('account', ['primary']), 'primary');
-  assert.equal(d.oneAccountOf('account', []), null, 'none named');
-  assert.equal(d.oneAccountOf('account', ['primary', 'secondary']), null, "several named, whose windows' shares do not add");
-  assert.equal(d.oneAccountOf('model', ['primary']), null, 'another grouping mixes accounts in every group');
+test("one named account's shares sum over the groups the route answered them on, under any grouping", () => {
+  const g = (costShares, planRequests = 2) => accountGroup({ costShares, planRequests });
+  const plan = (x) => x.planRequests === null || x.planRequests > 0;
+  const sum = (groups) => d.oneAccountShares(groups, (x) => x.costShares, (a, b) => a + b, plan);
+  assert.deepEqual(sum([g({ five_hour: 0.25, seven_day: 0.125, seven_day_fable: 0.0625 }), g({ five_hour: 0.5, seven_day: 0.25 })]), { five_hour: 0.75, seven_day: 0.375, seven_day_fable: 0.0625 }, "each model's group adds to the account's own windows, the model week where a group ran on one");
+  assert.deepEqual(sum([g({ five_hour: 0.25, seven_day: 0.125 }), g({ five_hour: 0.5 })]), { five_hour: 0.75 }, 'a group with plan requests that priced no figure on a window leaves it out, since a partial sum would read as the whole');
+  assert.deepEqual(sum([g({ five_hour: 0.25, seven_day: 0.125 }), g({ five_hour: 0.5, seven_day: null })]), { five_hour: 0.75 }, 'and so does a window carried as null');
+  assert.deepEqual(sum([g({ five_hour: 0.25, seven_day: 0.125 }), g({}, 0)]), { five_hour: 0.25, seven_day: 0.125 }, 'a group of billed rows alone carries no window to sum');
+  assert.equal(sum([g(null), g(null)]), null, 'no group answered a share map');
+  const probes = d.oneAccountShares([accountGroup({ probeShares: { seven_day: { cost: 0.25, wasted: 0.125 } } }), accountGroup({ probeShares: {} })], (x) => x.probeShares, (a, b) => ({ cost: a.cost + b.cost, wasted: a.wasted === null || b.wasted === null ? null : a.wasted + b.wasted }));
+  assert.deepEqual(probes, { seven_day: { cost: 0.25, wasted: 0.125 } }, 'a group without probes adds none, whatever its plan requests');
 });
 
 test('the model week is labeled by the key the share map carries, so a second model week reads under its own name', () => {
@@ -633,7 +639,9 @@ test("the share lines carry each account's 7-day and week shares per bucket with
     ],
     'a bucket an account has no group in, and a window it has no share on, read null, which the chart leaves as a gap',
   );
-  assert.deepEqual(d.shareLines([{ at: at(11), groups: [apiKey] }]), { accounts: [], data: [{ at: Date.UTC(2026, 8, 16, 11) }], weeks: {} }, 'no share map, no line');
+  assert.deepEqual(d.shareLines([{ at: at(11), groups: [apiKey] }]), { accounts: [], data: [{ at: Date.UTC(2026, 8, 16, 11) }], labels: {}, weeks: {} }, 'no share map, no line');
+  const holder = accountGroup({ costShares: { five_hour: 0.1, seven_day: 0.05 }, key: 'desktop@1000', label: 'desktop (deleted)' });
+  assert.deepEqual(d.shareLines([{ at: at(11), groups: [holder] }]).labels, { 'desktop@1000': 'desktop (deleted)' }, 'a line is named by its group label, the grouping the page reads, rather than its key');
 });
 
 test('a share line with one priced bucket between two gaps marks it as an isolated slot, which the chart draws as a dot', () => {
@@ -803,12 +811,11 @@ test('a native table cell reads the short 20x form with the billed dollars under
   assert.deepEqual(d.nativeCellOf('five_hour', undefined, false), { main: '-', sub: '', title: '' }, 'a cell with no row on either side');
 });
 
-test("the cache card's note under the shares names the Accounts filter and the account grouping, and Cache by model's the filter alone", () => {
-  // The card reads one account's shares under the account grouping, and the route answers Cache by model's under any
-  // grouping once one account is named, so each note names what its own surface needs.
-  assert.notEqual(d.CACHE_SHARE_NOTE, d.SHARE_NOTE, "the card's note is its own sentence");
-  assert.ok(d.CACHE_SHARE_NOTE.includes('Accounts filter') && d.CACHE_SHARE_NOTE.includes('account grouping'), d.CACHE_SHARE_NOTE);
-  assert.notEqual(d.CACHE_MODEL_SHARE_NOTE, d.CACHE_SHARE_NOTE);
-  assert.ok(d.CACHE_MODEL_SHARE_NOTE.includes('Accounts filter') && !d.CACHE_MODEL_SHARE_NOTE.includes('grouping'), d.CACHE_MODEL_SHARE_NOTE);
-  assert.ok(d.CACHE_SHARE_NOTE.startsWith(d.CACHE_MODEL_SHARE_NOTE.slice(0, -1)), 'the two notes read one sentence, the card adding the grouping');
+test("a share note names the half that applies: the filter for one account's whole, the grouping or the filter for a share per group", () => {
+  // The routes answer a named account's shares under any grouping, so a surface that reads one account's whole needs
+  // the filter alone, and one that reads a share per group needs either half.
+  assert.notEqual(d.ONE_ACCOUNT_SHARE_NOTE, d.SHARE_NOTE, "the Analytics notes are their own sentences");
+  assert.ok(d.ONE_ACCOUNT_SHARE_NOTE.includes('Accounts filter') && !d.ONE_ACCOUNT_SHARE_NOTE.includes('grouping') && !d.ONE_ACCOUNT_SHARE_NOTE.includes('group by'), d.ONE_ACCOUNT_SHARE_NOTE);
+  assert.ok(d.GROUPED_SHARE_NOTE.includes('Accounts filter') && d.GROUPED_SHARE_NOTE.includes('group by account'), d.GROUPED_SHARE_NOTE);
+  assert.ok(d.ONE_ACCOUNT_SHARE_NOTE.startsWith(d.GROUPED_SHARE_NOTE.slice(0, d.GROUPED_SHARE_NOTE.indexOf(':') + 1)), 'the two notes open on one sentence');
 });

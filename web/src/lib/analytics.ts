@@ -1,5 +1,5 @@
 import type { Api } from '@/api/client';
-import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, PinMigrationReason, Placement, PlacementRow, SubscriptionCosts, WindowSample } from '@/api/types';
+import type { Account, AccountRollup, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, PinMigrationReason, Placement, PlacementRow, SubscriptionCosts, WindowSample } from '@/api/types';
 import { tierCapacity, tierRow, type CostWindow } from '@/lib/costs';
 import { earlierHolderLabel, equivalentShort, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtShare, fmtUsd, withEstimate } from '@/lib/format';
 import type { UnitPosition } from '@/lib/unit';
@@ -205,20 +205,46 @@ export function sizedAccounts(accounts: Account[], costs: SubscriptionCosts, win
 }
 
 export const SHARE_NOTE = "Shares read under the account grouping alone, since shares of different accounts' windows do not add.";
-/** The cache card's empty note under Window shares: the card needs one account named as well as the grouping. */
-export const CACHE_SHARE_NOTE = "Shares of one account's windows alone: name one account in the Accounts filter under the account grouping.";
 /**
- * Cache by model's note under Window shares with no account named: the route answers one named account's shares by
- * model under any grouping, so the filter alone is needed.
+ * The note under Window shares of a surface that reads one account's own windows, such as a tile or the cache cost
+ * card, with no account named: the route answers a named account's shares under any grouping, so the filter alone is
+ * needed, whatever the grouping.
  */
-export const CACHE_MODEL_SHARE_NOTE = "Shares of one account's windows alone: name one account in the Accounts filter.";
+export const ONE_ACCOUNT_SHARE_NOTE = "Shares of one account's windows alone: name one account in the Accounts filter.";
 /**
- * The one account whose shares the tiles read: the account filter's one entry under the account grouping, and null
- * for none or several, where the tiles read "per account below".
+ * The note under Window shares of a surface that reads a share per group, such as the Cost chart or a Burn plan card,
+ * where no group holds one account's rows: either half makes each group one account's.
  */
-export const oneAccountOf = (groupBy: AnalyticsGroupBy, accountIds: string[]): string | null => (groupBy === 'account' && accountIds.length === 1 ? accountIds[0] : null);
+export const GROUPED_SHARE_NOTE = "Shares of one account's windows alone: group by account, or name one account in the Accounts filter.";
 
 const SHARED_WINDOWS = ['five_hour', 'seven_day'];
+
+/**
+ * One named account's shares over the groups the route answered them on, the Accounts filter naming that account:
+ * each window summed over the groups, since every group is the one account's. A window carried as null is left out,
+ * and so is a shared window that a group `required` to carry it lacks, since a partial sum would read as the
+ * account's. A model week sums where a group carries one, a group off such a model carrying none. Null where no group
+ * answered a map.
+ */
+export function oneAccountShares<T>(groups: AnalyticsGroup[], read: (g: AnalyticsGroup) => Record<string, T | null> | null, add: (a: T, b: T) => T, required: (g: AnalyticsGroup) => boolean = () => false): Record<string, T> | null {
+  const maps = groups.flatMap((g) => {
+    const map = read(g);
+    return map === null ? [] : [{ map, required: required(g) }];
+  });
+  if (maps.length === 0) return null;
+  const out: Record<string, T> = {};
+  const left = new Set<string>();
+  for (const { map, required: carries } of maps) {
+    if (carries) for (const window of SHARED_WINDOWS) if (!own(map, window)) left.add(window);
+    for (const [window, v] of Object.entries(map)) {
+      if (v === null) left.add(window);
+      else out[window] = own(out, window) ? add(out[window], v) : v;
+    }
+  }
+  for (const window of left) delete out[window];
+  return out;
+}
+
 /** The model week's key in a share map, the one key beside the two shared windows, undefined where the map has none. */
 export const weekKeyOf = (shares: Record<string, unknown>): string | undefined => Object.keys(shares).find((k) => !SHARED_WINDOWS.includes(k));
 /**
@@ -267,6 +293,8 @@ export const UNIT_SUBSET: Record<DollarPosition, string> = { all: 'all requests'
  * name them.
  */
 export const NATIVE_SUBSET = 'the subscription requests in 20x window equivalents and the billed requests in dollars';
+/** Native's requests where a surface reads the 7-day window alone, each side in the unit its funding pays in. */
+export const NATIVE_7D_SUBSET = 'the subscription requests in 20x 7-day equivalents and the billed requests in dollars';
 /** The Cost section's meta line per dollar position, after the dollars in range. */
 const UNIT_META: Record<DollarPosition, string> = { all: 'all requests', equivalent: 'equivalent', usd: 'billed' };
 /** The first Cost tile's label per dollar position. */
@@ -341,14 +369,17 @@ export function costHeadOf(unit: UnitPosition, totals: AnalyticsGroup): CostHead
 }
 
 /**
- * Per account the 7-day share (solid) and the model week's (dashed) per bucket as `<account>:7d` and
- * `<account>:week`, the 5-hour share beside them as `<account>:5h` for the tooltip, a gap (null) where a bucket has
- * none, and per account the key its model week is charted under (`weeks`), undefined where no bucket names one. The
- * accounts are the groups carrying a share map, so an API key account draws no line.
+ * Per group the 7-day share (solid) and the model week's (dashed) per bucket as `<group>:7d` and `<group>:week`, the
+ * 5-hour share beside them as `<group>:5h` for the tooltip, a gap (null) where a bucket has none, per group the key its
+ * model week is charted under (`weeks`), undefined where no bucket names one, and the group's label, which names the
+ * line under the page's grouping. The groups are the ones carrying a share map: each account under the account
+ * grouping, an API key account drawing no line, or each group of the one account the Accounts filter names.
  */
-export function shareLines(points: AnalyticsPoint[]): { accounts: string[]; data: Record<string, number | null>[]; weeks: Record<string, string | undefined> } {
+export function shareLines(points: AnalyticsPoint[]): { accounts: string[]; data: Record<string, number | null>[]; labels: Record<string, string>; weeks: Record<string, string | undefined> } {
   const accounts = [...new Set(points.flatMap((p) => p.groups.filter((g) => g.costShares !== null).map((g) => g.key)))].sort((a, b) => a.localeCompare(b));
   const weeks: Record<string, string | undefined> = Object.fromEntries(accounts.map((a) => [a, undefined]));
+  const labels: Record<string, string> = {};
+  for (const p of points) for (const g of p.groups) if (g.costShares !== null) labels[g.key] ??= g.label;
   const data = points.map((p) => {
     const row: Record<string, number | null> = { at: Date.parse(p.at) };
     for (const a of accounts) for (const w of ['5h', '7d', 'week']) row[`${a}:${w}`] = null;
@@ -362,7 +393,7 @@ export function shareLines(points: AnalyticsPoint[]): { accounts: string[]; data
     }
     return row;
   });
-  return { accounts, data, weeks };
+  return { accounts, data, labels, weeks };
 }
 
 const HOUR_MS = 3_600_000;

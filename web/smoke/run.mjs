@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, CACHE_MODEL_SHARE_NOTE, CACHE_SHARE_NOTE, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -11739,7 +11739,6 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   {
     // The unit is the console-wide setting the top bar's switch holds, so no section head draws a control for it and a
     // choice writes nothing to the address.
-    const SHARE_NOTE = "Shares read under the account grouping alone, since shares of different accounts' windows do not add.";
     const groupPage = (page, value) => changeSelect(page, page.container.querySelector('.filters select.groupby-select'), value);
     const costMeta = () => m.container.querySelector('#cost .analytics-section__meta')?.textContent ?? '';
     // Each head is read on its own tab, since a tab mounts its section alone, and a select under any label counts.
@@ -11843,7 +11842,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await chooseUnit(shares, 'share');
     await groupPage(shares, 'account');
     const accountCard = cardIn('Cost by account');
-    const lineChart = { areas: areasIn('Cost by account'), legend: legendIn('Cost by account').map(([label]) => label), note: accountCard?.textContent?.includes(SHARE_NOTE) ?? false, wrapper: accountCard?.querySelector('.recharts-wrapper') !== null };
+    const lineChart = { areas: areasIn('Cost by account'), legend: legendIn('Cost by account').map(([label]) => label), note: accountCard?.textContent?.includes(GROUPED_SHARE_NOTE) ?? false, wrapper: accountCard?.querySelector('.recharts-wrapper') !== null };
     // The legend names the subscription accounts whose groups carry a share map, each by its 7-day line and, where
     // a bucket priced its model week, the week's dashed line, and no API key account: read off the route's own
     // answers for the page's day.
@@ -11883,10 +11882,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const tiles = [...shares.container.querySelectorAll('#cost .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
     await groupPage(shares, 'model');
     const modelCard = cardIn('Cost by model');
-    const noted = { note: modelCard?.textContent?.includes(SHARE_NOTE) ?? false, tableNote: tableIn('Cost by model') === undefined && [...shares.container.querySelectorAll('#cost .card')].some((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost by model' && c !== modelCard && c.textContent?.includes(SHARE_NOTE)), wrapper: modelCard?.querySelector('.recharts-wrapper') !== null };
+    const noted = { note: modelCard?.textContent?.includes(GROUPED_SHARE_NOTE) ?? false, tableNote: tableIn('Cost by model') === undefined && [...shares.container.querySelectorAll('#cost .card')].some((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost by model' && c !== modelCard && c.textContent?.includes(GROUPED_SHARE_NOTE)), wrapper: modelCard?.querySelector('.recharts-wrapper') !== null };
     const modelTiles = [...shares.container.querySelectorAll('#cost .stat')].map((t) => [t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
     results.push({
-      name: '/analytics under Window shares the Cost chart draws a line per subscription account with the account grouping and the note under the model grouping',
+      name: '/analytics under Window shares the Cost chart draws a line per subscription account with the account grouping and, with no account named, the note naming the grouping and the filter under the model grouping',
       ok: dollarAreas > 0 && lineChart.areas === 0 && lineChart.wrapper && !lineChart.note && expectedLegend.length > 0 && JSON.stringify(lineChart.legend) === JSON.stringify(expectedLegend) && !lineChart.legend.some((l) => apiKeys.some((id) => l.startsWith(`${id} `))) && noted.note && !noted.wrapper && noted.tableNote,
       missing: [`dollar areas ${dollarAreas}`, `account ${JSON.stringify(lineChart)}`, `expected legend ${JSON.stringify(expectedLegend)}`, `model ${JSON.stringify(noted)}`],
     });
@@ -11896,8 +11895,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: [heads.join(','), JSON.stringify(rowsOf), JSON.stringify(tableRead), `tooltip ${JSON.stringify(tip)}`],
     });
     results.push({
-      name: '/analytics under Window shares the Cost tiles read per account below under the account grouping with none named and a dash under another grouping',
-      ok: JSON.stringify(tiles.slice(0, 3)) === JSON.stringify([['Window share', 'per account below', ''], ['Per request', 'per account below', ''], ['Per 1k output', 'per account below', '']]) && tiles[3]?.[0] === 'Fast mode spend' && modelTiles.slice(0, 3).every(([value, note]) => value === '-' && note === 'under the account grouping alone'),
+      name: '/analytics under Window shares the Cost tiles read per account below under the account grouping with none named, and under another grouping a dash under the note that names the Accounts filter',
+      ok: JSON.stringify(tiles.slice(0, 3)) === JSON.stringify([['Window share', 'per account below', ''], ['Per request', 'per account below', ''], ['Per 1k output', 'per account below', '']]) && tiles[3]?.[0] === 'Fast mode spend' && modelTiles.slice(0, 3).every(([value, note]) => value === '-' && note === ONE_ACCOUNT_SHARE_NOTE),
       missing: [JSON.stringify(tiles), JSON.stringify(modelTiles)],
     });
     await groupPage(shares, 'account');
@@ -11922,12 +11921,12 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const wastedNoted = wastedRead();
     const poolNoted = costCells('Cache warming by pool', 6);
     results.push({
-      name: "/analytics under Window shares with no account named the cache cost card reads its own note, Cache by model dashes under the filter's note, and the Probe cost tile, the Wasted probes card and the by-pool table dashes, the blurb ending in the one account's window shares",
+      name: "/analytics under Window shares grouped by account with no account named the cache cost card, Cache by model, the Probe cost tile and the Wasted cost tile dash under the note that names the Accounts filter alone, and the by-pool table dashes, the blurb ending in the one account's window shares",
       ok:
-        cacheUnit === 'share' && warmingUnit === 'share' && cacheNote === CACHE_SHARE_NOTE &&
-        modelNoted.cells.length > 0 && modelNoted.cells.every(([, cells]) => JSON.stringify(cells) === '["-","-"]') && modelNoted.subtitle === CACHE_MODEL_SHARE_NOTE &&
-        JSON.stringify(probeNoted) === JSON.stringify(['-', SHARE_NOTE]) &&
-        wastedNoted.ending && JSON.stringify(wastedNoted.tiles) === JSON.stringify([['Wasted cost', '-', SHARE_NOTE], ['Share of probe cost', '-', '']]) &&
+        cacheUnit === 'share' && warmingUnit === 'share' && cacheNote === ONE_ACCOUNT_SHARE_NOTE &&
+        modelNoted.cells.length > 0 && modelNoted.cells.every(([, cells]) => JSON.stringify(cells) === '["-","-"]') && modelNoted.subtitle === ONE_ACCOUNT_SHARE_NOTE &&
+        JSON.stringify(probeNoted) === JSON.stringify(['-', ONE_ACCOUNT_SHARE_NOTE]) &&
+        wastedNoted.ending && JSON.stringify(wastedNoted.tiles) === JSON.stringify([['Wasted cost', '-', ONE_ACCOUNT_SHARE_NOTE], ['Share of probe cost', '-', '']]) &&
         poolNoted.length > 0 && poolNoted.every(([, cells]) => JSON.stringify(cells) === '["-"]'),
       missing: [`unit on Cache ${cacheUnit}`, `unit on Cache warming ${warmingUnit}`, `cache note ${cacheNote}`, `model ${JSON.stringify(modelNoted)}`, `probe tile ${JSON.stringify(probeNoted)}`, `wasted ${JSON.stringify(wastedNoted)}`, `pools ${JSON.stringify(poolNoted)}`],
     });
@@ -11986,14 +11985,138 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       name: '/analytics under Window shares with one account named the cost tiles, the cache cost card and the Probe cost tile read shares with the window named',
       ok:
         namedLegend.length === 2 && namedLegend[0][0] === 'Write share' && sevenDay(namedLegend[0][1]) && namedLegend[1][0] === 'Read share' && sevenDay(namedLegend[1][1]) &&
-        !(namedCard?.textContent?.includes(SHARE_NOTE) ?? true) &&
+        !(namedCard?.textContent?.includes(ONE_ACCOUNT_SHARE_NOTE) ?? true) &&
         sevenDay(probeNamed[0]) &&
         /^\d[\d.]*% of 5-hour, \d[\d.]*% of 7-day Fable, \d[\d,]* probes$/.test(probeNamed[1] ?? '') &&
         namedTiles.length >= 3 && namedTiles[0][0] === 'Window share' && sevenDay(namedTiles[0][1]) && others(namedTiles[0][2]) &&
         JSON.stringify(namedTiles.slice(1, 3).map(([label, value, note]) => [label, isShare(value ?? ''), note])) === JSON.stringify([['Per request', true, 'of the 7-day window per plan-funded request'], ['Per 1k output', true, 'of the 7-day window per 1k plan-funded output tokens']]),
-      missing: [`legend ${JSON.stringify(namedLegend)}`, `card note ${namedCard?.textContent?.includes(SHARE_NOTE)}`, `probe tile ${JSON.stringify(probeNamed)}`, `tiles ${JSON.stringify(namedTiles)}`],
+      missing: [`legend ${JSON.stringify(namedLegend)}`, `card note ${namedCard?.textContent?.includes(ONE_ACCOUNT_SHARE_NOTE)}`, `probe tile ${JSON.stringify(probeNamed)}`, `tiles ${JSON.stringify(namedTiles)}`],
     });
+    {
+      // The route answers the named account's shares on every group under any grouping, so under the model grouping
+      // the tiles read the account's whole, its model groups summed, the Cost chart draws a line per model named as
+      // the grouping names it, and the share table lists each model.
+      await groupPage(shares, 'model');
+      const modelNamedTiles = [...shares.container.querySelectorAll('#cost .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
+      const modelChart = { legend: legendIn('Cost by model').map(([label]) => label), subtitle: cardIn('Cost by model')?.querySelector('.card__subtitle')?.textContent ?? '' };
+      const modelTable = [...(tableIn('Cost by model')?.querySelectorAll('tbody tr') ?? [])].map((tr) => [tr.children[0]?.textContent?.trim() ?? '', [...tr.querySelectorAll('td.num')].map((td) => td.textContent?.trim() ?? '')]);
+      const answered = await api.getAnalyticsBreakdown({ accountIds: ['nightly'], from: new Date(Date.now() - 24 * 3_600_000).toISOString(), groupBy: 'model', to: new Date().toISOString() });
+      const sharing = answered.filter((g) => g.costShares !== null && g.costShares.seven_day !== undefined).map((g) => g.label);
+      await groupPage(shares, 'account');
+      results.push({
+        name: "/analytics under Window shares with one account named under the model grouping the Cost tiles read the account's whole, the chart draws a line per model named by the model, and the share table lists the models",
+        ok:
+          JSON.stringify(modelNamedTiles.slice(0, 3)) === JSON.stringify(namedTiles.slice(0, 3)) &&
+          sharing.length > 0 &&
+          sharing.every((label) => modelChart.legend.includes(`${label} (7-day)`)) &&
+          modelChart.subtitle === "Each model's share of the named account's 7-day window per bucket, solid, and of its model week, dashed" &&
+          sharing.every((label) => modelTable.some(([row, cells]) => row === label && isShare(cells[2] ?? ''))),
+        missing: [`tiles ${JSON.stringify(modelNamedTiles)} against ${JSON.stringify(namedTiles)}`, `legend ${JSON.stringify(modelChart)}`, `sharing ${sharing.join(',')}`, `table ${JSON.stringify(modelTable)}`],
+      });
+    }
     shares.unmount();
+    {
+      // The one-sided paths under native, read on an account whose range ran on one funding alone: an API-key account
+      // bills every row, and a subscription account with no fast-mode or overage answer pays every row from its plan.
+      localStorage.removeItem('phoebis.unit');
+      const day = { from: new Date(Date.now() - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date().toISOString() };
+      const byAccount = await api.getAnalyticsBreakdown(day);
+      const warmingByAccount = await api.getAnalyticsBreakdown({ ...day, includeProbes: true });
+      const billedGroup = byAccount.find((g) => g.planRequests === 0 && g.requests > 0);
+      const planGroup = byAccount.find((g) => g.planRequests > 0 && g.planRequests === g.requests && g.billedUsd === 0);
+      const probesIn = (g) => (g === undefined ? 0 : g.probes.ok + g.probes.held + g.probes.skipped + g.probes.failed);
+      const planProbes = probesIn(warmingByAccount.find((g) => g.key === planGroup?.key));
+      const chartIn = (page, t) => [...page.container.querySelectorAll('.card:not(.card--table)')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+      const statIn = (page, scope, label) => {
+        const t = [...page.container.querySelectorAll(`${scope} .stat`)].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === label);
+        return { note: t?.querySelector('.stat__note')?.textContent?.trim() ?? '', words: [...(t?.querySelectorAll('.stat__pair-word') ?? [])].map((w) => w.textContent?.trim() ?? '') };
+      };
+      const read = async (account) => {
+        const page = await mount(`/analytics?accounts=${account}#cost`);
+        const out = { billedCard: chartIn(page, 'Billed by key') !== undefined, perRequest: statIn(page, '#cost', 'Cost per request'), planCard: chartIn(page, 'Cost by key') !== undefined };
+        await tab(page, 'Cache');
+        out.cache = chartIn(page, 'Write cost vs read cost')?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
+        await tab(page, 'Cache warming');
+        out.probe = statIn(page, '#cache-warming', 'Probe cost');
+        page.unmount();
+        return out;
+      };
+      const billed = billedGroup === undefined ? null : await read(billedGroup.key);
+      const plan = planGroup === undefined ? null : await read(planGroup.key);
+      results.push({
+        name: "/analytics under native a range of billed rows alone draws the billed card without the equivalent one, notes its billed requests alone and draws the cache card's bars in dollars, the billed side named",
+        ok:
+          billed !== null &&
+          !billed.planCard &&
+          billed.billedCard &&
+          JSON.stringify(billed.perRequest.words) === JSON.stringify(['billed']) &&
+          billed.perRequest.note === `${fmtInt(billedGroup.requests)} billed requests` &&
+          billed.cache === 'USD per bucket spent writing the cache and reading it back, billed',
+        missing: [`billed-only ${billedGroup?.key}`, JSON.stringify(billed)],
+      });
+      results.push({
+        name: "/analytics under native a range of plan rows alone notes its subscription requests alone, names no billed side on the cache card and reads one subscription figure on the Probe cost tile",
+        ok:
+          plan !== null &&
+          plan.planCard &&
+          !plan.billedCard &&
+          JSON.stringify(plan.perRequest.words) === JSON.stringify(['subscription']) &&
+          plan.perRequest.note === `${fmtInt(planGroup.planRequests)} subscription requests` &&
+          plan.cache === '20x 7-day equivalent per bucket spent writing the cache and reading it back by the subscription requests' &&
+          planProbes > 0 &&
+          JSON.stringify(plan.probe.words) === JSON.stringify(['subscription']),
+        missing: [`plan-only ${planGroup?.key} with ${planProbes} probes`, JSON.stringify(plan)],
+      });
+    }
+    {
+      // The Wasted probes blurb closes on the unit its tiles read in, dollars at list prices under each dollar position.
+      localStorage.removeItem('phoebis.unit');
+      const page = await mount('/analytics#cache-warming');
+      const endings = [];
+      for (const value of ['all', 'usd', 'equivalent']) {
+        await chooseUnit(page, value);
+        const card = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Wasted probes');
+        endings.push([value, card?.querySelector('.card__subtitle')?.textContent?.trim().endsWith('says the parked ceilings do. In dollars at list prices.') ?? false]);
+      }
+      page.unmount();
+      localStorage.removeItem('phoebis.unit');
+      results.push({ name: '/analytics the Wasted probes blurb ends in dollars at list prices under each dollar position', ok: endings.every(([, ended]) => ended), missing: endings.map((e) => e.join(' ')) });
+    }
+    {
+      // Each funded read stands or falls with its surface: a failure draws that surface's error rather than a figure
+      // of another position, and the reads the surface does not need keep theirs.
+      const failing = (match) => {
+        const real = api.getAnalyticsBreakdown;
+        api.getAnalyticsBreakdown = (...args) => (match(args[0]) ? Promise.reject(new Error('ledger locked')) : real.apply(api, args));
+        return () => {
+          api.getAnalyticsBreakdown = real;
+        };
+      };
+      const cardText = (page, t) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t)?.textContent ?? '';
+      const probeTitle = (page) => [...page.container.querySelectorAll('#cache-warming .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost')?.getAttribute('title') ?? null;
+      localStorage.removeItem('phoebis.unit');
+      let restore = failing((q) => q?.funding === 'billed' && q.groupBy !== 'pool');
+      const nativeWarming = await mount('/analytics#cache-warming');
+      const billedRead = { probe: probeTitle(nativeWarming), wasted: cardText(nativeWarming, 'Wasted probes').includes('Could not load wasted probes'), pools: cardText(nativeWarming, 'Cache warming by pool').includes('Could not load this breakdown') };
+      nativeWarming.unmount();
+      restore();
+      restore = failing((q) => q?.funding !== undefined && q.groupBy === 'model');
+      const usdCache = await mount('/analytics#cache');
+      await chooseUnit(usdCache, 'usd');
+      const modelRead = cardText(usdCache, 'Cache by model').includes('Could not load this breakdown');
+      restore();
+      restore = failing((q) => q?.funding !== undefined && q.groupBy === 'pool');
+      await tab(usdCache, 'Cache warming');
+      const poolRead = { pools: cardText(usdCache, 'Cache warming by pool').includes('Could not load this breakdown'), wasted: cardText(usdCache, 'Wasted probes').includes('Could not load wasted probes') };
+      restore();
+      usdCache.unmount();
+      localStorage.removeItem('phoebis.unit');
+      results.push({
+        name: "/analytics a failed funded read draws its own surface's error: native's billed read the Probe cost tile and Wasted probes, a dollar side's read by model Cache by model, and its read by pool the by-pool table alone",
+        ok: billedRead.probe === 'ledger locked' && billedRead.wasted && !billedRead.pools && modelRead && poolRead.pools && !poolRead.wasted,
+        missing: [JSON.stringify(billedRead), `model ${modelRead}`, JSON.stringify(poolRead)],
+      });
+    }
     {
       // Under native, a fresh browser's position, the Cost section reads one answer in two units: the plan rows' 20x
       // 7-day equivalent and the billed rows' dollars. The story's day holds Sonnet 4.6 rows, which the cost model
@@ -12274,7 +12397,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         name: "/analytics under native the Probe cost tile stacks the plan probes' 20x 7-day equivalent of the whole read over the billed probes' dollars of the billed read the Cache warming tab adds",
         ok:
           billedAnswer !== null && probe !== undefined && probeCount(whole) > probeCount(billed) && probeCount(billed) > 0 &&
-          JSON.stringify(probeTile.lines) === JSON.stringify(pairOf(probe.cost, billed.probeCostUsd)) && probeTile.note === `${fmtInt(probeCount(whole))} probes, ${NATIVE_SUBSET}` && probeTile.title === (whole.estimated ? ESTIMATED_TITLE : null),
+          JSON.stringify(probeTile.lines) === JSON.stringify(pairOf(probe.cost, billed.probeCostUsd)) && probeTile.note === `${fmtInt(probeCount(whole))} probes, ${NATIVE_7D_SUBSET}` && probeTile.title === (whole.estimated ? ESTIMATED_TITLE : null),
         missing: [JSON.stringify(probeTile), JSON.stringify({ billed: billed.probeCostUsd, probe, probes: [probeCount(whole), probeCount(billed)] })],
       });
       const wastedCard = cardOf('Wasted probes');
@@ -12284,7 +12407,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         ok:
           probe !== undefined && whole.wastedProbes > 0 &&
           wasted.count.value === fmtInt(whole.wastedProbes) && wasted.count.note === `of ${fmtInt(probeCount(whole))} probes` &&
-          JSON.stringify(wasted.cost.lines) === JSON.stringify(pairOf(probe.wasted, billed.wastedProbeUsd)) && wasted.cost.note === NATIVE_SUBSET && wasted.cost.title === (whole.estimated ? ESTIMATED_TITLE : null) &&
+          JSON.stringify(wasted.cost.lines) === JSON.stringify(pairOf(probe.wasted, billed.wastedProbeUsd)) && wasted.cost.note === NATIVE_7D_SUBSET && wasted.cost.title === (whole.estimated ? ESTIMATED_TITLE : null) &&
           wasted.share.value === fmtPct(probe.wasted / probe.cost, 1) && wasted.share.note === `of ${mark(whole.estimated)}${fmtEquivalent('seven_day', probe.cost)} and ${fmtUsd(billed.probeCostUsd)} on probes` &&
           wasted.subtitle.endsWith("says the parked ceilings do. In the unit each probe's funding pays in."),
         missing: [JSON.stringify(wasted), JSON.stringify({ billed: billed.wastedProbeUsd, probe })],

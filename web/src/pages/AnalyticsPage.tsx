@@ -19,7 +19,7 @@ import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, ANALYTICS_RANGES, type AnalyticsAddress } from '@/lib/address';
-import { CACHE_MODEL_SHARE_NOTE, CACHE_SHARE_NOTE, CONVERSATION_CLASSES, MAX_BURN_LINES, NATIVE_SUBSET, SHARE_NOTE, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, isolatedSlots, moveLabel, nativeCellOf, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, isolatedSlots, moveLabel, nativeCellOf, niceAxisTop, oneAccountShares, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -61,8 +61,6 @@ const SESSION_PAGE_SIZE = 500;
 const SESSION_PAGE_LIMIT = 20;
 const SESSION_SOURCE_NOTE = 'From the request log, since rollups carry no session. Cache warming figures are unavailable per session';
 const SESSION_COST_NOTE = 'Cost split is not available for a session view.';
-/** Native's requests where a surface reads the 7-day window alone, each side in the unit its funding pays in. */
-const NATIVE_7D_SUBSET = 'the subscription requests in 20x 7-day equivalents and the billed requests in dollars';
 // The rings' centers read bare, so the subtitle names the window the subscription ring's percents are of.
 const NATIVE_SPLIT_NOTE = `By token kind, ${NATIVE_7D_SUBSET}`;
 const UNAVAILABLE_NOTE = 'not in the request log';
@@ -539,11 +537,13 @@ export function AnalyticsPage() {
   const nativeRatios = nativeRatiosOf(costTotals);
   // A session fold has no cost split either, so the donut and the cache cost card read unavailable in a session view.
   const costSplit = knownSplit(costTotals.cost);
-  // Shares of one account's windows add, so the share tiles and the cache cost card read the one account the filter
-  // names under the account grouping, and its group among the position's rows.
-  const oneAccount = oneAccountOf(groupBy, filters.accountId);
-  const oneGroup = useMemo(() => (oneAccount === null ? null : (costGroups.find((g) => g.key === oneAccount) ?? null)), [costGroups, oneAccount]);
-  const cacheShareRows = useMemo(() => (unit === 'share' && oneAccount !== null ? cacheShareRowsOf(costPoints, oneAccount) : []), [unit, oneAccount, costPoints]);
+  // The routes answer a named account's own-window shares on every group under any grouping, and under the account
+  // grouping each account's on its own group. So the per-group surfaces read shares under either, and the surfaces that
+  // read one account's whole sum the named account's groups, whose shares add since they share its windows.
+  const namedAccount = filters.accountId.length === 1 ? filters.accountId[0] : null;
+  const sharedGroups = groupBy === 'account' || namedAccount !== null;
+  const oneGroup = useMemo(() => (namedAccount === null ? null : oneAccountGroupOf(costTotals, costGroups)), [costGroups, costTotals, namedAccount]);
+  const cacheShareRows = useMemo(() => (unit === 'share' && namedAccount !== null ? cacheShareRowsOf(costPoints) : []), [unit, namedAccount, costPoints]);
   // The cache chart's week rows are keyed off the one account's map, so its legend names that map's week.
   const cacheWeek = weekLabelOf(oneGroup === null || oneGroup.cacheShares === null ? undefined : weekKeyOf(oneGroup.cacheShares));
   const otherFilters = filters.keyId.length > 0 || filters.poolId.length > 0 || filters.model.length > 0 || userAgentPattern.trim() !== '' || classPattern.trim() !== '' || sessionId !== null || includeProbes;
@@ -582,8 +582,8 @@ export function AnalyticsPage() {
       : loading;
   const costError = funded ? (costSeries.error ?? costBreakdown.error) : warming ? (costBreakdown.error ?? billedBreakdown.error) : null;
   const billedTotals = useMemo(() => (nativeWarming && !billedBreakdown.stale && billedBreakdown.data !== null ? sumGroups(billedBreakdown.data) : null), [nativeWarming, billedBreakdown.stale, billedBreakdown.data]);
-  const shareTiles = shareTilesOf(groupBy, oneAccount, oneGroup, costLoading);
-  const probeTile = probeTileOf(unit, oneAccount, oneGroup, costTotals, billedTotals, costLoading, sessionId !== null);
+  const shareTiles = shareTilesOf(groupBy, namedAccount, oneGroup, costLoading);
+  const probeTile = probeTileOf(unit, namedAccount, oneGroup, costTotals, billedTotals, costLoading, sessionId !== null);
   const fundedModels = useMemo(() => new Map((byModelFunded.stale ? [] : (byModelFunded.data ?? [])).map((g) => [g.key, g])), [byModelFunded.stale, byModelFunded.data]);
   const fundedPools = useMemo(() => new Map((fundedByPool.stale ? [] : (fundedByPool.data ?? [])).map((g) => [g.key, g])), [fundedByPool.stale, fundedByPool.data]);
   // Native draws the cache card's bars in the plan rows' equivalent with the billed dollars in its subtitle, and a range
@@ -878,7 +878,7 @@ export function AnalyticsPage() {
               }
               loading={costLoading}
               error={costError}
-              empty={unit === 'share' && oneAccount === null ? CACHE_SHARE_NOTE : undefined}
+              empty={unit === 'share' && namedAccount === null ? ONE_ACCOUNT_SHARE_NOTE : undefined}
               legend={
                 unit === 'share'
                   ? [
@@ -959,7 +959,7 @@ export function AnalyticsPage() {
               funded={fundedModels}
               error={byModel.error ?? byModelFunded.error}
               loading={byModel.data === null || byModel.stale || (funded && (byModelFunded.data === null || byModelFunded.stale))}
-              namedAccount={filters.accountId.length === 1 ? filters.accountId[0] : null}
+              namedAccount={namedAccount}
               unit={unit}
             />
           )}
@@ -1002,7 +1002,7 @@ export function AnalyticsPage() {
             <Tile label="Fast mode spend" value={speedError !== null ? '-' : speedLoading ? null : fmtUsd(fastSpend)} note="usage credits, at the fast cells" />
           </div>
           <div className="grid-2">
-            <CostByGroup points={costPoints} groupBy={groupBy} groupSlot={groupSlot} loading={costLoading} error={costError} axis={axis} unit={unit} />
+            <CostByGroup points={costPoints} groupBy={groupBy} groupSlot={groupSlot} loading={costLoading} error={costError} axis={axis} shared={sharedGroups} unit={unit} />
             {/* Native draws a ring per funding, each in its own unit. Under the shares the split reads the whole in
                 dollars, as under All in dollars. */}
             <Card title="Cost split" subtitle={unit === 'native' ? NATIVE_SPLIT_NOTE : `By token kind, in dollars at the API price list, ${UNIT_SPLIT[dollars]}`}>
@@ -1022,15 +1022,15 @@ export function AnalyticsPage() {
               )}
             </Card>
           </div>
-          {sessionId === null && unit === 'share' && groupBy !== 'account' && (
+          {sessionId === null && unit === 'share' && !sharedGroups && (
             <Card title={`Cost by ${groupLabel.toLowerCase()}`} subtitle="Shares of each account's own windows">
-              <p className="muted">{SHARE_NOTE}</p>
+              <p className="muted">{GROUPED_SHARE_NOTE}</p>
             </Card>
           )}
-          {sessionId === null && unit === 'share' && groupBy === 'account' && (
+          {sessionId === null && unit === 'share' && sharedGroups && (
             <BreakdownTable
               title={`Cost by ${groupLabel.toLowerCase()}`}
-              subtitle="Shares of each account's own windows for the range, over its plan-funded requests"
+              subtitle={groupBy === 'account' ? "Shares of each account's own windows for the range, over its plan-funded requests" : "Shares of the named account's own windows for the range, over its plan-funded requests"}
               loading={costLoading}
               groupLabel={groupLabel}
               columns={['Plan requests', '5-hour', '7-day', weekColumnOf(costGroups), 'Per request', 'Per 1k output']}
@@ -1107,7 +1107,7 @@ export function AnalyticsPage() {
               ) : probesUnmeasured ? (
                 <p className="muted">{WARMING_UNAVAILABLE}</p>
               ) : (
-                <WastedProbes group={costTotals} probes={probesOf(costTotals)} unit={unit} billed={billedTotals} account={oneAccount === null ? null : { group: oneGroup }} />
+                <WastedProbes group={costTotals} probes={probesOf(costTotals)} unit={unit} billed={billedTotals} account={namedAccount === null ? null : { group: oneGroup }} />
               )}
             </Card>
 
@@ -1216,17 +1216,13 @@ function Section({ id, title, meta, metaTitle, controls, shown = true, children 
 type ShareTile = { note: string | undefined; value: string | null };
 /**
  * The three Cost tiles under "Window shares": the named account's 7-day share with its other windows in the note, and
- * the 7-day share per plan-funded request and per 1k plan-funded output tokens. With none or several accounts named
- * the tiles read "per account below" as their value, since shares of different accounts' windows do not add, and
- * under another grouping a dash.
+ * the 7-day share per plan-funded request and per 1k plan-funded output tokens, read under any grouping. With none or
+ * several accounts named the tiles read "per account below" under the account grouping, since shares of different
+ * accounts' windows do not add, and under another grouping a dash under the note that names the filter.
  */
-function shareTilesOf(groupBy: GroupBy, oneAccount: string | null, group: AnalyticsGroup | null, loading: boolean): { perRequest: ShareTile; perThousand: ShareTile; sevenDay: ShareTile } {
-  if (groupBy !== 'account') {
-    const tile: ShareTile = { note: 'under the account grouping alone', value: loading ? null : '-' };
-    return { perRequest: tile, perThousand: tile, sevenDay: tile };
-  }
-  if (oneAccount === null) {
-    const tile: ShareTile = { note: undefined, value: loading ? null : 'per account below' };
+function shareTilesOf(groupBy: GroupBy, namedAccount: string | null, group: AnalyticsGroup | null, loading: boolean): { perRequest: ShareTile; perThousand: ShareTile; sevenDay: ShareTile } {
+  if (namedAccount === null) {
+    const tile: ShareTile = groupBy === 'account' ? { note: undefined, value: loading ? null : 'per account below' } : { note: ONE_ACCOUNT_SHARE_NOTE, value: loading ? null : '-' };
     return { perRequest: tile, perThousand: tile, sevenDay: tile };
   }
   const shares = group?.costShares ?? null;
@@ -1268,9 +1264,9 @@ const probeFiguresOf = (sides: ReturnType<typeof probeSidesOf>): CostFigure[] =>
  * folds request rows, which measure no probe count, so `session` reads the count unmeasured on every path even where
  * the fold holds no group at all (the named account's rows all billed, or a position that keeps no row).
  */
-function probeTileOf(unit: UnitPosition, oneAccount: string | null, group: AnalyticsGroup | null, totals: AnalyticsGroup, billed: AnalyticsGroup | null, loading: boolean, session: boolean): { note: string; title?: string; value: ReactNode | null } {
+function probeTileOf(unit: UnitPosition, namedAccount: string | null, group: AnalyticsGroup | null, totals: AnalyticsGroup, billed: AnalyticsGroup | null, loading: boolean, session: boolean): { note: string; title?: string; value: ReactNode | null } {
   if (unit === 'share') {
-    if (oneAccount === null) return { note: SHARE_NOTE, value: loading ? null : '-' };
+    if (namedAccount === null) return { note: ONE_ACCOUNT_SHARE_NOTE, value: loading ? null : '-' };
     const probes = session || group?.fromRequests ? UNAVAILABLE_NOTE : `${fmtInt(group === null ? 0 : probesOf(group))} probes`;
     const shares = group?.probeShares ?? null;
     const named = (key: string | undefined) => (shares === null || key === undefined || !own(shares, key) ? null : shareLabel(key, shares[key].cost));
@@ -1282,10 +1278,21 @@ function probeTileOf(unit: UnitPosition, oneAccount: string | null, group: Analy
   if (unmeasured) return { note: UNAVAILABLE_NOTE, value: loading ? null : '-' };
   if (unit === 'native') {
     const sides = probeSidesOf(totals, billed, 'cost');
-    return { note: `${fmtInt(probesOf(totals))} probes, ${NATIVE_SUBSET}`, title: sides.estimated ? ESTIMATED_TITLE : undefined, value: loading ? null : figuresValue(probeFiguresOf(sides)) };
+    return { note: `${fmtInt(probesOf(totals))} probes, ${NATIVE_7D_SUBSET}`, title: sides.estimated ? ESTIMATED_TITLE : undefined, value: loading ? null : figuresValue(probeFiguresOf(sides)) };
   }
   return { note: `${fmtInt(probesOf(totals))} probes, ${UNIT_SPLIT[dollarsOf(unit)]}`, value: loading ? null : fmtUsd(totals.probeCostUsd) };
 }
+
+/** A plan group carries both shared windows unless one could not be priced on it. */
+const planRowsRequired = (g: AnalyticsGroup) => g.planRequests === null || g.planRequests > 0;
+const addReadWrite = (a: { read: number; write: number }, b: { read: number; write: number }) => ({ read: a.read + b.read, write: a.write + b.write });
+/** The named account's whole: the position's totals with its shares summed over the groups the route answered them on. */
+const oneAccountGroupOf = (totals: AnalyticsGroup, groups: AnalyticsGroup[]): AnalyticsGroup => ({
+  ...totals,
+  cacheShares: oneAccountShares(groups, (g) => g.cacheShares, addReadWrite, planRowsRequired),
+  costShares: oneAccountShares(groups, (g) => g.costShares, (a, b) => a + b, planRowsRequired),
+  probeShares: oneAccountShares(groups, (g) => g.probeShares, (a, b) => ({ cost: a.cost + b.cost, wasted: a.wasted === null || b.wasted === null ? null : a.wasted + b.wasted })),
+});
 
 /** The named account's cache share of its 7-day window on one side, read off its group, a dash where none is priced. */
 const cacheShareOf = (group: AnalyticsGroup | null, side: 'read' | 'write'): string => {
@@ -1300,10 +1307,11 @@ interface CacheShareRow {
   write: WindowShares;
 }
 
-/** One account's cache read and write shares per bucket, each window null where the bucket holds none. */
-function cacheShareRowsOf(points: AnalyticsPoint[], account: string): CacheShareRow[] {
+/** The named account's cache read and write shares per bucket, summed over its groups, each window null where the bucket
+ *  holds none. */
+function cacheShareRowsOf(points: AnalyticsPoint[]): CacheShareRow[] {
   return points.map((p) => {
-    const shares = p.groups.find((g) => g.key === account)?.cacheShares ?? null;
+    const shares = oneAccountShares(p.groups, (g) => g.cacheShares, addReadWrite, planRowsRequired);
     const week = shares === null ? undefined : weekKeyOf(shares);
     const side = (of: 'read' | 'write'): WindowShares => {
       const at = (key: string | undefined) => (shares === null || key === undefined || !own(shares, key) ? null : shares[key][of]);
@@ -1403,19 +1411,22 @@ function BreakdownTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={r.key}>
-                <td className="mono col-fill" title={r.title ?? r.label}>
-                  {r.label}
-                </td>
-                {r.cells.map((c, i) => (
-                  <td key={i} className="right num col-fit">
-                    {c}
+            {/* A table that reads a second answer beside its rows' own, a dollar side's cells say, draws that answer's
+                failure in place of the rows, so no cell stands without the figure it was read for. */}
+            {error === null &&
+              rows.map((r) => (
+                <tr key={r.key}>
+                  <td className="mono col-fill" title={r.title ?? r.label}>
+                    {r.label}
                   </td>
-                ))}
-              </tr>
-            ))}
-            {rows.length === 0 && (
+                  {r.cells.map((c, i) => (
+                    <td key={i} className="right num col-fit">
+                      {c}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            {(error !== null || rows.length === 0) && (
               <tr>
                 <td colSpan={columns.length + 1} className={error ? '' : 'muted'}>
                   {error ? <ErrorState title="Could not load this breakdown" body={error} /> : loading ? <Skeleton height={22} /> : 'No rows.'}
@@ -1532,7 +1543,7 @@ type ProbeTile = { note?: string; title?: string; value: ReactNode };
  * The Wasted cost and Share of probe cost tiles per position. Native stacks the wasted plan probes' 20x 7-day
  * equivalent over the wasted billed probes' dollars and reads the share off the plan side, the billed side's where no
  * plan probe ran. Under "Window shares" the named account's probe shares read, as the Probe cost tile reads them, and
- * with none named a dash under the grouping's note. A dollar position reads its own rows' dollars.
+ * with none named a dash under the note that names the filter. A dollar position reads its own rows' dollars.
  */
 function wastedTilesOf(unit: UnitPosition, group: AnalyticsGroup, billed: AnalyticsGroup | null, account: { group: AnalyticsGroup | null } | null): { cost: ProbeTile; share: ProbeTile } {
   if (unit === 'native') {
@@ -1542,12 +1553,12 @@ function wastedTilesOf(unit: UnitPosition, group: AnalyticsGroup, billed: Analyt
     const share = cost.equivalent === undefined ? ratio(wasted.billed, cost.billed) : ratio(wasted.equivalent, cost.equivalent);
     const of = probeFiguresOf(cost).map((f) => f.text);
     return {
-      cost: { note: NATIVE_SUBSET, title: wasted.estimated ? ESTIMATED_TITLE : undefined, value: figuresValue(probeFiguresOf(wasted)) },
+      cost: { note: NATIVE_7D_SUBSET, title: wasted.estimated ? ESTIMATED_TITLE : undefined, value: figuresValue(probeFiguresOf(wasted)) },
       share: { note: `of ${of.join(' and ')} on probes`, value: share === null ? '-' : fmtPct(share, 1) },
     };
   }
   if (unit === 'share') {
-    if (account === null) return { cost: { note: SHARE_NOTE, value: '-' }, share: { value: '-' } };
+    if (account === null) return { cost: { note: ONE_ACCOUNT_SHARE_NOTE, value: '-' }, share: { value: '-' } };
     const shares = account.group?.probeShares ?? null;
     const named = (key: string | undefined) => (shares === null || key === undefined || !own(shares, key) || shares[key].wasted === null ? null : shareLabel(key, shares[key].wasted));
     const sevenDay = shares !== null && own(shares, 'seven_day') ? shares.seven_day : null;
@@ -1693,8 +1704,8 @@ function Histogram({ h, format, p99 }: { format: (v: number) => string; h: numbe
 /**
  * Cache by model under a position: the token columns read every row, and the Read cost and Write cost cells read the
  * position's side. Native pairs each model's plan rows' 20x 7-day equivalent with its billed rows' dollars in each
- * cell, a dollar side reads its own read by model (`funded`, by key), and the shares read each model's 7-day share as
- * the route answers it while `namedAccount`, the Accounts filter's one entry, is set under any grouping.
+ * cell, a dollar side reads its own read by model (`funded`, by key), and the shares read each model's 7-day share
+ * where the route answers it, which it does while `namedAccount`, the Accounts filter's one entry, is set.
  */
 function CacheByModel({ error, funded, groups, loading, namedAccount, unit }: { error: string | null; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; namedAccount: string | null; unit: UnitPosition }) {
   const rows = useMemo(() => [...groups].sort((a, b) => b.tokens.cacheRead - a.tokens.cacheRead), [groups]);
@@ -1703,7 +1714,7 @@ function CacheByModel({ error, funded, groups, loading, namedAccount, unit }: { 
       ? `Totals for the selected range and filters, ${NATIVE_7D_SUBSET}`
       : unit === 'share'
         ? namedAccount === null
-          ? CACHE_MODEL_SHARE_NOTE
+          ? ONE_ACCOUNT_SHARE_NOTE
           : "Totals for the selected range and filters, one account's 7-day window shares"
         : `Totals for the selected range and filters, ${UNIT_SUBSET[unit]}`;
   const costsOf = (g: AnalyticsGroup): { cells: ReactNode[]; estimated: boolean } => {
@@ -1714,7 +1725,7 @@ function CacheByModel({ error, funded, groups, loading, namedAccount, unit }: { 
       const cell = (side: 'read' | 'write', billed: number | null) => nativeCell(nativeCellOf('seven_day', sides.equivalent === null ? undefined : (priced?.[side] ?? null), g.estimated, sides.billed === null ? undefined : billed));
       return { cells: [cell('read', g.billed.cacheRead), cell('write', g.billed.cacheWrite)], estimated: g.estimated && sides.equivalent !== null && priced !== undefined };
     }
-    if (unit === 'share') return { cells: namedAccount === null ? ['-', '-'] : [cacheShareOf(g, 'read'), cacheShareOf(g, 'write')], estimated: false };
+    if (unit === 'share') return { cells: [cacheShareOf(g, 'read'), cacheShareOf(g, 'write')], estimated: false };
     // A model the side has no row of spent nothing on that side.
     const side = unit === 'all' ? g : (funded.get(g.key) ?? null);
     return { cells: side === null ? [fmtUsd(0), fmtUsd(0)] : [usdOrDash(side.cost.cacheRead), usdOrDash(side.cost.cacheWrite)], estimated: false };
@@ -1871,7 +1882,8 @@ function stackOf(points: AnalyticsPoint[], value: (g: AnalyticsGroup) => number,
 }
 const sevenDayEquivalentOf = (g: AnalyticsGroup) => (own(g.costEquivalent, 'seven_day') ? g.costEquivalent.seven_day : 0);
 
-function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, unit }: { axis: TimeAxis; error: string | null; groupBy: GroupBy; groupSlot: (key: string) => string; loading: boolean; points: AnalyticsPoint[]; unit: UnitPosition }) {
+/** `shared` is whether the route answers the shares on the page's groups: under the account grouping, or with one account named. */
+function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, shared, unit }: { axis: TimeAxis; error: string | null; groupBy: GroupBy; groupSlot: (key: string) => string; loading: boolean; points: AnalyticsPoint[]; shared: boolean; unit: UnitPosition }) {
   const ink = useChartInk();
   const lines = useMemo(() => shareLines(points), [points]);
   // Native stacks the plan rows' equivalent and draws the billed rows' dollars on a card of their own.
@@ -1920,16 +1932,19 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, unit }:
     );
   }
   if (unit === 'share') {
-    // A model week an account never priced in the range lists no dashed entry, as its line draws nothing.
+    // A model week a group never priced in the range lists no dashed entry, as its line draws nothing.
     const weekOf = (a: string) => lines.data.some((row) => row[`${a}:week`] !== null);
+    // A line is named by its group's label, which names the page's grouping: an account under the account grouping, a
+    // model, a key or another dimension of the one named account under any other.
+    const nameOf = (a: string) => lines.labels[a] ?? a;
     return (
       <ChartCard
         title={title}
-        subtitle="Each account's share of its own 7-day window per bucket, solid, and of its model week, dashed"
+        subtitle={groupBy === 'account' ? "Each account's share of its own 7-day window per bucket, solid, and of its model week, dashed" : `Each ${GROUP_LABEL[groupBy].toLowerCase()}'s share of the named account's 7-day window per bucket, solid, and of its model week, dashed`}
         loading={loading}
         error={error}
-        empty={groupBy === 'account' ? undefined : SHARE_NOTE}
-        legend={lines.accounts.flatMap((a) => [{ color: groupSlot(a), label: `${a} (7-day)`, shape: 'line' as const }, ...(weekOf(a) ? [{ color: groupSlot(a), dashed: true, label: `${a} (${weekLabelOf(lines.weeks[a])})`, shape: 'line' as const }] : [])])}
+        empty={shared ? undefined : GROUPED_SHARE_NOTE}
+        legend={lines.accounts.flatMap((a) => [{ color: groupSlot(a), label: `${nameOf(a)} (7-day)`, shape: 'line' as const }, ...(weekOf(a) ? [{ color: groupSlot(a), dashed: true, label: `${nameOf(a)} (${weekLabelOf(lines.weeks[a])})`, shape: 'line' as const }] : [])])}
       >
         <LineChart data={lines.data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
@@ -1939,9 +1954,9 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, unit }:
             cursor={{ stroke: ink.axis }}
             content={timeTip<Record<string, number | null> & { at: number }>((p) =>
               lines.accounts.flatMap((a) => [
-                { color: groupSlot(a), label: `${a} (5-hour)`, value: shareOrDash(p[`${a}:5h`]) },
-                { color: groupSlot(a), label: `${a} (7-day)`, value: shareOrDash(p[`${a}:7d`]) },
-                ...(weekOf(a) ? [{ color: groupSlot(a), label: `${a} (${weekLabelOf(lines.weeks[a])})`, value: shareOrDash(p[`${a}:week`]) }] : []),
+                { color: groupSlot(a), label: `${nameOf(a)} (5-hour)`, value: shareOrDash(p[`${a}:5h`]) },
+                { color: groupSlot(a), label: `${nameOf(a)} (7-day)`, value: shareOrDash(p[`${a}:7d`]) },
+                ...(weekOf(a) ? [{ color: groupSlot(a), label: `${nameOf(a)} (${weekLabelOf(lines.weeks[a])})`, value: shareOrDash(p[`${a}:week`]) }] : []),
               ]),
             )}
           />
@@ -2056,8 +2071,6 @@ const TIER_UNKNOWN_HINT = 'No tier on file, or one the cost model does not size,
 const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model of no known tier, or on a tier the cost model has no capacity for on that window, prices no share there and draws no point';
 // "Model tier", since the tier unknown entries beside it name the account tier.
 const ESTIMATED_HINT = 'A bucket whose model has no measured weight and reads the latest weighed model of its model tier';
-/** The plan cards' note under Window shares where no group holds one account's rows alone. */
-const BURN_SHARE_NOTE = "Shares of one account's windows alone: group by account, or name one account in the Accounts filter.";
 const NO_ACCOUNT: ReadonlySet<string> = new Set();
 const PARTIAL_NOTE = 'The last bucket is partial, rated over the part of its width it covers';
 
@@ -2241,7 +2254,7 @@ function BurnCharts({
         empty={
           empty ??
           (figure === 'share' && !shared
-            ? BURN_SHARE_NOTE
+            ? GROUPED_SHARE_NOTE
             : drawn.length > 0
               ? undefined
               : unpriced.length > 0
