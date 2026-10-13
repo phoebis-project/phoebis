@@ -2242,6 +2242,7 @@ impl Relay {
         let (mut edited, mut body_injected, mut inject_betas, mut ttl) = match build(&skip) {
             Ok(built) => built,
             Err(error) => {
+                ending(end_guard, REFUSED);
                 return Leg::Respond(
                     self.refused(
                         admitted.trace,
@@ -2647,6 +2648,7 @@ impl Relay {
                 Ok(Drained::TooLarge(prefix)) => (Some(prefix), Some(reader), true),
                 Err(error) => {
                     tracing::warn!(account = %ctx.account.id, %error, "the rejection body was not readable");
+                    ctx.ending(TRANSPORT_ERROR);
                     return Next::Respond(self.unreadable(ctx.trace, &error, outcome).await);
                 }
             }
@@ -2684,6 +2686,7 @@ impl Relay {
                 }
                 Err(error) => {
                     tracing::warn!(account = %ctx.account.id, %error, "the stream ended before it committed");
+                    ctx.ending(TRANSPORT_ERROR);
                     return Next::Respond(self.unreadable(ctx.trace, &error, outcome).await);
                 }
             }
@@ -3864,7 +3867,7 @@ impl Relay {
             caller,
             cancel,
             checkin,
-            guards,
+            mut guards,
             head,
             held,
             keep_alive,
@@ -3881,6 +3884,7 @@ impl Relay {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
+                guards.ended(Some(TRANSPORT_ERROR));
                 return self.unreadable(trace, &error, outcome).await;
             }
         };
@@ -4003,6 +4007,7 @@ impl Relay {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
+                guards.ended(Some(TRANSPORT_ERROR));
                 return self.unreadable(trace, &error, outcome).await;
             }
         };
@@ -4012,6 +4017,7 @@ impl Relay {
                 Ok(payload) => payload,
                 Err(error) => {
                     tracing::warn!(%error, "the upstream response cannot be decoded");
+                    guards.ended(Some(TRANSPORT_ERROR));
                     return self.unreadable(trace, &error, outcome).await;
                 }
             },
@@ -4290,16 +4296,10 @@ impl Drop for EndGuard {
     }
 }
 
-/// The relay's estimate of the body's prompt tokens: its canonical bytes over four, the estimate the static affinity
-/// entries carry, so a fresh session's rewrite is priced from the figure its cache entries will read. Zero for a body
-/// that is no JSON document.
+/// The relay's estimate of the body's prompt tokens: its bytes over four, the byte estimate the static affinity
+/// entries carry, so a fresh session's rewrite is priced the way its cache entries will be read.
 fn body_tokens(raw: &[u8]) -> u64 {
-    let Some(value) = crate::facts::tolerant_value(raw) else {
-        return 0;
-    };
-    let mut canonical = Vec::with_capacity(raw.len());
-    crate::chains::canonical(&value, &mut canonical);
-    (canonical.len() / 4) as u64
+    (raw.len() / 4) as u64
 }
 
 /// Sets the cause the end report will carry, on a request that arms one.

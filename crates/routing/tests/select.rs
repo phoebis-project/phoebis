@@ -14144,9 +14144,10 @@ fn tiered(pool: Pool) -> RegistrySnapshot {
     snapshot_with_terms(pool, terms)
 }
 
-/// One cache-write token a ten-millionth of the 5-hour window, a sixty-millionth of the 7-day window and a
-/// thirty-millionth of the Fable week on `TIER`, the same ratios per input token a second for a burn, and nothing
-/// for a model spelled `unpriced`, so a case can hold a pin the tables do not weight.
+/// One five-minute cache-write token a ten-millionth of the 5-hour window, a sixty-millionth of the 7-day window
+/// and a thirty-millionth of the Fable week on `TIER`, a one-hour write token twice that, the same ratios per input
+/// token a second for a burn, and nothing for a model spelled `unpriced`, so a case can hold a pin the tables do not
+/// weight.
 fn ratio_pricer() -> SharePricer {
     fn ratio(window: &str, tier: &str, model: &str, tokens: f64) -> Option<f64> {
         if tier != TIER || model.contains("unpriced") {
@@ -14165,7 +14166,7 @@ fn ratio_pricer() -> SharePricer {
             window,
             tier,
             model,
-            (usage.write_5m + usage.write_1h) as f64,
+            (usage.write_5m + 2 * usage.write_1h) as f64,
         )
     })
     .with_rate(|window, tier, model, burn, _| ratio(window, tier, model, burn.input))
@@ -14364,13 +14365,14 @@ fn a_fresh_session_takes_the_median_burn_of_the_pools_warm_priced_pins() {
         members: vec![("a", 0)],
         ..Pool::default()
     });
+    // Skewed, so the median (20 000) reads apart from the mean (40 000), and the unpriced pin would move either.
     let mut st = loaded(vec![
         burning("s1", "a", 10_000.0, true, T),
-        burning("s2", "a", 30_000.0, true, T),
-        burning("s3", "a", 50_000.0, true, T),
+        burning("s2", "a", 20_000.0, true, T),
+        burning("s3", "a", 90_000.0, true, T),
         PinRow {
             model: "claude-unpriced-1".into(),
-            ..burning("s4", "a", 90_000.0, true, T)
+            ..burning("s4", "a", 50_000.0, true, T)
         },
     ]);
     st.set_share(ratio_pricer());
@@ -14382,12 +14384,27 @@ fn a_fresh_session_takes_the_median_burn_of_the_pools_warm_priced_pins() {
     select(&mut st, &s, &req, &mut rng());
     let booked = st.reservation("r-1").expect("the placement books");
     assert!(
-        close(booked.burn[FIVE_HOUR], 30_000.0 / 10_000_000.0),
+        close(booked.burn[FIVE_HOUR], 20_000.0 / 10_000_000.0),
         "the median of the three priced pins, the unpriced one left out: {booked:?}"
     );
     assert!(
-        close(booked.burn[SEVEN_DAY], 30_000.0 / 60_000_000.0),
+        close(booked.burn[SEVEN_DAY], 20_000.0 / 60_000_000.0),
         "{booked:?}"
+    );
+    // An even count reads the mean of the two middle pins (40 000), apart from the mean of all four (45 000).
+    let mut four = loaded(vec![
+        burning("s1", "a", 10_000.0, true, T),
+        burning("s2", "a", 20_000.0, true, T),
+        burning("s3", "a", 60_000.0, true, T),
+        burning("s4", "a", 90_000.0, true, T),
+    ]);
+    four.set_share(ratio_pricer());
+    four.record_sample("a", sample(0.5, 0.1, T));
+    select(&mut four, &s, &req, &mut rng());
+    let booked = four.reservation("r-1").expect("the placement books");
+    assert!(
+        close(booked.burn[FIVE_HOUR], 40_000.0 / 10_000_000.0),
+        "the two middle pins' mean: {booked:?}"
     );
     let mut cold = loaded(vec![burning("s1", "a", 10_000.0, false, T)]);
     cold.set_share(ratio_pricer());
@@ -14552,4 +14569,123 @@ fn a_hold_books_nothing_and_the_selection_after_it_books_for_the_request() {
         .expect("the placement after the hold books for the request");
     assert_eq!(booked.attempt, 1);
     assert!(close(five_hour(&st, "a", T), 0.52));
+}
+
+#[test]
+fn a_fresh_sessions_prior_counts_a_pin_only_on_the_windows_its_model_draws() {
+    let s = tiered(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![
+        burning("s1", "a", 10_000.0, true, T),
+        burning("s2", "a", 30_000.0, true, T),
+    ]);
+    st.set_share(ratio_pricer());
+    st.record_sample("a", with_fable(sample(0.5, 0.1, T), 0.3, None));
+    let fable = SelectRequest {
+        body_tokens: 1_000,
+        ..request(&s, Some("s9"), "claude-fable-5-1", true, &[], T)
+    };
+    assert_eq!(
+        landed(select(&mut st, &s, &fable, &mut rng()).0),
+        ("a".into(), None)
+    );
+    let booked = st.reservation("r-1").expect("the placement books");
+    assert_eq!(
+        booked
+            .rewrite
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE],
+        "the rewrite lands on every window the Fable request draws"
+    );
+    assert_eq!(
+        booked.burn.keys().map(String::as_str).collect::<Vec<_>>(),
+        [FIVE_HOUR, SEVEN_DAY],
+        "the Sonnet pins burn no Fable week, so the prior has none: {booked:?}"
+    );
+    assert!(
+        close(booked.burn[FIVE_HOUR], 20_000.0 / 10_000_000.0),
+        "the two pins' median on a window both draw: {booked:?}"
+    );
+}
+
+#[test]
+fn a_spent_move_books_the_pins_last_prompt_as_its_rewrite_and_its_own_decayed_burn() {
+    let pool = || Pool {
+        members: vec![("a", 0), ("b", 1)],
+        shedding: Shedding {
+            migrate_when_spent: true,
+            burn_window_seconds: 1_800,
+            ..Shedding::default()
+        },
+        ..Pool::default()
+    };
+    let s = tiered(pool());
+    let moving_at = T + 1_000;
+    // Folded one average before the move, so the priced rate reads at e^-1 on the new row's destination.
+    let pin = PinRow {
+        last_input_tokens: 813_365,
+        burn_at: Some(moving_at - 1_800_000),
+        ..burning("s1", "a", 40_000.0, true, T)
+    };
+    let spent = |st: &mut RoutingState| {
+        st.set_share(ratio_pricer());
+        st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+        st.record_sample("b", refreshing(0.2, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    };
+    let mut st = loaded(vec![pin]);
+    spent(&mut st);
+    let req = SelectRequest {
+        body_tokens: 200_000,
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], moving_at)
+    };
+    assert_eq!(
+        landed(select(&mut st, &s, &req, &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    let booked = st
+        .reservation("r-1")
+        .expect("the move books on its destination")
+        .clone();
+    assert_eq!(
+        (booked.account_id.as_str(), booked.pin.as_ref()),
+        ("b", Some(&pin_key("s1")))
+    );
+    assert!(
+        close(booked.rewrite[FIVE_HOUR], 813_365.0 / 10_000_000.0),
+        "the pin's last prompt as one five-minute write, not the body: {booked:?}"
+    );
+    assert!(close(booked.rewrite[SEVEN_DAY], 813_365.0 / 60_000_000.0));
+    let decayed = (-1.0f64).exp();
+    assert!(
+        close(booked.burn[FIVE_HOUR], 40_000.0 / 10_000_000.0 * decayed),
+        "the pin's own rate, decayed one average: {booked:?}"
+    );
+    assert!(close(
+        booked.burn[SEVEN_DAY],
+        40_000.0 / 60_000_000.0 * decayed
+    ));
+    // A pin never renewed with usage reads its context from the body, and a one-hour pin prices a one-hour write.
+    let mut st = loaded(vec![PinRow {
+        last_input_tokens: 0,
+        cache_ttl_ms: 3_600_000,
+        ..burning("s2", "a", 40_000.0, true, T)
+    }]);
+    spent(&mut st);
+    let req = SelectRequest {
+        body_tokens: 200_000,
+        ..request(&s, Some("s2"), "claude-sonnet-5", true, &[], moving_at)
+    };
+    assert_eq!(
+        landed(select(&mut st, &s, &req, &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    let booked = st.reservation("r-1").expect("the move books");
+    assert!(
+        close(booked.rewrite[FIVE_HOUR], 2.0 * 200_000.0 / 10_000_000.0),
+        "the body's estimate as one one-hour write: {booked:?}"
+    );
 }

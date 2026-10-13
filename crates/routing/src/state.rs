@@ -667,6 +667,11 @@ pub fn burn_average_ms(pool: &PoolRow) -> i64 {
     seconds_ms(pool.shedding.burn_window_seconds)
 }
 
+/// `burn_average_ms` of the default preset, for a key whose pool left the registry.
+pub(crate) fn default_burn_average_ms() -> i64 {
+    seconds_ms(phoebis_store::Shedding::default().burn_window_seconds)
+}
+
 /// How long a shedding round's marks hold and a source rests after one, in milliseconds.
 pub fn shed_dwell_ms(pool: &PoolRow) -> i64 {
     seconds_ms(pool.shedding.source_dwell_seconds)

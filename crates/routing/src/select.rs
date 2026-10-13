@@ -661,7 +661,14 @@ pub(crate) fn pin_figures(
         }
         let rate = match pin {
             Some(pin) => priced(window, pin),
-            None => median(warm_pins.iter().filter_map(|p| priced(window, p)).collect()),
+            // A pin burns the windows its own model draws, so a Sonnet pin adds nothing to a Fable week's prior.
+            None => median(
+                warm_pins
+                    .iter()
+                    .filter(|p| plan_windows(&p.model).any(|w| w == window))
+                    .filter_map(|p| priced(window, p))
+                    .collect(),
+            ),
         };
         if let Some(rate) = rate.filter(|r| *r > 0.0) {
             burn.insert(window.to_string(), rate);

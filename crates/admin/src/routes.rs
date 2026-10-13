@@ -1510,8 +1510,8 @@ pub(crate) struct RouterStats {
     /// The commands waiting in it now.
     pub queued: usize,
     /// The reports a closed queue refused at shutdown, per kind (`account_state`, `accounting`, `affinity`,
-    /// `cooldown`, `credits`, `member_spend`, `overage`, `pin_invalidated`, `pin_released`, `pin_renewed`,
-    /// `sample`, `usage`).
+    /// `cooldown`, `credits`, `ended`, `member_spend`, `overage`, `pin_invalidated`, `pin_released`,
+    /// `pin_renewed`, `sample`, `usage`).
     #[schema(value_type = BTreeMap<String, u64>)]
     pub dropped_reports: indexmap::IndexMap<String, u64>,
     /// The refusal records a full or closed router queue refused, each a decision row never written.

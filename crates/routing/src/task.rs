@@ -25,14 +25,13 @@ use crate::record::{
     ShedRoundFacts,
 };
 use crate::select::{
-    decide, release_reasons, seconds_ms, Decided, MigrateReason, Refusal, SelectRequest,
-    SelectResult,
+    decide, release_reasons, Decided, MigrateReason, Refusal, SelectRequest, SelectResult,
 };
 use crate::state::{
-    burn_average_ms, burn_folded, is_plan_window, mark_holds, shed_dwell_ms, AccountTicket,
-    BurnUnit, CreditsState, EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef,
-    PinUsage, RateTable, RoutingState, SharePricer, StateWrite, UtilizationSample, WindowReading,
-    WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    burn_average_ms, burn_folded, default_burn_average_ms, is_plan_window, mark_holds,
+    shed_dwell_ms, AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight, MemberSpend,
+    OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer, StateWrite,
+    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use crate::{resolve, term, window_for, KeyRefusal, Presented, RegistrySnapshot};
 
@@ -3415,10 +3414,7 @@ impl Task {
         snapshot
             .key(key_id)
             .and_then(|k| snapshot.pool(&k.pool_id))
-            .map_or(
-                seconds_ms(phoebis_store::Shedding::default().burn_window_seconds),
-                burn_average_ms,
-            )
+            .map_or_else(default_burn_average_ms, burn_average_ms)
     }
 
     fn token(&mut self, account_id: &str) -> &CancellationToken {

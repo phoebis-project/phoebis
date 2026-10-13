@@ -2666,13 +2666,16 @@ fn a_tenth_per_million() -> SharePricer {
     SharePricer::new(|_, _, _, usage, _| Some(usage.input as f64 / 1_000_000.0 * 0.1))
 }
 
+/// The rate-limit tier `with_tier` puts an account on, which a pricer that prices one tier keys on.
+const TIER: &str = "default_claude_max_5x";
+
 fn with_tier(store: &Store, account: &str) {
     store
         .set_profile(
             account,
             "{}",
             &SubscriptionRow {
-                tier: Some("default_claude_max_5x".into()),
+                tier: Some(TIER.into()),
                 ..SubscriptionRow::default()
             },
         )
@@ -7911,11 +7914,11 @@ async fn a_moved_account_state_emits_the_relay_s_cause() {
     no_further_event(&mut events).await;
 }
 
-/// Prices a million tokens of input or cache write at a tenth of either window, whatever the tier, the model or
-/// the instant: a 200 000 token body books 0.02 and a million input tokens charge 0.1.
+/// Prices a million tokens of input or cache write at a tenth of either window on `TIER`, whatever the model or the
+/// instant, and nothing on any other tier: a 200 000 token body books 0.02 and a million input tokens charge 0.1.
 fn a_tenth_per_million_written() -> SharePricer {
-    SharePricer::new(|_, _, _, usage, _| {
-        Some((usage.input + usage.write_5m) as f64 / 1_000_000.0 * 0.1)
+    SharePricer::new(|_, tier, _, usage, _| {
+        (tier == TIER).then(|| (usage.input + usage.write_5m) as f64 / 1_000_000.0 * 0.1)
     })
 }
 

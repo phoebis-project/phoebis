@@ -9,6 +9,7 @@ use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event};
+use phoebis_profile::fixtures::{body, BodyFixture};
 use phoebis_routing::{
     DecisionRecord, DecisionSummary, Report, RouterConfig, RouterEvent, SharePricer,
     UtilizationSample, WindowReading, WindowSource, FIVE_HOUR,
@@ -589,6 +590,12 @@ async fn priced_harness(up: &FakeUpstream, accounts: &[TestAccount]) -> Harness 
     h
 }
 
+/// The rewrite the fixture body books on `TIER`: its bytes over four, the relay's estimate of its prompt tokens, each
+/// a ten-millionth of the window.
+fn fixture_rewrite() -> f64 {
+    (body(BodyFixture::Oauth).len() / 4) as f64 / 10_000_000.0
+}
+
 /// The 5-hour prediction of `account`, as the router answers it now.
 async fn five_hour(h: &Harness, account: &str) -> f64 {
     h.router
@@ -643,8 +650,8 @@ async fn a_retry_in_place_sends_no_ended_between_its_attempts_and_one_usage_for_
     assert_eq!((resp.status().as_u16(), o.attempt), (200, 2));
     let standing = five_hour(&h, "a").await;
     assert!(
-        standing > 0.5,
-        "the booking of attempt 1's selection stands while attempt 2 streams: {standing}"
+        (standing - (0.5 + fixture_rewrite())).abs() < 1e-9,
+        "the booking of attempt 1's selection, the body's estimate, stands while attempt 2 streams: {standing}"
     );
     up.release();
     drain(resp).await;
