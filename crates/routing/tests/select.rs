@@ -1,9 +1,9 @@
 use phoebis_routing::{
-    cohort_hold, decide, effective_warm, elapsed_share_at, lane_key, release_reasons, resolve,
-    select, warm, warmth_of, AccountTicket, AffinityChain, AffinityMap, AffinityRow, BudgetFacts,
-    BurnRates, BurnUnit, CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditsState,
-    Decided, DecisionRecord, EvidenceSource, Exhaustion, FactEntity, FactValue, HoldFacts,
-    HoldOutcome, LaneFacts, LongContextRates, MemberSpend, MigrateReason,
+    cohort_hold, decide, effective_warm, lane_key, release_reasons, resolve, select, warm,
+    warmth_of, AccountTicket, AffinityChain, AffinityMap, AffinityRow, BudgetFacts, BurnRates,
+    BurnUnit, CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditsState, Decided,
+    DecisionRecord, EvidenceSource, Exhaustion, FactEntity, FactValue, HoldFacts, HoldOutcome,
+    LaneFacts, LongContextRates, MemberSpend, MigrateReason,
     OverageEvidence, PinKeyFacts, PinRef, Placement, RateTable, Rates, RefusalFacts,
     RefusedRequest, RegistrySnapshot, RequestFlags, RoutingState, SelectRequest, SelectResult,
     SharePricer, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading,
@@ -2891,57 +2891,53 @@ fn an_explicitly_chosen_strategy_orders_the_api_key_group_itself() {
 }
 
 #[test]
-fn a_marked_pins_fitting_destinations_tie_break_by_the_weekly_band_and_the_comparison_is_strict() {
+fn a_rounds_fitting_destinations_order_by_the_longest_runway_and_then_by_the_set_whatever_the_weeks_read(
+) {
     let s = tiered(Pool {
-        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         ..Pool::default()
     });
-    // `b` and `c` read alike on the 5-hour window, so their runways tie and the weekly band decides. `a` at 0.94 with
-    // its pins burning 0.05 of the window an hour projects to 0.99, so its round runs and marks s1.
-    let run = |b_seven_day: f64| {
+    // `a` at 0.94 with its pins burning 0.05 of the window an hour projects to 0.99, so its round runs and marks s1.
+    let run = |b: UtilizationSample, c: UtilizationSample| {
         let mut st = rounding(vec![
             burning("s1", "a", 4.0, false, T),
             burning("s0", "a", 1.0, false, T),
         ]);
         st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500));
-        st.record_sample("b", sample(0.3, b_seven_day, T - 500));
-        st.record_sample("c", sample(0.3, 0.1, T - 500));
+        st.record_sample("b", b);
+        st.record_sample("c", c);
         decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng())
     };
-    let d = run(0.77);
-    assert_eq!(
-        landed(d.result.clone()),
-        ("c".into(), Some(MigrateReason::Shed)),
-        "b leads its week by 0.77 against the band of 0.75, so c takes the tie"
-    );
-    let fit = line(&d.record, "fit");
-    assert_eq!(fit.verdict, "fits");
-    assert_eq!(fact_of(fit, "cool", "b"), &FactValue::Bool(false));
-    assert_eq!(fact_of(fit, "cool", "c"), &FactValue::Bool(true));
-    assert_eq!(
-        fact(line(&d.record, "move:shed"), "destinations"),
-        &FactValue::List(vec!["c".into()])
-    );
-    let d = run(0.75);
-    assert_eq!(
-        landed(d.result.clone()),
-        ("c".into(), Some(MigrateReason::Shed)),
-        "exactly threshold minus the band is still inside it: the comparison is strict"
-    );
-    assert_eq!(
-        fact_of(line(&d.record, "fit"), "cool", "b"),
-        &FactValue::Bool(false)
-    );
-    let d = run(0.70);
+    // b and c read alike on both windows, so their runways tie. b's week at 0.5 with a tenth gone runs 0.4 ahead of its
+    // pace, c's with six tenths gone runs behind it: the order keeps both and the strategy picks b, the higher priority.
+    let d = run(weekly(0.3, 0.5, 9, T - 500), weekly(0.3, 0.5, 4, T - 500));
     assert_eq!(
         landed(d.result.clone()),
         ("b".into(), Some(MigrateReason::Shed)),
-        "both cool, the tie stays and the strategy picks the higher priority"
+        "two fitting siblings with one runway: the first of the set, whatever the weeks read"
     );
+    let fit = line(&d.record, "fit");
+    assert_eq!(fit.verdict, "fits");
     assert_eq!(
         fact(line(&d.record, "move:shed"), "destinations"),
         &FactValue::List(vec!["b".into(), "c".into()])
+    );
+    assert!(
+        fit.facts.iter().all(|f| f.key != "cool"),
+        "the week's reading is no fact of the table: {:?}",
+        fit.facts
+    );
+    // c has the longer runway, 0.3 against b's 0.5 on the 5-hour window, and the week running ahead of its pace: the
+    // runway decides.
+    let d = run(weekly(0.5, 0.5, 4, T - 500), weekly(0.3, 0.5, 9, T - 500));
+    assert_eq!(
+        landed(d.result.clone()),
+        ("c".into(), Some(MigrateReason::Shed)),
+        "the longest runway wins"
+    );
+    assert_eq!(
+        fact(line(&d.record, "move:shed"), "destinations"),
+        &FactValue::List(vec!["c".into()])
     );
 }
 
@@ -3449,44 +3445,6 @@ fn a_spent_window_moves_a_pin_back_to_the_account_that_shed_it_inside_the_dwell(
     let (result, writes) = select(&mut st, &s, &auxiliary(&s, "s1", T + 1_000), &mut rng());
     assert_eq!(landed(result), ("a".into(), Some(MigrateReason::Spent)));
     assert!(writes.iter().any(|w| matches!(w, StateWrite::DeletePin(_))));
-}
-
-#[test]
-fn a_spent_pin_moves_to_a_sibling_the_band_would_refuse() {
-    let s = snapshot(Pool {
-        shed_ahead: Some(0.8),
-        members: vec![("a", 0), ("b", 1)],
-        ..Pool::default()
-    });
-    let mut st = RoutingState::from_load(RoutingLoad::default());
-    let pick = |st: &mut RoutingState, now: i64| {
-        select(
-            st,
-            &s,
-            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
-            &mut rng(),
-        )
-    };
-    assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
-    // b reads over the threshold, so the band refuses it as a utilization destination, and under 1.0, so it
-    // holds allowance.
-    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
-    st.record_sample("b", refreshing(0.9, 9 * HOUR, 9 * HOUR, 1_500));
-    let (result, writes) = pick(&mut st, 2_000);
-    let SelectResult::Selected(sel) = result else {
-        panic!()
-    };
-    assert_eq!(
-        (sel.account.id.as_str(), sel.migrated),
-        ("b", Some(MigrateReason::Spent)),
-        "the band would keep the pin on a; the spent window moves it"
-    );
-    assert!(
-        writes
-            .iter()
-            .any(|w| matches!(w, StateWrite::UpsertPin(p) if p.account_id == "b")),
-        "a spent migration writes a fresh pin onto the destination: {writes:?}"
-    );
 }
 
 #[test]
@@ -4783,9 +4741,9 @@ fn an_entry_another_key_wrote_places_the_request() {
     );
 }
 
-/// Accounts `a`, `b` and `c`, pools `p1` and `p2` at a shedding margin of 0.8 with the default shedding and a
-/// dwell of 900 s on each pool, each key `(id, pool)` and each member `(pool, account, priority)` as given. The dwell
-/// is set on each pool so the cases that read 900 s do not rest on the default preset.
+/// Accounts `a`, `b` and `c`, pools `p1` and `p2` with the default shedding and a dwell of 900 s on each pool, each
+/// key `(id, pool)` and each member `(pool, account, priority)` as given. The dwell is set on each pool so the cases
+/// that read 900 s do not rest on the default preset.
 fn shedding_pools(keys: &[(&str, &str)], members: &[(&str, &str, u32)]) -> RegistrySnapshot {
     let account = |id: &str| AccountRow {
         id: id.into(),
@@ -4825,7 +4783,6 @@ fn shedding_pools(keys: &[(&str, &str)], members: &[(&str, &str, u32)]) -> Regis
     let pool = |id: &str| PoolRow {
         strategy: Strategy::Priority,
         prefer_subscription: false,
-        shed_ahead_of_pace: Some(0.8),
         shedding: Shedding {
             source_dwell_seconds: 900,
             ..Shedding::default()
@@ -5126,9 +5083,8 @@ fn a_rounds_time_is_kept_for_its_own_pools_dwell_and_no_longer() {
 }
 
 #[test]
-fn the_shed_move_takes_the_fitting_siblings_with_the_longest_runway_the_band_and_the_cap_narrow() {
+fn the_shed_move_takes_the_fitting_siblings_with_the_longest_runway_and_the_cap_narrow() {
     let s = tiered(Pool {
-        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         ..Pool::default()
     });
@@ -5136,7 +5092,6 @@ fn the_shed_move_takes_the_fitting_siblings_with_the_longest_runway_the_band_and
     // c narrows out on one reading at a time, or on none: the order's answer and the fit table read each the same
     // way.
     for (narrow, destinations) in [
-        ("band", vec!["b"]),
         ("runway", vec!["b"]),
         ("cap", vec!["b"]),
         ("none", vec!["b", "c"]),
@@ -5147,12 +5102,8 @@ fn the_shed_move_takes_the_fitting_siblings_with_the_longest_runway_the_band_and
         ]);
         st.record_sample("a", sample(0.9, 0.3, T - 500));
         st.record_sample("b", sample(0.1, 0.1, T - 500));
-        let (c_five_hour, c_seven_day) = match narrow {
-            "band" => (0.1, 0.8),
-            "runway" => (0.2, 0.1),
-            _ => (0.1, 0.1),
-        };
-        st.record_sample("c", sample(c_five_hour, c_seven_day, T - 500));
+        let c_five_hour = if narrow == "runway" { 0.2 } else { 0.1 };
+        st.record_sample("c", sample(c_five_hour, 0.1, T - 500));
         let _held: Vec<_> = if narrow == "cap" {
             (0..cap)
                 .map(|_| st.in_flight().dispatched("c", T))
@@ -5181,17 +5132,12 @@ fn the_shed_move_takes_the_fitting_siblings_with_the_longest_runway_the_band_and
                 "{id} with c narrowed by {narrow}"
             );
         }
-        assert_eq!(
-            fact_of(fit, "cool", "c"),
-            &FactValue::Bool(narrow != "band"),
-            "c narrowed by {narrow}"
-        );
     }
 }
 
 #[test]
-fn the_blocker_refuses_a_hot_account_and_the_request_lands_by_the_strategy() {
-    let scenario = |pool: Pool, seed: &dyn Fn(&mut RoutingState)| {
+fn the_blocker_passes_an_account_far_ahead_of_its_weekly_pace_and_keeps_its_other_refusals() {
+    let scenario = |pool: Pool, seed: &dyn Fn(&mut RoutingState), expected: &str, why: &str| {
         let s = snapshot(pool);
         let mut st = RoutingState::from_load(RoutingLoad::default());
         seed_affinity(
@@ -5219,24 +5165,24 @@ fn the_blocker_refuses_a_hot_account_and_the_request_lands_by_the_strategy() {
             "worker",
         );
         let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
-            panic!("the strategy still lands the request")
+            panic!("the request still lands")
         };
-        assert_eq!(
-            sel.account.id, "b",
-            "b takes it since a is refused by the blocker"
-        );
-        assert_eq!(sel.trace.placement, None);
+        assert_eq!(sel.account.id, expected, "{why}");
+        // The warm prefix is a's, so a placement lands there and a refusal leaves the request to the strategy.
+        assert_eq!(sel.trace.placement.is_some(), expected == "a", "{why}");
     };
-    // At or above `weekly_lead_margin` minus the band on the 7-day window, the one window the band reads.
+    // The 7-day window at 0.8 with no reset runs 0.8 ahead of its pace, which refuses nothing: the static prefix
+    // places the request on a.
     scenario(
         Pool {
             members: vec![("a", 1), ("b", 0)],
-            shed_ahead: Some(0.8),
             ..Pool::default()
         },
         &|st| {
             st.record_sample("a", sample(0.0, 0.8, 1_000));
         },
+        "a",
+        "a week far ahead of its pace is no refusal",
     );
     // At or above the ceiling.
     scenario(
@@ -5248,6 +5194,8 @@ fn the_blocker_refuses_a_hot_account_and_the_request_lands_by_the_strategy() {
         &|st| {
             st.record_sample("a", sample(0.5, 0.0, 1_000));
         },
+        "b",
+        "the ceiling refuses a",
     );
     // At or under the Pace floor: `window_for` reads the seven-day window for this model.
     scenario(
@@ -5259,6 +5207,8 @@ fn the_blocker_refuses_a_hot_account_and_the_request_lands_by_the_strategy() {
         &|st| {
             st.record_sample("a", sample(0.0, 0.96, 1_000));
         },
+        "b",
+        "the floor refuses a",
     );
     // Spent: no allowance left in the request's window.
     scenario(
@@ -5269,6 +5219,8 @@ fn the_blocker_refuses_a_hot_account_and_the_request_lands_by_the_strategy() {
         &|st| {
             st.record_sample("a", sample(1.0, 1.0, 1_000));
         },
+        "b",
+        "a spent window refuses a",
     );
     // Cooling: a cooldown makes the account ineligible, so it never joins the candidates placement chooses among.
     scenario(
@@ -5279,6 +5231,8 @@ fn the_blocker_refuses_a_hot_account_and_the_request_lands_by_the_strategy() {
         &|st| {
             st.record_cooldown(cooled("a", "account", 10_000, "five_hour", "rate_limit"));
         },
+        "b",
+        "a cooling account is no candidate",
     );
 }
 
@@ -5288,7 +5242,6 @@ fn the_blocker_passes_an_api_key_candidate_while_its_bucket_holds_room() {
         let s = snapshot(Pool {
             members: vec![("a", 1), ("b", 0)],
             kinds: vec![("a", AccountKind::ApiKey)],
-            shed_ahead: Some(0.2),
             ..Pool::default()
         });
         let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -5344,13 +5297,6 @@ fn the_blocker_passes_an_api_key_candidate_while_its_bucket_holds_room() {
         },
         "a",
         "a holds room, so rung 4 places the request on its warm prefix though b outranks it",
-    );
-    scenario(
-        &|st| {
-            st.record_sample("a", bucket(1.0));
-        },
-        "b",
-        "an exhausted bucket blocks a at rung 4",
     );
     scenario(
         &|st| {
@@ -6030,7 +5976,7 @@ fn a_tail_match_bypasses_the_ceiling_the_wind_down_and_the_floor() {
 #[test]
 fn after_a_return_to_plan_move_a_warm_entry_on_the_source_cannot_place_the_request() {
     let s = snapshot_with_terms(
-        cool_preference_pool(vec![("a", AccountKind::ApiKey)]),
+        b_outranks_c_pool(vec![("a", AccountKind::ApiKey)]),
         tier_terms(&["b", "c"]),
     );
     // The pin's last prompt rewrites a tenth of the 5-hour window on TIER, so b reads least bad and c fits.
@@ -6039,7 +5985,7 @@ fn after_a_return_to_plan_move_a_warm_entry_on_the_source_cannot_place_the_reque
         last_input_tokens: 1_000_000,
         ..burning("cold", "a", 0.0, false, T)
     }]);
-    hot_b_cool_c(&mut st, T - 500);
+    b_filled_c_free(&mut st, T - 500);
     seed_affinity(
         &st,
         vec![affinity_row(
@@ -7789,7 +7735,7 @@ fn a_subscription_window_past_its_reset_scores_as_untouched_not_by_a_minutes_cla
 }
 
 #[test]
-fn the_five_hour_ceiling_demotes_an_account_under_pace() {
+fn the_five_hour_ceiling_demotes_an_account_under_the_pace_strategy() {
     let s = snapshot(Pool {
         strategy: Strategy::Pace,
         select_below: Some(0.9),
@@ -10681,19 +10627,17 @@ fn a_cold_pin_on_a_winding_down_account_drains_and_a_warm_one_stays() {
     );
 }
 
-/// A pool whose moves read a threshold of 0.8, where `b` outranks `c`: without the cool preference every move
-/// below would land on `b`.
-fn cool_preference_pool(kinds: Vec<(&'static str, AccountKind)>) -> Pool {
+/// A pool where `b` outranks `c`, so a move that read no fit would land on `b`.
+fn b_outranks_c_pool(kinds: Vec<(&'static str, AccountKind)>) -> Pool {
     Pool {
-        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         kinds,
         ..Pool::default()
     }
 }
 
-/// `b` reads above the threshold and still holds allowance, so every rule would take it; `c` reads cool.
-fn hot_b_cool_c(st: &mut RoutingState, at: i64) {
+/// `b` reads near the ceiling and still holds allowance, so a rule without the gate would take it, and `c` has room.
+fn b_filled_c_free(st: &mut RoutingState, at: i64) {
     st.record_sample("b", sample(0.9, 0.3, at));
     st.record_sample("c", sample(0.1, 0.1, at));
 }
@@ -10729,8 +10673,8 @@ fn spent_move_from_a(
 }
 
 #[test]
-fn a_spent_move_prefers_a_fitting_sibling_and_breaks_a_tie_by_the_weekly_band() {
-    let s = tiered(cool_preference_pool(vec![]));
+fn a_spent_move_prefers_a_fitting_sibling_over_the_one_its_rewrite_fills() {
+    let s = tiered(b_outranks_c_pool(vec![]));
     let mut st = RoutingState::from_load(RoutingLoad::default());
     let d = spent_move_from_a(
         &s,
@@ -10749,33 +10693,11 @@ fn a_spent_move_prefers_a_fitting_sibling_and_breaks_a_tie_by_the_weekly_band() 
         fact_of(fit, "verdict", "b"),
         &FactValue::Text("least_bad".into())
     );
-    // Both fit with room to spare, and b leads its week by 0.9 against the band of 0.75.
-    let mut st = RoutingState::from_load(RoutingLoad::default());
-    let d = spent_move_from_a(
-        &s,
-        &mut st,
-        sample(0.3, 0.9, T + 500),
-        sample(0.3, 0.1, T + 500),
-    );
-    assert_eq!(
-        landed(d.result.clone()),
-        ("c".into(), Some(MigrateReason::Spent)),
-        "the cool sibling takes the tie over the one that outranks it"
-    );
-    let fit = line(&d.record, "fit");
-    assert_eq!(
-        (
-            fit.verdict,
-            fact_of(fit, "cool", "b"),
-            fact_of(fit, "cool", "c")
-        ),
-        ("fits", &FactValue::Bool(false), &FactValue::Bool(true))
-    );
 }
 
 #[test]
 fn an_overage_move_prefers_a_fitting_sibling() {
-    let s = tiered(cool_preference_pool(vec![]));
+    let s = tiered(b_outranks_c_pool(vec![]));
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.set_share(ratio_pricer());
     select(
@@ -10785,7 +10707,7 @@ fn an_overage_move_prefers_a_fitting_sibling() {
         &mut rng(),
     );
     st.record_overage("a", overage(true, T + 500, Some(T + 40 * MINUTE)));
-    hot_b_cool_c(&mut st, T + 500);
+    b_filled_c_free(&mut st, T + 500);
     let d = decide(
         &mut st,
         &s,
@@ -10806,7 +10728,7 @@ fn an_overage_move_prefers_a_fitting_sibling() {
 #[test]
 fn a_return_to_plan_move_prefers_a_fitting_sibling() {
     let s = snapshot_with_terms(
-        cool_preference_pool(vec![("a", AccountKind::ApiKey)]),
+        b_outranks_c_pool(vec![("a", AccountKind::ApiKey)]),
         tier_terms(&["b", "c"]),
     );
     let mut st = priced(vec![PinRow {
@@ -10814,7 +10736,7 @@ fn a_return_to_plan_move_prefers_a_fitting_sibling() {
         last_input_tokens: 1_000_000,
         ..burning("cold", "a", 0.0, false, T)
     }]);
-    hot_b_cool_c(&mut st, T - 500);
+    b_filled_c_free(&mut st, T - 500);
     let d = decide(&mut st, &s, &auxiliary(&s, "cold", T), &mut rng());
     assert_eq!(
         landed(d.result.clone()),
@@ -10829,12 +10751,12 @@ fn a_drain_move_prefers_a_fitting_sibling() {
     let mut terms = tier_terms(&["a", "b", "c"]);
     terms[0].cancelled = true;
     terms[0].ends_at = Some(T + 10 * MINUTE);
-    let s = snapshot_with_terms(cool_preference_pool(vec![]), terms);
+    let s = snapshot_with_terms(b_outranks_c_pool(vec![]), terms);
     let mut st = priced(vec![PinRow {
         last_input_tokens: 1_000_000,
         ..burning("cold", "a", 0.0, false, T)
     }]);
-    hot_b_cool_c(&mut st, T - 500);
+    b_filled_c_free(&mut st, T - 500);
     let d = decide(&mut st, &s, &auxiliary(&s, "cold", T), &mut rng());
     assert_eq!(
         landed(d.result.clone()),
@@ -10877,7 +10799,7 @@ fn a_spent_move_lands_on_an_untiered_sibling_that_reads_least_bad() {
 #[test]
 fn an_api_key_sibling_with_a_full_bucket_reads_least_bad_and_a_fitting_one_takes_the_move() {
     let s = snapshot_with_terms(
-        cool_preference_pool(vec![("b", AccountKind::ApiKey)]),
+        b_outranks_c_pool(vec![("b", AccountKind::ApiKey)]),
         tier_terms(&["a", "c"]),
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -10932,7 +10854,7 @@ fn an_api_key_sibling_fits_while_its_bucket_holds_room() {
         let s = snapshot_with_terms(
             Pool {
                 shed_ahead: Some(0.2),
-                ..cool_preference_pool(vec![("b", AccountKind::ApiKey)])
+                ..b_outranks_c_pool(vec![("b", AccountKind::ApiKey)])
             },
             tier_terms(&["a", "c"]),
         );
@@ -10979,8 +10901,7 @@ fn an_api_key_sibling_fits_while_its_bucket_holds_room() {
         )
     };
     let verdict_of = |d: &Decided, id: &str| fact_of(line(&d.record, "fit"), "verdict", id).clone();
-    // c fits and reads cool under the margin's band of 0.15 too, so b wins the tie by its priority alone and leaves
-    // the order by its bucket alone.
+    // c fits too, so b wins the tie by its priority alone and leaves the order by its bucket alone.
     let d = run(0.95, false);
     assert_eq!(
         landed(d.result.clone()),
@@ -11023,7 +10944,7 @@ fn a_fitting_sibling_at_its_cap_is_passed_over_for_a_least_bad_one_under_it() {
             in_flight_cap: 1,
             ..Failover::default()
         },
-        ..cool_preference_pool(vec![])
+        ..b_outranks_c_pool(vec![])
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.set_share(ratio_pricer());
@@ -11034,7 +10955,7 @@ fn a_fitting_sibling_at_its_cap_is_passed_over_for_a_least_bad_one_under_it() {
         &mut rng(),
     );
     st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
-    hot_b_cool_c(&mut st, T + 500);
+    b_filled_c_free(&mut st, T + 500);
     let on_c = st.in_flight().dispatched("c", T + 500);
     let d = decide(
         &mut st,
@@ -11121,10 +11042,9 @@ fn a_marked_pin_on_a_cooled_account_is_released_with_cooldown_rather_than_shed()
     );
 }
 
-/// A pool whose round runs on `a` at 0.8, with `b` a cool destination.
+/// A pool over `a` and `b`, where a round on `a` finds `b` its one destination.
 fn shedding_pool(shedding: Shedding) -> Pool {
     Pool {
-        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         shedding,
         ..Pool::default()
@@ -11133,7 +11053,7 @@ fn shedding_pool(shedding: Shedding) -> Pool {
 
 /// `a` at 0.94 on its 5-hour window with the reset an hour out, so pins burning a hundredth of the window an hour
 /// between them take its projection over the ceiling, and `b` at 0.1 on both windows, fitting every pin of these cases
-/// to its horizon. Both weeks run behind their pace, so the weekly trigger stays quiet.
+/// to its horizon. Both weeks read 0.1, far under the ceiling at their horizons.
 fn over_a_fitting_b(st: &mut RoutingState, at: i64) {
     st.record_sample("a", refreshing(0.94, at + HOUR, at + 72 * HOUR, at));
     st.record_sample("b", refreshing(0.1, at + HOUR, at + 72 * HOUR, at));
@@ -11147,8 +11067,9 @@ fn rounding(pins: Vec<PinRow>) -> RoutingState {
 }
 
 /// The round cases' pricer on `TIER`: a pin burning `x` input tokens a second burns `x / 100` of the 5-hour window an
-/// hour, a sixth of that of the 7-day window and a third of the Fable week, and a cache-write token prices as
-/// `ratio_pricer`'s. A model spelled `guess` or `unpriced`, or the unlisted `claude-opus-4-8`, prices nothing.
+/// hour, a sixth of that of the 7-day window and, for a Fable model, a third of the Fable week, and a cache-write token
+/// prices as `ratio_pricer`'s. A model spelled `guess` or `unpriced`, or the unlisted `claude-opus-4-8`, prices nothing,
+/// and no other model prices on the Fable week, since it draws none.
 fn hourly_pricer() -> SharePricer {
     fn per_token(window: &str, tier: &str, model: &str) -> Option<f64> {
         if tier != TIER
@@ -11161,7 +11082,7 @@ fn hourly_pricer() -> SharePricer {
         match window {
             FIVE_HOUR => Some(10_000_000.0),
             SEVEN_DAY => Some(60_000_000.0),
-            SEVEN_DAY_FABLE => Some(30_000_000.0),
+            SEVEN_DAY_FABLE if model.contains("fable") => Some(30_000_000.0),
             _ => None,
         }
     }
@@ -11173,14 +11094,6 @@ fn hourly_pricer() -> SharePricer {
     })
 }
 
-/// A margin of 0.2 over pace on the shedding pool, where the cool line sits at 0.15.
-fn pace_pool() -> Pool {
-    Pool {
-        shed_ahead: Some(0.2),
-        ..shedding_pool(Shedding::default())
-    }
-}
-
 /// Two cold pins on `a`, so a round there marks `s1`, the heavier, and leaves `s0`.
 fn two_pins_on_a() -> RoutingState {
     rounding(vec![
@@ -11189,8 +11102,7 @@ fn two_pins_on_a() -> RoutingState {
     ])
 }
 
-/// A 5-hour reading with no reset, so its lead is its utilization, and a 7-day reading whose reset sits
-/// `remaining_tenths` tenths of a week after `T`, so the rest of the week has elapsed.
+/// A 5-hour reading with no reset and a 7-day reading whose reset sits `remaining_tenths` tenths of a week after `T`.
 fn weekly(
     five_hour: f64,
     seven_day: f64,
@@ -11209,151 +11121,11 @@ fn weekly(
 }
 
 #[test]
-fn a_pin_half_through_a_week_ten_percent_elapsed_sheds_at_a_margin_of_a_fifth() {
-    let s = tiered(pace_pool());
-    let mut st = two_pins_on_a();
-    // 0.5 with a tenth of the week gone runs 0.4 ahead of pace; the 5-hour window leads by 0.1.
-    st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
-    // 0.3 with six tenths gone runs 0.3 behind pace, so b is cool on both windows though it reads over 0.15.
-    st.record_sample("b", weekly(0.1, 0.3, 4, T - 500));
-    assert_eq!(
-        landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
-        ("b".into(), Some(MigrateReason::Shed)),
-        "the week's lead of 0.4 starts a round and the marked pin moves to the sibling behind its pace"
-    );
-    assert_eq!(st.last_shed("p", "a"), Some(T));
-}
-
-#[test]
-fn the_round_s_elapsed_share_is_the_exported_reading_of_its_window_s_reset() {
-    let s = tiered(pace_pool());
-    let mut st = two_pins_on_a();
-    st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
-    st.record_sample("b", weekly(0.1, 0.3, 4, T - 500));
-    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
-    let round = d.shed_round.expect("the round ran on this decision").facts;
-    let exported = elapsed_share_at(SEVEN_DAY, Some(T + WEEK_MS * 9 / 10), None, T);
-    let elapsed = round
-        .elapsed_share
-        .expect("a lead trigger carries the elapsed share");
-    assert!(
-        (elapsed - exported).abs() < 1e-12 && (exported - 0.1).abs() < 1e-9,
-        "the engine's reading and the exported arithmetic agree on a tenth of the week: {elapsed} against {exported}"
-    );
-}
-
-#[test]
-fn a_sibling_that_ends_inside_its_week_reads_the_smaller_lead_and_takes_the_shed_pin() {
-    // a and b read the same week, 0.5 with a tenth gone, so each runs 0.4 ahead of a pace to the reset. b's
-    // subscription ends a tenth of a week from now, so half its span to the end has gone and it runs level. b is
-    // the one fitting sibling either way, so the band's reading shows on the fit table rather than in the landing.
-    let run = |b_ends: Option<i64>| {
-        let mut terms = tier_terms(&["a", "b"]);
-        terms[1].cancelled = b_ends.is_some();
-        terms[1].ends_at = b_ends;
-        let s = snapshot_with_terms(pace_pool(), terms);
-        let mut st = two_pins_on_a();
-        st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
-        st.record_sample("b", weekly(0.1, 0.5, 9, T - 500));
-        let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
-        assert_eq!(
-            landed(d.result.clone()),
-            ("b".into(), Some(MigrateReason::Shed))
-        );
-        fact_of(line(&d.record, "fit"), "cool", "b").clone()
-    };
-    assert_eq!(
-        run(Some(T + WEEK_MS / 10)),
-        FactValue::Bool(true),
-        "b's lead reads 0 to its end, under the cool line of 0.15"
-    );
-    assert_eq!(
-        run(None),
-        FactValue::Bool(false),
-        "without the end b runs 0.4 ahead like a, over the line"
-    );
-}
-
-#[test]
-fn a_pinned_account_that_ends_inside_its_week_reads_the_smaller_lead_and_runs_no_round() {
-    // a reads 0.5 with a tenth of the week gone, 0.4 ahead of a pace to the reset. Its subscription ends a tenth of
-    // a week from now, so half its span to the end has gone and it runs level, under the threshold of 0.2.
-    let end = T + WEEK_MS / 10;
-    let run = |a_ends: Option<i64>| {
-        let mut terms = tier_terms(&["a", "b"]);
-        terms[0].cancelled = a_ends.is_some();
-        terms[0].ends_at = a_ends;
-        let s = snapshot_with_terms(pace_pool(), terms);
-        let mut st = two_pins_on_a();
-        st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
-        st.record_sample("b", weekly(0.1, 0.3, 4, T - 500));
-        let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
-        let last_shed = st.last_shed("p", "a");
-        (d, last_shed)
-    };
-    let (ends, last_shed) = run(Some(end));
-    assert_eq!(
-        landed(ends.result.clone()),
-        ("a".into(), None),
-        "a's lead reads 0 to its end, under the threshold, so the pin stays"
-    );
-    assert!(
-        ends.shed_round.is_none() && last_shed.is_none(),
-        "no round ran on a"
-    );
-    let shed = line(&ends.record, "move:shed");
-    assert_eq!(shed.verdict, "no");
-    assert!(
-        (number(fact(shed, "elapsed_seven_day")) - 0.5).abs() < 1e-9,
-        "the record's elapsed share runs to the end: a tenth gone of the fifth of a week to it"
-    );
-    assert!(number(fact(shed, "ahead_seven_day")).abs() < 1e-9);
-    let deadline = shed
-        .facts
-        .iter()
-        .find(|f| f.key == "deadline_seven_day")
-        .expect("the week's deadline is the end, so the line names it");
-    assert_eq!(
-        (&deadline.value, deadline.unit),
-        (&FactValue::Int(end), Some("time"))
-    );
-    assert!(
-        shed.facts.iter().all(|f| !f.key.ends_with("_five_hour")
-            || f.key.starts_with("projection")
-            || f.key.starts_with("horizon")),
-        "the 5-hour window's lead left the shed line, which names its projection alone: {:?}",
-        shed.facts
-    );
-    let (plain, last_shed) = run(None);
-    assert_eq!(
-        landed(plain.result.clone()),
-        ("b".into(), Some(MigrateReason::Shed)),
-        "without the end a runs 0.4 ahead, so the round moves the marked pin to b"
-    );
-    assert_eq!(last_shed, Some(T));
-}
-
-#[test]
-fn the_same_reading_sixty_percent_elapsed_does_not_shed() {
-    let s = tiered(pace_pool());
-    let mut st = two_pins_on_a();
-    // 0.5 with six tenths of the week gone runs 0.1 behind pace; the 5-hour window leads by 0.1.
-    st.record_sample("a", weekly(0.1, 0.5, 4, T - 500));
-    st.record_sample("b", sample(0.1, 0.1, T - 500));
-    assert_eq!(
-        landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
-        ("a".into(), None),
-        "a week behind its pace runs no round, so the pin renews in place"
-    );
-    assert_eq!(st.last_shed("p", "a"), None);
-}
-
-#[test]
 fn a_five_hour_window_whose_projection_stays_under_the_ceiling_at_its_reset_does_not_shed() {
-    let s = tiered(pace_pool());
+    let s = tiered(shedding_pool(Shedding::default()));
     let mut st = two_pins_on_a();
     // An hour left of five: 0.85 plus the pins' 0.05 an hour reaches 0.9 at the reset, under the ceiling, and the
-    // week reads 0.1 with no reset, 0.1 ahead of its pace and under the margin.
+    // week at 0.1 with no reset takes five hours of a sixth of that burn, far under it.
     st.record_sample(
         "a",
         sample(0.85, 0.1, T - 500).with(
@@ -11383,43 +11155,6 @@ fn a_five_hour_window_whose_projection_stays_under_the_ceiling_at_its_reset_does
     assert_eq!(fact(shed, "horizon_five_hour"), &FactValue::Int(T + HOUR));
     assert!((number(fact(shed, "ceiling")) - 0.95).abs() < 1e-9);
     assert!(shed.facts.iter().all(|f| f.key != "trigger"));
-}
-
-#[test]
-fn a_destination_at_four_tenths_twenty_percent_elapsed_loses_the_tie_to_one_at_three_tenths() {
-    let s = tiered(Pool {
-        members: vec![("a", 0), ("b", 1), ("c", 2)],
-        ..pace_pool()
-    });
-    let run = |b_seven_day: f64| {
-        let mut st = rounding(vec![
-            burning("s1", "a", 4.0, false, T),
-            burning("s0", "a", 1.0, false, T),
-        ]);
-        // The 5-hour window at 0.9 with no reset projects five hours of the pins' 0.05 an hour, 1.15, so a round
-        // runs on a and marks s1.
-        st.record_sample("a", sample(0.9, 0.1, T - 500));
-        st.record_sample("b", weekly(0.1, b_seven_day, 8, T - 500));
-        // 0.3 with two tenths of the week gone runs 0.1 ahead, under the cool line of 0.15.
-        st.record_sample("c", weekly(0.1, 0.3, 8, T - 500));
-        decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng())
-    };
-    // 0.4 at the same point of the week runs 0.2 ahead, at or over the line.
-    let d = run(0.4);
-    assert_eq!(
-        landed(d.result.clone()),
-        ("c".into(), Some(MigrateReason::Shed)),
-        "b's week leads by 0.2, so c, cool, takes the tie of two fitting siblings"
-    );
-    let fit = line(&d.record, "fit");
-    assert_eq!(fact_of(fit, "cool", "b"), &FactValue::Bool(false));
-    assert_eq!(fact_of(fit, "cool", "c"), &FactValue::Bool(true));
-    let d = run(0.3);
-    assert_eq!(
-        landed(d.result.clone()),
-        ("b".into(), Some(MigrateReason::Shed)),
-        "both lead by 0.1, so the tie stays and the strategy picks b"
-    );
 }
 
 #[test]
@@ -11874,7 +11609,7 @@ fn a_pin_that_fails_over_off_its_account_leaves_its_mark_with_the_row() {
         ("a".into(), None),
         "a's cooldown has ended, so the session pins to a again inside a's dwell"
     );
-    // c turns cool, so a mark that outlived the fail-over would find a destination.
+    // c now reads low, so a mark that outlived the fail-over would find a destination.
     st.record_sample("c", sample(0.1, 0.1, T + 6_500));
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 7_000), &mut rng()).0),
@@ -12181,7 +11916,7 @@ fn a_shed_pin_never_returns_to_the_account_that_shed_it_within_the_dwell_even_wh
     assert_eq!(
         landed(d.result.clone()),
         ("b".into(), None),
-        "B's round runs, and A, cool now, is still no destination for a pin it shed, so p4 is not marked"
+        "B's round runs, and A, under its ceiling now, is still no destination for a pin it shed, so p4 is not marked"
     );
     let round = d.shed_round.expect("B's round ran").facts;
     assert_eq!(
@@ -12554,10 +12289,7 @@ fn a_renewal_records_five_no_move_lines_and_their_facts() {
         fact(line(&d.record, "move:drain"), "cold"),
         &FactValue::Bool(false)
     );
-    assert_eq!(
-        fact(line(&d.record, "move:shed"), "margin"),
-        &FactValue::Text("off".into())
-    );
+    assert!((number(fact(line(&d.record, "move:shed"), "ceiling")) - 0.95).abs() < 1e-9);
     let pin = d.record.pin.as_ref().expect("the live pin's block");
     assert_eq!(
         (pin.found, pin.warmth, pin.warmth_cause, pin.idle_ms),
@@ -12601,7 +12333,7 @@ fn a_renewal_records_five_no_move_lines_and_their_facts() {
 
 #[test]
 fn a_spent_move_records_the_fit_table_and_the_cap_filter() {
-    let s = tiered(cool_preference_pool(vec![]));
+    let s = tiered(b_outranks_c_pool(vec![]));
     let mut st = RoutingState::from_load(RoutingLoad::default());
     let d = spent_move_from_a(
         &s,
@@ -12661,7 +12393,6 @@ fn a_spent_move_records_the_fit_table_and_the_cap_filter() {
         fit.facts
     );
     assert!(close(number(fact_of(fit, "reserved_five_hour", "c")), 0.0));
-    assert_eq!(fact_of(fit, "cool", "c"), &FactValue::Bool(true));
     assert_eq!(
         fact_of(line(&d.record, "cap_filter"), "in_flight", "c"),
         &FactValue::Text("0/16".into())
@@ -12703,7 +12434,7 @@ fn a_spent_move_records_the_fit_table_and_the_cap_filter() {
 #[test]
 fn the_fit_table_reads_an_api_key_member_by_its_worst_bucket_alone() {
     let s = snapshot_with_terms(
-        cool_preference_pool(vec![("c", AccountKind::ApiKey)]),
+        b_outranks_c_pool(vec![("c", AccountKind::ApiKey)]),
         tier_terms(&["a", "b"]),
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -12740,26 +12471,23 @@ fn the_fit_table_reads_an_api_key_member_by_its_worst_bucket_alone() {
             .filter(|f| f.account_id.as_deref() == Some("c"))
             .map(|f| f.key)
             .collect::<Vec<_>>(),
-        ["verdict", "cool"],
-        "an api_key member has no plan window to project, so its row is its verdict and the band's reading"
+        ["verdict"],
+        "an api_key member has no plan window to project, so its row is its verdict alone"
     );
     assert_eq!(
         fact_of(fit, "verdict", "c"),
         &FactValue::Text("fits".into())
     );
-    assert_eq!(
-        fact_of(fit, "cool", "c"),
-        &FactValue::Bool(true),
-        "an api_key member reads cool while its worst live bucket holds room"
-    );
 }
 
 #[test]
-fn a_shed_move_records_the_round_and_its_marks() {
-    let s = tiered(pace_pool());
+fn the_shed_line_names_the_projection_and_horizon_of_every_window_the_trigger_read() {
+    let s = tiered(shedding_pool(Shedding::default()));
     let mut st = two_pins_on_a();
-    st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
-    st.record_sample("b", weekly(0.1, 0.3, 4, T - 500));
+    // Neither window has a reset, so both horizons sit five hours out. The 5-hour window at 0.1 takes the pins' 0.05
+    // an hour to 0.35, the week at 0.93 their 0.05 / 6 an hour to 0.9717, over the ceiling, so the week fires.
+    st.record_sample("a", sample(0.1, 0.93, T - 500));
+    st.record_sample("b", sample(0.1, 0.1, T - 500));
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     assert_eq!(
         landed(d.result.clone()),
@@ -12775,34 +12503,45 @@ fn a_shed_move_records_the_round_and_its_marks() {
     }
     let shed = line(&d.record, "move:shed");
     assert_eq!(shed.verdict, "fired");
+    assert!((number(fact(shed, "projection_five_hour")) - 0.35).abs() < 1e-9);
+    assert_eq!(
+        fact(shed, "horizon_five_hour"),
+        &FactValue::Int(T + 5 * HOUR)
+    );
+    assert!((number(fact(shed, "projection_seven_day")) - (0.93 + 0.25 / 6.0)).abs() < 1e-9);
+    assert_eq!(
+        fact(shed, "horizon_seven_day"),
+        &FactValue::Int(T + 5 * HOUR)
+    );
+    assert!((number(fact(shed, "ceiling")) - 0.95).abs() < 1e-9);
+    assert_eq!(fact(shed, "trigger"), &FactValue::Text("seven_day".into()));
+    assert!(number(fact(shed, "excess")) > 0.0);
+    assert!(number(fact(shed, "target")) > 0.0);
     assert_eq!(fact(shed, "round"), &FactValue::Text("ran".into()));
     assert_eq!(
         fact(shed, "marks"),
         &FactValue::List(vec!["k/s1/main/claude-sonnet-5".into()])
     );
-    assert!((number(fact(shed, "ahead_seven_day")) - 0.4).abs() < 1e-9);
-    assert!((number(fact(shed, "elapsed_seven_day")) - 0.1).abs() < 1e-9);
+    assert_eq!(fact(shed, "skipped"), &FactValue::List(Vec::new()));
+    assert_eq!(fact(shed, "marked"), &FactValue::Bool(true));
+    assert!(
+        shed.facts.iter().all(|f| {
+            !f.key.starts_with("ahead_")
+                && !f.key.starts_with("deadline_")
+                && !f.key.starts_with("elapsed_")
+                && f.key != "margin"
+                && f.key != "threshold"
+        }),
+        "the lead over pace and the margin are no facts of the line: {:?}",
+        shed.facts
+    );
     assert!(
         shed.facts
             .iter()
-            .all(|f| f.key != "ahead_five_hour" && f.key != "elapsed_five_hour"),
-        "the 5-hour window's lead is no trigger and leaves the line: {:?}",
+            .all(|f| !f.key.ends_with("_seven_day_fable")),
+        "no pin draws the Fable week, so the line does not read it: {:?}",
         shed.facts
     );
-    assert!(
-        shed.facts.iter().all(|f| !f.key.starts_with("deadline_")),
-        "a pace to the reset names no deadline: {:?}",
-        shed.facts
-    );
-    assert!(
-        (number(fact(shed, "margin")) - 0.2).abs() < 1e-9,
-        "the margin is the setting"
-    );
-    assert_eq!(fact(shed, "trigger"), &FactValue::Text("lead".into()));
-    assert!(number(fact(shed, "excess")) > 0.0);
-    assert!(number(fact(shed, "target")) > 0.0);
-    assert_eq!(fact(shed, "skipped"), &FactValue::List(Vec::new()));
-    assert_eq!(fact(shed, "marked"), &FactValue::Bool(true));
     assert_eq!(
         d.record.outcome.shed_marks,
         Some(vec![PinKeyFacts {
@@ -12820,12 +12559,19 @@ fn a_shed_move_records_the_round_and_its_marks() {
 }
 
 #[test]
-fn a_shed_round_answers_its_trigger_and_its_pins_in_the_rounds_order() {
-    let s = tiered(pace_pool());
+fn a_round_fires_on_the_seven_day_projection_over_the_ceiling_and_prices_its_pins_in_the_weeks_share(
+) {
+    let s = tiered(shedding_pool(Shedding::default()));
     let mut st = two_pins_on_a();
-    st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
-    st.record_sample("b", weekly(0.1, 0.3, 4, T - 500));
+    // The 5-hour window at 0.1 with no reset projects 0.35 at its horizon, under the ceiling. The week at 0.93 takes
+    // the pins' 0.05 / 6 an hour over the five hours to its horizon to 0.9717, over it, so the round reads the week.
+    st.record_sample("a", sample(0.1, 0.93, T - 500));
+    st.record_sample("b", sample(0.1, 0.1, T - 500));
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Shed))
+    );
     let ran = d.shed_round.expect("the round ran on this decision");
     assert_eq!(
         (ran.account_id.as_str(), &ran.pin),
@@ -12841,22 +12587,17 @@ fn a_shed_round_answers_its_trigger_and_its_pins_in_the_rounds_order() {
         "the round names the pin it ran on and that pin's account"
     );
     let round = ran.facts;
-    // The 5-hour window at 0.1 with no reset projects 0.35, under the ceiling. The week's lead of 0.4 reaches the
-    // margin, so the round reads the week: the pins burn 0.05 of the 5-hour window an hour, a sixth of that of the
-    // week, against a pace of the remaining half over the 0.9 week to the reset.
     let burn_sum: f64 = 0.05 / 6.0;
-    let excess: f64 = burn_sum - 0.5 / (0.9 * 168.0);
+    let excess: f64 = (0.93 + burn_sum * 5.0 - 0.95) / 5.0;
     assert_eq!(
-        (round.trigger, round.window.as_str(), round.unit),
-        ("lead", "seven_day", "window_share")
+        (round.window.as_str(), round.unit),
+        ("seven_day", "window_share")
     );
-    assert_eq!((round.projection, round.horizon), (None, None));
+    assert_eq!(round.horizon, T + 5 * HOUR);
     for (read, expected) in [
-        (round.utilization, 0.5),
+        (round.utilization, 0.93),
+        (round.projection, 0.93 + burn_sum * 5.0),
         (round.ceiling, 0.95),
-        (round.elapsed_share.unwrap(), 0.1),
-        (round.ahead.unwrap(), 0.4),
-        (round.threshold.unwrap(), 0.2),
         (round.shed_cap, 0.5),
         (round.burn_sum, burn_sum),
         (round.excess, excess),
@@ -12905,7 +12646,7 @@ fn a_shed_round_answers_its_trigger_and_its_pins_in_the_rounds_order() {
                 None
             ),
         ],
-        "cold first by burn, the request's own pin named, the mark's destination planned"
+        "cold first by the week's burn, the request's own pin named, the mark's destination planned"
     );
     let marked_pin = &round.pins[0];
     assert!(
@@ -12914,13 +12655,6 @@ fn a_shed_round_answers_its_trigger_and_its_pins_in_the_rounds_order() {
             .is_some_and(|r| (r - 1_000.0 / 60_000_000.0).abs() < 1e-12),
         "the rewrite on the week, priced on b's tier: {:?}",
         marked_pin.rewrite
-    );
-    assert!(
-        marked_pin
-            .payback
-            .is_some_and(|p| (p - 9_600.0).abs() < 1e-6),
-        "a day of the pin's burn over its rewrite: {:?}",
-        marked_pin.payback
     );
     assert!(
         marked_pin.runway_ms.is_some_and(|r| r > 5 * HOUR),
@@ -12942,8 +12676,157 @@ fn a_shed_round_answers_its_trigger_and_its_pins_in_the_rounds_order() {
         ),
         (600, "when_needed", 900, T + 900_000)
     );
+    assert_eq!(
+        d.record.outcome.mark_cleared.as_ref().map(|m| (
+            m.reason,
+            m.marked_at,
+            m.marked_on.as_str(),
+            m.marked_window.as_str()
+        )),
+        Some(("moved", T, "a", "seven_day")),
+        "the mark names the week and the move consumes it in the same selection"
+    );
     let next = decide(&mut st, &s, &auxiliary(&s, "s0", T + 1_000), &mut rng());
     assert_eq!(next.shed_round, None, "inside the dwell no round runs");
+}
+
+#[test]
+fn with_both_windows_over_the_ceiling_the_five_hour_window_fires_and_the_round_reads_its_share() {
+    let s = tiered(shedding_pool(Shedding::default()));
+    let mut st = two_pins_on_a();
+    // No reset on either window, so both horizons sit five hours out: the 5-hour window at 0.9 projects 1.15, the week
+    // at 0.93 projects 0.9717, both over the ceiling. The 5-hour window is tested first and fires.
+    st.record_sample("a", sample(0.9, 0.93, T - 500));
+    st.record_sample("b", sample(0.1, 0.1, T - 500));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Shed))
+    );
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(fact(shed, "trigger"), &FactValue::Text("five_hour".into()));
+    assert!((number(fact(shed, "projection_five_hour")) - 1.15).abs() < 1e-9);
+    assert!(
+        (number(fact(shed, "projection_seven_day")) - (0.93 + 0.25 / 6.0)).abs() < 1e-9,
+        "the week's projection is read and named though the 5-hour window fired"
+    );
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        (round.window.as_str(), round.horizon),
+        ("five_hour", T + 5 * HOUR)
+    );
+    for (read, expected) in [
+        (round.utilization, 0.9),
+        (round.projection, 1.15),
+        (round.burn_sum, 0.05),
+        (round.excess, 0.2 / 5.0),
+        (round.target, 0.025),
+        (round.removed, 0.04),
+    ] {
+        assert!((read - expected).abs() < 1e-9, "{read} against {expected}");
+    }
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (
+                p.session_id.as_str(),
+                p.marked,
+                p.burn.map(|b| (b * 1e3).round() / 1e3)
+            ))
+            .collect::<Vec<_>>(),
+        [("s1", true, Some(0.04)), ("s0", false, Some(0.01))],
+        "the pins' burn in the 5-hour share"
+    );
+}
+
+#[test]
+fn a_model_week_over_its_ceiling_fires_a_round_that_marks_the_fable_pin_and_reads_the_opus_pin_unpriced(
+) {
+    let s = tiered(shedding_pool(Shedding::default()));
+    let model_pin = |session: &str, model: &str, burn: f64, warm: bool| PinRow {
+        model: model.into(),
+        lane: lane_key(model, "standard", "none", "-"),
+        ..burning(session, "a", burn, warm, T)
+    };
+    // The Opus pin is cold and the Fable pin warm, so the Opus pin is walked first. Both shared windows read 0.1 and
+    // project under the ceiling, and the Fable pin's 0.04 / 3 of its week an hour takes the week's 0.93 to 0.9967 at
+    // its horizon five hours out.
+    let mut st = rounding(vec![
+        model_pin("o1", "claude-opus-5", 2.0, false),
+        model_pin("f1", "claude-fable-5", 4.0, true),
+    ]);
+    st.record_sample(
+        "a",
+        with_fable(sample(0.1, 0.1, T - 500), 0.93, Some(T + 96 * HOUR)),
+    );
+    st.record_sample(
+        "b",
+        with_fable(sample(0.1, 0.1, T - 500), 0.1, Some(T + 96 * HOUR)),
+    );
+    let req = with_facts(
+        request(&s, Some("o1"), "claude-opus-5", true, &[], T),
+        Some("quota"),
+        false,
+        None,
+        &[],
+    );
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("a".into(), None),
+        "the Opus pin is not marked and renews"
+    );
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(
+        fact(shed, "trigger"),
+        &FactValue::Text("seven_day_fable".into())
+    );
+    assert!((number(fact(shed, "projection_seven_day_fable")) - (0.93 + 0.2 / 3.0)).abs() < 1e-9);
+    assert_eq!(
+        fact(shed, "horizon_seven_day_fable"),
+        &FactValue::Int(T + 5 * HOUR)
+    );
+    assert!((number(fact(shed, "projection_five_hour")) - 0.4).abs() < 1e-9);
+    assert!((number(fact(shed, "projection_seven_day")) - 0.15).abs() < 1e-9);
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        (round.window.as_str(), round.outcome.as_str(), round.reason),
+        ("seven_day_fable", "marked 1", None)
+    );
+    assert!((round.projection - (0.93 + 0.2 / 3.0)).abs() < 1e-9);
+    assert_eq!((round.horizon, round.utilization), (T + 5 * HOUR, 0.93));
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.marked, p.skip, p.planned.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("o1", false, Some("unpriced"), None),
+            ("f1", true, None, Some("b"))
+        ],
+        "the Opus pin draws no Fable week, so its burn is unpriced there, and the Fable pin is marked"
+    );
+    assert!(
+        (round.burn_sum - 0.04 / 3.0).abs() < 1e-9,
+        "the Opus pin adds nothing to the week's sum: {}",
+        round.burn_sum
+    );
+    assert_eq!(
+        fact(shed, "skipped"),
+        &FactValue::List(vec!["k/o1/main/claude-opus-5: unpriced".into()])
+    );
+    let fable = PinKey {
+        model: "claude-fable-5".into(),
+        ..pin_key("f1")
+    };
+    assert!(st.shed_marked(&fable));
+    assert_eq!(
+        st.pin(&fable).and_then(|p| p.marked_window.as_deref()),
+        Some("seven_day_fable"),
+        "the mark names the Fable week"
+    );
 }
 
 #[test]
@@ -14376,7 +14259,6 @@ fn a_four_member_shed_move_serializes_under_twenty_kilobytes() {
             &snapshot_over_terms(
                 Pool {
                     strategy: Strategy::Pace,
-                    shed_ahead: Some(0.2),
                     session_placement: SessionPlacement::ByWarmPrefix,
                     members: vec![("a", 0), ("b", 0), ("c", 0), ("d", 0)],
                     ..Pool::default()
@@ -14398,9 +14280,10 @@ fn a_four_member_shed_move_serializes_under_twenty_kilobytes() {
         burning("s3", "a", 2.0, false, T),
         burning("s0", "a", 1.0, false, T),
     ]);
+    // The week at 0.93 takes the four pins' 0.1 / 6 an hour over the five hours to its horizon past the ceiling.
     st.record_sample(
         "a",
-        with_fable(weekly(0.1, 0.5, 9, T - 500), 0.4, Some(T + 96 * HOUR)),
+        with_fable(weekly(0.1, 0.93, 9, T - 500), 0.4, Some(T + 96 * HOUR)),
     );
     for (id, seven_day) in [("b", 0.3), ("c", 0.25), ("d", 0.2)] {
         st.record_sample(
@@ -14461,7 +14344,6 @@ fn a_four_member_shed_move_serializes_under_twenty_kilobytes() {
         fact_of(fit, "verdict", "d"),
         &FactValue::Text("fits".into())
     );
-    assert_eq!(fact_of(fit, "cool", "d"), &FactValue::Bool(true));
     assert_eq!(
         d.summary.fact.iter().map(|f| f.key).collect::<Vec<_>>(),
         vec!["runway", "gap", "over"],
@@ -16168,14 +16050,13 @@ fn a_zero_runway_on_one_window_reads_none_whatever_another_window_allows() {
 }
 
 #[test]
-fn a_renewal_names_the_five_hour_projection_at_the_ceiling_before_the_week_lead_at_the_margin() {
+fn a_renewal_names_the_first_window_whose_projection_at_its_horizon_reaches_the_ceiling() {
     let s = tiered(Pool {
-        shed_ahead: Some(0.2),
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
     // The pin burns a ten-thousandth of the 5-hour window a second: 0.5 now with 2.4 hours to the reset projects to
-    // 1.36, over the ceiling, while the window's lead sits under the margin and runs no round.
+    // 1.36, over the ceiling, while the week at 0.1 projects 0.4 over the five hours to its horizon.
     let mut st = priced(vec![burning("s1", "a", 1_000.0, true, T)]);
     st.record_sample(
         "a",
@@ -16188,54 +16069,27 @@ fn a_renewal_names_the_five_hour_projection_at_the_ceiling_before_the_week_lead_
         vec![(FIVE_HOUR, FactValue::Number(0.5), Some("percent"))],
         "the 5-hour window's utilization, since its projection reaches the ceiling"
     );
-    // Under the ceiling, the week's lead at or over the margin names the week: a round runs on the one pin and marks
-    // nothing, so the pin renews.
-    let mut st = priced(vec![burning("s2", "a", 1.0, true, T)]);
-    st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
+    // A hundred tokens a second take the week's 0.93 to 0.96 over the five hours to its horizon while the 5-hour window
+    // at 0.1 projects 0.28: the week is the first window to reach the ceiling. The round on the one pin marks nothing,
+    // so the pin renews.
+    let mut st = priced(vec![burning("s2", "a", 100.0, true, T)]);
+    st.record_sample("a", sample(0.1, 0.93, T - 500));
     let d = decide(&mut st, &s, &auxiliary(&s, "s2", T), &mut rng());
     assert_eq!(d.record.outcome.kind, "renewed");
     assert_eq!(
         summary_facts(&d),
-        vec![(SEVEN_DAY, FactValue::Number(0.5), Some("percent"))],
-        "the week's utilization, since its lead of 0.4 reaches the margin"
+        vec![(SEVEN_DAY, FactValue::Number(0.93), Some("percent"))],
+        "the week's utilization, since its projection reaches the ceiling and the 5-hour window's does not"
     );
-}
-
-#[test]
-fn a_siblings_five_hour_lead_alone_no_longer_reads_hot_for_the_weekly_band() {
-    let s = tiered(cool_preference_pool(vec![]));
-    let mut st = RoutingState::from_load(RoutingLoad::default());
-    st.set_share(ratio_pricer());
-    select(
-        &mut st,
-        &s,
-        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
-        &mut rng(),
-    );
-    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
-    // b leads its 5-hour window by 0.9 with no reset and its week by 0.1, c both by 0.1: both fit and both read cool
-    // under the band of 0.75, which the week alone decides.
-    st.record_sample("b", sample(0.9, 0.1, T + 500));
-    st.record_sample("c", sample(0.1, 0.1, T + 500));
-    let d = decide(
-        &mut st,
-        &s,
-        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
-        &mut rng(),
-    );
+    // Both reach it: the 5-hour window is read first.
+    let mut st = priced(vec![burning("s3", "a", 100.0, true, T)]);
+    st.record_sample("a", sample(0.9, 0.93, T - 500));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s3", T), &mut rng());
+    assert_eq!(d.record.outcome.kind, "renewed");
     assert_eq!(
-        landed(d.result.clone()),
-        ("b".into(), Some(MigrateReason::Spent)),
-        "b outranks c, and its 5-hour lead keeps it from nothing"
-    );
-    let fit = line(&d.record, "fit");
-    assert_eq!(
-        (fact_of(fit, "cool", "b"), fact_of(fit, "cool", "c")),
-        (&FactValue::Bool(true), &FactValue::Bool(true))
-    );
-    assert_eq!(
-        fact(line(&d.record, "move:spent"), "destinations"),
-        &FactValue::List(vec!["b".into(), "c".into()])
+        summary_facts(&d),
+        vec![(FIVE_HOUR, FactValue::Number(0.9), Some("percent"))],
+        "the 5-hour window's utilization when both windows reach the ceiling"
     );
 }
 
@@ -16251,11 +16105,10 @@ fn three_pins_projecting_over() -> RoutingState {
     st
 }
 
-/// A Pace pool over `members` with the weekly margin at 0.2 and every member on `TIER`.
+/// A Pace pool over `members` with every member on `TIER`.
 fn projection_pool(members: Vec<(&'static str, u32)>) -> RegistrySnapshot {
     tiered(Pool {
         strategy: Strategy::Pace,
-        shed_ahead: Some(0.2),
         members,
         ..Pool::default()
     })
@@ -16275,7 +16128,7 @@ fn a_five_hour_round_fires_on_the_projection_over_the_ceiling_and_marks_until_th
     );
     let shed = line(&d.record, "move:shed");
     assert_eq!(shed.verdict, "no");
-    assert_eq!(fact(shed, "trigger"), &FactValue::Text("projection".into()));
+    assert_eq!(fact(shed, "trigger"), &FactValue::Text("five_hour".into()));
     assert!((number(fact(shed, "projection_five_hour")) - 1.22).abs() < 1e-9);
     assert_eq!(fact(shed, "horizon_five_hour"), &FactValue::Int(T + HOUR));
     assert!((number(fact(shed, "ceiling")) - 0.95).abs() < 1e-9);
@@ -16292,17 +16145,12 @@ fn a_five_hour_round_fires_on_the_projection_over_the_ceiling_and_marks_until_th
     assert_eq!(fact(shed, "skipped"), &FactValue::List(Vec::new()));
     let round = d.shed_round.expect("the round ran").facts;
     assert_eq!(
-        (
-            round.trigger,
-            round.window.as_str(),
-            round.outcome.as_str(),
-            round.reason
-        ),
-        ("projection", "five_hour", "marked 2", None)
+        (round.window.as_str(), round.outcome.as_str(), round.reason),
+        ("five_hour", "marked 2", None)
     );
     for (read, expected) in [
         (round.utilization, 0.80),
-        (round.projection.unwrap(), 1.22),
+        (round.projection, 1.22),
         (round.ceiling, 0.95),
         (round.burn_sum, 0.42),
         (round.excess, 0.27),
@@ -16312,7 +16160,7 @@ fn a_five_hour_round_fires_on_the_projection_over_the_ceiling_and_marks_until_th
     ] {
         assert!((read - expected).abs() < 1e-9, "{read} against {expected}");
     }
-    assert_eq!(round.horizon, Some(T + HOUR));
+    assert_eq!(round.horizon, T + HOUR);
     assert_eq!(
         round
             .pins
@@ -16510,142 +16358,6 @@ fn a_standing_mark_counts_as_removed_and_is_skipped_standing() {
 }
 
 #[test]
-fn a_weekly_round_skips_a_pin_whose_day_of_burn_is_under_three_rewrites_and_the_five_hour_round_marks_it(
-) {
-    let s = tiered(pace_pool());
-    // Both pins last wrote 300 000 tokens, a two-hundredth of the week. The light pin burns a sixth of a thousandth of
-    // the week an hour, 0.8 rewrites a day, the heavy one twenty times that.
-    let pins = || {
-        vec![
-            PinRow {
-                last_input_tokens: 300_000,
-                ..burning("light", "a", 0.1, false, T)
-            },
-            PinRow {
-                last_input_tokens: 300_000,
-                ..burning("heavy", "a", 2.0, true, T)
-            },
-        ]
-    };
-    let mut st = rounding(pins());
-    // The week at 0.95 with three tenths left leads its pace by 0.25, and the pins burn past the pace of the remaining
-    // twentieth over the 50 hours to the reset.
-    st.record_sample("a", weekly(0.1, 0.95, 3, T));
-    st.record_sample("b", weekly(0.1, 0.3, 4, T));
-    let d = decide(&mut st, &s, &auxiliary(&s, "light", T), &mut rng());
-    assert_eq!(
-        landed(d.result.clone()),
-        ("a".into(), None),
-        "the light pin is skipped and renews"
-    );
-    let round = d.shed_round.expect("the weekly round ran").facts;
-    assert_eq!(round.trigger, "lead");
-    assert_eq!(
-        round
-            .pins
-            .iter()
-            .map(|p| (
-                p.session_id.as_str(),
-                p.marked,
-                p.skip,
-                p.payback.map(|r| (r * 100.0).round() / 100.0)
-            ))
-            .collect::<Vec<_>>(),
-        [
-            ("light", false, Some("payback"), Some(0.8)),
-            ("heavy", true, None, Some(16.0)),
-        ],
-        "the light pin's day of burn is under three rewrites, the heavy pin's over"
-    );
-    assert_eq!((round.outcome.as_str(), round.reason), ("marked 1", None));
-    assert!(marked(&st, "heavy") && !marked(&st, "light"));
-
-    // The 5-hour round takes no payback filter: at the wall the light pin moves cold like any other.
-    let mut st = rounding(pins());
-    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T));
-    st.record_sample("b", weekly(0.1, 0.3, 4, T));
-    let d = decide(&mut st, &s, &auxiliary(&s, "light", T), &mut rng());
-    assert_eq!(
-        landed(d.result.clone()),
-        ("b".into(), Some(MigrateReason::Shed)),
-        "the light pin is marked and moves on its own request"
-    );
-    let round = d.shed_round.expect("the 5-hour round ran").facts;
-    assert_eq!(round.trigger, "projection");
-    assert_eq!(
-        round
-            .pins
-            .iter()
-            .map(|p| (p.session_id.as_str(), p.marked, p.skip, p.payback))
-            .collect::<Vec<_>>(),
-        [
-            ("light", true, None, None),
-            ("heavy", false, Some("last_pin"), None),
-        ],
-        "no payback is read, the light pin is marked and the heavy one is the last pin"
-    );
-}
-
-#[test]
-fn a_weekly_round_on_an_account_burning_under_its_pace_marks_nothing_with_under_pace() {
-    let s = tiered(pace_pool());
-    // The week at 0.55 with its reset 120 hours out has 48 of its 168 hours gone, a lead of 0.26 over the margin. Its
-    // remaining 0.45 over 120 hours is a pace of 0.00375 an hour.
-    let week = |at: i64| {
-        sample(0.1, 0.55, at).with(
-            SEVEN_DAY,
-            WindowReading {
-                utilization: 0.55,
-                reset: Some(T + 120 * HOUR),
-                observed_at: at,
-                source: WindowSource::Poll,
-            },
-        )
-    };
-    let run = |s1: f64, s2: f64| {
-        let mut st = rounding(vec![
-            burning("s1", "a", s1, false, T),
-            burning("s2", "a", s2, false, T),
-        ]);
-        st.record_sample("a", week(T));
-        st.record_sample("b", weekly(0.1, 0.3, 4, T));
-        let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
-        (d, st)
-    };
-    // The pins burn 0.003 of the week an hour between them, under the pace.
-    let (d, st) = run(1.2, 0.6);
-    assert_eq!(landed(d.result.clone()), ("a".into(), None));
-    let round = d.shed_round.expect("the round ran").facts;
-    assert_eq!(
-        (round.trigger, round.outcome.as_str(), round.reason),
-        ("lead", "nothing_to_mark", Some("under_pace"))
-    );
-    assert!(
-        (round.excess + 0.00075).abs() < 1e-9,
-        "0.003 an hour less the pace of 0.00375: {}",
-        round.excess
-    );
-    assert!(round
-        .ahead
-        .is_some_and(|lead| (lead - (0.55 - 48.0 / 168.0)).abs() < 1e-9));
-    assert!(!marked(&st, "s1") && !marked(&st, "s2"));
-    assert_eq!(
-        st.last_shed("p", "a"),
-        Some(T),
-        "the round is recorded, so the dwell holds"
-    );
-    // Twice the burn, 0.006 an hour, runs over the pace by 0.00225.
-    let (d, _) = run(2.4, 1.2);
-    let round = d.shed_round.expect("the round ran").facts;
-    assert!(
-        (round.excess - 0.00225).abs() < 1e-9,
-        "0.006 an hour less the pace of 0.00375: {}",
-        round.excess
-    );
-    assert_eq!(round.outcome, "marked 1");
-}
-
-#[test]
 fn a_mark_holds_past_the_dwell_heals_when_the_projection_reads_under_the_ceiling_and_stays_with_no_fitting_destination(
 ) {
     let s = tiered(shedding_pool(Shedding::default()));
@@ -16767,4 +16479,89 @@ fn a_mark_holds_past_the_dwell_heals_when_the_projection_reads_under_the_ceiling
     let shed = line(&d.record, "move:shed");
     assert_eq!(fact(shed, "marked"), &FactValue::Bool(true));
     assert_eq!(fact(shed, "no_destination"), &FactValue::Bool(true));
+}
+
+#[test]
+fn a_mark_on_the_week_heals_when_the_seven_day_projection_reads_under_the_ceiling_and_stands_at_it()
+{
+    let s = tiered(shedding_pool(Shedding::default()));
+    // s1 was marked on the week 963 seconds ago by a round whose 900 second dwell has passed.
+    let marked_at = T - 963_000;
+    let state = |burn: f64| {
+        let mut st = RoutingState::from_load(RoutingLoad {
+            pins: vec![
+                PinRow {
+                    marked_at: Some(marked_at),
+                    marked_on: Some("a".into()),
+                    marked_window: Some(SEVEN_DAY.into()),
+                    last_used_at: marked_at,
+                    ..burning("s1", "a", burn, false, T)
+                },
+                burning("s0", "a", burn, false, T),
+            ],
+            shed_rounds: vec![ShedRoundRow {
+                pool_id: "p".into(),
+                account_id: "a".into(),
+                incarnation: 1,
+                round_at: marked_at,
+            }],
+            ..RoutingLoad::default()
+        });
+        st.set_share(hourly_pricer());
+        st
+    };
+
+    // The week at 0.9 with no reset takes the pins' 0.04 / 6 an hour over the five hours to its horizon to 0.9333,
+    // under the ceiling: the heal check clears the mark ahead of the move rules.
+    let mut st = state(2.0);
+    st.record_sample("a", sample(0.1, 0.9, T - 500));
+    st.record_sample("b", sample(0.1, 0.1, T - 500));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    assert!(
+        d.record.pin.as_ref().is_some_and(|pin| !pin.marked),
+        "the record's pin block reads the cleared row"
+    );
+    let cleared = d.record.outcome.mark_cleared.as_ref().expect("the heal");
+    assert_eq!(
+        (
+            cleared.reason,
+            cleared.marked_at,
+            cleared.marked_on.as_str(),
+            cleared.marked_window.as_str()
+        ),
+        ("healed", marked_at, "a", "seven_day")
+    );
+    assert!(
+        cleared
+            .projection
+            .is_some_and(|p| (p - (0.9 + 0.2 / 6.0)).abs() < 1e-9),
+        "the healing projection of the week at its horizon: {:?}",
+        cleared.projection
+    );
+    assert!(!marked(&st, "s1"));
+    assert_eq!(d.record.outcome.kind, "renewed");
+
+    // The week at 0.95 with pins burning nothing projects 0.95, at the ceiling: the mark stands, since the heal reads
+    // strictly under, and the trigger, strictly over, fires no round, so the pin renews in place with its mark.
+    let mut st = state(0.0);
+    st.record_sample("a", sample(0.1, 0.95, T - 500));
+    st.record_sample("b", sample(0.1, 0.1, T - 500));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    assert!(d.record.pin.as_ref().is_some_and(|pin| pin.marked));
+    assert_eq!(d.record.outcome.mark_cleared, None);
+    assert_eq!(
+        pinned(&st, "s1").marked_at,
+        Some(marked_at),
+        "a projection at the ceiling heals nothing"
+    );
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(shed.verdict, "no");
+    assert!((number(fact(shed, "projection_seven_day")) - 0.95).abs() < 1e-9);
+    assert!(
+        shed.facts.iter().all(|f| f.key != "trigger"),
+        "a projection at the ceiling fires nothing: {:?}",
+        shed.facts
+    );
 }

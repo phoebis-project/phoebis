@@ -626,11 +626,6 @@ pub fn ceiling(_pool: &PoolRow, _window: &str) -> f64 {
     DEFAULT_WINDOW_CEILING
 }
 
-/// The lead over pace that fires the weekly round and the weekly cool band, `None` with both off.
-pub fn weekly_lead_margin(pool: &PoolRow) -> Option<f64> {
-    pool.shed_ahead_of_pace
-}
-
 /// The share of an account's burn one shedding round removes at most.
 pub fn shed_cap(pool: &PoolRow) -> f64 {
     pool.shedding.shed_share
@@ -1897,10 +1892,15 @@ impl RoutingState {
 
     /// The pins on the account whose mark stands, in key order, for the round's `standing` skip.
     pub fn marked_pins(&self, account_id: &str) -> Vec<&PinRow> {
+        self.pins_on(account_id, &mark_holds)
+    }
+
+    /// The pins on `account_id` that `keep` admits, in key order.
+    pub fn pins_on(&self, account_id: &str, keep: &dyn Fn(&PinRow) -> bool) -> Vec<&PinRow> {
         let mut pins: Vec<&PinRow> = self
             .pins
             .values()
-            .filter(|p| p.account_id == account_id && mark_holds(p))
+            .filter(|p| p.account_id == account_id && keep(p))
             .collect();
         pins.sort_by(|a, b| {
             (&a.key_id, &a.session_id, &a.agent_id, &a.model).cmp(&(

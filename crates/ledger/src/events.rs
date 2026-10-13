@@ -966,15 +966,11 @@ mod tests {
             agent_id: "main".into(),
             model: "m".into(),
             round: Box::new(ShedRoundFacts {
-                trigger: "lead",
                 window: "seven_day".into(),
                 utilization: 0.5,
-                projection: None,
-                horizon: None,
+                projection: 0.97,
+                horizon: 19_000,
                 ceiling: 0.95,
-                elapsed_share: Some(0.1),
-                ahead: Some(0.4),
-                threshold: Some(0.2),
                 unit: "window_share",
                 burn_average_seconds: 600,
                 shed_cap: 0.5,
@@ -994,7 +990,6 @@ mod tests {
                     per_rewrite: Some(0.004),
                     marked: true,
                     rewrite: Some(0.01),
-                    payback: Some(9.6),
                     planned: Some("b".into()),
                     runway_ms: Some(7_200_000),
                     skip: None,
@@ -1027,15 +1022,11 @@ mod tests {
         );
         let detail = detail_of(&row);
         for (field, value) in [
-            ("trigger", json!("lead")),
             ("window", json!("seven_day")),
             ("utilization", json!(0.5)),
-            ("projection", json!(null)),
-            ("horizon", json!(null)),
+            ("projection", json!(0.97)),
+            ("horizon", json!(19_000)),
             ("ceiling", json!(0.95)),
-            ("elapsed_share", json!(0.1)),
-            ("ahead", json!(0.4)),
-            ("threshold", json!(0.2)),
             ("unit", json!("window_share")),
             ("burn_average_seconds", json!(600)),
             ("shed_cap", json!(0.5)),
@@ -1052,12 +1043,51 @@ mod tests {
         ] {
             assert_eq!(detail[field], value, "{field}");
         }
+        for absent in ["ahead", "elapsed_share", "threshold", "trigger"] {
+            assert!(
+                detail.get(absent).is_none(),
+                "{absent} is no member of the round: {detail}"
+            );
+        }
+        let mut members: Vec<&str> = detail
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        members.sort_unstable();
+        assert_eq!(
+            members,
+            [
+                "burn_average_seconds",
+                "burn_sum",
+                "ceiling",
+                "dwell_seconds",
+                "dwell_until",
+                "excess",
+                "horizon",
+                "marks",
+                "outcome",
+                "persisted",
+                "pins",
+                "projection",
+                "reason",
+                "removed",
+                "shed_cap",
+                "target",
+                "unit",
+                "utilization",
+                "warm_sessions",
+                "window",
+            ],
+            "the round's members and no other"
+        );
         assert_eq!(
             detail["pins"],
             json!([{
                 "key_id": "k", "session_id": "s1", "agent_id": "main", "model": "m", "cold": true,
                 "burn": 4.0, "last_input_tokens": 1_000, "per_rewrite": 0.004, "marked": true,
-                "rewrite": 0.01, "payback": 9.6, "planned": "b", "runway_ms": 7_200_000, "skip": null,
+                "rewrite": 0.01, "planned": "b", "runway_ms": 7_200_000, "skip": null,
                 "note": "current"
             }]),
             "each pin is an object of one-value fields"

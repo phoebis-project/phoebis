@@ -6728,30 +6728,16 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
                 ("a", "p", "r-1", "k", "s1", "main", "claude-sonnet-5", at)
             );
             assert_eq!(
-                (
-                    round.trigger,
-                    round.window.as_str(),
-                    round.unit,
-                    round.warm_sessions
-                ),
-                ("projection", "five_hour", "window_share", "when_needed")
+                (round.window.as_str(), round.unit, round.warm_sessions),
+                ("five_hour", "window_share", "when_needed")
             );
             assert!((round.utilization - 0.9).abs() < 1e-9);
             assert!((round.ceiling - 0.95).abs() < 1e-9);
-            assert_eq!(
-                round.horizon,
-                Some(at + 5 * HOUR),
-                "no reset, so five hours out"
-            );
+            assert_eq!(round.horizon, at + 5 * HOUR, "no reset, so five hours out");
             assert!(
-                round.projection.is_some_and(|p| p > round.ceiling),
-                "the projection at the horizon fired the round: {:?}",
+                round.projection > round.ceiling,
+                "the projection at the horizon fired the round: {}",
                 round.projection
-            );
-            assert_eq!(
-                (round.elapsed_share, round.ahead, round.threshold),
-                (None, None, None),
-                "a projection trigger carries no lead facts"
             );
             assert_eq!(
                 round
@@ -6909,7 +6895,7 @@ fn priced_config() -> RouterConfig {
     }
 }
 
-/// The pool `p` over OAuth accounts `ids` in that priority order, shedding at a lead of 0.2 over pace.
+/// The pool `p` over OAuth accounts `ids` in that priority order.
 fn shedding_store(ids: &[&str]) -> Arc<Store> {
     let store = seeded_oauth(ids);
     store
@@ -6927,9 +6913,6 @@ fn shedding_store(ids: &[&str]) -> Arc<Store> {
             "test",
         )
         .unwrap();
-    let mut pool = store.pool("p").unwrap().unwrap();
-    pool.shed_ahead_of_pace = Some(0.2);
-    store.update_pool(&pool, pool.updated_at, "test").unwrap();
     store
 }
 
@@ -6950,7 +6933,7 @@ fn second_pool(store: &Store, dwell_seconds: u64) {
         .unwrap();
 }
 
-/// Both shared windows at `five_hour` and `seven_day` with no reset, so each one's lead over pace is its reading.
+/// Both shared windows at `five_hour` and `seven_day` with no reset, so each one's horizon sits five hours out.
 fn windows(account: &str, five_hour: f64, seven_day: f64, at: i64) -> Report {
     observed(
         account,
@@ -7223,7 +7206,8 @@ async fn a_released_and_recreated_pin_s_mark_does_not_survive_a_restart() {
 
     now.store(AT + 2_000, Ordering::SeqCst);
     let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
-    handle.report(windows("a", 0.9, 0.3, AT + 2_000)).await;
+    // With s1's burn gone, 0.93 keeps a's projection over the ceiling, so the dwell alone holds a second round off.
+    handle.report(windows("a", 0.93, 0.3, AT + 2_000)).await;
     handle.report(windows("b", 0.1, 0.1, AT + 2_000)).await;
     handle.samples().await.unwrap();
     let mut events = handle.subscribe_events();
@@ -7534,9 +7518,6 @@ async fn after_a_restart_a_spent_pin_moves_to_a_sibling_whatever_its_former_pool
             "test",
         )
         .unwrap();
-    let mut pool = store.pool("p").unwrap().unwrap();
-    pool.shed_ahead_of_pace = Some(0.2);
-    store.update_pool(&pool, pool.updated_at, "test").unwrap();
     second_pool(&store, 900);
     store
         .upsert_pin(&stored_pin(&store, "s1", "x", 1, 0.0))

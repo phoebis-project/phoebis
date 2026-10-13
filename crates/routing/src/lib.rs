@@ -34,18 +34,17 @@ pub use select::{
     release_reasons, seconds_ms, select, warmth_of, ClientClass, CohortHold, Decided, Exhaustion,
     HoldFacts, MigrateReason, Placement, Refusal, SelectRequest,
     SelectResult, Selection, SelectionTrace, ShedRoundRecord, Skipped, Warmth, WarmthCause,
-    BUDGET_WINDOW, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MIGRATE_BAND,
-    MODEL_REJECTED_REASON, PAYBACK_FACTOR, REFRESHING_CLASSES,
+    BUDGET_WINDOW, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MODEL_REJECTED_REASON,
+    REFRESHING_CLASSES,
 };
 pub use snapshot::{KeyRefusal, Presented, RegistrySnapshot};
 pub use state::{
     budget_deadline, burn_average_ms, burn_decayed, ceiling, cooldown_holds, is_plan_window,
-    shed_cap, shed_dwell_ms, warm, weekly_lead_margin, AccountTicket, BurnUnit, CreditsState,
-    EvidenceSource, InFlight, KeyPermit, LongContextRates, MemberSpend, OverageEvidence, PinRef,
-    PinUsage, Purged, RateTable, Rates, Reservation, RoutingState, SharePricer, StateWrite,
-    UtilizationSample, WindowReading, WindowSource, BUCKET_LIFE_MS, BUCKET_TTL_MS,
-    DEFAULT_WINDOW_CEILING, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
-    MAX_BUCKETS_PER_ACCOUNT, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    shed_cap, shed_dwell_ms, warm, AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight,
+    KeyPermit, LongContextRates, MemberSpend, OverageEvidence, PinRef, PinUsage, Purged, RateTable,
+    Rates, Reservation, RoutingState, SharePricer, StateWrite, UtilizationSample, WindowReading,
+    WindowSource, BUCKET_LIFE_MS, BUCKET_TTL_MS, DEFAULT_WINDOW_CEILING, FAST_INPUT, FAST_OUTPUT,
+    FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MAX_BUCKETS_PER_ACCOUNT, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 pub use task::{
     credits_from_usage, sample_from_usage, spawn, BandWeight, BurnRates, LoadCounts, ReloadError,

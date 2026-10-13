@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use phoebis_store::PoolRow;
 
-use crate::select::{ClientClass, CohortHold, HoldFacts, Placement, SelectRequest, MIGRATE_BAND};
+use crate::select::{ClientClass, CohortHold, HoldFacts, Placement, SelectRequest};
 use crate::state::Tier;
 use crate::RegistrySnapshot;
 
@@ -204,7 +204,6 @@ pub struct Settings {
     pub in_flight_cap: u32,
     pub retry_in_place_seconds: u64,
     pub pace_floor: f64,
-    pub migrate_band: f64,
     pub pool_updated_at: i64,
 }
 
@@ -343,7 +342,7 @@ pub struct PrefixLookup {
 
 /// One entry the rung walk visited on a member: the boundary's hash as the affinity map keys it (64 lowercase hex
 /// characters), the entry's fields, and the gate that refused it (`lane`, `expired`, `incarnation`, `not_admitted`,
-/// `size_gate`, `at_cap`, `above_ceiling`, `winding_down`, `floor`, `band`) or `None` for an accepted one.
+/// `size_gate`, `at_cap`, `above_ceiling`, `winding_down`, `floor`) or `None` for an accepted one.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct PrefixEntry {
     pub hash: String,
@@ -534,22 +533,17 @@ pub struct PinKeyFacts {
 }
 
 /// What a shedding round read and did, for the round's event. The record keeps the marks alone. The trigger is the
-/// 5-hour projection over the ceiling (`projection`, with `projection` and `horizon` filled) or the weekly lead over
-/// the margin (`lead`, with `elapsed_share`, `ahead` and `threshold` filled). `burn_sum`, `excess`, `target` and
-/// `removed` are shares of the trigger's window per hour.
+/// projection of `window` at `horizon` over `ceiling`, `window` the first plan window in the trigger's order to read
+/// so. `burn_sum`, `excess`, `target` and `removed` are shares of that window per hour.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ShedRoundFacts {
-    /// `projection` or `lead`.
-    pub trigger: &'static str,
     pub window: String,
     /// The prediction at the round's instant.
     pub utilization: f64,
-    pub projection: Option<f64>,
-    pub horizon: Option<i64>,
+    /// The projection at `horizon` that fired the round.
+    pub projection: f64,
+    pub horizon: i64,
     pub ceiling: f64,
-    pub elapsed_share: Option<f64>,
-    pub ahead: Option<f64>,
-    pub threshold: Option<f64>,
     /// `window_share` or `usd`, the unit the round's order read the anchor table in.
     pub unit: &'static str,
     pub burn_average_seconds: u64,
@@ -563,8 +557,8 @@ pub struct ShedRoundFacts {
     pub marks: Vec<PinKeyFacts>,
     /// `marked N` or `nothing_to_mark`.
     pub outcome: String,
-    /// `None` after marks, else the last skip class that applied: `last_pin`, `no_runway`, `payback`, `standing`,
-    /// `under_pace` or `unpriced`.
+    /// `None` after marks, else the deepest skip class any pin reached: `last_pin`, `no_runway`, `standing` or
+    /// `unpriced`.
     pub reason: Option<&'static str>,
     pub dwell_seconds: u64,
     pub dwell_until: i64,
@@ -586,13 +580,10 @@ pub struct ShedPinFacts {
     pub marked: bool,
     /// The pin's rewrite on its planned destination, `None` with none.
     pub rewrite: Option<f64>,
-    /// A weekly round's ratio of the burn over the next day (or the rest of the week) to the rewrite, read against
-    /// `PAYBACK_FACTOR`.
-    pub payback: Option<f64>,
     /// The destination the round found for the pin.
     pub planned: Option<String>,
     pub runway_ms: Option<i64>,
-    /// `fast_lane`, `last_pin`, `no_runway`, `payback`, `standing` or `unpriced`.
+    /// `fast_lane`, `last_pin`, `no_runway`, `standing` or `unpriced`.
     pub skip: Option<&'static str>,
     /// `current` for the request's own pin.
     pub note: Option<&'static str>,
@@ -872,7 +863,6 @@ pub(crate) fn settings_of(pool: &PoolRow) -> Settings {
         in_flight_cap: pool.failover.in_flight_cap,
         retry_in_place_seconds: pool.failover.retry_in_place_seconds,
         pace_floor: pool.failover.pace_floor,
-        migrate_band: MIGRATE_BAND,
         pool_updated_at: pool.updated_at,
     }
 }
@@ -973,7 +963,6 @@ mod tests {
                 in_flight_cap: 8,
                 retry_in_place_seconds: 10,
                 pace_floor: 0.0,
-                migrate_band: 0.05,
                 pool_updated_at: 100,
             }),
             candidates: vec![CandidateFacts {
