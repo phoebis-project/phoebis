@@ -107,6 +107,8 @@ export const STATUS_LABEL: Record<Account['status'], string> = {
   ready: 'Ready',
   unpaired: 'Not paired',
 };
+/** The statuses the router reports, in the labels' order, which the Accounts address and its status filter read. */
+export const ACCOUNT_STATUSES = Object.keys(STATUS_LABEL) as Account['status'][];
 
 /** How the usage poll last answered, in the words the Quota page and the routing log share. */
 export const POLL_OUTCOME_LABEL: Record<PollOutcome, string> = { clean: 'clean', failed: 'failed', rate_limited: 'rate limited' };

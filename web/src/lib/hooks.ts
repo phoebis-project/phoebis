@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { ApiError, quietly, reportRecovery } from '@/api/http';
-import type { Codec } from './address';
+import type { Codec, RangeValue } from './address';
 import { createAttentionPoll, type AttentionRead } from './attention';
 import { clock } from './clock';
 
@@ -22,9 +22,10 @@ export interface Loaded<T> {
 
 export interface AsyncOptions {
   /**
-   * Re-run `load` every `refreshMs` while the document is visible and `paused` is false; a refresh keeps `data` drawn,
-   * never turns `loading` on, replaces `data` on success and keeps it on failure with `error` set; a refresh still in
-   * flight when `paused` turns true is dropped. A read that settles after a newer one has landed is dropped.
+   * Re-run `load` every `refreshMs` while the document is visible and `paused` is false. A refresh keeps `data` drawn,
+   * never turns `loading` on, replaces `data` on success and keeps it on failure with `error` set, and one still in
+   * flight when `paused` turns true is dropped. When the pause ends, the period is set or the tab comes back, a refresh
+   * runs at once if the last answer is a full period old. A read that settles after a newer one has landed is dropped.
    */
   refreshMs?: number;
   paused?: boolean;
@@ -149,10 +150,11 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     const id = clock.setInterval(() => {
       if (!document.hidden) refresh();
     }, refreshMs);
-    // A tab that comes back reads at once only when its last answer is a full period old.
+    // A tab that comes back, and a pause that ends, read at once only when the last answer is a full period old.
     const onVisible = () => {
       if (!document.hidden && fetched.current !== null && clock.now() - Date.parse(fetched.current) >= refreshMs) refresh();
     };
+    onVisible();
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       armed.alive = false;
@@ -232,6 +234,18 @@ export function useQueryFilters<F>(codec: Codec<F>): { address: string; filters:
   return { address: searchParams.toString(), filters, replace, update: (patch) => replace({ ...filters, ...patch }) };
 }
 
+/**
+ * The instant the page took its range, read again only when the range moves: another preset, or a span with another
+ * `from` or `to`. A link capped at now ends its span at the clock it was made on, so this instant tells it from a span
+ * that has ended, and a chip, the search or a view control, which leave the range as it stands, keep it reading on.
+ */
+export function useRangeTakenAt(range: RangeValue): number {
+  const key = `${range.preset} ${range.from} ${range.to}`;
+  const [taken, setTaken] = useState(() => ({ at: clock.now(), for: key }));
+  if (taken.for !== key) setTaken({ at: clock.now(), for: key });
+  return taken.at;
+}
+
 const attention = createAttentionPoll(() => api.getAttention());
 
 /**
@@ -257,6 +271,16 @@ export function useNow(intervalMs = 15_000): number {
     return () => clock.clearInterval(id);
   }, [intervalMs]);
   return now;
+}
+
+const onVisibility = (changed: () => void) => {
+  document.addEventListener('visibilitychange', changed);
+  return () => document.removeEventListener('visibilitychange', changed);
+};
+
+/** document.hidden, followed through visibilitychange. */
+export function useDocumentHidden(): boolean {
+  return useSyncExternalStore(onVisibility, () => document.hidden);
 }
 
 export function useLocalStorage<T extends string>(key: string, fallback: T): [T, (v: T) => void] {

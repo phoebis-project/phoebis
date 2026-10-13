@@ -1,5 +1,5 @@
 import type { KeepaliveRecipe, KeepaliveState, RecipeCause } from '@/api/types';
-import { REQUEST_RANGES } from '@/lib/address';
+import { RANGE_PRESETS } from '@/lib/address';
 
 export const CAUSE_LABEL: Record<RecipeCause, string> = {
   affinity_too_short: 'affinity too short',
@@ -161,7 +161,7 @@ export function orderRecipes(agents: readonly KeepaliveRecipe[]): KeepaliveRecip
   });
 }
 
-export type RequestsRange = '1h' | '6h' | '24h';
+export type RequestsRange = (typeof RANGE_PRESETS)[number]['name'];
 
 /**
  * A minute under each width: the request log measures its window from its own load, a moment after the click that
@@ -177,7 +177,7 @@ const RANGE_HEADROOM_MS = 60_000;
 export function requestsRange(lastRequestAt: string | null, now: number): RequestsRange | null {
   if (lastRequestAt === null) return null;
   const age = now - Date.parse(lastRequestAt);
-  return REQUEST_RANGES.find((r) => age <= r.ms - RANGE_HEADROOM_MS)?.name ?? null;
+  return RANGE_PRESETS.find((r) => age <= r.ms - RANGE_HEADROOM_MS)?.name ?? null;
 }
 
 /**

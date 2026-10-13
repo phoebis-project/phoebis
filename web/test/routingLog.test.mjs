@@ -354,7 +354,7 @@ test('each link in builds its URL with its range', () => {
 test('logHref writes a preset by name and a window as two instants', () => {
   assert.equal(d.logHref({ range: '24h' }), '/routing-log?range=24h');
   assert.equal(d.logHref({ range: '1h' }), '/routing-log');
-  assert.equal(d.logHref({ kinds: ['held'], range: '3h' }), '/routing-log?kinds=held&range=3h');
+  assert.equal(d.logHref({ kinds: ['held'], range: '6h' }), '/routing-log?kinds=held&range=6h');
   const instants = new URL(d.logHref({ from: ms(13, 30) + 123, to: ms(14, 29, 59) + 999 }), 'http://phoebis.test').searchParams;
   assert.deepEqual(Object.fromEntries(instants), { from: '2026-09-16T13:30:00.123Z', to: '2026-09-16T14:29:59.999Z' });
 });
@@ -382,7 +382,7 @@ function arrivals(count) {
   return { read, reads, rows };
 }
 
-test('a Follow poll reads every page that arrived down to a row the list holds', async () => {
+test('an auto reload poll reads every page that arrived down to a row the list holds', async () => {
   // The list holds the oldest 25, and 100 more arrived before the poll.
   const route = arrivals(125);
   const shown = route.rows.slice(100);
@@ -392,7 +392,7 @@ test('a Follow poll reads every page that arrived down to a row the list holds',
   assert.deepEqual(d.merged(shown, polled.rows, d.identityOf, d.compareRows).map(d.identityOf), route.rows.map(d.identityOf), 'every row once, in the route order');
 });
 
-test('a Follow poll stops at eight pages and names the cursor that reaches the rows it left', async () => {
+test('an auto reload poll stops at eight pages and names the cursor that reaches the rows it left', async () => {
   // 300 arrived over the 25 the list holds: eight pages bring the newest 200.
   const route = arrivals(325);
   const shown = route.rows.slice(300);
@@ -403,7 +403,7 @@ test('a Follow poll stops at eight pages and names the cursor that reaches the r
   assert.equal(polled.overrun, '200');
   const gap = await route.read(polled.overrun);
   assert.equal(d.identityOf(gap.rows[0]), d.identityOf(route.rows[200]), 'the overrun cursor reads the first row the poll left');
-  assert.equal(d.FOLLOW_OVERRUN, 'More rows arrived than Follow could fetch. Reload to read them.');
+  assert.equal(d.FOLLOW_OVERRUN, 'More rows arrived than auto reload could fetch. Reload to read them.');
 });
 
 // The two model tier members the shell hands the module, and the empty pair it holds before the settings answer.

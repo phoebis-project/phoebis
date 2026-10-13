@@ -2,40 +2,39 @@ import { Fragment, useMemo, useState, type MouseEvent, type ReactNode } from 're
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import { iso } from '@/api/decode';
-import type { DecisionKind, DecisionSummary, FactEntity, RoutingLogQuery, RoutingLogRow } from '@/api/types';
+import type { DecisionKind, FactEntity, RoutingLogQuery, RoutingLogRow } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { type Paging, useFollow } from '@/app/useFollow';
 import { DecisionCard } from '@/components/DecisionCard';
 import { EventDetail } from '@/components/EventDetail';
-import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
-import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh } from '@/components/ui/icons';
-import { Badge, Button, Card, EmptyState, ErrorState, Input, Select, Skeleton, Toggle, useDescription } from '@/components/ui/primitives';
-import { addressWindow, type LogFilters, ROUTING_LOG_CODEC, ROUTING_LOG_RANGES } from '@/lib/address';
+import { FilterBar } from '@/components/FilterBar';
+import type { Option } from '@/components/ui/OptionList';
+import { IconChevronLeft, IconChevronRight, IconChevronsLeft } from '@/components/ui/icons';
+import { Badge, Button, Card, EmptyState, ErrorState, Skeleton, useDescription } from '@/components/ui/primitives';
+import { addressWindow, type LogFilters, RANGE_PRESETS, ROUTING_LOG_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { compareByModelTier } from '@/lib/costs';
-import { FOLLOW_OVERRUN } from '@/lib/follow';
-import { fmtAbsolute, fmtTime, toLocalInput, upperFirst } from '@/lib/format';
-import { useAsync, useCommittedText, useQueryFilters } from '@/lib/hooks';
-import { DECISION_KIND_LABEL, DECISION_KIND_TONE, EVENT_KIND_LABEL, type LogLink, aroundRequest, aroundSubject, byOf, clockMinute, compareRows, entityHref, eventTone, factsOf, formatFact, identityOf, logHref } from '@/lib/routingLog';
+import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
+import { effectiveInterval, FOLLOW_OVERRUN, readEnd, spanEnded } from '@/lib/follow';
+import { fmtAbsolute, fmtInt, fmtTime, upperFirst } from '@/lib/format';
+import { useAsync, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
+import { ALL_KINDS, byOf, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref } from '@/lib/routingLog';
 
 const PAGE_SIZE = 25;
 
 const DECISION_KINDS = Object.keys(DECISION_KIND_LABEL).sort() as DecisionKind[];
-const HIDDEN_EVENT = 'warm_prefix_expired';
-const EVENT_KINDS = Object.keys(EVENT_KIND_LABEL).filter((k) => k !== HIDDEN_EVENT);
-/** The route's default set: every decision kind but a probe's and every event kind but a warm prefix's expiry. */
-const DEFAULT_KINDS = [...DECISION_KINDS, ...EVENT_KINDS];
 const KIND_OPTIONS: Option[] = [
   ...DECISION_KINDS.map((k) => ({ group: 'Decisions', label: upperFirst(DECISION_KIND_LABEL[k]), value: k })),
-  { group: 'Decisions', label: 'Probe decisions (hidden by default)', value: 'probe' },
-  ...EVENT_KINDS.map((k) => ({ group: 'Events', label: upperFirst(EVENT_KIND_LABEL[k]), value: k })).sort((a, b) => a.label.localeCompare(b.label)),
-  { group: 'Events', label: 'Warm prefix expired (hidden by default)', value: HIDDEN_EVENT },
+  // The pseudo-kind ends its group, since it names the probes among the six kinds above it rather than a kind of its own.
+  { group: 'Decisions', label: 'Probe decisions', value: 'probe' },
+  ...Object.keys(EVENT_KIND_LABEL)
+    .map((k) => ({ group: 'Events', label: upperFirst(EVENT_KIND_LABEL[k]), value: k }))
+    .sort((a, b) => a.label.localeCompare(b.label)),
 ];
-const kindWords = (kind: string) => (kind === 'probe' ? 'probe decisions' : (DECISION_KIND_LABEL[kind as DecisionKind] ?? EVENT_KIND_LABEL[kind] ?? kind));
+const KIND_PRESET_ROWS = { kinds: KIND_PRESETS };
 
-const DEFAULTS: LogFilters = { accounts: [], keys: [], kinds: [], models: [], pools: [], range: { from: '', preset: '1h', to: '' }, request: '', session: '' };
-
-const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+// Compared by the set's size, since a list that repeats one kind and leaves another out is as long as every kind.
+const sameSet = (a: readonly string[], b: readonly string[]) => new Set(a).size === b.length && a.every((x) => b.includes(x));
 
 const Dash = () => <span className="muted">-</span>;
 
@@ -46,8 +45,12 @@ const EntityLink = ({ children, id, kind, mono = false }: { children?: ReactNode
   </Link>
 );
 
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+
 export function RoutingLogPage() {
-  const { address, filters, replace, update } = useQueryFilters(ROUTING_LOG_CODEC);
+  const { address, filters, update: rawUpdate } = useQueryFilters(ROUTING_LOG_CODEC);
+  // A set equal to every kind writes no key, since an absent `kinds` reads every kind.
+  const update = (patch: Partial<LogFilters>) => rawUpdate(patch.kinds !== undefined && sameSet(patch.kinds, ALL_KINDS) ? { ...patch, kinds: [] } : patch);
   const navigate = useNavigate();
   const keys = useAsync(() => api.listKeys(), []);
   const pools = useAsync(() => api.listPools(), []);
@@ -67,7 +70,7 @@ export function RoutingLogPage() {
 
   // The cursor and the pages before it belong to the address they were read under, so a filter change drops them in
   // the render that brings it, and one list request follows.
-  // `to` holds the range's end a walk from Follow's overrun reads under, the end its cursor came from.
+  // `to` holds the range's end a walk from the poll's overrun reads under, the end its cursor came from.
   const [paging, setPaging] = useState<Paging>({ for: address, stack: [] });
   if (paging.for !== address) setPaging({ for: address, stack: [] });
   const cursor = paging.for === address ? paging.cursor : undefined;
@@ -89,48 +92,37 @@ export function RoutingLogPage() {
   // The last hour ends where the list was loaded, so a cursor page is read against the window its cursor came from.
   // Refresh moves the end to now.
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
-  const [customOpen, setCustomOpen] = useState(false);
-  const [follow, setFollow] = useState(false);
-  const session = useCommittedText(filters.session, (next) => update({ session: next.trim() }));
-  const request = useCommittedText(filters.request, (next) => update({ request: next.trim() }));
+  // Off on the logs until the reader picks an interval, and page state, so a link or a reload opens the log off.
+  const [intervalMs, setIntervalMs] = useState(0);
+  const [barOpen, setBarOpen] = useState(false);
+  const rangeTakenAt = useRangeTakenAt(filters.range);
 
-  // A preset ends where the list was loaded, and a custom span reads its own instants.
-  const range = useMemo(() => addressWindow(filters.range, ROUTING_LOG_RANGES, '1h', loadedAt), [filters.range, loadedAt]);
+  // A preset ends where the list was loaded, and a custom span reads its own instants, which Refresh reads again.
+  const custom = filters.range.preset === 'custom';
+  const range = useMemo(() => addressWindow(filters.range, RANGE_PRESETS, '1h', loadedAt), [filters.range, loadedAt]);
+  const ended = spanEnded(custom, range.to, rangeTakenAt);
+  const polledMs = effectiveInterval(intervalMs, ended);
   const query = useMemo<RoutingLogQuery>(
-    () => ({ accountIds: filters.accounts, cursor, from: iso(range.from), keyIds: filters.keys, kinds: filters.kinds.length ? filters.kinds : undefined, limit: PAGE_SIZE, models: filters.models, poolIds: filters.pools, request: filters.request || undefined, session: filters.session || undefined, to: iso(pagedTo ?? range.to) }),
-    [filters, range, cursor, pagedTo],
+    () => ({ accountIds: filters.accounts, cursor, from: iso(range.from), keyIds: filters.keys, kinds: filters.kinds.length ? filters.kinds : undefined, limit: PAGE_SIZE, models: filters.models, poolIds: filters.pools, request: filters.request || undefined, session: filters.session || undefined, to: iso(readEnd(custom, range.to, pagedTo ?? range.to)) }),
+    [filters, custom, range, cursor, pagedTo],
   );
   const log = useAsync(() => api.listRoutingLog(query), [query]);
 
-  const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed, toggleFollow } = useFollow<RoutingLogRow>({
+  // An open menu or popover under the bar stands over the list, so the poll waits for it to close.
+  const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed } = useFollow<RoutingLogRow>({
     address,
     compare: compareRows,
     error: log.error,
     identity: identityOf,
+    intervalMs: polledMs,
     list: log.data,
-    on: follow && cursor === undefined,
     paging,
-    read: (c, to) => api.listRoutingLog({ ...query, cursor: c, to: iso(to) }),
-    setFollow,
+    paused: barOpen,
+    read: (c, to) => api.listRoutingLog({ ...query, cursor: c, to: iso(readEnd(custom, range.to, to)) }),
     setPaging,
     stale: log.stale,
   });
 
-  const rangeValue = customOpen || filters.range.preset === 'custom' ? 'custom' : filters.range.preset;
-  // Custom starts from the window the list shows, so the choice holds.
-  const chooseRange = (value: string) => {
-    setCustomOpen(value === 'custom');
-    update({ range: value === 'custom' ? { from: iso(range.from), preset: 'custom', to: iso(range.to) } : { from: '', preset: value, to: '' } });
-  };
-  // A bound that would end the span before it starts writes nothing, since the address would read that pair as the
-  // preset.
-  const setBound = (bound: 'from' | 'to', local: string) => {
-    const ms = Date.parse(local);
-    if (Number.isNaN(ms)) return;
-    const next = bound === 'from' ? { from: ms, to: range.to } : { from: range.from, to: Math.min(ms, clock.now()) };
-    if (next.from >= next.to) return;
-    update({ range: { from: iso(next.from), preset: 'custom', to: iso(next.to) } });
-  };
   // A preset is read again from now, and a custom span as it stands.
   const refresh = () => {
     setPaging({ for: address, stack: [] });
@@ -138,93 +130,58 @@ export function RoutingLogPage() {
     setLoadedAt(clock.now());
     log.reload();
   };
-  const clear = () => {
-    setCustomOpen(false);
-    replace(DEFAULTS);
-  };
 
   const now = clock.now();
-  const narrowed = filters.session !== '' || filters.accounts.length > 0 || filters.pools.length > 0 || filters.keys.length > 0 || filters.models.length > 0 || filters.kinds.length > 0 || rangeValue === 'custom';
+  // An address that lists every kind is every kind, which draws no chip and every row of the Kinds list checked.
+  const barFilters = useMemo(() => (sameSet(filters.kinds, ALL_KINDS) ? { ...filters, kinds: [] } : filters), [filters]);
+  const counts = log.data?.counts ?? null;
+  // The request chip keeps its id form and carries the route's counts for the request in its title.
+  const dimensions = useMemo(
+    () =>
+      ROUTING_LOG_DIMENSIONS.map((d) =>
+        d.field !== 'request'
+          ? d
+          : {
+              ...d,
+              text: (value: unknown) => {
+                const chip = chipText(d, value);
+                return counts ? { ...chip, title: `${String(value)}: ${plural(counts.decisions, 'decision')}, ${plural(counts.events, 'event')}` } : chip;
+              },
+            },
+      ),
+    [counts],
+  );
+  const options: Record<string, Option[]> = {
+    accounts: (accounts.data ?? []).map((a) => ({ label: a.label, value: a.id })),
+    keys: (keys.data ?? []).map((k) => ({ label: k.name, value: k.id })),
+    kinds: KIND_OPTIONS,
+    models: modelOptions,
+    pools: (pools.data ?? []).map((p) => ({ label: p.name, value: p.id })),
+  };
+  const disabled = { ...notLoadedReason('keys', 'key', keys), ...notLoadedReason('pools', 'pool', pools), ...notLoadedReason('accounts', 'account', accounts), ...notLoadedReason('models', 'model', catalog) };
 
   return (
     <div className="routing-log stack">
-      <div className="filters">
-        <Select value={rangeValue} onChange={(e) => chooseRange(e.target.value)} aria-label="Range">
-          {ROUTING_LOG_RANGES.map((r) => (
-            <option key={r.name} value={r.name}>
-              {r.label}
-            </option>
-          ))}
-          <option value="custom">Custom range</option>
-        </Select>
-        {rangeValue === 'custom' && (
-          <>
-            <Input type="datetime-local" aria-label="From" value={toLocalInput(range.from)} onChange={(e) => setBound('from', e.target.value)} />
-            <Input type="datetime-local" aria-label="To" value={toLocalInput(range.to)} onChange={(e) => setBound('to', e.target.value)} />
-          </>
-        )}
-        <MultiSelect
-          label="Kinds"
-          options={KIND_OPTIONS}
-          value={filters.kinds.length ? filters.kinds : DEFAULT_KINDS}
-          active={filters.kinds.length > 0}
-          summary={filters.kinds.length ? undefined : 'Kinds (2 hidden)'}
-          onChange={(v) => update({ kinds: v.length === 0 || sameSet(v, DEFAULT_KINDS) ? [] : v })}
-        />
-        <MultiSelect
-          label="Keys"
-          options={(keys.data ?? []).map((k) => ({ label: k.name, value: k.id }))}
-          value={filters.keys}
-          onChange={(v) => update({ keys: v })}
-          disabled={keys.data === null && keys.error !== null}
-          description={keys.error ? `The key list did not load: ${keys.error}` : undefined}
-          mono
-        />
-        <MultiSelect
-          label="Pools"
-          options={(pools.data ?? []).map((p) => ({ label: p.name, value: p.id }))}
-          value={filters.pools}
-          onChange={(v) => update({ pools: v })}
-          disabled={pools.data === null && pools.error !== null}
-          description={pools.error ? `The pool list did not load: ${pools.error}` : undefined}
-          mono
-        />
-        <MultiSelect
-          label="Accounts"
-          options={(accounts.data ?? []).map((a) => ({ label: a.label, value: a.id }))}
-          value={filters.accounts}
-          onChange={(v) => update({ accounts: v })}
-          disabled={accounts.data === null && accounts.error !== null}
-          description={accounts.error ? `The account list did not load: ${accounts.error}` : undefined}
-        />
-        <MultiSelect
-          label="Models"
-          options={modelOptions}
-          value={filters.models}
-          onChange={(v) => update({ models: v })}
-          disabled={catalog.data === null && catalog.error !== null}
-          description={catalog.error ? `The model list did not load: ${catalog.error}` : undefined}
-          searchable
-          mono
-        />
-        <Input className="mono routing-log__id" placeholder="Session id" aria-label="Session id" value={session.draft} onChange={(e) => session.onChange(e.target.value)} onBlur={session.onBlur} onKeyDown={session.onKeyDown} />
-        <Input className="mono routing-log__id" placeholder="Request id" aria-label="Request id" value={request.draft} onChange={(e) => request.onChange(e.target.value)} onBlur={request.onBlur} onKeyDown={request.onKeyDown} />
-        <label className="row routing-log__follow">
-          <Toggle checked={follow} onChange={toggleFollow} label="Follow" />
-          <span className="secondary">{follow ? 'polling every 5 s, the range ends now' : 'Follow'}</span>
-        </label>
-        <div className="filters__cols">
-          <Button size="sm" icon={<IconRefresh size={14} />} onClick={refresh} title={`Rows up to ${fmtTime(iso(range.to))}. Refresh reads up to now.`}>
-            Refresh
-          </Button>
-        </div>
-      </div>
-
-      {filters.request !== '' ? (
-        <RequestScope requestId={filters.request} rows={rows} counts={log.data?.counts ?? null} now={now} onClear={clear} />
-      ) : narrowed ? (
-        <Narrowing filters={filters} range={range} rows={rows.length} more={nextCursor !== null} now={now} onClear={clear} />
-      ) : null}
+      <FilterBar
+        address={address}
+        count={rows.length > 0 ? `${fmtInt(rows.length)} shown${nextCursor ? ', more available' : ''}` : log.data === null ? '' : 'No rows'}
+        dimensions={dimensions}
+        disabled={disabled}
+        filters={barFilters}
+        onOpenChange={setBarOpen}
+        options={options}
+        presets={KIND_PRESET_ROWS}
+        range={{ now: clock.now, window: range }}
+        refresh={{
+          disabled: ended ? 'A custom range that has ended has nothing new to read' : undefined,
+          intervalMs,
+          onIntervalChange: setIntervalMs,
+          onRefresh: refresh,
+          paused: barOpen ? 'menu' : cursor !== undefined ? 'olderPage' : null,
+          refreshTitle: custom ? `Rows from ${fmtTime(iso(range.from))} to ${fmtTime(iso(range.to))}. Refresh reads the same window again` : `Rows up to ${fmtTime(iso(range.to))}. Refresh reads up to now`,
+        }}
+        update={update}
+      />
 
       {overrun !== null && (
         <div className="callout callout--warning routing-log__overrun" role="status">
@@ -285,10 +242,6 @@ export function RoutingLogPage() {
           </table>
         </div>
         <footer className="pager">
-          <span className="muted num">
-            {rows.length === 0 ? 'No rows' : `${rows.length} shown`}
-            {nextCursor ? ', more available' : ''}
-          </span>
           <div className="pager__nav">
             <button type="button" onClick={() => setPaging({ for: address, stack: [] })} disabled={stack.length === 0} aria-label="First page">
               <IconChevronsLeft size={15} />
@@ -302,109 +255,6 @@ export function RoutingLogPage() {
           </div>
         </footer>
       </Card>
-    </div>
-  );
-}
-
-const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
-
-/** The line a request filter opens: the request's counts, the three widenings around its time, and Clear. */
-function RequestScope({ counts, now, onClear, requestId, rows }: { counts: { decisions: number; events: number } | null; now: number; onClear: () => void; requestId: string; rows: RoutingLogRow[] }) {
-  const decisions = rows.filter((r): r is DecisionSummary => r.type === 'decision' && r.requestId === requestId);
-  // The rows run newest first, so the request's first decision is the last and its final placement the first.
-  const at = decisions.length ? Date.parse(decisions[decisions.length - 1].at) : null;
-  const sessionId = decisions.find((d) => d.sessionId !== null)?.sessionId ?? null;
-  const accountId = decisions.find((d) => d.accountId !== null)?.accountId ?? null;
-  const widenings = [
-    { href: at !== null && sessionId !== null ? logHref({ session: sessionId, ...aroundSubject(at, now) }) : null, label: 'this session', title: sessionId },
-    { href: at !== null && accountId !== null ? logHref({ accounts: [accountId], ...aroundRequest(at, null, now) }) : null, label: 'this account', title: accountId },
-    { href: at === null ? null : logHref(clockMinute(at, now)), label: 'this minute', title: null },
-  ].filter((w): w is { href: string; label: string; title: string | null } => w.href !== null);
-  return (
-    <div className="routing-log__scope">
-      <span>
-        Request{' '}
-        <b>
-          <EntityLink kind="request" id={requestId} mono />
-        </b>
-        {counts && `: ${plural(counts.decisions, 'decision')}, ${plural(counts.events, 'event')}`}
-      </span>
-      {widenings.length > 0 && (
-        <span className="routing-log__widen">
-          Widen to
-          {widenings.map((w) => (
-            <Link key={w.label} to={w.href} title={w.title ?? undefined}>
-              {w.label}
-            </Link>
-          ))}
-        </span>
-      )}
-      <button type="button" className="link-btn routing-log__clear" onClick={onClear}>
-        Clear
-      </button>
-    </div>
-  );
-}
-
-/** The line any other narrowing opens: what the rows are narrowed to, the range, and the page's count. */
-function Narrowing({ filters, more, now, onClear, range, rows }: { filters: LogFilters; more: boolean; now: number; onClear: () => void; range: { from: number; to: number }; rows: number }) {
-  const parts: ReactNode[] = [];
-  const entities = (kind: FactEntity['kind'], ids: string[]) => {
-    if (ids.length === 0) return;
-    parts.push(
-      <Fragment key={kind}>
-        {ids.length === 1 ? kind : `${kind}s`}{' '}
-        {ids.map((id, i) => (
-          <Fragment key={id}>
-            {i > 0 && ', '}
-            <b>
-              <EntityLink kind={kind} id={id} />
-            </b>
-          </Fragment>
-        ))}
-      </Fragment>,
-    );
-  };
-  if (filters.session) {
-    parts.push(
-      <Fragment key="session">
-        session{' '}
-        <b>
-          <EntityLink kind="session" id={filters.session} mono>
-            {filters.session.slice(0, 8)}
-          </EntityLink>
-        </b>
-      </Fragment>,
-    );
-  }
-  entities('account', filters.accounts);
-  entities('pool', filters.pools);
-  entities('key', filters.keys);
-  entities('model', filters.models);
-  if (filters.kinds.length) {
-    parts.push(
-      <Fragment key="kinds">
-        {filters.kinds.length === 1 ? 'kind' : 'kinds'} <b>{filters.kinds.map(kindWords).join(', ')}</b>
-      </Fragment>,
-    );
-  }
-  return (
-    <div className="routing-log__scope">
-      <span>
-        Narrowed to{' '}
-        {parts.map((p, i) => (
-          <Fragment key={i}>
-            {i > 0 && ', '}
-            {p}
-          </Fragment>
-        ))}
-        {parts.length > 0 && ', '}
-        {formatFact(range.from, 'time', now)} to {formatFact(range.to, 'time', now)}: {plural(rows, 'row')}
-        {more && ', more'}
-      </span>
-      <button type="button" className="link-btn routing-log__clear" onClick={onClear}>
-        Clear
-      </button>
     </div>
   );
 }

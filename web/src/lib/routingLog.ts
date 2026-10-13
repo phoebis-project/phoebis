@@ -3,6 +3,7 @@ import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUni
 import { ROUTING_LOG_CODEC, type RangeValue } from './address';
 import { moveLabel, own } from './analytics';
 import { compareByModelTier } from './costs';
+import type { ChipText } from './filterBar';
 import { fmtCompact, fmtInt, fmtPct, fmtTime, fmtUsd, instant, shortModel } from './format';
 import { planLabel, POLL_OUTCOME_LABEL } from './quota';
 
@@ -154,6 +155,51 @@ export const EVENT_KIND_LABEL: Record<string, string> = {
   window_reset: 'window reset',
   window_spent: 'window spent',
 };
+
+/** A named set of kinds, which the Kinds list checks or unchecks in one click. */
+export interface KindPreset {
+  label: string;
+  members: readonly string[];
+}
+
+/** The eight groups of related kinds, in the order a reader follows a request. Every kind belongs to exactly one, and a preset is exactly its members. */
+export const KIND_PRESETS: readonly KindPreset[] = [
+  { label: 'placements and pins', members: ['placed', 'renewed', 'pin_created', 'pin_migrated', 'pin_released', 'pin_expired'] },
+  { label: 'moves and holds', members: ['moved', 'held', 'shedding_round', 'wind_down_started'] },
+  { label: 'exhaustion and refusals', members: ['exhausted', 'refused', 'window_spent', 'budget_reached'] },
+  { label: 'account state and windows', members: ['account_state_changed', 'window_reset', 'overage_started', 'overage_ended', 'budget_period_ended', 'fast_credits_changed', 'refresh_failed', 'refresh_succeeded', 'refresh_uncertain'] },
+  { label: 'cooldowns and backoff', members: ['cooldown_set', 'cooldown_cleared', 'poll_backoff_started', 'poll_backoff_ended'] },
+  { label: 'keepalive', members: ['probe', 'warm_prefix_expired'] },
+  { label: 'registry changes', members: ['registry_changed', 'catalog_changed', 'model_permitted', 'model_rejected'] },
+  { label: 'router life cycle', members: ['router_started', 'ledger_gap'] },
+];
+
+/** Every kind the Kinds list offers: the six decision kinds, `probe`, and the 28 event kinds. */
+export const ALL_KINDS: readonly string[] = [...Object.keys(DECISION_KIND_LABEL), 'probe', ...Object.keys(EVENT_KIND_LABEL)];
+
+/** A kind's word: "probe decisions" for the pseudo-kind, else its label. */
+export const kindWord = (kind: string): string => (kind === 'probe' ? 'probe decisions' : (DECISION_KIND_LABEL[kind as DecisionKind] ?? EVENT_KIND_LABEL[kind] ?? kind));
+
+/** The words a Kinds chip prints before it counts the rest. */
+const KINDS_LISTED = 3;
+
+/**
+ * The Kinds chip: one whole preset by its name, a union of whole presets and nothing else by their names in
+ * KIND_PRESETS' order, else the kinds' words three then " +N", every word in the title. A set equal to every kind, or
+ * empty, draws no chip (empty text).
+ */
+export function kindsChipText(kinds: readonly string[]): ChipText {
+  const set = new Set(kinds);
+  if (set.size === 0 || (set.size === ALL_KINDS.length && ALL_KINDS.every((k) => set.has(k)))) return { text: '', title: '', values: '' };
+  const words = kinds.map(kindWord);
+  // The presets share no kind, so whole presets that hold as many kinds as the set are the set.
+  const whole = KIND_PRESETS.filter((p) => p.members.every((m) => set.has(m)));
+  const values =
+    whole.length > 0 && whole.reduce((n, p) => n + p.members.length, 0) === set.size
+      ? whole.map((p) => p.label).join(', ')
+      : `${words.slice(0, KINDS_LISTED).join(', ')}${words.length > KINDS_LISTED ? ` +${words.length - KINDS_LISTED}` : ''}`;
+  return { text: `kinds: ${values}`, title: words.join(', '), values };
+}
 
 const EVENT_TONE: Record<string, 'critical' | 'serious' | 'warning'> = {
   account_state_changed: 'serious',

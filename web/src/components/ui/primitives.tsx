@@ -1,4 +1,4 @@
-import { createContext, Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type FocusEvent, type HTMLAttributes, type InputHTMLAttributes, type KeyboardEvent, type ReactNode, type SelectHTMLAttributes } from 'react';
+import { createContext, forwardRef, Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type FocusEvent, type HTMLAttributes, type InputHTMLAttributes, type KeyboardEvent, type ReactNode, type SelectHTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import type { ToastItem } from '@/app/session';
@@ -109,14 +109,15 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: 'danger' | 'ghost' | 'primary' | 'secondary';
 };
 
-export function Button({ variant = 'secondary', size = 'md', icon, children, className = '', ...rest }: ButtonProps) {
+/** The one button primitive, forwarding its ref so a popover can anchor on it and return focus to it. */
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button({ variant = 'secondary', size = 'md', icon, children, className = '', ...rest }, ref) {
   return (
-    <button type="button" className={`btn btn--${variant} btn--${size} ${className}`} {...rest}>
+    <button ref={ref} type="button" className={`btn btn--${variant} btn--${size} ${className}`} {...rest}>
       {icon && <span className="btn__icon">{icon}</span>}
       {children}
     </button>
   );
-}
+});
 
 /** A caller that passes `active` is a toggle and reads as pressed or not, and a one-shot action passes none. */
 export function Pill({ children, active, onClick, disabled, title, icon }: { active?: boolean; children: ReactNode; disabled?: boolean; icon?: ReactNode; onClick?: () => void; title?: string }) {
@@ -237,7 +238,7 @@ export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <span className="select">
       <select {...props} className={`input ${props.className ?? ''}`} />
-      <IconChevron size={14} />
+      <IconChevron size={12} strokeWidth={1.5} />
     </span>
   );
 }

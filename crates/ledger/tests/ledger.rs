@@ -7084,7 +7084,7 @@ fn the_routing_log_answers_a_cursor_only_past_a_full_page() {
 }
 
 #[test]
-fn the_default_kind_set_hides_probes_and_prefix_expiries_and_kinds_replaces_it() {
+fn an_absent_kinds_lists_every_kind_and_kinds_names_exactly_its_set() {
     let db = LedgerDb::open_in_memory().unwrap();
     put_decision(&db, &logged("r1", 1, 1, 100, "placed"));
     let mut probe = logged("r2", 1, 1, 200, "renewed");
@@ -7099,8 +7099,13 @@ fn the_default_kind_set_hides_probes_and_prefix_expiries_and_kinds_replaces_it()
     };
     assert_eq!(
         log_ids(&db, &log_filter()),
-        ["e:cooldown_set@400", "d:r1/1"],
-        "the default set hides probe decisions and the prefix expiries"
+        [
+            "e:cooldown_set@400",
+            "e:warm_prefix_expired@300",
+            "d:r2/1",
+            "d:r1/1"
+        ],
+        "an absent kinds lists every decision and event, the probe decisions and the prefix expiries among them"
     );
     assert_eq!(
         log_ids(&db, &kinds(&["probe"])),
@@ -7119,7 +7124,7 @@ fn the_default_kind_set_hides_probes_and_prefix_expiries_and_kinds_replaces_it()
     assert_eq!(
         log_ids(&db, &kinds(&["warm_prefix_expired"])),
         ["e:warm_prefix_expired@300"],
-        "the kinds named replace the default set whole"
+        "the kinds named are exactly the set"
     );
 }
 

@@ -13,6 +13,7 @@ import { useAppSettings } from '@/app/settings';
 import { AttentionRows } from '@/components/AttentionRows';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
+import { FilterBar } from '@/components/FilterBar';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { AttentionLine } from '@/components/ui/AttentionLine';
 import { CostReferenceLink } from '@/components/ui/CostReference';
@@ -176,22 +177,28 @@ const STRATEGY_HINT: Record<PoolStrategy, ReactNode> = {
 
 export function PoolsPage() {
   const { unit } = useAppSettings();
-  const pools = useAsync(() => api.listPools(), []);
-  const accounts = useAsync(() => api.listAccounts(), []);
-  const keys = useAsync(() => api.listKeys(), []);
+  const [dialog, setDialog] = useState<{ initialGroup: PoolGroup | null; pool: Pool | null } | null>(null);
+  const [deleting, setDeleting] = useState<Pool | null>(null);
+  const [intervalMs, setIntervalMs] = useState(5_000);
+  const [barOpen, setBarOpen] = useState(false);
+  // The pool dialog draws these lists, so auto reload waits while it is open rather than change them under an edit, and
+  // while the Delete pool confirm is open, as every read waits under a dialog.
+  const dialogOpen = dialog !== null || deleting !== null;
+  const reread = { paused: dialogOpen || barOpen, refreshMs: intervalMs };
+  const pools = useAsync(() => api.listPools(), [], reread);
+  const accounts = useAsync(() => api.listAccounts(), [], reread);
+  const keys = useAsync(() => api.listKeys(), [], reread);
   // Feeds the cache TTL per-model override picker's options.
-  const catalog = useAsync(() => api.listCatalog(), []);
-  const sessions = useAsync(() => api.listSessions(), []);
-  // Read once for the dialog's return rate, as the Sessions page reads it.
-  const overview = useAsync(() => api.getKeepaliveOverview(), []);
+  const catalog = useAsync(() => api.listCatalog(), [], reread);
+  const sessions = useAsync(() => api.listSessions(), [], reread);
+  // The dialog's return rate, as the Sessions page reads it.
+  const overview = useAsync(() => api.getKeepaliveOverview(), [], reread);
   const attention = useAttention();
   const now = useNow();
   const location = useLocation();
   const navigate = useNavigate();
   const pageRef = useRef<HTMLDivElement>(null);
   const landed = useRef<string | null>(null);
-  const [dialog, setDialog] = useState<{ initialGroup: PoolGroup | null; pool: Pool | null } | null>(null);
-  const [deleting, setDeleting] = useState<Pool | null>(null);
   const { notify } = useSession();
 
   // The address opens the dialog on a named group once both lists the dialog reads have loaded; the entry is then
@@ -281,12 +288,32 @@ export function PoolsPage() {
 
   return (
     <div className="stack" ref={pageRef}>
-      <div className="page-head">
-        <p className="page-head__meta">A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per session, and fail over when a member hits a rate limit.</p>
+      <FilterBar
+        address="/pools"
+        count={pools.data === null ? '' : `${pools.data.length} ${pools.data.length === 1 ? 'pool' : 'pools'}`}
+        filters={{}}
+        onOpenChange={setBarOpen}
+        refresh={{
+          intervalMs,
+          onIntervalChange: setIntervalMs,
+          onRefresh: () => {
+            pools.reload();
+            accounts.reload();
+            keys.reload();
+            catalog.reload();
+            sessions.reload();
+            overview.reload();
+          },
+          paused: dialogOpen ? 'dialog' : barOpen ? 'menu' : null,
+          refreshTitle: 'Reads the list again now',
+        }}
+        update={() => undefined}
+      >
         <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, pool: null })}>
           Create pool
         </Button>
-      </div>
+      </FilterBar>
+      <p className="page-head__meta">A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per session, and fail over when a member hits a rate limit.</p>
       <div className="stat-grid stat-grid--fit">
         <Tile label="Pools" value={totals ? fmtInt(totals.pools) : null} />
         <Tile label="Accounts in pools" value={totals ? fmtInt(totals.accounts) : null} />

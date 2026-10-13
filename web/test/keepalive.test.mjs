@@ -10,6 +10,7 @@ const d = await import('./dist/api.js');
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
 const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
 const NOW = Date.UTC(2026, 8, 16, 14, 30);
 const ms = (h, m) => Date.UTC(2026, 8, 16, h, m);
 const iso = (t) => new Date(t).toISOString();
@@ -69,8 +70,11 @@ test('requestsRange picks the narrowest range that covers the last request, with
     [5 * HOUR + 59 * MINUTE, '6h'],
     [5 * HOUR + 59 * MINUTE + SECOND, '24h'],
     [23 * HOUR + 59 * MINUTE, '24h'],
-    [23 * HOUR + 59 * MINUTE + SECOND, null],
-    [25 * HOUR, null],
+    [23 * HOUR + 59 * MINUTE + SECOND, '7d'],
+    [6 * DAY + 23 * HOUR + 59 * MINUTE, '7d'],
+    [6 * DAY + 23 * HOUR + 59 * MINUTE + SECOND, '30d'],
+    [29 * DAY + 23 * HOUR + 59 * MINUTE, '30d'],
+    [30 * DAY, null],
   ];
   assert.deepEqual(
     cases.map(([age]) => d.requestsRange(iso(NOW - age), NOW)),
@@ -78,7 +82,7 @@ test('requestsRange picks the narrowest range that covers the last request, with
   );
   assert.equal(d.requestsRange(null, NOW), null);
   // The widths are the Requests page's own presets, read from the one table the address grammar holds.
-  assert.deepEqual(d.REQUEST_RANGES.map((r) => r.name), ['1h', '6h', '24h']);
+  assert.deepEqual(d.RANGE_PRESETS.map((r) => r.name), ['1h', '6h', '24h', '7d', '30d']);
 });
 
 test('releasedCount counts the lines the view hides and nothing else', () => {

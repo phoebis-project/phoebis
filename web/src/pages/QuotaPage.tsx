@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import type { Account, ExtraUsage, QuotaPoll, QuotaSnapshot, RateLimitWindow } from '@/api/types';
 import { accountColor, accountSlots } from '@/components/charts/theme';
+import { FilterBar } from '@/components/FilterBar';
 import { SectionBar } from '@/components/SectionBar';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
@@ -20,7 +21,9 @@ const QUOTA_SECTIONS = [
 type QuotaSectionId = (typeof QUOTA_SECTIONS)[number]['id'];
 
 export function QuotaPage() {
-  const accounts = useAsync(() => api.listAccounts(), [], { refreshMs: 30_000 });
+  const [intervalMs, setIntervalMs] = useState(5_000);
+  const [barOpen, setBarOpen] = useState(false);
+  const accounts = useAsync(() => api.listAccounts(), [], { paused: barOpen, refreshMs: intervalMs });
   const now = useNow();
   const [sort, setSort] = useState<Sort>('default');
   const [refreshing, setRefreshing] = useState(false);
@@ -74,22 +77,27 @@ export function QuotaPage() {
 
   return (
     <div className="stack">
-      <div className="page-head">
-        <div>
-          <p className="page-head__meta quota-meta">
-            <span>{total} {total === 1 ? 'account' : 'accounts'}</span>
-            {attention > 0 && (
-              <>
-                <span className="quota-meta__sep" aria-hidden />
-                <span className="quota-meta__attention">{attention} {attention === 1 ? 'needs' : 'need'} attention</span>
-              </>
-            )}
-          </p>
-        </div>
+      <FilterBar
+        address="/quota"
+        count={
+          accounts.data === null ? (
+            ''
+          ) : (
+            <>
+              {total} {total === 1 ? 'account' : 'accounts'}
+              {attention > 0 && <span className="filter-bar__count--critical">, {attention} {attention === 1 ? 'needs' : 'need'} attention</span>}
+            </>
+          )
+        }
+        filters={{}}
+        onOpenChange={setBarOpen}
+        refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: reload, paused: barOpen ? 'menu' : null, refreshTitle: 'Reads the list again now' }}
+        update={() => undefined}
+      >
         <Pill onClick={() => void refreshAll()} disabled={refreshing} title={refreshHint} icon={<IconRefresh size={13} className={refreshing ? 'spin' : ''} />}>
           Refresh all
         </Pill>
-      </div>
+      </FilterBar>
 
       <SectionBar sections={QUOTA_SECTIONS} shown={shown} onChoose={choose} />
 

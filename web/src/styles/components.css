@@ -325,7 +325,9 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 7px 12px;
+  /* An icon-only button has no line box and would take its height from the icon alone. */
+  min-height: 32px;
+  padding: 6px 12px;
   font-weight: 500;
   line-height: 18px;
   white-space: nowrap;
@@ -335,7 +337,7 @@
 }
 
 .btn--sm {
-  padding: 4px 9px;
+  padding: 6px 9px;
   font-size: 12.5px;
 }
 
@@ -355,11 +357,12 @@
 .btn--secondary {
   color: var(--ink);
   background: var(--surface);
-  border-color: var(--hairline-strong);
+  border-color: var(--hairline);
 }
 
 .btn--secondary:hover:not(:disabled) {
   background: var(--surface-2);
+  border-color: var(--hairline-strong);
 }
 
 .btn--ghost {
@@ -386,18 +389,20 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 11px;
+  padding: 6px 11px;
   font-size: 12.5px;
   font-weight: 500;
+  line-height: 18px;
   color: var(--ink-2);
   background: var(--surface);
-  border: 1px solid var(--hairline-strong);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
 }
 
 .pill:hover:not(:disabled) {
   color: var(--ink);
   background: var(--surface-2);
+  border-color: var(--hairline-strong);
 }
 
 .pill.is-active {
@@ -417,9 +422,12 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
+  /* An icon-only pill (the top bar's theme control) has no line box and would read 25. */
+  min-height: 28px;
+  padding: 5px 10px;
   font-size: 12.5px;
   font-weight: 500;
+  line-height: 18px;
   color: var(--ink-2);
   background: transparent;
   border: 0;
@@ -658,22 +666,21 @@
 .input {
   width: 100%;
   min-width: 0;
-  padding: 7px 10px;
+  padding: 5px 10px;
+  line-height: 20px;
   color: var(--ink);
   background: var(--surface);
-  border: 1px solid var(--hairline-strong);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
-}
-
-/* `.mono` sets 0.92em and the body's unitless line height scales with it, drawing a mono input 1.6px shorter than a
-   plain one beside it. A length holds a plain input's line, the body's size at its leading, at either font size: the
-   pattern filters restore the full size inline. */
-.input.mono {
-  line-height: calc(var(--body-size) * var(--body-leading));
 }
 
 .input::placeholder {
   color: var(--ink-3);
+}
+
+/* A focused field keeps the accent border under the pointer. */
+.input:hover:not(:disabled):not(:focus) {
+  border-color: var(--hairline-strong);
 }
 
 .input:focus {
@@ -763,46 +770,6 @@ textarea.input {
   transform: translateX(16px);
 }
 
-/* Multi select */
-.mselect {
-  position: relative;
-  display: inline-flex;
-}
-
-.mselect__trigger {
-  display: inline-flex;
-  gap: 8px;
-  align-items: center;
-  padding: 7px 10px;
-  color: var(--ink-2);
-  background: var(--surface);
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--radius-sm);
-}
-
-.mselect.has-value .mselect__trigger {
-  color: var(--ink);
-  border-color: var(--accent);
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-}
-
-.mselect__clear {
-  display: inline-flex;
-  align-items: center;
-  padding: 0 8px;
-  color: var(--ink-3);
-  background: var(--surface);
-  border: 1px solid var(--accent);
-  border-left: 0;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-}
-
-.mselect__clear:hover {
-  color: var(--ink);
-  background: var(--surface-3);
-}
-
-.mselect__list,
 .menu__list {
   position: absolute;
   top: calc(100% + 4px);
@@ -921,6 +888,150 @@ textarea.input {
 
 .menu__list .is-danger {
   color: var(--critical-ink);
+}
+
+/* The box every filter opener hangs under: the menu list's ground, border, radius and shadow, placed by the component. */
+.popover {
+  z-index: 30;
+  min-width: 220px;
+  padding: 4px;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+
+.popover:focus {
+  outline: none;
+}
+
+.popover__head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+}
+
+/* The back button starts the head, where the margin it keeps from text elsewhere would only push the title in. */
+.popover__head .icon-btn {
+  margin-left: 0;
+}
+
+.popover__title {
+  flex: 1;
+  font-weight: 600;
+}
+
+.popover__foot {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 8px;
+}
+
+/* A long value in a row would widen the box past a reading width, so the box stops here and the value gives way. */
+.add-filter {
+  max-width: 360px;
+}
+
+.add-filter__search {
+  margin-bottom: 4px;
+}
+
+.add-filter__row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  padding: 7px 8px;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+}
+
+.add-filter__row:hover,
+.add-filter__row:focus-visible {
+  background: var(--surface-2);
+}
+
+/* A disabled row's reason takes a line of its own under the label. */
+.add-filter__row[aria-disabled='true'] {
+  flex-wrap: wrap;
+  row-gap: 2px;
+  color: var(--ink-3);
+}
+
+.add-filter__description {
+  flex-basis: 100%;
+  font-size: 11.5px;
+}
+
+.add-filter__label {
+  flex: none;
+}
+
+.add-filter__value {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The split Refresh button: one bordered box, the body and the interval part parted by a hairline. The part reserves
+   its widest word's width, so the count beside it never moves. */
+.refresh-control {
+  display: inline-flex;
+  height: 32px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+
+.refresh-control:hover {
+  border-color: var(--hairline-strong);
+}
+
+.refresh-control__body,
+.refresh-control__part {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 0 9px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  background: none;
+  border: 0;
+}
+
+.refresh-control__part {
+  border-left: 1px solid var(--hairline);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.refresh-control__word {
+  display: grid;
+}
+
+.refresh-control__word > span {
+  grid-area: 1 / 1;
+}
+
+.refresh-control__sizer {
+  visibility: hidden;
+}
+
+.refresh-control[data-state='on'] .refresh-control__part {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+.refresh-control[data-state='paused'] .refresh-control__part,
+.refresh-control__part:disabled {
+  color: var(--ink-3);
 }
 
 /* Pattern editor: one bordered row per rule, the inherited rows after them in the muted ink */

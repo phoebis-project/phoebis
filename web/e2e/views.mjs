@@ -214,7 +214,7 @@ async function atRest() {
  * Identity and Keys read 11 px at weight 400 in a resting parent's ink, 6 px after their label on its line and clear
  * of the refusal dot, at the pass's viewport and in the 720 px strip. With expert fields and the mode off, a group's
  * discovery line sits below its last field in the hint's size and a parent's ink, and the cell grid reaches a field
- * through its wrapper. Then the rail outgrows its height twice, on a 700 px viewport and with eight more groups at
+ * through its wrapper. Then the rail outgrows its height twice, on a 700 px viewport and with nine more groups at
  * 800 px: it scrolls, and once scrolled to its end the parent heading of the run passing its top holds there in the
  * rail's own color, over the groups that pass under it.
  */
@@ -492,9 +492,9 @@ async function groupedDialogFixture(theme) {
     await load('');
     await scrolls('at 700 px', { height: 652, width: 1040 });
     await page.setViewportSize({ height: 800, width: 1280 });
-    // Eight, so the scrolled end falls well inside a run rather than at a run's edge, where no run passes the top.
-    await load('?extra=8');
-    await scrolls('with eight more groups', { height: 752, width: 1040 });
+    // Nine, so the scrolled end falls well inside a run rather than at a run's edge, where no run passes the top.
+    await load('?extra=9');
+    await scrolls('with nine more groups', { height: 752, width: 1040 });
   } catch (error) {
     say(error instanceof Error ? error.message : String(error));
   }
@@ -577,6 +577,19 @@ async function attentionLine(theme) {
   } else if (read.lead === null ? JSON.stringify(texts) !== '["Nothing needs attention"]' : !texts.includes('Pool exhausted: Main')) {
     say(`reads ${read.lead} over ${JSON.stringify(texts)}, neither the seeded exhaustion nor the quiet line`);
   }
+}
+
+/** The top bar's controls under the one control height: "Log out" and the theme control at 32 px, one top edge. */
+async function topbarHeights(theme) {
+  const read = await page.evaluate(() => {
+    const box = (el) => (el ? { height: Math.round(el.getBoundingClientRect().height), top: Math.round(el.getBoundingClientRect().top) } : null);
+    const logout = [...document.querySelectorAll('.topbar__right .btn')].find((b) => b.textContent?.trim() === 'Log out');
+    return { logout: box(logout), theme: box(document.querySelector('.topbar__right .segmented')) };
+  });
+  measurements.push(`${theme} / top bar ${JSON.stringify(read)}`);
+  if (read.logout?.height !== 32) failures.push(`${theme} /: Log out is ${read.logout?.height} px, not 32`);
+  if (read.theme?.height !== 32) failures.push(`${theme} /: the theme control is ${read.theme?.height} px, not 32`);
+  failures.push(...compare(read.logout, read.theme, ['top'], `${theme} /: Log out against the theme control`));
 }
 
 /**
@@ -827,6 +840,8 @@ async function poolCachingControls(theme) {
       policy: readSwitch(el.querySelector('button[role="switch"][aria-label="Set the cache TTL for this pool"]')),
     };
   };
+  // A field under the pointer draws the hover border, so the pointer leaves the dialog before the selects are compared.
+  await page.mouse.move(0, 0);
   const pair = await dialog.evaluate(read);
   await railEntry(dialog, 'Cache diagnostics').click();
   await settle();
@@ -1289,6 +1304,25 @@ const disabledIn = (dialog, label, selectors) =>
   );
 
 /**
+ * The drawn size and stroke of the first chevron `svg` matches against `size` and `stroke`, recorded under `label`. A
+ * select draws its chevron lighter than the shared icon stroke, which every other chevron keeps, so the pass reads one
+ * of each. Answers the findings, each worded for the failure list.
+ */
+async function chevronWeight(label, svg, size, stroke) {
+  const read =
+    (await svg.count()) === 0
+      ? null
+      : await svg.first().evaluate((el) => {
+          const box = el.getBoundingClientRect();
+          return { height: box.height, stroke: getComputedStyle(el).strokeWidth, width: box.width };
+        });
+  measurements.push(`${label} chevron ${JSON.stringify(read)}`);
+  if (!read) return ['no chevron is drawn to measure'];
+  if (read.width === size && read.height === size && parseFloat(read.stroke) === stroke) return [];
+  return [`the chevron draws ${read.width} by ${read.height} at a ${read.stroke} stroke, not ${size} by ${size} at ${stroke}`];
+}
+
+/**
  * The pool dialog in the plain view, then in the expert view: the frame and every group's layout at the pass's
  * viewport, then the frame and the rail's strips at 720 px. The plain rail holds eleven groups under the five parents,
  * the five expert-only groups left out, and the expert rail all sixteen. Every group on the rail is chosen and read
@@ -1353,6 +1387,7 @@ async function poolDialogWalk(theme, mode) {
       measurements.push(`${theme} /pools ${mode} dialog Identity heights ${JSON.stringify(heights)}`);
       if (heights.name === null || heights.status === null) found.push('the Name input and the Status select are not both drawn to compare');
       else if (Math.abs(heights.name - heights.status) > 1) found.push(`the Name input is ${heights.name} px tall against the Status select's ${heights.status} px`);
+      found.push(...(await chevronWeight(`${theme} /pools ${mode} dialog Identity select`, dialog.locator('section.dialog-group[aria-label="Identity"] .select > svg'), 12, 1.5)));
     }
     if (group === 'Keepalive') {
       if (warning && !warning.closes) found.push('its warning does not close the group');
@@ -1703,6 +1738,53 @@ async function keysLayout(theme) {
   measurements.push(`${theme} /keys layout tracks ${JSON.stringify(narrow)} at 1280 by 800, ${JSON.stringify(wide)} at 1440 by 900`);
   if (narrow?.length !== 1) say(`the cards sit in ${narrow?.length ?? 'no'} columns at 1280 by 800, not stacked in one`);
   if (wide?.length !== 2) say(`the cards sit in ${wide?.length ?? 'no'} columns at 1440 by 900, not side by side`);
+}
+
+/**
+ * The Create key dialog under the one control height: the Key group's Name input and Pool select at 32 px, its Notes
+ * field at the 72 px a text area keeps, the footer's buttons at 32 px, and each label above its control. The other
+ * groups are hidden and lay out at 0 px, so the group a new key opens on is the one read. The dialog's width is
+ * recorded, since the frame takes it from its prop.
+ */
+async function dialogControls(theme) {
+  const say = (what) => failures.push(`${theme} /keys create key dialog: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  try {
+    await page.getByRole('button', { name: 'Create key', exact: true }).first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await settle();
+  } catch (error) {
+    say(`never opened (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  const read = await dialog.evaluate((el) => {
+    const group = el.querySelector('section.dialog-group[aria-label="Key"]');
+    const height = (node) => (node ? Math.round(node.getBoundingClientRect().height) : null);
+    const control = (label, tag) => [...(group?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector(tag) ?? null;
+    const unstacked = [...(group?.querySelectorAll('.field:not(.field--beside) > .field__control > .field__label') ?? [])]
+      .filter((label) => {
+        const below = label.nextElementSibling;
+        return below && label.getBoundingClientRect().bottom > below.getBoundingClientRect().top + 1;
+      })
+      .map((label) => label.textContent?.trim());
+    return {
+      buttons: [...el.querySelectorAll('.dialog__foot .btn')].map(height),
+      name: height(control('Name', 'input')),
+      notes: height(control('Notes', 'textarea')),
+      pool: height(control('Pool', 'select')),
+      shown: group !== null && !group.hidden,
+      unstacked,
+      width: Math.round(el.getBoundingClientRect().width),
+    };
+  });
+  measurements.push(`${theme} /keys create key dialog ${JSON.stringify(read)}`);
+  if (!read.shown) say('opens on another group than Key');
+  if (read.name !== 32 || read.pool !== 32) say(`the Name input is ${read.name} px and the Pool select ${read.pool} px, not 32`);
+  if (read.notes !== 72) say(`the Notes field is ${read.notes} px, not the text area's 72`);
+  if (read.buttons.length === 0 || read.buttons.some((n) => n !== 32)) say(`the footer's buttons are ${JSON.stringify(read.buttons)} px, not 32`);
+  if (read.unstacked.length) say(`the labels ${read.unstacked.join(', ')} do not sit above their controls`);
+  await closeByEscape(dialog, `${theme} /keys create key dialog`, say);
+  await atRest();
 }
 
 /**
@@ -2965,12 +3047,12 @@ async function requestsTableWide(theme) {
  */
 async function requestsTableNoFill(theme) {
   const say = (what) => failures.push(`${theme} /requests without its fills: ${what}`);
-  const button = page.locator('.filters__cols button', { hasText: /^Columns/ });
+  const button = page.locator('.filter-bar button[aria-label="Columns"]');
   const turn = async (labels) => {
     await button.click();
     await settle();
     for (const label of labels) {
-      await page.locator('.cols-popover label', { hasText: new RegExp(`^${label}$`) }).locator('input[type="checkbox"]').click();
+      await page.locator('.popover .cols-popover label', { hasText: new RegExp(`^${label}$`) }).locator('input[type="checkbox"]').click();
       await settle();
     }
     await button.click();
@@ -3022,7 +3104,7 @@ async function burnLoneCard(theme) {
   const say = (what) => failures.push(`${theme} /analytics Burn by account: ${what}`);
   try {
     if (!(await tabTo(theme, 'Burn'))) return;
-    const group = page.locator('.filters select').filter({ has: page.locator('option[value="session"]') });
+    const group = page.locator('.filter-bar select[aria-label="Group by"]').filter({ has: page.locator('option[value="session"]') });
     await group.selectOption('account');
     await advance(LOAD_MS);
     const read = await page.evaluate(() => {
@@ -3089,40 +3171,329 @@ async function requestPageWidths(theme) {
 }
 
 /**
- * The Speed control at the end of the request log's filter bar against the Turn origin control it follows: the
- * same trigger box, type and border, on the same row of the bar or at the start of the next one.
+ * The table's pager under the one control height: its three buttons 32 by 32, its page-size select where it draws one
+ * at 32 px, and the footer as tall as one 32 px control with its padding and its top border.
  */
-async function speedFilter(theme) {
+async function pagerControls(theme, path) {
   const read = await page.evaluate(() => {
-    const trigger = (label) => [...document.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith(label));
-    const box = (el) => {
-      if (!el) return null;
-      const s = getComputedStyle(el);
-      return { border: `${s.borderTopWidth} ${s.borderTopStyle} ${s.borderTopColor}`, font: `${s.fontFamily}/${s.fontSize}/${s.fontWeight}`, height: Math.round(el.getBoundingClientRect().height), padding: `${s.paddingTop} ${s.paddingLeft}`, radius: s.borderRadius };
+    const pager = document.querySelector('.pager');
+    if (!pager) return null;
+    const style = getComputedStyle(pager);
+    const select = pager.querySelector('select');
+    return {
+      border: parseFloat(style.borderTopWidth),
+      buttons: [...pager.querySelectorAll('.pager__nav button')].map((b) => ({ height: b.getBoundingClientRect().height, width: b.getBoundingClientRect().width })),
+      height: pager.getBoundingClientRect().height,
+      padding: parseFloat(style.paddingTop) + parseFloat(style.paddingBottom),
+      select: select ? select.getBoundingClientRect().height : null,
     };
-    return { speed: box(trigger('Speed')), turn: box(trigger('Turn origin')) };
   });
-  measurements.push(`${theme} /requests speed filter ${JSON.stringify(read)}`);
-  failures.push(...compare(read.speed, read.turn, ['border', 'font', 'height', 'padding', 'radius'], `${theme} /requests: the Speed control against Turn origin`));
+  measurements.push(`${theme} ${path} pager ${JSON.stringify(read)}`);
+  const say = (what) => failures.push(`${theme} ${path}: the pager's ${what}`);
+  if (!read) return say('footer is not drawn');
+  if (read.buttons.length !== 3 || read.buttons.some((b) => b.width !== 32 || b.height !== 32)) say(`buttons measure ${JSON.stringify(read.buttons)}, not three of 32 by 32`);
+  if (read.select !== null && read.select !== 32) say(`page-size select is ${read.select} px, not 32`);
+  const expected = 32 + read.padding + read.border;
+  if (Math.abs(read.height - expected) > 0.5) say(`footer is ${read.height} px, not the ${expected} px of one 32 px control, ${read.padding} px of padding and a ${read.border} px border`);
 }
 
 /**
- * The Cache miss reason, Effort and Request class controls of the request log's filter bar against the Turn origin
- * control, as the Speed control is read: the same trigger box, type and border.
+ * The range control at rest on the request log's bar: the group 32 px with its six pills 28 px on one top, the group
+ * against the split Refresh button and against the search field on height and top, since the bar holds all three on
+ * its one row, and the Custom pill's width at rest recorded, the base its span grows from.
  */
-async function diagnosticsFilters(theme) {
-  const LABELS = ['Cache miss reason', 'Effort', 'Request class'];
-  const read = await page.evaluate((labels) => {
-    const trigger = (label) => [...document.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith(label));
+async function rangePills(theme) {
+  const read = await page.evaluate(() => {
+    const box = (el) => (el ? { height: Math.round(el.getBoundingClientRect().height), top: Math.round(el.getBoundingClientRect().top) } : null);
+    const group = document.querySelector('.segmented[aria-label="Range"]');
+    const pills = [...(group?.querySelectorAll('button') ?? [])];
+    return {
+      custom: pills.length > 0 ? Math.round(pills[pills.length - 1].getBoundingClientRect().width * 10) / 10 : null,
+      group: box(group),
+      pills: pills.map((b) => ({ ...box(b), text: b.textContent?.trim() ?? '' })),
+      refresh: box(document.querySelector('.filter-bar .refresh-control')),
+      search: box(document.querySelector('.filter-bar input.filter-bar__search')),
+    };
+  });
+  measurements.push(`${theme} /requests range pills ${JSON.stringify(read)}`);
+  const say = (what) => failures.push(`${theme} /requests: the range control's ${what}`);
+  if (read.group?.height !== 32) say(`group is ${read.group?.height} px, not 32`);
+  if (read.pills.length !== 6 || read.pills.some((p) => p.height !== 28)) say(`pills measure ${JSON.stringify(read.pills)}, not six of 28 px`);
+  if (new Set(read.pills.map((p) => p.top)).size > 1) say(`pills stand at ${JSON.stringify(read.pills.map((p) => p.top))}, not one top`);
+  failures.push(...compare(read.group, read.refresh, ['height', 'top'], `${theme} /requests: the range group against the split Refresh button`));
+  failures.push(...compare(read.group, read.search, ['height', 'top'], `${theme} /requests: the range group against the search field`));
+}
+
+/** The request log on an address of its own, loaded the way a view loads, its rows awaited. */
+async function loadRequests(search = '') {
+  await page.goto(`${base}/requests${search}`);
+  await booted();
+  await advance(LOAD_MS);
+  await page.waitForSelector('.filter-bar', { timeout: 15_000 }).catch(() => {});
+}
+
+/** The filter chips' address both chip measures load: values the mock's story holds, though a chip draws without rows. */
+const CHIPPED = '?turn_origins=human&efforts=high&request_classes=main&speeds=fast&cache_miss_reasons=messages_changed';
+
+/** A chip's box, type and border, the words the chip measures compare. */
+const chipBoxes = (words) =>
+  page.evaluate((list) => {
     const box = (el) => {
       if (!el) return null;
       const s = getComputedStyle(el);
       return { border: `${s.borderTopWidth} ${s.borderTopStyle} ${s.borderTopColor}`, font: `${s.fontFamily}/${s.fontSize}/${s.fontWeight}`, height: Math.round(el.getBoundingClientRect().height), padding: `${s.paddingTop} ${s.paddingLeft}`, radius: s.borderRadius };
     };
-    return { controls: Object.fromEntries(labels.map((label) => [label, box(trigger(label))])), turn: box(trigger('Turn origin')) };
-  }, LABELS);
+    const chip = (word) => [...document.querySelectorAll('.chip-line .chip--filter')].find((c) => c.textContent?.trim().startsWith(`${word}:`));
+    return Object.fromEntries(list.map((word) => [word, box(chip(word))]));
+  }, words);
+
+/**
+ * The speed chip against the turn origin chip beside it on the request log's chip line: the same box, type and border
+ * at the chips' 26 px. Read after the view's shot on an address that holds both, and the bare log loads again after.
+ */
+async function speedFilter(theme) {
+  await loadRequests(CHIPPED);
+  const read = await chipBoxes(['speed', 'turn origin']);
+  measurements.push(`${theme} /requests speed filter ${JSON.stringify(read)}`);
+  failures.push(...compare(read.speed, read['turn origin'], ['border', 'font', 'height', 'padding', 'radius'], `${theme} /requests: the speed chip against the turn origin chip`));
+  if (read.speed && read.speed.height !== 26) failures.push(`${theme} /requests: the speed chip is ${read.speed.height} px, not 26`);
+  await loadRequests();
+}
+
+/**
+ * The cache miss reason, effort and request class chips of the request log's chip line against the turn origin chip,
+ * as the speed chip is read: the same box, type and border at 26 px.
+ */
+async function diagnosticsFilters(theme) {
+  const WORDS = ['cache miss reason', 'effort', 'request class'];
+  await loadRequests(CHIPPED);
+  const read = await chipBoxes([...WORDS, 'turn origin']);
   measurements.push(`${theme} /requests diagnostics filters ${JSON.stringify(read)}`);
-  for (const label of LABELS) failures.push(...compare(read.controls[label], read.turn, ['border', 'font', 'height', 'padding', 'radius'], `${theme} /requests: the ${label} control against Turn origin`));
+  for (const word of WORDS) {
+    failures.push(...compare(read[word], read['turn origin'], ['border', 'font', 'height', 'padding', 'radius'], `${theme} /requests: the ${word} chip against the turn origin chip`));
+    if (read[word] && read[word].height !== 26) failures.push(`${theme} /requests: the ${word} chip is ${read[word].height} px, not 26`);
+  }
+  await loadRequests();
+}
+
+/**
+ * The address `barRow` reads a view's chip line on, a chip on each of its own dimensions up to five. A view without
+ * one has no dimension and is measured at rest.
+ */
+const BAR_CHIPS = {
+  '/accounts': '?status=cooldown',
+  '/analytics': '?accounts=primary&keys=laptop&models=claude-opus-5&pools=jobs&probes=1',
+  '/keys': '?pools=all,jobs&status=active',
+  '/requests': '?accounts=primary&keys=laptop&models=claude-opus-5&pools=jobs&statuses=200',
+  '/routing-log': '?accounts=primary&keys=laptop&kinds=moved,held,shedding_round,wind_down_started&models=claude-opus-5&pools=jobs',
+};
+/** A view whose row draws no search holds its slots under this width at rest, far from a second line. */
+const ROW_BOUND = {
+  // The row measured 730 px with its range and Group by select, past the Routing log's 700, so the bound is that measure
+  // plus margin.
+  '/analytics': 760,
+  '/routing-log': 700,
+};
+/** The views whose bar draws no range: the bar is first on the page and the view's head or tiles follow it. */
+const CARD_VIEWS = ['/accounts', '/keys', '/pools', '/quota', '/sessions'];
+/** The views `barRow` also reads at 950 by 800, where their slots outrun the content column beside the sidebar. */
+const NARROW_VIEWS = ['/analytics', '/requests'];
+/** A span from 23:00 the day before the pass's clock to 01:00 on its day, the Custom pill's widest words. */
+const MIDNIGHT = (origin) => {
+  const day = new Date(origin).toISOString().slice(0, 10);
+  const before = new Date(Date.parse(`${day}T00:00:00.000Z`) - 3_600_000).toISOString();
+  return `?from=${before}&to=${day}T01:00:00.000Z`;
+};
+
+/**
+ * The bar's measure on `view`, called after its shot: the row 32 px at rest and the bar 66 with a chip line (49 and 83
+ * on the Analytics sticky bar, whose 8 px of padding above and below and hairline add 17), every row child 32 px at one
+ * top (a segmented's pills 28 inside their group), the chips 26 with the word in --ink-2 and the values in --ink, one
+ * line (scrollWidth equal to clientWidth) at 1280 by 800 and 1440 by 900 at rest, with the view's chips and, on a
+ * ranged view, with a span across midnight, and the row against the first card's head. On a card view the element
+ * after the bar and the tiles stand under the bar's bottom. The row's `width`, its slots' widths and the gaps between
+ * them, holds under the view's ROW_BOUND at rest. On Analytics the Group by select reads the Add filter button's height
+ * and top. On the NARROW_VIEWS at 950 by 800 the bar and its row run no wider than their boxes and the right edge, and
+ * the count where the view draws one, end inside the window. Records to `measurements`.
+ */
+async function barRow(theme, view) {
+  const say = (what) => failures.push(`${theme} ${view} bar: ${what}`);
+  const ranged = view === '/requests' || view === '/routing-log' || view === '/analytics';
+  const sticky = view === '/analytics';
+  const read = () =>
+    page.evaluate(() => {
+      const bar = document.querySelector('.filter-bar');
+      const row = bar?.querySelector(':scope > .filter-bar__row');
+      const line = bar?.querySelector(':scope > .chip-line');
+      if (!bar || !row) return null;
+      const box = (el) => el.getBoundingClientRect();
+      // A token as a color the browser resolves, so it compares with a computed color.
+      const ink = (token) => {
+        const probe = document.createElement('span');
+        probe.style.color = `var(${token})`;
+        bar.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      };
+      const head = document.querySelector('.card--table .card__head') ?? document.querySelector('.card--table thead th, table thead th');
+      const chips = [...(line?.querySelectorAll('.chip--filter') ?? [])].filter((c) => !c.hidden);
+      const slots = [...row.children];
+      const edges = (el) => (el ? { height: Math.round(box(el).height), top: Math.round(box(el).top) } : null);
+      return {
+        addFilter: edges([...row.querySelectorAll(':scope > button')].find((b) => b.textContent?.trim() === 'Add filter')),
+        bar: Math.round(box(bar).height),
+        bottom: Math.round(box(bar).bottom),
+        chips: chips.map((c) => ({ height: Math.round(box(c).height), values: c.querySelector('.chip__values') ? getComputedStyle(c.querySelector('.chip__values')).color : null, word: getComputedStyle(c.querySelector('.chip__word')).color })),
+        children: [...row.children].map((el) => ({ height: Math.round(box(el).height), name: el.className.split(' ')[0] || el.tagName.toLowerCase(), top: Math.round(box(el).top) })),
+        custom: row.querySelector('.segmented button:last-child')?.textContent?.trim() ?? null,
+        groupBy: edges(row.querySelector('select[aria-label="Group by"]')),
+        head: head ? Math.round(box(head).top) : null,
+        inks: { ink: ink('--ink'), ink2: ink('--ink-2') },
+        line: line ? { client: line.clientWidth, scroll: line.scrollWidth } : null,
+        next: bar.nextElementSibling ? Math.round(box(bar.nextElementSibling).top) : null,
+        pills: [...(row.querySelectorAll('.segmented button') ?? [])].map((b) => Math.round(box(b).height)),
+        row: { client: row.clientWidth, height: Math.round(box(row).height), scroll: row.scrollWidth, top: Math.round(box(row).top), width: Math.round(box(row).width) },
+        tiles: document.querySelector('.stat-grid') ? Math.round(box(document.querySelector('.stat-grid')).top) : null,
+        width: Math.round(slots.reduce((sum, el) => sum + box(el).width, 0) + (parseFloat(getComputedStyle(row).columnGap) || 0) * Math.max(0, slots.length - 1)),
+      };
+    });
+  const check = (at, got, chipped) => {
+    if (got === null) return say(`${at}: no bar to measure`);
+    if (got.row.height !== 32) say(`${at}: the row is ${got.row.height} px, not 32`);
+    if (got.row.scroll > got.row.client) say(`${at}: the row runs ${got.row.scroll} px in ${got.row.client}, past one line`);
+    const off = got.children.filter((c) => c.height !== 32);
+    if (off.length > 0) say(`${at}: row children not 32 px ${JSON.stringify(off)}`);
+    if (new Set(got.children.map((c) => c.top)).size > 1) say(`${at}: the row's children stand at ${JSON.stringify(got.children.map((c) => c.top))}, not one top`);
+    if (got.pills.some((h) => h !== 28)) say(`${at}: the pills measure ${JSON.stringify(got.pills)}, not 28`);
+    if (got.head !== null && got.head < got.bottom) say(`${at}: the first card's head stands at ${got.head}, above the bar's bottom ${got.bottom}`);
+    if (CARD_VIEWS.includes(view)) {
+      if (got.next === null || got.next < got.bottom) say(`${at}: the element after the bar stands at ${got.next ?? 'none'}, not under the bar's bottom ${got.bottom}`);
+      if (got.tiles !== null && got.tiles < got.bottom) say(`${at}: the tiles stand at ${got.tiles}, above the bar's bottom ${got.bottom}`);
+    }
+    if (sticky) failures.push(...compare(got.groupBy, got.addFilter, ['height', 'top'], `${theme} ${view} bar: ${at}: the Group by select against the Add filter button`));
+    const rest = sticky ? 49 : 32;
+    if (!chipped) {
+      if (got.bar !== rest) say(`${at}: the bar is ${got.bar} px at rest, not ${rest}`);
+      return;
+    }
+    if (got.bar !== rest + 34) say(`${at}: the bar is ${got.bar} px with a chip line, not ${rest + 34}`);
+    if (got.chips.length === 0 || got.chips.some((c) => c.height !== 26)) say(`${at}: the chips measure ${JSON.stringify(got.chips.map((c) => c.height))}, not 26`);
+    if (got.chips.some((c) => c.word !== got.inks.ink2 || (c.values !== null && c.values !== got.inks.ink))) say(`${at}: the chips' inks ${JSON.stringify(got.chips)} against --ink-2 ${got.inks.ink2} and --ink ${got.inks.ink}`);
+    if (got.line && got.line.scroll > got.line.client) say(`${at}: the chip line runs ${got.line.scroll} px in ${got.line.client}, past one line`);
+  };
+  try {
+    for (const [width, height] of [
+      [1280, 800],
+      [1440, 900],
+    ]) {
+      await page.setViewportSize({ height, width });
+      const cases = [['at rest', '', false], ...(BAR_CHIPS[view] ? [['with its chips', BAR_CHIPS[view], true]] : []), ...(ranged ? [['with a span across midnight', MIDNIGHT(clockOrigin), false]] : [])];
+      for (const [label, search, chipped] of cases) {
+        await page.goto(`${base}${view}${search}`);
+        await booted();
+        await advance(LOAD_MS);
+        await page.waitForSelector('.filter-bar', { timeout: 15_000 }).catch(() => {});
+        const got = await read();
+        measurements.push(`${theme} ${view} bar row at ${width} by ${height} ${label} ${JSON.stringify(got)}`);
+        check(`${width} by ${height} ${label}`, got, chipped);
+        if (label === 'at rest' && ROW_BOUND[view] !== undefined && got !== null && got.width >= ROW_BOUND[view]) say(`${width} by ${height} at rest: the row's slots take ${got.width} px, not under ${ROW_BOUND[view]}`);
+      }
+    }
+    // At 950 px the sidebar leaves the content column narrower than a ranged view's slots, so the row wraps its
+    // trailing slots in place of running the bar past the window.
+    if (NARROW_VIEWS.includes(view)) {
+      await page.setViewportSize({ height: 800, width: 950 });
+      await page.goto(`${base}${view}`);
+      await booted();
+      await advance(LOAD_MS);
+      await page.waitForSelector('.filter-bar', { timeout: 15_000 }).catch(() => {});
+      const narrow = await page.evaluate(() => {
+        const bar = document.querySelector('.filter-bar');
+        const row = bar?.querySelector(':scope > .filter-bar__row');
+        if (!bar || !row) return null;
+        const right = (el) => (el ? Math.round(el.getBoundingClientRect().right) : null);
+        return { bar: { client: bar.clientWidth, scroll: bar.scrollWidth }, count: right(row.querySelector('.filter-bar__count')), edge: right(row.querySelector('.filter-bar__edge')), row: { client: row.clientWidth, scroll: row.scrollWidth }, window: window.innerWidth };
+      });
+      measurements.push(`${theme} ${view} bar row at 950 by 800 ${JSON.stringify(narrow)}`);
+      if (narrow === null) say('950 by 800: no bar to measure');
+      else {
+        if (narrow.bar.scroll > narrow.bar.client) say(`950 by 800: the bar runs ${narrow.bar.scroll} px in ${narrow.bar.client}`);
+        if (narrow.row.scroll > narrow.row.client) say(`950 by 800: the row runs ${narrow.row.scroll} px in ${narrow.row.client}`);
+        if (narrow.edge === null || narrow.edge > narrow.window) say(`950 by 800: the right edge ends at ${narrow.edge ?? 'none'} px, past the ${narrow.window} px window`);
+        if (view === '/requests' && (narrow.count === null || narrow.count > narrow.window)) say(`950 by 800: the count ends at ${narrow.count ?? 'none'} px, past the ${narrow.window} px window`);
+      }
+    }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await page.goto(`${base}${view}`);
+    await booted();
+    await advance(LOAD_MS);
+    await atRest();
+  }
+}
+
+/**
+ * The Kinds list through Add filter on the routing log at 1280 by 800, Select all, the eight presets and the 35 kinds:
+ * its popover keeps 8 px inside the window above and below, where the list scrolls. Records the box.
+ */
+async function kindsPopoverInside(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: the Kinds popover ${what}`);
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await page.locator('.filter-bar__row > button', { hasText: /^Add filter$/ }).click();
+  await advance(CLOCK_STEP_MS);
+  await page.locator('.popover .add-filter__row').filter({ has: page.locator('.add-filter__label', { hasText: /^Kinds$/ }) }).click();
+  await advance(CLOCK_STEP_MS);
+  const read = await page.evaluate(() => {
+    const box = document.querySelector('.popover .add-filter')?.closest('.popover');
+    if (!box) return null;
+    const r = box.getBoundingClientRect();
+    return { bottom: Math.round(r.bottom), client: box.clientHeight, rows: box.querySelectorAll('.option-list [role="option"]').length, scroll: box.scrollHeight, top: Math.round(r.top), view: window.innerHeight };
+  });
+  measurements.push(`${theme} /routing-log kinds popover inside ${JSON.stringify(read)}`);
+  if (read === null) say('did not open');
+  else {
+    if (read.rows !== 44) say(`lists ${read.rows} rows, not Select all, the eight presets and the 35 kinds`);
+    if (read.top < 8 || read.bottom > read.view - 8) say(`spans ${read.top} to ${read.bottom} px, outside the ${read.view} px window less 8 px above and below`);
+  }
+  await page.keyboard.press('Escape');
+  await advance(CLOCK_STEP_MS);
+  await atRest();
+}
+
+/**
+ * The split Refresh button keeps its width whatever its state, so the count beside it never moves: the control's width
+ * and the count's left read at Off, at 5 s chosen through its menu, and paused under the drawer the first row's Details
+ * link opens, all equal. The interval returns to Off and the drawer closes afterwards.
+ */
+async function refreshControlWidth(theme) {
+  const read = (state) =>
+    page.evaluate((s) => {
+      const control = document.querySelector('.filter-bar .refresh-control');
+      const count = document.querySelector('.filter-bar .filter-bar__count');
+      return { count: count ? Math.round(count.getBoundingClientRect().left * 10) / 10 : null, data: control?.getAttribute('data-state') ?? null, state: s, width: control ? Math.round(control.getBoundingClientRect().width * 10) / 10 : null };
+    }, state);
+  const choose = async (word) => {
+    await page.locator('.filter-bar .refresh-control__part').click();
+    await settle();
+    await page.locator('.popover[role="menu"] [role="menuitemradio"]', { hasText: new RegExp(`^${word}$`) }).click();
+    await settle();
+  };
+  const reads = [await read('off')];
+  await choose('5 s');
+  reads.push(await read('on'));
+  await page.locator('.requests__table tbody tr .requests__links a', { hasText: 'Details' }).first().click();
+  await advance(LOAD_MS);
+  reads.push(await read('paused'));
+  await page.locator('button[aria-label="Close details"]').click();
+  await settle();
+  await choose('Off');
+  await atRest();
+  measurements.push(`${theme} /requests split Refresh button ${JSON.stringify(reads)}`);
+  const say = (what) => failures.push(`${theme} /requests: the split Refresh button ${what}`);
+  if (JSON.stringify(reads.map((r) => r.data)) !== JSON.stringify(['off', 'on', 'paused'])) say(`reads the states ${JSON.stringify(reads.map((r) => r.data))}, not off, on and paused`);
+  if (reads.some((r) => r.width === null || r.width !== reads[0].width)) say(`measures ${JSON.stringify(reads.map((r) => r.width))} across its states, not one width`);
+  if (reads.some((r) => r.count === null || r.count !== reads[0].count)) say(`moves the count to ${JSON.stringify(reads.map((r) => r.count))} across its states`);
 }
 
 /**
@@ -3253,23 +3624,47 @@ async function analyticsTabs(theme) {
 
 /**
  * The tab strip docks under the sticky filter bar: on Latency, the longest section, scrolled to the page's end, the
- * strip's top sits on the filter bar's bottom, the height the page measured from the bar.
+ * strip's top sits on the filter bar's bottom, the height the page measured from the bar, 49 px under the 52 px top bar
+ * at rest and 83 px with a chip line. `chipped` reads the chip line on a load of its own, after the view's shot, whose
+ * address holds the probes flag, a chip that narrows no figure, so the section still scrolls on the router's seed, and
+ * loads the bare page again after.
  */
-async function stickyStrip(theme) {
-  try {
+async function stickyStrip(theme, chipped = false) {
+  const say = (what) => failures.push(`${theme} /analytics: ${what}`);
+  const docked = async (label, height) => {
     if (!(await tabTo(theme, 'Latency'))) return;
     await page.evaluate(() => window.scrollTo(0, document.scrollingElement.scrollHeight));
     await settle();
-    const read = await page.evaluate(() => ({
-      filters: document.querySelector('.filters--sticky')?.getBoundingClientRect().bottom ?? null,
-      scrolled: Math.round(document.scrollingElement.scrollTop),
-      strip: document.querySelector('.section-bar')?.getBoundingClientRect().top ?? null,
-    }));
-    measurements.push(`${theme} /analytics sticky strip ${JSON.stringify(read)}`);
-    if (read.scrolled === 0) failures.push(`${theme} /analytics: the Latency tab does not scroll, so the strip's dock is not measured`);
-    if (read.filters === null || read.strip === null || read.strip !== read.filters) failures.push(`${theme} /analytics: scrolled to the end, the tab strip's top is ${read.strip} against the filter bar's bottom ${read.filters}`);
+    const read = await page.evaluate(() => {
+      const bar = document.querySelector('.filter-bar--sticky');
+      return {
+        bar: bar ? Math.round(bar.getBoundingClientRect().height) : null,
+        filters: bar?.getBoundingClientRect().bottom ?? null,
+        scrolled: Math.round(document.scrollingElement.scrollTop),
+        strip: document.querySelector('.section-bar')?.getBoundingClientRect().top ?? null,
+      };
+    });
+    measurements.push(`${theme} /analytics sticky strip ${label} ${JSON.stringify(read)}`);
+    if (read.scrolled === 0) say(`${label}, the Latency tab does not scroll, so the strip's dock is not measured`);
+    if (read.filters === null || read.strip === null || read.strip !== read.filters) say(`${label}, scrolled to the end, the tab strip's top is ${read.strip} against the filter bar's bottom ${read.filters}`);
+    if (read.bar !== height || read.strip !== 52 + height) say(`${label}, the bar is ${read.bar} px and the strip's top ${read.strip}, not ${height} and ${52 + height}`);
+  };
+  try {
+    if (chipped) {
+      await page.goto(`${base}/analytics?probes=1`);
+      await booted();
+      await advance(LOAD_MS);
+      await page.waitForSelector('.section-bar', { timeout: 15_000 }).catch(() => {});
+    }
+    await docked(chipped ? 'with a chip line' : 'at rest', chipped ? 83 : 49);
   } finally {
-    await tabTo(theme, 'Traffic');
+    if (chipped) {
+      await page.goto(`${base}/analytics`);
+      await booted();
+      await advance(LOAD_MS);
+      await page.waitForSelector('.analytics-section#traffic', { timeout: 15_000 }).catch(() => {});
+      await atRest();
+    } else await tabTo(theme, 'Traffic');
   }
 }
 
@@ -3465,7 +3860,7 @@ async function unitControl(theme) {
           [b.left + 4, b.bottom - 4],
           [b.right - 4, b.bottom - 4],
         ];
-        const filters = document.querySelector('.filters--sticky')?.getBoundingClientRect();
+        const filters = document.querySelector('.filter-bar--sticky')?.getBoundingClientRect();
         return {
           box: { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) },
           covered: points.filter(([x, y]) => !el.contains(document.elementFromPoint(x, y))).map(([x, y]) => [Math.round(x), Math.round(y), document.elementFromPoint(x, y)?.className ?? null]),
@@ -3563,7 +3958,8 @@ async function fastLane(theme, path) {
 
 /**
  * The newest request's drawer beside the compact table: the drawer is 400 px at 1280 by 800 and 440 px at 1440 by 900,
- * its head 70 px at both, the table draws Time, Model, Status, Attempts and the links' column with nothing to scroll
+ * its head 106 px at both (the id, the time and the "Widen to" line, which breaks once beside the head's actions at
+ * either width), the table draws Time, Model, Status, Attempts and the links' column with nothing to scroll
  * sideways at both, and every chip the drawer draws, the Answer row's and the upstream ids', takes the status badge's
  * type and height, and the request class badge its box. The Estimated cost row of a request a subscription window
  * paid draws its share chips in the same type, each on one line inside the cell, with the muted equivalent on one
@@ -3682,7 +4078,7 @@ async function requestDrawerCompact(theme) {
     const got = await read();
     measurements.push(`${theme} /requests drawer at ${width} by ${height} ${JSON.stringify(got)}`);
     if (got.drawer !== drawer) say(`${where} is ${got.drawer}px wide, not ${drawer}px`);
-    if (got.head !== 70) say(`${where}: the head is ${got.head}px tall, not 70px`);
+    if (got.head !== 106) say(`${where}: the head is ${got.head}px tall, not 106px`);
     if (JSON.stringify(got.heads) !== JSON.stringify(['Time', 'Model', 'Status', 'Attempts', ''])) say(`${where}: the table draws the columns ${JSON.stringify(got.heads)}`);
     if (got.table === null) say(`${where} has no table to measure`);
     else if (got.table.scroll > got.table.client) say(`${where}: the table needs ${got.table.scroll}px of its card's ${got.table.client}px`);
@@ -3746,8 +4142,9 @@ async function requestDrawerCompact(theme) {
 
 /**
  * The first link of the Analytics page's Misses by reason panel, on the Cache tab, lands on the Requests page under
- * the linked range, and the first row's drawer reads the link's reason on its Cache row, whose first span is the label
- * a detail follows. The mock pass runs it on a load of its own, and it leaves the Analytics page on its Traffic tab.
+ * the linked range, pressed as the Custom pill printing its span, and the first row's drawer reads the link's reason
+ * on its Cache row, whose first span is the label a detail follows. The mock pass runs it on a load of its own, and it
+ * leaves the Analytics page on its Traffic tab.
  */
 async function reasonLink(theme) {
   const say = (what) => failures.push(`${theme} /analytics reasons panel link: ${what}`);
@@ -3773,7 +4170,11 @@ async function reasonLink(theme) {
       say(`${link.href} lists no request`);
       return;
     }
-    const range = await page.evaluate(() => document.querySelector('select[aria-label="Date range"]')?.selectedOptions[0]?.textContent ?? null);
+    const range = await page.evaluate(() => {
+      const pills = [...document.querySelectorAll('.segmented[aria-label="Range"] button')];
+      const pressed = pills.find((b) => b.getAttribute('aria-pressed') === 'true');
+      return pressed ? { custom: pressed === pills[pills.length - 1], text: pressed.textContent?.trim() ?? '' } : null;
+    });
     await page.locator('.requests__table tbody tr').first().click();
     await advance(LOAD_MS);
     try {
@@ -3784,7 +4185,7 @@ async function reasonLink(theme) {
     }
     const cache = await page.evaluate(() => [...document.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Cache')?.querySelector('dd span')?.textContent ?? null);
     measurements.push(`${theme} /analytics reasons panel link ${JSON.stringify({ cache, href: link.href, label: link.label, range })}`);
-    if (!range?.startsWith('Custom range')) say(`${link.href} reads the range ${JSON.stringify(range)}, not the linked one`);
+    if (!range?.custom) say(`${link.href} reads the range ${JSON.stringify(range)}, not the linked one on the Custom pill`);
     if (cache !== link.label) say(`the first row's drawer reads the reason ${JSON.stringify(cache)} under the "${link.label}" link`);
   } finally {
     await page.goto(`${base}/analytics`);
@@ -4503,45 +4904,50 @@ async function shedPopoverHeight(theme, where, short) {
 }
 
 /**
- * With the Accounts filter's list open and the focus in it, a pointer resting on `station` opens its popover, and one
- * Escape closes both: a popover a hover opened lets the key run on to the focused filter, which closes its list and
- * keeps the focus, on its trigger.
+ * With the Add filter popover open on its Account step and the focus in its option list, a pointer resting on `station`
+ * opens its popover, and one Escape closes both: the hover popover closes on the key in the capture phase, before the
+ * Add filter popover takes it, closes and hands the focus back to Add filter.
  */
 async function escapeReachesFilter(theme, what, station) {
-  const say = (message) => failures.push(`${theme} /routing-log: ${what} over the open Accounts filter: ${message}`);
+  const say = (message) => failures.push(`${theme} /routing-log: ${what} over the open Add filter popover: ${message}`);
   if ((await station.count()) === 0) {
     say('no station to hover');
     return;
   }
-  const filter = page.locator('.mselect').filter({ has: page.locator('.mselect__trigger', { hasText: /^Accounts/ }) });
-  if ((await filter.count()) !== 1) {
-    say(`the page draws ${await filter.count()} Accounts filters, not one`);
+  const button = page.locator('.filter-bar__row > button', { hasText: /^Add filter$/ });
+  if ((await button.count()) !== 1) {
+    say(`the bar draws ${await button.count()} Add filter buttons, not one`);
     return;
   }
   const read = () =>
-    filter.evaluate((el) => {
+    page.evaluate(() => {
       const at = document.activeElement;
+      const box = document.querySelector('.popover .add-filter')?.closest('.popover') ?? null;
+      const add = [...document.querySelectorAll('.filter-bar__row > button')].find((b) => b.textContent?.trim() === 'Add filter');
       return {
-        focus: at === el.querySelector('.mselect__trigger') ? 'trigger' : el.querySelector('.mselect__list')?.contains(at) ? 'list' : (at?.tagName ?? null),
-        list: el.querySelector('.mselect__list') !== null,
+        box: box !== null,
+        focus: at === add ? 'add filter' : box?.querySelector('.option-list')?.contains(at) ? 'list' : (at?.tagName ?? null),
         open: document.querySelectorAll('.strip-popover').length,
         pinned: document.querySelector('.strip-popover')?.classList.contains('is-pinned') ?? null,
+        step: box?.querySelector('.popover__title')?.textContent?.trim() ?? null,
       };
     });
-  await filter.locator('.mselect__trigger').click();
+  await button.click();
+  await advance(CLOCK_STEP_MS);
+  await page.locator('.popover .add-filter__row').filter({ has: page.locator('.add-filter__label', { hasText: /^Account$/ }) }).click();
   await advance(CLOCK_STEP_MS);
   await station.hover();
   await advance(CLOCK_STEP_MS);
   const before = await read();
-  measurements.push(`${theme} /routing-log ${what} hovered over the open Accounts filter ${JSON.stringify(before)}`);
-  if (!before.list || before.focus !== 'list' || before.open !== 1 || before.pinned !== false) say(`the hover left ${JSON.stringify(before)}, not the filter's list open with the focus in it under one hover popover`);
+  measurements.push(`${theme} /routing-log ${what} hovered over the open Add filter popover ${JSON.stringify(before)}`);
+  if (!before.box || before.step !== 'Account' || before.focus !== 'list' || before.open !== 1 || before.pinned !== false) say(`the hover left ${JSON.stringify(before)}, not the Account step open with the focus in its list under one hover popover`);
   await page.keyboard.press('Escape');
   await advance(CLOCK_STEP_MS);
   const after = await read();
-  measurements.push(`${theme} /routing-log ${what} after one Escape over the open Accounts filter ${JSON.stringify(after)}`);
-  if (after.open !== 0 || after.list || after.focus !== 'trigger') say(`one Escape left ${JSON.stringify(after)}, not the popover closed and the filter's list closed with the focus kept on its trigger`);
-  // A list left open would stand over the rest of the pass.
-  if (after.list) {
+  measurements.push(`${theme} /routing-log ${what} after one Escape over the open Add filter popover ${JSON.stringify(after)}`);
+  if (after.open !== 0 || after.box || after.focus !== 'add filter') say(`one Escape left ${JSON.stringify(after)}, not the hover popover and the Add filter popover closed with the focus on Add filter`);
+  // A box left open would stand over the rest of the pass.
+  if (after.box) {
     await page.keyboard.press('Escape');
     await advance(CLOCK_STEP_MS);
   }
@@ -4635,8 +5041,8 @@ async function stripIdleContrast(theme) {
  * read on the seeded router's first card and on the mock's fresh placement, whose Pick station the mock pass then opens
  * and closes by Enter, Escape, Space and Escape. The shed move's shed station's popover keeps inside the window less 8
  * px above and below at both viewports and in a window shorter than its content, where it scrolls. One Escape over the
- * open Accounts filter closes a hovered station's popover and the filter's list alike, on the seeded router's first
- * card's host station and on the mock's fresh placement's Pick station.
+ * Add filter popover open on its Account step closes a hovered station's popover and the Add filter popover alike, on
+ * the seeded router's first card's host station and on the mock's fresh placement's Pick station.
  */
 async function decisionCard(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -4875,8 +5281,8 @@ const compare = (mine, neighbour, keys, what) => {
 };
 
 /**
- * The identity card's subscription end editor on an OAuth account: its date field is the box of the status filter
- * beside the list (the page's other plain control; the label editor's field takes the heading's type), its checkbox
+ * The identity card's subscription end editor on an OAuth account: its date field is the box of the Sort select in
+ * the bar (the page's other plain control, where the label editor's field takes the heading's type), its checkbox
  * label the field label's type, its Save the size of the Edit end button it opened from, and opening it moves no row
  * of the card. Ticking the box prefills a date. The router's seed has only an API-key account, which has no
  * editor, so there the check stands down; the mock's first account is an OAuth one.
@@ -4895,6 +5301,8 @@ async function subscriptionEndForm(theme) {
   const editButton = await open.evaluate(button);
   await open.click();
   await identity.locator('label.row input[type="checkbox"]').check();
+  // A field under the pointer draws the hover border, so the pointer leaves the card before the fields are compared.
+  await page.mouse.move(0, 0);
   await settle();
   const read = await page.evaluate(() => {
     const box = (el) => {
@@ -4915,7 +5323,7 @@ async function subscriptionEndForm(theme) {
     return {
       ends: box(ends),
       fieldLabel: type(card?.querySelector('.field .field__label')),
-      filter: box(document.querySelector('select[aria-label="Status filter"]')),
+      sort: box(document.querySelector('.filter-bar select[aria-label="Sort"]')),
       prefill: ends?.value ?? null,
       tickLabel: type(card?.querySelector('label.row .field__label')),
     };
@@ -4926,7 +5334,7 @@ async function subscriptionEndForm(theme) {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(read.prefill ?? '')) say(`ticking Cancelled left the end ${JSON.stringify(read.prefill)} rather than the derived date`);
   for (const finding of [
     // A select keeps room for its chevron, so the padding is left out.
-    ...compare(read.ends, read.filter, ['background', 'border', 'font', 'height', 'radius'], 'the Ends field against the status filter'),
+    ...compare(read.ends, read.sort, ['background', 'border', 'font', 'height', 'radius'], 'the Ends field against the Sort select'),
     ...compare(save, editButton, ['font', 'height', 'padding', 'radius'], "the editor's Save against the Edit end button"),
   ]) say(finding);
   if (read.tickLabel !== read.fieldLabel) say(`the Cancelled label reads ${read.tickLabel} against the Ends label's ${read.fieldLabel}`);
@@ -5079,6 +5487,8 @@ async function keyAccessSelects(theme) {
       return node ? `${getComputedStyle(node).fontSize} ${getComputedStyle(node).color} ${getComputedStyle(node).lineHeight}` : null;
     }, label);
   await show('Access');
+  // A field under the pointer draws the hover border, so the pointer leaves the dialog before the selects are compared.
+  await page.mouse.move(0, 0);
   const expiry = await measureSelect('Expiry');
   const autoMode = await measureSelect('Server-side auto mode');
   const hints = { autoMode: await hintOf('Server-side auto mode') };
@@ -5229,30 +5639,38 @@ async function keyDialogGeometry(theme) {
   await atRest();
 }
 
-/** The toolbar's Pool select against the Status select beside it: the same box and type. */
+/**
+ * The Keys bar's pool chip against the status chip beside it on an address that holds both, the pool the table's first
+ * key sits in, since the page drops a pool the router does not hold: the same box, type and border at the chips' 26 px.
+ * Read after the view's shot, and the bare page loads again after.
+ */
 async function keysPoolSelect(theme) {
-  const read = await page.evaluate(() => {
-    const box = (el) => {
-      if (!el) return null;
-      const s = getComputedStyle(el);
-      return { backgroundColor: s.backgroundColor, borderRadius: s.borderRadius, fontSize: s.fontSize, height: el.getBoundingClientRect().height, paddingLeft: s.paddingLeft, paddingRight: s.paddingRight };
-    };
-    return { pool: box(document.querySelector('.table-toolbar select[aria-label="Pool"]')), status: box(document.querySelector('select[aria-label="Status"]')) };
-  });
-  measurements.push(`${theme} /keys Pool select ${JSON.stringify(read)}`);
-  if (!read.pool) {
-    failures.push(`${theme} /keys: the toolbar draws no Pool select`);
-    return;
+  const load = async (search) => {
+    await page.goto(`${base}/keys${search}`);
+    await booted();
+    await advance(LOAD_MS);
+    await page.waitForSelector('.filter-bar', { timeout: 15_000 }).catch(() => {});
+  };
+  const pool = await page.evaluate(() => document.querySelector('.card--table tbody tr td:nth-child(3)')?.textContent?.trim() ?? '');
+  await load(`?${new URLSearchParams({ pools: pool, status: 'active' })}`);
+  const read = await chipBoxes(['pool', 'status']);
+  measurements.push(`${theme} /keys pool chip ${JSON.stringify(read)}`);
+  if (!read.pool) failures.push(`${theme} /keys: the bar draws no pool chip`);
+  else {
+    failures.push(...compare(read.pool, read.status, ['border', 'font', 'height', 'padding', 'radius'], `${theme} /keys: the pool chip against the status chip`));
+    if (read.pool.height !== 26) failures.push(`${theme} /keys: the pool chip is ${read.pool.height} px, not 26`);
   }
-  failures.push(...compare(read.pool, read.status, ['backgroundColor', 'borderRadius', 'fontSize', 'height', 'paddingLeft', 'paddingRight'], `${theme} /keys: the Pool select against the Status select`));
+  await load('');
+  await atRest();
 }
 
 /**
- * The Sessions head at 1280 by 800, where the disclosure wraps, and at 1440 by 900, where it does not: closed, the head
- * stays under 60 px and the disclosure ends the lead's paragraph, at most two lines, on the sentence's last line where
- * both fit and flush left on the next line where they do not; opened, the paragraph lands 6 px under the lead and
- * above the tiles. Cost reference stays one line at the head's top right in both states. The heights and Cost
- * reference's place are recorded per viewport, and the head is left closed at the pass's viewport for the shot.
+ * The Sessions head under the bar at 1280 by 800, where the disclosure wraps, and at 1440 by 900, where it does not:
+ * closed, the head starts under the bar's bottom and stays under 60 px, and the disclosure ends the lead's paragraph, at
+ * most two lines, on the sentence's last line where both fit and flush left on the next line where they do not.
+ * Opened, the paragraph lands 6 px under the lead and above the tiles. Cost reference stays one line at the head's top
+ * right in both states. The heights, the bar's bottom against the head's top and Cost reference's place are recorded
+ * per viewport, and the head is left closed at the pass's viewport for the shot.
  */
 async function sessionsLead(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -5301,6 +5719,7 @@ async function sessionsLead(theme) {
         lead: box(lead),
         lineHeight: lead ? parseFloat(getComputedStyle(lead).lineHeight) : null,
         line,
+        bar: box(document.querySelector('.filter-bar')),
         para: box(para),
         tiles: box(document.querySelector('.stat-grid')),
         words,
@@ -5325,6 +5744,7 @@ async function sessionsLead(theme) {
     const after = await read();
     measurements.push(
       `${theme} /sessions lead ${where} ${JSON.stringify({
+        bar: closed.bar && closed.head ? { bottom: px(closed.bar.bottom), head: px(closed.head.top) } : null,
         closed: px(closed.head?.height),
         cost: { closed: at(closed.cost), open: at(open.cost) },
         gap: open.para && open.lead ? px(open.para.top - open.lead.bottom) : null,
@@ -5332,6 +5752,7 @@ async function sessionsLead(theme) {
       })}`,
     );
     if (closed.head === null || closed.head.height >= 60) say(`${where} the closed head is ${px(closed.head?.height) ?? 'not'}px tall, not under 60px`);
+    if (closed.bar === null || closed.head === null || closed.bar.bottom > closed.head.top) say(`${where} the bar ends at ${px(closed.bar?.bottom) ?? 'none'}px, not above the head's top at ${px(closed.head?.top) ?? 'none'}px`);
     if (closed.para === null || closed.para.height !== 0 || closed.expanded !== 'false') say(`${where} the closed head shows the paragraph (${px(closed.para?.height)}px, aria-expanded ${closed.expanded})`);
     const { button: b, lead: p, line, lineHeight, words } = closed;
     if (b === null || p === null || line === null || lineHeight === null || words === null) say(`${where} the lead has no sentence, button or paragraph to measure`);
@@ -6117,6 +6538,7 @@ try {
         await sessionForkMark(theme);
         await sessionForkBadges(theme);
         await probeBarSlots(theme);
+        for (const what of await chevronWeight(`${theme} /sessions row`, page.locator('.srow__chevron > svg'), 14, 1.75)) failures.push(`${theme} /sessions row: ${what}`);
       }
       if (view.path === '/pools') {
         await expertRow(theme);
@@ -6160,7 +6582,6 @@ try {
       if (view.path === '/keys') {
         await tableColumns(theme, 'keys', '.card--table table', ['Name', 'Models', 'Status']);
         await keyBadges(theme);
-        await keysPoolSelect(theme);
         await keyAccessSelects(theme);
         await keyDialogGeometry(theme);
         await keysPageMenus(theme);
@@ -6173,13 +6594,13 @@ try {
         // is empty. In the mock pass the story's values run past the card, so the table's width is a record there.
         await tableColumns(theme, 'requests', '.requests__table', ['Client'], 0, { overflowRecorded: mock, wrapping: ['Status', 'Attempts', ''] });
         if (mock) await requestsTableWide(theme);
-        await speedFilter(theme);
-        await diagnosticsFilters(theme);
+        await pagerControls(theme, view.path);
       }
       if (view.path === '/routing-log') {
         await routingLogColumns(theme);
         await diagnosticsNav(theme, view.path);
         await firstDecisionOpen(theme);
+        await pagerControls(theme, view.path);
       }
       if (view.path === '/quota') {
         await quotaChips(theme);
@@ -6203,16 +6624,34 @@ try {
       // After the shot, since it resizes the page and back, and before the measures that reload or leave the view.
       await topBarFits(theme, view.path);
       if (view.path === '/pools') await utilizationMargin(theme);
+      if (view.path === '/') await topbarHeights(theme);
       if (view.path === '/keys') await keysLayout(theme);
+      if (view.path === '/keys') await dialogControls(theme);
       if (view.path === '/analytics') await burnLoneCard(theme);
+      // The chip line's dock and the bar's measure load their addresses themselves and leave the bare page.
+      if (view.path === '/analytics') await stickyStrip(theme, true);
+      if (view.path === '/analytics') await barRow(theme, view.path);
+      if (view.path === '/requests') await rangePills(theme);
+      // The chip measures, the bar's and the split button's each load what they read and leave the bare log at 1280 by
+      // 800, so the shot above stays the bare log and the measures after them read it.
+      if (view.path === '/requests') await speedFilter(theme);
+      if (view.path === '/requests') await diagnosticsFilters(theme);
+      if (view.path === '/requests') await barRow(theme, view.path);
+      if (view.path === '/requests') await refreshControlWidth(theme);
       if (view.path === '/requests') await requestsTableNoFill(theme);
       if (view.path === '/requests') await requestDrawerCompact(theme);
       if (view.path === '/requests' && mock) await attemptCardAtTheBottom(theme);
       if (view.path === '/requests') await wideBodyDialog(theme);
       if (view.path === '/routing-log') await stripIdleContrast(theme);
       if (view.path === '/routing-log') await decisionCard(theme);
+      // The bar's measure loads each address itself and leaves the bare log, where the Kinds list opens.
+      if (view.path === '/routing-log') await barRow(theme, view.path);
+      if (view.path === '/routing-log') await kindsPopoverInside(theme);
       if (view.path === '/sessions') await forkLink(theme);
       if (view.path === '/settings') await copyFallback(theme);
+      // The pool chip's measure and the bar's load their addresses themselves and leave the bare view.
+      if (view.path === '/keys') await keysPoolSelect(theme);
+      if (CARD_VIEWS.includes(view.path)) await barRow(theme, view.path);
     }
   }
   // Only the mock bundle routes the fixture path.

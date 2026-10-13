@@ -1189,6 +1189,9 @@ async fn the_request_log_filters_paginates_and_shows_one_row_per_request_with_it
         if i == 7 {
             row.error_code = Some("weird_code".into());
         }
+        if i == 3 || i == 4 {
+            row.session_id = Some("s-pair".into());
+        }
         parts
             .db
             .insert_request(
@@ -1318,6 +1321,114 @@ async fn the_request_log_filters_paginates_and_shows_one_row_per_request_with_it
     )
     .await;
     assert_eq!(text["requests"][0]["id"], "r007");
+    let ids = |body: serde_json::Value| -> Vec<String> {
+        body["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let one = json(
+        get(
+            &parts.app,
+            "/admin/requests?request=r007&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(ids(one), ["r007"], "request answers the one row");
+    let prefix = json(
+        get(
+            &parts.app,
+            "/admin/requests?request=r0&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        ids(prefix),
+        Vec::<String>::new(),
+        "request matches the id whole, never a prefix"
+    );
+    let session = json(
+        get(
+            &parts.app,
+            "/admin/requests?session=s-pair&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        ids(session),
+        ["r003", "r004"],
+        "session answers the session's rows"
+    );
+    let unknown = json(
+        get(
+            &parts.app,
+            "/admin/requests?session=nope&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        ids(unknown),
+        Vec::<String>::new(),
+        "an unknown session answers none"
+    );
+    let both = json(
+        get(
+            &parts.app,
+            "/admin/requests?request=r007&text=r00&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(ids(both), ["r007"], "request stands beside text");
+    let neither = json(
+        get(
+            &parts.app,
+            "/admin/requests?request=r007&text=r01&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        ids(neither),
+        Vec::<String>::new(),
+        "text still narrows a request match"
+    );
+    let paired = json(
+        get(
+            &parts.app,
+            "/admin/requests?session=s-pair&text=r004&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(ids(paired), ["r004"], "session stands beside text");
+    let narrowed = json(
+        get(
+            &parts.app,
+            "/admin/requests?session=s-pair&text=r00&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        ids(narrowed),
+        ["r003", "r004"],
+        "session narrows a text that matches more rows"
+    );
     assert_eq!(
         rows[0]["user_agent"].as_str(),
         Some("claude-cli/2.1.300 (external, cli)"),

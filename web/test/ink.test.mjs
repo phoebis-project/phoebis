@@ -8,15 +8,16 @@ const sheet = (name) => readFileSync(new URL(`../src/styles/${name}.css`, import
  * The rules whose `--ink-3` draws no word the operator reads: placeholders, disabled controls and decorative strokes.
  */
 const INK3_ALLOWED = new Set([
+  ".add-filter__row[aria-disabled='true']",
   '.chip--removable button',
   '.dialog__close',
   '.dialog-group .input:disabled',
   '.icon-btn',
   '.input::placeholder',
   '.ldot',
-  '.mselect__clear',
   '.pct-label',
-  '.quota-meta__sep',
+  ".refresh-control[data-state='paused'] .refresh-control__part",
+  '.refresh-control__part:disabled',
   '.search > svg',
   '.select > svg',
   '.srow__chevron',
@@ -89,7 +90,7 @@ test('the text inks reach 4.5 to 1 on every surface in both themes', () => {
   assert.deepEqual(short, []);
 });
 
-test('only placeholders, disabled controls and decorative strokes read --ink-3', () => {
+test('only placeholders, disabled controls, muted states and decorative strokes read --ink-3', () => {
   const stray = [];
   for (const name of ['base', 'components', 'pages']) {
     for (const rule of rules(sheet(name))) {
