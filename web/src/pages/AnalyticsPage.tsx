@@ -160,8 +160,8 @@ const optionsOf = (rows: AnalyticsGroup[] | null): Option[] =>
 
 export function AnalyticsPage() {
   const [now, setNow] = useState(() => clock.now());
-  // Try again and Refresh bump it with the end, and a custom span's reload tick bumps it alone, so every read keyed on
-  // the window runs again even while the clock or the span stands still.
+  // Try again and Refresh bump it with the end, so every read keyed on the window runs again even while the clock
+  // stands still.
   const [generation, setGeneration] = useState(0);
   // Every filter lives in the address, so a link or a reload lands on the same view.
   const { address, filters: a, update: rawUpdate } = useQueryFilters(ANALYTICS_CODEC);
@@ -261,12 +261,16 @@ export function AnalyticsPage() {
   // controls over what it holds: a cursor page that crossed a filter change may be wider than the pattern, and the
   // user agent matches its folded token, as the unscoped page's rollups do, where the route matches the raw header.
   const foldOptions = useMemo(() => ({ agentGroups, agentPatterns: userAgentPattern.trim() ? [userAgentPattern.trim()] : undefined, clientPatterns: classPattern.trim() ? [classPattern.trim()] : undefined }), [agentGroups, classPattern, userAgentPattern]);
+  // A custom span holds its end, so no dependency moves at the interval: its window's reads poll at it instead, and the
+  // figures stay drawn until the new answer lands, where a request that finished late shows. A preset's end moves to
+  // now at a boundary, and that change reads again.
+  const reload = { paused, refreshMs: custom ? polledMs : 0 };
   // A session view answers every section from the request log, so the rollup reads stay home while one is set.
-  const series = useAsync(() => (sessionId === null ? api.getAnalyticsSeries(query) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId, generation]);
-  const breakdown = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown(query) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId, generation]);
+  const series = useAsync(() => (sessionId === null ? api.getAnalyticsSeries(query) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId, generation], reload);
+  const breakdown = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown(query) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId, generation], reload);
   // A read only a hidden tab draws answers null without a request, and runs once its tab is chosen.
-  const byModel = useAsync(() => (tab === 'cache' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'model' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation]);
-  const byPool = useAsync(() => (tab === 'cache-warming' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'pool' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation]);
+  const byModel = useAsync(() => (tab === 'cache' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'model' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation], reload);
+  const byPool = useAsync(() => (tab === 'cache-warming' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'pool' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation], reload);
   const log = useAsync(
     () =>
       sessionId === null
@@ -281,8 +285,9 @@ export function AnalyticsPage() {
             SESSION_PAGE_LIMIT,
           ),
     [classPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation],
+    reload,
   );
-  const accountRollups = useAsync(() => (tab === 'accounts' ? api.listAccountRollups(fromIso, toIso) : Promise.resolve(null)), [fromIso, toIso, tab, generation]);
+  const accountRollups = useAsync(() => (tab === 'accounts' ? api.listAccountRollups(fromIso, toIso) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
   // The fold rates the hour still running over the part of it this read saw, so the answer keeps its end and instant.
   // The instant is the read's own: the range clock stands still while another tab is open, and a read made later in
   // the same hour has seen more of it.
@@ -290,7 +295,7 @@ export function AnalyticsPage() {
     if (tab !== 'burn') return Promise.resolve(null);
     const readAt = clock.now();
     return readBurn(api, { from: fromIso, to: toIso }, burnGroup).then((read) => ({ ...read, endMs: span.toMs, readAt }));
-  }, [fromIso, toIso, burnGroup, tab, generation]);
+  }, [fromIso, toIso, burnGroup, tab, generation], reload);
   // The registry's list, for the account slots alone: the range's option list holds the accounts with traffic and
   // differs from the Dashboard's, and one account keeps one color across the views.
   const registry = useAsync(() => api.listAccounts(), [], { paused, refreshMs: polledMs });
@@ -298,17 +303,17 @@ export function AnalyticsPage() {
   // The plan chart's line category reads each account's stored tier against the cost model's capacity rows.
   const burnSettings = useAsync(() => (tab === 'burn' ? api.getSettings() : Promise.resolve(null)), [tab]);
   const sized = useMemo(() => (burn.data && burnSettings.data ? sizedAccounts(burn.data.accounts, burnSettings.data.subscriptionCosts) : null), [burn.data, burnSettings.data]);
-  const rewrites = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRewrites({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation]);
+  const rewrites = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRewrites({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
   // Side groupings on the page's own query, as byModel and byPool are; a session view folds them from the log.
-  const bySpeed = useAsync(() => (sessionId === null ? api.getAnalyticsSeries({ ...query, groupBy: 'speed' }) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId, generation]);
-  const byEffort = useAsync(() => (tab === 'traffic' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation]);
+  const bySpeed = useAsync(() => (sessionId === null ? api.getAnalyticsSeries({ ...query, groupBy: 'speed' }) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId, generation], reload);
+  const byEffort = useAsync(() => (tab === 'traffic' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation], reload);
   // A dollar side narrows the three cost-bearing sections to the rows that side paid for, a filter the page's reads
   // cannot carry (Traffic, Latency and the Cache token charts read every row), so those sections read a second query
   // while one of them shows. A share sums plan-funded rows alone whatever the filter, so that position and the whole
   // read the page's own.
   const fundedTab = tab === 'cache' || tab === 'cache-warming' || tab === 'cost';
   const funded = sessionId === null && (unit === 'usd' || unit === 'equivalent');
-  const costSeries = useAsync(() => (funded && fundedTab ? api.getAnalyticsSeries({ ...query, funding }) : Promise.resolve<AnalyticsPoint[] | null>(null)), [query, funding, funded, fundedTab, generation]);
+  const costSeries = useAsync(() => (funded && fundedTab ? api.getAnalyticsSeries({ ...query, funding }) : Promise.resolve<AnalyticsPoint[] | null>(null)), [query, funding, funded, fundedTab, generation], reload);
   // The Cache warming card's Probe cost tile is the one reader of this breakdown on its tab, and it reads the probe
   // rows counted under every position, the whole and the shares included: a breakdown that does not count probes
   // drops a group left with probe rows alone, whether a dollar side dropped the group's real rows or the group is
@@ -318,10 +323,12 @@ export function AnalyticsPage() {
   const costBreakdown = useAsync(
     () => ((funded && fundedTab) || warming ? api.getAnalyticsBreakdown({ ...query, funding: funded ? funding : undefined, includeProbes: query.includeProbes || warming }) : Promise.resolve<AnalyticsGroup[] | null>(null)),
     [query, funding, funded, fundedTab, warming, generation],
+    reload,
   );
   const placements = useAsync(
     () => (tab === 'cache' && sessionId === null ? api.analyticsPlacements({ from: fromIso, keyIds: filters.keyId, poolIds: filters.poolId, to: toIso }) : Promise.resolve<PlacementRow[] | null>(sessionId === null ? null : [])),
     [fromIso, toIso, filters.keyId, filters.poolId, sessionId, tab, generation],
+    reload,
   );
   const budgets = useAsync(() => (tab === 'burn' ? api.analyticsBudgets() : Promise.resolve(null)), [tab]);
   // With no filter and no session the page's breakdown is the range's whole key list on its grouping.
@@ -343,19 +350,16 @@ export function AnalyticsPage() {
   );
 
   const rangeBucketMs = bucketSizeFor(span.toMs - span.fromMs);
-  // At the auto reload interval: a passed bucket boundary moves the end, so a page left open shows the hour it is in. A
-  // custom span holds its end, so each tick reads its window again, where a request that finished late lands. Off, the
-  // end holds where it was read. The check waits, as the reads do, while a menu under the bar or a dialog is open or
-  // the tab is hidden.
+  // At the auto reload interval: a passed bucket boundary moves the end, so a page left open shows the hour it is in.
+  // Off, the end holds where it was read. The check waits, as the reads do, while a menu under the bar or a dialog is
+  // open or the tab is hidden.
   useEffect(() => {
     if (polledMs === 0 || paused) return;
     const id = clock.setInterval(() => {
-      if (document.hidden) return;
-      if (Math.floor(clock.now() / rangeBucketMs) !== Math.floor(now / rangeBucketMs)) setNow(clock.now());
-      if (custom) setGeneration((g) => g + 1);
+      if (!document.hidden && Math.floor(clock.now() / rangeBucketMs) !== Math.floor(now / rangeBucketMs)) setNow(clock.now());
     }, polledMs);
     return () => clock.clearInterval(id);
-  }, [custom, now, paused, polledMs, rangeBucketMs]);
+  }, [now, paused, polledMs, rangeBucketMs]);
   // A read that failed or that still answers the filters before the change draws nothing, so no figure stands
   // under a filter it was not read for.
   const failure = series.error ?? breakdown.error ?? log.error;

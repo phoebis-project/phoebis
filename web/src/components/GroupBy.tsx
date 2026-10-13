@@ -47,24 +47,30 @@ export interface GroupsButtonProps {
   value: string;
 }
 
-/** A 32 px secondary button "Groups (N)", N the non-empty lines of `value`, aria-haspopup dialog, aria-expanded, whose Popover holds the textarea under the stacked label "User agent groups" with the page's placeholder, title, maxLength, boundPatterns and PATTERN_BOUND_HINT, committing on blur and on the 400 ms pause. */
+/** A 32 px secondary button "Groups (N)", N the non-empty lines of `value`, aria-haspopup dialog, aria-expanded, whose Popover holds the textarea under the stacked label "User agent groups" with the page's placeholder, title, maxLength, boundPatterns and PATTERN_BOUND_HINT, committing on blur, on the 400 ms pause and as the popover closes. */
 export function GroupsButton({ onCommit, value }: GroupsButtonProps): JSX.Element {
   const boxId = useId();
   const labelId = useId();
   // Held in state through the ref callback, since the hooks lint refuses a ref read while rendering.
   const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null);
   const [open, setOpen] = useState(false);
-  // Held by the button rather than the popover's content, so a pattern typed under the pause before Escape or a click
-  // outside closes the popover still commits. Enter inserts a line, so it commits on the pause and on blur alone.
+  // Held by the button rather than the popover's content, so the draft outlives the field. Enter inserts a line, so the
+  // field commits on the pause and on blur.
   const text = useCommittedText(value, onCommit);
+  // A click outside takes the field away before its blur, and a Group by change inside the pause would then take this
+  // button and its pending draft with it, so the draft commits as the popover closes.
+  const close = () => {
+    text.onBlur();
+    setOpen(false);
+  };
   const [cut, setCut] = useState(false);
   const count = value.split('\n').filter((line) => line.trim()).length;
   return (
     <>
-      <Button ref={setAnchor} size="sm" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <Button ref={setAnchor} size="sm" aria-haspopup="dialog" aria-expanded={open} onClick={() => (open ? close() : setOpen(true))}>
         Groups ({count})
       </Button>
-      <Popover anchor={anchor} id={boxId} labelledBy={labelId} onClose={() => setOpen(false)} open={open}>
+      <Popover anchor={anchor} id={boxId} labelledBy={labelId} onClose={close} open={open}>
         <div className="groups-popover">
           <Field label={<span id={labelId}>User agent groups</span>} hint={cut ? PATTERN_BOUND_HINT : undefined}>
             <textarea

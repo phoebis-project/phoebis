@@ -13762,6 +13762,25 @@ m.unmount();
     page.unmount();
   }
   {
+    // The mousedown outside takes the field away before its blur, and the Group by change takes the button with it, so
+    // the pattern typed under the pause reaches the address as the popover closes and stays beside the grouping chosen.
+    const name = '/analytics a pattern typed in the Groups popover and left by a Group by change inside the pause stays in the address';
+    const lines = 'claude-cli/2.1.*';
+    const page = await mount('/analytics?by=user_agent', { now: CLOCK_ORIGIN });
+    const field = await groupsField(page);
+    if (field) {
+      setArea.call(field, lines);
+      field.dispatchEvent(new window.Event('input', { bubbles: true }));
+    }
+    await page.settle(100);
+    page.container.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+    await page.settle(100);
+    await chooseGroup(page, 'model');
+    const read = { button: groupsButton(page) === undefined, by: query(page).by ?? null, groups: query(page).groups ?? null, select: groupBySelect(page)?.value ?? null };
+    results.push({ name, ok: field !== null && JSON.stringify(read) === JSON.stringify({ button: true, by: 'model', groups: lines, select: 'model' }), missing: [field === null ? 'no field' : 'a field', JSON.stringify(read)] });
+    page.unmount();
+  }
+  {
     const name = "/analytics starts auto reload at 5 s, reads the registry at the interval, holds the end while off with the title naming it, and names a custom range's window on Refresh";
     const part = (page) => ({ disabled: intervalPart(page)?.disabled ?? null, title: intervalPart(page)?.getAttribute('title') ?? null, word: intervalWord(page) });
     const hour = Date.UTC(2026, 8, 16, 15);
