@@ -951,7 +951,7 @@ fn the_no_fit_partition_drops_an_account_without_runway_and_falls_back_when_none
             assert_eq!(
                 (b.partition, b.fit, b.binding.as_deref()),
                 (None, Some("fits"), None),
-                "a fitting candidate names no binding window under {strategy:?}"
+                "with nothing burning, no window bounds b's runway under {strategy:?}"
             );
         }
         // b and c within the rewrite of the ceiling: no account has room for it.
@@ -981,6 +981,32 @@ fn the_no_fit_partition_drops_an_account_without_runway_and_falls_back_when_none
             }
         }
     }
+}
+
+#[test]
+fn a_fitting_placement_row_names_the_window_with_the_least_runway() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    // A warm pin on a burning 100 input tokens a second gives the fresh prior a burn: a hundred-thousandth of the
+    // 5-hour window and a six-hundred-thousandth of the week a second on the ratio pricer.
+    let mut st = priced(vec![burning("h1", "a", 100.0, true, T)]);
+    st.record_sample("a", sample(0.96, 0.1, T - 500));
+    // b's 5-hour window at 0.3 leaves 0.63 past the body's 0.02 rewrite, 63 000 s of the prior's burn, and its week
+    // at 0.9 leaves 0.0467 past the rewrite, 28 000 s. Both reach the five hours to their horizons, so b fits and the
+    // week, the shorter runway, binds.
+    st.record_sample("b", sample(0.3, 0.9, T - 500));
+    let d = decide(&mut st, &s, &placing(&s, "r-2", "fresh", T), &mut rng());
+    assert_eq!(picked(&d.result), "b");
+    let b = candidate(&d.record, "b");
+    assert_eq!(
+        (b.partition, b.fit, b.binding.as_deref()),
+        (None, Some("fits"), Some("seven_day")),
+        "{b:?}"
+    );
+    let runway = b.runway_ms.expect("a finite runway");
+    assert!((runway - 28_000_000).abs() <= 1, "{runway}");
 }
 
 #[test]
@@ -1024,7 +1050,7 @@ fn a_pin_on_a_depleted_account_is_renewed_rather_than_moved() {
         ("a", None, epoch),
         "the fit narrows a fresh selection, and only a move rule moves a live pin"
     );
-    // A fresh session's 200 000 token body has no room on a, so it lands on b though a's week leads.
+    // a's 5-hour window sits at the ceiling, so a fresh session lands on b though a's week leads.
     let fresh = SelectRequest {
         body_tokens: 200_000,
         ..request(&s, Some("s2"), "claude-sonnet-5", true, &[], 2_000)
@@ -3091,7 +3117,7 @@ fn a_pin_on_a_spent_five_hour_window_moves_to_a_sibling_with_allowance_and_stays
     assert_eq!(
         (sel.account.id.as_str(), sel.migrated),
         ("a", None),
-        "a fresh sample under 1.0 is allowance, whatever the threshold-free pool thinks of it"
+        "a fresh sample under 1.0 still holds allowance, so the pin renews where it is"
     );
     st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 2_500));
     st.record_sample("b", refreshing(1.0, 9 * HOUR, 9 * HOUR, 2_500));
@@ -5326,11 +5352,10 @@ fn the_blocker_passes_an_account_far_ahead_of_its_weekly_pace_and_keeps_its_othe
         "b",
         "no runway on the 5-hour window refuses a",
     );
-    // No runway on the week, under Pace, which reads the 7-day window for this model.
+    // No runway on the week.
     scenario(
         Pool {
             members: vec![("a", 1), ("b", 0)],
-            strategy: Strategy::Pace,
             ..Pool::default()
         },
         &|st| {
@@ -7893,7 +7918,7 @@ fn an_account_without_runway_is_passed_over_under_pace_while_a_fitting_one_serve
         ..Pool::default()
     });
     let mut st = priced(Vec::new());
-    // a: no room for the body's rewrite on its 5-hour window, but the best Pace score (almost nothing used on the
+    // a: its 5-hour window at the ceiling leaves no runway, but it has the best Pace score (almost nothing used on the
     // week).
     st.record_sample("a", sample(0.95, 0.01, 1_000));
     // b: room to its horizon but a worse Pace score (more used).
@@ -8104,6 +8129,71 @@ fn an_unread_window_is_skipped_for_a_placement_and_reads_least_bad_for_a_move() 
 }
 
 #[test]
+fn a_placement_after_a_move_the_cap_stopped_reads_its_candidates_again() {
+    // c carries no tier, so a move reads it least bad and a placement reads it as fitting. Both siblings sit at their
+    // cap of one, b outranks c, and b's 5-hour window at the ceiling leaves it no room either way.
+    let s = snapshot_with_terms(
+        Pool {
+            failover: Failover {
+                in_flight_cap: 1,
+                ..Failover::default()
+            },
+            ..gate_pool()
+        },
+        tier_terms(&["a", "b"]),
+    );
+    let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
+    // a is spent until a reset past the retry bound and cooled until then, so the spent rule reads its gate and step
+    // 5 cannot renew the pin there.
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    st.record_cooldown(cooled(
+        "a",
+        "account",
+        T + 9 * HOUR,
+        "five_hour",
+        "rate_limit",
+    ));
+    st.record_sample("b", refreshing(0.96, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("c", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    let on_b = st.in_flight().dispatched("b", T - 500);
+    let on_c = st.in_flight().dispatched("c", T - 500);
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    drop((on_b, on_c));
+    // The spent rule's gate read both siblings least bad, and the cap stopped the move.
+    let fit = line(&d.record, "fit");
+    assert_eq!(fit.verdict, "least_bad");
+    for id in ["b", "c"] {
+        assert_eq!(
+            fact_of(fit, "verdict", id),
+            &FactValue::Text("least_bad".into()),
+            "{id}"
+        );
+    }
+    assert_eq!(line(&d.record, "cap_filter").verdict, "dropped");
+    // The placement reads both again: b still has no room and c fits, so the request waits on c ahead of b.
+    let b = candidate(&d.record, "b");
+    assert_eq!((b.partition, b.fit), (Some("no_fit"), Some("least_bad")));
+    let c = candidate(&d.record, "c");
+    assert_eq!(
+        (c.partition, c.fit, c.runway_ms, c.binding.as_deref()),
+        (None, Some("fits"), None, None)
+    );
+    let partitions = line(&d.record, "partitions");
+    assert_eq!(fact(partitions, "at_cap"), &FactValue::Text("held".into()));
+    assert_eq!(fact(partitions, "no_fit"), &FactValue::Int(1));
+    assert!(
+        matches!(&d.result, SelectResult::Held { account_id, .. } if account_id == "c"),
+        "{:?}",
+        d.result
+    );
+}
+
+#[test]
 fn the_exhaustion_deadline_takes_each_spent_accounts_latest_dated_reset_past_an_undated_window() {
     let s = snapshot(Pool {
         strategy: Strategy::Pace,
@@ -8241,7 +8331,7 @@ fn an_exhausted_bucket_of_one_model_is_refunded_at_its_reset_and_a_siblings_free
     assert_eq!(
         picked(&select(&mut st, &s, &req, &mut rng()).0),
         "a",
-        "x is refunded at its reset, so a ranks by y's 0.9 remaining, above b's 0.5 and above the floor"
+        "x is refunded at its reset, so a ranks by y's 0.9 remaining, above b's 0.5"
     );
 }
 

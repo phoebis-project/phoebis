@@ -1556,8 +1556,7 @@ fn run(
             if let Some(member) = rec.candidate_mut(&c.account_id) {
                 member.runway_ms = read.runway_ms;
                 member.fit = Some(read.verdict);
-                // A fitting account falls short on no window, so none binds.
-                member.binding = read.binding.filter(|_| read.verdict != "fits");
+                member.binding = read.binding;
             }
             if read.verdict == "fits" {
                 fitting.push(c);
@@ -2066,10 +2065,11 @@ pub(crate) struct FitRead {
     pub end: Option<i64>,
 }
 
-/// How `fit_of` reads a window with no reading and an account with no tier. A move pays a cold rewrite on its
-/// destination, so it trusts only one it can price on every window the model draws and reads either gap as least
-/// bad. A placement keeps today's stance on an unknown reading: a window nobody has read counts as untouched and is
-/// skipped, and an untiered account, whose rewrite and burn nothing prices, fits with an unbounded runway.
+/// How `fit_of` reads a window with no reading and an account with no tier. `Move` reads either gap as least bad: a
+/// move pays a cold rewrite on its destination, so it trusts only one it can price on every window the model draws.
+/// `Placement` skips a window with no reading and reads an untiered account as fitting with an unbounded runway and no
+/// binding window, since a fresh session counts an unsampled account as untouched and nothing prices an untiered
+/// account's rewrite or burn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Judge {
     Move,
