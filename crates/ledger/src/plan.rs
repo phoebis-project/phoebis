@@ -13,6 +13,7 @@ use jiff::civil::Weekday;
 use jiff::tz::{TimeZone, TimeZoneDatabase};
 use jiff::Timestamp;
 use phoebis_routing::{window_for, PinUsage, RateTable, Rates, FIVE_HOUR, SEVEN_DAY};
+use phoebis_store::PinBurn;
 
 use crate::rollup::{BILLED_FUNDING, FAST_FUNDING, OVERAGE_FUNDING, PLAN_FUNDING};
 use crate::LedgerError;
@@ -597,6 +598,29 @@ impl SubscriptionCosts {
         ))
     }
 
+    /// The share of the tier's own `window` a pin burning `burn` typed tokens a second consumes per second at `at`:
+    /// `share_at` over a rate rather than a count, the same weight with its fallback, multipliers, capacity, capacity
+    /// factor and model-week divisor. `None` where `share_at` answers none.
+    pub fn share_rate_at(
+        &self,
+        window: &str,
+        tier: &str,
+        canonical_model: &str,
+        burn: &PinBurn,
+        at: i64,
+    ) -> Option<f64> {
+        let (priced, divisor) = self.priced_window(window)?;
+        let (weight, _) = self.weight_or_fallback(canonical_model, window)?;
+        let capacity = tier_row(&self.capacity, tier)?.on(priced)?;
+        let [cache_read, write_1h, write_5m, input, output] = self.multipliers(canonical_model);
+        let units = burn.input * weight * input
+            + burn.cache_read * weight * cache_read
+            + burn.write_5m * weight * write_5m
+            + burn.write_1h * weight * write_1h
+            + burn.output * weight * output;
+        Some(units / capacity / self.factor_at(priced, at) / divisor)
+    }
+
     /// `share_at` under the anchor tier (`unit.defined_by.tier`): the cost model's units over the Max 20x capacity.
     pub fn equivalent_at(
         &self,
@@ -899,6 +923,19 @@ impl PlanTables {
         self.revisions
             .in_force(at)
             .share_at(window, tier, canonical_model, usage, at)
+    }
+
+    pub fn share_rate_at(
+        &self,
+        window: &str,
+        tier: &str,
+        canonical_model: &str,
+        burn: &PinBurn,
+        at: i64,
+    ) -> Option<f64> {
+        self.revisions
+            .in_force(at)
+            .share_rate_at(window, tier, canonical_model, burn, at)
     }
 
     pub fn equivalent_at(

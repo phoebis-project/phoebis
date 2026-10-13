@@ -9,6 +9,7 @@ use phoebis_ledger::{
     LedgerError, PlanTables, SubscriptionCosts, BILLED_FUNDING, FAST_FUNDING,
 };
 use phoebis_routing::{PinUsage, Rates, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
+use phoebis_store::PinBurn;
 
 /// Monday 2026-09-21 at 14:00 UTC, inside the band while Pacific daylight time holds.
 const SEPTEMBER_AFTERNOON: i64 = 1_789_999_200_000;
@@ -50,6 +51,14 @@ fn assert_share(got: Option<f64>, want: f64, what: &str) {
     assert!(close(got, want), "{what}: {got} against {want}");
 }
 
+/// A rate is the share of the usage that counts its tokens a second, so the two answer alike, `None` included.
+fn assert_rate_follows_share(rate: Option<f64>, share: Option<f64>, what: &str) {
+    match (rate, share) {
+        (Some(rate), Some(share)) => assert!(close(rate, share), "{what}: {rate} against {share}"),
+        (rate, share) => assert_eq!(rate, share, "{what}"),
+    }
+}
+
 fn input(tokens: u64) -> PinUsage {
     PinUsage {
         input: tokens,
@@ -67,6 +76,13 @@ fn cache_read(tokens: u64) -> PinUsage {
 fn output(tokens: u64) -> PinUsage {
     PinUsage {
         output: tokens,
+        ..Default::default()
+    }
+}
+
+fn input_burn(tokens: f64) -> PinBurn {
+    PinBurn {
+        input: tokens,
         ..Default::default()
     }
 }
@@ -114,6 +130,195 @@ fn one_input_token_spends_its_weight_over_the_tiers_five_hour_capacity_and_twice
         0.04,
         "in band",
     );
+}
+
+// One Opus 5.5 input token a second is 2 units a second: 2 / 100 of the Max 20x 5-hour window per second out of
+// band, over the band's 0.5 inside it.
+#[test]
+fn one_input_token_a_second_burns_its_weight_over_the_capacity_per_second_and_twice_that_inside_the_band(
+) {
+    let tables = first();
+    for (at, want, what) in [
+        (OUT_OF_BAND, 0.02, "out of band"),
+        (IN_BAND, 0.04, "in band"),
+    ] {
+        let rate = tables.share_rate_at(FIVE_HOUR, MAX_20X, OPUS, &input_burn(1.0), at);
+        assert_share(rate, want, what);
+        assert_rate_follows_share(
+            rate,
+            tables.share_at(FIVE_HOUR, MAX_20X, OPUS, input(1), at),
+            what,
+        );
+    }
+}
+
+// Opus 5.5 at weight 2 over the multipliers input 1, cache read 0.1, both writes 2 and output 10:
+// (2 + 0.2 + 4 + 4 + 20) / 100 per second for one token of each type a second.
+#[test]
+fn a_burn_of_every_type_sums_its_five_rates_as_a_usage_sums_its_five_counts() {
+    let tables = first();
+    let one_of_each = PinBurn {
+        cache_read: 1.0,
+        input: 1.0,
+        output: 1.0,
+        write_1h: 1.0,
+        write_5m: 1.0,
+    };
+    let rate = tables.share_rate_at(FIVE_HOUR, MAX_20X, OPUS, &one_of_each, OUT_OF_BAND);
+    assert_share(rate, 0.302, "one token of each type a second");
+    assert_rate_follows_share(
+        rate,
+        tables.share_at(
+            FIVE_HOUR,
+            MAX_20X,
+            OPUS,
+            PinUsage {
+                input: 1,
+                cache_read: 1,
+                write_5m: 1,
+                write_1h: 1,
+                output: 1,
+            },
+            OUT_OF_BAND,
+        ),
+        "one token of each type a second",
+    );
+    let apart = PinBurn {
+        cache_read: 2.0,
+        input: 1.0,
+        output: 5.0,
+        write_1h: 4.0,
+        write_5m: 3.0,
+    };
+    assert_rate_follows_share(
+        tables.share_rate_at(FIVE_HOUR, MAX_20X, HAIKU, &apart, OUT_OF_BAND),
+        tables.share_at(
+            FIVE_HOUR,
+            MAX_20X,
+            HAIKU,
+            PinUsage {
+                input: 1,
+                cache_read: 2,
+                write_5m: 3,
+                write_1h: 4,
+                output: 5,
+            },
+            OUT_OF_BAND,
+        ),
+        "each type at its own rate, under Haiku's own cache read multiplier",
+    );
+}
+
+// The Fable week is the 7-day window at a capacity factor of 0.5: 2 / 1000 / 0.5. Pro holds 5 units on the 5-hour
+// window: 2 / 5.
+#[test]
+fn the_rate_on_a_model_week_and_on_a_smaller_tier_follows_share_at() {
+    let tables = first();
+    for (window, tier, want, what) in [
+        (SEVEN_DAY_FABLE, MAX_20X, 0.004, "the Fable week"),
+        (FIVE_HOUR, PRO, 0.4, "Pro"),
+    ] {
+        let rate = tables.share_rate_at(window, tier, OPUS, &input_burn(1.0), OUT_OF_BAND);
+        assert_share(rate, want, what);
+        assert_rate_follows_share(
+            rate,
+            tables.share_at(window, tier, OPUS, input(1), OUT_OF_BAND),
+            what,
+        );
+    }
+}
+
+// The mystery tier has no weighted model and GPT-5 no tier. The file lacks the enterprise tier, and Team holds no
+// capacity on the week.
+#[test]
+fn a_model_of_no_weighted_tier_or_a_tier_without_capacity_prices_no_rate() {
+    let tables = first();
+    for model in ["claude-mystery-2", "gpt-5"] {
+        for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
+            let what = format!("{model} on {window}");
+            let rate = tables.share_rate_at(window, MAX_20X, model, &input_burn(1.0), OUT_OF_BAND);
+            assert_eq!(rate, None, "{what}");
+            assert_rate_follows_share(
+                rate,
+                tables.share_at(window, MAX_20X, model, input(1), OUT_OF_BAND),
+                &what,
+            );
+        }
+    }
+    for (window, tier) in [
+        (FIVE_HOUR, "claude_enterprise"),
+        (SEVEN_DAY, TEAM),
+        (SEVEN_DAY_FABLE, TEAM),
+    ] {
+        let what = format!("{tier} on {window}");
+        let rate = tables.share_rate_at(window, tier, OPUS, &input_burn(1.0), OUT_OF_BAND);
+        assert_eq!(rate, None, "{what}");
+        assert_rate_follows_share(
+            rate,
+            tables.share_at(window, tier, OPUS, input(1), OUT_OF_BAND),
+            &what,
+        );
+    }
+}
+
+#[test]
+fn a_zero_burn_prices_zero_on_a_weighted_model() {
+    let tables = first();
+    for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
+        for at in [IN_BAND, OUT_OF_BAND] {
+            assert_eq!(
+                tables.share_rate_at(window, MAX_20X, OPUS, &PinBurn::default(), at),
+                Some(0.0),
+                "{window} at {at}"
+            );
+        }
+    }
+}
+
+// Opus 5 (a null weight), Opus 4.8 (a tier entry and no weight) and Opus 9 (no row at all) burn at Opus 5.5's 2,
+// the latest weighted model of their tier, as their share prices.
+#[test]
+fn a_model_without_a_weight_burns_at_its_tiers_latest_weight_as_its_share_prices() {
+    let tables = first();
+    assert_share(
+        tables.share_rate_at(
+            FIVE_HOUR,
+            MAX_20X,
+            "claude-opus-5",
+            &input_burn(1.0),
+            OUT_OF_BAND,
+        ),
+        0.02,
+        "Opus 5 at Opus 5.5's weight: 2 / 100",
+    );
+    for model in ["claude-opus-5", "claude-opus-4-8", "claude-opus-9"] {
+        for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
+            assert_rate_follows_share(
+                tables.share_rate_at(window, MAX_20X, model, &input_burn(1.0), OUT_OF_BAND),
+                tables.share_at(window, MAX_20X, model, input(1), OUT_OF_BAND),
+                &format!("{model} on {window}"),
+            );
+        }
+    }
+}
+
+// The second revision doubles every weight, so one Opus 5.5 input token a second burns 4 / 100 a second from
+// 2026-02-01 on.
+#[test]
+fn the_tables_price_a_burn_at_the_revision_in_force_at_the_instant() {
+    let tables = tables();
+    for (at, want, what) in [
+        (JANUARY_2026, 0.02, "the first revision in January"),
+        (OUT_OF_BAND, 0.04, "the second revision in September"),
+    ] {
+        let rate = tables.share_rate_at(FIVE_HOUR, MAX_20X, OPUS, &input_burn(1.0), at);
+        assert_share(rate, want, what);
+        assert_rate_follows_share(
+            rate,
+            tables.share_at(FIVE_HOUR, MAX_20X, OPUS, input(1), at),
+            what,
+        );
+    }
 }
 
 // The week holds 1000 units on Max 20x and its capacity factor is 1, so the band leaves it at 2 / 1000.

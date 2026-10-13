@@ -732,10 +732,10 @@ pub async fn run_until(
 }
 
 /// The routing task's burn prices and peak band: the model's 5-hour share per token on its anchor tier and its band,
-/// and for dollars `prices`, the revision of the table `Pricing::load` chose that is in force at the start `now`, and
-/// the share of an account's window a completed request consumed, priced through the model on the account's tier.
-/// The burn rates and the measured windows are read at `now` and fixed for the life of the process, so a pending
-/// revision takes effect at the next start.
+/// and for dollars `prices`, the revision of the table `Pricing::load` chose that is in force at the start `now`, the
+/// share of an account's window a completed request consumed, and the share per second a pin's burn consumes, both
+/// priced through the model on the account's tier. The burn rates and the measured windows are read at `now` and fixed
+/// for the life of the process, so a pending revision takes effect at the next start.
 fn router_config(
     prices: &phoebis_ledger::PriceTable,
     tables: Arc<phoebis_ledger::PlanTables>,
@@ -744,6 +744,7 @@ fn router_config(
 ) -> phoebis_routing::RouterConfig {
     let band = tables.clone();
     let measured = tables.clone();
+    let rate_tables = tables.clone();
     phoebis_routing::RouterConfig {
         band: phoebis_routing::BandWeight::new(move |window, at| band.band_factor(window, at)),
         rates: phoebis_routing::BurnRates {
@@ -754,7 +755,10 @@ fn router_config(
         share: phoebis_routing::SharePricer::new(move |window, tier, model, usage, at| {
             tables.share_at(window, tier, model, usage, at)
         })
-        .with_measured(move |window| measured.measured(window, now)),
+        .with_measured(move |window| measured.measured(window, now))
+        .with_rate(move |window, tier, model, burn, at| {
+            rate_tables.share_rate_at(window, tier, model, burn, at)
+        }),
         funding_retry: Duration::from_secs(300.min(routing.model_rejection_seconds)),
         // Released once the ledger's mirror subscribed and the start row is recorded, below.
         hold_first_purge: true,
@@ -1049,6 +1053,28 @@ mod tests {
             !config.share.measured("seven_day_opus"),
             "the router reads the tables' own answer on a model week they do not measure"
         );
+        let burn = phoebis_store::PinBurn {
+            cache_read: 100.0,
+            input: 10.0,
+            output: 5.0,
+            write_1h: 2.0,
+            write_5m: 1.0,
+        };
+        for window in [
+            phoebis_routing::FIVE_HOUR,
+            phoebis_routing::SEVEN_DAY,
+            phoebis_routing::SEVEN_DAY_FABLE,
+        ] {
+            let rate = config
+                .share
+                .rate(window, tier, "claude-opus-5-5", &burn, at);
+            assert_eq!(
+                rate,
+                tables.share_rate_at(window, tier, "claude-opus-5-5", &burn, at),
+                "a pin's burn on {window} is priced through the same tables"
+            );
+            assert!(rate.is_some_and(|rate| rate > 0.0), "{window}");
+        }
         assert!(config
             .share
             .price(
