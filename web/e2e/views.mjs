@@ -3221,11 +3221,16 @@ async function diagnosticsFilters(theme) {
 
 /** The address `barRow` reads a view's chip line on, five chips on its own dimensions. A view without one is measured at rest. */
 const BAR_CHIPS = {
+  '/analytics': '?accounts=primary&keys=laptop&models=claude-opus-5&pools=jobs&probes=1',
   '/requests': '?accounts=primary&keys=laptop&models=claude-opus-5&pools=jobs&statuses=200',
   '/routing-log': '?accounts=primary&keys=laptop&kinds=moved,held,shedding_round,wind_down_started&models=claude-opus-5&pools=jobs',
 };
 /** A view whose row draws no search holds its slots under this width at rest, far from a second line. */
-const ROW_BOUND = { '/routing-log': 700 };
+const ROW_BOUND = {
+  // The measured 730 px row plus margin, since the spec's 700 summed control widths estimated before they landed.
+  '/analytics': 760,
+  '/routing-log': 700,
+};
 /** A span from 23:00 the day before the pass's clock to 01:00 on its day, the Custom pill's widest words. */
 const MIDNIGHT = (origin) => {
   const day = new Date(origin).toISOString().slice(0, 10);
@@ -3234,16 +3239,18 @@ const MIDNIGHT = (origin) => {
 };
 
 /**
- * The bar's measure on `view`, called after its shot: the row 32 px at rest and the bar 66 with a chip line, every row
- * child 32 px at one top (a segmented's pills 28 inside their group), the chips 26 with the word in --ink-2 and the
- * values in --ink, one line (scrollWidth equal to clientWidth) at 1280 by 800 and 1440 by 900 at rest, with the view's
- * chips and, on a ranged view, with a span across midnight, and the row against the first card's head. The row's
- * `width`, its slots' widths and the gaps between them, holds under the view's ROW_BOUND at rest. Records to
- * `measurements`.
+ * The bar's measure on `view`, called after its shot: the row 32 px at rest and the bar 66 with a chip line (49 and 83
+ * on the Analytics sticky bar, whose 8 px of padding above and below and hairline add 17), every row child 32 px at one
+ * top (a segmented's pills 28 inside their group), the chips 26 with the word in --ink-2 and the values in --ink, one
+ * line (scrollWidth equal to clientWidth) at 1280 by 800 and 1440 by 900 at rest, with the view's chips and, on a
+ * ranged view, with a span across midnight, and the row against the first card's head. The row's `width`, its slots'
+ * widths and the gaps between them, holds under the view's ROW_BOUND at rest. On Analytics the Group by select reads
+ * the Add filter button's height and top. Records to `measurements`.
  */
 async function barRow(theme, view) {
   const say = (what) => failures.push(`${theme} ${view} bar: ${what}`);
   const ranged = view === '/requests' || view === '/routing-log' || view === '/analytics';
+  const sticky = view === '/analytics';
   const read = () =>
     page.evaluate(() => {
       const bar = document.querySelector('.filter-bar');
@@ -3263,12 +3270,15 @@ async function barRow(theme, view) {
       const head = document.querySelector('.card--table .card__head') ?? document.querySelector('.card--table thead th, table thead th');
       const chips = [...(line?.querySelectorAll('.chip--filter') ?? [])].filter((c) => !c.hidden);
       const slots = [...row.children];
+      const edges = (el) => (el ? { height: Math.round(box(el).height), top: Math.round(box(el).top) } : null);
       return {
+        addFilter: edges([...row.querySelectorAll(':scope > button')].find((b) => b.textContent?.trim() === 'Add filter')),
         bar: Math.round(box(bar).height),
         bottom: Math.round(box(bar).bottom),
         chips: chips.map((c) => ({ height: Math.round(box(c).height), values: c.querySelector('.chip__values') ? getComputedStyle(c.querySelector('.chip__values')).color : null, word: getComputedStyle(c.querySelector('.chip__word')).color })),
         children: [...row.children].map((el) => ({ height: Math.round(box(el).height), name: el.className.split(' ')[0] || el.tagName.toLowerCase(), top: Math.round(box(el).top) })),
         custom: row.querySelector('.segmented button:last-child')?.textContent?.trim() ?? null,
+        groupBy: edges(row.querySelector('select[aria-label="Group by"]')),
         head: head ? Math.round(box(head).top) : null,
         inks: { ink: ink('--ink'), ink2: ink('--ink-2') },
         line: line ? { client: line.clientWidth, scroll: line.scrollWidth } : null,
@@ -3286,11 +3296,13 @@ async function barRow(theme, view) {
     if (new Set(got.children.map((c) => c.top)).size > 1) say(`${at}: the row's children stand at ${JSON.stringify(got.children.map((c) => c.top))}, not one top`);
     if (got.pills.some((h) => h !== 28)) say(`${at}: the pills measure ${JSON.stringify(got.pills)}, not 28`);
     if (got.head !== null && got.head < got.bottom) say(`${at}: the first card's head stands at ${got.head}, above the bar's bottom ${got.bottom}`);
+    if (sticky) failures.push(...compare(got.groupBy, got.addFilter, ['height', 'top'], `${theme} ${view} bar: ${at}: the Group by select against the Add filter button`));
+    const rest = sticky ? 49 : 32;
     if (!chipped) {
-      if (got.bar !== 32) say(`${at}: the bar is ${got.bar} px at rest, not 32`);
+      if (got.bar !== rest) say(`${at}: the bar is ${got.bar} px at rest, not ${rest}`);
       return;
     }
-    if (got.bar !== 66) say(`${at}: the bar is ${got.bar} px with a chip line, not 66`);
+    if (got.bar !== rest + 34) say(`${at}: the bar is ${got.bar} px with a chip line, not ${rest + 34}`);
     if (got.chips.length === 0 || got.chips.some((c) => c.height !== 26)) say(`${at}: the chips measure ${JSON.stringify(got.chips.map((c) => c.height))}, not 26`);
     if (got.chips.some((c) => c.word !== got.inks.ink2 || (c.values !== null && c.values !== got.inks.ink))) say(`${at}: the chips' inks ${JSON.stringify(got.chips)} against --ink-2 ${got.inks.ink2} and --ink ${got.inks.ink}`);
     if (got.line && got.line.scroll > got.line.client) say(`${at}: the chip line runs ${got.line.scroll} px in ${got.line.client}, past one line`);
@@ -3461,23 +3473,47 @@ async function analyticsTabs(theme) {
 
 /**
  * The tab strip docks under the sticky filter bar: on Latency, the longest section, scrolled to the page's end, the
- * strip's top sits on the filter bar's bottom, the height the page measured from the bar.
+ * strip's top sits on the filter bar's bottom, the height the page measured from the bar, 49 px under the 52 px top bar
+ * at rest and 83 px with a chip line. `chipped` reads the chip line on a load of its own, after the view's shot, whose
+ * address holds the probes flag, a chip that narrows no figure, so the section still scrolls on the router's seed, and
+ * loads the bare page again after.
  */
-async function stickyStrip(theme) {
-  try {
+async function stickyStrip(theme, chipped = false) {
+  const say = (what) => failures.push(`${theme} /analytics: ${what}`);
+  const docked = async (label, height) => {
     if (!(await tabTo(theme, 'Latency'))) return;
     await page.evaluate(() => window.scrollTo(0, document.scrollingElement.scrollHeight));
     await settle();
-    const read = await page.evaluate(() => ({
-      filters: document.querySelector('.filters--sticky')?.getBoundingClientRect().bottom ?? null,
-      scrolled: Math.round(document.scrollingElement.scrollTop),
-      strip: document.querySelector('.section-bar')?.getBoundingClientRect().top ?? null,
-    }));
-    measurements.push(`${theme} /analytics sticky strip ${JSON.stringify(read)}`);
-    if (read.scrolled === 0) failures.push(`${theme} /analytics: the Latency tab does not scroll, so the strip's dock is not measured`);
-    if (read.filters === null || read.strip === null || read.strip !== read.filters) failures.push(`${theme} /analytics: scrolled to the end, the tab strip's top is ${read.strip} against the filter bar's bottom ${read.filters}`);
+    const read = await page.evaluate(() => {
+      const bar = document.querySelector('.filter-bar--sticky');
+      return {
+        bar: bar ? Math.round(bar.getBoundingClientRect().height) : null,
+        filters: bar?.getBoundingClientRect().bottom ?? null,
+        scrolled: Math.round(document.scrollingElement.scrollTop),
+        strip: document.querySelector('.section-bar')?.getBoundingClientRect().top ?? null,
+      };
+    });
+    measurements.push(`${theme} /analytics sticky strip ${label} ${JSON.stringify(read)}`);
+    if (read.scrolled === 0) say(`${label}, the Latency tab does not scroll, so the strip's dock is not measured`);
+    if (read.filters === null || read.strip === null || read.strip !== read.filters) say(`${label}, scrolled to the end, the tab strip's top is ${read.strip} against the filter bar's bottom ${read.filters}`);
+    if (read.bar !== height || read.strip !== 52 + height) say(`${label}, the bar is ${read.bar} px and the strip's top ${read.strip}, not ${height} and ${52 + height}`);
+  };
+  try {
+    if (chipped) {
+      await page.goto(`${base}/analytics?probes=1`);
+      await booted();
+      await advance(LOAD_MS);
+      await page.waitForSelector('.section-bar', { timeout: 15_000 }).catch(() => {});
+    }
+    await docked(chipped ? 'with a chip line' : 'at rest', chipped ? 83 : 49);
   } finally {
-    await tabTo(theme, 'Traffic');
+    if (chipped) {
+      await page.goto(`${base}/analytics`);
+      await booted();
+      await advance(LOAD_MS);
+      await page.waitForSelector('.analytics-section#traffic', { timeout: 15_000 }).catch(() => {});
+      await atRest();
+    } else await tabTo(theme, 'Traffic');
   }
 }
 
@@ -6219,6 +6255,9 @@ try {
       if (view.path === '/keys') await keysLayout(theme);
       if (view.path === '/keys') await dialogControls(theme);
       if (view.path === '/analytics') await burnLoneCard(theme);
+      // The chip line's dock and the bar's measure load their addresses themselves and leave the bare page.
+      if (view.path === '/analytics') await stickyStrip(theme, true);
+      if (view.path === '/analytics') await barRow(theme, view.path);
       if (view.path === '/requests') await rangePills(theme);
       // The chip measures, the bar's and the split button's each load what they read and leave the bare log at 1280 by
       // 800, so the shot above stays the bare log and the measures after them read it.

@@ -285,6 +285,18 @@ const chooseInterval = async (page, word) => {
   [...document.querySelectorAll('.popover[role="menu"] [role="menuitemradio"]')].find((b) => b.textContent?.trim() === word)?.click();
   await page.settle(100);
 };
+/** The Analytics bar's Group by select and its "Groups (N)" button, which stands beside it while the page groups by user agent. */
+const groupBySelect = (page) => page.container.querySelector('.filter-bar select[aria-label="Group by"]');
+const groupsButton = (page) => [...page.container.querySelectorAll('.filter-bar__row button')].find((b) => /^Groups \(\d+\)$/.test(b.textContent?.trim() ?? ''));
+const groupsBox = () => document.querySelector('.popover textarea[aria-label="User agent groups"]')?.closest('.popover') ?? null;
+/** The user agent groups field in its popover, opened from the Groups button where it is shut: the field, or null. */
+const groupsField = async (page) => {
+  if (groupsBox() === null) {
+    groupsButton(page)?.click();
+    await page.settle(100);
+  }
+  return groupsBox()?.querySelector('textarea') ?? null;
+};
 /**
  * Turns a Sessions column on through the Columns control, then closes the control, whose open grid would otherwise
  * stand over every check after it. The grid is a popover a portal draws at the end of the body.
@@ -11649,12 +11661,11 @@ m.unmount();
   const page = await mount('/analytics');
   const keyRows = () => [...([...page.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Traffic by key'))?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim() ?? '');
   const before = keyRows();
-  const keyFilter = [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Key'));
-  keyFilter?.querySelector('.mselect__trigger')?.click();
-  await page.settle(150);
+  await addFilter(page, 'Key');
   failNextCall('getAnalyticsBreakdown', '/admin/analytics/breakdown', 'the ledger is unavailable');
-  [...(keyFilter?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'desktop')?.click();
+  boxOptions().find((o) => o.textContent?.trim() === 'desktop')?.click();
   await page.settle(900);
+  await closeBoxes(page);
   const t = page.text();
   const failed = keyRows().filter(Boolean);
   results.push({
@@ -11683,12 +11694,9 @@ m.unmount();
   const page = await mount('/analytics');
   const choices = async () => {
     const counts = [];
-    for (const trigger of page.container.querySelectorAll('.filters .mselect__trigger')) {
-      trigger.click();
-      await page.settle(60);
-      counts.push(`${trigger.textContent?.trim()} ${trigger.parentElement?.querySelectorAll(CHOICE).length ?? 0}`);
-      trigger.click();
-      await page.settle(60);
+    for (const label of ['Account', 'Key', 'Model', 'Pool']) {
+      counts.push(`${label} ${(await addFilter(page, label)) === null ? 'no list' : boxOptions().length}`);
+      await closeBoxes(page);
     }
     return counts;
   };
@@ -11732,8 +11740,8 @@ m.unmount();
   page.unmount();
 }
 
-// The pattern fields commit once typing pauses, or at once on Enter. The clock stands still, so only a tick fires the
-// pause's timer and a commit without one can only come from the key.
+// A pattern typed in Add filter's step commits on Enter or Apply alone. The clock stands still and a tick passes the
+// pause a field elsewhere commits on, so a read before the key could only come from a timer.
 {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const typeInto = (input, text) => {
@@ -11742,25 +11750,27 @@ m.unmount();
   };
   const seriesReads = (spy) => spy.calls.map(([q]) => ({ clients: q?.clients, from: q?.from, groupBy: q?.groupBy, to: q?.to }));
 
-  const tenCheck = '/analytics typing claude-cli one character at a time issues one series read per grouping';
+  const tenCheck = '/analytics typing in the pattern step reads nothing until Enter, and Enter reads once per grouping';
   const typing = await mount('/analytics', { now: CLOCK_ORIGIN });
-  const typed = typing.container.querySelector('input[aria-label="Client pattern"]');
-  if (!typed) controlMissing(tenCheck, 'Client pattern');
+  const typed = (await addFilter(typing, 'Client'))?.querySelector('input');
+  if (!typed) controlMissing(tenCheck, 'Client');
   else {
     const spy = countCalls('getAnalyticsSeries');
     for (let i = 1; i <= 10; i++) typeInto(typed, 'claude-cli'.slice(0, i));
     await typing.settle(100);
-    const beforePause = spy.calls.length;
     tick(400);
+    await typing.settle();
+    const beforeEnter = spy.calls.length;
+    typed.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter' }));
     await typing.settle();
     const reads = seriesReads(spy);
     // The selected grouping's read and the speed card's, both on the committed pattern and one window.
     const groupings = reads.map((r) => r.groupBy).sort();
     results.push({
       name: tenCheck,
-      // The commit moves the window's end to the instant it fired.
-      ok: beforePause === 0 && reads.length === 2 && JSON.stringify(groupings) === JSON.stringify(['key', 'speed']) && reads.every((r) => JSON.stringify(r.clients) === '["claude-cli"]' && r.from === reads[0].from && r.to === new Date(CLOCK_ORIGIN + 400).toISOString()),
-      missing: [`${beforePause} reads while typing`, JSON.stringify(reads)],
+      // The commit moves the window's end to the instant of the key.
+      ok: beforeEnter === 0 && reads.length === 2 && JSON.stringify(groupings) === JSON.stringify(['key', 'speed']) && reads.every((r) => JSON.stringify(r.clients) === '["claude-cli"]' && r.from === reads[0].from && r.to === new Date(CLOCK_ORIGIN + 400).toISOString()),
+      missing: [`${beforeEnter} reads before Enter`, JSON.stringify(reads)],
     });
     spy.restore();
   }
@@ -11768,14 +11778,14 @@ m.unmount();
 
   const enterCheck = '/analytics Enter commits a pattern at once';
   const pressing = await mount('/analytics', { now: CLOCK_ORIGIN });
-  const pressed = pressing.container.querySelector('input[aria-label="Client pattern"]');
-  if (!pressed) controlMissing(enterCheck, 'Client pattern');
+  const pressed = (await addFilter(pressing, 'Client'))?.querySelector('input');
+  if (!pressed) controlMissing(enterCheck, 'Client');
   else {
     const spy = countCalls('getAnalyticsSeries');
     for (const text of ['c', 'cl', 'cla']) typeInto(pressed, text);
     await pressing.settle(100);
     const beforeEnter = spy.calls.length;
-    pressed.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+    pressed.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter' }));
     await pressing.settle();
     const clients = seriesReads(spy).map((r) => JSON.stringify(r.clients));
     results.push({ name: enterCheck, ok: beforeEnter === 0 && clients.length === 2 && clients.every((c) => c === '["cla"]'), missing: [`${beforeEnter} reads before Enter`, ...clients] });
@@ -11784,8 +11794,9 @@ m.unmount();
   pressing.unmount();
 }
 
-// The window's end follows the clock. The page looks once a minute and moves the end only when the range's bucket
-// boundary has passed, so the reads stay put between boundaries; Try again moves it to the instant it runs.
+// The window's end follows the clock. The page looks at the auto reload interval, 5 s when it opens, and moves the end
+// only when the range's bucket boundary has passed, so the reads stay put between boundaries, and Try again moves it
+// to the instant it runs.
 {
   const groupingsOf = (calls) => JSON.stringify(calls.map(([q]) => q?.groupBy).sort());
   const boundaryCheck = "/analytics the window's end moves past the next hour boundary";
@@ -11827,11 +11838,6 @@ m.unmount();
 // on, so there only the retry's generation sends the reads again. The account rollups on the Accounts tab and the burn
 // read on the Burn tab read the window alone, so a read of either is a moved end.
 {
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const typeInto = (input, text) => {
-    setter.call(input, text);
-    input?.dispatchEvent(new window.Event('input', { bubbles: true }));
-  };
   const at14 = Date.UTC(2026, 8, 16, 14);
   // 12:00 to the end of the window the popover opens on, the mount's instant, which Apply keeps: an hour bucket at 14:00
   // holds the end.
@@ -11858,24 +11864,16 @@ m.unmount();
     if (JSON.stringify(ends) !== JSON.stringify([new Date(at).toISOString()])) moved.push(`${name}: ${ends.join(',') || 'no read'}`);
   };
   await act('a Key pick', async () => {
-    const trigger = [...page.container.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith('Key'));
-    trigger?.click();
-    await page.settle(150);
-    [...(trigger?.parentElement?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'desktop')?.click();
-    await page.settle(150);
-    trigger?.click();
+    await pick(page, 'Key', 'desktop');
+    await closeBoxes(page);
   });
   await act('Group by', async () => {
-    const select = [...page.container.querySelectorAll('.filters select')].find((s) => [...s.options].some((o) => o.textContent === 'Client'));
-    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, 'model');
+    const select = groupBySelect(page);
+    if (select) Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, 'model');
     select?.dispatchEvent(new window.Event('change', { bubbles: true }));
   });
-  await act('Include probes', async () => page.container.querySelector('button[role="switch"][aria-label="Include probes"]')?.click());
-  await act('the session field', async () => {
-    const field = page.container.querySelector('input[aria-label="Session id"]');
-    typeInto(field, requests.find((r) => r.sessionId !== null)?.sessionId ?? '');
-    field?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
-  });
+  await act('Include probes', async () => addFilter(page, 'Include probes'));
+  await act('the session', async () => applyText(page, 'Session', requests.find((r) => r.sessionId !== null)?.sessionId ?? ''));
   spy.restore();
   page.unmount();
   page = await mount('/analytics#burn', { now: at });
@@ -12001,7 +11999,7 @@ m.unmount();
 
 m = await mount('/analytics');
 // The page opens on Traffic and shows one section at a time, so each list holds the words its own tab draws.
-expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'Session', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'desktop', 'laptop', 'in range']);
+expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'desktop', 'laptop', 'in range']);
 await tab(m, 'Latency');
 expect('/analytics latency tab', m.text(), ['Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key']);
 await tab(m, 'Cache');
@@ -12105,7 +12103,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       await page.settle(900);
     };
     const chooseUnit = (page, value) => changeSelect(page, unitSelect(page, 'cost') ?? unitSelect(page, 'cache') ?? unitSelect(page, 'cache-warming'), value);
-    const groupPage = (page, value) => changeSelect(page, page.container.querySelector('.filters select.groupby-select'), value);
+    const groupPage = (page, value) => changeSelect(page, groupBySelect(page), value);
     const costMeta = () => m.container.querySelector('#cost .analytics-section__meta')?.textContent ?? '';
     await tab(m, 'Cost');
     const select = unitSelect(m, 'cost');
@@ -12260,11 +12258,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // One account named, nightly, whose plan rows price every window: the cache card's legend reads its two 7-day
     // shares, the Probe cost tile its 7-day probe share over the other windows and the probe count, and the Cost
     // tiles its 7-day share over the other windows, its share per plan-funded request and per 1k output tokens.
-    const accountFilter = [...shares.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Account'));
-    accountFilter?.querySelector('.mselect__trigger')?.click();
-    await shares.settle(150);
-    [...(accountFilter?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'nightly')?.click();
-    await shares.settle(900);
+    await pick(shares, 'Account', 'nightly');
+    await closeBoxes(shares);
+    await shares.settle(200);
     const probeNamed = probeTile();
     await tab(shares, 'Cache');
     const namedCard = cardIn('Write cost vs read cost');
@@ -12385,11 +12381,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const served = requests.find((r) => r.sessionId !== null && r.status === 200 && r.accountId !== null && r.attempts[r.attempts.length - 1]?.accountKind === 'oauth' && r.attempts[r.attempts.length - 1]?.overageInUse !== true && r.attempts[r.attempts.length - 1]?.response.speed !== 'fast');
       const session = await mount(`/analytics?session=${encodeURIComponent(served.sessionId)}&key=${encodeURIComponent(`${served.keyId}@${served.keyGeneration}`)}&unit=share#cache-warming`);
       await groupPage(session, 'account');
-      const filter = [...session.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Account'));
-      filter?.querySelector('.mselect__trigger')?.click();
-      await session.settle(150);
-      [...(filter?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === served.accountId)?.click();
-      await session.settle(900);
+      await pick(session, 'Account', served.accountId);
+      await closeBoxes(session);
+      await session.settle(200);
       const tile = [...session.container.querySelectorAll('#cache-warming .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
       const read = [tile?.querySelector('.stat__value')?.textContent?.trim(), tile?.querySelector('.stat__note')?.textContent?.trim()];
       const meta = session.container.querySelector('#cache-warming .analytics-section__meta')?.textContent ?? '';
@@ -12415,11 +12409,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       else {
         const billed = await mount(`/analytics?session=${encodeURIComponent(billedOnly.sessionId)}&key=${encodeURIComponent(`${billedOnly.keyId}@${billedOnly.keyGeneration}`)}&unit=share#cache-warming`);
         await groupPage(billed, 'account');
-        const filter = [...billed.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Account'));
-        filter?.querySelector('.mselect__trigger')?.click();
-        await billed.settle(150);
-        [...(filter?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === billedOnly.accountId)?.click();
-        await billed.settle(900);
+        await pick(billed, 'Account', billedOnly.accountId);
+        await closeBoxes(billed);
+        await billed.settle(200);
         const underShares = probeTile(billed);
         billed.unmount();
         const plan = await mount(`/analytics?session=${encodeURIComponent(planOnly.sessionId)}&key=${encodeURIComponent(`${planOnly.keyId}@${planOnly.keyGeneration}`)}&unit=usd#cache-warming`);
@@ -12799,14 +12791,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   };
   const countOf = (el) => Number(el?.textContent?.trim().split(' ')[0].replace(/,/g, '') ?? NaN);
   {
-    const keyFilter = () => [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Key'));
     const toggleKey = async (value) => {
-      keyFilter()?.querySelector('.mselect__trigger')?.click();
-      await m.settle(150);
-      [...(keyFilter()?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === value)?.click();
-      await m.settle(700);
-      keyFilter()?.querySelector('.mselect__trigger')?.click();
-      await m.settle(150);
+      await pick(m, 'Key', value);
+      await closeBoxes(m);
     };
     const bars = () => [...(missCard()?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => ({ count: countOf(li.querySelector('.num')), label: li.children[0]?.textContent?.trim() ?? '', link: li.querySelector('.num > a') }));
     await toggleKey('desktop');
@@ -12823,12 +12810,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: wrong.length ? wrong : keyed.map((b) => `${b.label} ${b.count}`),
     });
     await toggleKey('desktop');
-    m.container.querySelector('.filters [role="switch"][aria-label="Include probes"]')?.click();
+    await addFilter(m, 'Include probes');
     await m.settle(700);
     const probed = bars().find((b) => b.link !== null);
     const probeTitle = probed?.link?.getAttribute('title') ?? '';
-    m.container.querySelector('.filters [role="switch"][aria-label="Include probes"]')?.click();
-    await m.settle(700);
+    await removeChip(m, 'include probes');
     results.push({ name: '/analytics with probes included a totals link says the list leaves the probes out', ok: probeTitle.includes('leaves the probes out') && logTarget(probed?.link?.getAttribute('href')).kind === undefined, missing: [probeTitle, probed?.link?.getAttribute('href') ?? 'no link'] });
   }
   await tab(m, 'Cache warming');
@@ -12838,8 +12824,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     results.push({ name: '/analytics wasted probe rows align their label at the top', ok: reasonRows.length === 9 && reasonRows.every((li) => li.classList.contains('hbars__row--top')), missing: [] });
   }
   {
-    const group = [...m.container.querySelectorAll('.filters select')].find((s) => [...s.options].some((o) => o.textContent === 'Client'));
-    const offered = [...(group?.options ?? [])].map((o) => o.textContent);
+    const offered = [...(groupBySelect(m)?.options ?? [])].map((o) => o.textContent);
     results.push({ name: '/analytics group-by offers the client class and the user agent', ok: offered.includes('Client') && offered.includes('User agent'), missing: offered });
     results.push({ name: '/analytics group-by offers the speed', ok: offered.includes('Speed'), missing: offered });
   }
@@ -12848,16 +12833,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const setArea = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
     const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
     const groupBy = async (label) => {
-      const select = [...m.container.querySelectorAll('.filters select')].find((s) => [...s.options].some((o) => o.textContent === 'Client'));
+      const select = groupBySelect(m);
       const option = [...(select?.options ?? [])].find((o) => o.textContent === label);
-      setSelect.call(select, option?.value);
+      if (select) setSelect.call(select, option?.value);
       select?.dispatchEvent(new window.Event('change', { bubbles: true }));
       await m.settle(800);
     };
     const traffic = (dimension) => [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith(`Traffic by ${dimension}`));
     const trafficRows = (dimension) => [...(traffic(dimension)?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? ''));
+    // The field stands in the Groups popover, which a typed list leaves open for the next one.
     const typeGroups = async (check, value) => {
-      const field = m.container.querySelector('textarea[aria-label="User agent groups"]');
+      const field = await groupsField(m);
       if (!field) {
         controlMissing(check, 'User agent groups');
         return;
@@ -12902,13 +12888,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     });
     const boundCheck = '/analytics the user agent groups hold 32 patterns of 256 characters at most';
     await typeGroups(boundCheck, ['y'.repeat(300), ...Array.from({ length: 32 }, (_, i) => `client-${i}/*`)].join('\n'));
-    const bounded = m.container.querySelector('textarea[aria-label="User agent groups"]')?.value.split('\n') ?? [];
+    const bounded = groupsBox()?.querySelector('textarea')?.value.split('\n') ?? [];
+    const hint = groupsBox()?.querySelector('.field__hint')?.textContent?.trim() ?? '';
     results.push({
       name: boundCheck,
-      ok: bounded.length === 32 && bounded[0].length === 256 && bounded[31] === 'client-30/*' && m.text().includes('32 patterns of 256 characters at most, as the route accepts'),
-      missing: [String(bounded.length), String(bounded[0]?.length), bounded[31] ?? ''],
+      ok: bounded.length === 32 && bounded[0].length === 256 && bounded[31] === 'client-30/*' && hint === '32 patterns of 256 characters at most, as the route accepts',
+      missing: [String(bounded.length), String(bounded[0]?.length), bounded[31] ?? '', hint || 'no hint'],
     });
     await typeGroups(boundCheck, '');
+    await closeBoxes(m);
 
     // Effort rides on the hourly rollups, and the synthesized month is the range that holds all three.
     const range = (label) => [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === label);
@@ -12960,8 +12948,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   {
     const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
     const groupBy = async (label) => {
-      const select = [...m.container.querySelectorAll('.filters select')].find((s) => [...s.options].some((o) => o.textContent === 'Client'));
-      setSelect.call(select, [...(select?.options ?? [])].find((o) => o.textContent === label)?.value);
+      const select = groupBySelect(m);
+      if (select) setSelect.call(select, [...(select.options ?? [])].find((o) => o.textContent === label)?.value);
       select?.dispatchEvent(new window.Event('change', { bubbles: true }));
       await m.settle(800);
     };
@@ -13010,14 +12998,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const accountTable = () => [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Accounts in range'));
     const accountRows = () => [...(accountTable()?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim() ?? '');
     const every = accountRows();
-    const filter = (label) => [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith(label));
     const toggle = async (label, value) => {
-      filter(label)?.querySelector('.mselect__trigger')?.click();
-      await m.settle(150);
-      [...(filter(label)?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === value)?.click();
-      await m.settle(700);
-      filter(label)?.querySelector('.mselect__trigger')?.click();
-      await m.settle(150);
+      await pick(m, label, value);
+      await closeBoxes(m);
     };
     // The Account filter offers the accounts with traffic in range, which `legacy`, the first row, is not among.
     const picked = 'primary';
@@ -13037,25 +13020,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     });
     // A session view reads the request log for every other section, while this one keeps the range's rollups,
     // which carry no session and no probe count, so a session alone or the probes toggle alone draws the clause.
-    const setInput = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    const commitSession = async (value) => {
-      const input = [...m.container.querySelectorAll('.filters input')].find((i) => i.getAttribute('type') === 'search');
-      setInput.call(input, value);
-      input?.dispatchEvent(new window.Event('input', { bubbles: true }));
-      input?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
-      await m.settle(900);
-    };
-    const probes = async () => {
-      m.container.querySelector('.filters [role="switch"][aria-label="Include probes"]')?.click();
-      await m.settle(700);
-    };
-    await commitSession(requests.find((r) => r.sessionId !== null).sessionId);
+    await applyText(m, 'Session', requests.find((r) => r.sessionId !== null).sessionId);
+    await m.settle(200);
     const bySession = subtitle();
     const sessionRows = accountRows();
-    await commitSession('');
-    await probes();
+    await removeChip(m, 'session');
+    await addFilter(m, 'Include probes');
+    await m.settle(700);
     const byProbes = subtitle();
-    await probes();
+    await removeChip(m, 'include probes');
     results.push({
       name: '/analytics the accounts section says the session filter and the probes toggle do not reach it',
       ok: bySession === ignored && JSON.stringify(sessionRows) === JSON.stringify(every) && byProbes === ignored && subtitle() === 'Totals for the selected range and accounts',
@@ -13220,21 +13193,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: [...reasonHeads, JSON.stringify(unknownParts), ...monthBars],
     });
     await tab(m, 'Traffic');
-    const keyFilter = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Key'));
-    const pick = async (label) => {
-      keyFilter?.querySelector('.mselect__trigger')?.click();
-      await m.settle(150);
-      [...(keyFilter?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === label)?.click();
-      await m.settle(700);
+    const pickKey = async (label) => {
+      await pick(m, 'Key', label);
       const rows = trafficRows();
-      keyFilter?.querySelector('.mselect__clear')?.click();
-      await m.settle(400);
-      // Clearing leaves the list open, so the trigger closes it and the next pick opens it again.
-      keyFilter?.querySelector('.mselect__trigger')?.click();
+      await closeBoxes(m);
+      await removeChip(m, 'key');
       return rows;
     };
-    const liveOnly = await pick('desktop');
-    const deletedOnly = await pick(earlierLabel);
+    const liveOnly = await pickKey('desktop');
+    const deletedOnly = await pickKey(earlierLabel);
     results.push({
       name: '/analytics each desktop option selects its own rows',
       // A table that never rendered answers undefined on both sides, which would compare equal and prove nothing.
@@ -13267,12 +13234,20 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: [probeLegend.map((li) => li.textContent ?? '').join('|').slice(0, 160), held?.getAttribute('title') ?? 'no held slice', columns.join(',')],
     });
   }
-  results.push({ name: '/analytics filter bar is sticky', ok: m.container.querySelector('.filters.filters--sticky') !== null, missing: [m.container.querySelector('.filters')?.className ?? 'no filter bar'] });
+  results.push({ name: '/analytics filter bar is sticky', ok: m.container.querySelector('.filter-bar.filter-bar--sticky') !== null, missing: [m.container.querySelector('.filter-bar')?.className ?? 'no filter bar'] });
   await tab(m, 'Latency');
   const hints = m.container.querySelectorAll('[title="±1 bucket"]').length;
   results.push({ name: '/analytics percentile labels carry the bucket hint', ok: hints >= 8, missing: [String(hints)] });
-  const dims = [...m.container.querySelectorAll('.filters .mselect__trigger')].map((b) => b.textContent?.trim());
-  results.push({ name: '/analytics has a filter per dimension', ok: ['Key', 'Pool', 'Account', 'Model'].every((d) => dims.includes(d)), missing: dims });
+  addFilterButton(m)?.click();
+  await m.settle(100);
+  const dims = filterRows().map((r) => r.querySelector('.add-filter__label')?.textContent?.trim());
+  const groupHeads = [...(filterBox()?.querySelectorAll('.mselect__group') ?? [])].map((g) => g.textContent?.trim());
+  await closeBoxes(m);
+  results.push({
+    name: '/analytics has a filter per dimension',
+    ok: JSON.stringify(dims) === JSON.stringify(['Account', 'Key', 'Model', 'Pool', 'Client', 'Include probes', 'User agent', 'Session']) && JSON.stringify(groupHeads) === JSON.stringify(['Routing', 'Request', 'Subject']),
+    missing: [...dims, ...groupHeads],
+  });
   await openCustom(m);
   const pickers = rangeBox()?.querySelectorAll('input[type="datetime-local"]').length ?? 0;
   await closeCustom(m, 'Cancel');
@@ -13288,7 +13263,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     results.push({ name: '/analytics shows Traffic alone and mounts no other section', ok: mounted() === 'traffic' && m.container.querySelector('#traffic')?.getAttribute('role') === 'tabpanel' && m.container.querySelector('#traffic')?.getAttribute('aria-labelledby') === 'tab-traffic', missing: [mounted()] });
     await tab(m, 'Burn');
     results.push({ name: '/analytics a tab click writes its hash and mounts its section alone', ok: m.location().hash === '#burn' && m.location().pathname === '/analytics' && mounted() === 'burn', missing: [JSON.stringify(m.location()), mounted()] });
-    const selects = ['.filters select.groupby-select', '#burn select.groupby-select[aria-label="Burn group by"]'].map((s) => m.container.querySelector(s));
+    const selects = ['.filter-bar select.groupby-select[aria-label="Group by"]', '#burn select.groupby-select[aria-label="Burn group by"]'].map((s) => m.container.querySelector(s));
     results.push({ name: "/analytics both group-by controls are selects of one class, Burn's named and explained beside it", ok: selects.every((s) => s !== null) && [...(selects[1]?.options ?? [])].map((o) => o.textContent).join() === 'Account,Key,Session,Request class' && (m.container.querySelector('#burn .analytics-groupby__reason')?.textContent ?? '') === "Burn groups by account, key, session or request class alone. The plan shares read under Account, since shares of different accounts' windows do not add.", missing: selects.map((s) => s?.outerHTML.slice(0, 80) ?? 'missing') });
     await tab(m, 'Traffic');
     m.unmount();
@@ -13328,14 +13303,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // With no filter set, the grouped dimension's options come from the page's own breakdown, which still holds the
       // grouping before a change until the new read lands; the reads are held here so that beat can be read.
       m = await mount('/analytics');
-      const trigger = (label) => [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith(label));
-      const listed = (label) => [...(trigger(label)?.querySelectorAll(CHOICE) ?? [])].map((o) => o.textContent?.trim() ?? '');
+      const listed = () => boxOptions().map((o) => o.textContent?.trim() ?? '');
       const optionsOf = async (label) => {
-        trigger(label)?.querySelector('.mselect__trigger')?.click();
-        await m.settle(60);
-        const options = listed(label);
-        trigger(label)?.querySelector('.mselect__trigger')?.click();
-        await m.settle(60);
+        await addFilter(m, label);
+        const options = listed();
+        await closeBoxes(m);
         return options;
       };
       const keyLabels = await optionsOf('Key');
@@ -13346,25 +13318,21 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         const gate = new Promise((resolve) => {
           open = resolve;
         });
-        trigger('Key')?.querySelector('.mselect__trigger')?.click();
-        await m.settle(60);
+        await addFilter(m, 'Key');
         api.getAnalyticsBreakdown = (...args) => gate.then(() => breakdown.apply(api, args));
-        [...(trigger('Key')?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'desktop')?.click();
+        boxOptions().find((o) => o.textContent?.trim() === 'desktop')?.click();
         await m.settle(300);
-        const during = listed('Key');
-        const summary = trigger('Key')?.querySelector('.mselect__trigger')?.textContent?.trim() ?? '';
+        const during = listed();
+        const summary = chipRead(m, 'key');
         open();
         await m.settle(300);
         api.getAnalyticsBreakdown = breakdown;
-        results.push({ name: '/analytics the first key pick keeps the Key list while the reads it starts are out', ok: keyLabels.length > 1 && JSON.stringify(during) === JSON.stringify(keyLabels) && summary === 'Key (1)', missing: [`keys ${keyLabels.join(',')}`, `during ${during.join(',')}`, summary] });
-        // Clearing leaves the list open, so the trigger closes it.
-        trigger('Key')?.querySelector('.mselect__clear')?.click();
-        await m.settle(400);
-        trigger('Key')?.querySelector('.mselect__trigger')?.click();
-        await m.settle(60);
+        results.push({ name: '/analytics the first key pick keeps the Key list while the reads it starts are out', ok: keyLabels.length > 1 && JSON.stringify(during) === JSON.stringify(keyLabels) && summary === 'key: desktop', missing: [`keys ${keyLabels.join(',')}`, `during ${during.join(',')}`, summary] });
+        await closeBoxes(m);
+        await removeChip(m, 'key');
       }
       const held = deferNextCall('getAnalyticsBreakdown');
-      const select = m.container.querySelector('.filters select.groupby-select');
+      const select = groupBySelect(m);
       if (select) {
         Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, 'model');
         select.dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -13384,15 +13352,12 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       {
         // With a filter set every list reads its own keys, and a range change sends each read out again; a list keeps
         // the keys it showed until its new answer lands.
-        const pool = trigger('Pool');
-        pool?.querySelector('.mselect__trigger')?.click();
-        await m.settle(60);
-        const picked = pool?.querySelector(CHOICE);
+        await addFilter(m, 'Pool');
+        const picked = boxOptions()[0];
         const poolName = picked?.textContent?.trim() ?? '';
         picked?.click();
         await m.settle(700);
-        pool?.querySelector('.mselect__trigger')?.click();
-        await m.settle(60);
+        await closeBoxes(m);
         const lists = ['Account', 'Key', 'Model', 'Pool'];
         const shown = {};
         for (const label of lists) shown[label] = await optionsOf(label);
@@ -13409,12 +13374,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         const during = {};
         const empty = {};
         for (const label of lists) {
-          trigger(label)?.querySelector('.mselect__trigger')?.click();
-          await m.settle(60);
-          during[label] = listed(label);
-          empty[label] = trigger(label)?.querySelector('.mselect__empty') !== null;
-          trigger(label)?.querySelector('.mselect__trigger')?.click();
-          await m.settle(60);
+          await addFilter(m, label);
+          during[label] = listed();
+          empty[label] = filterBox()?.querySelector('.mselect__empty') !== null;
+          await closeBoxes(m);
         }
         open();
         await m.settle(300);
@@ -13428,12 +13391,19 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       m.unmount();
     }
     m = await mount(`/analytics?session=${encodeURIComponent(laptopRow.sessionId)}&key=laptop%40${laptopRow.keyGeneration}`);
+    {
+      // The session chip prints the id's first eight characters, and its title names the whole id and the key lifetime
+      // the address carries beside it, which has no chip of its own.
+      const chip = chipOf(m, 'session');
+      const read = { chips: m.container.querySelectorAll('.chip--filter').length, remove: chip?.querySelector('.chip__remove')?.getAttribute('aria-label') ?? null, text: chip?.textContent?.trim() ?? null, title: chip?.getAttribute('title') ?? null };
+      const want = { chips: 1, remove: 'Remove session filter', text: `session: ${laptopRow.sessionId.slice(0, 8)}…`, title: `${laptopRow.sessionId} under the key laptop@${laptopRow.keyGeneration}` };
+      results.push({ name: '/analytics the session chip reads the id cut at eight characters with the key lifetime in its title', ok: JSON.stringify(read) === JSON.stringify(want), missing: [JSON.stringify(read), JSON.stringify(want)] });
+    }
     await tab(m, 'Latency');
     results.push({ name: '/analytics a tab change keeps the session query', ok: m.location().hash === '#latency' && m.location().search.includes('session=') && m.location().search.includes('key=laptop'), missing: [JSON.stringify(m.location())] });
     await tab(m, 'Cache warming');
-    m.container.querySelector('.chip--removable button')?.click();
-    await m.settle(400);
-    results.push({ name: '/analytics removing a session chip clears the query and keeps the tab', ok: JSON.stringify(m.location()) === JSON.stringify({ hash: '#cache-warming', pathname: '/analytics', search: '' }) && mounted() === 'cache-warming' && m.container.querySelector('.chip--removable') === null, missing: [JSON.stringify(m.location()), mounted()] });
+    await removeChip(m, 'session');
+    results.push({ name: '/analytics removing a session chip clears the query and keeps the tab', ok: JSON.stringify(m.location()) === JSON.stringify({ hash: '#cache-warming', pathname: '/analytics', search: '' }) && mounted() === 'cache-warming' && chipOf(m, 'session') === undefined, missing: [JSON.stringify(m.location()), mounted()] });
     m.unmount();
     m = await mount('/analytics');
     // A fresh mount opens on the day, and the session checks below read the three days up to its end: the Custom
@@ -13458,14 +13428,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     });
   }
   {
-    const field = () => [...m.container.querySelectorAll('.filters input')].find((i) => i.getAttribute('type') === 'search');
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    // The session enters through Add filter's id step and leaves through its chip's x.
     const commit = async (value) => {
-      const input = field();
-      setter.call(input, value);
-      input?.dispatchEvent(new window.Event('input', { bubbles: true }));
-      input?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
-      await m.settle(900);
+      if (value) await applyText(m, 'Session', value);
+      else await removeChip(m, 'session');
+      await m.settle(200);
     };
     // Cache warming is the section whose meta names the request log as a session view's source.
     await tab(m, 'Cache warming');
@@ -13478,13 +13445,12 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   {
     // A session view answers every section from the request log, so the client, user agent, and effort controls
     // have to reach the local fold exactly as they reach the routes.
-    const setInput = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
     const setArea = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
     const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
     const groupBy = async (label) => {
-      const select = [...m.container.querySelectorAll('.filters select')].find((s) => [...s.options].some((o) => o.textContent === 'Client'));
+      const select = groupBySelect(m);
       const option = [...(select?.options ?? [])].find((o) => o.textContent === label);
-      setSelect.call(select, option?.value);
+      if (select) setSelect.call(select, option?.value);
       select?.dispatchEvent(new window.Event('change', { bubbles: true }));
       await m.settle(900);
     };
@@ -13493,20 +13459,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       return [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? ''));
     };
     const num = (cell) => Number((cell ?? '').replace(/,/g, ''));
+    // A pattern applies through Add filter's step, and an empty one leaves its chip.
     const typeInto = async (check, label, value) => {
-      const input = m.container.querySelector(`input[aria-label="${label}"]`);
-      if (!input) {
-        controlMissing(check, label);
-        return;
-      }
-      setInput.call(input, value);
-      input.dispatchEvent(new window.Event('input', { bubbles: true }));
-      await m.settle(900);
+      if (!(await applyText(m, label, value))) controlMissing(check, label);
+      await m.settle(200);
     };
-    const typeUserAgent = (check, value) => typeInto(check, 'User agent pattern', value);
-    const typeClass = (check, value) => typeInto(check, 'Client pattern', value);
+    const typeUserAgent = (check, value) => typeInto(check, 'User agent', value);
+    const typeClass = (check, value) => typeInto(check, 'Client', value);
     const typeGroups = async (check, value) => {
-      const field = m.container.querySelector('textarea[aria-label="User agent groups"]');
+      const field = await groupsField(m);
       if (!field) {
         controlMissing(check, 'User agent groups');
         return;
@@ -13517,12 +13478,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     };
     const seed = requests.find((r) => r.keyId === 'desktop' && r.usage.webSearch > 0);
     const session = seed?.sessionId ?? null;
-    const field = [...m.container.querySelectorAll('.filters input')].find((i) => i.getAttribute('type') === 'search');
-    setInput.call(field, session ?? '');
-    field?.dispatchEvent(new window.Event('input', { bubbles: true }));
-    field?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
-    await m.settle(1200);
-    results.push({ name: '/analytics a typed session raises its chip', ok: session !== null && m.container.querySelector('.chip--removable') !== null, missing: [String(session)] });
+    await applyText(m, 'Session', session ?? '');
+    await m.settle(500);
+    results.push({ name: '/analytics a typed session raises its chip', ok: session !== null && chipRead(m, 'session') === `session: ${session.slice(0, 8)}…`, missing: [String(session), chipRead(m, 'session')] });
 
     await groupBy('Model');
     const perModel = trafficRows('model');
@@ -13560,6 +13518,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const wanted = [...new Set(agents.map((c) => ['claude-cli/2.1.', 'claude-cli/2.0.'].find((p) => c.startsWith(p)) ?? 'other:'))].map((p) => (p === 'other:' ? 'other' : `${p}*`)).sort();
     results.push({ name: sessionGroups, ok: wanted.length > 0 && JSON.stringify([...named].sort()) === JSON.stringify(wanted), missing: [named.join(','), wanted.join(',')] });
     await typeGroups(sessionGroups, '');
+    await closeBoxes(m);
 
     await groupBy('Effort');
     const perEffort = trafficRows('effort');
@@ -13572,8 +13531,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: [...perEffort.map((row) => row[0]), `${counted} of ${own}`],
     });
 
-    m.container.querySelector('.chip--removable button')?.click();
-    await m.settle(900);
+    await removeChip(m, 'session');
+    await m.settle(200);
     await groupBy('Key');
     await tab(m, 'Cache warming');
     results.push({ name: '/analytics removing the session chip leaves the session view', ok: !m.text().includes('From the request log'), missing: [] });
@@ -13586,15 +13545,8 @@ m.unmount();
   // the way it reaches the rollup reads.
   const seed = requests.find((r) => r.keyId === 'desktop' && r.sessionId !== null && r.kind !== 'probe');
   const view = `/analytics?session=${seed?.sessionId}&key=${seed?.keyId}@${seed?.keyGeneration}`;
-  const setInput = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const typeClass = (check, page, value) => {
-    const input = page.container.querySelector('input[aria-label="Client pattern"]');
-    if (!input) {
-      controlMissing(check, 'Client pattern');
-      return;
-    }
-    setInput.call(input, value);
-    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  const typeClass = async (check, page, value) => {
+    if (!(await applyText(page, 'Client', value))) controlMissing(check, 'Client');
   };
   const total = (page) => Number(/^([\d,]+) requests/.exec(page.container.querySelector('#traffic .analytics-section__meta')?.textContent ?? '')?.[1].replace(/,/g, '') ?? -1);
   const trafficRows = (page) => {
@@ -13606,11 +13558,11 @@ m.unmount();
   let page = await mount(view);
   await page.settle(900);
   const whole = total(page);
-  typeClass(narrows, page, 'claude-code/*');
-  await page.settle(900);
+  await typeClass(narrows, page, 'claude-code/*');
+  await page.settle(200);
   const matching = total(page);
-  typeClass(narrows, page, 'sdk/*');
-  await page.settle(900);
+  await typeClass(narrows, page, 'sdk/*');
+  await page.settle(200);
   const none = total(page);
   const noneRows = trafficRows(page);
   results.push({
@@ -13630,10 +13582,10 @@ m.unmount();
   const restarts = '/analytics a client pattern typed during a session load restarts the fold';
   page = await mount(view);
   const pending = total(page);
-  typeClass(restarts, page, 'sdk/*');
+  await typeClass(restarts, page, 'sdk/*');
   await page.settle(3_500);
   const restarted = total(page);
-  typeClass(restarts, page, '');
+  await typeClass(restarts, page, '');
   await page.settle(3_500);
   const cleared = total(page);
   api.listRequests = listRequests;
@@ -13644,6 +13596,184 @@ m.unmount();
     missing: [`while loading ${pending}`, `reads ${reads.map((q) => q.client ?? '-').join(',')}`, `after sdk/* ${restarted}`, `cleared ${cleared} of ${whole}`],
   });
   page.unmount();
+}
+
+// The Analytics bar: the sticky bar first in the page with its slots, the Groups (N) button and its popover, auto
+// reload at 5 s over the registry read and the bucket boundary, and the Partial note under the bar.
+{
+  const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+  const setArea = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+  const chooseGroup = async (page, value) => {
+    const select = groupBySelect(page);
+    if (select) {
+      setSelect.call(select, value);
+      select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    }
+    await page.settle(300);
+  };
+  const query = (page) => Object.fromEntries(new URLSearchParams(page.location().search));
+  {
+    const name = '/analytics mounts the sticky bar first with the range, Add filter, Group by and the edge, no search and no count';
+    const page = await mount('/analytics', { now: CLOCK_ORIGIN });
+    const bar = page.container.querySelector('.filter-bar');
+    const slotOf = (el) =>
+      el.matches('.segmented[aria-label="Range"]')
+        ? 'range'
+        : el.querySelector('input[type="search"]') || el.matches('input')
+          ? 'search'
+          : el.textContent?.trim() === 'Add filter'
+            ? 'add filter'
+            : el.querySelector('select[aria-label="Group by"]')
+              ? 'group by'
+              : el.matches('.filter-bar__edge')
+                ? 'edge'
+                : el.className || el.tagName.toLowerCase();
+    const read = {
+      count: bar === null ? null : bar.querySelector('.filter-bar__count') !== null,
+      first: bar !== null && bar.parentElement?.classList.contains('stack') === true && bar.parentElement.firstElementChild === bar,
+      label: bar?.querySelector('label.row > span.muted')?.textContent?.trim() ?? null,
+      slots: [...(bar?.querySelector('.filter-bar__row')?.children ?? [])].map(slotOf),
+      sticky: bar?.classList.contains('filter-bar--sticky') ?? null,
+    };
+    const want = { count: false, first: true, label: 'Group by', slots: ['range', 'add filter', 'group by', 'edge'], sticky: true };
+    results.push({ name, ok: JSON.stringify(read) === JSON.stringify(want), missing: [JSON.stringify(read)] });
+    page.unmount();
+  }
+  {
+    const name = '/analytics the Groups (N) button stands under the user agent grouping, its popover edits a pattern, and the count and the address follow';
+    const lines = 'claude-cli/2.1.*\nclaude-cli/2.0.*';
+    const page = await mount('/analytics', { now: CLOCK_ORIGIN });
+    const underKey = groupsButton(page) === undefined;
+    await chooseGroup(page, 'user_agent');
+    const button = groupsButton(page);
+    const rest = { expanded: button?.getAttribute('aria-expanded') ?? null, popup: button?.getAttribute('aria-haspopup') ?? null, text: button?.textContent?.trim() ?? null };
+    const field = await groupsField(page);
+    const labelId = groupsBox()?.getAttribute('aria-labelledby') ?? null;
+    const opened = { expanded: button?.getAttribute('aria-expanded') ?? null, focused: field !== null && document.activeElement === field, label: labelId === null ? null : (document.getElementById(labelId)?.textContent?.trim() ?? null), role: groupsBox()?.getAttribute('role') ?? null };
+    if (field) {
+      setArea.call(field, lines);
+      field.dispatchEvent(new window.Event('input', { bubbles: true }));
+    }
+    await page.settle(100);
+    // The frozen clock fires the field's pause on the tick alone.
+    tick(400);
+    await page.settle(300);
+    const typed = { groups: query(page).groups ?? null, text: groupsButton(page)?.textContent?.trim() ?? null };
+    pressKey('Escape', field);
+    await page.settle(100);
+    const escaped = { focused: document.activeElement === groupsButton(page), open: groupsBox() !== null };
+    groupsButton(page)?.click();
+    await page.settle(100);
+    const reopened = groupsBox() !== null;
+    page.container.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+    await page.settle(100);
+    const outside = groupsBox() === null;
+    await chooseGroup(page, 'key');
+    const left = { button: groupsButton(page) === undefined, groups: query(page).groups ?? null };
+    results.push({
+      name,
+      ok:
+        underKey &&
+        JSON.stringify(rest) === JSON.stringify({ expanded: 'false', popup: 'dialog', text: 'Groups (0)' }) &&
+        JSON.stringify(opened) === JSON.stringify({ expanded: 'true', focused: true, label: 'User agent groups', role: 'dialog' }) &&
+        JSON.stringify(typed) === JSON.stringify({ groups: lines, text: 'Groups (2)' }) &&
+        JSON.stringify(escaped) === JSON.stringify({ focused: true, open: false }) &&
+        reopened &&
+        outside &&
+        JSON.stringify(left) === JSON.stringify({ button: true, groups: lines }),
+      missing: [`under the key grouping ${underKey ? 'no button' : 'a button'}`, JSON.stringify(rest), JSON.stringify(opened), JSON.stringify(typed), JSON.stringify(escaped), `reopened ${reopened}`, `closed by a click outside ${outside}`, JSON.stringify(left)],
+    });
+    page.unmount();
+  }
+  {
+    const name = '/analytics starts auto reload at 5 s, reads the registry at the interval and holds the end while off with the title naming it';
+    const part = (page) => ({ disabled: intervalPart(page)?.disabled ?? null, title: intervalPart(page)?.getAttribute('title') ?? null, word: intervalWord(page) });
+    const hour = Date.UTC(2026, 8, 16, 15);
+    const page = await mount('/analytics', { now: CLOCK_ORIGIN });
+    const start = part(page);
+    let registry = countCalls('listAccounts');
+    tick(5_000);
+    await page.settle();
+    const polled = registry.calls.length;
+    registry.restore();
+    await chooseInterval(page, 'Off');
+    const off = { ...part(page), refresh: page.container.querySelector('.refresh-control__body')?.getAttribute('title') ?? null };
+    registry = countCalls('listAccounts');
+    let series = countCalls('getAnalyticsSeries');
+    // An hour on, past 15:00, the boundary the page moves the end over while auto reload is on.
+    tick(3_600_000);
+    await page.settle();
+    const held = { registry: registry.calls.length, series: series.calls.length, title: part(page).title };
+    registry.restore();
+    series.restore();
+    series = countCalls('getAnalyticsSeries');
+    page.container.querySelector('.refresh-control__body')?.click();
+    await page.settle();
+    const refreshed = { ends: [...new Set(series.calls.map(([q]) => q?.to))], title: part(page).title };
+    series.restore();
+    page.unmount();
+
+    // A span that ended a day before the clock has nothing new to read.
+    const ended = await mount('/analytics?from=2026-09-15T12:00:00.000Z&to=2026-09-15T14:00:00.000Z', { now: CLOCK_ORIGIN });
+    const endedPart = part(ended);
+    registry = countCalls('listAccounts');
+    tick(5_000);
+    await ended.settle();
+    const endedReads = registry.calls.length;
+    registry.restore();
+    ended.unmount();
+
+    // An open Groups popover is a menu under the bar: the registry and the boundary wait for it, and run once it closes.
+    const grouped = await mount('/analytics?by=user_agent', { now: CLOCK_ORIGIN });
+    await groupsField(grouped);
+    const pausedPart = part(grouped);
+    registry = countCalls('listAccounts');
+    series = countCalls('getAnalyticsSeries');
+    tick(31 * 60_000);
+    await grouped.settle();
+    const paused = { registry: registry.calls.length, series: series.calls.length };
+    await closeBoxes(grouped);
+    tick(5_000);
+    await grouped.settle();
+    const resumed = { registry: registry.calls.length - paused.registry, series: series.calls.slice(paused.series).map(([q]) => q?.to) };
+    registry.restore();
+    series.restore();
+    grouped.unmount();
+    results.push({
+      name,
+      ok:
+        JSON.stringify(start) === JSON.stringify({ disabled: false, title: 'Auto reload every 5 s', word: '5 s' }) &&
+        polled === 1 &&
+        JSON.stringify(off) === JSON.stringify({ disabled: false, title: 'Auto reload off, the window ends 14:30', word: 'Off', refresh: 'Window ends 14:30. Refresh reads up to now' }) &&
+        JSON.stringify(held) === JSON.stringify({ registry: 0, series: 0, title: 'Auto reload off, the window ends 14:30' }) &&
+        JSON.stringify(refreshed) === JSON.stringify({ ends: [new Date(CLOCK_ORIGIN + 5_000 + 3_600_000).toISOString()], title: 'Auto reload off, the window ends 15:30' }) &&
+        JSON.stringify(endedPart) === JSON.stringify({ disabled: true, title: 'A custom range that has ended has nothing new to read', word: 'Off' }) &&
+        endedReads === 0 &&
+        JSON.stringify(pausedPart) === JSON.stringify({ disabled: false, title: 'Auto reload every 5 s, paused while a menu is open', word: '5 s' }) &&
+        JSON.stringify(paused) === JSON.stringify({ registry: 0, series: 0 }) &&
+        resumed.registry > 0 &&
+        resumed.series.length === 2 &&
+        resumed.series.every((to) => Date.parse(to) >= hour),
+      missing: [JSON.stringify(start), `${polled} registry reads in 5 s`, JSON.stringify(off), JSON.stringify(held), JSON.stringify(refreshed), JSON.stringify(endedPart), `${endedReads} registry reads on the ended span`, JSON.stringify(pausedPart), JSON.stringify(paused), JSON.stringify(resumed)],
+    });
+  }
+  {
+    const name = '/analytics the Partial note reads under the bar as a status line in a partial session view';
+    const seed = requests.find((r) => r.sessionId !== null && r.kind !== 'probe' && Date.parse(r.at) > CLOCK_ORIGIN - 23 * 3_600_000 && Date.parse(r.at) <= CLOCK_ORIGIN);
+    const listRequests = api.listRequests;
+    // Every page names one after it, so the session view reads its twenty pages and stops short of the end.
+    api.listRequests = (q) => listRequests.call(api, { ...q, cursor: undefined }).then((answer) => ({ ...answer, nextCursor: 'more' }));
+    const page = await mount(`/analytics?session=${encodeURIComponent(seed?.sessionId ?? '')}`, { now: CLOCK_ORIGIN });
+    const noteOf = () => [...page.container.querySelectorAll('[role="status"]')].find((el) => (el.textContent ?? '').startsWith('Partial'));
+    // The mock answers each page after its own delay, so the twenty pages land over a few seconds.
+    await until(page, () => noteOf() !== undefined, 6_000);
+    api.listRequests = listRequests;
+    const bar = page.container.querySelector('.filter-bar');
+    const note = noteOf();
+    const read = { inBar: note !== undefined && bar?.contains(note) === true, muted: note?.classList.contains('muted') ?? null, next: note !== undefined && bar?.nextElementSibling === note, tag: note?.tagName.toLowerCase() ?? null, text: note?.textContent?.trim() ?? null };
+    results.push({ name, ok: seed !== undefined && JSON.stringify(read) === JSON.stringify({ inBar: false, muted: true, next: true, tag: 'p', text: 'Partial: the first 10,000 requests of the range' }), missing: [seed?.sessionId ?? 'no session in the default range', JSON.stringify(read)] });
+    page.unmount();
+  }
 }
 
 m = await mount('/keepalive');
@@ -14068,23 +14198,19 @@ m.unmount();
     select?.dispatchEvent(new window.Event('change', { bubbles: true }));
     await page.settle(300);
   };
-  const typeIn = (input, text) => {
-    if (!input) return;
-    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, text);
-    input.dispatchEvent(new window.Event('input', { bubbles: true }));
-  };
   const query = (page) => Object.fromEntries(new URLSearchParams(page.location().search));
   const pressed = (page) => page.container.querySelector('.segmented[aria-label="Range"] button[aria-pressed="true"]')?.textContent?.trim() ?? null;
   const total = (page) => Number(/^([\d,]+) requests/.exec(page.container.querySelector('#traffic .analytics-section__meta')?.textContent ?? '')?.[1].replace(/,/g, '') ?? -1);
 
   {
-    const name = '/analytics reads the group-by, range, probes switch, agent pattern and Account picker from the address, and a unit change keeps every key and the tab';
-    const page = await mount('/analytics?by=account&range=7d&probes=1&agent=claude&accounts=primary#cost', { now: CLOCK_ORIGIN });
+    const name = '/analytics reads the group-by, range, probes, agent pattern and Account chips from the address, and a unit change keeps every key and the tab';
+    const page = await mount(`/analytics?by=account&range=7d&probes=1&agent=${encodeURIComponent('claude-cli/2.1.*')}&accounts=primary#cost`, { now: CLOCK_ORIGIN });
     const read = {
-      account: [...page.container.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith('Account'))?.textContent?.trim() ?? null,
-      agent: page.container.querySelector('input[aria-label="User agent pattern"]')?.value ?? null,
-      groupBy: page.container.querySelector('.filters select.groupby-select')?.value ?? null,
-      probes: page.container.querySelector('button[role="switch"][aria-label="Include probes"]')?.getAttribute('aria-checked') ?? null,
+      account: chipRead(page, 'account'),
+      agent: chipRead(page, 'user agent'),
+      agentMono: chipOf(page, 'user agent')?.querySelector('.chip__values')?.classList.contains('mono') ?? null,
+      groupBy: groupBySelect(page)?.value ?? null,
+      probes: chipRead(page, 'include probes'),
       range: pressed(page),
     };
     const unit = page.container.querySelector('select[aria-label="Cost unit"]');
@@ -14094,7 +14220,7 @@ m.unmount();
       const after = { hash: page.location().hash, query: query(page) };
       results.push({
         name,
-        ok: JSON.stringify(read) === JSON.stringify({ account: 'Account (1)', agent: 'claude', groupBy: 'account', probes: 'true', range: '7d' }) && after.hash === '#cost' && JSON.stringify(Object.entries(after.query).sort()) === JSON.stringify(Object.entries({ accounts: 'primary', agent: 'claude', by: 'account', probes: '1', range: '7d', unit: 'usd' }).sort()),
+        ok: JSON.stringify(read) === JSON.stringify({ account: 'account: primary', agent: 'user agent: claude-cli/2.1.*', agentMono: true, groupBy: 'account', probes: 'include probes', range: '7d' }) && after.hash === '#cost' && JSON.stringify(Object.entries(after.query).sort()) === JSON.stringify(Object.entries({ accounts: 'primary', agent: 'claude-cli/2.1.*', by: 'account', probes: '1', range: '7d', unit: 'usd' }).sort()),
         missing: [JSON.stringify(read), JSON.stringify(after)],
       });
     }
@@ -14203,10 +14329,8 @@ m.unmount();
     else {
       const page = await mount(`/analytics?session=${encodeURIComponent(first.sessionId)}&key=${encodeURIComponent(lifetime(first))}`, { now: CLOCK_ORIGIN });
       const spy = countCalls('listRequests');
-      const field = page.container.querySelector('input[aria-label="Session id"]');
-      typeIn(field, second.sessionId);
-      field?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
-      await page.settle(900);
+      await applyText(page, 'Session', second.sessionId);
+      await page.settle(200);
       spy.restore();
       const keyed = spy.calls.filter(([q]) => q?.search === second.sessionId).map(([q]) => q?.keyIds ?? []);
       results.push({
@@ -14215,6 +14339,44 @@ m.unmount();
         missing: [page.location().search, JSON.stringify(keyed), `total ${total(page)}`],
       });
       page.unmount();
+    }
+  }
+  {
+    // Clear all writes every dimension's empty value in one patch, the session's among them, and the key lifetime
+    // belongs to the session it arrived with, so it leaves with the session. The grouping, the range and the unit stay.
+    const name = '/analytics Clear all clears every chip with and without a session, and a session change drops the key lifetime';
+    const clearAll = async (page) => {
+      [...page.container.querySelectorAll('.chip-line .link-btn')].find((b) => b.textContent?.trim() === 'Clear all')?.click();
+      await page.settle(700);
+    };
+    const chips = (page) => page.container.querySelectorAll('.chip--filter').length;
+    const sorted = (page) => JSON.stringify(Object.entries(query(page)).sort());
+    if (first === undefined || second === undefined) results.push({ name, ok: false, missing: ['no two sessions under two keys in the default range'] });
+    else {
+      let page = await mount(`/analytics?accounts=primary&agent=${encodeURIComponent('claude-cli/*')}&by=model&class=${encodeURIComponent('claude-code/*')}&keys=laptop&probes=1&range=7d&unit=usd`, { now: CLOCK_ORIGIN });
+      const five = chips(page);
+      await clearAll(page);
+      const plain = { chips: chips(page), query: sorted(page) };
+      page.unmount();
+      page = await mount(`/analytics?keys=desktop&session=${encodeURIComponent(first.sessionId)}&key=${encodeURIComponent(lifetime(first))}`, { now: CLOCK_ORIGIN });
+      const sessioned = { chips: chips(page), title: chipOf(page, 'session')?.getAttribute('title') ?? null };
+      await clearAll(page);
+      const cleared = { chips: chips(page), query: sorted(page) };
+      page.unmount();
+      page = await mount(`/analytics?session=${encodeURIComponent(first.sessionId)}&key=${encodeURIComponent(lifetime(first))}`, { now: CLOCK_ORIGIN });
+      await applyText(page, 'Session', second.sessionId);
+      const replaced = sorted(page);
+      page.unmount();
+      results.push({
+        name,
+        ok:
+          five === 5 &&
+          JSON.stringify(plain) === JSON.stringify({ chips: 0, query: JSON.stringify([['by', 'model'], ['range', '7d'], ['unit', 'usd']]) }) &&
+          JSON.stringify(sessioned) === JSON.stringify({ chips: 2, title: `${first.sessionId} under the key ${lifetime(first)}` }) &&
+          JSON.stringify(cleared) === JSON.stringify({ chips: 0, query: '[]' }) &&
+          replaced === JSON.stringify([['session', second.sessionId]]),
+        missing: [`${five} chips`, JSON.stringify(plain), JSON.stringify(sessioned), JSON.stringify(cleared), replaced],
+      });
     }
   }
   {
@@ -15023,11 +15185,11 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
 
   const sessionId = cell(busyRow(), 'Session')?.getAttribute('title') ?? '';
   const jump = async (label) => (await openMenu(busyRow())).find((b) => b.textContent?.trim() === label);
-  const chipText = () => [...m.container.querySelectorAll('.chip--removable')].map((c) => c.textContent?.trim() ?? '');
+  const chipText = () => [...m.container.querySelectorAll('.chip--filter')].map((c) => c.textContent?.trim() ?? '');
 
   (await jump('View in analytics'))?.click();
   await m.settle(900);
-  results.push({ name: '/sessions View in analytics pre-filters the session', ok: chipText().some((c) => c.startsWith('Session')) && m.text().includes('Cache warming'), missing: chipText() });
+  results.push({ name: '/sessions View in analytics pre-filters the session', ok: chipText().some((c) => c.startsWith('session: ')) && m.text().includes('Cache warming'), missing: chipText() });
   await tab(m, 'Cache warming');
   results.push({ name: '/analytics a session view says it reads the request log', ok: m.text().includes('From the request log'), missing: [] });
   {
@@ -15048,10 +15210,10 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     // The request log takes the same four filters the rollup query does, so a model the session never used
     // empties the page instead of leaving every number where it was.
     const requestsInMeta = () => Number(/^([\d,]+) requests/.exec(m.container.querySelector('#traffic .analytics-section__meta')?.textContent ?? '')?.[1].replace(/,/g, '') ?? -1);
-    const groupSelect = m.container.querySelector('.filters select');
+    const groupSelect = groupBySelect(m);
     const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
     const group = async (value) => {
-      setSelect.call(groupSelect, value);
+      if (groupSelect) setSelect.call(groupSelect, value);
       groupSelect?.dispatchEvent(new window.Event('change', { bubbles: true }));
       await m.settle(600);
     };
@@ -15059,10 +15221,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const table = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Traffic by model'));
     const used = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim());
     const before = requestsInMeta();
-    const modelFilter = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Model'));
-    modelFilter?.querySelector('.mselect__trigger')?.click();
-    await m.settle(150);
-    const unused = [...(modelFilter?.querySelectorAll(CHOICE) ?? [])].find((o) => !used.includes(o.textContent?.trim()));
+    await addFilter(m, 'Model');
+    const unused = boxOptions().find((o) => !used.includes(o.textContent?.trim()));
     unused?.click();
     await m.settle(900);
     results.push({
@@ -15070,17 +15230,17 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       ok: before > 0 && used.length > 0 && unused !== undefined && requestsInMeta() === 0,
       missing: [`before ${before}`, `after ${requestsInMeta()}`, `used ${used.join(',')}`, `picked ${unused?.textContent?.trim() ?? 'none'}`],
     });
-    modelFilter?.querySelector('.mselect__clear')?.click();
-    await m.settle(600);
-    modelFilter?.querySelector('.mselect__trigger')?.click();
+    await closeBoxes(m);
+    await removeChip(m, 'model');
     await group('key');
   }
   {
-    const chip = m.container.querySelector('.chip--removable');
-    results.push({ name: '/analytics session chip names the session', ok: chip?.getAttribute('title') === sessionId, missing: [chip?.getAttribute('title') ?? 'no chip', sessionId] });
-    chip?.querySelector('button')?.click();
-    await m.settle(400);
-    results.push({ name: '/analytics session chip removes itself', ok: m.container.querySelector('.chip--removable') === null, missing: chipText() });
+    // A Sessions link carries the row's key lifetime beside the session, which the chip's title names.
+    const chip = chipOf(m, 'session');
+    const lifetime = new URLSearchParams(m.location().search).get('key');
+    results.push({ name: '/analytics session chip names the session and its key lifetime', ok: lifetime !== null && chip?.getAttribute('title') === `${sessionId} under the key ${lifetime}`, missing: [chip?.getAttribute('title') ?? 'no chip', sessionId, lifetime ?? 'no key'] });
+    await removeChip(m, 'session');
+    results.push({ name: '/analytics session chip removes itself', ok: chipOf(m, 'session') === undefined && new URLSearchParams(m.location().search).get('key') === null, missing: [...chipText(), m.location().search] });
   }
 
   // The session that holds a released record lists its recipes out of the view's order. Its main line is found by its

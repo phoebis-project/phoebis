@@ -408,21 +408,39 @@ A request the ledger does not hold reads "Request not found" with "It may have a
 ![The Analytics view: the Traffic tab](assets/analytics-light.png#only-light)
 ![The Analytics view: the Traffic tab](assets/analytics-dark.png#only-dark)
 
-The sticky filter bar offers the range Last hour, Last 6 hours, Last 24 hours (the default), Last 7 days, Last 30 days
-or Custom range with From and To, the pills and the popover as on the Requests view, "Group by" with Account, Client,
-Key, Effort, Kind, Model, Pool, Request class, Speed or User agent, the multi-selects Key, Pool, Account and Model,
-"Client pattern" and "User agent pattern" in the Requests view's grammar, a "User agent groups" box with one pattern per
-line, where each pattern names a group and every other agent groups under `other` (`claude-cli/2.1.*` and
-`claude-cli/2.0.*` as two groups), a "Session" id filter, and the switch "Include cache probes". The user agent grouping
-reads the agent's first product token, `claude-cli/2.1.269` for `claude-cli/2.1.269 (external, cli)`. Filtered to one
-session the view sums the request log instead of the hourly rollups and says so, over the first 10,000 requests of the
-range. Under that filter the Cost split reads "Cost split is not available for a session view.", the Write cost vs read
-cost legend reads a dash for each cost, and Cache warming reads "Cache warming figures are not available for a session
-view." with "not in the request log" under its probe tiles, since a request row carries one cost total and no probe or
-kept-warm fact. The range, the grouping, every filter, the client groups, the probes switch, the burn grouping and the
-cost unit live in the page's address. The section bar under it shows one section at a time, Traffic, Burn, Latency,
-Cache, Cost, Cache warming or Accounts, and a range with nothing reads "No traffic in this range." What each figure
-means is on [Statistics](statistics.md).
+The sticky filter bar holds one row: the range, Add filter, "Group by" and, while the page groups by user agent, the
+"Groups (N)" button, then at the right edge the split Refresh button. It has no search and no count. The range offers
+Last hour, Last 6 hours, Last 24 hours (the default), Last 7 days, Last 30 days or Custom range with From and To, the
+pills and the popover as on the Requests view. Add filter opens a "Filter by" field over the filters in three groups:
+Routing (Account, Key, Model, Pool), Request (Client, Include probes, User agent) and Subject (Session). Account, Key,
+Model and Pool list the values the range holds, Client and User agent take a pattern in the Requests view's grammar,
+applied on Enter or Apply, Include probes applies at once, and Session takes a session id, typed or pasted, which
+matches the session exactly. Each filter in force stands as a chip on a line under the bar, as on the Requests view,
+such as "client: claude-code*" or "include probes". The session chip prints the id's first eight characters, and its
+hover names the whole id with the key lifetime a link from the Sessions view carries ("under the key laptop@3"), which
+has no chip of its own and leaves when the session changes. "Group by" offers Account, Client, Key, Effort, Kind, Model,
+Pool, Request class, Speed or User agent. While it reads User agent, "Groups (N)" opens the "User agent groups" box with
+one pattern per line, N the patterns it holds, where each pattern names a group and every other agent groups under
+`other` (`claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups). The user agent grouping reads the agent's first
+product token, `claude-cli/2.1.269` for `claude-cli/2.1.269 (external, cli)`.
+
+Auto reload is at 5 s when the view opens, set on the split Refresh button's dropdown as on the Requests view and kept
+out of the page's address. At each interval it reads the account list again and, once a new bucket of the range has
+begun, moves the window's end to now and reads every chart again, so a page left open shows the hour it is in. It waits
+while a menu or popover under the bar is open or the tab is hidden. Off, the window's end holds where it was read and
+the dropdown's title adds "the window ends {time}" until a filter, the range or Refresh moves it. The split Refresh
+button's body moves the end to now and reads every chart again. A custom range holds its own end either way, and one
+that had ended when the page took it reads Off in the dropdown, disabled.
+
+Filtered to one session the view sums the request log instead of the hourly rollups and says so, over the first 10,000
+requests of the range, and a session with more reads "Partial: the first 10,000 requests of the range" on a line under
+the bar. Under that filter the Cost split reads "Cost split is not available for a session view.", the Write cost vs
+read cost legend reads a dash for each cost, and Cache warming reads "Cache warming figures are not available for a
+session view." with "not in the request log" under its probe tiles, since a request row carries one cost total and no
+probe or kept-warm fact. The range, the grouping, every filter, the client groups, the burn grouping and the cost unit
+live in the page's address. The section bar under it shows one section at a time, Traffic, Burn, Latency, Cache, Cost,
+Cache warming or Accounts, and a range with nothing reads "No traffic in this range." What each figure means is on
+[Statistics](statistics.md).
 
 Traffic reads `{n} requests, {pct} errors` and draws Requests by outcome (OK, Rate limited, Failed, Incomplete and
 Exhausted), Errors by code, Failovers, Migration rewrites with Moves by reason, Requests by speed, Effort levels, and

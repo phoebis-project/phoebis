@@ -11,12 +11,11 @@ import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, 
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Tooltip';
 import { CostReferenceLink } from '@/components/ui/CostReference';
-import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
-import { PatternInput } from '@/components/ui/PatternInput';
+import type { Option } from '@/components/ui/OptionList';
 import { Tile } from '@/components/ui/Tile';
-import { IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
-import { RangeControl } from '@/components/RangeControl';
+import { Badge, Button, Card, ErrorState, Meter, Segmented, Select, Skeleton } from '@/components/ui/primitives';
+import { FilterBar } from '@/components/FilterBar';
+import { GroupBy, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress, RANGE_PRESETS } from '@/lib/address';
 import { CONVERSATION_CLASSES, COST_UNITS, MAX_BURN_LINES, SHARE_NOTE, UNIT_FUNDING, UNIT_LABEL, foldBurn, isolatedSlots, moveLabel, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type AnalyticsUnit, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
@@ -24,9 +23,11 @@ import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
 import { bandRuns } from '@/lib/costs';
-import { fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, pct, shareLabel, shortId, upperFirst, usdTickDigits } from '@/lib/format';
+import { ANALYTICS_DIMENSIONS, chipText } from '@/lib/filterBar';
+import { effectiveInterval, spanEnded } from '@/lib/follow';
+import { fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, pct, shareLabel, shortId, upperFirst, usdTickDigits } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
-import { useAsync, useCommittedText, useQueryFilters, type Loaded } from '@/lib/hooks';
+import { useAsync, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { linkedKeyIds, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { WINDOW_LABEL } from '@/lib/windows';
 
@@ -39,6 +40,7 @@ type Dim = QueryDim | 'sessionId';
 
 const HOUR = 3_600_000;
 const GROUP_LABEL: Record<GroupBy, string> = { account: 'Account', client: 'Client', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', request_class: 'Request class', speed: 'Speed', user_agent: 'User agent' };
+const GROUP_OPTIONS = (Object.keys(GROUP_LABEL) as GroupBy[]).map((value) => ({ label: GROUP_LABEL[value], value }));
 /** The two speeds the rollups file an answer under, standard at the foot of each stacked bar. */
 const SPEED_SERIES = [
   { key: 'standard', label: 'standard', slot: 0 },
@@ -47,11 +49,6 @@ const SPEED_SERIES = [
 const BURN_GROUP_LABEL: Record<BurnGroup, string> = { account: 'Account', key: 'Key', request_class: 'Request class', session: 'Session' };
 // Account first: the route's default, and the one grouping that draws the plan share.
 const BURN_GROUPS: BurnGroup[] = ['account', 'key', 'session', 'request_class'];
-const DIM_LABEL: Record<QueryDim, string> = { accountId: 'Account', keyId: 'Key', model: 'Model', poolId: 'Pool' };
-/** The address key each filter dimension travels under. */
-const DIM_KEY: Record<QueryDim, 'accounts' | 'keys' | 'models' | 'pools'> = { accountId: 'accounts', keyId: 'keys', model: 'models', poolId: 'pools' };
-// Ordered the way a request travels them rather than alphabetically: the key names the pool, which picks the account.
-const DIMS: QueryDim[] = ['keyId', 'poolId', 'accountId', 'model'];
 /** Filter choices come from a breakdown on that dimension, so every value the range holds is offered. */
 const DIM_GROUP: Record<QueryDim, GroupBy> = { accountId: 'account', keyId: 'key', model: 'model', poolId: 'pool' };
 /** The log has no session filter, so a session view pages through it; both bounds together are the note's figure. */
@@ -61,10 +58,6 @@ const SESSION_SOURCE_NOTE = 'From the request log, since rollups carry no sessio
 const SESSION_COST_NOTE = 'Cost split is not available for a session view.';
 const UNAVAILABLE_NOTE = 'not in the request log';
 const WARMING_UNAVAILABLE = 'Cache warming figures are not available for a session view.';
-/** The breakdown route's bounds on a pattern list; the field holds no more than the route accepts. */
-const MAX_PATTERNS = 32;
-const MAX_PATTERN_CHARS = 256;
-const PATTERN_BOUND_HINT = '32 patterns of 256 characters at most, as the route accepts';
 const COST_PARTS: { key: keyof CostSplit; label: string; slot: number }[] = [
   { key: 'input', label: 'Input', slot: 0 },
   { key: 'cacheRead', label: 'Cache read', slot: 2 },
@@ -119,16 +112,6 @@ const usdAxis = (values: Iterable<number>) => {
 /** The split as the donut draws it, or null for a group folded from request rows, which carry one total. */
 const knownSplit = (c: AnalyticsGroup['cost']): CostSplit | null => (c.cacheRead === null || c.cacheWrite === null ? null : { ...c, cacheRead: c.cacheRead, cacheWrite: c.cacheWrite });
 
-/** Lines past the count are dropped and each line cut at the length, counted in characters as the route counts them. */
-function boundPatterns(text: string): { cut: boolean; text: string } {
-  const bounded = text
-    .split('\n')
-    .slice(0, MAX_PATTERNS)
-    .map((line) => ([...line].length > MAX_PATTERN_CHARS ? [...line].slice(0, MAX_PATTERN_CHARS).join('') : line))
-    .join('\n');
-  return { cut: bounded !== text, text: bounded };
-}
-
 type Pct = Record<(typeof PERCENTILES)[number]['key'], number | null>;
 
 /** The routes answer one output sum; the chart stacks its thinking share and the rest, so the page derives the rest. */
@@ -177,19 +160,26 @@ const optionsOf = (rows: AnalyticsGroup[] | null): Option[] =>
 
 export function AnalyticsPage() {
   const [now, setNow] = useState(() => clock.now());
-  // Try again bumps it with the end, so every read keyed on the window runs again even while the clock stands still.
+  // Try again and Refresh bump it with the end, so every read keyed on the window runs again even while the clock
+  // stands still.
   const [generation, setGeneration] = useState(0);
   // Every filter lives in the address, so a link or a reload lands on the same view.
-  const { filters: a, update } = useQueryFilters(ANALYTICS_CODEC);
+  const { address, filters: a, update: rawUpdate } = useQueryFilters(ANALYTICS_CODEC);
   const groupBy = a.by as GroupBy;
   const userAgentPattern = a.agent;
   const classPattern = a.class;
   const clientGroups = a.groups;
-  const [groupsCut, setGroupsCut] = useState(false);
   const includeProbes = a.probes;
   const burnGroup = a.burn as BurnGroup;
   const filtersRef = useRef<HTMLDivElement>(null);
   const filtersHeight = useStickyHeight(filtersRef);
+  // 5 s when the page opens, and page state, so a link or a reload opens on it.
+  const [intervalMs, setIntervalMs] = useState(5_000);
+  const [barOpen, setBarOpen] = useState(false);
+  // A link capped at now ends its span at the clock it was made on, so the instant the page took the address, read once
+  // per address, tells it from a span that has ended.
+  const [addressed, setAddressed] = useState(() => ({ at: clock.now(), for: address }));
+  if (addressed.for !== address) setAddressed({ at: clock.now(), for: address });
   const location = useLocation();
   const navigate = useNavigate();
   // The hash is the tab: a link or a reload lands on the section it names, and a change replaces the entry with the
@@ -219,13 +209,6 @@ export function AnalyticsPage() {
     const split = (joined: string) => (joined ? joined.split(',') : []);
     return { accountId: split(accountList), keyId: split(keyList), model: split(modelList), poolId: split(poolList), sessionId: a.session ? [a.session] : [] };
   }, [accountList, keyList, modelList, poolList, a.session]);
-  const [sessionText, setSessionText] = useState(a.session);
-  // The field follows the address, so a link or the bare Analytics entry replaces what it shows.
-  const [sessionFor, setSessionFor] = useState(a.session);
-  if (sessionFor !== a.session) {
-    setSessionFor(a.session);
-    setSessionText(a.session);
-  }
   const ink = useChartInk();
   // A committed filter reads the window up to the instant it changed, as a range change does. The end and the address
   // change in one render, so each read goes out once: the hook writes the address at once, and a pattern commits from
@@ -233,47 +216,41 @@ export function AnalyticsPage() {
   const commit = (patch: Partial<AnalyticsAddress>, at = clock.now()) =>
     flushSync(() => {
       setNow(at);
-      update(patch);
+      rawUpdate(patch);
     });
-  const commitClass = (next: string) => commit({ class: next });
-  const commitAgent = (next: string) => commit({ agent: next });
+  /**
+   * The bar's one writer, so the chips, Add filter and the address cannot disagree. A key lifetime belongs to the
+   * session it arrived with, so a patch that moves the session drops it, and Clear all's one patch commits whole. A
+   * patch that changes nothing, such as a flag chosen again, moves no end and reads nothing.
+   */
+  const update = (patch: Partial<AnalyticsAddress>) => {
+    const next = 'session' in patch && patch.session !== a.session ? { ...patch, key: '' } : patch;
+    if (Object.entries(next).every(([field, value]) => JSON.stringify(value) === JSON.stringify(a[field as keyof AnalyticsAddress]))) return;
+    commit(next);
+  };
   const commitGroups = (next: string) => commit({ groups: next });
   const changeGroupBy = (next: GroupBy) => commit({ by: next });
-  const changeFilter = (dim: QueryDim, next: string[]) => {
-    const patch: Partial<AnalyticsAddress> = {};
-    patch[DIM_KEY[dim]] = next;
-    commit(patch);
-  };
-  const changeProbes = (on: boolean) => commit({ probes: on });
   const changeBurnGroup = (next: BurnGroup) => {
     if (next === burnGroup) return;
     commit({ burn: next });
   };
-  // Enter inserts a line in the groups field, so it commits on the pause and on blur alone.
-  const groupsText = useCommittedText(clientGroups, commitGroups);
-
-  /**
-   * The one writer for the session filter, so the field, the chip and the address cannot disagree. A key lifetime
-   * belongs to the session it arrived with, so a new session drops it.
-   */
-  const selectSession = (id: string) => {
-    setSessionText(id);
-    if (id === a.session) return;
-    commit({ key: '', session: id });
-  };
   /** The one writer for the unit: the default leaves the address clean, and every other parameter stays. */
   const chooseUnit = (next: AnalyticsUnit) => {
     if (next === unit) return;
-    update({ unit: next });
+    rawUpdate({ unit: next });
   };
 
   // The query bounds come from the address's instants, which keep the milliseconds the inputs' minutes drop.
   const span = useMemo(() => {
     const { from, to } = addressWindow(a.range, RANGE_PRESETS, '24h', now);
-    return { fromMs: from, toMs: Math.min(to, now) };
+    return { endMs: to, fromMs: from, toMs: Math.min(to, now) };
   }, [a.range, now]);
   const fromIso = new Date(span.fromMs).toISOString();
   const toIso = new Date(span.toMs).toISOString();
+  // A custom span's own end, never the end the page capped at its clock, tells a span that has ended from a link capped
+  // at now, which reads at the interval.
+  const ended = spanEnded(a.range.preset === 'custom', span.endMs, addressed.at);
+  const polledMs = effectiveInterval(intervalMs, ended);
   const sessionId = filters.sessionId[0] ?? null;
 
   const agentGroups = useMemo(() => (groupBy === 'user_agent' && clientGroups.trim() ? clientGroups.split('\n').map((s) => s.trim()).filter(Boolean) : undefined), [clientGroups, groupBy]);
@@ -317,7 +294,7 @@ export function AnalyticsPage() {
   }, [fromIso, toIso, burnGroup, tab, generation]);
   // The registry's list, for the account slots alone: the range's option list holds the accounts with traffic and
   // differs from the Dashboard's, and one account keeps one color across the views.
-  const registry = useAsync(() => api.listAccounts(), [], { refreshMs: 30_000 });
+  const registry = useAsync(() => api.listAccounts(), [], { paused: barOpen, refreshMs: polledMs });
   const slotOf = useMemo(() => accountSlots((registry.data ?? []).map((a) => a.id)), [registry.data]);
   // The plan chart's line category reads each account's stored tier against the cost model's capacity rows.
   const burnSettings = useAsync(() => (tab === 'burn' ? api.getSettings() : Promise.resolve(null)), [tab]);
@@ -358,22 +335,33 @@ export function AnalyticsPage() {
     () => ({ accountId: optionsOf(accountKeys.data), keyId: optionsOf(keyKeys.data), model: optionsOf(modelKeys.data), poolId: optionsOf(poolKeys.data) }),
     [accountKeys.data, keyKeys.data, modelKeys.data, poolKeys.data],
   );
+  const barOptions = useMemo(() => ({ accounts: options.accountId, keys: options.keyId, models: options.model, pools: options.poolId }), [options]);
+  // The session chip keeps its id form, and its title names the key lifetime the session arrived with, which draws no
+  // chip of its own.
+  const dimensions = useMemo(
+    () => ANALYTICS_DIMENSIONS.map((d) => (d.field !== 'session' ? d : { ...d, text: (value: unknown, known: Option[]) => ({ ...chipText(d, value, known), title: a.key ? `${String(value)} under the key ${a.key}` : String(value) }) })),
+    [a.key],
+  );
 
   const rangeBucketMs = bucketSizeFor(span.toMs - span.fromMs);
-  // Once a minute: a passed bucket boundary moves the end, so a page left open shows the hour it is in.
+  // At the auto reload interval: a passed bucket boundary moves the end, so a page left open shows the hour it is in.
+  // Off, the end holds where it was read. The check waits, as the reads do, while a menu under the bar is open or the
+  // tab is hidden.
   useEffect(() => {
+    if (polledMs === 0 || barOpen) return;
     const id = clock.setInterval(() => {
-      if (Math.floor(clock.now() / rangeBucketMs) !== Math.floor(now / rangeBucketMs)) setNow(clock.now());
-    }, 60_000);
+      if (!document.hidden && Math.floor(clock.now() / rangeBucketMs) !== Math.floor(now / rangeBucketMs)) setNow(clock.now());
+    }, polledMs);
     return () => clock.clearInterval(id);
-  }, [now, rangeBucketMs]);
+  }, [barOpen, now, polledMs, rangeBucketMs]);
   // A read that failed or that still answers the filters before the change draws nothing, so no figure stands
   // under a filter it was not read for.
   const failure = series.error ?? breakdown.error ?? log.error;
   const stale = series.stale || breakdown.stale || log.stale;
-  // An outage of the ledger fails the section and filter-choice reads with these three, and this is the one
-  // control that reads again, so it reads everything the view draws from: the reads keyed on the window through the
-  // moved end and the generation in one update, so none runs twice, and the two with no window by reloading.
+  // An outage of the ledger fails the section and filter-choice reads with these three, and Try again and the bar's
+  // Refresh are the controls that read again, so they read everything the view draws from: the reads keyed on the
+  // window through the moved end and the generation in one update, so none runs twice, and the two with no window by
+  // reloading.
   const retry = () => {
     setNow(clock.now());
     setGeneration((g) => g + 1);
@@ -458,79 +446,34 @@ export function AnalyticsPage() {
 
   return (
     <div className="stack">
-      <div className="filters filters--sticky" ref={filtersRef}>
-        <RangeControl now={clock.now} onChange={(next) => commit({ range: next })} value={a.range} window={{ from: span.fromMs, to: span.toMs }} />
-        {!log.stale && log.data?.partial && <span className="secondary">Partial: the first {fmtInt(SESSION_PAGE_LIMIT * SESSION_PAGE_SIZE)} requests of the range</span>}
-        <span className="filters__sep" aria-hidden />
-        <label className="row">
-          <span className="muted">Group by</span>
-          <Select value={groupBy} onChange={(e) => changeGroupBy(e.target.value as GroupBy)} className="groupby-select">
-            {(Object.keys(GROUP_LABEL) as GroupBy[]).map((g) => (
-              <option key={g} value={g}>
-                {GROUP_LABEL[g]}
-              </option>
-            ))}
-          </Select>
-        </label>
-        {DIMS.map((dim) => (
-          <MultiSelect key={dim} label={DIM_LABEL[dim]} options={options[dim]} value={filters[dim]} onChange={(v) => changeFilter(dim, v)} mono />
-        ))}
-        <PatternInput label="Client pattern" value={classPattern} onCommit={commitClass} />
-        <PatternInput label="User agent pattern" value={userAgentPattern} onCommit={commitAgent} />
-        {groupBy === 'user_agent' && (
-          <>
-            <textarea
-              value={groupsText.draft}
-              maxLength={MAX_PATTERNS * (MAX_PATTERN_CHARS + 1)}
-              onBlur={groupsText.onBlur}
-              onChange={(e) => {
-                const next = boundPatterns(e.target.value);
-                groupsText.onChange(next.text);
-                setGroupsCut(next.cut);
-              }}
-              placeholder={'User agent groups, one pattern per line\nclaude-cli/2.1.*\nclaude-cli/2.0.*'}
-              aria-label="User agent groups"
-              title="Each pattern names a group, and every other user agent groups under other"
-              className="mono filters__groups"
-              rows={2}
-            />
-            {groupsCut && <span className="secondary">{PATTERN_BOUND_HINT}</span>}
-          </>
-        )}
-        {/* No route enumerates sessions, so this one is typed or pasted rather than picked; the chip beside it
-            is how a session arriving from the sessions list shows itself. */}
-        <label className="row">
-          <span className="muted">Session</span>
-          <Input
-            type="search"
-            placeholder="Session id"
-            aria-label="Session id"
-            className="filters__session"
-            value={sessionText}
-            onChange={(e) => setSessionText(e.target.value)}
-            onBlur={() => selectSession(sessionText.trim())}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') selectSession(sessionText.trim());
-            }}
-          />
-        </label>
-        <label className="row">
-          <Toggle checked={includeProbes} onChange={changeProbes} label="Include probes" />
-          <span className="secondary">Include cache probes</span>
-        </label>
-        {filters.sessionId.length > 0 && (
-          <span className="chips">
-            {filters.sessionId.map((id) => (
-              <span key={id} className="chip chip--removable mono" title={id}>
-                Session {shortId(id, 13)}
-                <button type="button" aria-label={`Remove session filter ${id}`} onClick={() => selectSession('')}>
-                  <IconX size={12} />
-                </button>
-              </span>
-            ))}
-          </span>
-        )}
-      </div>
+      <FilterBar
+        address={address}
+        dimensions={dimensions}
+        filters={a}
+        onOpenChange={setBarOpen}
+        options={barOptions}
+        range={{ now: clock.now, window: { from: span.fromMs, to: span.toMs } }}
+        ref={filtersRef}
+        refresh={{
+          disabled: ended ? 'A custom range that has ended has nothing new to read' : undefined,
+          intervalMs,
+          note: intervalMs === 0 && a.range.preset !== 'custom' ? `the window ends ${fmtShortTime(toIso)}` : undefined,
+          onIntervalChange: setIntervalMs,
+          onRefresh: retry,
+          paused: barOpen ? 'menu' : null,
+          refreshTitle: `Window ends ${fmtShortTime(toIso)}. Refresh reads up to now`,
+        }}
+        sticky
+        update={update}
+      >
+        <GroupBy onChange={changeGroupBy} options={GROUP_OPTIONS} value={groupBy} />
+        {groupBy === 'user_agent' && <GroupsButton onCommit={commitGroups} value={clientGroups} />}
+      </FilterBar>
+      {!log.stale && log.data?.partial && (
+        <p className="muted" role="status">
+          Partial: the first {fmtInt(SESSION_PAGE_LIMIT * SESSION_PAGE_SIZE)} requests of the range
+        </p>
+      )}
 
       <SectionBar sections={SECTIONS} shown={tab} onChoose={chooseTab} top={TOPBAR_HEIGHT + filtersHeight} />
 

@@ -13,6 +13,7 @@ export { ChipLine } from '@/components/ChipLine';
 export { DecisionCard } from '@/components/DecisionCard';
 export { FilterBar } from '@/components/FilterBar';
 export { FilterChip } from '@/components/FilterChip';
+export { GroupBy, GroupsButton } from '@/components/GroupBy';
 export { RangeControl } from '@/components/RangeControl';
 export { RefreshControl } from '@/components/RefreshControl';
 export { ChartTooltip } from '@/components/charts/Tooltip';
