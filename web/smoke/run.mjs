@@ -2983,6 +2983,27 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         unpriced.read.every(([, r]) => r.text === '-' && !!r.title && r.title !== SHARE_NOTE),
       missing: [JSON.stringify(priced), JSON.stringify(unpriced)],
     });
+    {
+      // While the share's read is out, the card's dash says the share is loading.
+      let open = () => {};
+      const gate = new Promise((resolve) => {
+        open = resolve;
+      });
+      api.getAnalyticsBreakdown = (...args) => gate.then(() => breakdownOf.apply(api, args));
+      localStorage.setItem('phoebis.unit', 'share');
+      const page = await mount('/pools');
+      const held = single.map((p) => [p.id, costRead(page, p.name)]);
+      open();
+      await page.settle(300);
+      page.unmount();
+      delete api.getAnalyticsBreakdown;
+      localStorage.removeItem('phoebis.unit');
+      results.push({
+        name: "/pools under Window shares the card of one subscription member reads a dash titled with the load while the route's read is out",
+        ok: held.length > 0 && held.every(([, r]) => r.text === '-' && r.title === 'Loading the share'),
+        missing: [JSON.stringify(held)],
+      });
+    }
     // The same day with every plan row weighted, so nothing the tile and the cards draw is an estimate.
     const poolsOf = api.listPools;
     api.listPools = async () => (await poolsOf.call(api)).map((p) => ({ ...p, estimated24h: false }));
