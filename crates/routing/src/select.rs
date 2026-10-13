@@ -172,7 +172,8 @@ pub struct HoldFacts {
     pub ran_out: bool,
     /// `cap` for a hold on a slot, `reset` for a spent window about to reset.
     pub reason: &'static str,
-    /// The reset the request waits for under `reset`, `None` under `cap`.
+    /// The instant the request waits for under `reset`: the later of the spent window's reset and the end of the
+    /// account's cooldown. `None` under `cap`.
     pub until: Option<i64>,
 }
 
@@ -181,7 +182,7 @@ pub struct HoldFacts {
 pub struct CohortHold {
     pub waited_on: Vec<String>,
     pub cohort: Option<String>,
-    /// The holds' waits summed: the time the request spent waiting for a slot.
+    /// The holds' waits summed: the time the request spent waiting, for a slot or a reset.
     pub held_ms: u64,
 }
 
@@ -714,23 +715,29 @@ fn holds_allowance(state: &RoutingState, account_id: &str, window: &str, now: i6
 }
 
 /// The latest reset among the spent windows `holds_allowance` reads for `window`, with that window's key: the
-/// moment the account can serve the request again once every spent window has reset. `None` when no spent window
-/// names a reset.
+/// moment the account can serve the request again once every spent window has reset. `None` when no window is
+/// spent, and when a spent window names no reset, since a wait would end with that window still spent.
 fn spent_until<'a>(
     state: &RoutingState,
     account_id: &str,
     window: &'a str,
     now: i64,
 ) -> Option<(i64, &'a str)> {
-    [window, FIVE_HOUR, SEVEN_DAY]
+    let spent: Vec<(Option<i64>, &'a str)> = [window, FIVE_HOUR, SEVEN_DAY]
         .into_iter()
         .filter_map(|name| {
             state
                 .predicted(account_id, name, now)
                 .filter(|r| r.utilization >= 1.0)
-                .and_then(|r| r.reset)
-                .map(|reset| (reset, name))
+                .map(|r| (r.reset, name))
         })
+        .collect();
+    if spent.iter().any(|(reset, _)| reset.is_none()) {
+        return None;
+    }
+    spent
+        .into_iter()
+        .filter_map(|(reset, name)| reset.map(|reset| (reset, name)))
         .max_by_key(|(reset, _)| *reset)
 }
 
@@ -1308,7 +1315,7 @@ fn run(
             }
             // A spent window about to reset holds the request on its own account: the hold books and writes
             // nothing, the relay waits to the reset and selects again, and the pin renews in place then.
-            if let MoveVerdict::Wait { reset } = moved {
+            if let MoveVerdict::Wait { until } = moved {
                 let hold = HoldFacts {
                     account_id: current.account_id.clone(),
                     cohort: None,
@@ -1317,7 +1324,7 @@ fn run(
                     seq: request.seq,
                     ran_out: false,
                     reason: "reset",
-                    until: Some(reset),
+                    until: Some(until),
                 };
                 return (
                     SelectResult::Held {
@@ -2093,8 +2100,9 @@ pub(crate) fn fit_of(
     let mut unread = false;
     let mut every_fits = true;
     let mut rewrite_lands = true;
-    // The window whose runway falls shortest of its horizon binds, and its runway is the candidate's.
-    let mut binding: Option<(&str, i64, i64)> = None;
+    // Every bounded runway with whether it falls short of its horizon: the window the pin reaches first among those
+    // it overruns binds, else the first it reaches at all, so a zero runway on any window is the candidate's runway.
+    let mut bounded: Vec<(&str, i64, bool)> = Vec::new();
     for window in plan_windows(&request.canonical_model) {
         let Some(projection) = projections.get(window) else {
             unread = true;
@@ -2116,30 +2124,35 @@ pub(crate) fn fit_of(
             window.to_string(),
             state.reserved(candidate, window) + planned_rewrite,
         );
-        let runway_ms = if predicted + rewrite >= limit {
+        // The verdict reads the rewrite against the ceiling itself, and the rounding touches the figure alone.
+        let lands = predicted + rewrite < limit;
+        if !lands {
+            rewrite_lands = false;
+        }
+        let runway_ms = if !lands {
             Some(0)
         } else if burn <= 0.0 {
             None
         } else {
             Some(((limit - predicted - rewrite) / burn * 1_000.0).round() as i64)
         };
-        if runway_ms == Some(0) {
-            rewrite_lands = false;
-        }
         let Some(runway_ms) = runway_ms else {
             continue;
         };
-        let slack = runway_ms.saturating_sub(span);
-        if slack < 0 {
+        let short = runway_ms < span;
+        if short {
             every_fits = false;
         }
-        if binding.is_none_or(|(_, least, _)| slack < least) {
-            binding = Some((window, slack, runway_ms));
-        }
+        bounded.push((window, runway_ms, short));
     }
-    if let Some((window, _, runway_ms)) = binding {
+    let binding = bounded
+        .iter()
+        .filter(|(_, _, short)| *short)
+        .min_by_key(|(_, runway_ms, _)| *runway_ms)
+        .or_else(|| bounded.iter().min_by_key(|(_, runway_ms, _)| *runway_ms));
+    if let Some((window, runway_ms, _)) = binding {
         read.binding = Some(window.to_string());
-        read.runway_ms = Some(runway_ms);
+        read.runway_ms = Some(*runway_ms);
     }
     read.verdict = if tier.is_none() || unread {
         "least_bad"
@@ -2364,12 +2377,13 @@ fn allowance_known(
         }
 }
 
-/// What step 4's rules answered: the pin stays, moves to one of a set under a reason, or waits in place for the
-/// reset of its spent window. The window and the wait are the spent line's facts, written where the rule reads them.
+/// What step 4's rules answered: the pin stays, moves to one of a set under a reason, or waits in place until its
+/// spent window has reset and its account's cooldown has ended. The reset, the window and the wait are the spent
+/// line's facts, written where the rule reads them.
 enum MoveVerdict<'a> {
     Stay,
     Move(MigrateReason, Vec<&'a Candidate>),
-    Wait { reset: i64 },
+    Wait { until: i64 },
 }
 
 /// What a rule's gate answered: the destination set of the first non-empty order, the `fit` step over every candidate
@@ -2574,12 +2588,30 @@ fn move_of<'a>(
         rec.step(RULES[0], "no", vec![Fact::bool("holds_allowance", true)]);
     } else {
         // A reset inside the retry bound costs less than a cold rewrite: the request waits for it in place and the
-        // pin renews once the window has refunded.
+        // pin renews once the window has refunded. The 429 that spent the window cools the account a margin past the
+        // reset, so the wait runs to the later of the two, else the request would select again on a cooled account
+        // and be placed afresh.
         let bound = now.saturating_add(seconds_ms(pool.failover.retry_in_place_seconds));
-        if let Some((reset, spent_window)) = spent_until(state, &current.account_id, window, now)
-            .filter(|(reset, _)| *reset <= bound)
+        let cooled_until = state
+            .blocking_cooldown(
+                &current.account_id,
+                &request.canonical_model,
+                now,
+                request.fast,
+            )
+            .map(|row| row.until);
+        if let Some((reset, spent_window, until)) =
+            spent_until(state, &current.account_id, window, now)
+                .map(|(reset, spent_window)| {
+                    (
+                        reset,
+                        spent_window,
+                        cooled_until.map_or(reset, |end| end.max(reset)),
+                    )
+                })
+                .filter(|(_, _, until)| *until <= bound)
         {
-            let wait_ms = reset - now;
+            let wait_ms = until - now;
             rec.step(
                 RULES[0],
                 "held",
@@ -2593,7 +2625,7 @@ fn move_of<'a>(
             for later in &RULES[1..] {
                 rec.step(later, "not_run", Vec::new());
             }
-            return MoveVerdict::Wait { reset };
+            return MoveVerdict::Wait { until };
         }
         let gate = gate(
             state,
@@ -2944,13 +2976,7 @@ fn shed_round(
 ) -> (Vec<PinKey>, ShedRoundFacts) {
     let account_id = &current.account_id;
     let unit = burn_unit(state, snapshot, account_id, now, fallback_ms);
-    // The round is the account's one pool's: a pin under a key of a pool the account left is retained until it ends
-    // and is neither ranked nor marked here, so a former pool's pins never spend this pool's mark budget.
-    let in_pool = |p: &PinRow| {
-        snapshot
-            .key(&p.key_id)
-            .is_some_and(|k| k.pool_id == pool.id)
-    };
+    let in_pool = in_pool(snapshot, pool);
     let average_ms = burn_average_ms(pool);
     let (mut pins, mut sum) =
         state.burn_of(account_id, &in_pool, unit, state.rates(), now, average_ms);
@@ -4555,9 +4581,12 @@ impl Readings<'_> {
                         Some(ms) => summary_fact("runway", FactValue::Int(ms), "ms"),
                     });
                 }
+                // The fired rule's table is the walk's last: an earlier rule whose gate read a set and found nothing
+                // left a table of its own before it.
                 let order = self
                     .walk
                     .iter()
+                    .rev()
                     .find(|w| w.step == "fit")
                     .map(|w| w.verdict);
                 match order {
@@ -4584,7 +4613,9 @@ impl Readings<'_> {
                 // The wait explains the placement more than where it landed: the row names the hold it followed
                 // and how long it lasted.
                 Some(hold) => {
-                    let place = if hold.cohort.is_some() {
+                    let place = if hold.reason == "reset" {
+                        "reset"
+                    } else if hold.cohort.is_some() {
                         "cohort"
                     } else {
                         "strategy_pick"

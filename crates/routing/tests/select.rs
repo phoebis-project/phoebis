@@ -10778,7 +10778,7 @@ fn a_drain_move_prefers_a_fitting_sibling() {
 }
 
 #[test]
-fn a_spent_move_lands_on_a_hot_sibling_when_no_cool_one_exists() {
+fn a_spent_move_lands_on_an_untiered_sibling_that_reads_least_bad() {
     let s = snapshot(Pool {
         shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
@@ -10793,19 +10793,18 @@ fn a_spent_move_lands_on_a_hot_sibling_when_no_cool_one_exists() {
     );
     st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
     st.record_sample("b", sample(0.9, 0.3, T + 500));
-    assert_eq!(
-        landed(
-            select(
-                &mut st,
-                &s,
-                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
-                &mut rng()
-            )
-            .0
-        ),
-        ("b".into(), Some(MigrateReason::Spent)),
-        "the preference falls through to the rule's own set rather than leaving the pin on a spent account"
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+        &mut rng(),
     );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent)),
+        "a sibling with no tier reads least bad and still takes the pin rather than leaving it on a spent account"
+    );
+    assert_eq!(line(&d.record, "fit").verdict, "least_bad");
 }
 
 #[test]
@@ -12378,6 +12377,11 @@ fn a_spent_move_records_the_fit_table_and_the_cap_filter() {
     ));
     assert!(close(number(fact_of(fit, "rewrite_five_hour", "b")), 0.1));
     assert_eq!(fact_of(fit, "runway_ms", "b"), &FactValue::Int(0));
+    assert_eq!(
+        fact_of(fit, "binding", "b"),
+        &FactValue::Text("five_hour".into()),
+        "the window the rewrite fills binds"
+    );
     assert!(
         fit.facts
             .iter()
@@ -15499,6 +15503,45 @@ fn a_spent_pin_waits_in_place_for_a_reset_inside_the_retry_bound_and_moves_past_
         ),
         ("b".into(), Some(MigrateReason::Spent))
     );
+    // A wait the bound cut short leaves the account attempted, and the placement that follows names the reset it
+    // waited for beside the wait.
+    let mut st = spent(T + 30_000);
+    let SelectResult::Held { hold, .. } = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    )
+    .0
+    else {
+        panic!("the reset 30 s out holds the request")
+    };
+    let after = SelectRequest {
+        seq: 2,
+        holds: vec![HoldFacts {
+            held_ms: 60_000,
+            ran_out: true,
+            ..hold
+        }],
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &["a"], T + 60_000)
+    };
+    let d = decide(&mut st, &s, &after, &mut rng());
+    assert_eq!(
+        (
+            d.record.outcome.kind,
+            d.record.outcome.account_id.as_deref()
+        ),
+        ("placed", Some("b"))
+    );
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("hold", "reset"),
+        "the row names the reset the request waited for"
+    );
+    assert_eq!(
+        summary_facts(&d),
+        vec![("held", FactValue::Int(60_000), Some("ms"))]
+    );
 }
 
 #[test]
@@ -15558,4 +15601,313 @@ fn the_shed_rule_takes_the_one_fitting_destination_with_the_longest_runway_or_no
             &FactValue::Text("least_bad".into())
         );
     }
+}
+
+#[test]
+fn a_spent_pins_wait_runs_to_the_end_of_a_cooldown_that_outlasts_the_reset() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let spent = |cooldown_until: i64| {
+        let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
+        st.record_sample("a", refreshing(1.0, T + 30_000, T + 72 * HOUR, T - 500));
+        st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+        // The 429 that spent the window cools the account a margin past the reset.
+        st.record_cooldown(cooled(
+            "a",
+            "account",
+            cooldown_until,
+            "five_hour",
+            "rate_limit",
+        ));
+        st
+    };
+    let mut st = spent(T + 45_000);
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    let SelectResult::Held { account_id, hold } = d.result.clone() else {
+        panic!(
+            "a cooldown ending inside the bound is waited out, not {:?}",
+            d.result
+        )
+    };
+    assert_eq!(
+        (account_id.as_str(), hold.reason, hold.until),
+        ("a", "reset", Some(T + 45_000)),
+        "the wait runs to the later of the reset and the cooldown's end"
+    );
+    let spent_line = line(&d.record, "move:spent");
+    assert_eq!(spent_line.verdict, "held");
+    assert_eq!(fact(spent_line, "reset"), &FactValue::Int(T + 30_000));
+    assert_eq!(fact(spent_line, "wait_ms"), &FactValue::Int(45_000));
+    assert_eq!(
+        d.record.outcome.hold.as_ref().and_then(|hold| hold.until),
+        Some(T + 45_000)
+    );
+    // Past the cooldown's end the account serves again and the pin renews in place.
+    let (result, _) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 46_000),
+        &mut rng(),
+    );
+    let SelectResult::Selected(sel) = result else {
+        panic!("the pin renews after the cooldown, not {result:?}")
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated, sel.trace.renewed),
+        ("a", None, true)
+    );
+    // A cooldown ending past the bound moves the pin, whatever the reset reads.
+    let mut st = spent(T + 70_000);
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+                &mut rng()
+            )
+            .0
+        ),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+}
+
+#[test]
+fn a_moved_row_reads_the_fired_rules_fit_step_when_an_earlier_rule_read_the_gate_too() {
+    // b ends inside the horizon and c holds no reading: the spent rule's keep admits b alone, which the gate reads
+    // ending, and the overage rule's keep admits both, where c reads least bad and takes the move.
+    let mut terms = tier_terms(&["a", "b"]);
+    terms[1].cancelled = true;
+    terms[1].ends_at = Some(T + 2 * HOUR);
+    let s = snapshot_with_terms(gate_pool(), terms);
+    let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_overage("a", overage(true, T - 500, Some(T + 40 * MINUTE)));
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("c".into(), Some(MigrateReason::Overage))
+    );
+    let fits: Vec<&str> = d
+        .record
+        .walk
+        .iter()
+        .filter(|w| w.step == "fit")
+        .map(|w| w.verdict)
+        .collect();
+    assert_eq!(
+        fits,
+        ["none", "least_bad"],
+        "the spent rule's table of one ending sibling, then the overage rule's"
+    );
+    assert_eq!(
+        fact(line(&d.record, "move:spent"), "ending"),
+        &FactValue::List(vec!["b".into()])
+    );
+    assert_eq!(
+        summary_facts(&d),
+        vec![
+            ("runway", FactValue::Text("unbounded".into()), Some("text")),
+            ("fit", FactValue::Text("least bad".into()), Some("text")),
+        ],
+        "the row reads the fired rule's verdict"
+    );
+}
+
+/// A reading of `five_hour` and `seven_day` with the given utilizations and resets.
+fn windows_with_resets(
+    five_hour: (f64, i64),
+    seven_day: (f64, i64),
+    observed_at: i64,
+) -> UtilizationSample {
+    sample(five_hour.0, seven_day.0, observed_at)
+        .with(
+            FIVE_HOUR,
+            WindowReading {
+                utilization: five_hour.0,
+                reset: Some(five_hour.1),
+                observed_at,
+                source: WindowSource::Poll,
+            },
+        )
+        .with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: seven_day.0,
+                reset: Some(seven_day.1),
+                observed_at,
+                source: WindowSource::Poll,
+            },
+        )
+}
+
+#[test]
+fn the_binding_window_is_the_one_the_pin_reaches_first_among_those_it_overruns() {
+    let s = tiered(gate_pool());
+    // 2 000 input tokens a second burn two ten-thousandths of the 5-hour window a second and a thirtieth of that on
+    // the week.
+    let mut st = priced(vec![gated_pin("s1", "a", 2_000.0)]);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    // b overruns both windows: 0.4 of the 5-hour window left is 2 000 s against an hour to its reset, and 0.3417 of
+    // the week left is 10 250 s against the five-hour horizon, so the larger shortfall sits on the longer runway.
+    st.record_sample(
+        "b",
+        windows_with_resets((0.5, T + HOUR), (0.6, T + 72 * HOUR), T - 500),
+    );
+    // c overruns the 5-hour window alone: 0.6 left is 3 000 s against three hours to its reset.
+    st.record_sample("c", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("c".into(), Some(MigrateReason::Spent)),
+        "c's 3 000 s outlast b's 2 000 s, whatever b's week leaves"
+    );
+    let fit = line(&d.record, "fit");
+    assert_eq!(fit.verdict, "rewrite_only");
+    assert_eq!(
+        (fact_of(fit, "binding", "b"), fact_of(fit, "runway_ms", "b")),
+        (
+            &FactValue::Text("five_hour".into()),
+            &FactValue::Int(2_000_000)
+        ),
+        "the window the pin reaches first binds, not the one with the larger shortfall"
+    );
+    assert_eq!(
+        (fact_of(fit, "binding", "c"), fact_of(fit, "runway_ms", "c")),
+        (
+            &FactValue::Text("five_hour".into()),
+            &FactValue::Int(3_000_000)
+        )
+    );
+}
+
+#[test]
+fn a_zero_runway_on_one_window_reads_none_whatever_another_window_allows() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = priced(vec![gated_pin("s1", "a", 2_000.0)]);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    // The rewrite alone takes b's 5-hour window to the ceiling an hour from its reset, while its week leaves
+    // 10 250 s of burn.
+    st.record_sample(
+        "b",
+        windows_with_resets((0.95, T + HOUR), (0.6, T + 72 * HOUR), T - 500),
+    );
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    let fit = line(&d.record, "fit");
+    assert_eq!(fit.verdict, "least_bad");
+    assert_eq!(
+        (fact_of(fit, "binding", "b"), fact_of(fit, "runway_ms", "b")),
+        (&FactValue::Text("five_hour".into()), &FactValue::Int(0)),
+        "a zero runway on any window is the candidate's runway"
+    );
+    assert_eq!(candidate(&d.record, "b").runway_ms, Some(0));
+    assert_eq!(
+        summary_facts(&d),
+        vec![
+            ("runway", FactValue::Text("none".into()), Some("text")),
+            ("fit", FactValue::Text("least bad".into()), Some("text")),
+        ]
+    );
+}
+
+#[test]
+fn a_renewal_names_the_five_hour_projection_at_the_ceiling_before_the_week_lead_at_the_margin() {
+    let s = tiered(Pool {
+        shed_ahead: Some(0.2),
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    // The pin burns a ten-thousandth of the 5-hour window a second: 0.5 now with 2.4 hours to the reset projects to
+    // 1.36, over the ceiling, while the window's lead sits under the margin and runs no round.
+    let mut st = priced(vec![burning("s1", "a", 1_000.0, true, T)]);
+    st.record_sample(
+        "a",
+        refreshing(0.5, T + 144 * MINUTE, T + 72 * HOUR, T - 500),
+    );
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(d.record.outcome.kind, "renewed");
+    assert_eq!(
+        summary_facts(&d),
+        vec![(FIVE_HOUR, FactValue::Number(0.5), Some("percent"))],
+        "the 5-hour window's utilization, since its projection reaches the ceiling"
+    );
+    // Under the ceiling, the week's lead at or over the margin names the week: a round runs on the one pin and marks
+    // nothing, so the pin renews.
+    let mut st = priced(vec![burning("s2", "a", 1.0, true, T)]);
+    st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s2", T), &mut rng());
+    assert_eq!(d.record.outcome.kind, "renewed");
+    assert_eq!(
+        summary_facts(&d),
+        vec![(SEVEN_DAY, FactValue::Number(0.5), Some("percent"))],
+        "the week's utilization, since its lead of 0.4 reaches the margin"
+    );
+}
+
+#[test]
+fn a_siblings_five_hour_lead_alone_no_longer_reads_hot_for_the_weekly_band() {
+    let s = tiered(cool_preference_pool(vec![]));
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.set_share(ratio_pricer());
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    // b leads its 5-hour window by 0.9 with no reset and its week by 0.1, c both by 0.1: both fit and both read cool
+    // under the band of 0.75, which the week alone decides.
+    st.record_sample("b", sample(0.9, 0.1, T + 500));
+    st.record_sample("c", sample(0.1, 0.1, T + 500));
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent)),
+        "b outranks c, and its 5-hour lead keeps it from nothing"
+    );
+    let fit = line(&d.record, "fit");
+    assert_eq!(
+        (fact_of(fit, "cool", "b"), fact_of(fit, "cool", "c")),
+        (&FactValue::Bool(true), &FactValue::Bool(true))
+    );
+    assert_eq!(
+        fact(line(&d.record, "move:spent"), "destinations"),
+        &FactValue::List(vec!["b".into(), "c".into()])
+    );
 }

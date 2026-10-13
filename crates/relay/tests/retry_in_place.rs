@@ -290,8 +290,9 @@ async fn a_spent_window_resetting_inside_the_bound_is_waited_out_in_place_and_th
     let app = h.app.clone();
     let waiting =
         tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
-    // The hold's decision goes out before the wait starts, so the clock is stepped past the reset and the
-    // cooldown's margin while the request waits.
+    // The hold's decision goes out before the wait starts, so the clock is stepped while the request waits: first to
+    // a point past the reset but inside the cooldown's one-second margin, where the account is still cooled and a
+    // wait that ended would place the request afresh, then past the margin.
     let mut seen = Vec::new();
     loop {
         let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
@@ -305,7 +306,9 @@ async fn a_spent_window_resetting_inside_the_bound_is_waited_out_in_place_and_th
             break;
         }
     }
-    h.clock.store(NOW + 4_000, Ordering::SeqCst);
+    h.clock.store(NOW + 2_500, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    h.clock.store(NOW + 3_000, Ordering::SeqCst);
     let resp = tokio::time::timeout(Duration::from_secs(5), waiting)
         .await
         .expect("the request lands after the reset")
@@ -339,7 +342,8 @@ async fn a_spent_window_resetting_inside_the_bound_is_waited_out_in_place_and_th
             hold.reason,
             hold.until
         )),
-        Some(("a", "reset", Some(NOW + 2_000)))
+        Some(("a", "reset", Some(NOW + 3_000))),
+        "the hold runs to the cooldown's end, a margin past the reset"
     );
     assert_eq!(
         records[1]
@@ -353,7 +357,7 @@ async fn a_spent_window_resetting_inside_the_bound_is_waited_out_in_place_and_th
                 hold.ran_out
             ))
             .collect::<Vec<_>>(),
-        [("a", "reset", Some(NOW + 2_000), false)],
+        [("a", "reset", Some(NOW + 3_000), false)],
         "the renewal's decision carries the one wait with its reason"
     );
     assert_eq!(credentials_seen(&up), [A, A, B, A]);

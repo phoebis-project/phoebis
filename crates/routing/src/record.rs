@@ -482,7 +482,8 @@ pub struct HoldOutcome {
     pub bound_ms: i64,
     /// `cap` for a hold on a slot, `reset` for a spent window about to reset.
     pub reason: &'static str,
-    /// The reset the request waits for under `reset`, `None` under `cap`.
+    /// The instant the request waits for under `reset`: the later of the spent window's reset and the end of the
+    /// account's cooldown. `None` under `cap`.
     pub until: Option<i64>,
 }
 
