@@ -44,9 +44,9 @@ The legend ends on what a 20x window equivalent is: the share of a Max 20x accou
 the cost model's unit over the Max 20x capacity, so figures of different account tiers compare and add. The 5-hour
 column carries the peak band's weight, the 7-day column the week's factor, and a model week its own capacity factor. A
 figure marked `~` is an estimate: its model has no measured weight and reads the latest weighed model of its model tier,
-and its hover reads "Estimated at the model tier's latest weighted model". On a narrow window the switch reads the short
-labels `All $`, `Billed $`, `Shares` and `Equivalent $`, and at a phone's width the legend's button leaves the top bar
-and stays on the Settings view's Unit row. The cost model behind the equivalents is on [Plan
+and its hover reads "Estimated at the model tier's latest weighted model". On a narrow window every position but Native
+reads a short label (`All $`, `Billed $`, `Shares` and `Equivalent $`), and at a phone's width the legend's button
+leaves the top bar and stays on the Settings view's Unit row. The cost model behind the equivalents is on [Plan
 meter](statistics.md#plan-meter).
 
 The expert view, whose switch carries the title "Shows every field of the pool and key dialogs, the advanced ones
