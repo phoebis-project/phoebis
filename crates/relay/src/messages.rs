@@ -1683,8 +1683,11 @@ impl Relay {
         // again on every pass.
         let mut held_for: Vec<String> = Vec::new();
         // Set by the request's first hold and shared by every later one, so a pool of any size holds the request
-        // one `retry_in_place` at most.
-        let mut hold_deadline: Option<tokio::time::Instant> = None;
+        // one `retry_in_place` at most. Kept on both clocks: the slot wait sleeps on the runtime's and the reset
+        // wait reads the relay's.
+        let mut hold_deadline: Option<(tokio::time::Instant, i64)> = None;
+        let retry_in_place_ms =
+            i64::try_from(admitted.retry_in_place.as_millis()).unwrap_or(i64::MAX);
         // Whether a hold ran out, and whether any leg dialled: an untimed exhaustion reached through holds alone
         // is a pool at its cap, which frees on its own, not one only an operator can clear.
         let mut held_out = false;
@@ -1838,16 +1841,36 @@ impl Relay {
                     // The account had its one hold of this request, or the request's one bound has passed: at its
                     // cap it is passed over as one whose wait ran out.
                     if held_for.contains(&account_id)
-                        || hold_deadline.is_some_and(|at| tokio::time::Instant::now() >= at)
+                        || hold_deadline.is_some_and(|(at, _)| tokio::time::Instant::now() >= at)
                     {
                         held_out = true;
                         attempted.push(account_id);
                         continue;
                     }
                     let started = tokio::time::Instant::now();
-                    let hold_deadline = *hold_deadline.get_or_insert_with(|| {
-                        tokio::time::Instant::now() + admitted.retry_in_place
+                    let (hold_deadline, hold_bound) = *hold_deadline.get_or_insert_with(|| {
+                        (
+                            tokio::time::Instant::now() + admitted.retry_in_place,
+                            now.saturating_add(retry_in_place_ms),
+                        )
                     });
+                    // A spent window about to reset: the request sleeps to the reset, or to its one bound when
+                    // that comes first, and selects again with the account still open to it, so the pin renews in
+                    // place. A wait the bound cut short, or one the account left during, passes the account over.
+                    if hold.reason == "reset" {
+                        let waited = self
+                            .wait_out(hold.until.unwrap_or(now), Some(hold_bound), &answer.cancel)
+                            .await;
+                        hold.held_ms = started.elapsed().as_millis() as u64;
+                        hold.ran_out = matches!(waited, Waited::Deadline);
+                        holds.push(hold);
+                        trace.waited(&holds);
+                        held_for.push(account_id.clone());
+                        if !matches!(waited, Waited::Cleared) {
+                            attempted.push(account_id);
+                        }
+                        continue;
+                    }
                     let freed = self
                         .router
                         .in_flight()

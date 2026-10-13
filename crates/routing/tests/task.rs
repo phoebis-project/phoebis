@@ -6931,6 +6931,8 @@ fn no_round(events: &[phoebis_routing::RouterEvent]) -> bool {
 async fn the_marks_and_the_dwell_gate_survive_a_restart() {
     use phoebis_routing::MigrateReason;
     let store = shedding_store(&["a", "b"]);
+    with_tier(&store, "a");
+    with_tier(&store, "b");
     // Neither pin burns, so a round run now would mark nothing: s1 moves on the stored mark alone.
     for pin in [
         stored_pin(&store, "s1", "a", 1, 0.0),
@@ -6990,6 +6992,9 @@ async fn the_marks_and_the_dwell_gate_survive_a_restart() {
 async fn a_pin_that_moved_away_and_returned_inside_the_dwell_is_not_shed_again_after_a_restart() {
     use phoebis_routing::MigrateReason;
     let store = shedding_store(&["a", "b", "c"]);
+    for id in ["a", "b", "c"] {
+        with_tier(&store, id);
+    }
     for pin in [
         stored_pin(&store, "s1", "a", 1, 4.0),
         stored_pin(&store, "s0", "a", 2, 1.0),
@@ -6998,10 +7003,11 @@ async fn a_pin_that_moved_away_and_returned_inside_the_dwell_is_not_shed_again_a
     }
     let now = Arc::new(AtomicI64::new(AT));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    // c holds no reading, so it reads as cool and a mark that outlived the move would find it a destination, while
-    // the spent move below, which needs a reading of the window, has only a to go to.
+    // c fits as b does, so a mark that outlived the move would find it a destination. Its week leads by 0.3, over
+    // the band of 0.15 like a's, so the spent move below ties a and c and the strategy takes a.
     handle.report(windows("a", 0.9, 0.3, AT)).await;
     handle.report(windows("b", 0.1, 0.1, AT)).await;
+    handle.report(windows("c", 0.1, 0.3, AT)).await;
     handle.samples().await.unwrap();
     assert_eq!(
         landed_on(
@@ -7171,7 +7177,7 @@ async fn the_purge_tick_writes_the_round_cut_past_the_longest_dwell() {
 }
 
 #[tokio::test]
-async fn after_a_restart_an_account_reads_as_shed_by_its_former_pool_s_round() {
+async fn after_a_restart_a_spent_pin_moves_to_a_sibling_whatever_its_former_pools_round_read() {
     use phoebis_routing::{FactValue, MigrateReason};
     let store = seeded(&["x", "a"]);
     store
@@ -7213,28 +7219,24 @@ async fn after_a_restart_an_account_reads_as_shed_by_its_former_pool_s_round() {
                 .unwrap()
         ),
         ("a".into(), Some(MigrateReason::Spent)),
-        "with no cool sibling the spent move falls through to the rule's own destination"
+        "the sibling fits by its bucket, and a former pool's round on it holds the move no more"
     );
     let (_, record) = next_decision(&mut events).await;
-    let cool = record
+    let fit = record
         .walk
         .iter()
-        .find(|step| step.step == "cool")
-        .expect("the spent rule's cool line");
+        .find(|step| step.step == "fit")
+        .expect("the spent rule's fit table");
     let about_a = |key: &str| {
-        cool.facts
+        fit.facts
             .iter()
             .find(|fact| fact.key == key && fact.account_id.as_deref() == Some("a"))
             .map(|fact| fact.value.clone())
     };
     assert_eq!(
-        (cool.verdict, about_a("last_shed_age_ms"), about_a("cool")),
-        (
-            "fell_through",
-            Some(FactValue::Int(60_000)),
-            Some(FactValue::Bool(false))
-        ),
-        "a reads as just shed by its former pool's round, which p never ran"
+        (fit.verdict, about_a("verdict"), about_a("runway_ms")),
+        ("fits", Some(FactValue::Text("fits".into())), None),
+        "an api_key sibling with no bucket reading fits with no runway"
     );
 }
 

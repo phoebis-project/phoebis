@@ -23,13 +23,6 @@
       ]
     },
     {
-      "step": "cool",
-      "verdicts": [
-        "fell_through",
-        "preferred"
-      ]
-    },
-    {
       "step": "eligible",
       "verdicts": [
         "match",
@@ -40,6 +33,15 @@
       "step": "exhausted",
       "verdicts": [
         "exhausted"
+      ]
+    },
+    {
+      "step": "fit",
+      "verdicts": [
+        "fits",
+        "least_bad",
+        "none",
+        "rewrite_only"
       ]
     },
     {
@@ -85,6 +87,7 @@
       "step": "move:spent",
       "verdicts": [
         "fired",
+        "held",
         "no",
         "not_run"
       ]

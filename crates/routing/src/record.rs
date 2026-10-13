@@ -14,22 +14,22 @@ use crate::RegistrySnapshot;
 pub const RECORD_VERSION: u32 = 1;
 
 /// Every step id the engine records with the verdict words it writes, in the ids' order, the two steps the refusal
-/// record writes by hand (`admission`, `selection`) and the cool reading it appends whole (`cool`) included. The
+/// record writes by hand (`admission`, `selection`) and the fit table it appends whole (`fit`) included. The
 /// recorder asserts each of its calls against this list, and the console's station table is held to it through the
 /// fixture `tests/walk_steps.rs` writes.
 pub const WALK_STEPS: &[(&str, &[&str])] = &[
     ("admission", &["refused"]),
     ("bound", &["bound", "exhausted", "renewed"]),
     ("cap_filter", &["dropped", "passed"]),
-    ("cool", &["fell_through", "preferred"]),
     ("eligible", &["match", "none"]),
     ("exhausted", &["exhausted"]),
+    ("fit", &["fits", "least_bad", "none", "rewrite_only"]),
     ("hold", &["held", "placed"]),
     ("move:drain", &["fired", "no", "not_run"]),
     ("move:overage", &["fired", "no", "not_run"]),
     ("move:return_to_plan", &["fired", "no", "not_run"]),
     ("move:shed", &["fired", "no", "not_run"]),
-    ("move:spent", &["fired", "no", "not_run"]),
+    ("move:spent", &["fired", "held", "no", "not_run"]),
     ("partitions", &["match", "none"]),
     ("pick", &["chosen", "none"]),
     ("pin", &["match", "none"]),
@@ -237,6 +237,12 @@ pub struct CandidateFacts {
     pub score: Option<f64>,
     /// `chosen`, `renewed`, `held_on`, `source`, `destination`, `eligible`, `ranked`, `out`, `not_needed`.
     pub verdict: &'static str,
+    /// The destination gate's reading of the member, filled where a move's gate read it: the runway on the binding
+    /// window (`None` for an unbounded one), the verdict (`ending`, `fits`, `least_bad`, `rewrite_only`) and the
+    /// window that binds.
+    pub runway_ms: Option<i64>,
+    pub fit: Option<&'static str>,
+    pub binding: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -256,6 +262,9 @@ pub struct WindowFacts {
     pub observed_at: i64,
     pub age_ms: i64,
     pub ahead: Option<f64>,
+    /// The projection at the window's horizon and the horizon, filled for a plan window of a subscription member.
+    pub projection: Option<f64>,
+    pub horizon: Option<i64>,
 }
 
 /// `end`, `deadline` and `hours` are `None` for an api_key member, which Pace scores by its remaining share alone.
@@ -471,6 +480,10 @@ pub struct HoldOutcome {
     pub account_id: String,
     pub cohort: Option<String>,
     pub bound_ms: i64,
+    /// `cap` for a hold on a slot, `reset` for a spent window about to reset.
+    pub reason: &'static str,
+    /// The reset the request waits for under `reset`, `None` under `cap`.
+    pub until: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -938,6 +951,8 @@ mod tests {
                         observed_at: 1_900,
                         age_ms: 100,
                         ahead: Some(-0.1),
+                        projection: None,
+                        horizon: None,
                     },
                 )]),
                 allowance_known: true,
@@ -958,6 +973,9 @@ mod tests {
                 rank: None,
                 score: None,
                 verdict: "renewed",
+                runway_ms: None,
+                fit: None,
+                binding: None,
             }],
             walk: vec![WalkStep {
                 step: "pin",

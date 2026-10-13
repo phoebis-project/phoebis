@@ -21,7 +21,7 @@ use crate::record::{
     WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION, WALK_STEPS,
 };
 use crate::state::{
-    budget_reached, burn_average_ms, burn_decayed, plan_windows, shed_cap, shed_dwell_ms,
+    budget_reached, burn_average_ms, burn_decayed, ceiling, plan_windows, shed_cap, shed_dwell_ms,
     shed_marks, warm, weekly_lead_margin, BurnUnit, CreditsState, MemberSpend, PinRef, PinUsage,
     Reservation, RoutingState, StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR,
     IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
@@ -170,6 +170,10 @@ pub struct HoldFacts {
     pub seq: u32,
     /// Whether the wait's bound ran out with no slot freed, which the relay learns when the wait ends.
     pub ran_out: bool,
+    /// `cap` for a hold on a slot, `reset` for a spent window about to reset.
+    pub reason: &'static str,
+    /// The reset the request waits for under `reset`, `None` under `cap`.
+    pub until: Option<i64>,
 }
 
 /// The holds before this attempt, as the trace records them.
@@ -1302,9 +1306,30 @@ fn run(
             if let Some(round) = rec.shed_round.as_ref() {
                 writes.push(round_write(state, pool, current, request.now, round));
             }
+            // A spent window about to reset holds the request on its own account: the hold books and writes
+            // nothing, the relay waits to the reset and selects again, and the pin renews in place then.
+            if let MoveVerdict::Wait { reset } = moved {
+                let hold = HoldFacts {
+                    account_id: current.account_id.clone(),
+                    cohort: None,
+                    held_ms: 0,
+                    attempt: request.attempt,
+                    seq: request.seq,
+                    ran_out: false,
+                    reason: "reset",
+                    until: Some(reset),
+                };
+                return (
+                    SelectResult::Held {
+                        account_id: current.account_id.clone(),
+                        hold,
+                    },
+                    writes,
+                );
+            }
             // A hold is for a fresh placement: with every destination at its cap the move is not made, the pin
             // renews in place at step 5, and the next request judges the move again.
-            if let Some((reason, set)) = moved {
+            if let MoveVerdict::Move(reason, set) = moved {
                 let cap = pool.failover.in_flight_cap;
                 let loads: Vec<u32> = set
                     .iter()
@@ -1604,6 +1629,8 @@ fn run(
                         attempt: request.attempt,
                         seq: request.seq,
                         ran_out: false,
+                        reason: "cap",
+                        until: None,
                     },
                     None => HoldFacts {
                         account_id: strategy_choice.account_id.clone(),
@@ -1612,6 +1639,8 @@ fn run(
                         attempt: request.attempt,
                         seq: request.seq,
                         ran_out: false,
+                        reason: "cap",
+                        until: None,
                     },
                 };
                 let place = *rec.hold_place.get_or_insert("strategy_pick");
@@ -1877,6 +1906,316 @@ fn utilization_at_least(
 
 const FIVE_HOUR_MS: i64 = 5 * 3_600_000;
 
+/// Milliseconds as the seconds a share-per-second burn multiplies.
+fn seconds(ms: i64) -> f64 {
+    ms as f64 / 1_000.0
+}
+
+/// The projection of one account on one window at its horizon, read at `now`: the prediction plus the burn (share a
+/// second) over the seconds to the horizon.
+pub(crate) struct Projection {
+    pub predicted: f64,
+    /// Share per second, the account's `burn_shares` on the window.
+    pub burn: f64,
+    pub horizon: i64,
+    pub at_horizon: f64,
+}
+
+/// The pins the account's pool keeps: a pin under a key of a pool the account left is retained until it ends and
+/// counts in neither a round nor a projection, so a former pool's pins never move this pool's figures.
+fn in_pool<'a>(snapshot: &'a RegistrySnapshot, pool: &'a PoolRow) -> impl Fn(&PinRow) -> bool + 'a {
+    move |p: &PinRow| {
+        snapshot
+            .key(&p.key_id)
+            .is_some_and(|k| k.pool_id == pool.id)
+    }
+}
+
+/// The 5-hour horizon is the earlier of the reading's reset (`now + FIVE_HOUR_MS` for a reading past its reset with
+/// none, since the window opens with the next request and runs five hours) and the account's end, the weekly horizon
+/// the earliest of `now + FIVE_HOUR_MS`, the reset and the end. An end at or before `now` makes the horizon `now`.
+pub(crate) fn horizon_of(
+    snapshot: &RegistrySnapshot,
+    account_id: &str,
+    window: &str,
+    reading: &WindowReading,
+    now: i64,
+) -> i64 {
+    let length = now.saturating_add(FIVE_HOUR_MS);
+    let horizon = match reading.reset {
+        Some(reset) if window == FIVE_HOUR => reset,
+        Some(reset) => reset.min(length),
+        None => length,
+    };
+    account_end(snapshot, account_id, now)
+        .map_or(horizon, |end| horizon.min(end))
+        .max(now)
+}
+
+/// The projections of `account_id` on the plan windows it holds a reading of, from one read of its burn: empty for an
+/// api_key account, which has no plan window. An unknown tier prices no burn, so an untiered account projects its
+/// prediction alone.
+fn projections_of(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    account_id: &str,
+    tier: &str,
+    now: i64,
+) -> BTreeMap<String, Projection> {
+    if snapshot.account(account_id).map(|a| a.kind) == Some(AccountKind::ApiKey) {
+        return BTreeMap::new();
+    }
+    let burn = state.burn_shares(
+        account_id,
+        &in_pool(snapshot, pool),
+        tier,
+        now,
+        burn_average_ms(pool),
+    );
+    let mut projections = BTreeMap::new();
+    for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
+        let Some(reading) = state.predicted(account_id, window, now) else {
+            continue;
+        };
+        let horizon = horizon_of(snapshot, account_id, window, &reading, now);
+        let burn = burn.get(window).copied().unwrap_or(0.0);
+        projections.insert(
+            window.to_string(),
+            Projection {
+                predicted: reading.utilization,
+                burn,
+                horizon,
+                at_horizon: reading.utilization + burn * seconds(horizon - now),
+            },
+        );
+    }
+    projections
+}
+
+/// The projection of `account_id` on `window` at its horizon: `None` for an account with no reading of the window or
+/// an api_key account.
+#[allow(dead_code)]
+pub(crate) fn projection_of(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    account_id: &str,
+    tier: &str,
+    window: &str,
+    now: i64,
+) -> Option<Projection> {
+    projections_of(state, snapshot, pool, account_id, tier, now).remove(window)
+}
+
+/// What the gate read for one candidate: the verdict and the figures the `fit` step and the candidate table state.
+pub(crate) struct FitRead {
+    /// `ending`, `fits`, `least_bad` or `rewrite_only`.
+    pub verdict: &'static str,
+    /// The runway on the binding window: `None` for an unbounded one (no burn on it), `Some(0)` when the rewrite
+    /// alone reaches the ceiling.
+    pub runway_ms: Option<i64>,
+    pub binding: Option<String>,
+    pub projection: BTreeMap<String, f64>,
+    pub horizon: BTreeMap<String, i64>,
+    pub rewrite: BTreeMap<String, f64>,
+    pub reserved: BTreeMap<String, f64>,
+    pub end: Option<i64>,
+    /// The weekly band's reading of a fitting candidate, the tie-break among the order, `None` where the band is off
+    /// or the candidate does not fit.
+    pub cool: Option<bool>,
+}
+
+/// The fit of `pin` (or a fresh session) on `candidate`: the runway per window the request's model draws, the
+/// predicate of the three verdicts and the end exclusion. `planned` holds the reservations a shedding round planned
+/// before this read, summed into the candidate's prediction and burn as the live ones are, and is empty for a move
+/// rule or the partition.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fit_of(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    request: &SelectRequest,
+    pin: Option<&PinRow>,
+    candidate: &str,
+    planned: &[Reservation],
+    now: i64,
+) -> FitRead {
+    let mut read = FitRead {
+        verdict: "least_bad",
+        runway_ms: None,
+        binding: None,
+        projection: BTreeMap::new(),
+        horizon: BTreeMap::new(),
+        rewrite: BTreeMap::new(),
+        reserved: BTreeMap::new(),
+        end: None,
+        cool: None,
+    };
+    // An end inside the next five hours is inside every horizon, so the candidate is in no order.
+    if let Some(end) =
+        account_end(snapshot, candidate, now).filter(|end| *end < now.saturating_add(FIVE_HOUR_MS))
+    {
+        read.end = Some(end);
+        read.verdict = "ending";
+        return read;
+    }
+    let band_set = weekly_lead_margin(pool).is_some();
+    if snapshot.account(candidate).map(|a| a.kind) == Some(AccountKind::ApiKey) {
+        // A bucket refills within its minute, so a line under 1.0 says the account has room and there is nothing
+        // to project.
+        let room = state
+            .sample(candidate)
+            .and_then(|s| s.worst_bucket(now))
+            .is_none_or(|r| r.utilization < 1.0);
+        read.verdict = if room { "fits" } else { "least_bad" };
+        read.cool = (room && band_set).then(|| under_band(state, snapshot, pool, candidate, now));
+        return read;
+    }
+    // An unnamed tier prices neither the rewrite nor the burn, so the figures are the prediction alone and the
+    // verdict stays least bad.
+    let tier = snapshot.tier(candidate);
+    let (rewrite, pin_burn) = tier
+        .map(|tier| pin_figures(state, snapshot, pool, request, pin, tier, now))
+        .unwrap_or_default();
+    let projections = projections_of(
+        state,
+        snapshot,
+        pool,
+        candidate,
+        tier.unwrap_or_default(),
+        now,
+    );
+    let planned: Vec<&Reservation> = planned
+        .iter()
+        .filter(|r| r.account_id == candidate)
+        .collect();
+    let mut unread = false;
+    let mut every_fits = true;
+    let mut rewrite_lands = true;
+    // The window whose runway falls shortest of its horizon binds, and its runway is the candidate's.
+    let mut binding: Option<(&str, i64, i64)> = None;
+    for window in plan_windows(&request.canonical_model) {
+        let Some(projection) = projections.get(window) else {
+            unread = true;
+            continue;
+        };
+        let planned_rewrite: f64 = planned.iter().filter_map(|r| r.rewrite.get(window)).sum();
+        let planned_burn: f64 = planned.iter().filter_map(|r| r.burn.get(window)).sum();
+        let predicted = projection.predicted + planned_rewrite;
+        let account_burn = projection.burn + planned_burn;
+        let rewrite = rewrite.get(window).copied().unwrap_or(0.0);
+        let burn = account_burn + pin_burn.get(window).copied().unwrap_or(0.0);
+        let limit = ceiling(pool, window);
+        let span = projection.horizon - now;
+        read.projection
+            .insert(window.to_string(), predicted + account_burn * seconds(span));
+        read.horizon.insert(window.to_string(), projection.horizon);
+        read.rewrite.insert(window.to_string(), rewrite);
+        read.reserved.insert(
+            window.to_string(),
+            state.reserved(candidate, window) + planned_rewrite,
+        );
+        let runway_ms = if predicted + rewrite >= limit {
+            Some(0)
+        } else if burn <= 0.0 {
+            None
+        } else {
+            Some(((limit - predicted - rewrite) / burn * 1_000.0).round() as i64)
+        };
+        if runway_ms == Some(0) {
+            rewrite_lands = false;
+        }
+        let Some(runway_ms) = runway_ms else {
+            continue;
+        };
+        let slack = runway_ms.saturating_sub(span);
+        if slack < 0 {
+            every_fits = false;
+        }
+        if binding.is_none_or(|(_, least, _)| slack < least) {
+            binding = Some((window, slack, runway_ms));
+        }
+    }
+    if let Some((window, _, runway_ms)) = binding {
+        read.binding = Some(window.to_string());
+        read.runway_ms = Some(runway_ms);
+    }
+    read.verdict = if tier.is_none() || unread {
+        "least_bad"
+    } else if every_fits {
+        "fits"
+    } else if rewrite_lands {
+        "rewrite_only"
+    } else {
+        "least_bad"
+    };
+    read.cool = (read.verdict == "fits" && band_set)
+        .then(|| under_band(state, snapshot, pool, candidate, now));
+    read
+}
+
+/// The record's key for a per-window fact of the fit table, spelled once per plan window since a fact's key is
+/// static. `None` for a window the table does not name.
+fn fit_key(kind: &str, window: &str) -> Option<&'static str> {
+    Some(match (kind, window) {
+        ("projection", FIVE_HOUR) => "projection_five_hour",
+        ("projection", SEVEN_DAY) => "projection_seven_day",
+        ("projection", SEVEN_DAY_FABLE) => "projection_seven_day_fable",
+        ("rewrite", FIVE_HOUR) => "rewrite_five_hour",
+        ("rewrite", SEVEN_DAY) => "rewrite_seven_day",
+        ("rewrite", SEVEN_DAY_FABLE) => "rewrite_seven_day_fable",
+        ("reserved", FIVE_HOUR) => "reserved_five_hour",
+        ("reserved", SEVEN_DAY) => "reserved_seven_day",
+        ("reserved", SEVEN_DAY_FABLE) => "reserved_seven_day_fable",
+        _ => return None,
+    })
+}
+
+/// The `fit` walk step over the candidates read, its verdict the order taken (`fits`, `rewrite_only`, `least_bad`)
+/// or `none` when no order holds a candidate. One row per candidate, each fact about its account, with `runway_ms`
+/// absent for an unbounded runway and `cool` beside a fitting candidate under a set band.
+pub(crate) fn fit_step(reads: &[(String, FitRead)], verdict: &'static str) -> WalkStep {
+    let mut facts = Vec::new();
+    for (account_id, read) in reads {
+        let mut row = Vec::new();
+        for (window, projection) in &read.projection {
+            if let Some(key) = fit_key("projection", window) {
+                row.push(Fact::number(key, *projection).unit("percent"));
+            }
+        }
+        if let Some(runway_ms) = read.runway_ms {
+            row.push(Fact::int("runway_ms", runway_ms).unit("ms"));
+        }
+        for (window, rewrite) in &read.rewrite {
+            if let Some(key) = fit_key("rewrite", window) {
+                row.push(Fact::number(key, *rewrite).unit("percent"));
+            }
+        }
+        for (window, reserved) in &read.reserved {
+            if let Some(key) = fit_key("reserved", window) {
+                row.push(Fact::number(key, *reserved).unit("percent"));
+            }
+        }
+        if let Some(binding) = &read.binding {
+            row.push(Fact::text("binding", binding.clone()));
+        }
+        if let Some(end) = read.end {
+            row.push(Fact::int("end", end).unit("time"));
+        }
+        row.push(Fact::text("verdict", read.verdict));
+        if let Some(cool) = read.cool {
+            row.push(Fact::bool("cool", cool));
+        }
+        facts.extend(row.into_iter().map(|fact| fact.about(account_id)));
+    }
+    WalkStep {
+        step: "fit",
+        verdict,
+        facts,
+    }
+}
+
 /// How far a window's prediction runs ahead of its pace: the utilization less the share of the window that has
 /// elapsed toward the earlier of its reset and the account's end (`term::end_of`, the deadline Pace's score reads),
 /// so a reading at 0.5 ten percent into a week is 0.4 ahead and the same reading sixty percent in is behind, and an
@@ -1939,12 +2278,10 @@ pub fn elapsed_share_at(window: &str, reset_at: Option<i64>, end: Option<i64>, a
     })
 }
 
-/// Whether `account_id` reads cool: a subscription account under `shed_ahead_of_pace` minus the hysteresis band on
-/// how far each shared plan window runs ahead of its pace, an api_key account with room in its worst standing bucket
-/// (under 1.0, whatever the margin). No threshold configured, or no reading, counts as cool. The reading `move_of`'s
-/// `cool` predicate takes for a migration destination and rung 4's `blocked` takes for a placement, so the arithmetic
-/// lives once. It builds no fact, so a caller that only filters pays for no record. `band_facts` answers it beside
-/// the facts the record states.
+/// Whether `account_id` reads cool: a subscription account under `weekly_lead_margin` minus the hysteresis band on
+/// how far the 7-day window runs ahead of its pace, an api_key account with room in its worst standing bucket (under
+/// 1.0, whatever the margin). No margin configured, or no reading, counts as cool. The reading the destination gate
+/// breaks its ties by and rung 4's `blocked` takes for a placement, so the arithmetic lives once.
 fn under_band(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -1962,58 +2299,14 @@ fn under_band(
             .sample(account_id)
             .and_then(|s| s.worst_bucket(now))
             .is_none_or(|r| r.utilization < 1.0),
-        _ => {
-            let band = threshold - MIGRATE_BAND;
-            [FIVE_HOUR, SEVEN_DAY]
-                .into_iter()
-                .filter_map(|window| ahead(state, snapshot, account_id, window, now))
-                .all(|(lead, _, _)| lead < band)
-        }
+        _ => ahead(state, snapshot, account_id, SEVEN_DAY, now)
+            .is_none_or(|(lead, _, _)| lead < threshold - MIGRATE_BAND),
     }
 }
 
-/// The readings `under_band` judges, as the record's facts, with its answer beside them: the leads over pace of the
-/// two shared windows with their elapsed shares and the larger lead's margin over the band for a subscription
-/// account, or the worst bucket for an api_key one, and the line they are held under as `band`: the threshold less
-/// `MIGRATE_BAND` on a subscription account, a full bucket (1.0) on an api_key one. No threshold reads as under with
-/// no fact.
-fn band_facts(
-    state: &RoutingState,
-    snapshot: &RegistrySnapshot,
-    pool: &PoolRow,
-    account_id: &str,
-    now: i64,
-) -> (Vec<Fact>, bool) {
-    let under = under_band(state, snapshot, pool, account_id, now);
-    let Some(threshold) = weekly_lead_margin(pool) else {
-        return (Vec::new(), under);
-    };
-    let mut facts = Vec::with_capacity(6);
-    let band = match snapshot.account(account_id).map(|a| a.kind) {
-        Some(AccountKind::ApiKey) => {
-            if let Some(reading) = state.sample(account_id).and_then(|s| s.worst_bucket(now)) {
-                facts.push(Fact::number("worst_bucket", reading.utilization).unit("percent"));
-            }
-            1.0
-        }
-        _ => {
-            let band = threshold - MIGRATE_BAND;
-            lead_facts(
-                &mut facts,
-                ahead(state, snapshot, account_id, FIVE_HOUR, now),
-                ahead(state, snapshot, account_id, SEVEN_DAY, now),
-                band,
-            );
-            band
-        }
-    };
-    facts.push(Fact::number("band", band).unit("percent"));
-    (facts, under)
-}
-
 /// The two shared windows' leads and elapsed shares as facts, each window's deadline where its pace runs to the
-/// account's end, and the larger lead's margin over `against` (the shed threshold or the band): what the shed line
-/// and the cool line state of one reading each. Answers the two leads, 5-hour first.
+/// account's end, and the larger lead's margin over `against` (the shed threshold): what the shed line states of one
+/// reading each. Answers the two leads, 5-hour first.
 fn lead_facts(
     facts: &mut Vec<Fact>,
     five_hour: Option<(f64, f64, Option<i64>)>,
@@ -2071,9 +2364,177 @@ fn allowance_known(
         }
 }
 
+/// What step 4's rules answered: the pin stays, moves to one of a set under a reason, or waits in place for the
+/// reset of its spent window. The window and the wait are the spent line's facts, written where the rule reads them.
+enum MoveVerdict<'a> {
+    Stay,
+    Move(MigrateReason, Vec<&'a Candidate>),
+    Wait { reset: i64 },
+}
+
+/// What a rule's gate answered: the destination set of the first non-empty order, the `fit` step over every candidate
+/// read, and the candidates the end exclusion dropped.
+struct Gate<'a> {
+    set: Vec<&'a Candidate>,
+    step: WalkStep,
+    ending: Vec<String>,
+}
+
+/// The candidates of `set` the gate read as `verdict`, each with its read.
+fn order<'a, 'r>(
+    set: &[&'a Candidate],
+    reads: &'r [(String, FitRead)],
+    verdict: &str,
+) -> Vec<(&'a Candidate, &'r FitRead)> {
+    set.iter()
+        .zip(reads)
+        .filter(|(_, (_, read))| read.verdict == verdict)
+        .map(|(c, (_, read))| (*c, read))
+        .collect()
+}
+
+/// The candidates with the longest runway, an unbounded one longest of all, ties kept for the band and the pick.
+fn longest<'a, 'r>(
+    candidates: Vec<(&'a Candidate, &'r FitRead)>,
+) -> Vec<(&'a Candidate, &'r FitRead)> {
+    let key = |read: &FitRead| read.runway_ms.unwrap_or(i64::MAX);
+    let Some(best) = candidates.iter().map(|(_, read)| key(read)).max() else {
+        return candidates;
+    };
+    candidates
+        .into_iter()
+        .filter(|(_, read)| key(read) == best)
+        .collect()
+}
+
+/// The candidates under the weekly band where any is, else all of them: the tie-break of an order, off with the
+/// margin unset.
+fn cool_subset<'a, 'r>(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    candidates: Vec<(&'a Candidate, &'r FitRead)>,
+    now: i64,
+) -> Vec<(&'a Candidate, &'r FitRead)> {
+    if weekly_lead_margin(pool).is_none() {
+        return candidates;
+    }
+    let cool: Vec<_> = candidates
+        .iter()
+        .copied()
+        .filter(|(c, _)| under_band(state, snapshot, pool, &c.account_id, now))
+        .collect();
+    if cool.is_empty() {
+        candidates
+    } else {
+        cool
+    }
+}
+
+/// The three orders over the siblings `keep` admits: the candidates the pin fits to the horizon on every window its
+/// model draws (the weekly band the tie-break among them), else the one where the rewrite alone fits with the longest
+/// runway (ties by the band, then the pick), else the rest. A candidate at its in-flight cap leaves the first two
+/// orders, so a move does not pick a full account while a free fitting one exists, and reaches the last, where the
+/// cap filter reads it as today. The shed rule (`one`) takes the first order alone, reduced to the longest runway.
+/// Every read lands on the member's row of the record too.
+#[allow(clippy::too_many_arguments)]
+fn gate<'a>(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    request: &SelectRequest,
+    current: &PinRow,
+    eligible: &[&'a Candidate],
+    window: &str,
+    keep: &dyn Fn(&Candidate) -> bool,
+    one: bool,
+    rec: &mut Recorder,
+) -> Gate<'a> {
+    let now = request.now;
+    let set: Vec<&'a Candidate> = eligible
+        .iter()
+        .copied()
+        .filter(|c| c.account_id != current.account_id && keep(c))
+        // An account with no allowance left in the model's own window is no destination: step 6 drops it, so
+        // releasing the pin for a set of them would strand the request on nothing.
+        .filter(|c| window == SEVEN_DAY || holds_allowance(state, &c.account_id, window, now))
+        .collect();
+    let reads: Vec<(String, FitRead)> = set
+        .iter()
+        .map(|c| {
+            (
+                c.account_id.clone(),
+                fit_of(
+                    state,
+                    snapshot,
+                    pool,
+                    request,
+                    Some(current),
+                    &c.account_id,
+                    &[],
+                    now,
+                ),
+            )
+        })
+        .collect();
+    for (account_id, read) in &reads {
+        if let Some(member) = rec.candidate_mut(account_id) {
+            member.runway_ms = read.runway_ms;
+            member.fit = Some(read.verdict);
+            member.binding = read.binding.clone();
+        }
+    }
+    let cap = pool.failover.in_flight_cap;
+    let free = |(c, _): &(&Candidate, &FitRead)| state.in_flight().account(&c.account_id) < cap;
+    let fits: Vec<_> = order(&set, &reads, "fits")
+        .into_iter()
+        .filter(free)
+        .collect();
+    let rewrite_only: Vec<_> = order(&set, &reads, "rewrite_only")
+        .into_iter()
+        .filter(free)
+        .collect();
+    let least_bad: Vec<&'a Candidate> = set
+        .iter()
+        .copied()
+        .zip(&reads)
+        .filter(|(_, (_, read))| read.verdict != "ending")
+        .map(|(c, _)| c)
+        .collect();
+    let chosen = |candidates: Vec<(&'a Candidate, &FitRead)>| -> Vec<&'a Candidate> {
+        cool_subset(state, snapshot, pool, candidates, now)
+            .into_iter()
+            .map(|(c, _)| c)
+            .collect()
+    };
+    let (set, verdict) = if !fits.is_empty() {
+        let fits = if one { longest(fits) } else { fits };
+        (chosen(fits), "fits")
+    } else if one {
+        (Vec::new(), "none")
+    } else if !rewrite_only.is_empty() {
+        (chosen(longest(rewrite_only)), "rewrite_only")
+    } else if !least_bad.is_empty() {
+        (least_bad, "least_bad")
+    } else {
+        (Vec::new(), "none")
+    };
+    let ending = reads
+        .iter()
+        .filter(|(_, read)| read.verdict == "ending")
+        .map(|(account_id, _)| account_id.clone())
+        .collect();
+    Gate {
+        set,
+        step: fit_step(&reads, verdict),
+        ending,
+    }
+}
+
 /// Step 4's rules in their order: spent, overage, return to plan, drain, shed. Each yields the siblings it
 /// would move the pin to, and the first with any moves it under its own reason. Each rule appends its line: `no`
-/// with the fact that kept it, or `fired` with its destinations and `not_run` for every rule after it.
+/// with the fact that kept it, or `fired` with its destinations and `not_run` for every rule after it. The spent
+/// rule alone can answer `held`, for a reset inside the retry bound.
 #[allow(clippy::too_many_arguments)]
 fn move_of<'a>(
     state: &mut RoutingState,
@@ -2086,82 +2547,11 @@ fn move_of<'a>(
     cold: bool,
     fast: bool,
     rec: &mut Recorder,
-) -> Option<(MigrateReason, Vec<&'a Candidate>)> {
+) -> MoveVerdict<'a> {
     let (now, fallback_ms) = (request.now, request.fallback_ms);
     let prefer_plan = pool.overage_policy == OveragePolicy::PreferPlan;
     let kind = |id: &str| snapshot.account(id).map(|a| a.kind);
     let dwell_ms = shed_dwell_ms(pool);
-    let cap = pool.failover.in_flight_cap;
-    // A sibling the next round would not shed from again soon: every reading its sample holds cool (the shared windows'
-    // leads over their pace under the band on a subscription account, room in the worst live bucket of an api_key one;
-    // an unsampled account reads as cool), no pool has run a round on it within the dwell, and room under the cap. A
-    // full sibling counts as hot, so a move whose cool siblings are all full falls through to a free one rather than
-    // being dropped at the cap. The readings come back as the cool line's facts beside the answer.
-    let cool_facts = |state: &RoutingState, c: &Candidate| -> (Vec<Fact>, bool) {
-        let (mut facts, under) = band_facts(state, snapshot, pool, &c.account_id, now);
-        let last_shed = state.newest_shed(&c.account_id);
-        let rested = last_shed.is_none_or(|at| now - at >= dwell_ms);
-        let in_flight = state.in_flight().account(&c.account_id);
-        if let Some(at) = last_shed {
-            facts.push(Fact::int("last_shed_age_ms", now - at).unit("ms"));
-        }
-        facts.push(in_flight_fact(in_flight, cap));
-        let cool = under && rested && in_flight < cap;
-        facts.push(Fact::bool("cool", cool));
-        let facts = facts
-            .into_iter()
-            .map(|fact| fact.about(&c.account_id))
-            .collect();
-        (facts, cool)
-    };
-    // `cool_facts`' answer without its facts, for the shed rule's filter, which keeps none of them.
-    let cool = |state: &RoutingState, c: &Candidate| -> bool {
-        under_band(state, snapshot, pool, &c.account_id, now)
-            && state
-                .newest_shed(&c.account_id)
-                .is_none_or(|at| now - at >= dwell_ms)
-            && state.in_flight().account(&c.account_id) < cap
-    };
-    let destinations = |state: &RoutingState,
-                        keep: &dyn Fn(&Candidate) -> bool|
-     -> (Vec<&'a Candidate>, Option<WalkStep>) {
-        let set: Vec<&'a Candidate> = eligible
-            .iter()
-            .copied()
-            .filter(|c| c.account_id != current.account_id && keep(c))
-            // An account with no allowance left in the model's own window is no destination: step 6 drops it,
-            // so releasing the pin for a set of them would strand the request on nothing.
-            .filter(|c| window == SEVEN_DAY || holds_allowance(state, &c.account_id, window, now))
-            .collect();
-        // A hot destination would shed the session again at its next round, so every move prefers a cool
-        // one. The preference falls through to the rule's own set: each rule moves the pin for a reason a
-        // hot sibling still answers, which staying put does not.
-        if weekly_lead_margin(pool).is_none() || set.is_empty() {
-            return (set, None);
-        }
-        let mut facts = Vec::new();
-        let mut preferred: Vec<&'a Candidate> = Vec::new();
-        for c in &set {
-            let (read, is_cool) = cool_facts(state, c);
-            facts.extend(read);
-            if is_cool {
-                preferred.push(*c);
-            }
-        }
-        let (set, verdict) = if preferred.is_empty() {
-            (set, "fell_through")
-        } else {
-            (preferred, "preferred")
-        };
-        (
-            set,
-            Some(WalkStep {
-                step: "cool",
-                verdict,
-                facts,
-            }),
-        )
-    };
 
     // A spent window is not a hover: the pinned account cannot serve the request until the window resets, so
     // the pin moves outside the round's budget as soon as a sibling is known to hold allowance, rather than
@@ -2183,17 +2573,50 @@ fn move_of<'a>(
     } else if holds_allowance(state, &current.account_id, window, now) {
         rec.step(RULES[0], "no", vec![Fact::bool("holds_allowance", true)]);
     } else {
-        let (set, cool_line) = destinations(state, &|c| {
-            holds_allowance(state, &c.account_id, window, now)
-                && allowance_known(state, snapshot, &c.account_id, window, now)
-                && !(prefer_plan && state.in_overage(&c.account_id, now, fallback_ms))
-        });
-        let facts = vec![Fact::bool("holds_allowance", false)];
-        if !set.is_empty() {
-            fired(rec, 0, facts, &set, cool_line);
-            return Some((MigrateReason::Spent, set));
+        // A reset inside the retry bound costs less than a cold rewrite: the request waits for it in place and the
+        // pin renews once the window has refunded.
+        let bound = now.saturating_add(seconds_ms(pool.failover.retry_in_place_seconds));
+        if let Some((reset, spent_window)) = spent_until(state, &current.account_id, window, now)
+            .filter(|(reset, _)| *reset <= bound)
+        {
+            let wait_ms = reset - now;
+            rec.step(
+                RULES[0],
+                "held",
+                vec![
+                    Fact::bool("holds_allowance", false),
+                    Fact::int("reset", reset).unit("time"),
+                    Fact::text("window", spent_window),
+                    Fact::int("wait_ms", wait_ms).unit("ms"),
+                ],
+            );
+            for later in &RULES[1..] {
+                rec.step(later, "not_run", Vec::new());
+            }
+            return MoveVerdict::Wait { reset };
         }
-        no_destination(rec, 0, facts);
+        let gate = gate(
+            state,
+            snapshot,
+            pool,
+            request,
+            current,
+            eligible,
+            window,
+            &|c| {
+                holds_allowance(state, &c.account_id, window, now)
+                    && allowance_known(state, snapshot, &c.account_id, window, now)
+                    && !(prefer_plan && state.in_overage(&c.account_id, now, fallback_ms))
+            },
+            false,
+            rec,
+        );
+        let facts = vec![Fact::bool("holds_allowance", false)];
+        if !gate.set.is_empty() {
+            let set = fired(rec, 0, facts, gate);
+            return MoveVerdict::Move(MigrateReason::Spent, set);
+        }
+        no_destination(rec, 0, facts, gate);
     }
 
     // A subscription account in overage hands the session back to plan quota, warm or cold, onto a plan-funded
@@ -2224,16 +2647,27 @@ fn move_of<'a>(
                 rec.step(RULES[1], "no", facts);
             }
             None => {
-                let (set, cool_line) = destinations(state, &|c| {
-                    kind(&c.account_id) == Some(AccountKind::Oauth)
-                        && !state.in_overage(&c.account_id, now, fallback_ms)
-                        && holds_allowance(state, &c.account_id, window, now)
-                });
-                if !set.is_empty() {
-                    fired(rec, 1, facts, &set, cool_line);
-                    return Some((MigrateReason::Overage, set));
+                let gate = gate(
+                    state,
+                    snapshot,
+                    pool,
+                    request,
+                    current,
+                    eligible,
+                    window,
+                    &|c| {
+                        kind(&c.account_id) == Some(AccountKind::Oauth)
+                            && !state.in_overage(&c.account_id, now, fallback_ms)
+                            && holds_allowance(state, &c.account_id, window, now)
+                    },
+                    false,
+                    rec,
+                );
+                if !gate.set.is_empty() {
+                    let set = fired(rec, 1, facts, gate);
+                    return MoveVerdict::Move(MigrateReason::Overage, set);
                 }
-                no_destination(rec, 1, facts);
+                no_destination(rec, 1, facts, gate);
             }
         }
     }
@@ -2252,16 +2686,27 @@ fn move_of<'a>(
         if !(cold || dwell_age_ms >= dwell_ms) {
             rec.step(RULES[2], "no", facts);
         } else {
-            let (set, cool_line) = destinations(state, &|c| {
-                kind(&c.account_id) == Some(AccountKind::Oauth)
-                    && !state.in_overage(&c.account_id, now, fallback_ms)
-                    && holds_allowance(state, &c.account_id, window, now)
-            });
-            if !set.is_empty() {
-                fired(rec, 2, facts, &set, cool_line);
-                return Some((MigrateReason::ReturnToPlan, set));
+            let gate = gate(
+                state,
+                snapshot,
+                pool,
+                request,
+                current,
+                eligible,
+                window,
+                &|c| {
+                    kind(&c.account_id) == Some(AccountKind::Oauth)
+                        && !state.in_overage(&c.account_id, now, fallback_ms)
+                        && holds_allowance(state, &c.account_id, window, now)
+                },
+                false,
+                rec,
+            );
+            if !gate.set.is_empty() {
+                let set = fired(rec, 2, facts, gate);
+                return MoveVerdict::Move(MigrateReason::ReturnToPlan, set);
             }
-            no_destination(rec, 2, facts);
+            no_destination(rec, 2, facts, gate);
         }
     }
 
@@ -2277,13 +2722,24 @@ fn move_of<'a>(
     } else if !winding_down(&current.account_id) {
         rec.step(RULES[3], "no", vec![Fact::bool("winding_down", false)]);
     } else {
-        let (set, cool_line) = destinations(state, &|c| !winding_down(&c.account_id));
+        let gate = gate(
+            state,
+            snapshot,
+            pool,
+            request,
+            current,
+            eligible,
+            window,
+            &|c| !winding_down(&c.account_id),
+            false,
+            rec,
+        );
         let facts = vec![Fact::bool("cold", true), Fact::bool("winding_down", true)];
-        if !set.is_empty() {
-            fired(rec, 3, facts, &set, cool_line);
-            return Some((MigrateReason::Drain, set));
+        if !gate.set.is_empty() {
+            let set = fired(rec, 3, facts, gate);
+            return MoveVerdict::Move(MigrateReason::Drain, set);
         }
-        no_destination(rec, 3, facts);
+        no_destination(rec, 3, facts, gate);
     }
 
     // The trigger reads how far the prediction runs ahead of the window's pace, as the ceiling reads the
@@ -2291,7 +2747,7 @@ fn move_of<'a>(
     // percent in is not, and a refunded window reads zero at its reset.
     let Some(threshold) = weekly_lead_margin(pool) else {
         rec.step(RULES[4], "no", vec![Fact::text("threshold", "off")]);
-        return None;
+        return MoveVerdict::Stay;
     };
     let mut facts = Vec::new();
     let leads = [
@@ -2311,7 +2767,7 @@ fn move_of<'a>(
             .map(|read| (window, read))
     }) else {
         rec.step(RULES[4], "no", facts);
-        return None;
+        return MoveVerdict::Stay;
     };
     if state
         .last_shed(&pool.id, &current.account_id)
@@ -2365,7 +2821,7 @@ fn move_of<'a>(
     {
         facts.push(Fact::bool("cooldown", true));
         rec.step(RULES[4], "no", facts);
-        return None;
+        return MoveVerdict::Stay;
     }
     // A pin moves only when its session asks, so an unmarked pin never moves for utilization and a marked one
     // moves at its next request. A plan-quota round sheds window share, which a fast request does not draw, so
@@ -2374,7 +2830,7 @@ fn move_of<'a>(
     facts.push(Fact::bool("marked", marked));
     if !marked {
         rec.step(RULES[4], "no", facts);
-        return None;
+        return MoveVerdict::Stay;
     }
     if request.fast
         && burn_unit(state, snapshot, &current.account_id, now, fallback_ms)
@@ -2382,30 +2838,43 @@ fn move_of<'a>(
     {
         facts.push(Fact::bool("window_share_fast", true));
         rec.step(RULES[4], "no", facts);
-        return None;
+        return MoveVerdict::Stay;
     }
-    let (set, cool_line) = destinations(state, &|c| {
-        let shed_it_here = current.shed_from.as_deref() == Some(c.account_id.as_str())
-            && current.shed_at.is_some_and(|at| now - at < dwell_ms);
-        cool(state, c) && !shed_it_here
-    });
-    if set.is_empty() {
-        no_destination(rec, 4, facts);
-        return None;
+    // The shed rule's keep is the no-return test alone: a pin never returns inside the dwell to the account that
+    // shed it. With nothing fitting the pin renews in place and its mark stands, rather than landing on an account
+    // the next round would shed it from again.
+    let gate = gate(
+        state,
+        snapshot,
+        pool,
+        request,
+        current,
+        eligible,
+        window,
+        &|c| {
+            !(current.shed_from.as_deref() == Some(c.account_id.as_str())
+                && current.shed_at.is_some_and(|at| now - at < dwell_ms))
+        },
+        true,
+        rec,
+    );
+    if gate.set.is_empty() {
+        no_destination(rec, 4, facts, gate);
+        return MoveVerdict::Stay;
     }
-    fired(rec, 4, facts, &set, cool_line);
-    Some((MigrateReason::Shed, set))
+    let set = fired(rec, 4, facts, gate);
+    MoveVerdict::Move(MigrateReason::Shed, set)
 }
 
-/// A rule that moves the pin: its line with the destinations, the rules after it `not_run`, then the cool reading
-/// the destinations were preferred by.
-fn fired(
+/// A rule that moves the pin: its line with the destinations, the rules after it `not_run`, then the fit table the
+/// destinations were taken from. Answers the destinations.
+fn fired<'a>(
     rec: &mut Recorder,
     rule: usize,
     mut facts: Vec<Fact>,
-    set: &[&Candidate],
-    cool: Option<WalkStep>,
-) {
+    gate: Gate<'a>,
+) -> Vec<&'a Candidate> {
+    let Gate { set, step, .. } = gate;
     facts.push(Fact::list(
         "destinations",
         set.iter().map(|c| c.account_id.clone()).collect(),
@@ -2414,13 +2883,19 @@ fn fired(
     for later in &RULES[rule + 1..] {
         rec.step(later, "not_run", Vec::new());
     }
-    rec.walk.extend(cool);
+    rec.walk.push(step);
+    set
 }
 
-/// A rule whose reason held but which found no sibling to move the pin to.
-fn no_destination(rec: &mut Recorder, rule: usize, mut facts: Vec<Fact>) {
+/// A rule whose reason held but which found no sibling to move the pin to, with the candidates the end exclusion
+/// dropped. The fit table follows when the gate read any candidate, so the record says why none passed.
+fn no_destination(rec: &mut Recorder, rule: usize, mut facts: Vec<Fact>, gate: Gate<'_>) {
     facts.push(Fact::bool("no_destination", true));
+    facts.push(Fact::list("ending", gate.ending));
     rec.step(RULES[rule], "no", facts);
+    if !gate.step.facts.is_empty() {
+        rec.walk.push(gate.step);
+    }
 }
 
 /// The unit the account's burn is shed in: the plan window's share on a subscription account on plan quota,
@@ -2877,9 +3352,9 @@ fn account_refusal(
 
 /// Rung 4's own gate on a candidate account, evaluated per candidate rather than inferred from the
 /// post-partition selection set: under the cap, below `select_below_utilization` on the 5-hour window when the
-/// pool sets one, not winding down, above the Pace floor under Pace, and under `under_band`, the reading
-/// `move_of`'s `cool` takes for a migration destination. Answers the first gate that blocks it: `at_cap`,
-/// `above_ceiling`, `winding_down`, `floor` or `band`.
+/// pool sets one, not winding down, above the Pace floor under Pace, and under `under_band`, the reading the
+/// destination gate breaks its ties by. Answers the first gate that blocks it: `at_cap`, `above_ceiling`,
+/// `winding_down`, `floor` or `band`.
 fn blocked(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -3631,7 +4106,12 @@ fn pin_line(pin: &PinFacts) -> Vec<Fact> {
     line
 }
 
-fn window_facts(reading: &WindowReading, ahead: Option<f64>, now: i64) -> WindowFacts {
+fn window_facts(
+    reading: &WindowReading,
+    ahead: Option<f64>,
+    projection: Option<&Projection>,
+    now: i64,
+) -> WindowFacts {
     WindowFacts {
         utilization: reading.utilization,
         reset: reading.reset,
@@ -3639,6 +4119,8 @@ fn window_facts(reading: &WindowReading, ahead: Option<f64>, now: i64) -> Window
         observed_at: reading.observed_at,
         age_ms: now - reading.observed_at,
         ahead,
+        projection: projection.map(|p| p.at_horizon),
+        horizon: projection.map(|p| p.horizon),
     }
 }
 
@@ -3683,24 +4165,35 @@ fn candidate_facts(
     let sample = state.sample(id);
     let mut windows = BTreeMap::new();
     if kind != Some(AccountKind::ApiKey) {
+        let projections = projections_of(
+            state,
+            snapshot,
+            pool,
+            id,
+            snapshot.tier(id).unwrap_or_default(),
+            now,
+        );
         for name in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
             if let Some(reading) = state.predicted(id, name, now) {
                 let ahead = (name != SEVEN_DAY_FABLE).then(|| {
                     reading.utilization - elapsed_share(snapshot, id, &reading, name, now)
                 });
-                windows.insert(name.to_string(), window_facts(&reading, ahead, now));
+                windows.insert(
+                    name.to_string(),
+                    window_facts(&reading, ahead, projections.get(name), now),
+                );
             }
         }
     }
     if let Some(reading) = sample.and_then(|s| s.worst_bucket(now)) {
         windows.insert(
             "worst_bucket".to_string(),
-            window_facts(&reading, None, now),
+            window_facts(&reading, None, None, now),
         );
     }
     for name in [FAST_INPUT, FAST_OUTPUT] {
         if let Some(reading) = sample.and_then(|s| s.reading(name)) {
-            windows.insert(name.to_string(), window_facts(&reading, None, now));
+            windows.insert(name.to_string(), window_facts(&reading, None, None, now));
         }
     }
     let budget = snapshot
@@ -3808,6 +4301,9 @@ fn candidate_facts(
         } else {
             "eligible"
         },
+        runway_ms: None,
+        fit: None,
+        binding: None,
     }
 }
 
@@ -3910,6 +4406,8 @@ fn finish(
                 account_id: hold.account_id.clone(),
                 cohort: hold.cohort.clone(),
                 bound_ms: pool.map_or(0, |p| seconds_ms(p.failover.retry_in_place_seconds)),
+                reason: hold.reason,
+                until: hold.until,
             });
         }
         SelectResult::Exhausted(exhaustion) => {
@@ -4047,21 +4545,35 @@ impl Readings<'_> {
         match outcome.kind {
             "renewed" => (by("none", ""), self.renewal_fact()),
             "moved" => {
-                // A move continues as a fresh placement: its By says why it left, its Fact where it landed.
-                let none_cool = self
+                // A move continues as a fresh placement: its By says why it left, its Fact the runway the gate read
+                // on the destination, then where it landed, or the verdict in words when no candidate fit.
+                let mut facts = Vec::new();
+                if let Some(member) = outcome.account_id.as_deref().and_then(|id| self.member(id)) {
+                    facts.push(match member.runway_ms {
+                        None => summary_fact("runway", FactValue::Text("unbounded".into()), "text"),
+                        Some(0) => summary_fact("runway", FactValue::Text("none".into()), "text"),
+                        Some(ms) => summary_fact("runway", FactValue::Int(ms), "ms"),
+                    });
+                }
+                let order = self
                     .walk
                     .iter()
-                    .any(|w| w.step == "cool" && w.verdict == "fell_through");
-                let fact = if none_cool {
-                    vec![summary_fact(
-                        "pick",
-                        FactValue::Text("none cool".into()),
+                    .find(|w| w.step == "fit")
+                    .map(|w| w.verdict);
+                match order {
+                    Some("least_bad") => facts.push(summary_fact(
+                        "fit",
+                        FactValue::Text("least bad".into()),
                         "text",
-                    )]
-                } else {
-                    self.placement_fact()
-                };
-                (by("rule", outcome.rule.unwrap_or_default()), fact)
+                    )),
+                    Some("rewrite_only") => facts.push(summary_fact(
+                        "fit",
+                        FactValue::Text("rewrite only".into()),
+                        "text",
+                    )),
+                    _ => facts.extend(self.placement_fact()),
+                }
+                (by("rule", outcome.rule.unwrap_or_default()), facts)
             }
             // The slot the cap's exemption found explains the landing, so it leads. The wait, when there was one,
             // says what the landing cost.
@@ -4091,10 +4603,20 @@ impl Readings<'_> {
                     (by, self.placement_fact())
                 }
             },
-            "held" => (
-                by("hold", self.hold_place.unwrap_or("strategy_pick")),
-                self.in_flight_fact(),
-            ),
+            // A wait for a reset names the reset, since no slot and no pick explain it.
+            "held" => match outcome.hold.as_ref().filter(|hold| hold.reason == "reset") {
+                Some(hold) => (
+                    by("hold", "reset"),
+                    hold.until
+                        .map(|until| summary_fact("reset", FactValue::Int(until), "time"))
+                        .into_iter()
+                        .collect(),
+                ),
+                None => (
+                    by("hold", self.hold_place.unwrap_or("strategy_pick")),
+                    self.in_flight_fact(),
+                ),
+            },
             "exhausted" => {
                 let Some(exhaustion) = &outcome.exhaustion else {
                     return (by("exhaustion", ""), Vec::new());
@@ -4133,7 +4655,8 @@ impl Readings<'_> {
     }
 
     /// A probe's renewal names the pin's epoch. Any other names the warmth's cause when the pin was cold, else the
-    /// hottest shared window at or above the shed threshold, else the pin's idle age.
+    /// 5-hour window's utilization when its projection at the horizon reaches the ceiling, else the 7-day window's
+    /// when its lead reaches the weekly margin, else the pin's idle age.
     fn renewal_fact(&self) -> Vec<SummaryFact> {
         let Some(renewal) = self.renewal else {
             return Vec::new();
@@ -4152,27 +4675,34 @@ impl Readings<'_> {
         if renewal.cold {
             return cause();
         }
-        let threshold = self.pool.and_then(weekly_lead_margin);
         let member = self
             .outcome
             .account_id
             .as_deref()
             .and_then(|id| self.member(id));
-        if let (Some(threshold), Some(member)) = (threshold, member) {
-            let hottest = [FIVE_HOUR, SEVEN_DAY]
-                .into_iter()
-                .filter_map(|name| {
-                    let window = member.windows.get(name)?;
-                    let lead = window.ahead.filter(|lead| *lead >= threshold)?;
-                    Some((name, lead, window.utilization))
-                })
-                .max_by(|a, b| a.1.total_cmp(&b.1));
-            if let Some((name, _, utilization)) = hottest {
+        if let (Some(pool), Some(member)) = (self.pool, member) {
+            // The two triggers a round reads, in the round's order, each named by its utilization.
+            if let Some(window) = member
+                .windows
+                .get(FIVE_HOUR)
+                .filter(|w| w.projection.is_some_and(|p| p >= ceiling(pool, FIVE_HOUR)))
+            {
                 return vec![summary_fact(
-                    name,
-                    FactValue::Number(utilization),
+                    FIVE_HOUR,
+                    FactValue::Number(window.utilization),
                     "percent",
                 )];
+            }
+            if let (Some(threshold), Some(window)) =
+                (weekly_lead_margin(pool), member.windows.get(SEVEN_DAY))
+            {
+                if window.ahead.is_some_and(|lead| lead >= threshold) {
+                    return vec![summary_fact(
+                        SEVEN_DAY,
+                        FactValue::Number(window.utilization),
+                        "percent",
+                    )];
+                }
             }
         }
         self.pin

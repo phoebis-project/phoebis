@@ -3,6 +3,7 @@
 
 mod common;
 
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use common::*;
@@ -45,6 +46,41 @@ fn json_200_with_usage() -> Respond {
         headers: vec![],
         body: br#"{"id":"msg_1","type":"message","content":[],"usage":{"input_tokens":100,"output_tokens":20}}"#
             .to_vec(),
+    }
+}
+
+/// An OAuth 429 whose unified headers read the 5-hour window spent with its reset at `reset_secs`: the head sample
+/// records the utilization, and the cooldown and the spent rule's wait read the reset.
+fn json_429_spent(reset_secs: i64) -> Respond {
+    Respond::Json {
+        status: 429,
+        headers: vec![
+            (
+                "anthropic-ratelimit-unified-status".into(),
+                "rejected".into(),
+            ),
+            (
+                "anthropic-ratelimit-unified-5h-status".into(),
+                "rejected".into(),
+            ),
+            (
+                "anthropic-ratelimit-unified-5h-utilization".into(),
+                "1.0".into(),
+            ),
+            (
+                "anthropic-ratelimit-unified-5h-reset".into(),
+                reset_secs.to_string(),
+            ),
+            (
+                "anthropic-ratelimit-unified-reset".into(),
+                reset_secs.to_string(),
+            ),
+            (
+                "anthropic-ratelimit-unified-representative-claim".into(),
+                "five_hour".into(),
+            ),
+        ],
+        body: br#"{"type":"error","error":{"type":"rate_limit_error","message":"limit"}}"#.to_vec(),
     }
 }
 
@@ -212,6 +248,115 @@ async fn a_short_retry_after_is_waited_out_on_the_same_account_once() {
         "the row is still recorded for the siblings"
     );
     drain(resp).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_spent_window_resetting_inside_the_bound_is_waited_out_in_place_and_the_pin_renews_there()
+{
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(A, "/v1/messages", json_200());
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    let first = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&first).account_id, "a", "s1 pins to a");
+    drain(first).await;
+    // Another session's 429 reads a's 5-hour window spent with its reset two seconds out, and that request fails
+    // over to b.
+    up.push_credential_rule(A, "/v1/messages", json_429_spent(NOW / 1_000 + 2));
+    let spent = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (outcome(&spent).account_id.as_str(), outcome(&spent).attempt),
+        ("b", 2)
+    );
+    drain(spent).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let app = h.app.clone();
+    let waiting =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
+    // The hold's decision goes out before the wait starts, so the clock is stepped past the reset and the
+    // cooldown's margin while the request waits.
+    let mut seen = Vec::new();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the hold's decision arrives")
+            .expect("not lagged");
+        let held =
+            matches!(&event, RouterEvent::Decision { summary, .. } if summary.kind == "held");
+        seen.push(event);
+        if held {
+            break;
+        }
+    }
+    h.clock.store(NOW + 4_000, Ordering::SeqCst);
+    let resp = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .expect("the request lands after the reset")
+        .unwrap();
+    tokio::time::resume();
+    let o = outcome(&resp);
+    assert_eq!(
+        (resp.status().as_u16(), o.account_id.as_str(), o.attempt),
+        (200, "a", 1),
+        "one wire attempt, on the account the pin stayed on"
+    );
+    drain(resp).await;
+    seen.extend(events_through_cache_map(&mut events, &o.request_id).await);
+    assert_eq!(
+        decisions_of(&seen, &o.request_id),
+        [(1, 1, "held"), (2, 1, "renewed")],
+        "the hold and the renewal are two decisions of one wire attempt"
+    );
+    let records: Vec<&DecisionRecord> = seen
+        .iter()
+        .filter_map(|event| match event {
+            RouterEvent::Decision { record, .. } if record.request.request_id == o.request_id => {
+                Some(&**record)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        records[0].outcome.hold.as_ref().map(|hold| (
+            hold.account_id.as_str(),
+            hold.reason,
+            hold.until
+        )),
+        Some(("a", "reset", Some(NOW + 2_000)))
+    );
+    assert_eq!(
+        records[1]
+            .request
+            .holds
+            .iter()
+            .map(|hold| (
+                hold.account_id.as_str(),
+                hold.reason,
+                hold.until,
+                hold.ran_out
+            ))
+            .collect::<Vec<_>>(),
+        [("a", "reset", Some(NOW + 2_000), false)],
+        "the renewal's decision carries the one wait with its reason"
+    );
+    assert_eq!(credentials_seen(&up), [A, A, B, A]);
     up.shutdown().await;
 }
 

@@ -562,6 +562,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 attempt: 1,
                 seq: 1,
                 ran_out: false,
+                reason: "cap",
+                until: None,
             }],
             dialed: false,
             held_out: false,
