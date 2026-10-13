@@ -13287,6 +13287,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await burnGroup('key');
     await burnGroup('account');
     const emptied = PLAN_CARDS.map((t) => card(t)?.querySelector('p.muted')?.textContent?.trim() ?? '');
+    // Under any other grouping the named account's tier sizes every line, so the empty state names the account.
+    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [point('claude-opus-5-5', null)] });
+    const named = await mount('/analytics?accounts=tierless&by=model&unit=share#burn');
+    const namedEmpty = PLAN_CARDS.map((t) => [...named.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t)?.querySelector('p.muted')?.textContent?.trim() ?? '');
+    named.unmount();
     delete api.getAnalyticsBurn;
     await burnGroup('key');
     await burnGroup('account');
@@ -13304,6 +13309,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       name: '/analytics under Window shares the plan cards with no sized subscription account name the unsized ones in their empty state',
       ok: emptied.every((e) => e === 'No subscription account in range has a tier the cost model sizes: tierless.'),
       missing: emptied,
+    });
+    results.push({
+      name: "/analytics under Window shares grouped by model with an unsized account named the plan cards' empty state names the account's tier",
+      ok: namedEmpty.every((e) => e === 'The named account has no tier on file, or one the cost model does not size, so no share of its windows is priced.'),
+      missing: namedEmpty,
     });
   }
 
