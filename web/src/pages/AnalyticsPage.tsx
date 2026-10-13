@@ -2264,7 +2264,7 @@ function BurnCharts({
               : unpriced.length > 0
                 ? byAccount
                   ? `No subscription account in range has a tier the cost model sizes: ${unpriced.map(nameOf).join(', ')}.`
-                  : 'The named account has no tier on file, or one the cost model does not size, so no share of its windows is priced.'
+                  : `The named account has ${TIER_UNKNOWN_HINT.charAt(0).toLowerCase()}${TIER_UNKNOWN_HINT.slice(1)}.`
                 : figure === 'share'
                   ? 'No subscription account burned in this range.'
                   : 'No subscription traffic in this range.')
