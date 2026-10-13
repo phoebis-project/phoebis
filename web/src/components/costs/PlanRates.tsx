@@ -74,9 +74,9 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
   const groups = tierGroups(models, costs);
   const shown = groups.map((g) => g.models[0]);
   const older = groups.flatMap((g) => g.models.slice(1));
-  // The weight column reads the 5-hour window, so a model weighed on the week alone sets neither end of its scale. An
-  // estimated weight is its donor's, so it moves neither end.
-  const fiveHourWeighted = models.filter((model) => weightOf(costs, model, 'five_hour') !== null);
+  // The scale's ends are the models weighed on the 5-hour window themselves: a model weighed on the week alone has no
+  // 5-hour weight there, and an estimate listed ahead of its donor would name itself the lightest.
+  const fiveHourWeighted = models.filter((model) => weightOrFallback(costs, model, 'five_hour')?.estimated === false);
   const fiveHourWeight = (model: string) => weightOf(costs, model, 'five_hour') ?? 0;
   const lightest = fiveHourWeighted.reduce<string | null>((low, model) => (low === null || fiveHourWeight(model) < fiveHourWeight(low) ? model : low), null);
   const heaviest = Math.max(0, ...fiveHourWeighted.map(fiveHourWeight));
@@ -142,7 +142,15 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
           <span className="cost-ref__track">
             <span className="cost-ref__bar" style={{ width: `${(weight / heaviest) * 100}%` }} />
           </span>
-          <span className={`cost-ref__val${donor === null ? '' : ' cost-ref__val--estimated'}`}>{donor === null ? multiple : `estimated, as ${donor}`}</span>
+          <span className={`cost-ref__val${donor === null ? '' : ' cost-ref__val--estimated'}`}>
+            {donor === null ? (
+              multiple
+            ) : (
+              <>
+                estimated, as <span className="cost-ref__donor">{donor}</span>
+              </>
+            )}
+          </span>
         </div>
       </td>
     );

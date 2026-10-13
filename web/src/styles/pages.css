@@ -3996,10 +3996,14 @@
   height: 6px;
 }
 
-/* The donor's id is the widest text the weight column draws, so it wraps beside its bar rather than widening the
-   table past the dialog. */
+/* The donor's id is the widest text the weight column draws, so the cell wraps beside its bar rather than widening
+   the table past the dialog, and breaks before the id rather than at a hyphen inside it. */
 .cost-ref__weight .cost-ref__val--estimated {
   white-space: normal;
+}
+
+.cost-ref__val--estimated .cost-ref__donor {
+  white-space: nowrap;
 }
 
 /* Every second model on --surface-2 over --surface, a model's sub-rows on its shade. The fold row is one step

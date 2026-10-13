@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierGroups, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -9547,6 +9547,47 @@ m.unmount();
   held.unmount();
 }
 
+// The routing log's Models filter lists the catalog in the cost model's tier order, which the shell reads off its
+// settings answer. Here that answer lands after the catalog and orders the tiers the other way round from the shipped
+// model, so the filter's order can only come from it.
+{
+  const { getSettings } = api;
+  let release = () => {};
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  let reversed = null;
+  api.getSettings = async (...args) => {
+    const settings = await getSettings.apply(api, args);
+    await held;
+    reversed = { modelTier: settings.subscriptionCosts.modelTier, tierOrder: [...settings.subscriptionCosts.tierOrder].reverse() };
+    return { ...settings, subscriptionCosts: { ...settings.subscriptionCosts, tierOrder: reversed.tierOrder } };
+  };
+  const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+  const modelsFilter = () => [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Models'));
+  const listed = async () => {
+    modelsFilter()?.querySelector('.mselect__trigger')?.click();
+    await page.settle(100);
+    const names = [...(modelsFilter()?.querySelectorAll(CHOICE) ?? [])].map((o) => o.textContent?.trim());
+    modelsFilter()?.querySelector('.mselect__trigger')?.click();
+    await page.settle(100);
+    return names;
+  };
+  const before = await listed();
+  release();
+  await page.settle(400);
+  const after = await listed();
+  page.unmount();
+  api.getSettings = getSettings;
+  const ids = (await api.listCatalog()).map((model) => model.id);
+  const shipped = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
+  results.push({
+    name: "/routing-log the Models filter lists the catalog in the cost model's tier order once the settings answer, even when the catalog answered first",
+    ok: before.length === ids.length && reversed !== null && JSON.stringify(after) === JSON.stringify(tierOrder(ids, reversed)) && JSON.stringify(after) !== JSON.stringify(tierOrder(ids, shipped)),
+    missing: [JSON.stringify(before), JSON.stringify(after), reversed === null ? 'no settings answer' : JSON.stringify(tierOrder(ids, reversed))],
+  });
+}
+
 // The routing log on the pinned clock. Every figure a check names is read from the mock's own answer to the query the
 // page sent, so the story's counts are the route's rules over the story rather than a number kept here.
 {
@@ -15692,6 +15733,8 @@ m.unmount();
   const rowOf = (model) => mainRows().find((r) => nameOf(r) === model);
   const cellsOf = (row) => [...(row?.children ?? [])].slice(2).map((td) => td.textContent?.trim());
   const foldOf = (panel) => panel?.querySelector('tr.cost-ref__fold button') ?? null;
+  // The fold row's words, by the rule the row reads them: the singular for one model.
+  const olderText = (n) => (n === 1 ? '1 older model' : `${n} older models`);
   // Opens the shown tab's older models, which both model tables then show.
   const openFold = async (pg, d) => {
     const button = foldOf(shownPanel(d));
@@ -15731,7 +15774,7 @@ m.unmount();
         JSON.stringify(shown) === JSON.stringify(leaders) &&
         older.length > 0 &&
         fold === rows.length - 1 &&
-        button?.textContent === `${older.length} older models` &&
+        button?.textContent === olderText(older.length) &&
         button.getAttribute('aria-expanded') === 'false' &&
         !rows.some((r) => r.classList.contains('is-divider')) &&
         caption() === `Share of a ${planLabel(anchor)} window per 1M tokens` &&
@@ -15781,6 +15824,7 @@ m.unmount();
     const cells = cellsOf(row);
     const titles = [...(row?.children ?? [])].slice(2).map((td) => td.getAttribute('title') ?? '');
     const weight = row?.children[1];
+    const donor = weight?.querySelector('.cost-ref__donor')?.textContent ?? '';
     results.push({
       name: "/sessions plan rates mark every cell of a model priced at its model tier's latest weight with a tilde and the estimate's title, its weight cell naming the model it reads, and the caption says what the mark means",
       ok:
@@ -15789,6 +15833,11 @@ m.unmount();
         cells.every((c) => c.startsWith('~')) &&
         titles.every((t) => t.endsWith(`${ESTIMATED_TITLE}.`)) &&
         (weight?.textContent ?? '').startsWith('estimated, as ') &&
+        // The id keeps its own span, so a wrapped cell breaks before it rather than inside it.
+        donor !== '' &&
+        weight?.textContent?.trim() === `estimated, as ${donor}` &&
+        !estimatedOn(donor, 'five_hour') &&
+        weightOf(costs, donor, 'five_hour') === weightOf(costs, model, 'five_hour') &&
         weight?.querySelector('[title]')?.getAttribute('title') === ESTIMATED_TITLE &&
         (rates()?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === CAPTION_NOTE,
       missing: [String(model), JSON.stringify(cells), weight?.textContent ?? 'no weight cell', weight?.querySelector('[title]')?.getAttribute('title') ?? 'no title', ...titles.filter((t) => !t.endsWith(`${ESTIMATED_TITLE}.`))],
@@ -15902,7 +15951,7 @@ m.unmount();
       name: "/sessions API prices list one row per model tier and the older models under the fold the plan rates opened, every model of the entry in force at its cells, a fast-mode row under each model with fast cells and a prompt-length row under each model priced by prompt length",
       ok:
         JSON.stringify(shownFirst) === JSON.stringify(priceGroups.map((g) => g.models[0])) &&
-        foldRow?.textContent === `${priceOlder.length} older models` &&
+        foldRow?.textContent === olderText(priceOlder.length) &&
         foldRow.querySelector('button')?.getAttribute('aria-expanded') === 'true' &&
         JSON.stringify(listed) === JSON.stringify(priceOrder) &&
         listed.length === prices.length &&
@@ -16424,6 +16473,38 @@ m.unmount();
     });
   }
 
+  // One older model: every tier's newest model and one more of a tier that has two, so each table folds one.
+  {
+    const { getSettings } = api;
+    const keep = new Set([...groups.map((g) => g.models[0]), groups.find((g) => g.models.length > 1)?.models[1]]);
+    const pick = (models) => models.filter((p) => keep.has(p.model));
+    const weights = (content) => ({ ...content, modelWeight: Object.fromEntries(Object.entries(content.modelWeight).filter(([model]) => keep.has(model))) });
+    api.getSettings = async (...args) => {
+      const settings = await getSettings.apply(api, args);
+      return {
+        ...settings,
+        apiPrices: { ...settings.apiPrices, models: pick(settings.apiPrices.models), revisions: settings.apiPrices.revisions.map((r) => ({ ...r, models: pick(r.models) })) },
+        subscriptionCosts: { ...weights(settings.subscriptionCosts), revisions: settings.subscriptionCosts.revisions.map((r) => ({ ...r, content: weights(r.content) })) },
+      };
+    };
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    linkIn(page.container.querySelector('.page-head'))?.click();
+    await page.settle(400);
+    const dlg = topDialog();
+    const ratesFold = foldOf(shownPanel(dlg))?.textContent ?? 'no fold';
+    tabsOf(dlg).find((t) => t.textContent?.trim() === 'API prices')?.click();
+    await page.settle(200);
+    const pricesFold = foldOf(shownPanel(dlg))?.textContent ?? 'no fold';
+    await closeCost(page, dlg);
+    page.unmount();
+    api.getSettings = getSettings;
+    results.push({
+      name: '/sessions a table with one older model names it in the singular on its fold row, in both model tables',
+      ok: keep.size === groups.length + 1 && ratesFold === olderText(1) && pricesFold === olderText(1),
+      missing: [ratesFold, pricesFold, olderText(1)],
+    });
+  }
+
   // The band on the test tables, Los Angeles weekdays 5 to 11, seen from UTC.
   {
     const tables = JSON.parse(readFileSync(new URL('../test/fixtures/test_tables.json', import.meta.url), 'utf8')).body;
@@ -16483,6 +16564,24 @@ m.unmount();
         drawnCard.factors === 2,
       missing: [JSON.stringify(drawnCard)],
     });
+    // A null weight listed ahead of its model tier's lightest model reads that model's weight as an estimate, which sets
+    // no end of the weight column's scale: every multiple's title names the lightest model weighed on its own.
+    {
+      const lead = 'claude-haiku-4';
+      const ahead = { ...tested, modelWeight: { [lead]: null, ...tested.modelWeight } };
+      const shown = await mountNode(React.createElement(PlanRates, { costs: ahead, now: CLOCK_ORIGIN, olderOpen: true, onToggleOlder: () => {}, prices: wired.apiPrices.models }));
+      const own = Object.keys(ahead.modelWeight).filter((model) => weightOrFallback(ahead, model, 'five_hour')?.estimated === false);
+      const lightest = own.reduce((low, model) => (low === null || weightOf(ahead, model, 'five_hour') < weightOf(ahead, low, 'five_hour') ? model : low), null);
+      const opus = [...shown.container.querySelectorAll('tbody tr')].find((r) => r.children[0]?.textContent?.trim() === 'claude-opus-5-5');
+      const title = opus?.children[1]?.querySelector('[title]')?.getAttribute('title') ?? 'no title';
+      shown.unmount();
+      const multiple = `${figure(weightOf(ahead, 'claude-opus-5-5', 'five_hour') / weightOf(ahead, lightest, 'five_hour'))}x`;
+      results.push({
+        name: '/sessions plan rates scale the weight column against the lightest model weighed on its own, never an estimate listed ahead of it',
+        ok: weightOrFallback(ahead, lead, 'five_hour')?.estimated === true && weightOf(ahead, lead, 'five_hour') === weightOf(ahead, lightest, 'five_hour') && title === `claude-opus-5-5: ${multiple} the share of ${lightest} per token of the same type on the 5-hour window`,
+        missing: [title, String(lightest)],
+      });
+    }
     const rates = await mountNode(React.createElement(PlanRates, { costs: unzoned, now: CLOCK_ORIGIN, prices: wired.apiPrices.models }));
     const band = () => [...rates.container.querySelectorAll('[aria-label="Peak band"] button')];
     const opusInput = () => [...rates.container.querySelectorAll('tbody tr')].find((r) => r.children[0]?.textContent?.trim() === 'claude-opus-5-5')?.children[2]?.textContent?.trim() ?? 'no cell';

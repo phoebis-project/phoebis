@@ -95,4 +95,3 @@ export function ApiPrices({ costs, olderOpen, onToggleOlder, prices }: { costs: 
     </>
   );
 }
-
