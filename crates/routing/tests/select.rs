@@ -2893,7 +2893,8 @@ fn an_explicitly_chosen_strategy_orders_the_api_key_group_itself() {
 #[test]
 fn a_rounds_fitting_destinations_order_by_the_longest_runway_and_then_by_the_strategy_whatever_the_weeks_read(
 ) {
-    // The stored margin is set, so b's week below is one the old band read as hot and c's as cool.
+    // The stored margin column stands until the settings migration drops it, and a set margin shows that nothing
+    // reads it: b's week below runs far ahead of its pace and c's behind.
     let s = tiered(Pool {
         shed_ahead: Some(0.2),
         members: vec![("a", 0), ("b", 1), ("c", 2)],
@@ -2940,6 +2941,57 @@ fn a_rounds_fitting_destinations_order_by_the_longest_runway_and_then_by_the_str
     assert_eq!(
         fact(line(&d.record, "move:shed"), "destinations"),
         &FactValue::List(vec!["c".into()])
+    );
+}
+
+#[test]
+fn a_rounds_plan_under_round_robin_names_the_cohorts_turn_the_move_then_takes() {
+    let s = tiered(Pool {
+        strategy: Strategy::RoundRobin,
+        members: vec![("a", 0), ("b", 0), ("c", 0)],
+        ..Pool::default()
+    });
+    let cap = s.pool("p").unwrap().failover.in_flight_cap;
+    let mut st = rounding(vec![
+        burning("s1", "a", 4.0, false, T),
+        burning("s0", "a", 1.0, false, T),
+    ]);
+    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("b", sample(0.3, 0.3, T - 500));
+    st.record_sample("c", sample(0.3, 0.3, T - 500));
+    // A fresh session placed while a sits at its cap takes the first turn of the cohort b, c and passes the turn on.
+    let held: Vec<_> = (0..cap)
+        .map(|_| st.in_flight().dispatched("a", T - 1_000))
+        .collect();
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &s,
+                &request(&s, Some("fresh"), "claude-sonnet-5", true, &[], T - 500),
+                &mut rng(),
+            )
+            .0
+        ),
+        ("b".into(), None)
+    );
+    drop(held);
+    // a's round marks s1 with b and c tied on the runway: the plan names the cohort's turn, c, where the move lands.
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("c".into(), Some(MigrateReason::Shed))
+    );
+    let round = d.shed_round.as_ref().expect("the round ran");
+    assert_eq!(
+        round
+            .facts
+            .pins
+            .iter()
+            .find(|p| p.session_id == "s1")
+            .and_then(|p| p.planned.as_deref()),
+        Some("c"),
+        "the plan reads the cursor's turn without passing it on"
     );
 }
 
@@ -5174,7 +5226,8 @@ fn the_blocker_passes_an_account_far_ahead_of_its_weekly_pace_and_keeps_its_othe
         assert_eq!(sel.trace.placement.is_some(), expected == "a", "{why}");
     };
     // The 7-day window at 0.8 with no reset runs 0.8 ahead of its pace, which refuses nothing: the static prefix
-    // places the request on a. The stored margin is set, so the reading is one the old band read as hot.
+    // places the request on a. The stored margin column stands until the settings migration drops it, and a set
+    // margin shows that nothing reads it.
     scenario(
         Pool {
             members: vec![("a", 1), ("b", 0)],
@@ -12838,7 +12891,7 @@ fn a_model_week_over_its_ceiling_fires_a_round_that_marks_the_fable_pin_and_read
             ("o1", false, Some("unpriced"), None),
             ("f1", true, None, Some("b"))
         ],
-        "the Opus pin draws no Fable week, so it reads unpriced there whatever the pricer says, and the Fable pin is marked"
+        "the Opus pin draws no Fable week, so it reads unpriced whatever the pricer says, and the Fable pin is marked"
     );
     assert!(
         (round.burn_sum - 0.04 / 3.0).abs() < 1e-9,
@@ -16182,6 +16235,80 @@ fn a_renewal_names_the_first_window_whose_projection_at_its_horizon_reaches_the_
         vec![(FIVE_HOUR, FactValue::Number(0.9), Some("percent"))],
         "the 5-hour window's utilization when both windows reach the ceiling"
     );
+}
+
+#[test]
+fn a_count_or_bound_renewal_names_the_window_whose_projection_reaches_the_ceiling() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    // The pin burns a ten-thousandth of the 5-hour window a second: 0.5 now with 2.4 hours to the reset projects to
+    // 1.36, over the ceiling. Neither request runs the move rules, so the fact rests on the renewal's own read.
+    let renew = |req: SelectRequest| {
+        let mut st = priced(vec![burning("s1", "a", 1_000.0, true, T)]);
+        st.record_sample(
+            "a",
+            refreshing(0.5, T + 144 * MINUTE, T + 72 * HOUR, T - 500),
+        );
+        decide(&mut st, &s, &req, &mut rng())
+    };
+    let d = renew(SelectRequest {
+        count: true,
+        ..auxiliary(&s, "s1", T)
+    });
+    assert_eq!(d.record.outcome.kind, "renewed");
+    assert_eq!(
+        summary_facts(&d),
+        vec![(FIVE_HOUR, FactValue::Number(0.5), Some("percent"))],
+        "a count renewal names the 5-hour window"
+    );
+    let d = renew(with_facts(
+        request(&s, Some("s1"), "claude-sonnet-5", false, &[], T),
+        Some("quota"),
+        false,
+        None,
+        &[],
+    ));
+    assert_eq!(d.record.outcome.kind, "renewed");
+    assert_eq!(
+        summary_facts(&d),
+        vec![(FIVE_HOUR, FactValue::Number(0.5), Some("percent"))],
+        "a bound renewal names the 5-hour window"
+    );
+}
+
+#[test]
+fn a_renewal_on_an_account_whose_pins_draw_no_fable_week_names_no_fable_week() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    // The Fable week reads 0.96, over the ceiling, and the account's one pin is a Sonnet pin, so no round tests that
+    // week and the renewal names the pin's idle age, on the portable path and on the bound one.
+    for req in [
+        auxiliary(&s, "s1", T),
+        with_facts(
+            request(&s, Some("s1"), "claude-sonnet-5", false, &[], T),
+            Some("quota"),
+            false,
+            None,
+            &[],
+        ),
+    ] {
+        let mut st = priced(vec![burning("s1", "a", 1.0, true, T)]);
+        st.record_sample(
+            "a",
+            with_fable(sample(0.1, 0.1, T - 500), 0.96, Some(T + 96 * HOUR)),
+        );
+        let d = decide(&mut st, &s, &req, &mut rng());
+        assert_eq!(d.record.outcome.kind, "renewed");
+        assert_eq!(
+            summary_facts(&d),
+            vec![("idle", FactValue::Int(1_000), Some("ms"))],
+            "the Fable week is no window the account's pins draw"
+        );
+    }
 }
 
 /// The 5-hour projection's source for the round cases: `a` at 0.80 with the reset an hour out and its pins burning

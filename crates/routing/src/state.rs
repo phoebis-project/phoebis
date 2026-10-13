@@ -1132,15 +1132,21 @@ impl RoutingState {
         cohort: &[&str],
         advance: bool,
     ) -> usize {
-        let key = (pool_id.to_string(), tier, cohort.join(","));
-        let index = self
-            .round_robin
-            .get(&key)
-            .map_or(0, |slot| slot % cohort.len());
+        let index = self.round_robin_turn(pool_id, tier, cohort);
         if advance {
-            self.round_robin.insert(key, index + 1);
+            self.round_robin
+                .insert((pool_id.to_string(), tier, cohort.join(",")), index + 1);
         }
         index
+    }
+
+    /// The index `round_robin_next` answers for the cohort now, with the turn left where it is: what a round's plan
+    /// reads, so the destination it names is the one the pin's own placement draws when nothing changes before it.
+    pub(crate) fn round_robin_turn(&self, pool_id: &str, tier: Tier, cohort: &[&str]) -> usize {
+        let key = (pool_id.to_string(), tier, cohort.join(","));
+        self.round_robin
+            .get(&key)
+            .map_or(0, |slot| slot % cohort.len())
     }
 
     /// The later deadline always wins, as in the store, and `set_at` advances on its own whenever the

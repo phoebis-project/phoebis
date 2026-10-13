@@ -976,7 +976,7 @@ struct Recorder {
     pin_written: Option<PinWritten>,
     hold_place: Option<&'static str>,
     shed_round: Option<ShedRoundRecord>,
-    /// The plan windows the shed rule's trigger tested, in its order, for the renewal fact.
+    /// The plan windows a round on the renewed pin's account tests, in the trigger's order, for the renewal fact.
     trigger_windows: Vec<&'static str>,
     /// The mark step 1's heal check or step 4's move cleared, for the outcome and the task's event.
     mark_cleared: Option<MarkClearedFacts>,
@@ -3040,8 +3040,10 @@ fn destination_of(
         .into_iter()
         .map(|(c, _)| c)
         .collect();
-    let ranked = rank(state, snapshot, pool, window, &fits, &[], now, fallback_ms)?;
-    let chosen = ranked.ties.first().map(|c| c.account_id.clone())?;
+    let chosen = rank(state, snapshot, pool, window, &fits, &[], now, fallback_ms)?
+        .planned
+        .account_id
+        .clone();
     reads.into_iter().find(|(id, _)| *id == chosen)
 }
 
@@ -3438,6 +3440,10 @@ fn renew(
         verdict == Warmth::Refresh,
         verdict != Warmth::Untouched && chained,
     );
+    // A bound or a count request renews without the move rules, so the shed rule has not read the windows for it.
+    if rec.trigger_windows.is_empty() {
+        rec.trigger_windows = trigger_windows(state, snapshot, pool, &current.account_id);
+    }
     rec.renewal = Some(Renewal {
         cold: !warm_on(current, verdict, now),
         cause: cause.as_str(),
@@ -4000,15 +4006,16 @@ fn tier_of(
 }
 
 /// The strategy's reading of a set before the draw: the tier `tier_of` ranks first, its members, their Pace scores
-/// where the strategy reads them, and the candidates the strategy draws among (the best Pace score, the whole tier
-/// under Priority, the tier in id order under round robin, where the cursor takes its turn). `choose` draws from
-/// `ties` and records the pick, and a round plans each mark on the first of them, so a plan and the move it foresees
-/// read one rule.
+/// where the strategy reads them, the candidates the strategy draws among (the best Pace score, the whole tier under
+/// Priority, the tier in id order under round robin), and the one a round plans on: the first of the ties, or under
+/// round robin the one at the cursor's turn, read without passing the turn on. `choose` draws from `ties` and records
+/// the pick, so a plan and the move it foresees read one rule.
 struct Ranked<'a> {
     tier: Tier,
     members: Vec<&'a Candidate>,
     scores: Vec<Score>,
     ties: Vec<&'a Candidate>,
+    planned: &'a Candidate,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4025,7 +4032,7 @@ fn rank<'a>(
     let key_of = |c: &Candidate| tier_of(state, snapshot, pool, c, spent_model, now, fallback_ms);
     let tier = set.iter().map(|c| key_of(c)).min()?;
     let members: Vec<&'a Candidate> = set.iter().copied().filter(|c| key_of(c) == tier).collect();
-    let (scores, ties) = match pool.strategy {
+    let (scores, ties, turn) = match pool.strategy {
         Strategy::Pace => {
             let scores: Vec<Score> = members
                 .iter()
@@ -4046,22 +4053,26 @@ fn rank<'a>(
                 .filter(|(_, s)| s.score == best)
                 .map(|(c, _)| c)
                 .collect();
-            (scores, ties)
+            (scores, ties, 0)
         }
-        Strategy::Priority => (Vec::new(), members.clone()),
+        Strategy::Priority => (Vec::new(), members.clone(), 0),
         Strategy::RoundRobin => {
             // The cursor walks the tier's sorted ids, so an account's turn does not depend on the order
             // `resolve` happened to build the candidate list in.
             let mut cohort = members.clone();
             cohort.sort_by(|a, b| a.account_id.cmp(&b.account_id));
-            (Vec::new(), cohort)
+            let ids: Vec<&str> = cohort.iter().map(|c| c.account_id.as_str()).collect();
+            let turn = state.round_robin_turn(&pool.id, tier, &ids);
+            (Vec::new(), cohort, turn)
         }
     };
+    let planned = ties.get(turn).copied()?;
     Some(Ranked {
         tier,
         members,
         scores,
         ties,
+        planned,
     })
 }
 
@@ -4089,6 +4100,7 @@ fn choose<'a>(
         members: tier,
         scores,
         ties,
+        ..
     }) = rank(
         state,
         snapshot,
