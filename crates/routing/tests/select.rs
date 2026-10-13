@@ -11564,10 +11564,8 @@ fn an_unpriced_pin_is_never_marked_and_stays_out_of_the_shed_share_sum() {
         ..BurnRates::default()
     });
     over_a_fitting_b(&mut st, T - 500);
-    assert_eq!(
-        landed(select(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng()).0),
-        ("a".into(), None)
-    );
+    let d = decide(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
     let marks: Vec<&str> = ["cold-guess", "cold-3", "warm-guess", "warm-4", "warm-1"]
         .into_iter()
         .filter(|session| marked(&st, session))
@@ -11576,6 +11574,33 @@ fn an_unpriced_pin_is_never_marked_and_stays_out_of_the_shed_share_sum() {
         marks,
         ["cold-3", "warm-4"],
         "the priced burn is 0.08 an hour and the target 0.04: cold-3 then warm-4 reach it, and neither guess is marked"
+    );
+    // The cold guess sits between the two marks in the order, so the walk reaches it with the target unmet and skips
+    // it as unpriced. The warm guess comes after the target is met and is left as it is.
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.burn.is_some(), p.marked, p.skip))
+            .collect::<Vec<_>>(),
+        [
+            ("cold-3", true, true, None),
+            ("cold-guess", false, false, Some("unpriced")),
+            ("warm-4", true, true, None),
+            ("warm-1", true, false, None),
+            ("warm-guess", false, false, None),
+        ]
+    );
+    assert_eq!(
+        fact(line(&d.record, "move:shed"), "skipped"),
+        &FactValue::List(vec!["k/cold-guess/main/claude-guess: unpriced".into()])
+    );
+    assert!(
+        (round.removed - 0.07).abs() < 1e-9 && (round.burn_sum - 0.08).abs() < 1e-9,
+        "the two marks' burn alone is removed and the guesses add nothing to the sum: {} of {}",
+        round.removed,
+        round.burn_sum
     );
 }
 
@@ -16059,7 +16084,7 @@ fn windows_with_resets(
 #[test]
 fn the_binding_window_is_the_one_the_pin_reaches_first_among_those_it_overruns() {
     let s = tiered(gate_pool());
-    // 2 000 input tokens a second burn two ten-thousandths of the 5-hour window a second and a thirtieth of that on
+    // 2 000 input tokens a second burn two ten-thousandths of the 5-hour window a second and a sixth of that on
     // the week.
     let mut st = priced(vec![gated_pin("s1", "a", 2_000.0)]);
     st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
@@ -16449,6 +16474,39 @@ fn a_standing_mark_counts_as_removed_and_is_skipped_standing() {
         Some(T - 1_000_000),
         "the standing mark keeps its own time"
     );
+
+    // The standing pin last in the order: its pending move still counts before the walk begins, so the pins ahead of
+    // it are not marked for burn that move already removes. Counted at its place, the walk would mark two of them.
+    let mut st = rounding(vec![
+        burning("s1", "a", 16.0, false, T),
+        burning("s2", "a", 14.0, false, T),
+        PinRow {
+            marked_at: Some(T - 1_000_000),
+            marked_on: Some("a".into()),
+            marked_window: Some(FIVE_HOUR.into()),
+            ..burning("s3", "a", 12.0, false, T)
+        },
+    ]);
+    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s2", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.marked, p.skip))
+            .collect::<Vec<_>>(),
+        [
+            ("s1", true, None),
+            ("s2", false, None),
+            ("s3", true, Some("standing")),
+        ],
+        "the standing burn of 0.12 and the first mark's 0.16 cover the target of 0.21, so the second pin is left"
+    );
+    assert_eq!((round.outcome.as_str(), round.marks.len()), ("marked 1", 1));
+    assert!((round.removed - 0.28).abs() < 1e-9, "{}", round.removed);
 }
 
 #[test]

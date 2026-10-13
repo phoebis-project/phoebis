@@ -7327,6 +7327,161 @@ async fn a_marked_pin_released_inside_a_decision_clears_its_mark_as_released() {
 }
 
 #[tokio::test]
+async fn a_cooldown_report_naming_a_marked_pin_clears_its_mark_as_released() {
+    use phoebis_routing::RouterEvent;
+    let store = shedding_store(&["a", "b"]);
+    store
+        .upsert_pin(&marked(stored_pin(&store, "s1", "a", 1, 0.0), AT - 60_000))
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    // A 429 on the pin's account: the relay's report names the pin, and the invalidation takes the row.
+    handle
+        .report(Report::Cooldown {
+            account_id: "a".into(),
+            row: CooldownRow {
+                account_id: "a".into(),
+                scope: "account".into(),
+                until: AT + 600_000,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: Some(PinRef {
+                key_id: "k".into(),
+                session_id: "s1".into(),
+                agent_id: "main".into(),
+                model: "claude-sonnet-5".into(),
+                epoch: 1,
+                lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+            }),
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        })
+        .await;
+    handle.cooldowns().await.unwrap();
+    assert!(
+        handle.pins().await.unwrap().is_empty(),
+        "the report invalidated the pin"
+    );
+    let seen = drained(&mut events).await;
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, RouterEvent::CooldownSet { account_id, .. } if account_id == "a")),
+        "{seen:?}"
+    );
+    assert!(
+        seen.iter().any(|event| matches!(
+            event,
+            RouterEvent::MarkCleared {
+                account_id,
+                session_id,
+                reason: "released",
+                marked_at,
+                marked_on,
+                marked_window,
+                projection: None,
+                ..
+            } if account_id == "a"
+                && session_id == "s1"
+                && *marked_at == AT - 60_000
+                && marked_on == "a"
+                && marked_window == "five_hour"
+        )),
+        "the invalidation clears the mark with its row: {seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_mark_a_round_makes_on_the_requests_own_pin_is_released_with_it_in_the_same_selection() {
+    use phoebis_routing::RouterEvent;
+    let store = shedding_store(&["a", "b"]);
+    with_tier(&store, "a");
+    with_tier(&store, "b");
+    for pin in [
+        stored_pin(&store, "s1", "a", 1, 4.0),
+        stored_pin(&store, "s0", "a", 2, 1.0),
+    ] {
+        store.upsert_pin(&pin).unwrap();
+    }
+    // The model is cooled on a: the round still runs and marks s1, the heavier pin, with b as its destination, and
+    // step 5 then releases the pin for the cooldown and places the session afresh on b.
+    store
+        .upsert_cooldown(&CooldownRow {
+            account_id: "a".into(),
+            scope: "model:claude-sonnet-5".into(),
+            until: AT + 600_000,
+            set_at: AT - 1_000,
+            reason: "rate_limit".into(),
+            window: "retry_after".into(),
+            source_request_id: None,
+            incarnation: 1,
+        })
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    handle.report(windows("a", 0.9, 0.3, AT)).await;
+    handle.report(windows("b", 0.1, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s1"), AT))
+                .await
+                .unwrap()
+        ),
+        ("b".into(), None),
+        "the cooled account's pin is released and the session placed afresh"
+    );
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(summary.kind, "placed");
+    assert_eq!(
+        record.outcome.shed_marks.as_ref().map(|marks| marks
+            .iter()
+            .map(|m| m.session_id.as_str())
+            .collect::<Vec<_>>()),
+        Some(vec!["s1"]),
+        "the round marked the request's own pin"
+    );
+    assert_eq!(
+        record.outcome.mark_cleared, None,
+        "no heal and no move cleared it"
+    );
+    let later = drained(&mut events).await;
+    assert!(
+        later
+            .iter()
+            .any(|event| matches!(event, RouterEvent::PinExpired { reasons, .. } if reasons.contains(&"cooldown"))),
+        "{later:?}"
+    );
+    assert!(
+        later.iter().any(|event| matches!(
+            event,
+            RouterEvent::MarkCleared {
+                account_id,
+                session_id,
+                reason: "released",
+                marked_at,
+                marked_on,
+                marked_window,
+                projection: None,
+                ..
+            } if account_id == "a"
+                && session_id == "s1"
+                && *marked_at == AT
+                && marked_on == "a"
+                && marked_window == "five_hour"
+        )),
+        "the mark made and released in one selection is cleared as released: {later:?}"
+    );
+}
+
+#[tokio::test]
 async fn the_purge_tick_writes_the_round_cut_past_the_longest_dwell() {
     let store = seeded(&["a"]);
     let mut pool = store.pool("p").unwrap().unwrap();

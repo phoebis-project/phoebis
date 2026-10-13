@@ -3089,7 +3089,10 @@ fn mark_cleared_of(
 
 /// The request `fit_of` and `pin_figures` read a pin of the round by. The request's own pin reads the request as it
 /// is. Another pin reads the request's shape with its own model and lane, which name the windows it draws and its
-/// speed, and no body estimate, since a pin never renewed with usage has no prompt to rewrite.
+/// speed, and no body estimate, since a pin never renewed with usage has no prompt to rewrite. It keeps the request's
+/// candidates, resolved for the request's model: a pin of another model is planned among them because the plan is
+/// advisory, the pin's own next request runs the gate over its own candidates, and the cost of the shortcut is a
+/// wrong `no_runway` skip or a wrong planned destination, never a wrong move.
 fn pin_request(request: &SelectRequest, pin: &PinRow, current: bool) -> SelectRequest {
     if current {
         return request.clone();

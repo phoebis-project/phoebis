@@ -2314,6 +2314,21 @@ impl Task {
                     mut summary,
                     shed_round,
                 } = decide(&mut self.state, &snapshot, &request, &mut rand::rng());
+                // A round that marked the request's own pin wrote that row ahead of the write that replaced it, so a
+                // release in the same selection reads the mark off the round's write: the row as it stood before the
+                // selection carries none.
+                let marked_here = pin_key.as_ref().and_then(|key| {
+                    writes.iter().rev().find_map(|write| match write {
+                        StateWrite::UpsertPin(row)
+                            if row.key() == *key
+                                && mark_holds(row)
+                                && before.as_ref().is_some_and(|old| old.epoch == row.epoch) =>
+                        {
+                            Some(row.clone())
+                        }
+                        _ => None,
+                    })
+                });
                 self.write(writes);
                 if let Some(pin) = record.pin.as_mut() {
                     pin.released = released.clone();
@@ -2443,7 +2458,11 @@ impl Task {
                             .iter()
                             .any(|event| matches!(event, RouterEvent::PinExpired { .. })) =>
                         {
-                            released_mark(before.as_ref()?, request.now)
+                            released_mark(before.as_ref()?, request.now).or_else(|| {
+                                marked_here
+                                    .as_ref()
+                                    .and_then(|row| released_mark(row, request.now))
+                            })
                         }
                         None => None,
                     }
@@ -2852,10 +2871,20 @@ impl Task {
                             pin_lane = %self.state.pin(&key).map_or("", |p| p.lane.as_str()),
                             "a fast refusal from a lane the pin has left leaves the pin"
                         );
-                    } else if self.state.invalidate_pin(&pin, &account_id) {
-                        self.invalidated
-                            .insert(key.clone(), (account_id.clone(), moved, (self.clock)()));
-                        writes.push(StateWrite::DeletePin(key));
+                    } else {
+                        // The row leaves with the invalidation, so its mark is read before it.
+                        let row = self.state.pin(&key).cloned();
+                        if self.state.invalidate_pin(&pin, &account_id) {
+                            let now = (self.clock)();
+                            self.invalidated
+                                .insert(key.clone(), (account_id.clone(), moved, now));
+                            if let Some(event) =
+                                row.as_ref().and_then(|row| released_mark(row, now))
+                            {
+                                self.emit(event);
+                            }
+                            writes.push(StateWrite::DeletePin(key));
+                        }
                     }
                 }
                 self.write(writes);
