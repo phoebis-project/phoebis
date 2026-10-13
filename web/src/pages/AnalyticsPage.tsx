@@ -151,6 +151,8 @@ function nativeRatiosOf(totals: AnalyticsGroup): { perRequest: NativeRatio; perT
  * the week column named by the groups' equivalent keys as `weekColumnOf` names it for the shares, then the ratios.
  */
 const nativeColumns = (groups: AnalyticsGroup[]): string[] => ['Requests', 'Cost', '20x 5-hour', `20x ${weekColumnOf(groups.map((g) => ({ costShares: g.costEquivalent })))}`, 'Per request', 'Per 1k output'];
+/** A share an estimate priced, marked as a native cell is: the tilde before the figure, the estimate on its title. */
+const shareCell = (label: string, estimated: boolean): ReactNode => (estimated ? nativeCell({ main: `~${label}`, sub: '', title: withEstimate(label, true) }) : label);
 /** A native cell's figure over its billed line, the full reading on its title. */
 const nativeCell = (cell: { main: string; sub: string; title: string }): ReactNode => (
   <span title={cell.title || undefined}>
@@ -1702,7 +1704,11 @@ function CacheByModel({ error, funded, groups, loading, namedAccount, unit }: { 
       const cell = (side: 'read' | 'write', billed: number | null) => nativeCell(nativeCellOf('seven_day', sides.equivalent === undefined ? undefined : (priced?.[side] ?? null), g.estimated, sides.billed === undefined ? undefined : billed));
       return { cells: [cell('read', g.billed.cacheRead), cell('write', g.billed.cacheWrite)], estimated: g.estimated && sides.equivalent !== undefined && priced !== undefined };
     }
-    if (unit === 'share') return { cells: [cacheShareOf(g, 'read'), cacheShareOf(g, 'write')], estimated: false };
+    if (unit === 'share') {
+      // A dash marks no estimate, as a native cell's does not.
+      const marked = g.estimated && g.cacheShares !== null && own(g.cacheShares, 'seven_day');
+      return { cells: [shareCell(cacheShareOf(g, 'read'), marked), shareCell(cacheShareOf(g, 'write'), marked)], estimated: marked };
+    }
     // A model the side has no row of spent nothing on that side.
     const side = unit === 'all' ? g : (funded.get(g.key) ?? null);
     return { cells: side === null ? [fmtUsd(0), fmtUsd(0)] : [usdOrDash(side.cost.cacheRead), usdOrDash(side.cost.cacheWrite)], estimated: false };
@@ -1742,7 +1748,7 @@ function KeepaliveByPool({ error, funded, groups, loading, unit }: { error: stri
     }
     if (unit === 'share') {
       const shares = g.probeShares;
-      return shares === null || !own(shares, 'seven_day') ? '-' : shareLabel('seven_day', shares.seven_day.cost);
+      return shares === null || !own(shares, 'seven_day') ? '-' : shareCell(shareLabel('seven_day', shares.seven_day.cost), g.estimated);
     }
     return fmtUsd(unit === 'all' ? g.probeCostUsd : (funded.get(g.key)?.probeCostUsd ?? 0));
   };

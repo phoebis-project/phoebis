@@ -12027,7 +12027,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     };
     const nightlyProbes = (await namedAnswer((q) => q.groupBy === 'account' && q.includeProbes === true)).find((g) => g.key === 'nightly')?.probeShares ?? null;
     const shareOrDashOf = (shares, read) => (shares?.seven_day === undefined || read(shares.seven_day) === null ? '-' : shareLabel('seven_day', read(shares.seven_day)));
-    const modelShares = (groups) => byLabel(groups.map((g) => [g.label, [shareOrDashOf(g.cacheShares, (x) => x.read), shareOrDashOf(g.cacheShares, (x) => x.write)]]));
+    // A share an estimate priced leads with the tilde, as a native cell does.
+    const markedShare = (g, shares, read) => ((figure) => (figure !== '-' && g.estimated ? `~${figure}` : figure))(shareOrDashOf(shares, read));
+    const modelShares = (groups) => byLabel(groups.map((g) => [g.label, [markedShare(g, g.cacheShares, (x) => x.read), markedShare(g, g.cacheShares, (x) => x.write)]]));
     const byModelNamed = await namedAnswer((q) => q.groupBy === 'model' && q.accountIds?.length === 1);
     const probeWeekOf = (shares) => Object.keys(shares ?? {}).find((k) => k !== 'five_hour' && k !== 'seven_day');
     const wastedOthers = ['five_hour', probeWeekOf(nightlyProbes)].flatMap((k) => (k === undefined || nightlyProbes?.[k]?.wasted === undefined || nightlyProbes[k].wasted === null ? [] : [shareLabel(k, nightlyProbes[k].wasted)]));
@@ -12035,7 +12037,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       ['Wasted cost', shareOrDashOf(nightlyProbes, (x) => x.wasted), wastedOthers.join(', ')],
       ['Share of probe cost', fmtPct(nightlyProbes.seven_day.wasted / nightlyProbes.seven_day.cost, 1), `of ${shareLabel('seven_day', nightlyProbes.seven_day.cost)} on probes`],
     ];
-    const poolWant = (await namedAnswer((q) => q.groupBy === 'pool')).map((g) => [g.label, [shareOrDashOf(g.probeShares, (x) => x.cost)]]);
+    const poolWant = (await namedAnswer((q) => q.groupBy === 'pool')).map((g) => [g.label, [markedShare(g, g.probeShares, (x) => x.cost)]]);
     results.push({
       name: "/analytics under Window shares with one account named Cache by model reads each model's 7-day read and write shares as the route answers them under the account and the model grouping, and the Wasted probes card and the by-pool table the account's probe shares",
       ok:
@@ -12045,6 +12047,42 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         poolWant.some(([, cells]) => cells[0] !== '-') && JSON.stringify(poolNamed) === JSON.stringify(poolWant),
       missing: [`model ${JSON.stringify(modelNamed)}`, `want ${JSON.stringify(modelShares(byModelNamed))}`, `wasted ${JSON.stringify(wastedNamed)} against ${JSON.stringify(wastedWant)}`, `pools ${JSON.stringify(poolNamed)} against ${JSON.stringify(poolWant)}`],
     });
+    {
+      // With secondary named, whose Sonnet 4.6 traffic the story prices through its model tier's fallback, that
+      // model's share cells and the by-pool probe share carry the tilde and the estimate's title, as the native cells
+      // do, each read off the route's own answer.
+      const asked = countCalls('getAnalyticsBreakdown');
+      const estimatedPage = await mount('/analytics?accounts=secondary&unit=share#cache', { now: CLOCK_ORIGIN });
+      const cellsOf = (t) =>
+        [...([...estimatedPage.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t)?.querySelectorAll('tbody tr') ?? [])].map((tr) => ({
+          cells: [...tr.querySelectorAll('td.num')].map((td) => [td.textContent?.trim() ?? '', td.querySelector('[title]')?.getAttribute('title') ?? '']),
+          label: tr.children[0]?.textContent?.trim() ?? '',
+          title: tr.children[0]?.getAttribute('title') ?? '',
+        }));
+      const models = cellsOf('Cache by model');
+      await tab(estimatedPage, 'Cache warming');
+      const pools = cellsOf('Cache warming by pool');
+      estimatedPage.unmount();
+      asked.restore();
+      localStorage.removeItem('phoebis.unit');
+      const answerOf = async (groupBy) => {
+        const q = asked.calls.map(([x]) => x).filter((x) => x?.groupBy === groupBy && x.accountIds?.length === 1 && x.funding === undefined).pop();
+        return q === undefined ? [] : await api.getAnalyticsBreakdown(q);
+      };
+      const model = (await answerOf('model')).find((g) => g.estimated && g.cacheShares?.seven_day !== undefined);
+      const pool = (await answerOf('pool')).find((g) => g.estimated && g.probeShares?.seven_day !== undefined);
+      const modelRow = models.find((r) => r.label === model?.label);
+      const poolRow = pools.find((r) => r.label === pool?.label);
+      const marked = (cell, label) => cell !== undefined && cell[0] === `~${label}` && cell[1].endsWith(`${ESTIMATED_TITLE}.`);
+      results.push({
+        name: "/analytics under Window shares with one account named an estimated model's cache share cells and an estimated pool's probe share carry the tilde and the estimate's title",
+        ok:
+          model !== undefined && modelRow !== undefined && modelRow.title === `${model.label}. ${ESTIMATED_TITLE}.` &&
+          marked(modelRow.cells.at(-2), shareLabel('seven_day', model.cacheShares.seven_day.read)) && marked(modelRow.cells.at(-1), shareLabel('seven_day', model.cacheShares.seven_day.write)) &&
+          pool !== undefined && marked(poolRow?.cells.at(-1), shareLabel('seven_day', pool.probeShares.seven_day.cost)),
+        missing: [`model ${model?.label}: ${JSON.stringify(modelRow)}`, `pool ${pool?.label}: ${JSON.stringify(poolRow)}`],
+      });
+    }
     await tab(shares, 'Cost');
     const namedTiles = [...shares.container.querySelectorAll('#cost .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
     const sevenDay = (v) => /^\d[\d.]*% of 7-day$/.test(v ?? '');
