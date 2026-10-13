@@ -16751,6 +16751,24 @@ m.unmount();
         missing: [title, String(lightest)],
       });
     }
+    // An estimate takes its donor's base weight, which can sit above the donor's own 5-hour override. A donor whose
+    // base outweighs every model's 5-hour weight lends it to an unweighted model of its tier, and every bar stays inside
+    // its track.
+    {
+      const top = Math.max(...Object.keys(tested.modelWeight).map((model) => weightOf(tested, model, 'five_hour') ?? 0));
+      const donor = 'claude-opus-98';
+      const lent = 'claude-opus-97';
+      const heavy = { ...tested, modelWeight: { ...tested.modelWeight, [donor]: top * 2, [lent]: null }, overrides: { ...tested.overrides, [donor]: { weightByWindow: { five_hour: top } } } };
+      const shown = await mountNode(React.createElement(PlanRates, { costs: heavy, now: CLOCK_ORIGIN, olderOpen: true, onToggleOlder: () => {}, prices: wired.apiPrices.models }));
+      const widths = [...shown.container.querySelectorAll('.cost-ref__bar')].map((bar) => Number.parseFloat(bar.style.width));
+      shown.unmount();
+      const borrowed = weightOrFallback(heavy, lent, 'five_hour');
+      results.push({
+        name: "/sessions plan rates scale the weight column's heavy end over every model, an estimate at its donor's base above the donor's own 5-hour weight among them, so no bar runs past its track",
+        ok: top > 0 && borrowed?.estimated === true && borrowed.weight === top * 2 && weightOf(heavy, donor, 'five_hour') === top && widths.length > 0 && widths.every((w) => w <= 100) && widths.includes(100),
+        missing: [JSON.stringify(widths), JSON.stringify(borrowed)],
+      });
+    }
     const rates = await mountNode(React.createElement(PlanRates, { costs: unzoned, now: CLOCK_ORIGIN, prices: wired.apiPrices.models }));
     const band = () => [...rates.container.querySelectorAll('[aria-label="Peak band"] button')];
     const opusInput = () => [...rates.container.querySelectorAll('tbody tr')].find((r) => r.children[0]?.textContent?.trim() === 'claude-opus-5-5')?.children[2]?.textContent?.trim() ?? 'no cell';
