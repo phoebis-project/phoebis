@@ -773,9 +773,9 @@ pub(crate) async fn list(
     };
     let filter = RequestFilter {
         text: q.get("text").cloned(),
-        // An emptied field in the view's bar narrows nothing, as an absent one.
-        request: q.get("request").filter(|r| !r.is_empty()).cloned(),
-        session: q.get("session").filter(|s| !s.is_empty()).cloned(),
+        // An empty value narrows nothing, as an absent one, since the ledger drops it as it drops an empty `text`.
+        request: q.get("request").cloned(),
+        session: q.get("session").cloned(),
         keys: list_param(&q, "keys"),
         pools: list_param(&q, "pools"),
         accounts: list_param(&q, "accounts"),

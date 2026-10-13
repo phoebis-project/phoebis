@@ -12,7 +12,7 @@ globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
 const d = await import('./dist/api.js');
-const { act, createElement: h, createRoot, fakeClock, installClock, useFollow, useState } = await import('./dist/ui.js');
+const { act, createElement: h, createRoot, fakeClock, installClock, useFollow, useRangeTakenAt, useState } = await import('./dist/ui.js');
 
 const at = (s) => new Date(Date.UTC(2026, 8, 16, 14, 0, s)).toISOString();
 const byId = (r) => r.id;
@@ -209,6 +209,7 @@ test('no read while the tab is hidden, and one at once on its return after a ful
   assert.equal(f.polls().length, 2, 'back 2 seconds after the last answer is inside the interval, so nothing reads at once');
   act(() => clock.tick(2_000));
   assert.equal(f.polls().at(-1), ORIGIN + 15_000, 'the next tick reads');
+  await settled();
 });
 
 test('an older page pauses the poll and keeps the followed rows, and the first page resumes it', async () => {
@@ -229,6 +230,7 @@ test('an older page pauses the poll and keeps the followed rows, and the first p
   await settled();
   act(() => clock.tick(5_000));
   assert.equal(f.polls().at(-1), ORIGIN + 15_000, 'and the poll ticks on');
+  await settled();
 });
 
 test('an ended span polls nothing', () => {
@@ -241,7 +243,7 @@ test('an ended span polls nothing', () => {
   assert.deepEqual(f.polls(), []);
 });
 
-test('a custom span has ended once its end lies a minute or more before the page took its address, however long the page has been open', () => {
+test('a custom span has ended once its end lies more than a minute before the page took its range, however long the page has been open', () => {
   const HOUR = 3_600_000;
   const taken = Date.UTC(2026, 8, 16, 14, 30);
   const end = taken - 20 * 60_000;
@@ -250,6 +252,32 @@ test('a custom span has ended once its end lies a minute or more before the page
   assert.equal(d.spanEnded(true, taken - 30_000, taken), false, 'a link capped at the click lands inside the minute of grace');
   assert.equal(d.spanEnded(true, taken - 61_000, taken), true);
   assert.equal(d.spanEnded(false, end, taken), false, 'a preset never ends');
+});
+
+test('the instant the page took its range moves with the range alone, so a filter edit leaves a capped span reading on', () => {
+  const clock = frozen();
+  const container = document.body.appendChild(document.createElement('div'));
+  const root = createRoot(container);
+  roots.push(root);
+  const seen = [];
+  const Taken = ({ range }) => {
+    seen.push(useRangeTakenAt(range));
+    return null;
+  };
+  const span = { from: new Date(ORIGIN - 3_600_000).toISOString(), preset: 'custom', to: new Date(ORIGIN).toISOString() };
+  act(() => root.render(h(Taken, { range: span })));
+  act(() => clock.tick(120_000));
+  // A filter edit reads the address again, which hands the page an equal range in a new object.
+  act(() => root.render(h(Taken, { range: { ...span } })));
+  assert.equal(seen.at(-1), ORIGIN, 'the same range keeps the instant it was taken at');
+  assert.equal(d.spanEnded(true, Date.parse(span.to), seen.at(-1)), false, 'so the capped span reads on');
+  act(() => root.render(h(Taken, { range: { ...span, from: new Date(ORIGIN - 7_200_000).toISOString() } })));
+  assert.equal(seen.at(-1), ORIGIN + 120_000, 'a new start is a new range, taken at the clock');
+  act(() => clock.tick(1_000));
+  act(() => root.render(h(Taken, { range: { from: '', preset: '6h', to: '' } })));
+  act(() => clock.tick(1_000));
+  act(() => root.render(h(Taken, { range: { from: '', preset: '6h', to: '' } })));
+  assert.equal(seen.at(-1), ORIGIN + 121_000, 'a preset is taken when it is chosen and kept while it stands');
 });
 
 test('a poll and an older page on a custom span read to the span\'s own end, and a preset reads up to the instant given', () => {

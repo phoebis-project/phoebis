@@ -354,7 +354,7 @@ test('each link in builds its URL with its range', () => {
 test('logHref writes a preset by name and a window as two instants', () => {
   assert.equal(d.logHref({ range: '24h' }), '/routing-log?range=24h');
   assert.equal(d.logHref({ range: '1h' }), '/routing-log');
-  assert.equal(d.logHref({ kinds: ['held'], range: '3h' }), '/routing-log?kinds=held&range=3h');
+  assert.equal(d.logHref({ kinds: ['held'], range: '6h' }), '/routing-log?kinds=held&range=6h');
   const instants = new URL(d.logHref({ from: ms(13, 30) + 123, to: ms(14, 29, 59) + 999 }), 'http://phoebis.test').searchParams;
   assert.deepEqual(Object.fromEntries(instants), { from: '2026-09-16T13:30:00.123Z', to: '2026-09-16T14:29:59.999Z' });
 });

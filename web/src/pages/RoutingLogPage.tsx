@@ -14,8 +14,8 @@ import { addressWindow, type LogFilters, RANGE_PRESETS, ROUTING_LOG_CODEC } from
 import { clock } from '@/lib/clock';
 import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, FOLLOW_OVERRUN, readEnd, spanEnded } from '@/lib/follow';
-import { fmtAbsolute, fmtTime, upperFirst } from '@/lib/format';
-import { useAsync, useQueryFilters } from '@/lib/hooks';
+import { fmtAbsolute, fmtInt, fmtTime, upperFirst } from '@/lib/format';
+import { useAsync, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { ALL_KINDS, byOf, compareModels, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref } from '@/lib/routingLog';
 
 const PAGE_SIZE = 25;
@@ -31,7 +31,8 @@ const KIND_OPTIONS: Option[] = [
 ];
 const KIND_PRESET_ROWS = { kinds: KIND_PRESETS };
 
-const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((x) => b.includes(x));
+// Compared by the set's size, since a list that repeats one kind and leaves another out is as long as every kind.
+const sameSet = (a: readonly string[], b: readonly string[]) => new Set(a).size === b.length && a.every((x) => b.includes(x));
 
 const Dash = () => <span className="muted">-</span>;
 
@@ -81,15 +82,12 @@ export function RoutingLogPage() {
   // Off on the logs until the reader picks an interval, and page state, so a link or a reload opens the log off.
   const [intervalMs, setIntervalMs] = useState(0);
   const [barOpen, setBarOpen] = useState(false);
-  // A link capped at now ends its span at the clock it was made on, so the instant the page took the address, read once
-  // per address, tells it from a span that has ended.
-  const [addressed, setAddressed] = useState(() => ({ at: clock.now(), for: address }));
-  if (addressed.for !== address) setAddressed({ at: clock.now(), for: address });
+  const rangeTakenAt = useRangeTakenAt(filters.range);
 
   // A preset ends where the list was loaded, and a custom span reads its own instants, which Refresh reads again.
   const custom = filters.range.preset === 'custom';
   const range = useMemo(() => addressWindow(filters.range, RANGE_PRESETS, '1h', loadedAt), [filters.range, loadedAt]);
-  const ended = spanEnded(custom, range.to, addressed.at);
+  const ended = spanEnded(custom, range.to, rangeTakenAt);
   const polledMs = effectiveInterval(intervalMs, ended);
   const query = useMemo<RoutingLogQuery>(
     () => ({ accountIds: filters.accounts, cursor, from: iso(range.from), keyIds: filters.keys, kinds: filters.kinds.length ? filters.kinds : undefined, limit: PAGE_SIZE, models: filters.models, poolIds: filters.pools, request: filters.request || undefined, session: filters.session || undefined, to: iso(readEnd(custom, range.to, pagedTo ?? range.to)) }),
@@ -156,7 +154,7 @@ export function RoutingLogPage() {
     <div className="routing-log stack">
       <FilterBar
         address={address}
-        count={rows.length > 0 ? `${rows.length} shown${nextCursor ? ', more available' : ''}` : log.data === null ? '' : 'No rows'}
+        count={rows.length > 0 ? `${fmtInt(rows.length)} shown${nextCursor ? ', more available' : ''}` : log.data === null ? '' : 'No rows'}
         dimensions={dimensions}
         disabled={disabled}
         filters={barFilters}

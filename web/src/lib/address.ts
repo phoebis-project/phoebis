@@ -242,7 +242,7 @@ export interface LogFilters {
 
 /**
  * The routing log's filters to and from its address. A kind this build does not know stays, so the route's refusal
- * reaches the page where a link from a newer router would otherwise read as the default set.
+ * reaches the page where a link from a newer router would otherwise read as every kind.
  */
 export const ROUTING_LOG_CODEC = codecOf<LogFilters>({
   accounts: list('accounts'),

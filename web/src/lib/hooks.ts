@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { ApiError, quietly, reportRecovery } from '@/api/http';
-import type { Codec } from './address';
+import type { Codec, RangeValue } from './address';
 import { createAttentionPoll, type AttentionRead } from './attention';
 import { clock } from './clock';
 
@@ -232,6 +232,18 @@ export function useQueryFilters<F>(codec: Codec<F>): { address: string; filters:
     navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { flushSync: true, replace: true });
   };
   return { address: searchParams.toString(), filters, replace, update: (patch) => replace({ ...filters, ...patch }) };
+}
+
+/**
+ * The instant the page took its range, read again only when the range moves: another preset, or a span with another
+ * `from` or `to`. A link capped at now ends its span at the clock it was made on, so this instant tells it from a span
+ * that has ended, and a chip, the search or a view control, which leave the range as it stands, keep it reading on.
+ */
+export function useRangeTakenAt(range: RangeValue): number {
+  const key = `${range.preset} ${range.from} ${range.to}`;
+  const [taken, setTaken] = useState(() => ({ at: clock.now(), for: key }));
+  if (taken.for !== key) setTaken({ at: clock.now(), for: key });
+  return taken.at;
 }
 
 const attention = createAttentionPoll(() => api.getAttention());

@@ -24,7 +24,7 @@ import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION }
 import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, FOLLOW_OVERRUN, readEnd, spanEnded } from '@/lib/follow';
 import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
-import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
+import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, NO_SHARE_TITLE } from '@/lib/requests';
 import { requestsWiden } from '@/lib/requestsLink';
 import { type Chip, logHref, requestLink } from '@/lib/routingLog';
@@ -216,10 +216,7 @@ export function RequestsPage() {
   // Off on the logs until the reader picks an interval, and page state, so a link or a reload opens the log off.
   const [intervalMs, setIntervalMs] = useState(0);
   const [barOpen, setBarOpen] = useState(false);
-  // A link capped at now ends its span at the clock it was made on, so the instant the page took the address, read once
-  // per address, tells it from a span that has ended.
-  const [addressed, setAddressed] = useState(() => ({ at: clock.now(), for: address }));
-  if (addressed.for !== address) setAddressed({ at: clock.now(), for: address });
+  const rangeTakenAt = useRangeTakenAt(filters.range);
   const update = (patch: Partial<Filters>) => {
     const next = { ...filters, ...patch };
     replace({ ...next, rows: String(next.rows) });
@@ -228,7 +225,7 @@ export function RequestsPage() {
   // A custom range names its own window, which Refresh reads again rather than moving it to now.
   const custom = filters.range.preset === 'custom';
   const span = useMemo(() => addressWindow(filters.range, RANGE_PRESETS, '24h', loadedAt), [filters.range, loadedAt]);
-  const ended = spanEnded(custom, span.to, addressed.at);
+  const ended = spanEnded(custom, span.to, rangeTakenAt);
   const polledMs = effectiveInterval(intervalMs, ended);
   const query = useMemo<RequestQuery>(
     // Probes are off the log unless they are what the filter asks for.

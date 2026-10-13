@@ -14,14 +14,14 @@ export const FOLLOW_OVERRUN = 'More rows arrived than auto reload could fetch. R
  * and disabled), else the chosen interval.
  */
 export const effectiveInterval = (intervalMs: number, ended: boolean): number => (ended ? 0 : intervalMs);
-/** The grace a custom span's end keeps against the instant the page took its address. */
+/** The grace a custom span's end keeps against the instant the page took its range. */
 const ENDED_GRACE_MS = 60_000;
 /**
- * Whether a custom span had ended when the page took its address, its end a minute or more before that instant. A link
+ * Whether a custom span had ended when the page took its range, its end more than a minute before that instant. A link
  * capped at the click lands inside the minute and reads on, and a span widened or typed with an end in the past has
  * ended however long the page has been open.
  */
-export const spanEnded = (custom: boolean, end: number, addressedAt: number): boolean => custom && end < addressedAt - ENDED_GRACE_MS;
+export const spanEnded = (custom: boolean, end: number, takenAt: number): boolean => custom && end < takenAt - ENDED_GRACE_MS;
 /**
  * The end a read takes: a custom span holds its own end, so a poll or an older page reads only the rows inside the span
  * the Custom pill prints, and a preset reads up to the instant given (the poll's clock, or the end a cursor came from).

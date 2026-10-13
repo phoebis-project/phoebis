@@ -3,14 +3,15 @@ import type { Chip } from '@/lib/filterBar';
 
 /**
  * `span.chip.chip--filter.chip--removable[title]` holding `button.chip__body` (the word, a colon, the values, 240 px at
- * most with an ellipsis) and a `button[aria-label="Remove {label} filter"]` with IconX at 12. A button holds no other
- * button, so the two stand side by side in the pill. `hidden` keeps a chip the line folds drawn but out of view.
+ * most with an ellipsis, `aria-haspopup="dialog"` with `aria-expanded` from `editing`) and a
+ * `button[aria-label="Remove {label} filter"]` with IconX at 12. A button holds no other button, so the two stand side
+ * by side in the pill. `hidden` keeps a chip the line folds drawn but out of view.
  */
-export function FilterChip({ chip, hidden, onOpen, onRemove }: { chip: Chip; hidden?: boolean; onOpen: (anchor: HTMLElement) => void; onRemove: () => void }): JSX.Element {
+export function FilterChip({ chip, editing = false, hidden, onOpen, onRemove }: { chip: Chip; editing?: boolean; hidden?: boolean; onOpen: (anchor: HTMLElement) => void; onRemove: () => void }): JSX.Element {
   const { values } = chip;
   return (
     <span className="chip chip--filter chip--removable" title={chip.title} hidden={hidden}>
-      <button type="button" className="chip__body" onClick={(e) => onOpen(e.currentTarget)}>
+      <button type="button" className="chip__body" aria-haspopup="dialog" aria-expanded={editing} onClick={(e) => onOpen(e.currentTarget)}>
         <span className="chip__word">{values === null ? chip.text : `${chip.label}:`}</span>
         {values !== null && (
           <>

@@ -68,7 +68,7 @@ test('the span reads the times alone inside one day and the date before each tim
   }
 });
 
-test('six pills print the short names, the preset the address holds is pressed, and the title names its label and end', () => {
+test('six pills print the short names they are named by, each preset titled with its label, the preset the address holds pressed, and the title names its label and end', () => {
   const { container } = render();
   const group = container.querySelector('.segmented[role="group"]');
   assert.equal(group?.getAttribute('aria-label'), 'Range');
@@ -79,6 +79,11 @@ test('six pills print the short names, the preset the address holds is pressed, 
   );
   assert.deepEqual(
     pills(container).map((b) => b.getAttribute('aria-label')),
+    [null, null, null, null, null, null],
+    'a pill is named by the word it prints',
+  );
+  assert.deepEqual(
+    pills(container).map((b) => b.getAttribute('title')),
     ['Last hour', 'Last 6 hours', 'Last 24 hours', 'Last 7 days', 'Last 30 days', null],
   );
   assert.deepEqual(

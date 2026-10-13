@@ -13,6 +13,8 @@ export interface ChipLineProps {
   /** The view's address, whose change folds an expanded line again. */
   address: string;
   chips: Chip[];
+  /** The field whose values the Add filter box shows from its chip, or null. */
+  editing?: string | null;
   onClearAll: () => void;
   onOpen: (field: string, anchor: HTMLElement) => void;
   onRemove: (field: string) => void;
@@ -26,7 +28,7 @@ export interface ChipLineProps {
  * mounted with no chips: it draws nothing then, and the focus hand-off after Clear all or the last chip's x runs in its
  * effects.
  */
-export function ChipLine({ addFilterRef, address, chips, onClearAll, onOpen, onRemove }: ChipLineProps): JSX.Element | null {
+export function ChipLine({ addFilterRef, address, chips, editing = null, onClearAll, onOpen, onRemove }: ChipLineProps): JSX.Element | null {
   const lineRef = useRef<HTMLDivElement>(null);
   const [fit, setFit] = useState(MOST);
   // The expansion is the bar's own and resets with the address. Clearing it as the address moves, rather than only
@@ -130,7 +132,7 @@ export function ChipLine({ addFilterRef, address, chips, onClearAll, onOpen, onR
       }}
     >
       {drawn.map((chip, i) => (
-        <FilterChip key={chip.field} chip={chip} hidden={!expanded && i >= shown.length} onOpen={(anchor) => onOpen(chip.field, anchor)} onRemove={() => onRemove(chip.field)} />
+        <FilterChip key={chip.field} chip={chip} editing={editing === chip.field} hidden={!expanded && i >= shown.length} onOpen={(anchor) => onOpen(chip.field, anchor)} onRemove={() => onRemove(chip.field)} />
       ))}
       {(expanded || folded.length > 0) && (
         <button key="fold" type="button" className="chip chip--more" title={expanded ? undefined : title} aria-expanded={expanded} onClick={() => setExpandedFor(expanded ? null : address)}>

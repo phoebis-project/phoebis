@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, requestsWiden, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, spanText, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, requestsWiden, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, spanText, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -8849,15 +8849,16 @@ m.unmount();
     await page.settle();
     paused.restore();
     const drawer = { calls: paused.calls.length, id: idOf(requestRows(page)[0]), open: page.container.querySelector('.drawer') !== null, title: partTitle(page) };
-    page.container.querySelector('button[aria-label="Close details"]')?.click();
-    await page.settle();
     // The close comes a full period after the last answer, so the poll reads at once as it arms again, and the next
     // tick's read ends a full period after the close and finds nothing new to tint.
     const resumed = countCalls('listRequests');
+    page.container.querySelector('button[aria-label="Close details"]')?.click();
+    await page.settle();
+    const closing = resumed.calls.map(([q]) => q?.to ?? null);
     tick(5_000);
     await page.settle();
     resumed.restore();
-    const after = { calls: resumed.calls.length, id: idOf(requestRows(page)[0]), tinted: page.container.querySelectorAll('.requests__table tbody tr.is-new').length, to: resumed.calls[0]?.[0]?.to };
+    const after = { calls: resumed.calls.length - closing.length, closing, id: idOf(requestRows(page)[0]), tinted: page.container.querySelectorAll('.requests__table tbody tr.is-new').length, to: resumed.calls[closing.length]?.[0]?.to };
     nextPage(page)?.click();
     await page.settle();
     // The older page pauses the poll and keeps the interval, so the next tick reads nothing.
@@ -8881,7 +8882,7 @@ m.unmount();
         before !== newest.id &&
         landed.calls === 2 && landed.cursor === undefined && typeof landed.second === 'string' && landed.to === isoAt(t + 3_000) && landed.id === newest.id && landed.isNew &&
         drawer.open && drawer.calls === 0 && drawer.id === newest.id && drawer.title === 'Auto reload every 5 s, paused while a request is open' &&
-        after.calls === 1 && after.to === isoAt(t + 13_000) && after.id === newest.id && after.tinted === 0 &&
+        JSON.stringify(after.closing) === JSON.stringify([isoAt(t + 8_000)]) && after.calls === 1 && after.to === isoAt(t + 13_000) && after.id === newest.id && after.tinted === 0 &&
         paged.calls === 0 && paged.rows > 0 && paged.word === '5 s' && paged.title === 'Auto reload every 5 s, paused on an older page' &&
         firstPage.calls > 0 && firstPage.to === isoAt(t + 23_000) && firstPage.title === 'Auto reload every 5 s',
       missing: [JSON.stringify(start), JSON.stringify(chosen), `first before ${before}, newest ${newest.id}`, JSON.stringify(landed), JSON.stringify(drawer), JSON.stringify(after), JSON.stringify(paged), JSON.stringify(firstPage)],
@@ -9152,6 +9153,39 @@ m.unmount();
       name: '/requests a custom span that ends at the clock reads at the chosen interval up to its own end',
       ok: enabled && word === '5 s' && sent.length > 0 && sent.every((to) => to === isoAt(CLOCK_ORIGIN)) && short,
       missing: [`enabled ${enabled}`, String(word), JSON.stringify(sent), `a span 30 s short enabled ${short}`],
+    });
+  }
+  {
+    // A chip, the search or a view control leaves the range where it stood, so a link capped at the clock reads on at
+    // the interval however long after landing the edit comes. The open interval menu holds the reads while the clock
+    // moves two minutes, past the minute of grace.
+    const views = [
+      { edit: (page) => addFilter(page, 'Held only'), path: '/requests', read: 'listRequests', word: 'held only' },
+      { edit: (page) => applyText(page, 'Request', 'req_capped'), path: '/routing-log', read: 'listRoutingLog', word: 'request' },
+      { edit: (page) => addFilter(page, 'Include probes'), path: '/analytics', read: 'listAccounts', word: 'include probes' },
+    ];
+    const read = [];
+    for (const view of views) {
+      const page = await mount(`${view.path}?from=${isoAt(CLOCK_ORIGIN - HOUR)}&to=${isoAt(CLOCK_ORIGIN)}`, { now: CLOCK_ORIGIN });
+      await chooseInterval(page, '5 s');
+      intervalPart(page)?.click();
+      await page.settle(100);
+      tick(2 * 60_000);
+      await page.settle();
+      await closeBoxes(page);
+      await view.edit(page);
+      await page.settle();
+      const spy = countCalls(view.read);
+      tick(5_000);
+      await page.settle();
+      spy.restore();
+      read.push({ chip: chipOf(page, view.word) !== undefined, disabled: intervalPart(page)?.disabled ?? null, path: view.path, reads: spy.calls.length, word: intervalWord(page) });
+      page.unmount();
+    }
+    results.push({
+      name: 'a filter edit two minutes after landing on a link capped at the clock keeps auto reload at the interval on Requests, the Routing log and Analytics',
+      ok: read.length === 3 && read.every((r) => r.chip && r.disabled === false && r.word === '5 s' && r.reads === 1),
+      missing: read.map((r) => JSON.stringify(r)),
     });
   }
 }
@@ -9839,10 +9873,25 @@ m.unmount();
       chips.push(chipRead(page, 'kinds'));
       page.unmount();
     }
+    // A link that lists every kind reads as every kind: no chip, and a preset's click narrows to its kinds alone.
+    const every = await mount(`/routing-log?kinds=${ALL_KINDS.join(',')}`, { now: CLOCK_ORIGIN });
+    const everyChip = chipRead(every, 'kinds');
+    await addFilter(every, 'Kinds');
+    await clickOption(every, 'keepalive');
+    const narrowed = new URLSearchParams(every.location().search).get('kinds');
+    await closeBoxes(every);
+    every.unmount();
+    // A hand-typed list as long as every kind that repeats one and leaves another out names fewer kinds, so it draws
+    // its chip.
+    const repeated = await mount(`/routing-log?kinds=${[...ALL_KINDS.filter((k) => k !== 'window_reset'), 'held'].join(',')}`, { now: CLOCK_ORIGIN });
+    const repeatedChip = chipRead(repeated, 'kinds');
+    repeated.unmount();
     results.push({
-      name: "/routing-log a link's kinds read as a hand-picked set or a preset",
-      ok: JSON.stringify(chips) === JSON.stringify(['kinds: exhausted', 'kinds: model rejected, model permitted', 'kinds: moves and holds', 'kinds: moves and holds']),
-      missing: chips,
+      name: "/routing-log a link's kinds read as a hand-picked set or a preset, every kind as no chip that a preset narrows, and a repeated kind as no stand-in for a missing one",
+      ok:
+        JSON.stringify(chips) === JSON.stringify(['kinds: exhausted', 'kinds: model rejected, model permitted', 'kinds: moves and holds', 'kinds: moves and holds']) &&
+        everyChip === 'no kinds chip' && narrowed === 'probe,warm_prefix_expired' && repeatedChip.startsWith('kinds: '),
+      missing: [...chips, everyChip, String(narrowed), repeatedChip],
     });
   }
   {
@@ -13710,7 +13759,7 @@ m.unmount();
     page.unmount();
   }
   {
-    const name = '/analytics starts auto reload at 5 s, reads the registry at the interval and holds the end while off with the title naming it';
+    const name = "/analytics starts auto reload at 5 s, reads the registry at the interval, holds the end while off with the title naming it, and names a custom range's window on Refresh";
     const part = (page) => ({ disabled: intervalPart(page)?.disabled ?? null, title: intervalPart(page)?.getAttribute('title') ?? null, word: intervalWord(page) });
     const hour = Date.UTC(2026, 8, 16, 15);
     const page = await mount('/analytics', { now: CLOCK_ORIGIN });
@@ -13737,9 +13786,9 @@ m.unmount();
     series.restore();
     page.unmount();
 
-    // A span that ended a day before the clock has nothing new to read.
+    // A span that ended a day before the clock has nothing new to read, and Refresh reads its window again.
     const ended = await mount('/analytics?from=2026-09-15T12:00:00.000Z&to=2026-09-15T14:00:00.000Z', { now: CLOCK_ORIGIN });
-    const endedPart = part(ended);
+    const endedPart = { ...part(ended), refresh: ended.container.querySelector('.refresh-control__body')?.getAttribute('title') ?? null };
     registry = countCalls('listAccounts');
     tick(5_000);
     await ended.settle();
@@ -13771,7 +13820,7 @@ m.unmount();
         JSON.stringify(off) === JSON.stringify({ disabled: false, title: 'Auto reload off, the window ends 14:30', word: 'Off', refresh: 'Window ends 14:30. Refresh reads up to now' }) &&
         JSON.stringify(held) === JSON.stringify({ registry: 0, series: 0, title: 'Auto reload off, the window ends 14:30' }) &&
         JSON.stringify(refreshed) === JSON.stringify({ ends: [new Date(CLOCK_ORIGIN + 5_000 + 3_600_000).toISOString()], title: 'Auto reload off, the window ends 15:30' }) &&
-        JSON.stringify(endedPart) === JSON.stringify({ disabled: true, title: 'A custom range that has ended has nothing new to read', word: 'Off' }) &&
+        JSON.stringify(endedPart) === JSON.stringify({ disabled: true, title: 'A custom range that has ended has nothing new to read', word: 'Off', refresh: 'Window from 12:00 to 14:00. Refresh reads the same window again' }) &&
         endedReads === 0 &&
         JSON.stringify(pausedPart) === JSON.stringify({ disabled: false, title: 'Auto reload every 5 s, paused while a menu is open', word: '5 s' }) &&
         JSON.stringify(paused) === JSON.stringify({ registry: 0, series: 0 }) &&
@@ -14685,6 +14734,38 @@ const CARD_VIEWS = [
       JSON.stringify(closed) === JSON.stringify({ open: 0, reads: 1, title: 'Auto reload every 5 s' }) &&
       ticked === 1,
     missing: [JSON.stringify(confirm), JSON.stringify(closed), `${ticked} reads at the tick after the cancel`],
+  });
+}
+{
+  const name = '/sessions an open Cost reference dialog pauses auto reload, and the reads resume once it closes';
+  const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+  const spy = countCalls('listSessions');
+  const title = () => intervalPart(page)?.getAttribute('title') ?? null;
+  // The dialog lives under the body, outside the page's container.
+  const costDialog = () => [...document.querySelectorAll('dialog[open]')].find((d) => d.querySelector('.dialog__title')?.textContent === 'Cost reference');
+  [...page.container.querySelectorAll('.page-head button')].find((b) => b.textContent?.trim() === 'Cost reference')?.click();
+  await page.settle(200);
+  const open = { open: costDialog() !== undefined, title: title() };
+  tick(5_000);
+  await page.settle();
+  open.reads = spy.calls.length;
+  [...(costDialog()?.querySelectorAll('.dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Close')?.click();
+  await page.settle(200);
+  // The last answer is a full period old when the dialog closes, so the page reads at once, then at the next tick.
+  const closed = { open: costDialog() !== undefined, reads: spy.calls.length, title: title() };
+  const from = spy.calls.length;
+  tick(5_000);
+  await page.settle();
+  const ticked = spy.calls.length - from;
+  spy.restore();
+  page.unmount();
+  results.push({
+    name,
+    ok:
+      JSON.stringify(open) === JSON.stringify({ open: true, title: 'Auto reload every 5 s, paused while a dialog is open', reads: 0 }) &&
+      JSON.stringify(closed) === JSON.stringify({ open: false, reads: 1, title: 'Auto reload every 5 s' }) &&
+      ticked === 1,
+    missing: [JSON.stringify(open), JSON.stringify(closed), `${ticked} reads at the tick after the close`],
   });
 }
 {
@@ -16723,6 +16804,21 @@ m.unmount();
   press('Escape');
   await page.settle(50);
   const chip = chipOf(page, 'agent type');
+  // The body opens the chip's values in the dialog Add filter draws, so it says so and whether that dialog stands open.
+  const chipBody = chip?.querySelector('.chip__body');
+  const popupOf = () => [chipBody?.getAttribute('aria-haspopup') ?? null, chipBody?.getAttribute('aria-expanded') ?? null];
+  const bodyRest = popupOf();
+  chipBody?.click();
+  await page.settle(100);
+  const bodyOpen = [...popupOf(), filterBox() !== null];
+  press('Escape');
+  await page.settle(50);
+  const bodyClosed = [...popupOf(), filterBox() !== null];
+  results.push({
+    name: "a chip's body names the dialog it opens and whether it stands open",
+    ok: JSON.stringify([bodyRest, bodyOpen, bodyClosed]) === JSON.stringify([['dialog', 'false'], ['dialog', 'true', true], ['dialog', 'false', false]]),
+    missing: [JSON.stringify(bodyRest), JSON.stringify(bodyOpen), JSON.stringify(bodyClosed)],
+  });
   const clear = chip?.querySelector('.chip__remove');
   const nested = page.container.querySelector('button button, button [role="button"]');
   const beside = `${named(clear)} after ${named(clear?.previousElementSibling)}`;

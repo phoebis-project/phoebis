@@ -203,7 +203,7 @@ export const ANALYTICS_DIMENSIONS: Dimension[] = [
 
 /** Keys. The status choice's none is `all`, the codec's default. */
 export const KEYS_DIMENSIONS: Dimension[] = [
-  { field: 'pools', group: 'Keys', kind: 'list', label: 'Pool', word: 'pool' },
+  { ...POOL, group: 'Keys' },
   { anyLabel: 'All statuses', defaultValue: 'all', field: 'status', group: 'Keys', kind: 'choice', label: 'Status', word: 'status' },
 ];
 

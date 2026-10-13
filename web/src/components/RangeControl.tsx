@@ -17,10 +17,11 @@ export interface RangeControlProps {
 type Side = 'from' | 'to';
 
 /**
- * Six 32 px pills, 1h, 6h, 24h, 7d, 30d and Custom, the pressed one the address's preset or Custom while a span stands,
- * printing the span. The group's title reads "Last 24 hours, ends {fmtAbsolute}" under a preset and "{from} to {to}"
- * in fmtAbsolute under a span. It draws `Segmented`'s markup itself, since the Custom pill anchors a popover and the
- * primitive's buttons take no ref.
+ * Six pills in a 32 px group, 1h, 6h, 24h, 7d, 30d and Custom, the pressed one the address's preset or Custom while a
+ * span stands, printing the span. A preset pill is named by the word it prints and carries its label on its title. The
+ * group's title reads "Last 24 hours, ends {fmtAbsolute}" under a preset and "{from} to {to}" in fmtAbsolute under a
+ * span. It draws `Segmented`'s markup itself, since the Custom pill anchors a popover and the primitive's buttons take
+ * no ref.
  */
 export function RangeControl({ now, onChange, value, window: shown }: RangeControlProps): JSX.Element {
   const boxId = useId();
@@ -61,7 +62,7 @@ export function RangeControl({ now, onChange, value, window: shown }: RangeContr
     <>
       <div className="segmented" role="group" aria-label="Range" title={custom ? pair : `${label}, ends ${fmtAbsolute(iso(shown.to))}`}>
         {RANGE_PRESETS.map((p) => (
-          <button key={p.name} type="button" className={p.name === value.preset ? 'is-active' : ''} aria-label={p.label} aria-pressed={p.name === value.preset} onClick={() => choose(p.name)}>
+          <button key={p.name} type="button" className={p.name === value.preset ? 'is-active' : ''} title={p.label} aria-pressed={p.name === value.preset} onClick={() => choose(p.name)}>
             {p.name}
           </button>
         ))}

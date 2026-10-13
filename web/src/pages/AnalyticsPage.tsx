@@ -24,10 +24,10 @@ import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missRea
 import { clock } from '@/lib/clock';
 import { bandRuns } from '@/lib/costs';
 import { ANALYTICS_DIMENSIONS, chipText } from '@/lib/filterBar';
-import { effectiveInterval, spanEnded } from '@/lib/follow';
+import { effectiveInterval, readEnd, spanEnded } from '@/lib/follow';
 import { fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, pct, shareLabel, shortId, upperFirst, usdTickDigits } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
-import { useAsync, useQueryFilters, type Loaded } from '@/lib/hooks';
+import { useAsync, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/hooks';
 import { linkedKeyIds, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { WINDOW_LABEL } from '@/lib/windows';
 
@@ -176,10 +176,10 @@ export function AnalyticsPage() {
   // 5 s when the page opens, and page state, so a link or a reload opens on it.
   const [intervalMs, setIntervalMs] = useState(5_000);
   const [barOpen, setBarOpen] = useState(false);
-  // A link capped at now ends its span at the clock it was made on, so the instant the page took the address, read once
-  // per address, tells it from a span that has ended.
-  const [addressed, setAddressed] = useState(() => ({ at: clock.now(), for: address }));
-  if (addressed.for !== address) setAddressed({ at: clock.now(), for: address });
+  const [costOpen, setCostOpen] = useState(false);
+  const pauseCause = costOpen ? 'dialog' : barOpen ? 'menu' : null;
+  const paused = pauseCause !== null;
+  const rangeTakenAt = useRangeTakenAt(a.range);
   const location = useLocation();
   const navigate = useNavigate();
   // The hash is the tab: a link or a reload lands on the section it names, and a change replaces the entry with the
@@ -241,15 +241,14 @@ export function AnalyticsPage() {
   };
 
   // The query bounds come from the address's instants, which keep the milliseconds the inputs' minutes drop.
+  const custom = a.range.preset === 'custom';
   const span = useMemo(() => {
     const { from, to } = addressWindow(a.range, RANGE_PRESETS, '24h', now);
-    return { endMs: to, fromMs: from, toMs: Math.min(to, now) };
-  }, [a.range, now]);
+    return { fromMs: from, toMs: readEnd(custom, to, now) };
+  }, [a.range, custom, now]);
   const fromIso = new Date(span.fromMs).toISOString();
   const toIso = new Date(span.toMs).toISOString();
-  // A custom span's own end, never the end the page capped at its clock, tells a span that has ended from a link capped
-  // at now, which reads at the interval.
-  const ended = spanEnded(a.range.preset === 'custom', span.endMs, addressed.at);
+  const ended = spanEnded(custom, span.toMs, rangeTakenAt);
   const polledMs = effectiveInterval(intervalMs, ended);
   const sessionId = filters.sessionId[0] ?? null;
 
@@ -294,7 +293,7 @@ export function AnalyticsPage() {
   }, [fromIso, toIso, burnGroup, tab, generation]);
   // The registry's list, for the account slots alone: the range's option list holds the accounts with traffic and
   // differs from the Dashboard's, and one account keeps one color across the views.
-  const registry = useAsync(() => api.listAccounts(), [], { paused: barOpen, refreshMs: polledMs });
+  const registry = useAsync(() => api.listAccounts(), [], { paused, refreshMs: polledMs });
   const slotOf = useMemo(() => accountSlots((registry.data ?? []).map((a) => a.id)), [registry.data]);
   // The plan chart's line category reads each account's stored tier against the cost model's capacity rows.
   const burnSettings = useAsync(() => (tab === 'burn' ? api.getSettings() : Promise.resolve(null)), [tab]);
@@ -345,15 +344,15 @@ export function AnalyticsPage() {
 
   const rangeBucketMs = bucketSizeFor(span.toMs - span.fromMs);
   // At the auto reload interval: a passed bucket boundary moves the end, so a page left open shows the hour it is in.
-  // Off, the end holds where it was read. The check waits, as the reads do, while a menu under the bar is open or the
-  // tab is hidden.
+  // Off, the end holds where it was read. The check waits, as the reads do, while a menu under the bar or a dialog is
+  // open or the tab is hidden.
   useEffect(() => {
-    if (polledMs === 0 || barOpen) return;
+    if (polledMs === 0 || paused) return;
     const id = clock.setInterval(() => {
       if (!document.hidden && Math.floor(clock.now() / rangeBucketMs) !== Math.floor(now / rangeBucketMs)) setNow(clock.now());
     }, polledMs);
     return () => clock.clearInterval(id);
-  }, [barOpen, now, polledMs, rangeBucketMs]);
+  }, [now, paused, polledMs, rangeBucketMs]);
   // A read that failed or that still answers the filters before the change draws nothing, so no figure stands
   // under a filter it was not read for.
   const failure = series.error ?? breakdown.error ?? log.error;
@@ -457,11 +456,11 @@ export function AnalyticsPage() {
         refresh={{
           disabled: ended ? 'A custom range that has ended has nothing new to read' : undefined,
           intervalMs,
-          note: intervalMs === 0 && a.range.preset !== 'custom' ? `the window ends ${fmtShortTime(toIso)}` : undefined,
+          note: intervalMs === 0 && !custom ? `the window ends ${fmtShortTime(toIso)}` : undefined,
           onIntervalChange: setIntervalMs,
           onRefresh: retry,
-          paused: barOpen ? 'menu' : null,
-          refreshTitle: `Window ends ${fmtShortTime(toIso)}. Refresh reads up to now`,
+          paused: pauseCause,
+          refreshTitle: custom ? `Window from ${fmtShortTime(fromIso)} to ${fmtShortTime(toIso)}. Refresh reads the same window again` : `Window ends ${fmtShortTime(toIso)}. Refresh reads up to now`,
         }}
         sticky
         update={update}
@@ -569,6 +568,7 @@ export function AnalyticsPage() {
             error={burn.error ?? (burnGroup === 'account' ? burnSettings.error : null)}
             groupBy={burnGroup}
             loading={burn.data === null || burn.stale || (burnGroup === 'account' && sized === null)}
+            onCostReferenceOpenChange={setCostOpen}
             rangeEndMs={burn.data?.endMs}
             readAt={burn.data?.readAt}
             sized={sized}
@@ -1608,6 +1608,7 @@ function BurnCharts({
   error,
   groupBy,
   loading,
+  onCostReferenceOpenChange,
   rangeEndMs,
   readAt,
   sized,
@@ -1618,6 +1619,8 @@ function BurnCharts({
   error: string | null;
   groupBy: BurnGroup;
   loading: boolean;
+  /** The Cost reference dialog opening and closing, which the page's auto reload waits for. */
+  onCostReferenceOpenChange: (open: boolean) => void;
   rangeEndMs: number | undefined;
   readAt: number | undefined;
   sized: ReadonlySet<string> | null;
@@ -1686,7 +1689,7 @@ function BurnCharts({
           title="Plan per hour"
           subtitle={
             <>
-              {PLAN_NOTE}.{partial ? ` ${PARTIAL_NOTE}.` : ''} <CostReferenceLink tab="tiers" />
+              {PLAN_NOTE}.{partial ? ` ${PARTIAL_NOTE}.` : ''} <CostReferenceLink onOpenChange={onCostReferenceOpenChange} tab="tiers" />
             </>
           }
           error={error}

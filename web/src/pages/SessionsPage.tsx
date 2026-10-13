@@ -194,9 +194,10 @@ export function SessionsPage() {
   const [intervalMs, setIntervalMs] = useState(5_000);
   const [barOpen, setBarOpen] = useState(false);
   const [pending, setPending] = useState<Row | null>(null);
+  const [costOpen, setCostOpen] = useState(false);
   // The rows whose menu is open, by row: an answer landing under an open menu could add or drop rows beneath it.
   const [openMenus, setOpenMenus] = useState<ReadonlySet<string>>(() => new Set());
-  const pauseCause = pending !== null ? 'dialog' : openMenus.size > 0 || barOpen ? 'menu' : null;
+  const pauseCause = pending !== null || costOpen ? 'dialog' : openMenus.size > 0 || barOpen ? 'menu' : null;
   const reread = { paused: pauseCause !== null, refreshMs: intervalMs };
   // The router keeps a session while it is used, so the list is read again rather than aged on this clock alone: a
   // session still sending requests would otherwise drop off once its first-read activity crossed the expiry. The
@@ -314,7 +315,7 @@ export function SessionsPage() {
             cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.
           </p>
         </div>
-        <CostReferenceLink tab="plan-rates" />
+        <CostReferenceLink onOpenChange={setCostOpen} tab="plan-rates" />
       </div>
 
       <div className="stat-grid stat-grid--caps">

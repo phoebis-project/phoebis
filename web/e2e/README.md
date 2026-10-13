@@ -48,7 +48,7 @@ pass and recorded in the mock pass, whose story runs past the card at 1280 by 80
 the Status, Attempts and links cells wrapping, the width past the card recorded in the mock pass), its
 text at 1920 by 1080 in the mock pass (no client class or agent type cut, each read on its own span),
 the request pages' widths, walked on a load of their own once every view's shot is taken, the
-pagers of the request log and the routing log (three buttons 32 px square, the page-size select 32 px, the footer one
+pagers of both logs (three buttons 32 px square on each, the request log's page-size select 32 px, each footer one
 control tall with its padding and its border), the request log's range control (the group 32 px with its six pills 28 px
 at one top, the group against the split Refresh button and the search field on height and top, the Custom pill's width
 recorded), the speed chip, and the cache miss reason, effort and request class chips (each against the turn origin chip

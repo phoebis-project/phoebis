@@ -347,8 +347,8 @@ the last 24 hours. The rule grammar and the levels are on [Model rules](routing.
 The filter bar holds one row: the range, the search, Add filter, the Columns button, and at the right edge the split
 Refresh button and the count of rows shown ("25 shown, more available"). The range offers Last hour, Last 6 hours, Last
 24 hours (the default), Last 7 days, Last 30 days or Custom range with From and To, drawn as the pills 1h, 6h, 24h, 7d,
-30d and Custom. Custom opens From and To in a popover on the window the table shows, where "End must be after start."
-holds Apply off while the pair is wrong and an end past now reads as now, and once applied the pill prints the span
+30d and Custom. Custom opens From and To in a popover on the window the table shows, where Apply stays disabled under
+"End must be after start." while the pair is wrong, an end past now reads as now, and the pill prints an applied span
 ("13:00 to 14:30", the date before each time across days). The search, "Search id, session, key, account, model, error,
 message id", matches the request id, the session, the key, the model, the error code, and an attempt's account,
 upstream request id or upstream message id, literally (`_` and `%` are characters), and applies 400 milliseconds after
@@ -450,11 +450,11 @@ product token, `claude-cli/2.1.269` for `claude-cli/2.1.269 (external, cli)`.
 Auto reload is at 5 s when the view opens, set on the split Refresh button's dropdown as on the Requests view and kept
 out of the page's address. At each interval it reads the account list again and, once a new bucket of the range has
 begun, moves the window's end to now and reads every chart again, so a page left open shows the hour it is in. It waits
-while a menu or popover under the bar is open or the tab is hidden. Off, the window's end holds where it was read and
-the dropdown's title adds "the window ends {time}" until a filter, the range or Refresh moves it. The split Refresh
-button's body moves the end to now and reads every chart again. A custom range holds its own end either way, and one
-whose end lay more than a minute in the past when the page took it reads Off in the dropdown, disabled, while a link
-whose range ends at the moment it was made reads on.
+while a menu or popover under the bar or the Cost reference dialog is open, or the tab is hidden. Off, the window's end
+holds where it was read and the dropdown's title adds "the window ends {time}" until a filter, the range or Refresh
+moves it. The split Refresh button's body moves the end to now and reads every chart again. A custom range holds its own
+end either way, and one whose end lay more than a minute in the past when the page took it reads Off in the dropdown,
+disabled, while a link whose range ends at the moment it was made reads on.
 
 Filtered to one session the view sums the request log instead of the hourly rollups and says so, over the first 10,000
 requests of the range, and a session with more reads "Partial: the first 10,000 requests of the range" on a line under
@@ -536,9 +536,9 @@ Retained (`{n} MiB of {max} MiB`, "prompts kept for probes"), "Cache probes, 24h
 {n} migrated, {n} held, {n} skipped, {n} failed`), "Expired between turns, 24h" ("misses cache warming exists to
 prevent") and "Bus gaps" ("times the keepalive engine missed bus events"). A tile whose read failed draws a dash with
 the reason on hover, and Try again under the tiles reads them again. Auto reload starts at 5 s and reads the sessions,
-the recipes and the tiles at that one interval, and it waits while a row's menu or the Release question is open. The
-probes and the recipe are explained on [Keepalive](keepalive.md), the mod's words under [The mod](keepalive.md#the-mod)
-and the recipe's states under [The five states](keepalive.md#the-five-states).
+the recipes and the tiles at that one interval, and it waits while the Cost reference dialog, the Release question or a
+row's menu is open. The probes and the recipe are explained on [Keepalive](keepalive.md), the mod's words under [The
+mod](keepalive.md#the-mod) and the recipe's states under [The five states](keepalive.md#the-five-states).
 
 The card "Sessions" ("One row per session. Open a row for the cache-warming recipe each agent carries") offers "Expand
 all" or "Collapse all". The Session column is always drawn, and the ten others, which the bar's Columns control shows

@@ -133,7 +133,7 @@ export interface Widening {
  * with the page size kept: this minute over `clockMinute`, this session over `aroundSubject` with the session, this
  * account over `aroundRequest` with the account. The windows are the Routing log's own, so one widening reads one span
  * on either view. A request without a session or an account omits that link, and one still running reads as a moment.
- * The windows end at most at `now` and never before the request ends.
+ * Each window's end is capped at `now`, or at the request's end where that is later.
  */
 export function requestsWiden(request: Pick<RequestLog, 'accountId' | 'at' | 'durationMs' | 'id' | 'sessionId'>, now: number, rows: string): Widening[] {
   const at = Date.parse(request.at);

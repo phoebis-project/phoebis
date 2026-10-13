@@ -1,6 +1,5 @@
 import { Fragment, type RefObject, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { OptionList, type Option, type Preset, walkRows } from '@/components/ui/OptionList';
-import { PATTERN_GRAMMAR } from '@/components/ui/PatternInput';
 import { Popover } from '@/components/ui/Popover';
 import { IconCheck, IconChevronLeft, IconPlus } from '@/components/ui/icons';
 import { Button, Input } from '@/components/ui/primitives';
@@ -23,6 +22,8 @@ export interface AddFilterProps {
 
 /** A list longer than this opens with its search field. */
 const SEARCHED = 12;
+
+export const PATTERN_GRAMMAR = '* matches any run of characters, ? one, and a backslash quotes either';
 
 /** A dimension's value in the chip's words without the dimension, "on" for a flag, and nothing while it holds none. */
 function valueWords(dimension: Dimension, value: unknown, options: Option[]): string {
