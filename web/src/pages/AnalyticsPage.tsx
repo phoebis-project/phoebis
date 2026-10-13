@@ -2240,7 +2240,8 @@ function BurnCharts({
       // One entry for every figure the cost model cannot price on the window, whichever line it fell on. Muted, since
       // it draws no line of its own.
       ...(drawn.some(({ l }) => w.unpriced(l)) ? [{ color: ink.muted, label: 'model unlisted', shape: 'line' as const, title: MODEL_UNLISTED_HINT, value: w.word }] : []),
-      ...(drawn.some(({ l }) => l.estimated) ? [{ color: ink.muted, hollow: true, label: 'estimated', shape: 'line' as const, title: ESTIMATED_HINT }] : []),
+      // Listed on the window's own marks, since the entry explains the hollow dot, which draws on them alone.
+      ...(drawn.some(({ i }) => rows.some((r) => w.marked(r, i))) ? [{ color: ink.muted, hollow: true, label: 'estimated', shape: 'line' as const, title: ESTIMATED_HINT }] : []),
       // Muted, since no line of its own is drawn.
       ...unpriced.map((l) => ({ color: ink.muted, label: nameOf(l), shape: 'line' as const, title: TIER_UNKNOWN_HINT, value: 'tier unknown' })),
     ];

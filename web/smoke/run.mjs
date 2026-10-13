@@ -12981,6 +12981,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // estimated bucket of a line the story draws on the week card also answers a week, so a stubbed answer of two
       // hours, the estimated one off the week, stands in for the line whose estimates miss its week.
       const weekRead = [];
+      const weekEntries = [];
       const readWeek = (by, answer) => {
         const holder = (group) => (by === 'key' ? /^(.+)@(\d+)$/.exec(group) : null);
         const labelFor = (group) => (holder(group) === null ? group : earlierHolderLabel(holder(group)[1], Number(holder(group)[2])));
@@ -12996,6 +12997,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         for (const li of legendItems('Model week per hour').filter((x) => !MUTED.includes(labelOf(x)))) {
           weekRead.push({ by, estimated: estimatedLines.has(labelOf(li)), label: labelOf(li), marked: weekMarked.has(labelOf(li)), title: li.getAttribute('title') ?? '', value: valueOf(li) });
         }
+        // The hollow entry explains the hollow dot, so it lists while a drawn line holds a slot the dot marks.
+        weekEntries.push({ by, listed: legendItems('Model week per hour').some((li) => labelOf(li) === 'estimated'), marked: weekRead.some((l) => l.by === by && l.marked) });
       };
       for (const by of ['key', 'account']) {
         await burnGroup(by);
@@ -13014,6 +13017,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       await burnGroup('account');
       readWeek('stubbed', stubbed);
       const stubbedFiveHour = legendItems('5-hour per hour').filter((li) => labelOf(li) === 'secondary').map(valueOf);
+      const stubbedFiveHourEntry = legendItems('5-hour per hour').some((li) => labelOf(li) === 'estimated');
       delete api.getAnalyticsBurn;
       await burnGroup('key');
       await burnGroup('account');
@@ -13022,6 +13026,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         name: "/analytics the model week card's legend marks a line's figure only where an estimated bucket answered a week, so a line estimated on its 5-hour buckets alone reads its week figure bare",
         ok: weekRead.some((l) => l.by === 'stubbed' && l.label === 'secondary' && l.estimated && !l.marked) && stubbedFiveHour.length === 1 && stubbedFiveHour[0].startsWith('~') && wrongWeek.length === 0,
         missing: [`stubbed 5-hour ${JSON.stringify(stubbedFiveHour)}`, ...weekRead.filter((l) => l.estimated || wrongWeek.includes(l)).map((l) => JSON.stringify(l))],
+      });
+      results.push({
+        name: "/analytics the model week card lists the estimated entry only while a drawn line holds an estimated bucket that answered a week, the 5-hour card while one holds any",
+        ok: weekEntries.every((e) => e.listed === e.marked) && weekEntries.some((e) => e.by === 'stubbed' && !e.listed) && stubbedFiveHourEntry,
+        missing: [JSON.stringify(weekEntries), `stubbed 5-hour entry ${stubbedFiveHourEntry}`],
       });
     }
     // The story's Fable traffic gives its accounts a model week of their own, which its own card charts.
