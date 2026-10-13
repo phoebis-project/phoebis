@@ -21,7 +21,8 @@ export { call };
 export { sumGroups } from '@/api/fold';
 export { AttentionRows } from '@/components/AttentionRows';
 export { CACHE_MODEL_SHARE_NOTE, CACHE_SHARE_NOTE, NATIVE_SUBSET, SHARE_NOTE } from '@/lib/analytics';
-export { ATTENTION_REFRESH_MS } from '@/lib/attention';
+// The model item's sentence, so the attention line's check reads its title against the story's own detail.
+export { ATTENTION_REFRESH_MS, attentionDetail } from '@/lib/attention';
 export { default as React } from 'react';
 export { AttemptCount, AttemptTrail } from '@/components/ui/AttemptTrail';
 // The viewer's row height and margin, so a body check bounds the drawn rows by the figures the viewer draws by.

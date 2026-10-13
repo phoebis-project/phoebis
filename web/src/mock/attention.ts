@@ -1,8 +1,10 @@
 import type { AttentionItem } from '@/api/types';
+import { latestWeighted, modelTierOf } from '@/lib/costs';
+import { undatedModel } from '@/lib/format';
 import { accountById } from './accounts';
 import { KEYS, POOLS } from './pools';
 import { REQUESTS } from './requests';
-import { ATTENTION_ITEM_SAMPLE } from './samples';
+import { ATTENTION_ITEM_SAMPLE, TABLES } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, iso } from './time';
 
 const ms = (at: string | null | undefined) => (at ? Date.parse(at) : null);
@@ -33,12 +35,27 @@ function exhaustion(poolId: string): Pick<AttentionItem, 'detail' | 'since'> | n
 const jobsExhausted = exhaustion('jobs');
 
 /**
- * One item per kind but a failed certificate reload, on the story's accounts, pools, keys and proxy listener, in the
- * route's order: jobs exhausted from the runner's first request after its one member spent the day's budget, a client
- * build refused on the laptop key, the routing state writer keeping its writes in memory, legacy's lapsed credential,
- * the Overflow workspace out of funding as its account reads, legacy's refreshes failing, the proxy listener's
- * certificate 12 days from its end, a priced record of the jobs pool's one member parked in the ledger file, and the
- * backoff secondary's poll is in.
+ * A model the cost model does not weight as the ledger counts it: the requests on it that a plan funded and that
+ * carried usage, priced at its model tier's latest weighted model, the run dated from the first of them. Null when the
+ * story holds none.
+ */
+function unweighted(model: string): Pick<AttentionItem, 'detail' | 'since'> | null {
+  // The rows run newest first.
+  const rows = REQUESTS.filter((r) => undatedModel(r.canonicalModel) === model && r.estimated && r.usage.input + r.usage.output + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0);
+  const first = rows[rows.length - 1];
+  const tier = modelTierOf(TABLES, model);
+  return first ? { detail: { model, requests: rows.length, tier, weight_of: tier === null ? null : latestWeighted(TABLES, tier) }, since: first.at } : null;
+}
+
+const sonnetUnweighted = unweighted('claude-sonnet-4-6');
+
+/**
+ * One item per kind but a failed certificate reload, on the story's accounts, pools, keys, proxy listener and models,
+ * in the route's order: jobs exhausted from the runner's first request after its one member spent the day's budget, a
+ * client build refused on the laptop key, the routing state writer keeping its writes in memory, legacy's lapsed
+ * credential, the Overflow workspace out of funding as its account reads, legacy's refreshes failing, the proxy
+ * listener's certificate 12 days from its end, a priced record of the jobs pool's one member parked in the ledger file,
+ * the backoff secondary's poll is in, and Sonnet 4.6 priced at its model tier's weight.
  */
 export const ATTENTION: AttentionItem[] = [
   ...(jobsExhausted
@@ -117,4 +134,16 @@ export const ATTENTION: AttentionItem[] = [
     kind: 'poll_backoff',
     since: secondaryPoll?.backoffSince ?? ago(42 * MINUTE),
   },
+  ...(sonnetUnweighted
+    ? [
+        {
+          ...ATTENTION_ITEM_SAMPLE,
+          ...sonnetUnweighted,
+          kind: 'model_unweighted' as const,
+          link: { id: 'claude-sonnet-4-6', page: 'models' as const },
+          pools: [],
+          subject: { id: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6', type: 'model' as const },
+        },
+      ]
+    : []),
 ];

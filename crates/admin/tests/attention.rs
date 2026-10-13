@@ -320,10 +320,10 @@ async fn the_system_route_answers_without_an_engine_stats_member() {
     assert!(system.get("alerts").is_none(), "{system}"); // removed name
 }
 
-/// The console at main reads a kind it does not know as an exhausted pool, so the route leaves the unweighted model's
-/// item out until the console names it, while the reader holds it and the metrics listener carries its series.
+/// The route and the metrics listener read one reader, so the unweighted model's item lists on the route as its series
+/// reads on the scrape.
 #[tokio::test]
-async fn a_held_model_unweighted_condition_stays_off_the_route_while_the_gauge_carries_it() {
+async fn a_held_model_unweighted_condition_lists_on_the_route_after_every_degraded_kind() {
     // The test cost model leaves `claude-opus-5` unweighted under the `opus` model tier at the rig's clock, so the
     // case reads no shipped figure.
     let parts =
@@ -375,6 +375,8 @@ async fn a_held_model_unweighted_condition_stays_off_the_route_while_the_gauge_c
     })
     .await;
     let body = json(get(&parts.app, "/admin/attention", Some(&cookie)).await).await;
+    // The kind ranks last in the reader's order, which the attention crate's tests pin over every kind, so the
+    // degraded account seeded beside it is enough to read the item after a degraded kind.
     assert_eq!(
         body["items"]
             .as_array()
@@ -382,8 +384,32 @@ async fn a_held_model_unweighted_condition_stays_off_the_route_while_the_gauge_c
             .iter()
             .map(|i| i["kind"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["funding_required"],
-        "every other held kind answers as before: {body}"
+        ["funding_required", "model_unweighted"],
+        "the model's item lists after every degraded kind: {body}"
+    );
+    let item = &body["items"][1];
+    let costs = phoebis_ledger::test_tables::subscription_costs();
+    let weight_of = costs
+        .revisions
+        .in_force(common::NOW)
+        .latest_weighted("opus")
+        .expect("the test cost model weights an opus model");
+    assert_eq!(
+        (
+            &item["subject"],
+            &item["link"],
+            &item["pools"],
+            &item["since"],
+            &item["detail"]
+        ),
+        (
+            &j!({ "type": "model", "id": "claude-opus-5", "label": "claude-opus-5" }),
+            &j!({ "page": "models", "id": "claude-opus-5" }),
+            &j!([]),
+            &j!(common::NOW),
+            &j!({ "model": "claude-opus-5", "requests": 1, "tier": "opus", "weight_of": weight_of }),
+        ),
+        "the item opens the Models page on the model, belongs to no pool and dates from the request: {item}"
     );
     let metrics = phoebis_ledger::metrics_router(
         Arc::new(Metrics::new()),

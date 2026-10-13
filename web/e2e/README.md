@@ -14,7 +14,7 @@ discovery line (below the group's last field, in the hint's size and a rail pare
 expert field's wrapper (a half cell beside the plain one, a lone field the grid's width), the sidebar's brand row (the
 mark's box 36 px square with the logo drawn 26 px square in it, the name 17 px at weight 600 on one line and inside the
 sidebar's content box), the dashboard's attention line (one 22 px row per line of badges, each badge the pool card's
-strip badge, in the content box and clear of the tiles, with the story's nine items in the mock pass, the seeded
+strip badge, in the content box and clear of the tiles, with the story's ten items in the mock pass, the seeded
 exhaustion or the quiet line in the router pass), the sidebar's Expert view row above the version line, the routing
 log's columns at 1280 by 800 and 1440 by 900 (Fact 150 px at both, Account 246 then 256 px, Model at 1440 alone, the
 table its card's width with nothing to scroll sideways), the Diagnostics group (neither its heading nor the Routing log
