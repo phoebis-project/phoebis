@@ -1,6 +1,6 @@
 import type { Account, MemberEligibility, Pool, RateLimitWindow, Session } from '@/api/types';
 import { fmtDuration, instant } from './format';
-import { windowOf } from './quota';
+import { endOf, windowOf } from './quota';
 
 export type SheddingPreset = 'balanced' | 'conservative' | 'custom' | 'fast';
 
@@ -80,6 +80,7 @@ function burnDecayed(burn: number, burnAt: string | null, now: number, windowMs:
 }
 
 const HOUR_MS = 3_600_000;
+const FIVE_HOURS_MS = 5 * HOUR_MS;
 
 /** A plan window the trigger reads, in the order the router's round walks them: the shared windows, then the week. */
 export type ShedWindow = '5h' | '7d' | '7d_fable';
@@ -122,6 +123,8 @@ export interface ShedPreview {
   /** The pool's switch is off: no round runs, whatever the projection reads. */
   off: boolean;
   sessions: number;
+  /** The rounds mark nothing because no pin on the members over the ceiling is priced, or none is pinned there. */
+  unpriced: boolean;
   warm: number;
 }
 
@@ -151,12 +154,14 @@ export function shedPreview(
     .sort((a, b) => a.priority - b.priority || a.account.label.localeCompare(b.account.label));
   // The preview's reading of the gate: a sibling has runway for a pin while its served projection sits under the
   // ceiling on every window the pin's model draws. The router also adds the pin's rewrite and burn and counts the
-  // round's planned reservations, which the served figures cannot replay, so this is an approximation of its read.
+  // round's planned reservations, which the served figures cannot replay, so this is an approximation of its read. An
+  // end inside the next five hours falls inside every horizon, so such a sibling is no destination whatever it reads.
   const hasRunway = (source: string, model: string | null) =>
     listed.some(
       ({ account, eligible }) =>
         account.id !== source &&
         eligible &&
+        (endOf(account, now) ?? Number.POSITIVE_INFINITY) >= now + FIVE_HOURS_MS &&
         (account.kind === 'api_key'
           ? bucketRoom(account, now)
           : windowsOf(model).every((id) => {
@@ -172,6 +177,7 @@ export function shedPreview(
   let warmMarked = 0;
   let walkable = 0;
   let stranded = 0;
+  let priced = 0;
   for (const { account } of listed) {
     if (account.kind === 'api_key') continue;
     const pins = sessions
@@ -227,9 +233,19 @@ export function shedPreview(
     marked += taken.length;
     warmMarked += taken.filter((p) => p.warm).length;
     walkable += walked.filter(open).length;
+    priced += walked.filter((p) => p.burn !== null).length;
     stranded += walked.filter((p) => open(p) && !p.runway).length;
   }
-  return { closest: hot.length === 0 ? closest : null, covered, hot, noRunway: marked === 0 && walkable > 0 && stranded === walkable, off: !pool.loadShedding, sessions: marked, warm: warmMarked };
+  return {
+    closest: hot.length === 0 ? closest : null,
+    covered,
+    hot,
+    noRunway: marked === 0 && walkable > 0 && stranded === walkable,
+    off: !pool.loadShedding,
+    sessions: marked,
+    unpriced: marked === 0 && priced === 0,
+    warm: warmMarked,
+  };
 }
 
 /** A share as a whole percent with the space before the sign, as the pool card's badge writes it. */
@@ -238,7 +254,7 @@ const percentText = (share: number) => `${Math.round(share * 100)} %`;
 /**
  * The shedding group's dry run in up to three sentences: the switch when it is off, the members whose projection
  * crosses the ceiling or the one closest to it, and the round they would run, or that no sibling has runway for their
- * sessions. A 5-hour horizon reads its clock time, a weekly one the span to it.
+ * sessions, or that none of them is priced. A 5-hour horizon reads its clock time, a weekly one the span to it.
  */
 export function shedPreviewLine(preview: ShedPreview, now: number = Date.now()): string {
   const off = preview.off ? ['Load shedding is off: no round runs.'] : [];
@@ -251,6 +267,10 @@ export function shedPreviewLine(preview: ShedPreview, now: number = Date.now()):
   const over = hot.length === 1 ? `1 member projects over the ceiling: ${hot[0].label}.` : `${hot.length} members project over the ceiling: ${hot.map((h) => h.label).join(', ')}.`;
   if (preview.off) return [...off, over].join(' ');
   const count = `${preview.sessions} ${preview.sessions === 1 ? 'session' : 'sessions'}`;
-  const round = preview.noRunway ? 'No sibling has runway for them, so nothing would be marked.' : `A round there would mark ${count} (${preview.warm} warm), ${(preview.covered * 100).toFixed(1)} %/h of the excess, to move to a sibling with runway.`;
+  const round = preview.noRunway
+    ? 'No sibling has runway for them, so nothing would be marked.'
+    : preview.unpriced
+      ? 'A round there would mark no session: none is priced.'
+      : `A round there would mark ${count} (${preview.warm} warm), ${(preview.covered * 100).toFixed(1)} %/h of the excess, to move to a sibling with runway.`;
   return `${over} ${round}`;
 }

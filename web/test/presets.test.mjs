@@ -165,6 +165,18 @@ test('the preview names every member over the ceiling, and says no sibling has r
   assert.deepEqual(ordered.hot.map((h) => h.label), ['hot', 'second'], 'the members in the order the Members group lists them, priority first');
 });
 
+test('a sibling whose plan ends inside the next five hours has no runway, whatever its projection', () => {
+  const ending = (hours) => ({ ...cool, cancelled: true, subscription: { endsAt: at(NOW + hours * HOUR), trialEndsAt: null } });
+  assert.equal(line([hot, ending(4)], three), '1 member projects over the ceiling: hot. No sibling has runway for them, so nothing would be marked.', 'an end four hours out falls inside every horizon');
+  assert.equal(line([hot, ending(6)], three), '1 member projects over the ceiling: hot. A round there would mark 2 sessions (1 warm), 4.5 %/h of the excess, to move to a sibling with runway.', 'an end six hours out does not');
+});
+
+test('a member over the ceiling with no priced pin reads that a round would mark no session', () => {
+  const said = '1 member projects over the ceiling: hot. A round there would mark no session: none is priced.';
+  assert.equal(line([hot, cool], [pin('hot', 'a', null, false), pin('hot', 'b', null, true)]), said, 'every pin unpriced');
+  assert.equal(line([hot, cool], []), said, 'no pin at all');
+});
+
 test("the preview reads a sibling's runway on every window the pin's model draws", () => {
   const fableFull = oauth('busy', 0.3, 0.2, 0.92);
   const fable = (id, burn) => pin('hot', id, burn, false, { model: 'claude-fable-5-1' });

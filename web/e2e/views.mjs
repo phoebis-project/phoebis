@@ -1408,7 +1408,8 @@ async function poolDialogWalk(theme, mode) {
     }, group);
     if (gated) found.push(gated);
     const preset = { 'Load shedding': ['Load shedding preset', ['Shed cap (%)', 'Burn average (s)', 'Shed dwell (s)']], Failover: ['Failover preset', ['In flight', 'Retry in place (s)']] }[group];
-    if (preset) {
+    // The presets and their fields are expert, so the plain walk reaches Load shedding with neither drawn.
+    if (preset && expert) {
       const state = await dialog.evaluate(
         (el, [label, pills, fields]) => {
           const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === label);

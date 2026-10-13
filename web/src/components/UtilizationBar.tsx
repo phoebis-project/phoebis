@@ -21,8 +21,9 @@ const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(mi
 
 function Handle({ label, min, max, threshold, track }: { label: string; max: number; min: number; threshold: Threshold; track: RefObject<HTMLDivElement | null> }) {
   const { onChange, value } = threshold;
-  // A refused value can lie past the track (a ceiling of 120), so the handle and aria-valuenow stay on the track while
-  // the text and title keep the value the field holds.
+  // A refused value can lie past the track (a ceiling of 120) or under the slider's minimum (a ceiling of 40), so the
+  // handle stays on the track and aria-valuenow inside the slider's bounds, while the text and title keep the value the
+  // field holds.
   const placed = clamp(value, 0, 100);
   const toPointer = (e: PointerEvent<HTMLSpanElement>) => {
     const rect = track.current?.getBoundingClientRect();
@@ -43,7 +44,7 @@ function Handle({ label, min, max, threshold, track }: { label: string; max: num
       aria-orientation="horizontal"
       aria-valuemin={min}
       aria-valuemax={max}
-      aria-valuenow={placed}
+      aria-valuenow={clamp(value, min, max)}
       aria-valuetext={`${value}%`}
       title={`${label}: ${value}%`}
       className="ubar__handle ubar__handle--ceiling"

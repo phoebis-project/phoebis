@@ -3277,8 +3277,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   });
 }
 {
-  // jobs' switch turned off in its dialog and saved reads on its badge, and the route adds the warning that says so;
-  // turned on again, the badge reads its ceiling once more.
+  // jobs' switch turned off in its dialog and saved reads on its badge, and the route adds the warning that says so.
+  // Turned on again, the badge reads its ceiling once more.
   const badge = () =>
     [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'jobs')?.querySelector('.pool__features a[href="/pools?edit=jobs&group=shedding"]')?.textContent?.trim() ?? null;
   const flipJobs = async () => {
@@ -3813,7 +3813,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       missing: [JSON.stringify(labelsOf('Failover')), String(introOf('Failover'))],
     });
     expect('/pools the overage group states the grace and the wind down', card('Overage and plan end')?.textContent ?? '', [
-      'Under Prefer plan quota, a session stays on an account in overage while its window resets within this many minutes; 0 moves it at once.',
+      'Under Prefer plan quota, a session stays on an account in overage while its window resets within this many minutes. At 0 it moves at once.',
       'This long before a cancelled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. The end is set on the Accounts page',
     ]);
     // Pool all runs the Pace strategy, so the Strategy field draws its hint. The Accounts page link carries its
@@ -5064,7 +5064,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const line = group(dlg, 'Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
   results.push({
     name: "/pools the shedding preview counts the pool's own pins alone on an account that left another pool",
-    ok: line === '1 member projects over the ceiling: primary. A round there would mark 0 sessions (0 warm), 0.0 %/h of the excess, to move to a sibling with runway.',
+    ok: line === '1 member projects over the ceiling: primary. A round there would mark no session: none is priced.',
     missing: [line],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -5870,12 +5870,19 @@ localStorage.removeItem('phoebis.expertView');
       ceiling.dispatchEvent(new window.Event('input', { bubbles: true }));
       await p.settle(120);
     }
-    const handle = group(dlg, 'Window ceiling')?.querySelector('[role="slider"][aria-label="Window ceiling"]');
-    const drawn = [handle?.getAttribute('aria-valuenow'), handle?.getAttribute('aria-valuemax'), handle?.style.left, handle?.getAttribute('aria-valuetext')];
+    const handle = () => group(dlg, 'Window ceiling')?.querySelector('[role="slider"][aria-label="Window ceiling"]');
+    const read = () => [handle()?.getAttribute('aria-valuenow'), handle()?.getAttribute('aria-valuemin'), handle()?.getAttribute('aria-valuemax'), handle()?.style.left, handle()?.getAttribute('aria-valuetext')];
+    const past = read();
+    if (ceiling) {
+      setter.call(ceiling, '40');
+      ceiling.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await p.settle(120);
+    }
+    const under = read();
     results.push({
-      name: "/pools a refused ceiling past the track draws its handle at the track's end, the field's value in its text",
-      ok: JSON.stringify(drawn) === JSON.stringify(['100', '100', '100%', '120%']),
-      missing: drawn.map(String),
+      name: "/pools a refused ceiling draws its handle on the track and announces the nearest bound, the field's value in its text",
+      ok: JSON.stringify(past) === JSON.stringify(['100', '50', '100', '100%', '120%']) && JSON.stringify(under) === JSON.stringify(['50', '50', '100', '40%', '40%']),
+      missing: [...past, ...under].map(String),
     });
   }
   foot(dlg, 'Cancel')?.click();

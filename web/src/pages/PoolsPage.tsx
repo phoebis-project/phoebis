@@ -1927,7 +1927,7 @@ export function PoolDialog({
             </Field>
           </Expert>
           <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.retryInPlaceSeconds)}>
-            <Field label={ENGINE_FIELD_LABELS.retryInPlaceSeconds} className="cell--half" hint="The longest throttle a request waits out on its member before failing over, and the longest wait for a free slot; 0 fails over at once.">
+            <Field label={ENGINE_FIELD_LABELS.retryInPlaceSeconds} className="cell--half" hint="The longest throttle a request waits out on its member before failing over, and the longest wait for a free slot. At 0 a request fails over at once.">
               <Input
                 type="number"
                 min={ENGINE_BOUNDS.retryInPlaceSeconds.min}
@@ -1965,7 +1965,7 @@ export function PoolDialog({
           </div>
         </Field>
         <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.overageMoveGraceMinutes)}>
-          <Field label={ENGINE_FIELD_LABELS.overageMoveGraceMinutes} hint="Under Prefer plan quota, a session stays on an account in overage while its window resets within this many minutes; 0 moves it at once.">
+          <Field label={ENGINE_FIELD_LABELS.overageMoveGraceMinutes} hint="Under Prefer plan quota, a session stays on an account in overage while its window resets within this many minutes. At 0 it moves at once.">
             <Input
               type="number"
               min={ENGINE_BOUNDS.overageMoveGraceMinutes.min}
