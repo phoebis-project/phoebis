@@ -976,6 +976,8 @@ struct Recorder {
     pin_written: Option<PinWritten>,
     hold_place: Option<&'static str>,
     shed_round: Option<ShedRoundRecord>,
+    /// The plan windows the shed rule's trigger tested, in its order, for the renewal fact.
+    trigger_windows: Vec<&'static str>,
     /// The mark step 1's heal check or step 4's move cleared, for the outcome and the task's event.
     mark_cleared: Option<MarkClearedFacts>,
     pick: Option<Pick>,
@@ -1924,7 +1926,7 @@ pub fn seconds_ms(seconds: u64) -> i64 {
 }
 
 /// The absolute prediction of `window` against `t`, which the select-below gate reads: that ceiling bounds the
-/// utilization itself, where the shedding trigger reads its lead over pace.
+/// utilization itself, where the shedding trigger reads the projection at the horizon.
 fn utilization_at_least(
     state: &RoutingState,
     account_id: &str,
@@ -2684,6 +2686,7 @@ fn move_of<'a>(
     let tier = snapshot.tier(source).unwrap_or_default();
     let projections = projections_of(state, snapshot, pool, source, tier, now);
     let windows = trigger_windows(state, snapshot, pool, source);
+    rec.trigger_windows = windows.clone();
     let mut facts = Vec::new();
     for window in &windows {
         let (Some(projection), Some(at), Some(until)) = (
@@ -2986,8 +2989,9 @@ fn pin_request(request: &SelectRequest, pin: &PinRow, current: bool) -> SelectRe
 
 /// The shed rule's destination for `pin` among the eligible siblings, as its own move would read it: the no-return
 /// keep, the allowance filter and the cap as `gate` applies them, the order `fits` alone reduced to the longest runway,
-/// and the first of what the strategy would pick among. `planned` holds the reservations the round planned for its
-/// earlier marks, which the fit counts on their destinations. `None` when nothing fits.
+/// and the strategy's pick among the tied as `rank` reads it, so the plan names the account the pin's own move lands
+/// on when nothing changes before its next request. `planned` holds the reservations the round planned for its earlier
+/// marks, which the fit counts on their destinations. `None` when nothing fits.
 #[allow(clippy::too_many_arguments)]
 fn destination_of(
     state: &RoutingState,
@@ -2999,6 +3003,7 @@ fn destination_of(
     planned: &[Reservation],
     now: i64,
     dwell_ms: i64,
+    fallback_ms: i64,
 ) -> Option<(String, FitRead)> {
     let window = window_for(&pin.model);
     let cap = pool.failover.in_flight_cap;
@@ -3031,8 +3036,12 @@ fn destination_of(
             )
         })
         .collect();
-    let fits = longest(order(&set, &reads, "fits"));
-    let chosen = fits.first().map(|(c, _)| c.account_id.clone())?;
+    let fits: Vec<&Candidate> = longest(order(&set, &reads, "fits"))
+        .into_iter()
+        .map(|(c, _)| c)
+        .collect();
+    let ranked = rank(state, snapshot, pool, window, &fits, &[], now, fallback_ms)?;
+    let chosen = ranked.ties.first().map(|c| c.account_id.clone())?;
     reads.into_iter().find(|(id, _)| *id == chosen)
 }
 
@@ -3042,8 +3051,8 @@ fn destination_of(
 /// target, `min(excess, shed_cap x burn_sum)` on the trigger's window. A standing mark is a move pending, so its burn
 /// counts as removed and the pin is skipped. The last unmarked pin and an unpriced one are never marked, and a pin
 /// with no fitting destination counts nothing. Each mark plans a reservation on its destination, which the next pin's
-/// fit counts, so a sibling's headroom is taken once. The
-/// current pin's warmth and lane are this request's, every other pin's the stored ones.
+/// fit counts, so a sibling's headroom is taken once. The current pin's warmth and lane are this request's, every
+/// other pin's the stored ones.
 #[allow(clippy::too_many_arguments)]
 fn shed_round(
     state: &RoutingState,
@@ -3109,12 +3118,18 @@ fn shed_round(
     let ordered: Vec<PinRow> = ordered.into_iter().map(|(p, _)| p).collect();
 
     // The walk's figures: each pin's burn on the trigger's window in share per second, `None` for a pin the pricer
-    // does not weight, and the record's figures per hour.
+    // does not weight, and the record's figures per hour. A pin whose model does not draw the window burns nothing
+    // there whatever the pricer answers, since the projection that fired summed the burn of the drawing models alone.
     let tier = snapshot.tier(account_id).unwrap_or_default();
     let share_of = |p: &PinRow| {
-        state
-            .share()
-            .rate(trigger.window, tier, &p.model, &p.burn, now)
+        plan_windows(&p.model)
+            .any(|window| window == trigger.window)
+            .then(|| {
+                state
+                    .share()
+                    .rate(trigger.window, tier, &p.model, &p.burn, now)
+            })
+            .flatten()
             .map(|rate| burn_decayed(rate, p.burn_at, now, average_ms))
     };
     let per_hour = |share: f64| share * 3_600.0;
@@ -3148,7 +3163,16 @@ fn shed_round(
         } else if let Some(burn) = share_of(p) {
             let req = pin_request(request, p, is_current(p));
             match destination_of(
-                state, snapshot, pool, &req, eligible, p, &planned, now, dwell_ms,
+                state,
+                snapshot,
+                pool,
+                &req,
+                eligible,
+                p,
+                &planned,
+                now,
+                dwell_ms,
+                fallback_ms,
             ) {
                 None => read.skip = Some("no_runway"),
                 Some((destination, fit)) => {
@@ -3975,6 +3999,72 @@ fn tier_of(
     }
 }
 
+/// The strategy's reading of a set before the draw: the tier `tier_of` ranks first, its members, their Pace scores
+/// where the strategy reads them, and the candidates the strategy draws among (the best Pace score, the whole tier
+/// under Priority, the tier in id order under round robin, where the cursor takes its turn). `choose` draws from
+/// `ties` and records the pick, and a round plans each mark on the first of them, so a plan and the move it foresees
+/// read one rule.
+struct Ranked<'a> {
+    tier: Tier,
+    members: Vec<&'a Candidate>,
+    scores: Vec<Score>,
+    ties: Vec<&'a Candidate>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rank<'a>(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    window: &str,
+    set: &[&'a Candidate],
+    spent_model: &[String],
+    now: i64,
+    fallback_ms: i64,
+) -> Option<Ranked<'a>> {
+    let key_of = |c: &Candidate| tier_of(state, snapshot, pool, c, spent_model, now, fallback_ms);
+    let tier = set.iter().map(|c| key_of(c)).min()?;
+    let members: Vec<&'a Candidate> = set.iter().copied().filter(|c| key_of(c) == tier).collect();
+    let (scores, ties) = match pool.strategy {
+        Strategy::Pace => {
+            let scores: Vec<Score> = members
+                .iter()
+                .map(|c| Score {
+                    account_id: c.account_id.clone(),
+                    score: pace_of(state, snapshot, c, window, now).score,
+                    unit: score_unit(snapshot, &c.account_id),
+                })
+                .collect();
+            let best = scores
+                .iter()
+                .map(|s| s.score)
+                .fold(f64::NEG_INFINITY, f64::max);
+            let ties = members
+                .iter()
+                .copied()
+                .zip(&scores)
+                .filter(|(_, s)| s.score == best)
+                .map(|(c, _)| c)
+                .collect();
+            (scores, ties)
+        }
+        Strategy::Priority => (Vec::new(), members.clone()),
+        Strategy::RoundRobin => {
+            // The cursor walks the tier's sorted ids, so an account's turn does not depend on the order
+            // `resolve` happened to build the candidate list in.
+            let mut cohort = members.clone();
+            cohort.sort_by(|a, b| a.account_id.cmp(&b.account_id));
+            (Vec::new(), cohort)
+        }
+    };
+    Some(Ranked {
+        tier,
+        members,
+        scores,
+        ties,
+    })
+}
+
 /// `places` is false for a request the cap holds: the choice names the account it waits for and places nothing.
 /// `spent_model` names the candidates step 6 kept on extra usage with a spent window. The pick's
 /// line names the tier, every tier member's score under Pace, the ties and the round-robin turn, and the tier's
@@ -3994,12 +4084,25 @@ fn choose<'a>(
     rec: &mut Recorder,
 ) -> Option<(&'a Candidate, Tier)> {
     let strategy = pool.strategy.as_str();
-    let key_of = |c: &Candidate| tier_of(state, snapshot, pool, c, spent_model, now, fallback_ms);
-    let Some(first) = set.iter().map(|c| key_of(c)).min() else {
+    let Some(Ranked {
+        tier: first,
+        members: tier,
+        scores,
+        ties,
+    }) = rank(
+        state,
+        snapshot,
+        pool,
+        window,
+        set,
+        spent_model,
+        now,
+        fallback_ms,
+    )
+    else {
         rec.step("pick", "none", vec![Fact::text("strategy", strategy)]);
         return None;
     };
-    let tier: Vec<&Candidate> = set.iter().copied().filter(|c| key_of(c) == first).collect();
     let mut facts = vec![
         Fact::text("strategy", strategy),
         Fact::list(
@@ -4011,34 +4114,14 @@ fn choose<'a>(
             ],
         ),
     ];
-    let mut scores: Vec<Score> = Vec::new();
     let chosen = match pool.strategy {
         Strategy::Pace => {
-            let scored: Vec<(&Candidate, f64)> = tier
-                .iter()
-                .map(|c| (*c, pace_of(state, snapshot, c, window, now).score))
-                .collect();
-            let best = scored
-                .iter()
-                .map(|(_, score)| *score)
-                .fold(f64::NEG_INFINITY, f64::max);
-            let ties: Vec<&Candidate> = scored
-                .iter()
-                .filter(|(_, score)| *score == best)
-                .map(|(c, _)| *c)
-                .collect();
-            for (c, score) in &scored {
-                let unit = score_unit(snapshot, &c.account_id);
+            for score in &scores {
                 facts.push(
-                    Fact::number("score", *score)
-                        .unit(unit)
-                        .about(&c.account_id),
+                    Fact::number("score", score.score)
+                        .unit(score.unit)
+                        .about(&score.account_id),
                 );
-                scores.push(Score {
-                    account_id: c.account_id.clone(),
-                    score: *score,
-                    unit,
-                });
             }
             facts.push(Fact::list(
                 "ties",
@@ -4050,20 +4133,17 @@ fn choose<'a>(
         Strategy::Priority => {
             facts.push(Fact::list(
                 "ties",
-                tier.iter().map(|c| c.account_id.clone()).collect(),
+                ties.iter().map(|c| c.account_id.clone()).collect(),
             ));
-            facts.push(Fact::bool("drawn", tier.len() > 1));
-            Some(tier[rng.random_range(0..tier.len())])
+            facts.push(Fact::bool("drawn", ties.len() > 1));
+            Some(ties[rng.random_range(0..ties.len())])
         }
         Strategy::RoundRobin => {
-            // The cursor walks the tier's sorted ids, so an account's turn does not depend on the order
-            // `resolve` happened to build the candidate list in.
-            let mut cohort: Vec<&str> = tier.iter().map(|c| c.account_id.as_str()).collect();
-            cohort.sort_unstable();
+            let cohort: Vec<&str> = ties.iter().map(|c| c.account_id.as_str()).collect();
             let i = state.round_robin_next(&pool.id, first, &cohort, places);
             facts.push(Fact::text("turn", format!("{} of {}", i + 1, cohort.len())));
             facts.push(Fact::bool("drawn", false));
-            tier.iter().copied().find(|c| c.account_id == cohort[i])
+            ties.get(i).copied()
         }
     };
     let Some(chosen) = chosen else {
@@ -4558,6 +4638,7 @@ fn finish(
         pin_written,
         hold_place,
         shed_round,
+        trigger_windows,
         mark_cleared,
         pick,
         renewal,
@@ -4669,6 +4750,7 @@ fn finish(
         renewal: renewal.as_ref(),
         hold_place,
         pick: pick.as_ref(),
+        trigger_windows: &trigger_windows,
         exhaustion: match result {
             SelectResult::Exhausted(exhaustion) => Some(exhaustion),
             _ => None,
@@ -4729,6 +4811,7 @@ struct Readings<'r> {
     hold_place: Option<&'static str>,
     pick: Option<&'r Pick>,
     exhaustion: Option<&'r Exhaustion>,
+    trigger_windows: &'r [&'static str],
 }
 
 fn summary_fact(key: &'static str, value: FactValue, unit: &'static str) -> SummaryFact {
@@ -4896,11 +4979,8 @@ impl Readings<'_> {
             .as_deref()
             .and_then(|id| self.member(id));
         if let (Some(pool), Some(member)) = (self.pool, member) {
-            // The windows a round's trigger reads, in its order, the first at the ceiling named by its utilization.
-            let windows = [FIVE_HOUR, SEVEN_DAY]
-                .into_iter()
-                .chain(MODEL_WINDOWS.iter().map(|(_, window)| *window));
-            for name in windows {
+            // The windows the round's trigger read, in its order, the first at the ceiling named by its utilization.
+            for name in self.trigger_windows.iter().copied() {
                 if let Some(window) = member
                     .windows
                     .get(name)

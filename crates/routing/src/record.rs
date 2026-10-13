@@ -257,7 +257,8 @@ pub struct OverageFacts {
     pub observed_at: i64,
 }
 
-/// `ahead` is the lead over pace `select.rs`'s `ahead` reads for the two shared plan windows, and `None` elsewhere.
+/// `ahead` is how far the window's prediction runs ahead of its pace, the utilization less the share of the window
+/// that has elapsed, for the two shared plan windows, and `None` elsewhere.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct WindowFacts {
     pub utilization: f64,

@@ -621,7 +621,7 @@ pub struct Reservation {
 /// the column is a one-line change here.
 pub const DEFAULT_WINDOW_CEILING: f64 = 0.95;
 
-/// The utilization of `window` on `pool` above which no move or placement lands and the 5-hour round fires.
+/// The utilization of `window` on `pool` above which no move or placement lands and a round fires on the window.
 pub fn ceiling(_pool: &PoolRow, _window: &str) -> f64 {
     DEFAULT_WINDOW_CEILING
 }
