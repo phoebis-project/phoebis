@@ -1,9 +1,9 @@
 import { api } from '@/api';
 import { effectiveLabel } from '@/api/decode';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
-import { UnitLegend } from '@/components/shell/Shell';
 import { IconMonitor, IconMoon, IconSun } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, ErrorState, KeyValue, Segmented, Select, Skeleton } from '@/components/ui/primitives';
+import { UnitLegend } from '@/components/ui/UnitControls';
 import type { TimeFormat } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
 import { snippetFor } from '@/lib/snippet';
