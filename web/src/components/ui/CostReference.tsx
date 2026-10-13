@@ -25,10 +25,13 @@ interface Dated {
   effectiveDate: string | null;
 }
 
-/** Both files' revision dates, one entry per date, ascending as each file lists its own. */
+/**
+ * Both files' revision dates, one entry per date, ascending as each file lists its own. An entry dated in free text
+ * anchors no instant, so choosing it would resolve to none and the select would snap back: it stays off the list.
+ */
 const unionOf = (settings: Settings): Dated[] => {
   const byDate = new Map<string, string | null>();
-  for (const r of [...settings.apiPrices.revisions, ...settings.subscriptionCosts.revisions]) byDate.set(r.effective, r.effectiveDate);
+  for (const r of [...settings.apiPrices.revisions, ...settings.subscriptionCosts.revisions]) if (r.effectiveDate !== null) byDate.set(r.effective, r.effectiveDate);
   return [...byDate].map(([effective, effectiveDate]) => ({ effective, effectiveDate })).sort((a, b) => (a.effectiveDate ?? a.effective).localeCompare(b.effectiveDate ?? b.effective));
 };
 

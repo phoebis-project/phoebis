@@ -16534,6 +16534,33 @@ m.unmount();
     });
   }
 
+  // A price entry dated in free text anchors no instant, so choosing it would draw no entry and snap back: the select
+  // lists the dated entries alone and opens on the date in force.
+  {
+    const { getSettings } = api;
+    const freeText = 'version 3';
+    api.getSettings = async (...args) => {
+      const settings = await getSettings.apply(api, args);
+      const last = settings.apiPrices.revisions[settings.apiPrices.revisions.length - 1];
+      return { ...settings, apiPrices: { ...settings.apiPrices, revisions: [...settings.apiPrices.revisions, { effective: freeText, effectiveDate: null, models: last.models }] } };
+    };
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    linkIn(page.container.querySelector('.page-head'))?.click();
+    await page.settle(400);
+    const dlg = topDialog();
+    const select = revisionSelect(dlg);
+    const options = [...(select?.options ?? [])].map((o) => o.value);
+    await closeCost(page, dlg);
+    page.unmount();
+    api.getSettings = getSettings;
+    const dated = [...new Set(union.map((r) => r.effective))].reverse();
+    results.push({
+      name: '/sessions a price entry dated in free text stays off the Revision select, which lists the dated entries on the date in force',
+      ok: select?.value === inForceDate && !options.includes(freeText) && JSON.stringify(options) === JSON.stringify(dated),
+      missing: [select?.value ?? 'no select', JSON.stringify(options), JSON.stringify(dated)],
+    });
+  }
+
   // Opened an hour before the earliest revision, the dialog reads the earliest entries, since a blank history reads
   // worse than the first known table, and marks every date next.
   {
