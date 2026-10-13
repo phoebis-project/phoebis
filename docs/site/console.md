@@ -207,8 +207,8 @@ flow, the states and the `curl` form are on [Pairing an account](pairing.md).
 The view opens on its bar, "Create pool" with the split Refresh button and the count `{n} pools` at the right edge, then
 "A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per session, and fail over
 when a member hits a rate limit." on a line of its own, then the tiles Pools, Accounts in pools, Keys, "Requests, 24h"
-and "Cost, 24h". Auto reload starts at 5 s and waits while the pool dialog is open. Every field's meaning is on [Pools,
-keys and routing](routing.md#pools).
+and "Cost, 24h". Auto reload starts at 5 s and waits while the pool dialog or the Delete pool confirm is open. Every
+field's meaning is on [Pools, keys and routing](routing.md#pools).
 
 Each card carries the pool's name, its status badge (active, degraded, disabled or exhausted), its keys as a link
 ("No keys yet", "1 key", `{n} keys`, or "Keys unavailable" when the keys read failed), an edit button and "Delete".

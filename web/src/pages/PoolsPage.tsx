@@ -179,8 +179,10 @@ export function PoolsPage() {
   const [deleting, setDeleting] = useState<Pool | null>(null);
   const [intervalMs, setIntervalMs] = useState(5_000);
   const [barOpen, setBarOpen] = useState(false);
-  // The pool dialog draws these lists, so auto reload waits while it is open rather than change them under an edit.
-  const reread = { paused: dialog !== null || barOpen, refreshMs: intervalMs };
+  // The pool dialog draws these lists, so auto reload waits while it is open rather than change them under an edit, and
+  // while the Delete pool confirm is open, as every read waits under a dialog.
+  const dialogOpen = dialog !== null || deleting !== null;
+  const reread = { paused: dialogOpen || barOpen, refreshMs: intervalMs };
   const pools = useAsync(() => api.listPools(), [], reread);
   const accounts = useAsync(() => api.listAccounts(), [], reread);
   const keys = useAsync(() => api.listKeys(), [], reread);
@@ -294,7 +296,7 @@ export function PoolsPage() {
             sessions.reload();
             overview.reload();
           },
-          paused: dialog !== null ? 'dialog' : barOpen ? 'menu' : null,
+          paused: dialogOpen ? 'dialog' : barOpen ? 'menu' : null,
           refreshTitle: 'Reads the list again now',
         }}
         update={() => undefined}

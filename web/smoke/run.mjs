@@ -14657,6 +14657,36 @@ const CARD_VIEWS = [
   });
 }
 {
+  const name = '/pools an open Delete pool confirm pauses auto reload, and the reads resume once it is cancelled';
+  const page = await mount('/pools', { now: CLOCK_ORIGIN });
+  const spy = countCalls('listPools');
+  const title = () => intervalPart(page)?.getAttribute('title') ?? null;
+  [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Delete pool all')?.click();
+  await page.settle(200);
+  const confirm = { open: openDialogs(page).length, title: title() };
+  tick(5_000);
+  await page.settle();
+  confirm.reads = spy.calls.length;
+  buttonIn(openDialogs(page).pop(), 'Cancel')?.click();
+  await page.settle(200);
+  // The last answer is a full period old when the confirm closes, so the page reads at once, then at the next tick.
+  const closed = { open: openDialogs(page).length, reads: spy.calls.length, title: title() };
+  const from = spy.calls.length;
+  tick(5_000);
+  await page.settle();
+  const ticked = spy.calls.length - from;
+  spy.restore();
+  page.unmount();
+  results.push({
+    name,
+    ok:
+      JSON.stringify(confirm) === JSON.stringify({ open: 1, title: 'Auto reload every 5 s, paused while a dialog is open', reads: 0 }) &&
+      JSON.stringify(closed) === JSON.stringify({ open: 0, reads: 1, title: 'Auto reload every 5 s' }) &&
+      ticked === 1,
+    missing: [JSON.stringify(confirm), JSON.stringify(closed), `${ticked} reads at the tick after the cancel`],
+  });
+}
+{
   const name = "the count slot reads the view's words";
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   const [accounts, keys, pools] = [await api.listAccounts(), await api.listKeys(), await api.listPools()];
