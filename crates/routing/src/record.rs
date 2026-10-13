@@ -241,12 +241,15 @@ pub struct CandidateFacts {
     pub score: Option<f64>,
     /// `chosen`, `renewed`, `held_on`, `source`, `destination`, `eligible`, `ranked`, `out`, `not_needed`.
     pub verdict: &'static str,
-    /// The destination gate's reading of the member, filled where a move's gate read it: the runway on the binding
-    /// window (`None` for an unbounded one), the verdict (`ending`, `fits`, `least_bad`, `rewrite_only`) and the
-    /// window that binds.
+    /// The request's fit on the member, filled where a move's gate read it or, for a placement, where the `no_fit`
+    /// partition read it: the runway on the binding window (`None` for an unbounded one), the verdict (`ending`,
+    /// `fits`, `least_bad`, `rewrite_only`) and the window that binds.
     pub runway_ms: Option<i64>,
     pub fit: Option<&'static str>,
     pub binding: Option<String>,
+    /// The burn of the pool's pins on the member: share per hour per plan window, the unit the record states as
+    /// `percent_per_hour`. Empty for an api_key member and an untiered one, which price no burn.
+    pub burn: BTreeMap<String, f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -272,8 +275,8 @@ pub struct WindowFacts {
     pub horizon: Option<i64>,
 }
 
-/// `end`, `deadline` and `hours` are `None` for an api_key member, which Pace scores by its remaining share alone.
-/// A subscription member with neither a reset nor an end reads a week of hours.
+/// `end`, `deadline` and `hours` are `None` and `burn` is 0 for an api_key member, which Pace scores by its remaining
+/// share alone. A subscription member with neither a reset nor an end reads a week of hours.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct PaceFacts {
     pub remaining: f64,
@@ -285,6 +288,8 @@ pub struct PaceFacts {
     /// The window the score read (`seven_day`, or the model's week such as `seven_day_fable`). `None` for an api_key
     /// member, which the worst bucket scores. The caller holds the window, so the console derives nothing.
     pub window: Option<String>,
+    /// The burn of the pins on the account on `window`, share per hour, what the score subtracts.
+    pub burn: f64,
 }
 
 /// The spend and its period are the ledger's spend row for the budget's period, all `None` while the ledger has
@@ -343,7 +348,7 @@ pub struct PrefixLookup {
 
 /// One entry the rung walk visited on a member: the boundary's hash as the affinity map keys it (64 lowercase hex
 /// characters), the entry's fields, and the gate that refused it (`lane`, `expired`, `incarnation`, `not_admitted`,
-/// `size_gate`, `at_cap`, `above_ceiling`, `winding_down`, `floor`) or `None` for an accepted one.
+/// `size_gate`, `at_cap`, `no_fit`, `winding_down`) or `None` for an accepted one.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct PrefixEntry {
     pub hash: String,
@@ -1013,6 +1018,7 @@ mod tests {
                 runway_ms: None,
                 fit: None,
                 binding: None,
+                burn: BTreeMap::new(),
             }],
             walk: vec![WalkStep {
                 step: "pin",

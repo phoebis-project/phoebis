@@ -395,8 +395,8 @@ pub struct SelectionTrace {
 pub struct Skipped {
     pub account_id: String,
     /// A step-2 obstacle (`attempted`, `budget`, `budget_unknown`, `cooldown`, `credits`, `operator`, `overage`,
-    /// `subscription_ended`), or a partition's name: `above_ceiling`, `at_cap`, `floor`, `spent`, `winding_down`,
-    /// or `ranked` for an eligible sibling the strategy did not pick.
+    /// `subscription_ended`), or a partition's name: `at_cap`, `no_fit`, `spent`, `winding_down`, or `ranked` for an
+    /// eligible sibling the strategy did not pick.
     pub obstacle: &'static str,
 }
 
@@ -710,16 +710,14 @@ fn holds_allowance(state: &RoutingState, account_id: &str, window: &str, now: i6
     }
 }
 
-/// The latest reset among the spent windows `holds_allowance` reads for `window`, with that window's key: the
-/// moment the account can serve the request again once every spent window has reset. `None` when no window is
-/// spent, and when a spent window names no reset, since a wait would end with that window still spent.
-fn spent_until<'a>(
+/// The spent windows `holds_allowance` reads for `window`, each with its reset, `None` for one that names none.
+fn spent_windows<'a>(
     state: &RoutingState,
     account_id: &str,
     window: &'a str,
     now: i64,
-) -> Option<(i64, &'a str)> {
-    let spent: Vec<(Option<i64>, &'a str)> = [window, FIVE_HOUR, SEVEN_DAY]
+) -> Vec<(Option<i64>, &'a str)> {
+    [window, FIVE_HOUR, SEVEN_DAY]
         .into_iter()
         .filter_map(|name| {
             state
@@ -727,14 +725,40 @@ fn spent_until<'a>(
                 .filter(|r| r.utilization >= 1.0)
                 .map(|r| (r.reset, name))
         })
-        .collect();
-    if spent.iter().any(|(reset, _)| reset.is_none()) {
-        return None;
-    }
-    spent
+        .collect()
+}
+
+/// The latest reset among the spent windows that name one, with that window's key: the deadline an exhaustion
+/// answers for an account step 6 passes over as spent. A spent window that names no reset adds nothing, so an account
+/// spent on a dated and an undated window still dates the answer. `None` when no spent window names a reset.
+fn spent_until<'a>(
+    state: &RoutingState,
+    account_id: &str,
+    window: &'a str,
+    now: i64,
+) -> Option<(i64, &'a str)> {
+    spent_windows(state, account_id, window, now)
         .into_iter()
         .filter_map(|(reset, name)| reset.map(|reset| (reset, name)))
         .max_by_key(|(reset, _)| *reset)
+}
+
+/// The moment the account can serve the request again once every spent window has reset, with the key of the window
+/// that resets last. `None` when no window is spent, and when a spent window names no reset, since a wait would end
+/// with that window still spent.
+fn refunded_at<'a>(
+    state: &RoutingState,
+    account_id: &str,
+    window: &'a str,
+    now: i64,
+) -> Option<(i64, &'a str)> {
+    if spent_windows(state, account_id, window, now)
+        .iter()
+        .any(|(reset, _)| reset.is_none())
+    {
+        return None;
+    }
+    spent_until(state, account_id, window, now)
 }
 
 /// The pool's affinity in milliseconds, saturating for a value no clock reaches.
@@ -1414,10 +1438,10 @@ fn run(
     }
 
     // Step 6: a model with its own window needs allowance left in it and in both shared windows, the cap bounds a
-    // fresh placement, the ceiling prefers the accounts under it, the wind-down prefers accounts that can take a
-    // fresh session, and under Pace the floor keeps an almost-spent account as the last resort. Each preference
-    // falls through to the wider set it narrowed when it would otherwise empty the selection, and every candidate
-    // a partition drops joins the trace under that partition's name.
+    // fresh placement, `no_fit` prefers the accounts the request fits to every horizon, and the wind-down prefers
+    // accounts that can take a fresh session. Each preference falls through to the wider set it narrowed when it
+    // would otherwise empty the selection, and every candidate a partition drops joins the trace under that
+    // partition's name.
     let mut skipped: Vec<Skipped> = Vec::new();
     // A dated deadline for the accounts the model-window partition passes over, kept apart from `skipped`: it
     // answers `exhaustion_of` when nothing is left to choose from, but every dropped candidate joins the trace as
@@ -1428,7 +1452,7 @@ fn run(
     // The candidates placement may choose among, before any of step 6's own partitions: judged on the account
     // itself, never on whether a preference below narrowed the wider set around it.
     let allowed: Vec<&Candidate> = selection_set.clone();
-    let mut partitions = Vec::with_capacity(5);
+    let mut partitions = Vec::with_capacity(4);
     if window != SEVEN_DAY {
         let mut left: Vec<&Candidate> = Vec::new();
         let mut dropped = 0;
@@ -1490,7 +1514,7 @@ fn run(
         partitions.push(Fact::text("spent", "off"));
     }
     // An account at its cap takes no fresh placement: a bound rather than a preference, so it runs ahead of the
-    // preferences below and a free account the ceiling would pass over still takes the request. With every
+    // preferences below and a free account the fit would pass over still takes the request. With every
     // account that could serve at its cap the request is held for a slot; the set is left whole so the answer
     // names the account the strategy would have chosen. A pinned request never gets here: step 5 renewed it.
     // A token count is bound to no cap: it occupies no slot (the task charges none for it), so the cap it would
@@ -1509,28 +1533,45 @@ fn run(
         narrow(&mut selection_set, &mut skipped, under_cap, "at_cap", rec)
     };
     partitions.push(at_cap);
-    // The threshold is a preference, not a refusal: with every account above it the request goes to the least
-    // bad one rather than answering exhausted while capacity remains.
-    if let Some(threshold) = pool.select_below_utilization {
-        let below: Vec<&Candidate> = selection_set
-            .iter()
-            .copied()
-            .filter(|c| {
-                state
-                    .predicted(&c.account_id, FIVE_HOUR, request.now)
-                    .is_none_or(|r| r.utilization < threshold)
-            })
-            .collect();
-        partitions.push(narrow(
-            &mut selection_set,
-            &mut skipped,
-            below,
-            "above_ceiling",
-            rec,
-        ));
+    // The fit is a preference, not a refusal: with no account fitting the request goes where the strategy picks
+    // rather than answering exhausted while capacity remains. A move's destinations are the set its rule's gate
+    // ordered, read with the moving pin already, so they stay as the gate left them. A fresh placement reads every
+    // candidate with the fresh prior, and one ending inside the next five hours never fits.
+    let fitting: Vec<&Candidate> = if moving.is_some() {
+        selection_set.clone()
     } else {
-        partitions.push(Fact::text("above_ceiling", "off"));
-    }
+        let mut fitting = Vec::with_capacity(selection_set.len());
+        for c in selection_set.iter().copied() {
+            let read = fit_of(
+                state,
+                snapshot,
+                pool,
+                request,
+                None,
+                &c.account_id,
+                &[],
+                request.now,
+                Judge::Placement,
+            );
+            if let Some(member) = rec.candidate_mut(&c.account_id) {
+                member.runway_ms = read.runway_ms;
+                member.fit = Some(read.verdict);
+                // A fitting account falls short on no window, so none binds.
+                member.binding = read.binding.filter(|_| read.verdict != "fits");
+            }
+            if read.verdict == "fits" {
+                fitting.push(c);
+            }
+        }
+        fitting
+    };
+    partitions.push(narrow(
+        &mut selection_set,
+        &mut skipped,
+        fitting,
+        "no_fit",
+        rec,
+    ));
     // A session should not start on an account about to end.
     let not_winding_down: Vec<&Candidate> = selection_set
         .iter()
@@ -1548,25 +1589,6 @@ fn run(
         "winding_down",
         rec,
     ));
-    // An almost-spent account is kept for when nothing else can serve.
-    if pool.strategy == Strategy::Pace {
-        let above_floor: Vec<&Candidate> = selection_set
-            .iter()
-            .copied()
-            .filter(|c| {
-                remaining(state, &c.account_id, window, request.now).0 > pool.failover.pace_floor
-            })
-            .collect();
-        partitions.push(narrow(
-            &mut selection_set,
-            &mut skipped,
-            above_floor,
-            "floor",
-            rec,
-        ));
-    } else {
-        partitions.push(Fact::text("floor", "off"));
-    }
     rec.step(
         "partitions",
         if selection_set.is_empty() {
@@ -1583,6 +1605,7 @@ fn run(
         snapshot,
         pool,
         request,
+        moving.as_ref(),
         &affinity_guard,
         &allowed,
         window,
@@ -1925,20 +1948,6 @@ pub fn seconds_ms(seconds: u64) -> i64 {
         .unwrap_or(i64::MAX)
 }
 
-/// The absolute prediction of `window` against `t`, which the select-below gate reads: that ceiling bounds the
-/// utilization itself, where the shedding trigger reads the projection at the horizon.
-fn utilization_at_least(
-    state: &RoutingState,
-    account_id: &str,
-    window: &str,
-    t: f64,
-    now: i64,
-) -> bool {
-    state
-        .predicted(account_id, window, now)
-        .is_some_and(|r| r.utilization >= t)
-}
-
 const FIVE_HOUR_MS: i64 = 5 * 3_600_000;
 
 /// Milliseconds as the seconds a share-per-second burn multiplies.
@@ -2057,10 +2066,20 @@ pub(crate) struct FitRead {
     pub end: Option<i64>,
 }
 
+/// How `fit_of` reads a window with no reading and an account with no tier. A move pays a cold rewrite on its
+/// destination, so it trusts only one it can price on every window the model draws and reads either gap as least
+/// bad. A placement keeps today's stance on an unknown reading: a window nobody has read counts as untouched and is
+/// skipped, and an untiered account, whose rewrite and burn nothing prices, fits with an unbounded runway.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Judge {
+    Move,
+    Placement,
+}
+
 /// The fit of `pin` (or a fresh session) on `candidate`: the runway per window the request's model draws, the
-/// predicate of the three verdicts and the end exclusion. `planned` holds the reservations a shedding round planned
-/// before this read, summed into the candidate's prediction and burn as the live ones are, and is empty for a move
-/// rule or the partition.
+/// predicate of the three verdicts and the end exclusion, with the unknowns read as `judge` says. `planned` holds the
+/// reservations a shedding round planned before this read, summed into the candidate's prediction and burn as the
+/// live ones are, and is empty for a move rule, the partition and rung 4.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn fit_of(
     state: &RoutingState,
@@ -2071,6 +2090,7 @@ pub(crate) fn fit_of(
     candidate: &str,
     planned: &[Reservation],
     now: i64,
+    judge: Judge,
 ) -> FitRead {
     let mut read = FitRead {
         verdict: "least_bad",
@@ -2100,9 +2120,13 @@ pub(crate) fn fit_of(
         read.verdict = if room { "fits" } else { "least_bad" };
         return read;
     }
-    // An unnamed tier prices neither the rewrite nor the burn, so the figures are the prediction alone and the
-    // verdict stays least bad.
+    // An unnamed tier prices neither the rewrite nor the burn, so for a move the figures are the prediction alone and
+    // the verdict stays least bad.
     let tier = snapshot.tier(candidate);
+    if tier.is_none() && judge == Judge::Placement {
+        read.verdict = "fits";
+        return read;
+    }
     let (rewrite, pin_burn) = tier
         .map(|tier| pin_figures(state, snapshot, pool, request, pin, tier, now))
         .unwrap_or_default();
@@ -2126,7 +2150,9 @@ pub(crate) fn fit_of(
     let mut bounded: Vec<(&str, i64, bool)> = Vec::new();
     for window in plan_windows(&request.canonical_model) {
         let Some(projection) = projections.get(window) else {
-            unread = true;
+            if judge == Judge::Move {
+                unread = true;
+            }
             continue;
         };
         let planned_rewrite: f64 = planned.iter().filter_map(|r| r.rewrite.get(window)).sum();
@@ -2395,6 +2421,7 @@ fn gate<'a>(
                     &c.account_id,
                     &[],
                     now,
+                    Judge::Move,
                 ),
             )
         })
@@ -2506,7 +2533,7 @@ fn move_of<'a>(
             )
             .map(|row| row.until);
         if let Some((reset, spent_window, until)) =
-            spent_until(state, &current.account_id, window, now)
+            refunded_at(state, &current.account_id, window, now)
                 .map(|(reset, spent_window)| {
                     (
                         reset,
@@ -3032,6 +3059,7 @@ fn destination_of(
                     &c.account_id,
                     planned,
                     now,
+                    Judge::Move,
                 ),
             )
         })
@@ -3589,33 +3617,40 @@ fn account_refusal(
 }
 
 /// Rung 4's own gate on a candidate account, evaluated per candidate rather than inferred from the
-/// post-partition selection set: under the cap, below `select_below_utilization` on the 5-hour window when the
-/// pool sets one, not winding down, and above the Pace floor under Pace. Answers the first gate that blocks it:
-/// `at_cap`, `above_ceiling`, `winding_down` or `floor`.
+/// post-partition selection set: under the cap, a fit for the request (the moving `pin`'s figures, or the fresh
+/// prior with none) as the `no_fit` partition reads it, and not winding down. Answers the first gate that blocks it:
+/// `at_cap`, `no_fit` or `winding_down`.
 fn blocked(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
-    window: &str,
-    now: i64,
+    request: &SelectRequest,
+    pin: Option<&PinRow>,
     account_id: &str,
 ) -> Option<&'static str> {
+    let now = request.now;
     if state.in_flight().account(account_id) >= pool.failover.in_flight_cap {
         Some("at_cap")
-    } else if pool
-        .select_below_utilization
-        .is_some_and(|threshold| utilization_at_least(state, account_id, FIVE_HOUR, threshold, now))
+    } else if fit_of(
+        state,
+        snapshot,
+        pool,
+        request,
+        pin,
+        account_id,
+        &[],
+        now,
+        Judge::Placement,
+    )
+    .verdict
+        != "fits"
     {
-        Some("above_ceiling")
+        Some("no_fit")
     } else if snapshot
         .term(account_id)
         .is_some_and(|term| term::winding_down(term, now, pool.failover.wind_down_minutes))
     {
         Some("winding_down")
-    } else if pool.strategy == Strategy::Pace
-        && remaining(state, account_id, window, now).0 <= pool.failover.pace_floor
-    {
-        Some("floor")
     } else {
         None
     }
@@ -3627,7 +3662,8 @@ fn blocked(
 /// since the cohort's own account outweighs it) or the deepest static boundary past the size gate, the cache
 /// gate and the blocker (rung 4, already under the cap by construction). `allowed` is the selection set before
 /// step 6's own partitions, so the source of a move or an account a preference narrowed around can never win a
-/// placement it would not have won on its own account. A token count is never placed: it reads no cache, so a
+/// placement it would not have won on its own account. `moving` is the pin a move takes off its source, whose figures
+/// the blocker's fit reads, and `None` for a fresh placement. A token count is never placed: it reads no cache, so a
 /// warm prefix would only lift it past the cap and promise its trace a read it can never make.
 #[allow(clippy::too_many_arguments)]
 fn placement_of<'a>(
@@ -3635,6 +3671,7 @@ fn placement_of<'a>(
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
     request: &SelectRequest,
+    moving: Option<&PinRow>,
     affinity: &AffinityMap,
     allowed: &[&'a Candidate],
     window: &str,
@@ -3775,7 +3812,7 @@ fn placement_of<'a>(
     let walk = affinity.walk(&request.canonical_model, &request.static_boundaries, |e| {
         entry_gate(e)
             .or_else(|| (!size_gate(e)).then_some("size_gate"))
-            .or_else(|| blocked(state, snapshot, pool, window, now, &e.account_id))
+            .or_else(|| blocked(state, snapshot, pool, request, moving, &e.account_id))
     });
     record_lookups(rec, &walk, now, false);
     let Some(visited) = walk.matched.map(|i| &walk.visited[i]) else {
@@ -3921,14 +3958,18 @@ fn remaining(state: &RoutingState, account_id: &str, window: &str, now: i64) -> 
     }
 }
 
-/// Pace's inputs and score for a candidate at `now`: remaining allowance over the hours to the earlier of the
-/// window's reset and the account's derived end, so an account that runs out sooner is spent first. An api_key
-/// account scores by its worst live bucket alone (a bucket refills within a minute, so Pace degrades to least
-/// utilized on it, and the bucket's own reset never enters the score). `choose` ranks by this score and the
-/// record carries the rest, so the two cannot disagree.
-fn pace_of(
+/// Pace's inputs and score for a candidate at `now`: the spare rate, the remaining allowance over the hours to the
+/// earlier of the window's reset and the account's derived end less the burn of the pool's pins on the account on
+/// that window, in share per hour. An account that runs out sooner is spent first, and one whose sessions already
+/// spend its allowance ranks below an idle one. The score reads negative where the account spends faster than its
+/// pace allows. An untiered account prices no burn. An api_key account scores by its worst live bucket alone (a
+/// bucket refills within a minute, so Pace degrades to least utilized on it, and neither the bucket's own reset nor
+/// a burn enters the score). `choose` ranks by this score and the record carries the rest, so the two cannot
+/// disagree.
+pub(crate) fn pace_of(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
     candidate: &Candidate,
     window: &str,
     now: i64,
@@ -3943,6 +3984,7 @@ fn pace_of(
             hours: None,
             score: remaining,
             window: None,
+            burn: 0.0,
         };
     }
     let end = snapshot
@@ -3957,14 +3999,31 @@ fn pace_of(
     let hours = deadline
         .map(|d| ((d - now) as f64 / 3_600_000.0).max(1.0 / 60.0))
         .unwrap_or(WEEK_HOURS);
+    let burn = snapshot
+        .tier(&candidate.account_id)
+        .and_then(|tier| {
+            state
+                .burn_shares(
+                    &candidate.account_id,
+                    &in_pool(snapshot, pool),
+                    tier,
+                    now,
+                    burn_average_ms(pool),
+                )
+                .get(window)
+                .copied()
+        })
+        .unwrap_or(0.0)
+        * 3_600.0;
     PaceFacts {
         remaining,
         reset,
         end,
         deadline,
         hours: Some(hours),
-        score: remaining / hours,
+        score: remaining / hours - burn,
         window: Some(window.to_string()),
+        burn,
     }
 }
 
@@ -4006,14 +4065,15 @@ fn tier_of(
 }
 
 /// The strategy's reading of a set before the draw: the tier `tier_of` ranks first, its members, their Pace scores
-/// where the strategy reads them, the candidates the strategy draws among (the best Pace score, the whole tier under
-/// Priority, the tier in id order under round robin), and the one a round plans on: the first of the ties, or under
-/// round robin the one at the cursor's turn, read without passing the turn on. `choose` draws from `ties` and records
-/// the pick, so a plan and the move it foresees read one rule.
+/// with the burn each subtracts (share per hour) where the strategy reads them, the candidates the strategy draws
+/// among (the best Pace score, the whole tier under Priority, the tier in id order under round robin), and the one a
+/// round plans on: the first of the ties, or under round robin the one at the cursor's turn, read without passing the
+/// turn on. `choose` draws from `ties` and records the pick, so a plan and the move it foresees read one rule.
 struct Ranked<'a> {
     tier: Tier,
     members: Vec<&'a Candidate>,
     scores: Vec<Score>,
+    burns: Vec<f64>,
     ties: Vec<&'a Candidate>,
     planned: &'a Candidate,
 }
@@ -4032,16 +4092,22 @@ fn rank<'a>(
     let key_of = |c: &Candidate| tier_of(state, snapshot, pool, c, spent_model, now, fallback_ms);
     let tier = set.iter().map(|c| key_of(c)).min()?;
     let members: Vec<&'a Candidate> = set.iter().copied().filter(|c| key_of(c) == tier).collect();
-    let (scores, ties, turn) = match pool.strategy {
+    let (scores, burns, ties, turn) = match pool.strategy {
         Strategy::Pace => {
+            let paces: Vec<PaceFacts> = members
+                .iter()
+                .map(|c| pace_of(state, snapshot, pool, c, window, now))
+                .collect();
             let scores: Vec<Score> = members
                 .iter()
-                .map(|c| Score {
+                .zip(&paces)
+                .map(|(c, pace)| Score {
                     account_id: c.account_id.clone(),
-                    score: pace_of(state, snapshot, c, window, now).score,
+                    score: pace.score,
                     unit: score_unit(snapshot, &c.account_id),
                 })
                 .collect();
+            let burns = paces.iter().map(|pace| pace.burn).collect();
             let best = scores
                 .iter()
                 .map(|s| s.score)
@@ -4053,9 +4119,9 @@ fn rank<'a>(
                 .filter(|(_, s)| s.score == best)
                 .map(|(c, _)| c)
                 .collect();
-            (scores, ties, 0)
+            (scores, burns, ties, 0)
         }
-        Strategy::Priority => (Vec::new(), members.clone(), 0),
+        Strategy::Priority => (Vec::new(), Vec::new(), members.clone(), 0),
         Strategy::RoundRobin => {
             // The cursor walks the tier's sorted ids, so an account's turn does not depend on the order
             // `resolve` happened to build the candidate list in.
@@ -4063,7 +4129,7 @@ fn rank<'a>(
             cohort.sort_by(|a, b| a.account_id.cmp(&b.account_id));
             let ids: Vec<&str> = cohort.iter().map(|c| c.account_id.as_str()).collect();
             let turn = state.round_robin_turn(&pool.id, tier, &ids);
-            (Vec::new(), cohort, turn)
+            (Vec::new(), Vec::new(), cohort, turn)
         }
     };
     let planned = ties.get(turn).copied()?;
@@ -4071,6 +4137,7 @@ fn rank<'a>(
         tier,
         members,
         scores,
+        burns,
         ties,
         planned,
     })
@@ -4078,8 +4145,8 @@ fn rank<'a>(
 
 /// `places` is false for a request the cap holds: the choice names the account it waits for and places nothing.
 /// `spent_model` names the candidates step 6 kept on extra usage with a spent window. The pick's
-/// line names the tier, every tier member's score under Pace, the ties and the round-robin turn, and the tier's
-/// members take their rank, the chosen one first.
+/// line names the tier, every tier member's score and burn under Pace, the ties and the round-robin turn, and the
+/// tier's members take their rank, the chosen one first.
 #[allow(clippy::too_many_arguments)]
 fn choose<'a>(
     state: &mut RoutingState,
@@ -4099,6 +4166,7 @@ fn choose<'a>(
         tier: first,
         members: tier,
         scores,
+        burns,
         ties,
         ..
     }) = rank(
@@ -4128,10 +4196,15 @@ fn choose<'a>(
     ];
     let chosen = match pool.strategy {
         Strategy::Pace => {
-            for score in &scores {
+            for (score, burn) in scores.iter().zip(&burns) {
                 facts.push(
                     Fact::number("score", score.score)
                         .unit(score.unit)
+                        .about(&score.account_id),
+                );
+                facts.push(
+                    Fact::number("burn", *burn)
+                        .unit("percent_per_hour")
                         .about(&score.account_id),
                 );
             }
@@ -4464,6 +4537,7 @@ fn candidate_facts(
     let kind = account.map(|a| a.kind);
     let sample = state.sample(id);
     let mut windows = BTreeMap::new();
+    let mut burn = BTreeMap::new();
     if kind != Some(AccountKind::ApiKey) {
         let projections = projections_of(
             state,
@@ -4473,6 +4547,19 @@ fn candidate_facts(
             snapshot.tier(id).unwrap_or_default(),
             now,
         );
+        if let Some(tier) = snapshot.tier(id) {
+            burn = state
+                .burn_shares(
+                    id,
+                    &in_pool(snapshot, pool),
+                    tier,
+                    now,
+                    burn_average_ms(pool),
+                )
+                .into_iter()
+                .map(|(window, share)| (window, share * 3_600.0))
+                .collect();
+        }
         for name in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
             if let Some(reading) = state.predicted(id, name, now) {
                 let ahead = (name != SEVEN_DAY_FABLE).then(|| {
@@ -4580,7 +4667,7 @@ fn candidate_facts(
         windows,
         allowance_known: allowance_known(state, snapshot, id, window, now),
         pace: (pool.strategy == Strategy::Pace)
-            .then(|| pace_of(state, snapshot, candidate, window, now)),
+            .then(|| pace_of(state, snapshot, pool, candidate, window, now)),
         budget,
         cooldowns,
         credits,
@@ -4604,6 +4691,7 @@ fn candidate_facts(
         runway_ms: None,
         fit: None,
         binding: None,
+        burn,
     }
 }
 
