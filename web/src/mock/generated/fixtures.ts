@@ -23,7 +23,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "organization_uuid": "00000000-0000-4000-8000-000000000002"
       },
       "credential": {
-        "access_expires_at": 4600000,
+        "access_expires_at": 1791724600000,
         "refresh_expires_at": null,
         "generation": 1,
         "last_refresh_at": null,
@@ -35,10 +35,10 @@ export const FIXTURES: Record<string, Fixture> = {
       "cooldowns": [
         {
           "scope": "model:claude-haiku-4-5-20251001",
-          "until": 2800000,
+          "until": 1791722800000,
           "reason": "model_rejected",
           "window": "model_rejection",
-          "set_at": 1000000
+          "set_at": 1791721000000
         }
       ],
       "overage": null,
@@ -56,44 +56,44 @@ export const FIXTURES: Record<string, Fixture> = {
         "since": 1773482400000,
         "trial_ends_at": null,
         "ends_at": null,
-        "derived_ends_at": 1159200000
+        "derived_ends_at": 1791972000000
       },
       "windows": [
         {
           "id": "five_hour",
           "utilization": 0.62,
-          "resets_at": 4600000,
-          "observed_at": 900000
+          "resets_at": 1791724600000,
+          "observed_at": 1791720900000
         },
         {
           "id": "seven_day",
           "utilization": 0.41,
-          "resets_at": 87400000,
-          "observed_at": 900000
+          "resets_at": 1791807400000,
+          "observed_at": 1791720900000
         },
         {
           "id": "seven_day_fable",
           "utilization": 0.12,
-          "resets_at": 87400000,
-          "observed_at": 900000
+          "resets_at": 1791807400000,
+          "observed_at": 1791720900000
         },
         {
           "id": "seven_day_opus",
           "utilization": 0.03,
-          "resets_at": 87400000,
-          "observed_at": 900000
+          "resets_at": 1791807400000,
+          "observed_at": 1791720900000
         }
       ],
       "fast_lane": {
         "input": {
           "utilization": 0.42,
-          "resets_at": 1030000,
-          "observed_at": 995000
+          "resets_at": 1791721030000,
+          "observed_at": 1791720995000
         },
         "output": {
           "utilization": 0.08,
-          "resets_at": 1030000,
-          "observed_at": 995000
+          "resets_at": 1791721030000,
+          "observed_at": 1791720995000
         }
       },
       "extra_usage": {
@@ -104,7 +104,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "monthly_limit": 5000,
         "used_credits": 1234,
         "utilization": 0.25,
-        "observed_at": 900000
+        "observed_at": 1791720900000
       },
       "pool": {
         "pool_id": "main",
@@ -117,12 +117,12 @@ export const FIXTURES: Record<string, Fixture> = {
       },
       "usage": {
         "error": null,
-        "fetched_at": 1000000,
+        "fetched_at": 1791721000000,
         "held_until": null,
         "poll": {
           "backoff_since": null,
-          "last_attempt_at": 1000000,
-          "last_clean_at": 1000000,
+          "last_attempt_at": 1791721000000,
+          "last_clean_at": 1791721000000,
           "last_error": null,
           "last_outcome": "clean",
           "next_attempt_at": null,
@@ -148,7 +148,7 @@ export const FIXTURES: Record<string, Fixture> = {
           ]
         }
       ],
-      "fetched_at": 1000000,
+      "fetched_at": 1791721000000,
       "error": null
     }
   },
@@ -156,16 +156,16 @@ export const FIXTURES: Record<string, Fixture> = {
     "route": "GET /admin/accounts/business/quota?range=7d",
     "body": {
       "account_id": "business",
-      "from": -603800000,
-      "to": 1000000,
+      "from": 1791116200000,
+      "to": 1791721000000,
       "windows": [
         {
           "id": "five_hour",
           "samples": [
             {
-              "at": 900000,
+              "at": 1791720900000,
               "utilization": 0.62,
-              "resets_at": 4600000,
+              "resets_at": 1791724600000,
               "source": "poll"
             }
           ]
@@ -174,9 +174,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "id": "seven_day",
           "samples": [
             {
-              "at": 900000,
+              "at": 1791720900000,
               "utilization": 0.41,
-              "resets_at": 87400000,
+              "resets_at": 1791807400000,
               "source": "head"
             }
           ]
@@ -185,9 +185,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "id": "seven_day_fable",
           "samples": [
             {
-              "at": 900000,
+              "at": 1791720900000,
               "utilization": 0.12,
-              "resets_at": 87400000,
+              "resets_at": 1791807400000,
               "source": "poll"
             }
           ]
@@ -196,9 +196,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "id": "seven_day_opus",
           "samples": [
             {
-              "at": 900000,
+              "at": 1791720900000,
               "utilization": 0.03,
-              "resets_at": 87400000,
+              "resets_at": 1791807400000,
               "source": "poll"
             }
           ]
@@ -206,7 +206,7 @@ export const FIXTURES: Record<string, Fixture> = {
       ],
       "extra_usage": [
         {
-          "at": 900000,
+          "at": 1791720900000,
           "is_enabled": true,
           "in_use": false,
           "monthly_limit": 5000,
@@ -234,13 +234,13 @@ export const FIXTURES: Record<string, Fixture> = {
         "utilization": null
       },
       "fable_window": null,
-      "fetched_at": 1000000,
+      "fetched_at": 1791721000000,
       "held_until": null,
       "identity_generation": 1,
       "poll": {
         "backoff_since": null,
-        "last_attempt_at": 1000000,
-        "last_clean_at": 1000000,
+        "last_attempt_at": 1791721000000,
+        "last_clean_at": 1791721000000,
         "last_error": null,
         "last_outcome": "clean",
         "next_attempt_at": null,
@@ -285,7 +285,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "organization_uuid": "00000000-0000-4000-8000-000000000002"
           },
           "credential": {
-            "access_expires_at": 4600000,
+            "access_expires_at": 1791724600000,
             "refresh_expires_at": null,
             "generation": 1,
             "last_refresh_at": null,
@@ -297,10 +297,10 @@ export const FIXTURES: Record<string, Fixture> = {
           "cooldowns": [
             {
               "scope": "model:claude-haiku-4-5-20251001",
-              "until": 2800000,
+              "until": 1791722800000,
               "reason": "model_rejected",
               "window": "model_rejection",
-              "set_at": 1000000
+              "set_at": 1791721000000
             }
           ],
           "overage": null,
@@ -318,44 +318,44 @@ export const FIXTURES: Record<string, Fixture> = {
             "since": 1773482400000,
             "trial_ends_at": null,
             "ends_at": null,
-            "derived_ends_at": 1159200000
+            "derived_ends_at": 1791972000000
           },
           "windows": [
             {
               "id": "five_hour",
               "utilization": 0.62,
-              "resets_at": 4600000,
-              "observed_at": 900000
+              "resets_at": 1791724600000,
+              "observed_at": 1791720900000
             },
             {
               "id": "seven_day",
               "utilization": 0.41,
-              "resets_at": 87400000,
-              "observed_at": 900000
+              "resets_at": 1791807400000,
+              "observed_at": 1791720900000
             },
             {
               "id": "seven_day_fable",
               "utilization": 0.12,
-              "resets_at": 87400000,
-              "observed_at": 900000
+              "resets_at": 1791807400000,
+              "observed_at": 1791720900000
             },
             {
               "id": "seven_day_opus",
               "utilization": 0.03,
-              "resets_at": 87400000,
-              "observed_at": 900000
+              "resets_at": 1791807400000,
+              "observed_at": 1791720900000
             }
           ],
           "fast_lane": {
             "input": {
               "utilization": 0.42,
-              "resets_at": 1030000,
-              "observed_at": 995000
+              "resets_at": 1791721030000,
+              "observed_at": 1791720995000
             },
             "output": {
               "utilization": 0.08,
-              "resets_at": 1030000,
-              "observed_at": 995000
+              "resets_at": 1791721030000,
+              "observed_at": 1791720995000
             }
           },
           "extra_usage": {
@@ -366,7 +366,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "monthly_limit": 5000,
             "used_credits": 1234,
             "utilization": 0.25,
-            "observed_at": 900000
+            "observed_at": 1791720900000
           },
           "pool": {
             "pool_id": "main",
@@ -379,12 +379,12 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "usage": {
             "error": null,
-            "fetched_at": 1000000,
+            "fetched_at": 1791721000000,
             "held_until": null,
             "poll": {
               "backoff_since": null,
-              "last_attempt_at": 1000000,
-              "last_clean_at": 1000000,
+              "last_attempt_at": 1791721000000,
+              "last_clean_at": 1791721000000,
               "last_error": null,
               "last_outcome": "clean",
               "next_attempt_at": null,
@@ -428,8 +428,8 @@ export const FIXTURES: Record<string, Fixture> = {
   "analytics_accounts": {
     "route": "GET /admin/analytics/accounts?range=24h",
     "body": {
-      "from": -85400000,
-      "to": 1000000,
+      "from": 1791634600000,
+      "to": 1791721000000,
       "accounts": [
         {
           "account_id": "business",
@@ -447,7 +447,7 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "hours": [
             {
-              "hour": -3600000,
+              "hour": 1791716400000,
               "utilization_5h_max": 0.4,
               "utilization_7d_max": null,
               "utilization_7d_oi_max": null,
@@ -463,7 +463,7 @@ export const FIXTURES: Record<string, Fixture> = {
               }
             },
             {
-              "hour": 0,
+              "hour": 1791720000000,
               "utilization_5h_max": 0.4,
               "utilization_7d_max": null,
               "utilization_7d_oi_max": null,
@@ -475,27 +475,27 @@ export const FIXTURES: Record<string, Fixture> = {
               "windows": {
                 "five_hour": {
                   "utilization": 0.62,
-                  "reset_at": 4600000,
+                  "reset_at": 1791724600000,
                   "lead": -0.1744444444444444,
-                  "sampled_at": 900000
+                  "sampled_at": 1791720900000
                 },
                 "seven_day": {
                   "utilization": 0.41,
-                  "reset_at": 87400000,
+                  "reset_at": 1791807400000,
                   "lead": -0.4469775132275133,
-                  "sampled_at": 900000
+                  "sampled_at": 1791720900000
                 },
                 "seven_day_fable": {
                   "utilization": 0.12,
-                  "reset_at": 87400000,
+                  "reset_at": 1791807400000,
                   "lead": -0.7369775132275133,
-                  "sampled_at": 900000
+                  "sampled_at": 1791720900000
                 },
                 "seven_day_opus": {
                   "utilization": 0.03,
-                  "reset_at": 87400000,
+                  "reset_at": 1791807400000,
                   "lead": -0.8269775132275132,
-                  "sampled_at": 900000
+                  "sampled_at": 1791720900000
                 }
               }
             }
@@ -517,7 +517,7 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "hours": [
             {
-              "hour": -3600000,
+              "hour": 1791716400000,
               "utilization_5h_max": 0.4,
               "utilization_7d_max": null,
               "utilization_7d_oi_max": null,
@@ -533,7 +533,7 @@ export const FIXTURES: Record<string, Fixture> = {
               }
             },
             {
-              "hour": 0,
+              "hour": 1791720000000,
               "utilization_5h_max": 0.4,
               "utilization_7d_max": null,
               "utilization_7d_oi_max": null,
@@ -556,8 +556,8 @@ export const FIXTURES: Record<string, Fixture> = {
   "analytics_breakdown": {
     "route": "GET /admin/analytics/breakdown?range=24h&group_by=key",
     "body": {
-      "from": -85400000,
-      "to": 1000000,
+      "from": 1791634600000,
+      "to": 1791721000000,
       "group_by": "key",
       "rows": [
         {
@@ -578,12 +578,12 @@ export const FIXTURES: Record<string, Fixture> = {
           "uncached": 0,
           "expired_between_turns": 0,
           "tokens": {
-            "cache_read": 2500,
+            "cache_read": 3000,
             "cache_write_1h": 0,
-            "cache_write_5m": 1000,
-            "output": 500,
-            "thinking": 200,
-            "uncached_input": 5000,
+            "cache_write_5m": 1200,
+            "output": 600,
+            "thinking": 240,
+            "uncached_input": 6000,
             "web_fetch": 0,
             "web_search": 0
           },
@@ -914,16 +914,16 @@ export const FIXTURES: Record<string, Fixture> = {
           "plan_requests": 3,
           "plan_output_tokens": 300,
           "cost_equivalent": {
-            "five_hour": 0.000052875,
-            "seven_day": 0.0000088125
+            "five_hour": 0.00005287500000000001,
+            "seven_day": 0.000008812499999999999
           },
           "cache_equivalent": {
             "five_hour": {
               "read": 3.75e-7,
-              "write": 0.0000075
+              "write": 0.000007500000000000001
             },
             "seven_day": {
-              "read": 6.25e-8,
+              "read": 6.250000000000001e-8,
               "write": 0.00000125
             }
           },
@@ -937,17 +937,17 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "equivalent_split": {
             "input": 0.000005,
-            "cache_read": 6.25e-8,
+            "cache_read": 6.250000000000001e-8,
             "cache_write": 0.00000125,
             "output": 0.0000025
           },
           "estimated": false
         },
         {
-          "key": "desktop@940000",
-          "label": "desktop (deleted, created 1970-01-01 00:15 UTC)",
+          "key": "desktop@1791720940000",
+          "label": "desktop (deleted, created 2026-10-11 12:15 UTC)",
           "key_id": "desktop",
-          "key_created_at": 940000,
+          "key_created_at": 1791720940000,
           "requests": 1,
           "succeeded": 1,
           "rate_limited": 0,
@@ -1304,7 +1304,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "write": 0.0000025
             },
             "seven_day": {
-              "read": 2.0833333333333335e-8,
+              "read": 2.0833333333333338e-8,
               "write": 4.1666666666666667e-7
             }
           },
@@ -1317,8 +1317,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "output": 0
           },
           "equivalent_split": {
-            "input": 0.0000016666666666666667,
-            "cache_read": 2.0833333333333335e-8,
+            "input": 0.0000016666666666666669,
+            "cache_read": 2.0833333333333338e-8,
             "cache_write": 4.1666666666666667e-7,
             "output": 8.333333333333333e-7
           },
@@ -1330,8 +1330,8 @@ export const FIXTURES: Record<string, Fixture> = {
   "analytics_breakdown_accounts": {
     "route": "GET /admin/analytics/breakdown?range=24h&group_by=account",
     "body": {
-      "from": -85400000,
-      "to": 1000000,
+      "from": 1791634600000,
+      "to": 1791721000000,
       "group_by": "account",
       "rows": [
         {
@@ -1351,12 +1351,12 @@ export const FIXTURES: Record<string, Fixture> = {
           "uncached": 0,
           "expired_between_turns": 0,
           "tokens": {
-            "cache_read": 2500,
+            "cache_read": 3000,
             "cache_write_1h": 0,
-            "cache_write_5m": 1000,
-            "output": 500,
-            "thinking": 200,
-            "uncached_input": 5000,
+            "cache_write_5m": 1200,
+            "output": 600,
+            "thinking": 240,
+            "uncached_input": 6000,
             "web_fetch": 0,
             "web_search": 0
           },
@@ -1722,8 +1722,8 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "equivalent_split": {
             "input": 0.000006666666666666667,
-            "cache_read": 8.333333333333334e-8,
-            "cache_write": 0.0000016666666666666667,
+            "cache_read": 8.333333333333335e-8,
+            "cache_write": 0.0000016666666666666669,
             "output": 0.0000033333333333333333
           },
           "estimated": false
@@ -2087,12 +2087,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "input": 0.002,
             "output": 0.001
           },
-          "equivalent_split": {
-            "input": 0,
-            "cache_read": 0,
-            "cache_write": 0,
-            "output": 0
-          },
+          "equivalent_split": {},
           "estimated": false
         }
       ]
@@ -2101,8 +2096,8 @@ export const FIXTURES: Record<string, Fixture> = {
   "analytics_breakdown_speed": {
     "route": "GET /admin/analytics/breakdown?range=24h&group_by=speed",
     "body": {
-      "from": -85400000,
-      "to": 1000000,
+      "from": 1791634600000,
+      "to": 1791721000000,
       "group_by": "speed",
       "rows": [
         {
@@ -2114,7 +2109,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "failed": 0,
           "exhausted": 0,
           "rejected": 0,
-          "attempts": 2,
+          "attempts": 1,
           "failovers": 1,
           "incomplete": 0,
           "cache_hits": 1,
@@ -2132,12 +2127,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost": {
-            "cache_read": 0.0001,
-            "cache_write": 0.001,
-            "input": 0.004,
-            "output": 0.002
+            "cache_read": 0.00005,
+            "cache_write": 0.0005,
+            "input": 0.002,
+            "output": 0.001
           },
-          "cost_usd": 0.0071,
+          "cost_usd": 0.00355,
           "errors": {},
           "cache_miss_reasons": {
             "none": 1
@@ -2457,19 +2452,14 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_equivalent": {},
           "cache_equivalent": {},
           "probe_equivalent": {},
-          "billed_usd": 0.0071,
+          "billed_usd": 0.00355,
           "billed": {
-            "cache_read": 0.0001,
-            "cache_write": 0.001,
-            "input": 0.004,
-            "output": 0.002
+            "cache_read": 0.00005,
+            "cache_write": 0.0005,
+            "input": 0.002,
+            "output": 0.001
           },
-          "equivalent_split": {
-            "input": 0,
-            "cache_read": 0,
-            "cache_write": 0,
-            "output": 0
-          },
+          "equivalent_split": {},
           "estimated": false
         },
         {
@@ -2481,7 +2471,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "failed": 1,
           "exhausted": 0,
           "rejected": 0,
-          "attempts": 5,
+          "attempts": 6,
           "failovers": 0,
           "incomplete": 1,
           "cache_hits": 5,
@@ -2489,22 +2479,22 @@ export const FIXTURES: Record<string, Fixture> = {
           "uncached": 0,
           "expired_between_turns": 0,
           "tokens": {
-            "cache_read": 2500,
+            "cache_read": 3000,
             "cache_write_1h": 0,
-            "cache_write_5m": 1000,
-            "output": 500,
-            "thinking": 200,
-            "uncached_input": 5000,
+            "cache_write_5m": 1200,
+            "output": 600,
+            "thinking": 240,
+            "uncached_input": 6000,
             "web_fetch": 0,
             "web_search": 0
           },
           "cost": {
-            "cache_read": 0.00030000000000000003,
-            "cache_write": 0.0025,
-            "input": 0.01,
-            "output": 0.005
+            "cache_read": 0.00035,
+            "cache_write": 0.003,
+            "input": 0.012,
+            "output": 0.006
           },
-          "cost_usd": 0.0178,
+          "cost_usd": 0.02135,
           "errors": {
             "stream_incomplete": 1,
             "upstream_error": 1
@@ -2834,22 +2824,22 @@ export const FIXTURES: Record<string, Fixture> = {
               "write": 0.00001
             },
             "seven_day": {
-              "read": 8.333333333333334e-8,
-              "write": 0.0000016666666666666667
+              "read": 8.333333333333335e-8,
+              "write": 0.0000016666666666666669
             }
           },
           "probe_equivalent": {},
-          "billed_usd": 0.0036,
+          "billed_usd": 0.00715,
           "billed": {
-            "cache_read": 0.0001,
-            "cache_write": 0.0005,
-            "input": 0.002,
-            "output": 0.001
+            "cache_read": 0.00015,
+            "cache_write": 0.001,
+            "input": 0.004,
+            "output": 0.002
           },
           "equivalent_split": {
             "input": 0.000006666666666666667,
-            "cache_read": 8.333333333333334e-8,
-            "cache_write": 0.0000016666666666666667,
+            "cache_read": 8.333333333333335e-8,
+            "cache_write": 0.0000016666666666666669,
             "output": 0.0000033333333333333333
           },
           "estimated": false
@@ -2867,8 +2857,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "kind": "oauth",
           "budget_usd": 30,
           "budget_period": "month",
-          "spent_usd": 0,
-          "period_end": 2678400000
+          "spent_usd": 0.00355,
+          "period_end": 1793491200000
         },
         {
           "pool_id": "main",
@@ -2877,7 +2867,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "budget_usd": 50,
           "budget_period": "month",
           "spent_usd": 0.0036,
-          "period_end": 2678400000
+          "period_end": 1793491200000
         }
       ]
     }
@@ -2885,710 +2875,810 @@ export const FIXTURES: Record<string, Fixture> = {
   "analytics_burn": {
     "route": "GET /admin/analytics/burn?range=24h&group_by=account",
     "body": {
-      "from": -85400000,
-      "to": 1000000,
+      "from": 1791634600000,
+      "to": 1791721000000,
       "bucket_seconds": 3600,
       "group_by": "account",
       "points": [
         {
-          "at": -86400000,
+          "at": 1791633600000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -82800000,
+          "at": 1791637200000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -79200000,
+          "at": 1791640800000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -75600000,
+          "at": 1791644400000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -72000000,
+          "at": 1791648000000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -68400000,
+          "at": 1791651600000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -64800000,
+          "at": 1791655200000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -61200000,
+          "at": 1791658800000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -57600000,
+          "at": 1791662400000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -54000000,
+          "at": 1791666000000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -50400000,
+          "at": 1791669600000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -46800000,
+          "at": 1791673200000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -43200000,
+          "at": 1791676800000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -39600000,
+          "at": 1791680400000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -36000000,
+          "at": 1791684000000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -32400000,
+          "at": 1791687600000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -28800000,
+          "at": 1791691200000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -25200000,
+          "at": 1791694800000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -21600000,
+          "at": 1791698400000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -18000000,
+          "at": 1791702000000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -14400000,
+          "at": 1791705600000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -10800000,
+          "at": 1791709200000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -7200000,
+          "at": 1791712800000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -3600000,
+          "at": 1791716400000,
           "group": "business",
           "unit": "window_share",
           "usd": 0.0071,
           "five_hour_share": 0.00003525,
           "seven_day_share": 0.000005875,
-          "cached_tokens": 1500,
-          "tokens": 5400,
-          "uncached_tokens": 3000,
+          "model_week_share": null,
           "five_hour_equivalent": 0.00003525,
           "seven_day_equivalent": 0.000005875,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 2000,
+          "tokens": 7200,
+          "uncached_tokens": 4000
         },
         {
-          "at": 0,
+          "at": 1791720000000,
           "group": "business",
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": 0.00003525,
           "seven_day_share": 0.000005875,
-          "cached_tokens": 1000,
-          "tokens": 3600,
-          "uncached_tokens": 2000,
+          "model_week_share": null,
           "five_hour_equivalent": 0.00003525,
           "seven_day_equivalent": 0.000005875,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 1000,
+          "tokens": 3600,
+          "uncached_tokens": 2000
         },
         {
-          "at": -86400000,
+          "at": 1791633600000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -82800000,
+          "at": 1791637200000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -79200000,
+          "at": 1791640800000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -75600000,
+          "at": 1791644400000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -72000000,
+          "at": 1791648000000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -68400000,
+          "at": 1791651600000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -64800000,
+          "at": 1791655200000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -61200000,
+          "at": 1791658800000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -57600000,
+          "at": 1791662400000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -54000000,
+          "at": 1791666000000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -50400000,
+          "at": 1791669600000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -46800000,
+          "at": 1791673200000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -43200000,
+          "at": 1791676800000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -39600000,
+          "at": 1791680400000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -36000000,
+          "at": 1791684000000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -32400000,
+          "at": 1791687600000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -28800000,
+          "at": 1791691200000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -25200000,
+          "at": 1791694800000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -21600000,
+          "at": 1791698400000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -18000000,
+          "at": 1791702000000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -14400000,
+          "at": 1791705600000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -10800000,
+          "at": 1791709200000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -7200000,
+          "at": 1791712800000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": -3600000,
+          "at": 1791716400000,
           "group": "direct",
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
           "seven_day_share": null,
-          "cached_tokens": 0,
-          "tokens": 0,
-          "uncached_tokens": 0,
+          "model_week_share": null,
           "five_hour_equivalent": null,
           "seven_day_equivalent": null,
-          "estimated": false
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
         },
         {
-          "at": 0,
+          "at": 1791720000000,
           "group": "direct",
           "unit": "usd",
           "usd": 0.0036,
           "five_hour_share": null,
           "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": 0,
+          "seven_day_equivalent": 0,
+          "model_week_equivalent": null,
+          "estimated": false,
           "cached_tokens": 500,
           "tokens": 1800,
-          "uncached_tokens": 1000,
-          "five_hour_equivalent": null,
-          "seven_day_equivalent": null,
-          "estimated": false
+          "uncached_tokens": 1000
         }
       ]
     }
@@ -3596,8 +3686,8 @@ export const FIXTURES: Record<string, Fixture> = {
   "analytics_placements": {
     "route": "GET /admin/analytics/placements?range=24h",
     "body": {
-      "from": -85400000,
-      "to": 1000000,
+      "from": 1791634600000,
+      "to": 1791721000000,
       "rows": [
         {
           "rung": "content",
@@ -3613,108 +3703,108 @@ export const FIXTURES: Record<string, Fixture> = {
   "analytics_rewrites": {
     "route": "GET /admin/analytics/rewrites?range=24h",
     "body": {
-      "from": -85400000,
-      "to": 1000000,
+      "from": 1791634600000,
+      "to": 1791721000000,
       "bucket_seconds": 3600,
       "points": [
         {
-          "at": -86400000,
+          "at": 1791633600000,
           "rewrite_tokens": 0
         },
         {
-          "at": -82800000,
+          "at": 1791637200000,
           "rewrite_tokens": 0
         },
         {
-          "at": -79200000,
+          "at": 1791640800000,
           "rewrite_tokens": 0
         },
         {
-          "at": -75600000,
+          "at": 1791644400000,
           "rewrite_tokens": 0
         },
         {
-          "at": -72000000,
+          "at": 1791648000000,
           "rewrite_tokens": 0
         },
         {
-          "at": -68400000,
+          "at": 1791651600000,
           "rewrite_tokens": 0
         },
         {
-          "at": -64800000,
+          "at": 1791655200000,
           "rewrite_tokens": 0
         },
         {
-          "at": -61200000,
+          "at": 1791658800000,
           "rewrite_tokens": 0
         },
         {
-          "at": -57600000,
+          "at": 1791662400000,
           "rewrite_tokens": 0
         },
         {
-          "at": -54000000,
+          "at": 1791666000000,
           "rewrite_tokens": 0
         },
         {
-          "at": -50400000,
+          "at": 1791669600000,
           "rewrite_tokens": 0
         },
         {
-          "at": -46800000,
+          "at": 1791673200000,
           "rewrite_tokens": 0
         },
         {
-          "at": -43200000,
+          "at": 1791676800000,
           "rewrite_tokens": 0
         },
         {
-          "at": -39600000,
+          "at": 1791680400000,
           "rewrite_tokens": 0
         },
         {
-          "at": -36000000,
+          "at": 1791684000000,
           "rewrite_tokens": 0
         },
         {
-          "at": -32400000,
+          "at": 1791687600000,
           "rewrite_tokens": 0
         },
         {
-          "at": -28800000,
+          "at": 1791691200000,
           "rewrite_tokens": 0
         },
         {
-          "at": -25200000,
+          "at": 1791694800000,
           "rewrite_tokens": 0
         },
         {
-          "at": -21600000,
+          "at": 1791698400000,
           "rewrite_tokens": 0
         },
         {
-          "at": -18000000,
+          "at": 1791702000000,
           "rewrite_tokens": 0
         },
         {
-          "at": -14400000,
+          "at": 1791705600000,
           "rewrite_tokens": 0
         },
         {
-          "at": -10800000,
+          "at": 1791709200000,
           "rewrite_tokens": 0
         },
         {
-          "at": -7200000,
+          "at": 1791712800000,
           "rewrite_tokens": 0
         },
         {
-          "at": -3600000,
+          "at": 1791716400000,
           "rewrite_tokens": 0
         },
         {
-          "at": 0,
+          "at": 1791720000000,
           "rewrite_tokens": 0
         }
       ],
@@ -3726,105 +3816,105 @@ export const FIXTURES: Record<string, Fixture> = {
   "analytics_series": {
     "route": "GET /admin/analytics/series?range=24h&group_by=key",
     "body": {
-      "from": -85400000,
-      "to": 1000000,
+      "from": 1791634600000,
+      "to": 1791721000000,
       "bucket_seconds": 3600,
       "group_by": "key",
       "points": [
         {
-          "at": -86400000,
+          "at": 1791633600000,
           "groups": []
         },
         {
-          "at": -82800000,
+          "at": 1791637200000,
           "groups": []
         },
         {
-          "at": -79200000,
+          "at": 1791640800000,
           "groups": []
         },
         {
-          "at": -75600000,
+          "at": 1791644400000,
           "groups": []
         },
         {
-          "at": -72000000,
+          "at": 1791648000000,
           "groups": []
         },
         {
-          "at": -68400000,
+          "at": 1791651600000,
           "groups": []
         },
         {
-          "at": -64800000,
+          "at": 1791655200000,
           "groups": []
         },
         {
-          "at": -61200000,
+          "at": 1791658800000,
           "groups": []
         },
         {
-          "at": -57600000,
+          "at": 1791662400000,
           "groups": []
         },
         {
-          "at": -54000000,
+          "at": 1791666000000,
           "groups": []
         },
         {
-          "at": -50400000,
+          "at": 1791669600000,
           "groups": []
         },
         {
-          "at": -46800000,
+          "at": 1791673200000,
           "groups": []
         },
         {
-          "at": -43200000,
+          "at": 1791676800000,
           "groups": []
         },
         {
-          "at": -39600000,
+          "at": 1791680400000,
           "groups": []
         },
         {
-          "at": -36000000,
+          "at": 1791684000000,
           "groups": []
         },
         {
-          "at": -32400000,
+          "at": 1791687600000,
           "groups": []
         },
         {
-          "at": -28800000,
+          "at": 1791691200000,
           "groups": []
         },
         {
-          "at": -25200000,
+          "at": 1791694800000,
           "groups": []
         },
         {
-          "at": -21600000,
+          "at": 1791698400000,
           "groups": []
         },
         {
-          "at": -18000000,
+          "at": 1791702000000,
           "groups": []
         },
         {
-          "at": -14400000,
+          "at": 1791705600000,
           "groups": []
         },
         {
-          "at": -10800000,
+          "at": 1791709200000,
           "groups": []
         },
         {
-          "at": -7200000,
+          "at": 1791712800000,
           "groups": []
         },
         {
-          "at": -3600000,
+          "at": 1791716400000,
           "groups": [
             {
               "key": "desktop",
@@ -3844,12 +3934,12 @@ export const FIXTURES: Record<string, Fixture> = {
               "uncached": 0,
               "expired_between_turns": 0,
               "tokens": {
-                "cache_read": 1000,
+                "cache_read": 1500,
                 "cache_write_1h": 0,
-                "cache_write_5m": 400,
-                "output": 200,
-                "thinking": 80,
-                "uncached_input": 2000,
+                "cache_write_5m": 600,
+                "output": 300,
+                "thinking": 120,
+                "uncached_input": 3000,
                 "web_fetch": 0,
                 "web_search": 0
               },
@@ -4188,7 +4278,7 @@ export const FIXTURES: Record<string, Fixture> = {
                   "write": 0.0000025
                 },
                 "seven_day": {
-                  "read": 2.0833333333333335e-8,
+                  "read": 2.0833333333333338e-8,
                   "write": 4.1666666666666667e-7
                 }
               },
@@ -4201,18 +4291,18 @@ export const FIXTURES: Record<string, Fixture> = {
                 "output": 0.002
               },
               "equivalent_split": {
-                "input": 0.0000016666666666666667,
-                "cache_read": 2.0833333333333335e-8,
+                "input": 0.0000016666666666666669,
+                "cache_read": 2.0833333333333338e-8,
                 "cache_write": 4.1666666666666667e-7,
                 "output": 8.333333333333333e-7
               },
               "estimated": false
             },
             {
-              "key": "desktop@940000",
-              "label": "desktop (deleted, created 1970-01-01 00:15 UTC)",
+              "key": "desktop@1791720940000",
+              "label": "desktop (deleted, created 2026-10-11 12:15 UTC)",
               "key_id": "desktop",
-              "key_created_at": 940000,
+              "key_created_at": 1791720940000,
               "requests": 1,
               "succeeded": 1,
               "rate_limited": 0,
@@ -4569,7 +4659,7 @@ export const FIXTURES: Record<string, Fixture> = {
                   "write": 0.0000025
                 },
                 "seven_day": {
-                  "read": 2.0833333333333335e-8,
+                  "read": 2.0833333333333338e-8,
                   "write": 4.1666666666666667e-7
                 }
               },
@@ -4582,8 +4672,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "output": 0
               },
               "equivalent_split": {
-                "input": 0.0000016666666666666667,
-                "cache_read": 2.0833333333333335e-8,
+                "input": 0.0000016666666666666669,
+                "cache_read": 2.0833333333333338e-8,
                 "cache_write": 4.1666666666666667e-7,
                 "output": 8.333333333333333e-7
               },
@@ -4592,7 +4682,7 @@ export const FIXTURES: Record<string, Fixture> = {
           ]
         },
         {
-          "at": 0,
+          "at": 1791720000000,
           "groups": [
             {
               "key": "desktop",
@@ -4956,7 +5046,7 @@ export const FIXTURES: Record<string, Fixture> = {
                   "write": 0.000005
                 },
                 "seven_day": {
-                  "read": 4.166666666666667e-8,
+                  "read": 4.1666666666666676e-8,
                   "write": 8.333333333333333e-7
                 }
               },
@@ -4970,9 +5060,9 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "equivalent_split": {
                 "input": 0.0000033333333333333333,
-                "cache_read": 4.166666666666667e-8,
+                "cache_read": 4.1666666666666676e-8,
                 "cache_write": 8.333333333333333e-7,
-                "output": 0.0000016666666666666667
+                "output": 0.0000016666666666666669
               },
               "estimated": false
             }
@@ -4984,105 +5074,105 @@ export const FIXTURES: Record<string, Fixture> = {
   "analytics_series_accounts": {
     "route": "GET /admin/analytics/series?range=24h&group_by=account",
     "body": {
-      "from": -85400000,
-      "to": 1000000,
+      "from": 1791634600000,
+      "to": 1791721000000,
       "bucket_seconds": 3600,
       "group_by": "account",
       "points": [
         {
-          "at": -86400000,
+          "at": 1791633600000,
           "groups": []
         },
         {
-          "at": -82800000,
+          "at": 1791637200000,
           "groups": []
         },
         {
-          "at": -79200000,
+          "at": 1791640800000,
           "groups": []
         },
         {
-          "at": -75600000,
+          "at": 1791644400000,
           "groups": []
         },
         {
-          "at": -72000000,
+          "at": 1791648000000,
           "groups": []
         },
         {
-          "at": -68400000,
+          "at": 1791651600000,
           "groups": []
         },
         {
-          "at": -64800000,
+          "at": 1791655200000,
           "groups": []
         },
         {
-          "at": -61200000,
+          "at": 1791658800000,
           "groups": []
         },
         {
-          "at": -57600000,
+          "at": 1791662400000,
           "groups": []
         },
         {
-          "at": -54000000,
+          "at": 1791666000000,
           "groups": []
         },
         {
-          "at": -50400000,
+          "at": 1791669600000,
           "groups": []
         },
         {
-          "at": -46800000,
+          "at": 1791673200000,
           "groups": []
         },
         {
-          "at": -43200000,
+          "at": 1791676800000,
           "groups": []
         },
         {
-          "at": -39600000,
+          "at": 1791680400000,
           "groups": []
         },
         {
-          "at": -36000000,
+          "at": 1791684000000,
           "groups": []
         },
         {
-          "at": -32400000,
+          "at": 1791687600000,
           "groups": []
         },
         {
-          "at": -28800000,
+          "at": 1791691200000,
           "groups": []
         },
         {
-          "at": -25200000,
+          "at": 1791694800000,
           "groups": []
         },
         {
-          "at": -21600000,
+          "at": 1791698400000,
           "groups": []
         },
         {
-          "at": -18000000,
+          "at": 1791702000000,
           "groups": []
         },
         {
-          "at": -14400000,
+          "at": 1791705600000,
           "groups": []
         },
         {
-          "at": -10800000,
+          "at": 1791709200000,
           "groups": []
         },
         {
-          "at": -7200000,
+          "at": 1791712800000,
           "groups": []
         },
         {
-          "at": -3600000,
+          "at": 1791716400000,
           "groups": [
             {
               "key": "business",
@@ -5101,12 +5191,12 @@ export const FIXTURES: Record<string, Fixture> = {
               "uncached": 0,
               "expired_between_turns": 0,
               "tokens": {
-                "cache_read": 1500,
+                "cache_read": 2000,
                 "cache_write_1h": 0,
-                "cache_write_5m": 600,
-                "output": 300,
-                "thinking": 120,
-                "uncached_input": 3000,
+                "cache_write_5m": 800,
+                "output": 400,
+                "thinking": 160,
+                "uncached_input": 4000,
                 "web_fetch": 0,
                 "web_search": 0
               },
@@ -5471,16 +5561,16 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "equivalent_split": {
                 "input": 0.0000033333333333333333,
-                "cache_read": 4.166666666666667e-8,
+                "cache_read": 4.1666666666666676e-8,
                 "cache_write": 8.333333333333333e-7,
-                "output": 0.0000016666666666666667
+                "output": 0.0000016666666666666669
               },
               "estimated": false
             }
           ]
         },
         {
-          "at": 0,
+          "at": 1791720000000,
           "groups": [
             {
               "key": "business",
@@ -5869,9 +5959,9 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "equivalent_split": {
                 "input": 0.0000033333333333333333,
-                "cache_read": 4.166666666666667e-8,
+                "cache_read": 4.1666666666666676e-8,
                 "cache_write": 8.333333333333333e-7,
-                "output": 0.0000016666666666666667
+                "output": 0.0000016666666666666669
               },
               "estimated": false
             },
@@ -6234,12 +6324,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 "input": 0.002,
                 "output": 0.001
               },
-              "equivalent_split": {
-                "input": 0,
-                "cache_read": 0,
-                "cache_write": 0,
-                "output": 0
-              },
+              "equivalent_split": {},
               "estimated": false
             }
           ]
@@ -6265,7 +6350,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "pools": [
             "main"
           ],
-          "since": 1000000,
+          "since": 1791721000000,
           "detail": {
             "key": "desktop",
             "pool": "main"
@@ -6285,7 +6370,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "pools": [
             "main"
           ],
-          "since": 1000000,
+          "since": 1791721000000,
           "detail": {
             "accounts": [
               "business"
@@ -6526,308 +6611,314 @@ export const FIXTURES: Record<string, Fixture> = {
     "route": "GET /admin/dashboard",
     "body": {
       "requests_24h": 6,
-      "tokens_24h": 10800,
-      "tokens_cached_24h": 3000,
+      "tokens_24h": 12600,
+      "tokens_cached_24h": 3500,
       "cost_24h": 0.0249,
+      "billed_24h": 0.0107,
+      "equivalent_24h": {
+        "five_hour": 0.0000705,
+        "seven_day": 0.00001175
+      },
+      "estimated_24h": false,
       "error_rate_24h": 0.3333333333333333,
       "top_error_code": "upstream_error",
       "hourly": [
         {
-          "at": -82800000,
-          "cost": 0,
-          "errors": 0,
-          "requests": 0,
-          "tokens": 0,
+          "at": 1791637200000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -79200000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791640800000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -75600000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791644400000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -72000000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791648000000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -68400000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791651600000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -64800000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791655200000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -61200000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791658800000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -57600000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791662400000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -54000000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791666000000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -50400000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791669600000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -46800000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791673200000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -43200000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791676800000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -39600000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791680400000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -36000000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791684000000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -32400000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791687600000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -28800000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791691200000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -25200000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791694800000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -21600000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791698400000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -18000000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791702000000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -14400000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791705600000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -10800000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791709200000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
-        },
-        {
-          "at": -7200000,
-          "cost": 0,
+          },
           "errors": 0,
           "requests": 0,
-          "tokens": 0,
+          "tokens": 0
+        },
+        {
+          "at": 1791712800000,
           "billed": 0,
+          "cost": 0,
           "equivalent": {
             "five_hour": 0,
             "seven_day": 0
-          }
+          },
+          "errors": 0,
+          "requests": 0,
+          "tokens": 0
         },
         {
-          "at": -3600000,
-          "cost": 0.0142,
-          "errors": 1,
-          "requests": 3,
-          "tokens": 5400,
+          "at": 1791716400000,
           "billed": 0.0071,
+          "cost": 0.0142,
           "equivalent": {
             "five_hour": 0.00003525,
             "seven_day": 0.000005875
-          }
-        },
-        {
-          "at": 0,
-          "cost": 0.0107,
+          },
           "errors": 1,
           "requests": 3,
-          "tokens": 5400,
+          "tokens": 7200
+        },
+        {
+          "at": 1791720000000,
           "billed": 0.0036,
+          "cost": 0.0107,
           "equivalent": {
             "five_hour": 0.00003525,
             "seven_day": 0.000005875
-          }
+          },
+          "errors": 1,
+          "requests": 3,
+          "tokens": 5400
         }
       ],
       "recent": [
         {
           "id": "r-placed",
-          "at": 970000,
-          "finished_at": 970900,
+          "at": 1791720970000,
+          "finished_at": 1791720970900,
           "key_id": "desktop",
-          "key_generation": 1000000,
+          "key_generation": 1791721000000,
           "pool_id": "main",
           "account_id": "direct",
           "session_id": "s3",
@@ -6889,14 +6980,17 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.0036,
           "cost_shares": null,
+          "cost_equivalent": null,
+          "estimated": false,
+          "tier": null,
           "phases": {
-            "received_at": 970000,
-            "selected_at": 970000,
-            "written_at": 970030,
-            "head_at": 970120,
-            "first_content_at": 970300,
-            "stream_end_at": 970850,
-            "finished_at": 970900
+            "received_at": 1791720970000,
+            "selected_at": 1791720970000,
+            "written_at": 1791720970030,
+            "head_at": 1791720970120,
+            "first_content_at": 1791720970300,
+            "stream_end_at": 1791720970850,
+            "finished_at": 1791720970900
           },
           "attempts": [
             {
@@ -6907,7 +7001,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "upstream_status": 200,
               "upstream_request_id": "req_r-placed_1",
               "upstream_message_id": "msg_r-placed_1",
-              "started_at": 970000,
+              "started_at": 1791720970000,
               "duration_ms": 400,
               "ttfb_ms": 120,
               "ttft_ms": null,
@@ -6919,7 +7013,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 {
                   "id": "five_hour",
                   "utilization": 0.4,
-                  "resets_at": 4570000
+                  "resets_at": 1791724570000
                 }
               ],
               "overage_in_use": null,
@@ -6945,17 +7039,14 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": null,
-          "cost_equivalent": null,
-          "estimated": false,
-          "tier": null
+          "diagnostics_source": null
         },
         {
           "id": "r-captured",
-          "at": 940000,
-          "finished_at": 940900,
+          "at": 1791720940000,
+          "finished_at": 1791720940900,
           "key_id": "desktop",
-          "key_generation": 1000000,
+          "key_generation": 1791721000000,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -7020,14 +7111,20 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000017625,
             "seven_day": 0.0000029375
           },
+          "cost_equivalent": {
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000029375
+          },
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
-            "received_at": 940000,
-            "selected_at": 940000,
-            "written_at": 940030,
-            "head_at": 940120,
-            "first_content_at": 940300,
-            "stream_end_at": 940850,
-            "finished_at": 940900
+            "received_at": 1791720940000,
+            "selected_at": 1791720940000,
+            "written_at": 1791720940030,
+            "head_at": 1791720940120,
+            "first_content_at": 1791720940300,
+            "stream_end_at": 1791720940850,
+            "finished_at": 1791720940900
           },
           "attempts": [
             {
@@ -7038,7 +7135,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "upstream_status": 200,
               "upstream_request_id": "req_r-captured_1",
               "upstream_message_id": "msg_r-captured_1",
-              "started_at": 940000,
+              "started_at": 1791720940000,
               "duration_ms": 400,
               "ttfb_ms": 120,
               "ttft_ms": null,
@@ -7050,7 +7147,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 {
                   "id": "five_hour",
                   "utilization": 0.4,
-                  "resets_at": 4540000
+                  "resets_at": 1791724540000
                 }
               ],
               "overage_in_use": null,
@@ -7070,20 +7167,14 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": "client",
-          "cost_equivalent": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
-          },
-          "estimated": false,
-          "tier": "default_claude_max_20x"
+          "diagnostics_source": "client"
         },
         {
           "id": "r-failed",
-          "at": 880000,
-          "finished_at": 880900,
+          "at": 1791720880000,
+          "finished_at": 1791720880900,
           "key_id": "desktop",
-          "key_generation": 1000000,
+          "key_generation": 1791721000000,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s2",
@@ -7148,14 +7239,20 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000017625,
             "seven_day": 0.0000029375
           },
+          "cost_equivalent": {
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000029375
+          },
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
-            "received_at": 880000,
-            "selected_at": 880000,
-            "written_at": 880030,
-            "head_at": 880120,
-            "first_content_at": 880300,
-            "stream_end_at": 880850,
-            "finished_at": 880900
+            "received_at": 1791720880000,
+            "selected_at": 1791720880000,
+            "written_at": 1791720880030,
+            "head_at": 1791720880120,
+            "first_content_at": 1791720880300,
+            "stream_end_at": 1791720880850,
+            "finished_at": 1791720880900
           },
           "attempts": [
             {
@@ -7166,7 +7263,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "upstream_status": 502,
               "upstream_request_id": "req_r-failed_1",
               "upstream_message_id": null,
-              "started_at": 880000,
+              "started_at": 1791720880000,
               "duration_ms": 400,
               "ttfb_ms": 120,
               "ttft_ms": null,
@@ -7178,7 +7275,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 {
                   "id": "five_hour",
                   "utilization": 0.4,
-                  "resets_at": 4480000
+                  "resets_at": 1791724480000
                 }
               ],
               "overage_in_use": null,
@@ -7198,20 +7295,14 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": null,
-          "cost_equivalent": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
-          },
-          "estimated": false,
-          "tier": "default_claude_max_20x"
+          "diagnostics_source": null
         },
         {
           "id": "r-incomplete",
-          "at": -2599400,
-          "finished_at": -2598500,
+          "at": 1791717400600,
+          "finished_at": 1791717401500,
           "key_id": "desktop",
-          "key_generation": 1000000,
+          "key_generation": 1791721000000,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -7280,14 +7371,20 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000017625,
             "seven_day": 0.0000029375
           },
+          "cost_equivalent": {
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000029375
+          },
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
-            "received_at": -2599400,
-            "selected_at": -2599400,
-            "written_at": -2599370,
-            "head_at": -2599280,
-            "first_content_at": -2599100,
-            "stream_end_at": -2598550,
-            "finished_at": -2598500
+            "received_at": 1791717400600,
+            "selected_at": 1791717400600,
+            "written_at": 1791717400630,
+            "head_at": 1791717400720,
+            "first_content_at": 1791717400900,
+            "stream_end_at": 1791717401450,
+            "finished_at": 1791717401500
           },
           "attempts": [
             {
@@ -7298,7 +7395,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "upstream_status": 200,
               "upstream_request_id": "req_r-incomplete_1",
               "upstream_message_id": "msg_r-incomplete_1",
-              "started_at": -2599400,
+              "started_at": 1791717400600,
               "duration_ms": 400,
               "ttfb_ms": 120,
               "ttft_ms": null,
@@ -7310,7 +7407,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 {
                   "id": "five_hour",
                   "utilization": 0.4,
-                  "resets_at": 1000600
+                  "resets_at": 1791721000600
                 }
               ],
               "overage_in_use": null,
@@ -7330,20 +7427,14 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": null,
-          "cost_equivalent": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
-          },
-          "estimated": false,
-          "tier": "default_claude_max_20x"
+          "diagnostics_source": null
         },
         {
           "id": "r-earlier-holder",
-          "at": -2599500,
-          "finished_at": -2598600,
+          "at": 1791717400500,
+          "finished_at": 1791717401400,
           "key_id": "desktop",
-          "key_generation": 940000,
+          "key_generation": 1791720940000,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s0",
@@ -7408,14 +7499,20 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000017625,
             "seven_day": 0.0000029375
           },
+          "cost_equivalent": {
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000029375
+          },
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
-            "received_at": -2599500,
-            "selected_at": -2599500,
-            "written_at": -2599470,
-            "head_at": -2599380,
-            "first_content_at": -2599200,
-            "stream_end_at": -2598650,
-            "finished_at": -2598600
+            "received_at": 1791717400500,
+            "selected_at": 1791717400500,
+            "written_at": 1791717400530,
+            "head_at": 1791717400620,
+            "first_content_at": 1791717400800,
+            "stream_end_at": 1791717401350,
+            "finished_at": 1791717401400
           },
           "attempts": [
             {
@@ -7426,7 +7523,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "upstream_status": 200,
               "upstream_request_id": "req_r-earlier-holder_1",
               "upstream_message_id": "msg_r-earlier-holder_1",
-              "started_at": -2599500,
+              "started_at": 1791717400500,
               "duration_ms": 400,
               "ttfb_ms": 120,
               "ttft_ms": null,
@@ -7438,7 +7535,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 {
                   "id": "five_hour",
                   "utilization": 0.4,
-                  "resets_at": 1000500
+                  "resets_at": 1791721000500
                 }
               ],
               "overage_in_use": null,
@@ -7458,20 +7555,14 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": null,
-          "cost_equivalent": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
-          },
-          "estimated": false,
-          "tier": "default_claude_max_20x"
+          "diagnostics_source": null
         },
         {
           "id": "r-failover",
-          "at": -2600000,
-          "finished_at": -2599100,
+          "at": 1791717400000,
+          "finished_at": 1791717400900,
           "key_id": "desktop",
-          "key_generation": 1000000,
+          "key_generation": 1791721000000,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -7533,14 +7624,17 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.0071,
           "cost_shares": null,
+          "cost_equivalent": null,
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
-            "received_at": -2600000,
-            "selected_at": -2600000,
-            "written_at": -2599570,
-            "head_at": -2599480,
-            "first_content_at": -2599300,
-            "stream_end_at": -2599150,
-            "finished_at": -2599100
+            "received_at": 1791717400000,
+            "selected_at": 1791717400000,
+            "written_at": 1791717400430,
+            "head_at": 1791717400520,
+            "first_content_at": 1791717400700,
+            "stream_end_at": 1791717400850,
+            "finished_at": 1791717400900
           },
           "attempts": [
             {
@@ -7551,7 +7645,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "upstream_status": 429,
               "upstream_request_id": "req_r-failover_1",
               "upstream_message_id": null,
-              "started_at": -2600000,
+              "started_at": 1791717400000,
               "duration_ms": 400,
               "ttfb_ms": 120,
               "ttft_ms": null,
@@ -7560,13 +7654,13 @@ export const FIXTURES: Record<string, Fixture> = {
               "client_drift": null,
               "cooldown_set": {
                 "reason": "account",
-                "until": 2800000
+                "until": 1791722800000
               },
               "windows": [
                 {
                   "id": "five_hour",
                   "utilization": 0.4,
-                  "resets_at": 1000000
+                  "resets_at": 1791721000000
                 }
               ],
               "overage_in_use": null,
@@ -7610,7 +7704,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "upstream_status": 200,
               "upstream_request_id": "req_r-failover_2",
               "upstream_message_id": "msg_r-failover_2",
-              "started_at": -2599600,
+              "started_at": 1791717400400,
               "duration_ms": 400,
               "ttfb_ms": 120,
               "ttft_ms": null,
@@ -7622,7 +7716,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 {
                   "id": "five_hour",
                   "utilization": 0.4,
-                  "resets_at": 1000400
+                  "resets_at": 1791721000400
                 }
               ],
               "overage_in_use": null,
@@ -7665,10 +7759,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "cohort": "direct",
             "held_ms": 1250
           },
-          "diagnostics_source": "router",
-          "cost_equivalent": null,
-          "estimated": false,
-          "tier": "default_claude_max_20x"
+          "diagnostics_source": "router"
         }
       ],
       "accounts": [
@@ -7678,39 +7769,33 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "five_hour",
               "utilization": 0.62,
-              "resets_at": 4600000,
-              "bucket": 900000
+              "resets_at": 1791724600000,
+              "bucket": 1791720900000
             },
             {
               "id": "seven_day",
               "utilization": 0.41,
-              "resets_at": 87400000,
-              "bucket": 900000
+              "resets_at": 1791807400000,
+              "bucket": 1791720900000
             },
             {
               "id": "seven_day_fable",
               "utilization": 0.12,
-              "resets_at": 87400000,
-              "bucket": 900000
+              "resets_at": 1791807400000,
+              "bucket": 1791720900000
             },
             {
               "id": "seven_day_opus",
               "utilization": 0.03,
-              "resets_at": 87400000,
-              "bucket": 900000
+              "resets_at": 1791807400000,
+              "bucket": 1791720900000
             }
           ]
         }
       ],
       "sessions": {
         "active_pins": 1
-      },
-      "billed_24h": 0.010700000000000001,
-      "equivalent_24h": {
-        "five_hour": 0.0000705,
-        "seven_day": 0.00001175
-      },
-      "estimated_24h": false
+      }
     }
   },
   "decision": {
@@ -7723,9 +7808,9 @@ export const FIXTURES: Record<string, Fixture> = {
         "request_id": "r-static",
         "attempt": 1,
         "seq": 1,
-        "at": 1000000,
+        "at": 1791721000000,
         "key_id": "desktop",
-        "key_generation": 1000000,
+        "key_generation": 1791721000000,
         "pool_id": "main",
         "routing_session_id": "s-static",
         "agent_id": "main",
@@ -7795,7 +7880,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "retry_in_place_seconds": 60,
         "pace_floor": 0.05,
         "migrate_band": 0.05,
-        "pool_updated_at": 1000039
+        "pool_updated_at": 1791721000039
       },
       "candidates": [
         {
@@ -7818,17 +7903,17 @@ export const FIXTURES: Record<string, Fixture> = {
           "windows": {
             "fast_input": {
               "utilization": 0.42,
-              "reset": 1030000,
+              "reset": 1791721030000,
               "source": "head",
-              "observed_at": 995000,
+              "observed_at": 1791720995000,
               "age_ms": 5000,
               "ahead": null
             },
             "fast_output": {
               "utilization": 0.08,
-              "reset": 1030000,
+              "reset": 1791721030000,
               "source": "head",
-              "observed_at": 995000,
+              "observed_at": 1791720995000,
               "age_ms": 5000,
               "ahead": null
             }
@@ -7847,10 +7932,10 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "period": "month",
               "budget_usd": 30,
-              "spent_usd": 0,
-              "period_start": 0,
-              "period_end": 2678400000,
-              "observed_at": 1000000
+              "spent_usd": 0.00355,
+              "period_start": 1790812800000,
+              "period_end": 1793491200000,
+              "observed_at": 1791721000000
             }
           ],
           "cooldowns": [
@@ -7858,7 +7943,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "scope": "model:claude-haiku-4-5-20251001",
               "reason": "model_rejected",
               "window": "model_rejection",
-              "until": 2800000,
+              "until": 1791722800000,
               "blocking": false
             }
           ],
@@ -7878,7 +7963,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "hash": "9c1f6b0e4d2a8f73b5e1c0d9a7f3e2b14c6d8e0f2a4b6c8d0e1f3a5b7c9d1e3f",
               "depth": 1,
               "prefix_tokens": 31200,
-              "written_at": 1000000,
+              "written_at": 1791721000000,
               "ttl_ms": 3600000,
               "live": true,
               "refused_by": null
@@ -7887,7 +7972,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "hash": "9c1f6b0e4d2a8f73b5e1c0d9a7f3e2b14c6d8e0f2a4b6c8d0e1f3a5b7c9d1e3f",
               "depth": 1,
               "prefix_tokens": 31200,
-              "written_at": 1000000,
+              "written_at": 1791721000000,
               "ttl_ms": 3600000,
               "live": true,
               "refused_by": null
@@ -7933,9 +8018,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "period": "month",
               "budget_usd": 50,
               "spent_usd": 0.0036,
-              "period_start": 0,
-              "period_end": 2678400000,
-              "observed_at": 1000000
+              "period_start": 1790812800000,
+              "period_end": 1793491200000,
+              "observed_at": 1791721000000
             }
           ],
           "cooldowns": [],
@@ -8133,7 +8218,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "account_id": "business"
             }
           ],
-          "completed_at": 999400
+          "completed_at": 1791720999400
         }
       }
     }
@@ -8266,9 +8351,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "key_id": "desktop",
           "last_guard": "rearm",
           "last_probe_at": null,
-          "last_request_at": 1000000,
+          "last_request_at": 1791721000000,
           "model": "claude-sonnet-5",
-          "next_probe_at": 1240000,
+          "next_probe_at": 1791721240000,
           "park_kind": null,
           "pool_id": "main",
           "probes_today": 0,
@@ -8303,34 +8388,34 @@ export const FIXTURES: Record<string, Fixture> = {
       "effective_body_capture_hours": 24,
       "auto_mode_server": null,
       "effective_auto_mode_server": true,
-      "prefix": "GqVtcpx9",
-      "created_at": 1000000,
-      "updated_at": 1000000,
-      "revision": 4398047511104,
+      "prefix": "ZFPxvgA5",
+      "created_at": 1791721000000,
+      "updated_at": 1791721000000,
+      "revision": 6189767511104,
       "rotated_at": null,
       "last_used_at": null,
       "retired_secret_last_used_at": null,
       "sessions_on_retired_secret": 0,
       "usage_7d": {
-        "cost_usd": 0,
-        "requests": 0,
-        "tokens": 0,
         "billed_usd": 0,
+        "cost_usd": 0,
         "equivalent": {
           "five_hour": 0,
           "seven_day": 0
         },
-        "estimated": false
+        "estimated": false,
+        "requests": 0,
+        "tokens": 0
       },
       "lifetime": {
-        "cost_usd": 0,
-        "requests": 0,
         "billed_usd": 0,
+        "cost_usd": 0,
         "equivalent": {
           "five_hour": 0,
           "seven_day": 0
         },
-        "estimated": false
+        "estimated": false,
+        "requests": 0
       },
       "secret": "phoebis-fixture"
     }
@@ -8383,34 +8468,34 @@ export const FIXTURES: Record<string, Fixture> = {
           "effective_body_capture_hours": 24,
           "auto_mode_server": null,
           "effective_auto_mode_server": true,
-          "prefix": "GqVtcpx9",
-          "created_at": 1000000,
-          "updated_at": 1000000,
-          "revision": 4398047511104,
+          "prefix": "ZFPxvgA5",
+          "created_at": 1791721000000,
+          "updated_at": 1791721000000,
+          "revision": 6189767511104,
           "rotated_at": null,
           "last_used_at": null,
           "retired_secret_last_used_at": null,
           "sessions_on_retired_secret": 0,
           "usage_7d": {
-            "cost_usd": 0.02135,
-            "requests": 5,
-            "tokens": 9000,
             "billed_usd": 0.0107,
+            "cost_usd": 0.02135,
             "equivalent": {
-              "five_hour": 0.000052875,
-              "seven_day": 0.0000088125
+              "five_hour": 0.00005287500000000001,
+              "seven_day": 0.000008812499999999999
             },
-            "estimated": false
+            "estimated": false,
+            "requests": 5,
+            "tokens": 10800
           },
           "lifetime": {
-            "cost_usd": 0.02135,
-            "requests": 5,
             "billed_usd": 0.0107,
+            "cost_usd": 0.02135,
             "equivalent": {
-              "five_hour": 0.000052875,
-              "seven_day": 0.0000088125
+              "five_hour": 0.00005287500000000001,
+              "seven_day": 0.000008812499999999999
             },
-            "estimated": false
+            "estimated": false,
+            "requests": 5
           }
         }
       ]
@@ -8427,16 +8512,16 @@ export const FIXTURES: Record<string, Fixture> = {
               "account_id": "business",
               "scope": "model:claude-haiku-4-5-20251001",
               "reason": "model_rejected",
-              "until": 2800000,
+              "until": 1791722800000,
               "window": "model_rejection",
-              "set_at": 1000000
+              "set_at": 1791721000000
             }
           ]
         }
       ],
       "rejections": [
         {
-          "at": -2599700,
+          "at": 1791717400300,
           "account_id": "business",
           "key_id": "desktop",
           "session_id": "s1",
@@ -8448,7 +8533,7 @@ export const FIXTURES: Record<string, Fixture> = {
       ],
       "permits": [
         {
-          "at": -2599650,
+          "at": 1791717400350,
           "account_id": "direct",
           "key_id": "desktop",
           "session_id": "s1",
@@ -8466,22 +8551,22 @@ export const FIXTURES: Record<string, Fixture> = {
   "pairing_started": {
     "route": "POST /admin/oauth/sessions",
     "body": {
-      "id": "4kNU4LIkjtY4Pcs9jAMZitsXSyXbr0I4HT3RBLe1rx8",
-      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A61326%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=MVZFRz6-JeZPPGGhfTkO6-p-4zhgKHUYGT7hqP8G4S8&code_challenge_method=S256&state=ygjFt5JgaerMBEfzUE2bKR1D8Y3AZf_Bc7DrD7a7opw",
-      "redirect_uri": "http://localhost:61326/callback",
-      "expires_at": 1600000
+      "id": "8DLey99Qr5TObOlNRsjL8tF61sB0Jp2ud36a5gAc1TM",
+      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A60050%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=r_1HcRI5tTLVMsB9HXDP80Ck3EtlaYlrC6WhJi1bUB0&code_challenge_method=S256&state=zrJRLOStH-7D5o0AAHzSr579aW0VbHYK61-NgdrxPYs",
+      "redirect_uri": "http://localhost:60050/callback",
+      "expires_at": 1791721600000
     }
   },
   "pool_traffic": {
     "route": "GET /admin/pools/main/traffic?range=24h",
     "body": {
       "pool_id": "main",
-      "from": -85400000,
-      "to": 1000000,
+      "from": 1791634600000,
+      "to": 1791721000000,
       "bucket_seconds": 3600,
       "buckets": [
         {
-          "at": -86400000,
+          "at": 1791633600000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8494,7 +8579,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -82800000,
+          "at": 1791637200000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8507,7 +8592,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -79200000,
+          "at": 1791640800000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8520,7 +8605,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -75600000,
+          "at": 1791644400000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8533,7 +8618,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -72000000,
+          "at": 1791648000000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8546,7 +8631,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -68400000,
+          "at": 1791651600000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8559,7 +8644,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -64800000,
+          "at": 1791655200000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8572,7 +8657,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -61200000,
+          "at": 1791658800000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8585,7 +8670,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -57600000,
+          "at": 1791662400000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8598,7 +8683,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -54000000,
+          "at": 1791666000000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8611,7 +8696,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -50400000,
+          "at": 1791669600000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8624,7 +8709,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -46800000,
+          "at": 1791673200000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8637,7 +8722,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -43200000,
+          "at": 1791676800000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8650,7 +8735,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -39600000,
+          "at": 1791680400000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8663,7 +8748,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -36000000,
+          "at": 1791684000000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8676,7 +8761,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -32400000,
+          "at": 1791687600000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8689,7 +8774,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -28800000,
+          "at": 1791691200000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8702,7 +8787,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -25200000,
+          "at": 1791694800000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8715,7 +8800,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -21600000,
+          "at": 1791698400000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8728,7 +8813,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -18000000,
+          "at": 1791702000000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8741,7 +8826,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -14400000,
+          "at": 1791705600000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8754,7 +8839,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -10800000,
+          "at": 1791709200000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8767,7 +8852,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -7200000,
+          "at": 1791712800000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
@@ -8780,10 +8865,10 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": -3600000,
+          "at": 1791716400000,
           "requests": 3,
           "failed": 1,
-          "tokens": 5400,
+          "tokens": 7200,
           "cost_usd": 0.0142,
           "billed_usd": 0.0071,
           "equivalent": {
@@ -8793,7 +8878,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "estimated": false
         },
         {
-          "at": 0,
+          "at": 1791720000000,
           "requests": 3,
           "failed": 1,
           "tokens": 5400,
@@ -8890,9 +8975,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_diagnostics": false,
           "auto_mode_server": true,
           "body_capture_hours": 24,
-          "created_at": 1000000,
-          "updated_at": 1000000,
-          "revision": 4398047511104,
+          "created_at": 1791721000000,
+          "updated_at": 1791721000000,
+          "revision": 6189767511104,
           "members": [
             {
               "account_id": "business",
@@ -8905,8 +8990,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "spends": [
                 {
                   "period": "month",
-                  "spent_usd": 0,
-                  "period_end": 2678400000
+                  "spent_usd": 0.00355,
+                  "period_end": 1793491200000
                 }
               ],
               "active_pins": 1
@@ -8923,7 +9008,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 {
                   "period": "month",
                   "spent_usd": 0.0036,
-                  "period_end": 2678400000
+                  "period_end": 1793491200000
                 }
               ],
               "active_pins": 0
@@ -8933,17 +9018,23 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "GqVtcpx9",
+              "prefix": "ZFPxvgA5",
               "enabled": true
             }
           ],
           "status": "active",
           "requests_24h": 6,
-          "cost_24h": 0.0249,
+          "cost_24h": 0.024900000000000005,
+          "billed_24h": 0.0107,
+          "equivalent_24h": {
+            "five_hour": 0.0000705,
+            "seven_day": 0.00001175
+          },
+          "estimated_24h": false,
           "active_pins": 1,
           "traffic_24h": [
             {
-              "at": -86400000,
+              "at": 1791633600000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -8956,7 +9047,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -82800000,
+              "at": 1791637200000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -8969,7 +9060,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -79200000,
+              "at": 1791640800000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -8982,7 +9073,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -75600000,
+              "at": 1791644400000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -8995,7 +9086,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -72000000,
+              "at": 1791648000000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9008,7 +9099,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -68400000,
+              "at": 1791651600000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9021,7 +9112,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -64800000,
+              "at": 1791655200000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9034,7 +9125,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -61200000,
+              "at": 1791658800000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9047,7 +9138,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -57600000,
+              "at": 1791662400000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9060,7 +9151,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -54000000,
+              "at": 1791666000000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9073,7 +9164,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -50400000,
+              "at": 1791669600000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9086,7 +9177,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -46800000,
+              "at": 1791673200000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9099,7 +9190,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -43200000,
+              "at": 1791676800000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9112,7 +9203,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -39600000,
+              "at": 1791680400000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9125,7 +9216,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -36000000,
+              "at": 1791684000000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9138,7 +9229,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -32400000,
+              "at": 1791687600000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9151,7 +9242,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -28800000,
+              "at": 1791691200000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9164,7 +9255,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -25200000,
+              "at": 1791694800000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9177,7 +9268,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -21600000,
+              "at": 1791698400000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9190,7 +9281,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -18000000,
+              "at": 1791702000000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9203,7 +9294,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -14400000,
+              "at": 1791705600000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9216,7 +9307,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -10800000,
+              "at": 1791709200000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9229,7 +9320,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -7200000,
+              "at": 1791712800000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
@@ -9242,10 +9333,10 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": -3600000,
+              "at": 1791716400000,
               "requests": 3,
               "failed": 1,
-              "tokens": 5400,
+              "tokens": 7200,
               "cost_usd": 0.0142,
               "billed_usd": 0.0071,
               "equivalent": {
@@ -9255,7 +9346,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "estimated": false
             },
             {
-              "at": 0,
+              "at": 1791720000000,
               "requests": 3,
               "failed": 1,
               "tokens": 5400,
@@ -9267,13 +9358,7 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "estimated": false
             }
-          ],
-          "billed_24h": 0.0107,
-          "equivalent_24h": {
-            "five_hour": 0.0000705,
-            "seven_day": 0.00001175
-          },
-          "estimated_24h": false
+          ]
         }
       ]
     }
@@ -9756,10 +9841,10 @@ export const FIXTURES: Record<string, Fixture> = {
     "body": {
       "request": {
         "id": "r-failover",
-        "at": -2600000,
-        "finished_at": -2599100,
+        "at": 1791717400000,
+        "finished_at": 1791717400900,
         "key_id": "desktop",
-        "key_generation": 1000000,
+        "key_generation": 1791721000000,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -9821,14 +9906,17 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         "cost_usd": 0.0071,
         "cost_shares": null,
+        "cost_equivalent": null,
+        "estimated": false,
+        "tier": "default_claude_max_20x",
         "phases": {
-          "received_at": -2600000,
-          "selected_at": -2600000,
-          "written_at": -2599570,
-          "head_at": -2599480,
-          "first_content_at": -2599300,
-          "stream_end_at": -2599150,
-          "finished_at": -2599100
+          "received_at": 1791717400000,
+          "selected_at": 1791717400000,
+          "written_at": 1791717400430,
+          "head_at": 1791717400520,
+          "first_content_at": 1791717400700,
+          "stream_end_at": 1791717400850,
+          "finished_at": 1791717400900
         },
         "attempts": [
           {
@@ -9839,7 +9927,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "upstream_status": 429,
             "upstream_request_id": "req_r-failover_1",
             "upstream_message_id": null,
-            "started_at": -2600000,
+            "started_at": 1791717400000,
             "duration_ms": 400,
             "ttfb_ms": 120,
             "ttft_ms": null,
@@ -9848,13 +9936,13 @@ export const FIXTURES: Record<string, Fixture> = {
             "client_drift": null,
             "cooldown_set": {
               "reason": "account",
-              "until": 2800000
+              "until": 1791722800000
             },
             "windows": [
               {
                 "id": "five_hour",
                 "utilization": 0.4,
-                "resets_at": 1000000
+                "resets_at": 1791721000000
               }
             ],
             "overage_in_use": null,
@@ -9898,7 +9986,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "upstream_status": 200,
             "upstream_request_id": "req_r-failover_2",
             "upstream_message_id": "msg_r-failover_2",
-            "started_at": -2599600,
+            "started_at": 1791717400400,
             "duration_ms": 400,
             "ttfb_ms": 120,
             "ttft_ms": null,
@@ -9910,7 +9998,7 @@ export const FIXTURES: Record<string, Fixture> = {
               {
                 "id": "five_hour",
                 "utilization": 0.4,
-                "resets_at": 1000400
+                "resets_at": 1791721000400
               }
             ],
             "overage_in_use": null,
@@ -9953,14 +10041,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cohort": "direct",
           "held_ms": 1250
         },
-        "diagnostics_source": "router",
-        "cost_equivalent": null,
-        "estimated": false,
-        "tier": "default_claude_max_20x"
+        "diagnostics_source": "router"
       },
       "events": [
         {
-          "at": -2599900,
+          "at": 1791717400100,
           "kind": "pin_migrated",
           "account_id": "business",
           "key_id": "desktop",
@@ -9978,7 +10063,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "request_id": null
         },
         {
-          "at": -2599800,
+          "at": 1791717400200,
           "kind": "pin_expired",
           "account_id": "business",
           "key_id": "desktop",
@@ -9997,7 +10082,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "request_id": null
         },
         {
-          "at": -2599700,
+          "at": 1791717400300,
           "kind": "model_rejected",
           "account_id": "business",
           "key_id": "desktop",
@@ -10015,7 +10100,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "request_id": "r-failover"
         },
         {
-          "at": -2599650,
+          "at": 1791717400350,
           "kind": "model_permitted",
           "account_id": "direct",
           "key_id": "desktop",
@@ -10056,7 +10141,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "response_bytes_seen": 25,
       "request_truncated": false,
       "response_truncated": false,
-      "expires_at": 87400000
+      "expires_at": 1791807400000
     }
   },
   "requests": {
@@ -10065,10 +10150,10 @@ export const FIXTURES: Record<string, Fixture> = {
       "requests": [
         {
           "id": "r-placed",
-          "at": 970000,
-          "finished_at": 970900,
+          "at": 1791720970000,
+          "finished_at": 1791720970900,
           "key_id": "desktop",
-          "key_generation": 1000000,
+          "key_generation": 1791721000000,
           "pool_id": "main",
           "account_id": "direct",
           "session_id": "s3",
@@ -10130,14 +10215,17 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.0036,
           "cost_shares": null,
+          "cost_equivalent": null,
+          "estimated": false,
+          "tier": null,
           "phases": {
-            "received_at": 970000,
-            "selected_at": 970000,
-            "written_at": 970030,
-            "head_at": 970120,
-            "first_content_at": 970300,
-            "stream_end_at": 970850,
-            "finished_at": 970900
+            "received_at": 1791720970000,
+            "selected_at": 1791720970000,
+            "written_at": 1791720970030,
+            "head_at": 1791720970120,
+            "first_content_at": 1791720970300,
+            "stream_end_at": 1791720970850,
+            "finished_at": 1791720970900
           },
           "attempts": [
             {
@@ -10148,7 +10236,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "upstream_status": 200,
               "upstream_request_id": "req_r-placed_1",
               "upstream_message_id": "msg_r-placed_1",
-              "started_at": 970000,
+              "started_at": 1791720970000,
               "duration_ms": 400,
               "ttfb_ms": 120,
               "ttft_ms": null,
@@ -10160,7 +10248,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 {
                   "id": "five_hour",
                   "utilization": 0.4,
-                  "resets_at": 4570000
+                  "resets_at": 1791724570000
                 }
               ],
               "overage_in_use": null,
@@ -10186,17 +10274,14 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": null,
-          "cost_equivalent": null,
-          "estimated": false,
-          "tier": null
+          "diagnostics_source": null
         },
         {
           "id": "r-captured",
-          "at": 940000,
-          "finished_at": 940900,
+          "at": 1791720940000,
+          "finished_at": 1791720940900,
           "key_id": "desktop",
-          "key_generation": 1000000,
+          "key_generation": 1791721000000,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -10261,14 +10346,20 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000017625,
             "seven_day": 0.0000029375
           },
+          "cost_equivalent": {
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000029375
+          },
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
-            "received_at": 940000,
-            "selected_at": 940000,
-            "written_at": 940030,
-            "head_at": 940120,
-            "first_content_at": 940300,
-            "stream_end_at": 940850,
-            "finished_at": 940900
+            "received_at": 1791720940000,
+            "selected_at": 1791720940000,
+            "written_at": 1791720940030,
+            "head_at": 1791720940120,
+            "first_content_at": 1791720940300,
+            "stream_end_at": 1791720940850,
+            "finished_at": 1791720940900
           },
           "attempts": [
             {
@@ -10279,7 +10370,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "upstream_status": 200,
               "upstream_request_id": "req_r-captured_1",
               "upstream_message_id": "msg_r-captured_1",
-              "started_at": 940000,
+              "started_at": 1791720940000,
               "duration_ms": 400,
               "ttfb_ms": 120,
               "ttft_ms": null,
@@ -10291,7 +10382,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 {
                   "id": "five_hour",
                   "utilization": 0.4,
-                  "resets_at": 4540000
+                  "resets_at": 1791724540000
                 }
               ],
               "overage_in_use": null,
@@ -10311,20 +10402,14 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": "client",
-          "cost_equivalent": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
-          },
-          "estimated": false,
-          "tier": "default_claude_max_20x"
+          "diagnostics_source": "client"
         },
         {
           "id": "r-failed",
-          "at": 880000,
-          "finished_at": 880900,
+          "at": 1791720880000,
+          "finished_at": 1791720880900,
           "key_id": "desktop",
-          "key_generation": 1000000,
+          "key_generation": 1791721000000,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s2",
@@ -10389,14 +10474,20 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000017625,
             "seven_day": 0.0000029375
           },
+          "cost_equivalent": {
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000029375
+          },
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
-            "received_at": 880000,
-            "selected_at": 880000,
-            "written_at": 880030,
-            "head_at": 880120,
-            "first_content_at": 880300,
-            "stream_end_at": 880850,
-            "finished_at": 880900
+            "received_at": 1791720880000,
+            "selected_at": 1791720880000,
+            "written_at": 1791720880030,
+            "head_at": 1791720880120,
+            "first_content_at": 1791720880300,
+            "stream_end_at": 1791720880850,
+            "finished_at": 1791720880900
           },
           "attempts": [
             {
@@ -10407,7 +10498,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "upstream_status": 502,
               "upstream_request_id": "req_r-failed_1",
               "upstream_message_id": null,
-              "started_at": 880000,
+              "started_at": 1791720880000,
               "duration_ms": 400,
               "ttfb_ms": 120,
               "ttft_ms": null,
@@ -10419,7 +10510,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 {
                   "id": "five_hour",
                   "utilization": 0.4,
-                  "resets_at": 4480000
+                  "resets_at": 1791724480000
                 }
               ],
               "overage_in_use": null,
@@ -10439,20 +10530,14 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": null,
-          "cost_equivalent": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
-          },
-          "estimated": false,
-          "tier": "default_claude_max_20x"
+          "diagnostics_source": null
         },
         {
           "id": "r-incomplete",
-          "at": -2599400,
-          "finished_at": -2598500,
+          "at": 1791717400600,
+          "finished_at": 1791717401500,
           "key_id": "desktop",
-          "key_generation": 1000000,
+          "key_generation": 1791721000000,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -10521,14 +10606,20 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000017625,
             "seven_day": 0.0000029375
           },
+          "cost_equivalent": {
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000029375
+          },
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
-            "received_at": -2599400,
-            "selected_at": -2599400,
-            "written_at": -2599370,
-            "head_at": -2599280,
-            "first_content_at": -2599100,
-            "stream_end_at": -2598550,
-            "finished_at": -2598500
+            "received_at": 1791717400600,
+            "selected_at": 1791717400600,
+            "written_at": 1791717400630,
+            "head_at": 1791717400720,
+            "first_content_at": 1791717400900,
+            "stream_end_at": 1791717401450,
+            "finished_at": 1791717401500
           },
           "attempts": [
             {
@@ -10539,7 +10630,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "upstream_status": 200,
               "upstream_request_id": "req_r-incomplete_1",
               "upstream_message_id": "msg_r-incomplete_1",
-              "started_at": -2599400,
+              "started_at": 1791717400600,
               "duration_ms": 400,
               "ttfb_ms": 120,
               "ttft_ms": null,
@@ -10551,7 +10642,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 {
                   "id": "five_hour",
                   "utilization": 0.4,
-                  "resets_at": 1000600
+                  "resets_at": 1791721000600
                 }
               ],
               "overage_in_use": null,
@@ -10571,20 +10662,14 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": null,
-          "cost_equivalent": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
-          },
-          "estimated": false,
-          "tier": "default_claude_max_20x"
+          "diagnostics_source": null
         },
         {
           "id": "r-earlier-holder",
-          "at": -2599500,
-          "finished_at": -2598600,
+          "at": 1791717400500,
+          "finished_at": 1791717401400,
           "key_id": "desktop",
-          "key_generation": 940000,
+          "key_generation": 1791720940000,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s0",
@@ -10649,14 +10734,20 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000017625,
             "seven_day": 0.0000029375
           },
+          "cost_equivalent": {
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000029375
+          },
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
-            "received_at": -2599500,
-            "selected_at": -2599500,
-            "written_at": -2599470,
-            "head_at": -2599380,
-            "first_content_at": -2599200,
-            "stream_end_at": -2598650,
-            "finished_at": -2598600
+            "received_at": 1791717400500,
+            "selected_at": 1791717400500,
+            "written_at": 1791717400530,
+            "head_at": 1791717400620,
+            "first_content_at": 1791717400800,
+            "stream_end_at": 1791717401350,
+            "finished_at": 1791717401400
           },
           "attempts": [
             {
@@ -10667,7 +10758,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "upstream_status": 200,
               "upstream_request_id": "req_r-earlier-holder_1",
               "upstream_message_id": "msg_r-earlier-holder_1",
-              "started_at": -2599500,
+              "started_at": 1791717400500,
               "duration_ms": 400,
               "ttfb_ms": 120,
               "ttft_ms": null,
@@ -10679,7 +10770,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 {
                   "id": "five_hour",
                   "utilization": 0.4,
-                  "resets_at": 1000500
+                  "resets_at": 1791721000500
                 }
               ],
               "overage_in_use": null,
@@ -10699,20 +10790,14 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": null,
-          "cost_equivalent": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
-          },
-          "estimated": false,
-          "tier": "default_claude_max_20x"
+          "diagnostics_source": null
         },
         {
           "id": "r-failover",
-          "at": -2600000,
-          "finished_at": -2599100,
+          "at": 1791717400000,
+          "finished_at": 1791717400900,
           "key_id": "desktop",
-          "key_generation": 1000000,
+          "key_generation": 1791721000000,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -10774,14 +10859,17 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.0071,
           "cost_shares": null,
+          "cost_equivalent": null,
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
-            "received_at": -2600000,
-            "selected_at": -2600000,
-            "written_at": -2599570,
-            "head_at": -2599480,
-            "first_content_at": -2599300,
-            "stream_end_at": -2599150,
-            "finished_at": -2599100
+            "received_at": 1791717400000,
+            "selected_at": 1791717400000,
+            "written_at": 1791717400430,
+            "head_at": 1791717400520,
+            "first_content_at": 1791717400700,
+            "stream_end_at": 1791717400850,
+            "finished_at": 1791717400900
           },
           "attempts": [
             {
@@ -10792,7 +10880,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "upstream_status": 429,
               "upstream_request_id": "req_r-failover_1",
               "upstream_message_id": null,
-              "started_at": -2600000,
+              "started_at": 1791717400000,
               "duration_ms": 400,
               "ttfb_ms": 120,
               "ttft_ms": null,
@@ -10801,13 +10889,13 @@ export const FIXTURES: Record<string, Fixture> = {
               "client_drift": null,
               "cooldown_set": {
                 "reason": "account",
-                "until": 2800000
+                "until": 1791722800000
               },
               "windows": [
                 {
                   "id": "five_hour",
                   "utilization": 0.4,
-                  "resets_at": 1000000
+                  "resets_at": 1791721000000
                 }
               ],
               "overage_in_use": null,
@@ -10851,7 +10939,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "upstream_status": 200,
               "upstream_request_id": "req_r-failover_2",
               "upstream_message_id": "msg_r-failover_2",
-              "started_at": -2599600,
+              "started_at": 1791717400400,
               "duration_ms": 400,
               "ttfb_ms": 120,
               "ttft_ms": null,
@@ -10863,7 +10951,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 {
                   "id": "five_hour",
                   "utilization": 0.4,
-                  "resets_at": 1000400
+                  "resets_at": 1791721000400
                 }
               ],
               "overage_in_use": null,
@@ -10906,23 +10994,20 @@ export const FIXTURES: Record<string, Fixture> = {
             "cohort": "direct",
             "held_ms": 1250
           },
-          "diagnostics_source": "router",
-          "cost_equivalent": null,
-          "estimated": false,
-          "tier": "default_claude_max_20x"
+          "diagnostics_source": "router"
         }
       ],
       "next_cursor": null
     }
   },
   "routing_log": {
-    "route": "GET /admin/routing-log?from=1969-12-31T23:16:40Z&to=1970-01-01T00:17:40Z&kinds=exhausted,held,moved,placed,refused,renewed,probe,account_state_changed,budget_period_ended,budget_reached,catalog_changed,cooldown_cleared,cooldown_set,fast_credits_changed,ledger_gap,model_permitted,model_rejected,overage_ended,overage_started,pin_created,pin_expired,pin_migrated,pin_released,poll_backoff_ended,poll_backoff_started,refresh_failed,refresh_succeeded,refresh_uncertain,registry_changed,router_started,shedding_round,warm_prefix_expired,wind_down_started,window_reset,window_spent&limit=200",
+    "route": "GET /admin/routing-log?from=2026-10-11T11:16:40Z&to=2026-10-11T12:17:40Z&kinds=exhausted,held,moved,placed,refused,renewed,probe,account_state_changed,budget_period_ended,budget_reached,catalog_changed,cooldown_cleared,cooldown_set,fast_credits_changed,ledger_gap,model_permitted,model_rejected,overage_ended,overage_started,pin_created,pin_expired,pin_migrated,pin_released,poll_backoff_ended,poll_backoff_started,refresh_failed,refresh_succeeded,refresh_uncertain,registry_changed,router_started,shedding_round,warm_prefix_expired,wind_down_started,window_reset,window_spent&limit=200",
     "body": {
       "rows": [
         {
           "type": "event",
           "id": 37,
-          "at": 1060000,
+          "at": 1791721060000,
           "kind": "router_started",
           "account_id": null,
           "key_id": null,
@@ -10939,7 +11024,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "shedding_rounds_stale": 1,
             "windows_loaded": 2,
             "affinity_entries_loaded": 5,
-            "down_since": 1000000,
+            "down_since": 1791721000000,
             "holds_lost": true
           }
         },
@@ -10949,7 +11034,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seq": 1,
           "attempt": 1,
           "attempt_count": null,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "placed",
           "probe": false,
           "key_id": "desktop",
@@ -11005,7 +11090,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seq": 1,
           "attempt": 1,
           "attempt_count": 1,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "placed",
           "probe": false,
           "key_id": "desktop",
@@ -11064,7 +11149,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seq": 1,
           "attempt": 1,
           "attempt_count": null,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "renewed",
           "probe": false,
           "key_id": "desktop",
@@ -11111,7 +11196,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seq": 1,
           "attempt": 1,
           "attempt_count": null,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "refused",
           "probe": false,
           "key_id": "retired",
@@ -11162,7 +11247,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seq": 1,
           "attempt": 1,
           "attempt_count": null,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "renewed",
           "probe": true,
           "key_id": "desktop",
@@ -11209,7 +11294,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seq": 1,
           "attempt": 1,
           "attempt_count": null,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "moved",
           "probe": false,
           "key_id": "desktop",
@@ -11264,7 +11349,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seq": 2,
           "attempt": 1,
           "attempt_count": null,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "placed",
           "probe": false,
           "key_id": "desktop",
@@ -11316,7 +11401,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seq": 1,
           "attempt": 1,
           "attempt_count": null,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "held",
           "probe": false,
           "key_id": "desktop",
@@ -11372,7 +11457,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seq": 1,
           "attempt": 1,
           "attempt_count": null,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "exhausted",
           "probe": false,
           "key_id": "desktop",
@@ -11390,7 +11475,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "fact": [
             {
               "key": "retry",
-              "value": 1600000,
+              "value": 1791721600000,
               "unit": "time",
               "entity": null
             }
@@ -11406,7 +11491,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "hold": null,
           "exhaustion": {
             "kind": "timed",
-            "deadline": 1600000,
+            "deadline": 1791721600000,
             "window": "five_hour",
             "reason": null,
             "obstacle": null
@@ -11422,7 +11507,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seq": 3,
           "attempt": 1,
           "attempt_count": null,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "exhausted",
           "probe": false,
           "key_id": "desktop",
@@ -11484,7 +11569,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seq": 2,
           "attempt": 1,
           "attempt_count": null,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "held",
           "probe": false,
           "key_id": "desktop",
@@ -11540,7 +11625,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seq": 1,
           "attempt": 1,
           "attempt_count": null,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "held",
           "probe": false,
           "key_id": "desktop",
@@ -11596,7 +11681,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seq": 2,
           "attempt": 1,
           "attempt_count": null,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "placed",
           "probe": false,
           "key_id": "desktop",
@@ -11644,7 +11729,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seq": 1,
           "attempt": 1,
           "attempt_count": null,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "placed",
           "probe": false,
           "key_id": "desktop",
@@ -11697,7 +11782,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 21,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "cooldown_set",
           "account_id": "direct",
           "key_id": null,
@@ -11709,7 +11794,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "actor": null,
           "detail": {
             "scope": "account",
-            "until": 1600000,
+            "until": 1791721600000,
             "reason": "rate_limited",
             "window": "five_hour",
             "source_request_id": "r-move"
@@ -11718,7 +11803,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 20,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "cooldown_set",
           "account_id": "business",
           "key_id": null,
@@ -11730,7 +11815,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "actor": null,
           "detail": {
             "scope": "account",
-            "until": 1600000,
+            "until": 1791721600000,
             "reason": "rate_limited",
             "window": "five_hour",
             "source_request_id": "r-move"
@@ -11739,7 +11824,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 19,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "pin_released",
           "account_id": "business",
           "key_id": "desktop",
@@ -11756,7 +11841,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 18,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "cooldown_cleared",
           "account_id": "business",
           "key_id": null,
@@ -11774,7 +11859,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 17,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "fast_credits_changed",
           "account_id": "business",
           "key_id": null,
@@ -11793,13 +11878,13 @@ export const FIXTURES: Record<string, Fixture> = {
             },
             "blocked_before": null,
             "blocked_after": "out_of_credits",
-            "observed_at": 1000000
+            "observed_at": 1791721000000
           }
         },
         {
           "type": "event",
           "id": 16,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "overage_ended",
           "account_id": "business",
           "key_id": null,
@@ -11810,13 +11895,13 @@ export const FIXTURES: Record<string, Fixture> = {
           "request_id": null,
           "actor": null,
           "detail": {
-            "since": 940000
+            "since": 1791720940000
           }
         },
         {
           "type": "event",
           "id": 14,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "pin_migrated",
           "account_id": "direct",
           "key_id": "desktop",
@@ -11836,7 +11921,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 13,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "window_spent",
           "account_id": "business",
           "key_id": null,
@@ -11849,7 +11934,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "detail": {
             "window": "five_hour",
             "utilization": 1,
-            "reset": 4600000,
+            "reset": 1791724600000,
             "source": "head",
             "source_request_id": "r-probe"
           }
@@ -11857,7 +11942,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 12,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "pin_created",
           "account_id": "business",
           "key_id": "desktop",
@@ -11875,7 +11960,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 11,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "pin_created",
           "account_id": "business",
           "key_id": "desktop",
@@ -11893,7 +11978,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 10,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "pin_created",
           "account_id": "business",
           "key_id": "desktop",
@@ -11911,7 +11996,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 9,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "cooldown_set",
           "account_id": "business",
           "key_id": null,
@@ -11923,7 +12008,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "actor": null,
           "detail": {
             "scope": "model:claude-haiku-4-5-20251001",
-            "until": 2800000,
+            "until": 1791722800000,
             "reason": "model_rejected",
             "window": "model_rejection",
             "source_request_id": null
@@ -11932,7 +12017,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 4,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "pin_created",
           "account_id": "business",
           "key_id": "desktop",
@@ -11950,7 +12035,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 3,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "account_state_changed",
           "account_id": "business",
           "key_id": null,
@@ -11970,7 +12055,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 2,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "registry_changed",
           "account_id": null,
           "key_id": null,
@@ -12004,7 +12089,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 1,
-          "at": 1000000,
+          "at": 1791721000000,
           "kind": "registry_changed",
           "account_id": null,
           "key_id": null,
@@ -12056,7 +12141,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 15,
-          "at": 940000,
+          "at": 1791720940000,
           "kind": "overage_started",
           "account_id": "business",
           "key_id": null,
@@ -12071,7 +12156,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 36,
-          "at": -1580000,
+          "at": 1791718420000,
           "kind": "registry_changed",
           "account_id": null,
           "key_id": null,
@@ -12095,7 +12180,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 35,
-          "at": -1640000,
+          "at": 1791718360000,
           "kind": "refresh_uncertain",
           "account_id": "business",
           "key_id": null,
@@ -12113,7 +12198,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 34,
-          "at": -1700000,
+          "at": 1791718300000,
           "kind": "refresh_failed",
           "account_id": "business",
           "key_id": null,
@@ -12131,7 +12216,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 33,
-          "at": -1760000,
+          "at": 1791718240000,
           "kind": "refresh_succeeded",
           "account_id": "business",
           "key_id": null,
@@ -12142,15 +12227,15 @@ export const FIXTURES: Record<string, Fixture> = {
           "request_id": null,
           "actor": null,
           "detail": {
-            "until": 4600000,
-            "access_expires_at": 4600000,
+            "until": 1791724600000,
+            "access_expires_at": 1791724600000,
             "refresh_expires_at": null
           }
         },
         {
           "type": "event",
           "id": 32,
-          "at": -1820000,
+          "at": 1791718180000,
           "kind": "account_state_changed",
           "account_id": "business",
           "key_id": null,
@@ -12170,7 +12255,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 31,
-          "at": -1880000,
+          "at": 1791718120000,
           "kind": "ledger_gap",
           "account_id": null,
           "key_id": null,
@@ -12188,7 +12273,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 30,
-          "at": -1940000,
+          "at": 1791718060000,
           "kind": "budget_period_ended",
           "account_id": "business",
           "key_id": null,
@@ -12201,13 +12286,13 @@ export const FIXTURES: Record<string, Fixture> = {
           "detail": {
             "period": "day",
             "previous_spent_usd": 4.2,
-            "period_start": -1940000
+            "period_start": 1791718060000
           }
         },
         {
           "type": "event",
           "id": 29,
-          "at": -2000000,
+          "at": 1791718000000,
           "kind": "budget_reached",
           "account_id": "business",
           "key_id": null,
@@ -12221,14 +12306,14 @@ export const FIXTURES: Record<string, Fixture> = {
             "period": "month",
             "budget_usd": 30,
             "spent_usd": 30.4,
-            "period_end": 87400000,
+            "period_end": 1791807400000,
             "source_request_id": "r-failover"
           }
         },
         {
           "type": "event",
           "id": 28,
-          "at": -2060000,
+          "at": 1791717940000,
           "kind": "catalog_changed",
           "account_id": "business",
           "key_id": null,
@@ -12251,7 +12336,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 27,
-          "at": -2120000,
+          "at": 1791717880000,
           "kind": "poll_backoff_ended",
           "account_id": "business",
           "key_id": null,
@@ -12264,13 +12349,13 @@ export const FIXTURES: Record<string, Fixture> = {
           "detail": {
             "duration_ms": 120000,
             "attempts": 2,
-            "resumed_at": -2120000
+            "resumed_at": 1791717880000
           }
         },
         {
           "type": "event",
           "id": 26,
-          "at": -2240000,
+          "at": 1791717760000,
           "kind": "poll_backoff_started",
           "account_id": "business",
           "key_id": null,
@@ -12284,14 +12369,14 @@ export const FIXTURES: Record<string, Fixture> = {
             "reason": "429",
             "endpoint": "usage",
             "attempts": 1,
-            "next_attempt_at": -2180000,
-            "last_clean_poll_at": -2300000
+            "next_attempt_at": 1791717820000,
+            "last_clean_poll_at": 1791717700000
           }
         },
         {
           "type": "event",
           "id": 25,
-          "at": -2300000,
+          "at": 1791717700000,
           "kind": "window_reset",
           "account_id": "business",
           "key_id": null,
@@ -12304,15 +12389,15 @@ export const FIXTURES: Record<string, Fixture> = {
           "detail": {
             "window": "seven_day",
             "utilization_before": 0.83,
-            "reset_at": -2300000,
-            "next_reset": 602500000,
+            "reset_at": 1791717700000,
+            "next_reset": 1792322500000,
             "observed": "sample"
           }
         },
         {
           "type": "event",
           "id": 24,
-          "at": -2360000,
+          "at": 1791717640000,
           "kind": "wind_down_started",
           "account_id": "business",
           "key_id": null,
@@ -12323,7 +12408,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "request_id": null,
           "actor": null,
           "detail": {
-            "ends_at": 87400000,
+            "ends_at": 1791807400000,
             "wind_down_minutes": 1440,
             "end_source": "cancelled"
           }
@@ -12331,7 +12416,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 23,
-          "at": -2420000,
+          "at": 1791717580000,
           "kind": "warm_prefix_expired",
           "account_id": "direct",
           "key_id": "desktop",
@@ -12358,7 +12443,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 22,
-          "at": -2480000,
+          "at": 1791717520000,
           "kind": "shedding_round",
           "account_id": "business",
           "key_id": "desktop",
@@ -12404,14 +12489,14 @@ export const FIXTURES: Record<string, Fixture> = {
               }
             ],
             "dwell_seconds": 900,
-            "dwell_until": -1580000,
+            "dwell_until": 1791718420000,
             "persisted": true
           }
         },
         {
           "type": "event",
           "id": 8,
-          "at": -2599650,
+          "at": 1791717400350,
           "kind": "model_permitted",
           "account_id": "direct",
           "key_id": "desktop",
@@ -12434,7 +12519,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 7,
-          "at": -2599700,
+          "at": 1791717400300,
           "kind": "model_rejected",
           "account_id": "business",
           "key_id": "desktop",
@@ -12454,7 +12539,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 6,
-          "at": -2599800,
+          "at": 1791717400200,
           "kind": "pin_expired",
           "account_id": "business",
           "key_id": "desktop",
@@ -12475,7 +12560,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "event",
           "id": 5,
-          "at": -2599900,
+          "at": 1791717400100,
           "kind": "pin_migrated",
           "account_id": "business",
           "key_id": "desktop",
@@ -12499,7 +12584,7 @@ export const FIXTURES: Record<string, Fixture> = {
   "session": {
     "route": "GET /admin/session",
     "body": {
-      "session_id": "-S4mATibcJQ8vjLYM0O9zhOPUU7ta_7aGvNpDPae678"
+      "session_id": "ubGziRUthj2CDHY-qPejWS0yDb2HWNwCGnqsCum9U1Q"
     }
   },
   "sessions": {
@@ -12508,23 +12593,25 @@ export const FIXTURES: Record<string, Fixture> = {
       "sessions": [
         {
           "key_id": "desktop",
-          "key_generation": 1000000,
+          "key_generation": 1791721000000,
           "session_id": "s-fixture",
           "agent_id": "main",
           "model": "claude-sonnet-5",
           "account_id": "business",
           "epoch": 1,
-          "created_at": 1000000,
-          "last_used_at": 1000000,
+          "created_at": 1791721000000,
+          "last_used_at": 1791721000000,
           "last_request_at": null,
           "requests": null,
           "pinned": true,
           "burn": 0,
           "burn_unit": "window_share",
+          "burn_equivalent": 0,
+          "estimated": false,
           "burn_at": null,
           "cache_ttl_ms": 300000,
           "last_input_tokens": 0,
-          "last_refresh_at": 1000000,
+          "last_refresh_at": 1791721000000,
           "shed_from": null,
           "historical": false,
           "companion": "none",
@@ -12538,13 +12625,11 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "presence_age_seconds": null,
           "forked_from": null,
-          "fork_depth": null,
-          "burn_equivalent": 0,
-          "estimated": false
+          "fork_depth": null
         },
         {
           "key_id": "desktop",
-          "key_generation": 1000000,
+          "key_generation": 1791721000000,
           "session_id": "s3",
           "agent_id": null,
           "model": "claude-sonnet-5",
@@ -12552,11 +12637,13 @@ export const FIXTURES: Record<string, Fixture> = {
           "epoch": null,
           "created_at": null,
           "last_used_at": null,
-          "last_request_at": 970000,
+          "last_request_at": 1791720970000,
           "requests": 1,
           "pinned": false,
           "burn": null,
           "burn_unit": null,
+          "burn_equivalent": null,
+          "estimated": false,
           "burn_at": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
@@ -12574,13 +12661,11 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "presence_age_seconds": null,
           "forked_from": null,
-          "fork_depth": null,
-          "burn_equivalent": null,
-          "estimated": false
+          "fork_depth": null
         },
         {
           "key_id": "desktop",
-          "key_generation": 1000000,
+          "key_generation": 1791721000000,
           "session_id": "s1",
           "agent_id": null,
           "model": "claude-sonnet-5-5",
@@ -12588,11 +12673,13 @@ export const FIXTURES: Record<string, Fixture> = {
           "epoch": null,
           "created_at": null,
           "last_used_at": null,
-          "last_request_at": 940000,
+          "last_request_at": 1791720940000,
           "requests": 3,
           "pinned": false,
           "burn": null,
           "burn_unit": null,
+          "burn_equivalent": null,
+          "estimated": false,
           "burn_at": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
@@ -12604,19 +12691,17 @@ export const FIXTURES: Record<string, Fixture> = {
           "keepalive": {
             "cause": "scheduled",
             "last_guard": "rearm",
-            "next_probe_at": 1240000,
+            "next_probe_at": 1791721240000,
             "state": "busy"
           },
           "presence_age_seconds": null,
           "historical": false,
           "forked_from": "s0",
-          "fork_depth": 2,
-          "burn_equivalent": null,
-          "estimated": false
+          "fork_depth": 2
         },
         {
           "key_id": "desktop",
-          "key_generation": 1000000,
+          "key_generation": 1791721000000,
           "session_id": "s2",
           "agent_id": null,
           "model": "claude-sonnet-5-5",
@@ -12624,11 +12709,13 @@ export const FIXTURES: Record<string, Fixture> = {
           "epoch": null,
           "created_at": null,
           "last_used_at": null,
-          "last_request_at": 880000,
+          "last_request_at": 1791720880000,
           "requests": 1,
           "pinned": false,
           "burn": null,
           "burn_unit": null,
+          "burn_equivalent": null,
+          "estimated": false,
           "burn_at": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
@@ -12646,13 +12733,11 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "presence_age_seconds": null,
           "forked_from": null,
-          "fork_depth": null,
-          "burn_equivalent": null,
-          "estimated": false
+          "fork_depth": null
         },
         {
           "key_id": "desktop",
-          "key_generation": 940000,
+          "key_generation": 1791720940000,
           "session_id": "s0",
           "agent_id": null,
           "model": "claude-sonnet-5-5",
@@ -12660,11 +12745,13 @@ export const FIXTURES: Record<string, Fixture> = {
           "epoch": null,
           "created_at": null,
           "last_used_at": null,
-          "last_request_at": -2599500,
+          "last_request_at": 1791717400500,
           "requests": 1,
           "pinned": false,
           "burn": null,
           "burn_unit": null,
+          "burn_equivalent": null,
+          "estimated": false,
           "burn_at": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
@@ -12682,9 +12769,7 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "presence_age_seconds": null,
           "forked_from": null,
-          "fork_depth": null,
-          "burn_equivalent": null,
-          "estimated": false
+          "fork_depth": null
         }
       ]
     }
@@ -13315,7 +13400,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "ready": true,
       "dead": [],
       "ledger": {
-        "schema_version": 32,
+        "schema_version": 34,
         "written": 18,
         "dropped": 0,
         "write_failures": 0,

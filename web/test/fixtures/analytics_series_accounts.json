@@ -1,105 +1,105 @@
 {
   "route": "GET /admin/analytics/series?range=24h&group_by=account",
   "body": {
-    "from": -85400000,
-    "to": 1000000,
+    "from": 1791634600000,
+    "to": 1791721000000,
     "bucket_seconds": 3600,
     "group_by": "account",
     "points": [
       {
-        "at": -86400000,
+        "at": 1791633600000,
         "groups": []
       },
       {
-        "at": -82800000,
+        "at": 1791637200000,
         "groups": []
       },
       {
-        "at": -79200000,
+        "at": 1791640800000,
         "groups": []
       },
       {
-        "at": -75600000,
+        "at": 1791644400000,
         "groups": []
       },
       {
-        "at": -72000000,
+        "at": 1791648000000,
         "groups": []
       },
       {
-        "at": -68400000,
+        "at": 1791651600000,
         "groups": []
       },
       {
-        "at": -64800000,
+        "at": 1791655200000,
         "groups": []
       },
       {
-        "at": -61200000,
+        "at": 1791658800000,
         "groups": []
       },
       {
-        "at": -57600000,
+        "at": 1791662400000,
         "groups": []
       },
       {
-        "at": -54000000,
+        "at": 1791666000000,
         "groups": []
       },
       {
-        "at": -50400000,
+        "at": 1791669600000,
         "groups": []
       },
       {
-        "at": -46800000,
+        "at": 1791673200000,
         "groups": []
       },
       {
-        "at": -43200000,
+        "at": 1791676800000,
         "groups": []
       },
       {
-        "at": -39600000,
+        "at": 1791680400000,
         "groups": []
       },
       {
-        "at": -36000000,
+        "at": 1791684000000,
         "groups": []
       },
       {
-        "at": -32400000,
+        "at": 1791687600000,
         "groups": []
       },
       {
-        "at": -28800000,
+        "at": 1791691200000,
         "groups": []
       },
       {
-        "at": -25200000,
+        "at": 1791694800000,
         "groups": []
       },
       {
-        "at": -21600000,
+        "at": 1791698400000,
         "groups": []
       },
       {
-        "at": -18000000,
+        "at": 1791702000000,
         "groups": []
       },
       {
-        "at": -14400000,
+        "at": 1791705600000,
         "groups": []
       },
       {
-        "at": -10800000,
+        "at": 1791709200000,
         "groups": []
       },
       {
-        "at": -7200000,
+        "at": 1791712800000,
         "groups": []
       },
       {
-        "at": -3600000,
+        "at": 1791716400000,
         "groups": [
           {
             "key": "business",
@@ -118,12 +118,12 @@
             "uncached": 0,
             "expired_between_turns": 0,
             "tokens": {
-              "cache_read": 1500,
+              "cache_read": 2000,
               "cache_write_1h": 0,
-              "cache_write_5m": 600,
-              "output": 300,
-              "thinking": 120,
-              "uncached_input": 3000,
+              "cache_write_5m": 800,
+              "output": 400,
+              "thinking": 160,
+              "uncached_input": 4000,
               "web_fetch": 0,
               "web_search": 0
             },
@@ -488,16 +488,16 @@
             },
             "equivalent_split": {
               "input": 3.3333333333333333e-6,
-              "cache_read": 4.166666666666667e-8,
+              "cache_read": 4.1666666666666676e-8,
               "cache_write": 8.333333333333333e-7,
-              "output": 1.6666666666666667e-6
+              "output": 1.6666666666666669e-6
             },
             "estimated": false
           }
         ]
       },
       {
-        "at": 0,
+        "at": 1791720000000,
         "groups": [
           {
             "key": "business",
@@ -886,9 +886,9 @@
             },
             "equivalent_split": {
               "input": 3.3333333333333333e-6,
-              "cache_read": 4.166666666666667e-8,
+              "cache_read": 4.1666666666666676e-8,
               "cache_write": 8.333333333333333e-7,
-              "output": 1.6666666666666667e-6
+              "output": 1.6666666666666669e-6
             },
             "estimated": false
           },
@@ -1251,12 +1251,7 @@
               "input": 0.002,
               "output": 0.001
             },
-            "equivalent_split": {
-              "input": 0.0,
-              "cache_read": 0.0,
-              "cache_write": 0.0,
-              "output": 0.0
-            },
+            "equivalent_split": {},
             "estimated": false
           }
         ]

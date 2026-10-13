@@ -1,5 +1,6 @@
 //! A store with an OAuth account, an API-key account, a pool holding both and a key on it, the router over
-//! them, a ledger over an in-memory file, and a clock the test moves; the reader spawns on the rig's bus.
+//! them, a ledger over an in-memory file and the ledger's test cost model, and a clock the test moves. The reader
+//! spawns on the rig's bus.
 #![allow(dead_code)]
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -11,7 +12,9 @@ use phoebis_bus::{
     Bus, Event, Kind as RequestKind, Origin, Outcome, RequestComplete, RequestObserved,
     RequestShape, ResponseFacts,
 };
-use phoebis_ledger::{Ledger, LedgerConfig, LedgerDb, Metrics, PriceTable, Pricing};
+use phoebis_ledger::{
+    CostRevisions, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables, PriceRevisions, Pricing,
+};
 use phoebis_oauth::{Clock, CredentialManager, UsageService};
 use phoebis_profile::claude_code_2_1_269_linux_x64;
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
@@ -23,6 +26,19 @@ use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 
 pub const NOW: i64 = 1_700_000_000_000;
+
+/// The ledger's test cost model as text, since this crate's tests build the ledger without its test tables. Its
+/// first entry is in force at `NOW` and leaves `claude-opus-5` unweighted under the `opus` model tier, whose latest
+/// weighted model is `claude-opus-5-5`.
+pub const COSTS: &str = include_str!("../../../ledger/tests/fixtures/subscription_costs.yaml");
+
+pub fn tables_of(text: &str) -> PlanTables {
+    PlanTables {
+        revisions: CostRevisions::from_yaml(text).expect("the cost list parses"),
+        path: None,
+        source: "test".to_string(),
+    }
+}
 
 pub struct Rig {
     pub bus: Bus,
@@ -95,6 +111,19 @@ pub async fn rig() -> Rig {
 
 /// The rig over a store the test opened itself, for the case that reads the store again after a restart.
 pub async fn rig_with_store(store: Arc<Store>) -> Rig {
+    rig_on(store, tables_of(COSTS)).await
+}
+
+/// The rig over a cost model the test wrote, for the case that needs a revision the fixture lacks.
+pub async fn rig_with_tables(tables: PlanTables) -> Rig {
+    rig_on(
+        Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()),
+        tables,
+    )
+    .await
+}
+
+async fn rig_on(store: Arc<Store>, tables: PlanTables) -> Rig {
     if store.accounts().unwrap().is_empty() {
         seed(&store);
     }
@@ -108,7 +137,8 @@ pub async fn rig_with_store(store: Arc<Store>) -> Rig {
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
     let ledger = phoebis_ledger::spawn(
         db.clone(),
-        Arc::new(Pricing::new(PriceTable::shipped())),
+        Arc::new(Pricing::new(PriceRevisions::shipped())),
+        Arc::new(tables),
         store.clone(),
         &bus,
         router.clone(),

@@ -2,10 +2,10 @@
 
 `views.mjs` drives a headless Chromium over every view of the console in the light and the dark theme. It logs in
 through the login screen, then for each theme visits the dashboard, quota, accounts (which lands on the first account
-through a client-side redirect, since `/accounts` carries no account id), pools, keys, request logs, analytics (on its
-Traffic tab), sessions, settings, and the routing log, and in the mock pass the Analytics page once more on its Cache
-warming tab and the Quota page once more on its Quota windows section. Per view it waits for one element, asserts the
-document title, records every console error and page error, and writes a full-page screenshot to
+through a client-side redirect, since `/accounts` carries no account id), pools, keys, models, request logs, analytics
+(on its Traffic tab), sessions, settings, and the routing log, and in the mock pass the Analytics page once more on its
+Cache warming tab and the Quota page once more on its Quota windows section. Per view it waits for one element, asserts
+the document title, records every console error and page error, and writes a full-page screenshot to
 `$PHOEBIS_SCREENSHOT_DIR/<theme>/<view>.png`. Further layout assertions ride along, one function each in `views.mjs`, in
 the order the file defines them (the rail's two levels (the indent, the gaps, the hairlines, a parent's color at rest
 and under the pointer), the create marks with and without the refusal dots (a mark's size, weight and ink, 6 px after
@@ -14,20 +14,20 @@ discovery line (below the group's last field, in the hint's size and a rail pare
 expert field's wrapper (a half cell beside the plain one, a lone field the grid's width), the sidebar's brand row (the
 mark's box 36 px square with the logo drawn 26 px square in it, the name 17 px at weight 600 on one line and inside the
 sidebar's content box), the dashboard's attention line (one 22 px row per line of badges, each badge the pool card's
-strip badge, in the content box and clear of the tiles; the story's nine items in the mock pass, the seeded exhaustion
-or the quiet line in the router pass), the sidebar's Expert view row above the version line, the routing log's columns
-at 1280 by 800 and 1440 by 900 (Fact 150 px at both, Account 246 then 256 px, Model at 1440 alone, the table its card's
-width with nothing to scroll sideways), the Diagnostics group (neither its heading nor the Routing log link on the
-dashboard with the expert view off, both with the log open and the link active), pool chips, the caching controls, the
-select-below threshold, the load groups, the pool card's serving table and tiles, the serving table's columns (Account
-the fill), the pool dialog's members table (Account the fill, each Priority and budget input at least its column's 96,
-140 or 150 px less the cell's padding) and keys table (Key the fill), each read while its group shows, and in the mock
-pass's expert view its model rules table (Model the fill, each select holding its widest option's text inside its
-padding), which the router's seed draws no override for, the settings cards' order, the listener hint's gaps and size
-and About's lines (their order, one type and one gap), the Settings page's Unit row at 1280 and 400 px (the legend's
-button on the select's line, and its popover inside the viewport's width, uncovered, in the legend's 12 px type and
-closed by Escape), the cooling-down block's columns (Reason the fill), the Delete account button, the account lines, the
-Quota cards' poll lines (short of the Refresh pill and inside the card, the backoff line in the serious ink, none
+strip badge, in the content box and clear of the tiles, with the story's nine items in the mock pass, the seeded
+exhaustion or the quiet line in the router pass), the sidebar's Expert view row above the version line, the routing
+log's columns at 1280 by 800 and 1440 by 900 (Fact 150 px at both, Account 246 then 256 px, Model at 1440 alone, the
+table its card's width with nothing to scroll sideways), the Diagnostics group (neither its heading nor the Routing log
+link on the dashboard with the expert view off, both with the log open and the link active), pool chips, the caching
+controls, the select-below threshold, the load groups, the pool card's serving table and tiles, the serving table's
+columns (Account the fill), the pool dialog's members table (Account the fill, each Priority and budget input at least
+its column's 96, 140 or 150 px less the cell's padding) and keys table (Key the fill), each read while its group shows,
+and in the mock pass's expert view its model rules table (Model the fill, each select holding its widest option's text
+inside its padding), which the router's seed draws no override for, the settings cards' order, the listener hint's gaps
+and size and About's lines (their order, one type and one gap), the Settings page's Unit row at 1280 and 400 px (the
+legend's button on the select's line, and its popover inside the viewport's width, uncovered, in the legend's 12 px type
+and closed by Escape), the cooling-down block's columns (Reason the fill), the Delete account button, the account lines,
+the Quota cards' poll lines (short of the Refresh pill and inside the card, the backoff line in the serious ink, none
 wrapping, a failed poll's reason cut inside its line and whole in its title), the Quota cards' chips and reset cells
 (each on one line inside its column, the window grid inside its card) and each live window's pace mark (inside its meter
 and taller than the track), the timeline's chips on the Quota windows section (each inside its column, a chip with a
@@ -112,7 +112,7 @@ PHOEBIS_E2E_BASE=http://127.0.0.1:8081 PHOEBIS_E2E_SECRET=... PHOEBIS_SCREENSHOT
 150 MB of Chromium under `~/.cache/ms-playwright` and is needed once per host.
 
 `cargo test -p phoebis-router --test end_to_end the_ui_passes` runs the same script against a router it starts and seeds
-itself, when `PHOEBIS_E2E_BROWSER=1` is set; without it the test prints a skip line, so a build host without Chromium
+itself, when `PHOEBIS_E2E_BROWSER=1` is set. Without it the test prints a skip line, so a build host without Chromium
 still runs the rest of that suite. The router seeds its registry at real time, so the clock origin there is the
 instant the pass launches.
 

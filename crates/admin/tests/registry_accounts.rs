@@ -1102,7 +1102,6 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
                 outcome: "succeeded".into(),
                 input_tokens: Some(10),
                 output_tokens: Some(5),
-                estimated_usd: Some(0.01),
                 ..Default::default()
             }],
             bodies: None,

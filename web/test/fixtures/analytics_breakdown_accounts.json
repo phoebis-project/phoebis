@@ -1,8 +1,8 @@
 {
   "route": "GET /admin/analytics/breakdown?range=24h&group_by=account",
   "body": {
-    "from": -85400000,
-    "to": 1000000,
+    "from": 1791634600000,
+    "to": 1791721000000,
     "group_by": "account",
     "rows": [
       {
@@ -22,12 +22,12 @@
         "uncached": 0,
         "expired_between_turns": 0,
         "tokens": {
-          "cache_read": 2500,
+          "cache_read": 3000,
           "cache_write_1h": 0,
-          "cache_write_5m": 1000,
-          "output": 500,
-          "thinking": 200,
-          "uncached_input": 5000,
+          "cache_write_5m": 1200,
+          "output": 600,
+          "thinking": 240,
+          "uncached_input": 6000,
           "web_fetch": 0,
           "web_search": 0
         },
@@ -393,8 +393,8 @@
         },
         "equivalent_split": {
           "input": 6.666666666666667e-6,
-          "cache_read": 8.333333333333334e-8,
-          "cache_write": 1.6666666666666667e-6,
+          "cache_read": 8.333333333333335e-8,
+          "cache_write": 1.6666666666666669e-6,
           "output": 3.3333333333333333e-6
         },
         "estimated": false
@@ -758,12 +758,7 @@
           "input": 0.002,
           "output": 0.001
         },
-        "equivalent_split": {
-          "input": 0.0,
-          "cache_read": 0.0,
-          "cache_write": 0.0,
-          "output": 0.0
-        },
+        "equivalent_split": {},
         "estimated": false
       }
     ]

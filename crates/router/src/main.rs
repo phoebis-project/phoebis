@@ -121,12 +121,16 @@ fn main() -> anyhow::Result<()> {
                             .unwrap_or_else(|| "the built-in table".to_string())
                     )
                 })?;
-            let prices = pricing.current();
+            let now = jiff::Timestamp::now().as_millisecond();
+            let revisions = pricing.revisions();
+            let prices = revisions.in_force(now);
             println!(
                 "api prices: {}",
                 table_line(
-                    &prices.source,
+                    &revisions.source,
+                    revisions.len(),
                     &prices.effective,
+                    revisions.pending(now).map(|next| next.effective.as_str()),
                     config.stats.api_prices_path.as_deref(),
                     format!("{} models", prices.models.len())
                 )
@@ -144,16 +148,24 @@ fn main() -> anyhow::Result<()> {
                             .unwrap_or_else(|| "the built-in model".to_string())
                     )
                 })?;
-            let costs = &tables.costs;
+            let costs = tables.revisions.in_force(now);
             let weighted = costs.weighted_model_count();
+            let by_tier = costs.by_tier_count();
             let sized = costs.sized_tier_count();
             println!(
                 "subscription costs: {}",
                 table_line(
                     &tables.source,
+                    tables.revisions.len(),
                     &costs.effective,
+                    tables
+                        .revisions
+                        .pending(now)
+                        .map(|next| next.effective.as_str()),
                     config.stats.subscription_costs_path.as_deref(),
-                    format!("{weighted} models, {sized} tiers")
+                    format!(
+                        "{weighted} weighted models, {by_tier} more by model tier, {sized} account tiers"
+                    )
                 )
             );
             let days = |n: u32| {
@@ -515,18 +527,27 @@ fn run_tls_reload(config_path: &Path, args: &TlsReloadArgs) -> ! {
     std::process::exit(tls_reload::exit_code(&body))
 }
 
-/// One table's `check-config` line: the file read, or the built-in table with the configured path it found nothing
-/// at, so an operator can tell a missing override from a misspelled one.
-fn table_line(source: &str, effective: &str, path: Option<&Path>, counts: String) -> String {
+/// One table's `check-config` line: the file read, or the built-in list with the configured path it found nothing
+/// at, so an operator can tell a missing override from a misspelled one. `next` names the first entry dated after the
+/// one in force, `None` when none is, so the operator knows what a restart changes.
+fn table_line(
+    source: &str,
+    revisions: usize,
+    in_force: &str,
+    next: Option<&str>,
+    path: Option<&Path>,
+    counts: String,
+) -> String {
+    let plural = if revisions == 1 { "" } else { "s" };
+    let next = next.map_or(String::new(), |date| format!(", next {date}"));
+    let listed = format!("{revisions} revision{plural}, in force {in_force}{next}, {counts}");
     match (source, path) {
-        ("file", Some(path)) => {
-            format!("{} (file, effective {effective}, {counts})", path.display())
-        }
+        ("file", Some(path)) => format!("{} (file, {listed})", path.display()),
         (_, Some(path)) => format!(
-            "built in (effective {effective}, {counts}), since {} was not found",
+            "built in ({listed}), since {} was not found",
             path.display()
         ),
-        (_, None) => format!("built in (effective {effective}, {counts})"),
+        (_, None) => format!("built in ({listed})"),
     }
 }
 

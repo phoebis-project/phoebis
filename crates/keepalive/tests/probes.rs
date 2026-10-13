@@ -40,8 +40,8 @@ fn read_evidence(request_id: &str, read: u64) -> phoebis_bus::Event {
     })
 }
 
-/// The cost the ledger's probe rows carry, once the engine's delta has landed: the probe's own request row reaches
-/// the rollups with no cost on it, ahead of that delta, so the wait names the cost rather than the row.
+/// The dollars a reader prices the probe rows at, once the probe's own request row has landed with its counts: the
+/// wait names the cost rather than a row.
 async fn ledger_probe_cost(r: &Rig) -> f64 {
     wait_for(std::time::Duration::from_secs(5), || {
         let rows =
@@ -54,11 +54,7 @@ async fn ledger_probe_cost(r: &Rig) -> f64 {
                 )
             })
             .unwrap();
-        let cost: f64 = rows
-            .iter()
-            .filter(|row| row.kind == "probe")
-            .map(|row| row.probe_cost_usd)
-            .sum();
+        let (cost, _) = read_dollars(r, &rows);
         (cost > 0.0).then_some(cost)
     })
     .await
@@ -698,10 +694,13 @@ async fn an_orphaned_probe_whose_agent_survives_settles_under_its_stop() {
                 )
             })
             .unwrap();
-        let mut sum = (0, 0.0, std::collections::BTreeMap::new());
+        let mut sum = (
+            0,
+            read_dollars(&r, &rows).1,
+            std::collections::BTreeMap::new(),
+        );
         for row in rows.iter().filter(|row| row.kind == "probe") {
             sum.0 += row.wasted_probes;
-            sum.1 += row.wasted_probe_usd;
             for (reason, n) in &row.wasted_probe_reasons {
                 *sum.2.entry(reason.clone()).or_insert(0) += n;
             }
@@ -808,9 +807,8 @@ async fn a_probe_answered_after_the_idle_limit_stays_pending_until_its_entry_lap
         })
         .unwrap();
     let mut reasons = std::collections::BTreeMap::new();
-    let mut wasted_usd = 0.0;
+    let (_, wasted_usd) = read_dollars(&r, &rows);
     for row in rows.iter().filter(|row| row.kind == "probe") {
-        wasted_usd += row.wasted_probe_usd;
         for (reason, n) in &row.wasted_probe_reasons {
             *reasons.entry(reason.clone()).or_insert(0) += n;
         }
@@ -1922,16 +1920,18 @@ fn read_back_at(speed: &str) -> Respond {
 }
 
 /// One fast-mode request on the plan-funded account and the probe after it, answered at `served`, and what
-/// the price table says 2,000 cache reads cost at that speed.
+/// the price table says 2,000 cache reads cost at that speed. The session stays attended, so a case can still stop
+/// the recipe with the probe unanswered.
 async fn fast_probe_served(served: &str, speed: phoebis_ledger::Speed) -> (Rig, f64) {
     let mut r = rig(plan_funded_spec()).await;
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", real_answer());
     r.observe_with("main", &fast_body()).await;
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", read_back_at(served));
-    r.advance(270_000);
+    r.advance_attended(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
-    let (cost, _) = phoebis_ledger::PriceTable::shipped()
+    let (cost, _) = phoebis_ledger::PriceRevisions::shipped()
+        .in_force(r.now())
         .estimate(FAST_PRICED, speed, 0, 2_000, 0, 0, 0)
         .expect("a priced model");
     (r, cost)
@@ -1943,7 +1943,8 @@ async fn fast_probe_served(served: &str, speed: phoebis_ledger::Speed) -> (Rig, 
 #[tokio::test]
 async fn a_fast_recipes_probe_settles_in_dollars_at_the_fast_cells_on_a_plan_funded_account() {
     let (r, fast) = fast_probe_served("fast", phoebis_ledger::Speed::Fast).await;
-    let (standard, _) = phoebis_ledger::PriceTable::shipped()
+    let (standard, _) = phoebis_ledger::PriceRevisions::shipped()
+        .in_force(r.now())
         .estimate(
             FAST_PRICED,
             phoebis_ledger::Speed::Standard,
@@ -1966,7 +1967,7 @@ async fn a_fast_recipes_probe_settles_in_dollars_at_the_fast_cells_on_a_plan_fun
 }
 
 /// The answer's own `usage.speed` picks the cells, as it does for a request: a fast recipe the upstream served
-/// at standard speed still settles in dollars, at the standard cells.
+/// at standard speed prices at the standard cells.
 #[tokio::test]
 async fn a_fast_recipe_served_standard_prices_at_the_standard_cells() {
     let (r, standard) = fast_probe_served("standard", phoebis_ledger::Speed::Standard).await;
@@ -1974,6 +1975,91 @@ async fn a_fast_recipe_served_standard_prices_at_the_standard_cells() {
     assert!(
         (charged - standard).abs() < 1e-12,
         "dollars at the standard cells: {charged} against {standard}"
+    );
+}
+
+/// `fast_probe_served`'s probe settled wasted by a release, and every rollup row once its settlement has landed.
+async fn released_and_settled(r: &mut Rig) -> Vec<phoebis_ledger::RollupRow> {
+    r.state("main", "released");
+    wait_for(std::time::Duration::from_secs(5), || {
+        let rows =
+            r.db.read_blocking(|c| {
+                phoebis_ledger::read_rollups(
+                    c,
+                    phoebis_ledger::hour_of(NOW) - 3_600,
+                    i64::MAX,
+                    &phoebis_ledger::RollupSelect::default(),
+                )
+            })
+            .unwrap();
+        rows.iter().any(|row| row.wasted_probes > 0).then_some(rows)
+    })
+    .await
+}
+
+/// The speed, the funding and the account tier each settlement row files under.
+fn settlement_keys(rows: &[phoebis_ledger::RollupRow]) -> Vec<(&str, &str, &str)> {
+    rows.iter()
+        .filter(|row| row.wasted_probes > 0)
+        .map(|row| (row.speed.as_str(), row.funding.as_str(), row.tier.as_str()))
+        .collect()
+}
+
+/// A wasted probe files beside its own request row, at the speed its answer reported: a fast recipe the upstream
+/// served at standard speed on an account without overage settles as `plan` under the account's tier, so its waste
+/// prices at the standard cells and reads in the plan's probe share beside the probe's cost.
+#[tokio::test]
+async fn a_fast_recipe_served_standard_settles_its_waste_as_plan_at_the_standard_cells() {
+    let (mut r, standard) = fast_probe_served("standard", phoebis_ledger::Speed::Standard).await;
+    let rows = released_and_settled(&mut r).await;
+    assert_eq!(
+        settlement_keys(&rows),
+        [("standard", "plan", "default_claude_max_5x")],
+        "the settlement's speed, funding and account tier"
+    );
+    let (cost, wasted) = read_dollars(&r, &rows);
+    assert!(
+        (cost - standard).abs() < 1e-12 && (wasted - standard).abs() < 1e-12,
+        "the cost and the waste at the standard cells: {cost} and {wasted} against {standard}"
+    );
+    let groups = phoebis_ledger::breakdown(
+        &rows,
+        "account",
+        true,
+        &phoebis_ledger::LiveKeys::default(),
+        &[],
+        Some(phoebis_ledger::SharePricing { tables: &r.tables }),
+        &r.pricing,
+        &r.tables,
+    );
+    let share = groups
+        .iter()
+        .find_map(|group| group.probe_shares.as_ref()?.get(phoebis_routing::FIVE_HOUR))
+        .expect("the plan-funded probe's share of the 5-hour window");
+    assert!(
+        share.cost > 0.0
+            && share
+                .wasted
+                .is_some_and(|wasted| (wasted - share.cost).abs() < 1e-12),
+        "the whole probe wasted in the plan's share: {share:?}"
+    );
+}
+
+/// A fast answer draws usage credits whatever funds the account, so its waste still files under `fast` with no account
+/// tier and prices in dollars at the fast cells.
+#[tokio::test]
+async fn a_fast_recipe_served_fast_settles_its_waste_in_dollars_at_the_fast_cells() {
+    let (mut r, fast) = fast_probe_served("fast", phoebis_ledger::Speed::Fast).await;
+    let rows = released_and_settled(&mut r).await;
+    assert_eq!(
+        settlement_keys(&rows),
+        [("fast", "fast", "-")],
+        "the settlement's speed, funding and account tier"
+    );
+    let (cost, wasted) = read_dollars(&r, &rows);
+    assert!(
+        (cost - fast).abs() < 1e-12 && (wasted - fast).abs() < 1e-12,
+        "the cost and the waste at the fast cells: {cost} and {wasted} against {fast}"
     );
 }
 
@@ -1985,11 +2071,14 @@ async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
     let captured = Captured::default();
     let _guard = captured.install();
     // The rig's model weighed in the cost model, so a readable tier would settle the probe in the share.
-    let mut tables = phoebis_ledger::PlanTables::shipped();
-    tables
-        .costs
+    let mut weighted = phoebis_ledger::CostRevisions::shipped().latest().clone();
+    weighted
         .model_weight
         .insert("claude-sonnet-4-5".to_string(), Some(1.0));
+    let tables = phoebis_ledger::PlanTables {
+        revisions: phoebis_ledger::CostRevisions::new(vec![weighted]).unwrap(),
+        ..phoebis_ledger::PlanTables::shipped()
+    };
     let mut r = rig(RigSpec {
         on_disk: true,
         tables,

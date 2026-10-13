@@ -4,7 +4,7 @@ mod common;
 use common::*;
 use phoebis_keepalive::{Event, KeepalivePolicy, KeepaliveTiming, Reason, LEASE_MS};
 use phoebis_ledger::{
-    hour_of, member_spends, read_rollups, BudgetedMember, PriceTable, RollupSelect,
+    hour_of, member_spends, read_rollups, BudgetedMember, PriceRevisions, RollupSelect,
 };
 use phoebis_relay::Accounting;
 use phoebis_routing::{
@@ -567,7 +567,7 @@ async fn plant_and_report_spend(r: &Rig, id: &str, usd: f64) {
                     metered_only: false,
                 }],
                 r.now(),
-                &PriceTable::shipped(),
+                &PriceRevisions::shipped(),
             )
         })
         .unwrap();

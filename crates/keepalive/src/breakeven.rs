@@ -2,9 +2,9 @@
 //! default every ceiling of the policy resolves to and the cap each of its numbers stays under.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
-use phoebis_ledger::{PlanTables, PriceTable};
+use phoebis_ledger::{PlanTables, PriceRevisions, PriceTable};
 use phoebis_relay::{CacheTtl, CacheTtlPolicy, TtlBranch};
 use phoebis_routing::rules::{allows, process, RulesMode};
 use phoebis_routing::{listing::row_for, LongContextRates, Rates, FIVE_HOUR};
@@ -59,14 +59,16 @@ pub fn break_even_ms(
     Some((exact + 1e-6).floor().max(0.0) as i64)
 }
 
-/// The factors for `canonical_model` under `funding`, at the fast cells when `fast`. Plan funding reads
-/// `tables.rate_table(FIVE_HOUR).rows`, and a model the cost model leaves unweighted or names nowhere reads its type
-/// multipliers, the model's own override where it has one. A token costs the model's weight times the type's
-/// multiplier, so the weight cancels from read over write and every plan recipe breaks even alike. Dollars read
-/// `pricing.rate_table().rows`, or `pricing.fast_rate_table().rows` for a fast recipe, whose probes draw usage credits
-/// at the fast cells, at a row's long-context rates when `prompt_tokens` is above their threshold, the set a probe's
-/// cost reads on the same prompt, and a model the price table prices nowhere takes the tightest row of that table (the
-/// smallest break-even among the priced rows). Probe costs do not read these factors.
+/// The factors for `canonical_model` under `funding`, at the fast cells when `fast`, on the cost model in force at
+/// `at`. Plan funding reads `tables.rate_table(FIVE_HOUR, at).rows`, a listed model without a weight of its own at
+/// its model tier's estimate there. Any other model reads its type multipliers, the model's own override where it has
+/// one: an id no file lists, which the share prices at its named model tier's estimate and the shared multipliers,
+/// breaks even at that same ratio. A token costs the model's weight times the type's multiplier, so the weight cancels
+/// from read over write and every plan recipe breaks even alike. Dollars read `pricing.rate_table().rows`, or
+/// `pricing.fast_rate_table().rows` for a fast recipe, whose probes draw usage credits at the fast cells, at a row's
+/// long-context rates when `prompt_tokens` is above their threshold, the set a probe's cost reads on the same prompt,
+/// and a model the price table prices nowhere takes the tightest row of that table (the smallest break-even among the
+/// priced rows). Probe costs do not read these factors.
 pub fn factors_for(
     pricing: &PriceTable,
     tables: &PlanTables,
@@ -74,8 +76,9 @@ pub fn factors_for(
     canonical_model: &str,
     fast: bool,
     prompt_tokens: u64,
+    at: i64,
 ) -> BreakEvenFactors {
-    FactorRows::of(pricing, tables).factors(funding, canonical_model, fast, prompt_tokens)
+    FactorRows::of(pricing, tables, at).factors(funding, canonical_model, fast, prompt_tokens)
 }
 
 /// The rows `factors_for` reads, built once so a tick that resolves every retained recipe builds each table's rows
@@ -98,21 +101,21 @@ pub(crate) struct FactorRows {
 }
 
 impl FactorRows {
-    pub(crate) fn of(pricing: &PriceTable, tables: &PlanTables) -> FactorRows {
+    pub(crate) fn of(pricing: &PriceTable, tables: &PlanTables, at: i64) -> FactorRows {
         let dollar_table = pricing.rate_table();
         let fast_table = pricing.fast_rate_table();
         let (dollars, dollars_long) = (dollar_table.rows, dollar_table.long_context);
         let (fast, fast_long) = (fast_table.rows, fast_table.long_context);
         let tightest_fast = tightest(fast.values().filter_map(BreakEvenFactors::of));
         let tightest = tightest(dollars.values().filter_map(BreakEvenFactors::of));
-        let shared = &tables.costs.type_multiplier;
+        let costs = tables.revisions.in_force(at);
+        let shared = &costs.type_multiplier;
         let plan_multipliers = BreakEvenFactors {
             read: shared.cache_read,
             write_5m: shared.cache_write_5m,
             write_1h: shared.cache_write_1h,
         };
-        let plan_overrides = tables
-            .costs
+        let plan_overrides = costs
             .overrides
             .iter()
             .filter_map(|(model, row)| {
@@ -132,7 +135,7 @@ impl FactorRows {
             fast,
             dollars_long,
             fast_long,
-            plan: tables.rate_table(FIVE_HOUR).rows,
+            plan: tables.rate_table(FIVE_HOUR, at).rows,
             plan_multipliers,
             plan_overrides,
             tightest,
@@ -191,34 +194,28 @@ impl FactorRows {
     }
 }
 
-/// The shipped price table's tightest row at the recipe's speed: what a recipe's ceilings fall back to when the tables
-/// in force give no break-even, since an operator's price file with no usable row must not leave a parked session
-/// probed until the session expires.
-pub(crate) fn shipped_tightest(fast: bool) -> BreakEvenFactors {
-    static STANDARD: OnceLock<BreakEvenFactors> = OnceLock::new();
-    static FAST: OnceLock<BreakEvenFactors> = OnceLock::new();
-    let shipped = PriceTable::shipped;
-    if fast {
-        *FAST.get_or_init(|| {
-            tightest(
-                shipped()
-                    .fast_rate_table()
-                    .rows
-                    .values()
-                    .filter_map(BreakEvenFactors::of),
-            )
-        })
+/// The shipped price list, parsed once: the fallback below runs per retained recipe on every tick whose tables give no
+/// break-even. The list is held rather than the factors, since it never changes and each call still reads the revision
+/// in force at its own instant, where factors held from the first call would keep that call's revision past the date
+/// the next one takes over.
+static SHIPPED_PRICES: LazyLock<PriceRevisions> = LazyLock::new(PriceRevisions::shipped);
+
+fn shipped_in_force(now: i64) -> &'static PriceTable {
+    SHIPPED_PRICES.in_force(now)
+}
+
+/// The tightest row at the recipe's speed of the shipped price revision in force at `now`: what a recipe's ceilings
+/// fall back to when the tables in force give no break-even, since an operator's price file with no usable row must
+/// not leave a parked session probed until the session expires.
+pub(crate) fn shipped_tightest(fast: bool, now: i64) -> BreakEvenFactors {
+    let table = shipped_in_force(now);
+    let rows = if fast {
+        table.fast_rate_table()
     } else {
-        *STANDARD.get_or_init(|| {
-            tightest(
-                shipped()
-                    .rate_table()
-                    .rows
-                    .values()
-                    .filter_map(BreakEvenFactors::of),
-            )
-        })
+        table.rate_table()
     }
+    .rows;
+    tightest(rows.values().filter_map(BreakEvenFactors::of))
 }
 
 /// The smallest break-even any row gives at each TTL, as one set of factors in the ratio's own unit: a row
@@ -329,6 +326,7 @@ pub struct ResolvedCeilings {
 /// which is what a request on it runs under, so a deny entry naming the dated id drops the row. Rules that allow none
 /// of them leave a model priced nowhere. Tables that give no break-even fall back to the shipped tightest row, as
 /// `ceilings_for` does. `None` with no funding.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_pool(
     policy: &KeepalivePolicy,
     cache_ttl: &CacheTtlPolicy,
@@ -337,6 +335,7 @@ pub(crate) fn resolve_pool(
     rows: &FactorRows,
     dated: &HashMap<String, String>,
     timing: &KeepaliveTiming,
+    now: i64,
 ) -> Option<ResolvedCeilings> {
     let processed = process(&[], RulesMode::Extend, rules);
     let named = cache_ttl
@@ -385,7 +384,7 @@ pub(crate) fn resolve_pool(
             };
             for ttl in ttls {
                 let Some(ceilings) = resolve(policy, factors, ttl, timing)
-                    .or_else(|| resolve(policy, shipped_tightest(false), ttl, timing))
+                    .or_else(|| resolve(policy, shipped_tightest(false, now), ttl, timing))
                 else {
                     continue;
                 };
@@ -414,4 +413,40 @@ pub(crate) fn resolve_pool(
         }
     }
     resolved
+}
+
+#[cfg(test)]
+mod tests {
+    use phoebis_ledger::effective_instant;
+
+    use super::*;
+
+    /// The boundary is the shipped file's second date, read through the loader so the test pins no shipped date. The
+    /// earlier instant is read first, as a tick before the date would, so a figure held from the first call reads one
+    /// revision at both.
+    #[test]
+    fn two_calls_on_either_side_of_a_shipped_revisions_date_read_the_two_revisions() {
+        let shipped = PriceRevisions::shipped();
+        let boundary = shipped
+            .iter()
+            .nth(1)
+            .and_then(|revision| effective_instant(&revision.effective))
+            .expect("the shipped price file carries a second revision");
+        let before = shipped_in_force(boundary - 1);
+        let after = shipped_in_force(boundary);
+        assert_eq!(
+            before,
+            shipped.in_force(boundary - 1),
+            "the revision before the date"
+        );
+        assert_eq!(
+            after,
+            shipped.in_force(boundary),
+            "the revision from the date on"
+        );
+        assert_ne!(
+            before.effective, after.effective,
+            "the two calls read two revisions"
+        );
+    }
 }

@@ -1,41 +1,39 @@
-//! The test tables: a subscription cost model and a price table in round numbers, so a test works its expected
+//! The test tables: a subscription cost model and a price file in round numbers, so a test works its expected
 //! figure out by hand from the file rather than reading a shipped value back. Embedded, so a test in another crate
-//! reads them without a path.
+//! reads them without a path. Each carries two revisions, the second a factor of two from the first, so a test
+//! crosses a boundary without writing a file.
 
-use std::cmp::Reverse;
-
-use crate::{PlanTables, PriceTable, SubscriptionCosts};
+use crate::{CostRevisions, PlanTables, PriceRevisions};
 
 pub const SUBSCRIPTION_COSTS: &str = include_str!("../tests/fixtures/subscription_costs.yaml");
 pub const API_PRICES: &str = include_str!("../tests/fixtures/api_prices.yaml");
 
+/// An instant inside the fixtures' first entry, 2026-01-15 12:00 UTC, for a test that wants the first entry's figures.
+pub const JANUARY_2026: i64 = 1_768_478_400_000;
+
 pub fn subscription_costs() -> PlanTables {
     PlanTables {
-        costs: SubscriptionCosts::from_yaml(SUBSCRIPTION_COSTS)
+        revisions: CostRevisions::from_yaml(SUBSCRIPTION_COSTS)
             .expect("the test subscription cost model parses"),
         path: None,
         source: "test".to_string(),
     }
 }
 
-pub fn api_prices() -> PriceTable {
-    PriceTable::from_yaml(API_PRICES, "test").expect("the test price table parses")
+pub fn api_prices() -> PriceRevisions {
+    PriceRevisions::from_yaml(API_PRICES, "test").expect("the test price file parses")
 }
 
-/// Whether `ids` keep the order both shipped files list their models in: Fable, Opus, Sonnet, Haiku, then anything
-/// else, and within a family the newer version first.
-pub fn in_family_order(ids: &[&str]) -> bool {
-    ids.windows(2)
-        .all(|pair| family_rank(pair[0]) <= family_rank(pair[1]))
+/// The cost fixture's first entry as a file of its own, for a test that reads at an instant past the second entry's
+/// date and wants the first entry's figures, or writes them with one edited.
+pub fn first_entry_costs_text() -> String {
+    let (first, _) = SUBSCRIPTION_COSTS
+        .split_once("  - effective: 2026-02-01\n")
+        .expect("the cost fixture carries a second entry");
+    first.to_string()
 }
 
-fn family_rank(model: &str) -> (usize, Reverse<Vec<u32>>) {
-    let rest = model.strip_prefix("claude-").unwrap_or(model);
-    let (family, version) = rest.split_once('-').unwrap_or((rest, ""));
-    let rank = ["fable", "opus", "sonnet", "haiku"]
-        .iter()
-        .position(|f| *f == family)
-        .unwrap_or(4);
-    let version = version.split('-').filter_map(|p| p.parse().ok()).collect();
-    (rank, Reverse(version))
+/// `first_entry_costs_text` loaded.
+pub fn first_entry_costs() -> CostRevisions {
+    CostRevisions::from_yaml(&first_entry_costs_text()).expect("the first cost entry parses alone")
 }

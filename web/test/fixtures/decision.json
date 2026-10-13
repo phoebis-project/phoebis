@@ -8,9 +8,9 @@
       "request_id": "r-static",
       "attempt": 1,
       "seq": 1,
-      "at": 1000000,
+      "at": 1791721000000,
       "key_id": "desktop",
-      "key_generation": 1000000,
+      "key_generation": 1791721000000,
       "pool_id": "main",
       "routing_session_id": "s-static",
       "agent_id": "main",
@@ -80,7 +80,7 @@
       "retry_in_place_seconds": 60,
       "pace_floor": 0.05,
       "migrate_band": 0.05,
-      "pool_updated_at": 1000039
+      "pool_updated_at": 1791721000039
     },
     "candidates": [
       {
@@ -103,17 +103,17 @@
         "windows": {
           "fast_input": {
             "utilization": 0.42,
-            "reset": 1030000,
+            "reset": 1791721030000,
             "source": "head",
-            "observed_at": 995000,
+            "observed_at": 1791720995000,
             "age_ms": 5000,
             "ahead": null
           },
           "fast_output": {
             "utilization": 0.08,
-            "reset": 1030000,
+            "reset": 1791721030000,
             "source": "head",
-            "observed_at": 995000,
+            "observed_at": 1791720995000,
             "age_ms": 5000,
             "ahead": null
           }
@@ -132,10 +132,10 @@
           {
             "period": "month",
             "budget_usd": 30.0,
-            "spent_usd": 0.0,
-            "period_start": 0,
-            "period_end": 2678400000,
-            "observed_at": 1000000
+            "spent_usd": 0.00355,
+            "period_start": 1790812800000,
+            "period_end": 1793491200000,
+            "observed_at": 1791721000000
           }
         ],
         "cooldowns": [
@@ -143,7 +143,7 @@
             "scope": "model:claude-haiku-4-5-20251001",
             "reason": "model_rejected",
             "window": "model_rejection",
-            "until": 2800000,
+            "until": 1791722800000,
             "blocking": false
           }
         ],
@@ -163,7 +163,7 @@
             "hash": "9c1f6b0e4d2a8f73b5e1c0d9a7f3e2b14c6d8e0f2a4b6c8d0e1f3a5b7c9d1e3f",
             "depth": 1,
             "prefix_tokens": 31200,
-            "written_at": 1000000,
+            "written_at": 1791721000000,
             "ttl_ms": 3600000,
             "live": true,
             "refused_by": null
@@ -172,7 +172,7 @@
             "hash": "9c1f6b0e4d2a8f73b5e1c0d9a7f3e2b14c6d8e0f2a4b6c8d0e1f3a5b7c9d1e3f",
             "depth": 1,
             "prefix_tokens": 31200,
-            "written_at": 1000000,
+            "written_at": 1791721000000,
             "ttl_ms": 3600000,
             "live": true,
             "refused_by": null
@@ -218,9 +218,9 @@
             "period": "month",
             "budget_usd": 50.0,
             "spent_usd": 0.0036,
-            "period_start": 0,
-            "period_end": 2678400000,
-            "observed_at": 1000000
+            "period_start": 1790812800000,
+            "period_end": 1793491200000,
+            "observed_at": 1791721000000
           }
         ],
         "cooldowns": [],
@@ -418,7 +418,7 @@
             "account_id": "business"
           }
         ],
-        "completed_at": 999400
+        "completed_at": 1791720999400
       }
     }
   }

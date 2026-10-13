@@ -1,8 +1,8 @@
 {
   "route": "GET /admin/analytics/breakdown?range=24h&group_by=key",
   "body": {
-    "from": -85400000,
-    "to": 1000000,
+    "from": 1791634600000,
+    "to": 1791721000000,
     "group_by": "key",
     "rows": [
       {
@@ -23,12 +23,12 @@
         "uncached": 0,
         "expired_between_turns": 0,
         "tokens": {
-          "cache_read": 2500,
+          "cache_read": 3000,
           "cache_write_1h": 0,
-          "cache_write_5m": 1000,
-          "output": 500,
-          "thinking": 200,
-          "uncached_input": 5000,
+          "cache_write_5m": 1200,
+          "output": 600,
+          "thinking": 240,
+          "uncached_input": 6000,
           "web_fetch": 0,
           "web_search": 0
         },
@@ -359,16 +359,16 @@
         "plan_requests": 3,
         "plan_output_tokens": 300,
         "cost_equivalent": {
-          "five_hour": 0.000052875,
-          "seven_day": 8.8125e-6
+          "five_hour": 0.00005287500000000001,
+          "seven_day": 8.812499999999999e-6
         },
         "cache_equivalent": {
           "five_hour": {
             "read": 3.75e-7,
-            "write": 7.5e-6
+            "write": 7.500000000000001e-6
           },
           "seven_day": {
-            "read": 6.25e-8,
+            "read": 6.250000000000001e-8,
             "write": 1.25e-6
           }
         },
@@ -382,17 +382,17 @@
         },
         "equivalent_split": {
           "input": 5e-6,
-          "cache_read": 6.25e-8,
+          "cache_read": 6.250000000000001e-8,
           "cache_write": 1.25e-6,
           "output": 2.5e-6
         },
         "estimated": false
       },
       {
-        "key": "desktop@940000",
-        "label": "desktop (deleted, created 1970-01-01 00:15 UTC)",
+        "key": "desktop@1791720940000",
+        "label": "desktop (deleted, created 2026-10-11 12:15 UTC)",
         "key_id": "desktop",
-        "key_created_at": 940000,
+        "key_created_at": 1791720940000,
         "requests": 1,
         "succeeded": 1,
         "rate_limited": 0,
@@ -749,7 +749,7 @@
             "write": 2.5e-6
           },
           "seven_day": {
-            "read": 2.0833333333333335e-8,
+            "read": 2.0833333333333338e-8,
             "write": 4.1666666666666667e-7
           }
         },
@@ -762,8 +762,8 @@
           "output": 0.0
         },
         "equivalent_split": {
-          "input": 1.6666666666666667e-6,
-          "cache_read": 2.0833333333333335e-8,
+          "input": 1.6666666666666669e-6,
+          "cache_read": 2.0833333333333338e-8,
           "cache_write": 4.1666666666666667e-7,
           "output": 8.333333333333333e-7
         },

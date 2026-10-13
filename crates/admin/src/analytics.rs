@@ -9,9 +9,9 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{
     breakdown_paged, bucket_seconds, burn_groups_paged, hour_ceil, hour_of, hourly_window_samples,
-    lead_over_pace, moves_by_reason, parse_range, read_account_rollups, rewrite_series,
-    series_paged, session_burn_series, AccountRollupRow, FundingFilter, HourlyWindowSample,
-    LedgerError, LiveKeys, RollupFilter, SeriesFilter, SharePricing, Tiers, GROUP_BYS,
+    lead_over_pace, moves_by_reason, names_one_account, parse_range, read_account_rollups,
+    rewrite_series, series_paged, session_burn_series, AccountRollupRow, FundingFilter,
+    HourlyWindowSample, LedgerError, LiveKeys, RollupFilter, SeriesFilter, SharePricing, GROUP_BYS,
 };
 use phoebis_routing::{term, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountKind, SubscriptionTerm};
@@ -20,10 +20,23 @@ use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, LedgerFailure, RouterUnavailable};
 use crate::routes::{failure, store_failure};
-use crate::tiers::oauth_tiers;
 use crate::AdminState;
 
-const BURN_GROUP_BYS: &[&str] = &["account", "key", "request_class", "session"];
+/// `session` beside the page's group-by dimensions: only the burn answers it, from the attempts, since the hourly
+/// rollups carry no session.
+const BURN_GROUP_BYS: &[&str] = &[
+    "account",
+    "client",
+    "effort",
+    "key",
+    "kind",
+    "model",
+    "pool",
+    "request_class",
+    "session",
+    "speed",
+    "user_agent",
+];
 
 fn list(q: &HashMap<String, String>, name: &str) -> Vec<String> {
     q.get(name)
@@ -72,31 +85,20 @@ fn filter_of(q: &HashMap<String, String>) -> RollupFilter {
 }
 
 /// The range in Unix milliseconds, the group-by, the filter, the live keys' generations the key dimension is read
-/// against, the registry's account kinds and, under the account grouping, each oauth account's tier.
+/// against, and the registry's account kinds.
 type Selection = (
     (i64, i64),
     String,
     RollupFilter,
     LiveKeys,
     HashMap<String, AccountKind>,
-    Tiers,
 );
 
-/// The registry's account kinds and, under the account grouping alone, each oauth account's tier, which the shares
-/// price under: no other grouping answers a share, so none reads a tier or fails on that read.
+/// The registry's account kinds by id, which name a burn group's unit.
 #[allow(clippy::result_large_err)]
-fn kinds_and_tiers(
-    state: &AdminState,
-    group_by: &str,
-) -> Result<(HashMap<String, AccountKind>, Tiers), Response> {
+fn kinds(state: &AdminState) -> Result<HashMap<String, AccountKind>, Response> {
     let accounts = state.store.accounts().map_err(store_failure)?;
-    let kinds = accounts.iter().map(|a| (a.id.clone(), a.kind)).collect();
-    let tiers = if group_by == "account" {
-        oauth_tiers(&state.store, &accounts).map_err(store_failure)?
-    } else {
-        Tiers::new()
-    };
-    Ok((kinds, tiers))
+    Ok(accounts.iter().map(|a| (a.id.clone(), a.kind)).collect())
 }
 
 /// Every analytics route starts here.
@@ -134,9 +136,9 @@ async fn selection(state: &AdminState, q: &HashMap<String, String>) -> Result<Se
             ))
         }
     };
-    let (kinds, tiers) = kinds_and_tiers(state, &group_by)?;
+    let kinds = kinds(state)?;
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
-    Ok(((from, to), group_by, filter, live, kinds, tiers))
+    Ok(((from, to), group_by, filter, live, kinds))
 }
 
 /// The query of `GET /admin/analytics/accounts` and `GET /admin/analytics/rewrites`.
@@ -220,10 +222,15 @@ pub(crate) struct PlacementsQuery {
 pub(crate) struct BurnQuery {
     /// Default `24h`.
     pub range: Option<String>,
-    /// `account`, `key`, `request_class`, or `session`. Default `account`. The `session` grouping reads the twenty
-    /// sessions with the most tokens over the range, since the hourly rollups carry no session dimension. The rest
-    /// read the hourly rollups the way `breakdown` and `series` do.
+    /// `account`, `client`, `effort`, `key`, `kind`, `model`, `pool`, `request_class`, `session`, `speed`, or
+    /// `user_agent`. Default `account`. The `session` grouping reads the twenty sessions with the most tokens over the
+    /// range, since the hourly rollups carry no session dimension. The rest read the hourly rollups the way
+    /// `breakdown` and `series` do.
     pub group_by: Option<String>,
+    /// A comma-separated list. Naming exactly one account answers `unit` and the shares under any grouping.
+    pub accounts: Option<String>,
+    /// Newline-separated patterns, each naming a group under `group_by=user_agent` as the Analytics tag describes.
+    pub user_agent_groups: Option<String>,
 }
 
 pub(crate) fn ledger_failure(error: phoebis_ledger::LedgerError) -> Response {
@@ -232,9 +239,8 @@ pub(crate) fn ledger_failure(error: phoebis_ledger::LedgerError) -> Response {
 }
 
 /// The series bucketed to the range. Under `group_by=key` a point's `groups` entries carry `key` in the same form
-/// as the breakdown route's key row. Under `group_by=account` each entry carries the breakdown row's
-/// `cost_shares`, `cache_shares`, `probe_shares`, `plan_requests` and `plan_output_tokens` under the same rule,
-/// summed over the bucket's rows.
+/// as the breakdown route's key row. Each entry carries the breakdown row's `cost_shares`, `cache_shares`,
+/// `probe_shares`, `plan_requests` and `plan_output_tokens` under the same rules, summed over the bucket's rows.
 // `GroupRow` serializes alone, so the series does too and the test-only `SeriesTwin` carries the round trip.
 #[derive(serde::Serialize, ToSchema)]
 pub(crate) struct Series {
@@ -266,15 +272,14 @@ pub(crate) async fn series(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, filter, live, kinds, tiers) = match selection(&state, &q).await {
+    let ((from, to), group_by, filter, live, _) = match selection(&state, &q).await {
         Ok(x) => x,
         Err(r) => return r,
     };
     let bucket = bucket_seconds(from, to);
-    let pricing = (group_by == "account").then(|| SharePricing {
+    // The ledger answers the shares where each group holds one account's rows.
+    let pricing = Some(SharePricing {
         tables: &state.tables,
-        kinds: &kinds,
-        tiers: &tiers,
     });
     let points = match series_paged(
         state.ledger.db(),
@@ -285,6 +290,8 @@ pub(crate) async fn series(
         bucket,
         &group_by,
         pricing,
+        &state.pricing.revisions(),
+        &state.tables,
     )
     .await
     {
@@ -334,14 +341,13 @@ pub(crate) async fn breakdown(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, filter, live, kinds, tiers) = match selection(&state, &q).await {
+    let ((from, to), group_by, filter, live, _) = match selection(&state, &q).await {
         Ok(x) => x,
         Err(r) => return r,
     };
-    let pricing = (group_by == "account").then(|| SharePricing {
+    // The ledger answers the shares where each group holds one account's rows.
+    let pricing = Some(SharePricing {
         tables: &state.tables,
-        kinds: &kinds,
-        tiers: &tiers,
     });
     let rows = match breakdown_paged(
         state.ledger.db(),
@@ -351,6 +357,8 @@ pub(crate) async fn breakdown(
         to,
         &group_by,
         pricing,
+        &state.pricing.revisions(),
+        &state.tables,
     )
     .await
     {
@@ -761,16 +769,19 @@ pub(crate) async fn accounts(
     Json(AnalyticsAccounts { from, to, accounts }).into_response()
 }
 
-/// The burn series per group: a subscription account's tokens as the share of its own 5-hour and 7-day window,
-/// and an API key account's in dollars. `unit` and the two shares are a `group_by=account` figure, null for every
-/// other grouping, since a key, a class or a session spans accounts whose shares do not add.
+/// The burn series per group: an API key account's tokens in dollars, and a subscription account's as the share of
+/// its own 5-hour and 7-day window and of its model's own week, and as the 20x window equivalent of each. `unit` and
+/// the shares answer under `group_by=account` and under any grouping whose `accounts` filter names exactly one
+/// account, and read null otherwise, since shares of different accounts' windows do not add. The equivalents answer
+/// under every grouping.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Burn {
     pub from: i64,
     pub to: i64,
     pub bucket_seconds: i64,
-    /// `account`, `key`, `request_class`, or `session`.
+    /// `account`, `client`, `effort`, `key`, `kind`, `model`, `pool`, `request_class`, `session`, `speed`, or
+    /// `user_agent`.
     #[schema(example = "account")]
     pub group_by: String,
     pub points: Vec<BurnPoint>,
@@ -781,21 +792,38 @@ pub(crate) struct Burn {
 pub(crate) struct BurnPoint {
     pub at: i64,
     pub group: String,
-    /// `window_share` for an oauth account, `usd` for an API key one, null for an account no longer registered.
+    /// `window_share` for an oauth account, `usd` for an API key one. Null for an account no longer registered, and
+    /// under every grouping but `account` unless the `accounts` filter names exactly one account.
     #[schema(example = "window_share")]
     pub unit: Option<String>,
     /// An API key account's estimated cost. It also carries a subscription account's fast-mode and overage spend,
     /// which draws usage credits and no window.
     pub usd: f64,
     /// The share of the account's own 5-hour window, band-weighted by the hour the tokens landed in: a fraction of
-    /// the window, not a percentage. Null for an API key account, one whose tier is unknown, a bucket with no row
-    /// the cost model prices, such as an idle hour, or a bucket holding a row the cost model cannot price (a model
-    /// it has no weight for, or a tier it has no capacity for on that window), so a partial figure never reads as
-    /// the bucket's share.
+    /// the window, not a percentage. Null under every grouping but `account` unless the `accounts` filter names
+    /// exactly one account, for an API key account, one whose tier is unknown, a bucket with no row the cost model
+    /// prices, such as an idle hour, or a bucket holding a row the cost model cannot price (a model it weighs neither
+    /// by itself nor by its model tier, or a tier it has no capacity for on that window), so a partial figure never
+    /// reads as the bucket's share.
     pub five_hour_share: Option<f64>,
     /// The same tokens over the 7-day window, weighed by the week's own band factor, 1 in the shipped model. Null
-    /// in the same four cases.
+    /// in the same cases.
     pub seven_day_share: Option<f64>,
+    /// The same tokens over the model's own week, where the model has one. Null where no row of the bucket is on
+    /// such a model, and in the same cases.
+    pub model_week_share: Option<f64>,
+    /// The bucket's plan-funded tokens as the share of a Max 20x account's 5-hour window, whatever tier served them,
+    /// band-weighted as `five_hour_share` is, under every grouping. A billed row adds a zero, so a bucket with tokens
+    /// and no plan row reads 0. Null for an idle bucket and for a bucket holding a row the cost model cannot price on
+    /// the window.
+    pub five_hour_equivalent: Option<f64>,
+    /// The same over a Max 20x account's 7-day window. Null in the same cases.
+    pub seven_day_equivalent: Option<f64>,
+    /// The same over the model's own week, null where no row of the bucket is on a model with a week of its own.
+    pub model_week_equivalent: Option<f64>,
+    /// Whether a plan-funded row of the bucket priced at its model tier's latest weight, for a model the cost model
+    /// does not weight.
+    pub estimated: bool,
     pub cached_tokens: u64,
     /// Every token of the bucket, uncached input, cache reads, both cache writes and output. Zero for a bucket
     /// with no traffic the ledger can attribute.
@@ -812,15 +840,16 @@ pub(crate) struct BurnPoint {
     params(BurnQuery),
     responses(
         (status = 200, description = "The points over the range.", body = Burn),
-        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\n`group_by is account, key, request_class, or session`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor the other parameters:\n- `group_by is account, client, effort, key, kind, model, pool, request_class, session, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent_groups`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
     ),
 )]
-// The shares and `unit` are answered under the `account` grouping alone and read null under every other one, since
-// a key, a class or a session spans accounts and shares of different accounts' windows do not add. A bucket holding
-// a row the table cannot price reads null on that window, so a partial sum never reads as its share. Each point's
-// `tokens` counts every token type, zero for a bucket with no traffic the ledger can attribute (a deregistered
-// account's traffic adds none), so for a registered account a reader tells an empty bucket from one whose traffic no
+// The shares and `unit` are answered where each group holds one account's rows, the account grouping or a filter
+// naming exactly one account, and read null otherwise, since shares of different accounts' windows do not add. A
+// point whose shares answer knows its account's funding, so `unit` follows the same gate. The 20x equivalents add
+// across accounts and tiers, so they answer under every grouping. A bucket holding a row the table cannot price
+// reads null on that window, so a partial sum never reads as its share. Each point's `tokens` counts every token
+// type of the bucket's rows, whatever the tables priced, so a reader tells an idle bucket from one whose traffic no
 // table priced.
 pub(crate) async fn burn(
     State(state): State<Arc<AdminState>>,
@@ -838,45 +867,67 @@ pub(crate) async fn burn(
     if !BURN_GROUP_BYS.contains(&group_by.as_str()) {
         return failure(
             StatusCode::BAD_REQUEST,
-            "group_by is account, key, request_class, or session",
+            "group_by is account, client, effort, key, kind, model, pool, request_class, session, speed, or user_agent",
         );
     }
-    let (kinds, tiers) = match kinds_and_tiers(&state, &group_by) {
-        Ok(x) => x,
+    let agent_groups = agent_list(&q, "user_agent_groups");
+    if !phoebis_ledger::patterns_within_bounds(&agent_groups) {
+        return failure(StatusCode::BAD_REQUEST, phoebis_ledger::PATTERNS_TOO_LONG);
+    }
+    let kinds = match kinds(&state) {
+        Ok(kinds) => kinds,
         Err(r) => return r,
     };
+    let accounts = list(&q, "accounts");
+    let one_account = names_one_account(&accounts).then(|| accounts[0].clone());
     let tables = state.tables.clone();
     let bucket = bucket_seconds(from, to);
     let filter = SeriesFilter {
         from,
         to,
         bucket_seconds: bucket,
+        accounts,
         ..Default::default()
     };
+    let prices = state.pricing.revisions();
     let read = if group_by == "session" {
         state
             .ledger
             .db()
-            .read(move |c| session_burn_series(c, &tables, &tiers, &filter))
+            .read(move |c| session_burn_series(c, &tables, &prices, &filter))
             .await
     } else {
         // One paged read for every group: each row is priced into its own group's buckets as its page arrives,
         // rather than the range read again per group under the reader lock.
-        burn_groups_paged(state.ledger.db(), &tables, &tiers, &filter, &group_by).await
+        burn_groups_paged(
+            state.ledger.db(),
+            &tables,
+            &prices,
+            &filter,
+            &group_by,
+            &LiveKeys::from_snapshot(&state.router.snapshot()),
+            &agent_groups,
+        )
+        .await
     };
     let series = match read {
         Ok(s) => s,
         Err(e) => return ledger_failure(e),
     };
-    let by_account = group_by == "account";
     let points = series
         .into_iter()
         .flat_map(|(group, points)| {
-            // The unit a reader charts the group in, so a subscription whose tier no table sizes reads apart from
-            // an api_key account, both answering no share; an account the registry no longer holds has none.
-            let unit = by_account
-                .then(|| kinds.get(&group))
-                .flatten()
+            // The one account the group's rows belong to, under the gate the ledger answers the shares under. Its
+            // kind names the unit a reader charts the group in, so a subscription whose tier no table sizes reads
+            // apart from an api_key account, both answering no share. An account the registry no longer holds has
+            // none.
+            let account = if group_by == "account" {
+                Some(&group)
+            } else {
+                one_account.as_ref()
+            };
+            let unit = account
+                .and_then(|account| kinds.get(account))
                 .map(|kind| match kind {
                     AccountKind::Oauth => "window_share",
                     AccountKind::ApiKey => "usd",
@@ -886,8 +937,13 @@ pub(crate) async fn burn(
                 group: group.clone(),
                 unit: unit.map(String::from),
                 usd: p.usd,
-                five_hour_share: p.five_hour_share.filter(|_| by_account),
-                seven_day_share: p.seven_day_share.filter(|_| by_account),
+                five_hour_share: p.five_hour_share,
+                seven_day_share: p.seven_day_share,
+                model_week_share: p.model_week_share,
+                five_hour_equivalent: p.five_hour_equivalent,
+                seven_day_equivalent: p.seven_day_equivalent,
+                model_week_equivalent: p.model_week_equivalent,
+                estimated: p.estimated,
                 cached_tokens: p.cached_tokens,
                 tokens: p.tokens,
                 uncached_tokens: p.uncached_tokens,

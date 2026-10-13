@@ -1073,10 +1073,6 @@ mod tests {
             ),
             (Some(5), Some(7), Some(2), Some("none"))
         );
-        assert_eq!(
-            (last.estimated_usd, last.pricing_version.as_deref()),
-            (None, None)
-        );
     }
 
     /// Every other field on an attempt row is measured from that attempt's start, while the completion's

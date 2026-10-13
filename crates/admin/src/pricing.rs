@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_ledger::{ModelRow, PlanTables, PriceTable, SubscriptionCosts};
+use phoebis_ledger::{ModelRow, PlanTables, PriceRevisions, PriceTable, SubscriptionCosts};
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
@@ -46,16 +46,25 @@ pub struct Envelopes {
     pub subscription_costs: Envelope<SubscriptionCostsContent>,
 }
 
-/// One table's envelope, its `content` the file as loaded, key for key.
-// The sentence on `content` sits on the type, since utoipa renders a generic field as its argument's schema and
-// drops the field's own description.
+/// One table's envelope, its `content` the revision in force as loaded, key for key, and `revisions` every revision
+/// the file lists, ascending by date, each in the shape of `content`.
+// The sentences on `content` and `revisions` sit on the type, since utoipa renders a generic field as its argument's
+// schema and drops the field's own description.
 #[derive(serde::Serialize, ToSchema)]
 pub struct Envelope<T: ToSchema> {
-    /// The table's date.
+    /// The date of the revision in force.
     pub effective: String,
     /// `shipped`, or `file` for the operator's file.
     #[schema(example = "shipped")]
     pub source: String,
+    pub content: T,
+    pub revisions: Vec<Revision<T>>,
+}
+
+/// One revision of a table: its date and its table, `content` in the envelope's shape.
+#[derive(serde::Serialize, ToSchema)]
+pub struct Revision<T: ToSchema> {
+    pub effective: String,
     pub content: T,
 }
 
@@ -74,21 +83,40 @@ pub struct PriceTableContent {
 #[schema(value_type = crate::openapi::SubscriptionCostsView)]
 pub struct SubscriptionCostsContent(pub SubscriptionCosts);
 
-/// The two tables' envelopes, as the price route answers them and the settings echo carries them.
-pub fn table_envelopes(prices: &PriceTable, tables: &PlanTables) -> Envelopes {
+/// The two tables' envelopes, each the revision in force at `now` beside every revision of its file, as the price
+/// route answers them and the settings echo carries them.
+pub fn table_envelopes(prices: &PriceRevisions, tables: &PlanTables, now: i64) -> Envelopes {
+    let price_content = |table: &PriceTable| PriceTableContent {
+        effective: table.effective.clone(),
+        models: table.models.clone(),
+    };
+    let table = prices.in_force(now);
+    let costs = tables.revisions.in_force(now);
     Envelopes {
         api_prices: Envelope {
-            effective: prices.effective.clone(),
+            effective: table.effective.clone(),
             source: prices.source.clone(),
-            content: PriceTableContent {
-                effective: prices.effective.clone(),
-                models: prices.models.clone(),
-            },
+            content: price_content(table),
+            revisions: prices
+                .iter()
+                .map(|table| Revision {
+                    effective: table.effective.clone(),
+                    content: price_content(table),
+                })
+                .collect(),
         },
         subscription_costs: Envelope {
-            effective: tables.costs.effective.clone(),
+            effective: costs.effective.clone(),
             source: tables.source.clone(),
-            content: SubscriptionCostsContent(tables.costs.clone()),
+            content: SubscriptionCostsContent(costs.clone()),
+            revisions: tables
+                .revisions
+                .iter()
+                .map(|costs| Revision {
+                    effective: costs.effective.clone(),
+                    content: SubscriptionCostsContent(costs.clone()),
+                })
+                .collect(),
         },
     }
 }
@@ -104,7 +132,12 @@ pub fn table_envelopes(prices: &PriceTable, tables: &PlanTables) -> Envelopes {
     ),
 )]
 pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
-    Json(table_envelopes(&state.pricing.current(), &state.tables)).into_response()
+    Json(table_envelopes(
+        &state.pricing.revisions(),
+        &state.tables,
+        (state.clock)(),
+    ))
+    .into_response()
 }
 
 #[cfg(test)]
@@ -116,5 +149,13 @@ mod tests {
     fn the_pricing_fixture_round_trips_through_the_mirrors() {
         round_trips_each::<ModelRowView>("pricing", &["api_prices", "content", "models", "*"]);
         round_trips_each::<SubscriptionCostsView>("pricing", &["subscription_costs", "content"]);
+        round_trips_each::<ModelRowView>(
+            "pricing",
+            &["api_prices", "revisions", "*", "content", "models", "*"],
+        );
+        round_trips_each::<SubscriptionCostsView>(
+            "pricing",
+            &["subscription_costs", "revisions", "*", "content"],
+        );
     }
 }

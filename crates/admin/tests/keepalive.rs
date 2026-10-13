@@ -868,6 +868,7 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
                     },
                     &[],
                     None,
+                    &phoebis_ledger::PriceRevisions::shipped(),
                 )?;
             }
             let delta = |pool: &str, account: &str, kind: &str| phoebis_ledger::KeepaliveDelta {

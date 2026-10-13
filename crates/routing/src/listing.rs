@@ -27,6 +27,18 @@ pub fn undated(id: &str) -> Option<&str> {
     (suffix.len() == 8 && suffix.bytes().all(|b| b.is_ascii_digit())).then_some(base)
 }
 
+/// The model tier name an id carries: the first `-` segment of its undated id after `claude-`
+/// (`claude-opus-9-20270101` reads `opus`), `None` without the prefix. The caller checks the name against its own
+/// tier list. The ledger's cost model and the routing rate table both read it, so an id no file lists prices under
+/// one model tier in both.
+pub fn tier_segment(canonical_model: &str) -> Option<&str> {
+    undated(canonical_model)
+        .unwrap_or(canonical_model)
+        .strip_prefix("claude-")?
+        .split('-')
+        .next()
+}
+
 /// The exact row, else the row of `undated(canonical_model)`, else `None`; the caller applies its own fallback.
 /// Shared by `RateTable::price` and the ledger's tables, since a request's canonical model is a dated catalog id
 /// and the rows ship undated.

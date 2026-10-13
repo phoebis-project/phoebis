@@ -23,34 +23,34 @@
         "effective_body_capture_hours": 24,
         "auto_mode_server": null,
         "effective_auto_mode_server": true,
-        "prefix": "GqVtcpx9",
-        "created_at": 1000000,
-        "updated_at": 1000000,
-        "revision": 4398047511104,
+        "prefix": "ZFPxvgA5",
+        "created_at": 1791721000000,
+        "updated_at": 1791721000000,
+        "revision": 6189767511104,
         "rotated_at": null,
         "last_used_at": null,
         "retired_secret_last_used_at": null,
         "sessions_on_retired_secret": 0,
         "usage_7d": {
-          "cost_usd": 0.02135,
-          "requests": 5,
-          "tokens": 9000,
           "billed_usd": 0.0107,
+          "cost_usd": 0.02135,
           "equivalent": {
-            "five_hour": 0.000052875,
-            "seven_day": 8.8125e-6
+            "five_hour": 0.00005287500000000001,
+            "seven_day": 8.812499999999999e-6
           },
-          "estimated": false
+          "estimated": false,
+          "requests": 5,
+          "tokens": 10800
         },
         "lifetime": {
-          "cost_usd": 0.02135,
-          "requests": 5,
           "billed_usd": 0.0107,
+          "cost_usd": 0.02135,
           "equivalent": {
-            "five_hour": 0.000052875,
-            "seven_day": 8.8125e-6
+            "five_hour": 0.00005287500000000001,
+            "seven_day": 8.812499999999999e-6
           },
-          "estimated": false
+          "estimated": false,
+          "requests": 5
         }
       }
     ]
