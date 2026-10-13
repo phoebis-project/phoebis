@@ -462,14 +462,14 @@ async function groupedDialogFixture(theme) {
     await choose('overage');
     await check('Overage and plan end chosen');
     await choose('utilization');
-    await check('Utilization thresholds chosen');
+    await check('Window ceiling chosen');
     await load('?refused=overage,utilization');
     await check('Identity chosen, both refused');
     await levels('Identity chosen, both refused');
     await choose('overage');
     await check('Overage and plan end chosen, both refused');
     await choose('utilization');
-    await check('Utilization thresholds chosen, both refused');
+    await check('Window ceiling chosen, both refused');
     await load('?create=1');
     await check('Identity chosen, marked');
     await levels('Identity chosen, marked');
@@ -874,67 +874,55 @@ async function poolCachingControls(theme) {
 }
 
 /**
- * The Utilization thresholds group's select-below switch, drawn in the expert view, against the shed-ahead switch
- * beside it: the same switch, the same percent field and the same label, so either reading smaller or lighter than the
- * other is the defect to catch.
+ * The Load shedding group's switch, drawn in every view, against the Migrate when spent switch below it, drawn in the
+ * expert view: the same switch with its label beside it, so either reading smaller or lighter than the other is the
+ * defect to catch.
  */
-async function poolSelectBelow(theme) {
+async function poolSheddingSwitch(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
   const dialog = page.locator('dialog[open]');
   try {
     await expertView(true);
     await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
-    await railEntry(dialog, 'Utilization thresholds').click();
+    await railEntry(dialog, 'Load shedding').click();
   } catch (error) {
-    say(`the pool dialog never reached its Utilization thresholds group (${error instanceof Error ? error.message : String(error)})`);
+    say(`the pool dialog never reached its Load shedding group (${error instanceof Error ? error.message : String(error)})`);
     await page.keyboard.press('Escape');
     await expertView(false).catch(() => {});
     return;
-  }
-  for (const label of ['Shed ahead of pace', 'Select below utilization']) {
-    const toggle = dialog.locator(`button[role="switch"][aria-label="${label}"]`);
-    if ((await toggle.count()) !== 1) say(`no ${label} switch`);
-    else if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click();
   }
   await settle();
   const pair = await dialog.evaluate((el) => {
     const read = (label) => {
       const toggle = el.querySelector(`button[role="switch"][aria-label="${label}"]`);
-      const block = toggle?.closest('.switched');
-      if (!block) return null;
-      const text = getComputedStyle(block.querySelector('.field__label'));
-      const input = block.querySelector('input[type="number"]');
-      const field = input ? getComputedStyle(input) : null;
+      const field = toggle?.closest('.field');
+      if (!field) return null;
+      const text = getComputedStyle(field.querySelector('.field__label'));
       const box = toggle.getBoundingClientRect();
-      return {
-        input: field ? `${input.getBoundingClientRect().width} ${input.getBoundingClientRect().height} ${field.fontSize} ${field.paddingTop} ${field.paddingLeft} ${field.borderTopWidth} ${field.borderTopColor}` : null,
-        label: `${text.fontSize} ${text.fontWeight} ${text.color}`,
-        switch: `${box.width} ${box.height}`,
-      };
+      return { field: field.className, label: `${text.fontSize} ${text.fontWeight} ${text.color}`, switch: `${box.width} ${box.height}` };
     };
-    const shedAhead = read('Shed ahead of pace');
-    const select = read('Select below utilization');
-    return shedAhead && select ? { select, shedAhead } : null;
+    const shedding = read('Load shedding');
+    const migrate = read('Migrate when spent');
+    return shedding && migrate ? { migrate, shedding } : null;
   });
   if (!pair) {
-    say('the shed-ahead and select-below switches are not both drawn to compare');
+    say('the Load shedding and Migrate when spent switches are not both drawn to compare');
   } else {
-    measurements.push(`${theme} /pools shed ahead of pace ${JSON.stringify(pair.shedAhead)}`);
-    measurements.push(`${theme} /pools select below ${JSON.stringify(pair.select)}`);
-    const differs = ['input', 'label', 'switch'].filter((key) => pair.select[key] === null || pair.select[key] !== pair.shedAhead[key]);
-    if (differs.length) say(`the select-below control's ${differs.join(', ')} differs from the shed-ahead control's`);
+    measurements.push(`${theme} /pools load shedding switch ${JSON.stringify(pair.shedding)}`);
+    measurements.push(`${theme} /pools migrate when spent switch ${JSON.stringify(pair.migrate)}`);
+    const differs = ['field', 'label', 'switch'].filter((key) => pair.shedding[key] !== pair.migrate[key]);
+    if (differs.length) say(`the Load shedding switch's ${differs.join(', ')} differs from the Migrate when spent switch's`);
   }
-  await closeByEscape(dialog, `${theme} /pools select below dialog`, say);
+  await closeByEscape(dialog, `${theme} /pools load shedding switch dialog`, say);
   await expertView(false).catch(() => {});
   await atRest();
 }
 
 /**
  * The load groups in the expert view against the controls beside them, each measured while its group shows: a preset
- * pill against a session-affinity pill, the overage grace field against the migrate percent field, and a
- * warm-sessions choice against an overage choice. Then the utilization bar's select-below handle and the shedding
- * preview line.
+ * pill against a session-affinity pill, the overage grace field against the window ceiling field, and a warm-sessions
+ * choice against an overage choice. Then the utilization bar's ceiling handle and the shedding preview line.
  */
 async function poolRoutingCards(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
@@ -943,19 +931,13 @@ async function poolRoutingCards(theme) {
     await expertView(true);
     await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
-    await railEntry(dialog, 'Utilization thresholds').click();
+    await railEntry(dialog, 'Window ceiling').click();
   } catch (error) {
-    say(`the pool dialog never reached its Utilization thresholds group (${error instanceof Error ? error.message : String(error)})`);
+    say(`the pool dialog never reached its Window ceiling group (${error instanceof Error ? error.message : String(error)})`);
     await page.keyboard.press('Escape');
     await expertView(false).catch(() => {});
     return;
   }
-  for (const label of ['Shed ahead of pace', 'Select below utilization']) {
-    const toggle = dialog.locator(`button[role="switch"][aria-label="${label}"]`);
-    if ((await toggle.count()) !== 1) say(`no ${label} switch`);
-    else if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click();
-  }
-  // The margin line draws at the field's value, which opens at the default of 20 for a pool that stores none.
   await settle();
   const measure = () =>
     dialog.evaluate((el) => {
@@ -976,26 +958,15 @@ async function poolRoutingCards(theme) {
       // A pressed pill and a chosen radio are drawn in their own ink, so each side is read in its resting state.
       const idlePill = (group) => [...el.querySelectorAll(`[aria-label="${group}"] .pill`)].find((p) => p.getAttribute('aria-pressed') === 'false');
       const idleChoice = (group) => el.querySelector(`[aria-label="${group}"] .radio-list__item:not(.is-active)`);
-      const handle = shown(el.querySelector('[role="slider"][aria-label="Select-below threshold"]'));
+      const handle = shown(el.querySelector('[role="slider"][aria-label="Window ceiling"]'));
       const track = el.querySelector('.ubar__track')?.getBoundingClientRect();
       const knob = handle?.getBoundingClientRect();
       const preview = shown(el.querySelector('.shed-preview'));
-      // The lead track under the used-share one: each tick and the margin line sit inside it when their centers fall
-      // within its box.
-      const leadTrack = shown(el.querySelector('.ubar__track--lead'));
-      const leadBox = leadTrack?.getBoundingClientRect();
-      const inLead = (node) => {
-        const b = node.getBoundingClientRect();
-        return b.left + b.width / 2 >= leadBox.left - 1 && b.left + b.width / 2 <= leadBox.right + 1;
-      };
-      const leadTicks = leadTrack ? [...leadTrack.querySelectorAll('.ubar__tick')] : [];
-      const marginLine = leadTrack?.querySelector('.ubar__margin');
       return {
         affinityPill: box(idlePill('Session affinity')),
+        ceilingField: box(el.querySelector('input[aria-label="Window ceiling (%)"]')),
         failoverPill: box(idlePill('Failover preset')),
         handle: handle && knob && track ? { inside: knob.left + knob.width / 2 >= track.left - 1 && knob.right - knob.width / 2 <= track.right + 1, value: handle.getAttribute('aria-valuenow'), width: knob.width } : null,
-        lead: leadTrack && leadBox ? { margin: marginLine ? inLead(marginLine) : null, ticks: leadTicks.length, ticksInside: leadTicks.every(inLead) } : null,
-        migrateField: box(el.querySelector('input[aria-label="Shed ahead of pace (%)"]')),
         overageChoice: box(idleChoice('Overage policy')),
         overageField: box(el.querySelector('input[aria-label="Overage grace (min)"]') ?? [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Overage grace (min)')?.querySelector('input')),
         preview: preview ? (preview.textContent ?? '').trim() : null,
@@ -1018,7 +989,7 @@ async function poolRoutingCards(theme) {
   const pairs = [
     ['sheddingPill', 'affinityPill', ['border', 'font', 'height', 'padding', 'radius']],
     ['failoverPill', 'affinityPill', ['border', 'font', 'height', 'padding', 'radius']],
-    ['overageField', 'migrateField', ['background', 'border', 'font', 'height', 'padding', 'radius']],
+    ['overageField', 'ceilingField', ['background', 'border', 'font', 'height', 'padding', 'radius']],
     ['warmChoice', 'overageChoice', ['background', 'border', 'font', 'padding', 'radius']],
   ];
   for (const [mine, neighbour, keys] of pairs) {
@@ -1029,58 +1000,53 @@ async function poolRoutingCards(theme) {
     const differs = keys.filter((key) => String(read[mine][key]) !== String(read[neighbour][key]));
     if (differs.length) say(`the ${mine}'s ${differs.join(', ')} differs from the ${neighbour}'s`);
   }
-  if (!read.handle) say('the utilization bar draws no select-below handle with select-below on');
-  else if (!read.handle.inside || read.handle.value === null) say(`the select-below handle sits off its track (${JSON.stringify(read.handle)})`);
-  if (!read.lead) say('the utilization bar draws no lead track');
-  else if (!read.lead.ticksInside) say(`a lead tick sits off its track (${JSON.stringify(read.lead)})`);
-  else if (read.lead.margin !== true) say(`the lead track draws no margin line inside it with shed ahead of pace on (${JSON.stringify(read.lead)})`);
-  if (!read.preview || !/^(\d+ members? runs? ahead of pace|No member is ahead of pace by the margin)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
+  if (!read.handle) say('the utilization bar draws no ceiling handle');
+  else if (!read.handle.inside || read.handle.value === null) say(`the ceiling handle sits off its track (${JSON.stringify(read.handle)})`);
+  if (!read.preview || !/^(Load shedding is off: no round runs\. )?(\d+ members? projects? over the ceiling|No member projects over the ceiling on any window)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
   await closeByEscape(dialog, `${theme} /pools routing groups dialog`, say);
   await expertView(false).catch(() => {});
   await atRest();
 }
 
 /**
- * The pool dialog's lead track with shed-ahead on: the shedding margin's line stands 26 px tall and reaches past the
- * track on both sides, taller than the readings' 18 px ticks, and the bar's legend names it "Shedding margin".
+ * The pool dialog's ceiling handle in the plain view: it stands on the track of used shares at the ceiling the field
+ * holds, centered on the track's height and taller than the track, and the bar's legend names the two readings alone.
  */
-async function utilizationMargin(theme) {
+async function utilizationCeiling(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
   const dialog = page.locator('dialog[open]');
   try {
-    await expertView(true);
     await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
-    await railEntry(dialog, 'Utilization thresholds').click();
+    await railEntry(dialog, 'Window ceiling').click();
   } catch (error) {
-    say(`the pool dialog never reached its Utilization thresholds group (${error instanceof Error ? error.message : String(error)})`);
+    say(`the pool dialog never reached its Window ceiling group (${error instanceof Error ? error.message : String(error)})`);
     await page.keyboard.press('Escape');
-    await expertView(false).catch(() => {});
     return;
   }
-  const toggle = dialog.locator('button[role="switch"][aria-label="Shed ahead of pace"]');
-  if ((await toggle.count()) !== 1) say('no Shed ahead of pace switch');
-  else if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click();
   await settle();
   const read = await dialog.evaluate((el) => {
-    const lead = el.querySelector('.ubar__track--lead');
+    const track = el.querySelector('.ubar__track');
     const box = (node) => node?.getBoundingClientRect() ?? null;
-    const track = box(lead);
-    const line = box(lead?.querySelector('.ubar__margin'));
-    const tick = box(lead?.querySelector('.ubar__tick'));
-    const legend = [...(lead?.closest('.ubar')?.querySelectorAll('.legend li') ?? [])].map((li) => li.textContent?.trim() ?? '');
-    return { legend, line: track && line ? { above: track.top - line.top, below: line.bottom - track.bottom, height: line.height } : null, tick: tick?.height ?? null };
+    const bar = box(track);
+    const knob = box(track?.querySelector('[role="slider"][aria-label="Window ceiling"]'));
+    const field = Number(el.querySelector('input[aria-label="Window ceiling (%)"]')?.value ?? Number.NaN);
+    const legend = [...(track?.closest('.ubar')?.querySelectorAll('.legend li') ?? [])].map((li) => li.textContent?.trim() ?? '');
+    return {
+      field,
+      handle: bar && knob ? { at: ((knob.left + knob.width / 2 - bar.left) / bar.width) * 100, height: knob.height, middle: knob.top + knob.height / 2 - (bar.top + bar.height / 2), track: bar.height } : null,
+      legend,
+    };
   });
-  measurements.push(`${theme} /pools shedding margin ${JSON.stringify(read)}`);
-  if (read.line === null) say('the lead track draws no margin line with shed-ahead on');
+  measurements.push(`${theme} /pools window ceiling handle ${JSON.stringify(read)}`);
+  if (read.handle === null) say('the utilization bar draws no ceiling handle in the plain view');
   else {
-    if (Math.abs(read.line.height - 26) > 0.5) say(`the margin line stands ${read.line.height}px tall, not 26`);
-    if (read.line.above <= 0 || read.line.below <= 0) say(`the margin line reaches ${read.line.above}px above the track and ${read.line.below}px below it, not past both edges`);
-    if (read.tick !== null && read.line.height <= read.tick) say(`the margin line is no taller than a reading's ${read.tick}px tick`);
+    if (Math.abs(read.handle.at - read.field) > 1) say(`the ceiling handle stands at ${read.handle.at.toFixed(1)}% of the track, not the field's ${read.field}%`);
+    if (Math.abs(read.handle.middle) > 1) say(`the ceiling handle sits ${read.handle.middle}px off the track's middle`);
+    if (read.handle.height <= read.handle.track) say(`the ceiling handle is ${read.handle.height}px tall, no taller than the ${read.handle.track}px track`);
   }
-  if (!read.legend.includes('Shedding margin')) say(`the bar's legend reads ${JSON.stringify(read.legend)}, without "Shedding margin"`);
-  await closeByEscape(dialog, `${theme} /pools shedding margin dialog`, say);
-  await expertView(false).catch(() => {});
+  if (JSON.stringify(read.legend) !== '["5-hour reading","7-day reading"]') say(`the bar's legend reads ${JSON.stringify(read.legend)}`);
+  await closeByEscape(dialog, `${theme} /pools window ceiling dialog`, say);
   await atRest();
 }
 
@@ -1115,7 +1081,8 @@ async function poolMemberPins(theme) {
 
 /**
  * The first pool card at the pass's viewport and in the 720 px strip: the serving table ends inside the card, and the
- * six tiles stand on two rows of three, then three rows of two, with a left hairline on every tile but a row's first.
+ * seven tiles stand in rows of three, then of two, the seventh alone on the last row, with a left hairline on every
+ * tile but a row's first.
  * Then every card's serving table at the pass's viewport, at 1160 px where two card columns leave a card narrower than
  * the table, in the 720 px strip and at 400 px: the wrapper stays inside its card and scrolls a table wider than
  * itself, and the page gains no horizontal overflow.
@@ -1139,14 +1106,14 @@ async function poolCardLayout(theme) {
   measurements.push(`${theme} /pools card ${JSON.stringify(wide)}`);
   if (wide.tableBottom === null || wide.cardBottom === null) say('no serving table in the first card');
   else if (wide.tableBottom > wide.cardBottom) say(`the serving table ends at ${wide.tableBottom}, past the card's bottom at ${wide.cardBottom}`);
-  if (JSON.stringify(rowsOf(wide.tops)) !== '[3,3]') say(`the tiles stand in rows of ${JSON.stringify(rowsOf(wide.tops))}, not two rows of three`);
-  if (JSON.stringify(wide.lefts) !== JSON.stringify(['0px', '1px', '1px', '0px', '1px', '1px'])) say(`the tiles' left hairlines read ${wide.lefts.join(' ')}`);
+  if (JSON.stringify(rowsOf(wide.tops)) !== '[3,3,1]') say(`the tiles stand in rows of ${JSON.stringify(rowsOf(wide.tops))}, not rows of three, then one`);
+  if (JSON.stringify(wide.lefts) !== JSON.stringify(['0px', '1px', '1px', '0px', '1px', '1px', '0px'])) say(`the tiles' left hairlines read ${wide.lefts.join(' ')}`);
   await page.setViewportSize({ height: 800, width: 720 });
   await settle();
   const narrow = await read();
   measurements.push(`${theme} /pools card at 720 px ${JSON.stringify(narrow)}`);
-  if (JSON.stringify(rowsOf(narrow.tops)) !== '[2,2,2]') say(`at 720 px the tiles stand in rows of ${JSON.stringify(rowsOf(narrow.tops))}, not three rows of two`);
-  if (JSON.stringify(narrow.lefts) !== JSON.stringify(['0px', '1px', '0px', '1px', '0px', '1px'])) say(`at 720 px the tiles' left hairlines read ${narrow.lefts.join(' ')}`);
+  if (JSON.stringify(rowsOf(narrow.tops)) !== '[2,2,2,1]') say(`at 720 px the tiles stand in rows of ${JSON.stringify(rowsOf(narrow.tops))}, not three rows of two, then one`);
+  if (JSON.stringify(narrow.lefts) !== JSON.stringify(['0px', '1px', '0px', '1px', '0px', '1px', '0px'])) say(`at 720 px the tiles' left hairlines read ${narrow.lefts.join(' ')}`);
   const serving = () =>
     page.evaluate(() => {
       const root = document.scrollingElement;
@@ -1183,9 +1150,9 @@ async function poolCardLayout(theme) {
 }
 
 /** The pool dialog's groups in rail order. */
-const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
+const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Window ceiling', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
 /** The groups whose every field is expert, which the rail leaves out while the mode is off. */
-const POOL_EXPERT_GROUPS = ['Auto mode', 'Placement', 'Load shedding', 'Failover', 'Cache diagnostics'];
+const POOL_EXPERT_GROUPS = ['Auto mode', 'Placement', 'Failover', 'Cache diagnostics'];
 /**
  * Per group, the switches whose dependents the geometry pass turns off, and the controls that must go disabled. An
  * `expert` switch and the `expertControls` are drawn in the expert view alone, so the plain walk leaves them out.
@@ -1203,10 +1170,6 @@ const POOL_DEPENDENTS = {
     { switch: 'Keep prompt caches warm', controls: ['input[type="number"]', 'button[role="switch"][aria-label="Max parked (s)"]', 'button[role="switch"][aria-label="Scheduled horizon (s)"]'] },
     { switch: 'Max parked (s)', controls: ['input[aria-label="Max parked (s)"]'] },
     { switch: 'Scheduled horizon (s)', controls: ['input[aria-label="Scheduled horizon (s)"]'] },
-  ],
-  'Utilization thresholds': [
-    { switch: 'Shed ahead of pace', controls: ['input[aria-label="Shed ahead of pace (%)"]'] },
-    { switch: 'Select below utilization', controls: ['input[aria-label="Select below utilization (%)"]'], expert: true },
   ],
 };
 
@@ -1444,7 +1407,7 @@ async function poolDialogWalk(theme, mode) {
       return null;
     }, group);
     if (gated) found.push(gated);
-    const preset = { 'Load shedding': ['Load shedding preset', ['Share (%)', 'Burn window (s)', 'Source dwell (s)']], Failover: ['Failover preset', ['In flight', 'Retry in place (s)', 'Pace floor (%)']] }[group];
+    const preset = { 'Load shedding': ['Load shedding preset', ['Shed cap (%)', 'Burn average (s)', 'Shed dwell (s)']], Failover: ['Failover preset', ['In flight', 'Retry in place (s)']] }[group];
     if (preset) {
       const state = await dialog.evaluate(
         (el, [label, pills, fields]) => {
@@ -6231,7 +6194,7 @@ try {
         await poolChips(theme);
         await poolTooltipColumns(theme);
         await poolCachingControls(theme);
-        await poolSelectBelow(theme);
+        await poolSheddingSwitch(theme);
         await poolRoutingCards(theme);
         await poolCardLayout(theme);
         await poolMemberPins(theme);
@@ -6302,7 +6265,7 @@ try {
       const offset = await page.evaluate(() => window.scrollY);
       if (offset !== 0) failures.push(`${theme} ${view.path}: the shot was taken ${offset} px down the page`);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
-      if (view.path === '/pools') await utilizationMargin(theme);
+      if (view.path === '/pools') await utilizationCeiling(theme);
       if (view.path === '/') await topbarHeights(theme);
       if (view.path === '/keys') await keysLayout(theme);
       if (view.path === '/keys') await dialogControls(theme);

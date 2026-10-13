@@ -5,11 +5,10 @@ import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, type PoolInput }
 import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type PoolEngineFields } from '@/api/client';
 import { slug } from '@/api/http';
 import type {
-  Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, KeepaliveOverview, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolMember, PoolStrategy, Range, Session,
+  Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, KeepaliveOverview, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolMember, PoolStrategy, PoolWarning, Range, Session,
   SessionPlacement, SubagentPlacement, TtlRules, WarmSessions,
 } from '@/api/types';
 import { useSession } from '@/app/session';
-import { useAppSettings } from '@/app/settings';
 import { AttentionRows } from '@/components/AttentionRows';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
@@ -22,14 +21,14 @@ import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { KEYS_CODEC } from '@/lib/address';
-import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, moveLabel, sizedAccounts } from '@/lib/analytics';
+import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, moveLabel } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, shortModel } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
 import { refreshAttention, useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
-import { endOf, windowOf } from '@/lib/quota';
+import { windowOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
 import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, overageBadge, poolStatusSentence, selectionOrder, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
@@ -41,16 +40,38 @@ const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutr
 const CREATE_MARKS: Partial<Record<PoolGroup, string>> = { identity: 'needed', keys: 'after saving', members: 'needed' };
 // Every field of these groups belongs to the expert view, so with the mode off a group has nothing to show and leaves
 // the rail.
-const EXPERT_ONLY: ReadonlySet<PoolGroup> = new Set(['autoMode', 'cacheDiagnostics', 'failover', 'placement', 'shedding']);
+const EXPERT_ONLY: ReadonlySet<PoolGroup> = new Set(['autoMode', 'cacheDiagnostics', 'failover', 'placement']);
 const isPoolGroup = (value: string | null): value is PoolGroup => value !== null && (POOL_GROUPS as readonly string[]).includes(value);
-/** The strip: a feature the pool has on, in the rail's order, each opening the dialog on the group that edits it. */
-const FEATURES: { group: PoolGroup; on: (pool: Pool) => boolean; word: string }[] = [
-  { group: 'autoMode', on: (p) => !p.autoModeServer, word: 'server-side auto mode off' },
-  // The route serves no lead over pace, so the badge reads as for a pool that sets none.
-  { group: 'shedding', on: () => false, word: 'load shedding' },
-  { group: 'cacheTtl', on: (p) => p.cacheTtl.enabled, word: 'cache TTL' },
-  { group: 'keepalive', on: (p) => p.keepalive.enabled, word: 'keepalive' },
+const percentOf = (share: number) => Math.round(share * 10_000) / 100;
+/** The route's bounds on the two shares the dialog reads in percent: the window ceiling and the shed cap. */
+const CEILING_PERCENT = { max: 100, min: 50 } as const;
+const CAP_PERCENT = { max: 100, min: 10 } as const;
+/**
+ * The strip: the features a pool has on, and the shedding's state, in the rail's order, each opening the dialog on the
+ * group that edits it.
+ */
+const FEATURES: { group: PoolGroup; on: (pool: Pool) => boolean; word: (pool: Pool) => string }[] = [
+  { group: 'autoMode', on: (p) => !p.autoModeServer, word: () => 'server-side auto mode off' },
+  // Drawn on every pool, so a pool whose switch is off says so on its card.
+  { group: 'shedding', on: () => true, word: (p) => (p.loadShedding ? `sheds above ${percentOf(p.windowCeiling)} %` : 'shedding off') },
+  { group: 'cacheTtl', on: (p) => p.cacheTtl.enabled, word: () => 'cache TTL' },
+  { group: 'keepalive', on: (p) => p.keepalive.enabled, word: () => 'keepalive' },
 ];
+/** The dialog group that edits each pool field a warning names. */
+const WARNING_FIELD_GROUP: Readonly<Record<string, PoolGroup>> = {
+  affinity_ttl_seconds: 'pinning',
+  burn_average_seconds: 'shedding',
+  cache_ttl: 'cacheTtl',
+  in_flight_cap: 'failover',
+  load_shedding: 'shedding',
+  migrate_when_spent: 'shedding',
+  shed_cap: 'shedding',
+  shed_dwell_seconds: 'shedding',
+  warm_sessions: 'shedding',
+  window_ceiling: 'utilization',
+};
+/** Where a warning is fixed: the group of its first field, or none for a field this build does not know. */
+const warningGroup = (warning: PoolWarning): PoolGroup | null => WARNING_FIELD_GROUP[warning.fields[0] ?? ''] ?? null;
 type IdleReturnBucket = KeepaliveOverview['pools'][number]['idleReturns'][number];
 const BREAK_EVEN_HINT = "The pause length at which the recipe's probes cost one re-write of its prefix, for this pool's funding, cache TTL and models.";
 const SHARE_HINT = "The idle window's probes against one re-write of the prefix, so the bet this window makes is visible per pool.";
@@ -126,23 +147,22 @@ const PRESET_PILLS = ['balanced', 'fast', 'conservative', 'custom'] as const;
 const PRESET_LABEL: Record<SheddingPreset, string> = { balanced: 'Balanced', conservative: 'Conservative', custom: 'Custom', fast: 'Fast' };
 const SHEDDING_HINT: Record<SheddingPreset, string> = {
   balanced: 'The default.',
-  conservative: 'Moves less and waits longer between rounds: fewer cache rewrites, slower relief.',
-  custom: 'Set the share, the burn window, and the dwell by hand.',
-  fast: 'Reads a shorter burn window and sheds again sooner: faster relief, more cache rewrites.',
+  conservative: 'Averages over an hour and waits longer between rounds: fewer cache rewrites, slower relief.',
+  custom: 'Set the cap, the burn average, and the dwell by hand.',
+  fast: 'Averages over fifteen minutes and sheds again sooner: faster relief, more cache rewrites.',
 };
 const FAILOVER_HINT: Record<FailoverPreset, string> = {
   balanced: 'The default.',
   conservative: 'Waits out a longer throttle before moving on.',
-  custom: 'Set the cap, the retry bound, and the floor by hand.',
+  custom: 'Set the cap and the retry bound by hand.',
   fast: 'Moves on sooner and spreads placements wider.',
 };
 // A scale from the fewest warm sessions moved to the most.
 const WARM_CHOICES: { body: string; title: string; value: WarmSessions }[] = [
-  { value: 'never', title: 'Never', body: 'a round moves cold sessions only, whatever the share still asks' },
+  { value: 'never', title: 'Never', body: 'a round marks cold sessions only, whatever the excess still asks' },
   { value: 'when_needed', title: 'When needed', body: 'cold sessions first, then warm ones by burn over the prompt they would rewrite' },
   { value: 'always', title: 'Always', body: 'every session by burn over the prompt it would rewrite, warm or cold alike' },
 ];
-const percentOf = (share: number) => Math.round(share * 10_000) / 100;
 
 /** The two groups name their presets alike, so one row of pills serves both. */
 function PresetPills({ label, value, onPick, hints }: { hints: Record<SheddingPreset | FailoverPreset, string>; label: string; onPick: (name: SheddingPreset | FailoverPreset) => void; value: SheddingPreset | FailoverPreset }) {
@@ -160,7 +180,7 @@ function PresetPills({ label, value, onPick, hints }: { hints: Record<SheddingPr
 const STRATEGY_HINT: Record<PoolStrategy, ReactNode> = {
   pace: (
     <>
-      Pace scores each member by the allowance left in the window it reads, the model&apos;s own Fable week where the model has one, else the 7-day window, per hour until that window resets or the subscription ends, within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible account. An unsampled account counts as untouched, and ties are random. Each account&apos;s windows are on the <PageLink to="/accounts">Accounts page</PageLink>.
+      Pace scores each member by its spare rate: the allowance left in the window it reads, the model&apos;s own Fable week where the model has one, else the 7-day window, per hour until that window resets or the subscription ends, less what its sessions burn of that window an hour, within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible account. An API-key member scores the room left in its worst bucket. An unsampled account counts as untouched, and ties are random. Each account&apos;s windows are on the <PageLink to="/accounts">Accounts page</PageLink>.
     </>
   ),
   priority: (
@@ -550,6 +570,7 @@ function PoolCard({
     return { at: Date.parse(b.at), requests: b.requests, tokens: b.tokens, average: window.reduce((s, x) => s + x.requests, 0) / window.length };
   });
   const tokens24h = pool.traffic24h.reduce((s, b) => s + b.tokens, 0);
+  const warnedAt = pool.warnings.length === 0 ? null : warningGroup(pool.warnings[0]);
   const tiers = selectionOrder(pool, accounts ?? [], now);
   const grouped = kindOrdered(pool);
   const sentence = poolStatusSentence(pool, accounts, now);
@@ -606,7 +627,7 @@ function PoolCard({
             {features.map((f) => (
               <Fragment key={f.group}>
                 <BadgeLink to={`/pools?edit=${pool.id}&group=${f.group}`} title={`Opens the pool dialog on ${POOL_RAIL[f.group].label}`}>
-                  {f.word}
+                  {f.word(pool)}
                 </BadgeLink>
                 {f.group === 'keepalive' && pool.keepaliveResolved && <span className="muted pool__ceilings">{ceilingsLine(pool.keepaliveResolved)}</span>}
               </Fragment>
@@ -769,6 +790,12 @@ function PoolCard({
           <dd className="num">{pool.activePins}</dd>
         </div>
         <div>
+          <dt>Warnings</dt>
+          <dd className="num" title={pool.warnings.length === 0 ? undefined : pool.warnings.map((w) => w.text).join(' ')}>
+            {warnedAt === null ? fmtInt(pool.warnings.length) : <Link to={`/pools?edit=${pool.id}&group=${warnedAt}`}>{fmtInt(pool.warnings.length)}</Link>}
+          </dd>
+        </div>
+        <div>
           <dt>Moves in the last hour</dt>
           <dd className="num" title={movesTitle}>
             <Link to={logHref({ pools: [pool.id], kinds: ['moved'], ...aroundSubject(null, now) })}>{fmtInt(movesTotal)}</Link>
@@ -854,10 +881,47 @@ function Eligibility({ verdict, account, now, periodEnd }: { account: Account | 
   return <WordedBadge tone="warning" badge={cooldownBadge(account?.cooldowns.find((c) => c.scope === 'account')?.until, now)} />;
 }
 
-/** Why an eligible member waits for the rest: at the Pace floor, or winding down with the time left to its end. */
+/** Why an eligible member waits for the rest: winding down, with the time left to its end. */
 function LastResort({ placement, now }: { now: number; placement: Placement }) {
   if (placement.lastResort === 'winding_down' && placement.end !== null) return <WordedBadge tone="warning" badge={windingDownBadge(placement.end, now)} />;
   return placement.lastResort && <Badge tone="warning">{LAST_RESORT_LABEL[placement.lastResort]}</Badge>;
+}
+
+/** The saved pool's warnings above the dialog's groups, each with a link to the group of its first field. */
+function PoolWarnings({ warnings }: { warnings: PoolWarning[] }) {
+  return (
+    <div className="pool-warnings">
+      {warnings.map((warning) => {
+        const group = warningGroup(warning);
+        return (
+          <div key={warning.code} className="callout callout--warning" role="status">
+            <IconWarning size={16} />
+            <div>
+              {warning.text}
+              {group !== null && (
+                <>
+                  {' '}
+                  Go to <GroupLink id={group}>{POOL_RAIL[group].label}</GroupLink>.
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The stale save's callout. The dialog brings its body back to the top when a notice first appears, but the saved
+ * pool's warnings may hold the notice already, so the callout does so itself as it arrives.
+ */
+function StaleNotice({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    ref.current?.closest('.dialog__body')?.scrollTo?.({ top: 0 });
+  }, []);
+  return <div ref={ref}>{children}</div>;
 }
 
 function WordedBadge({ badge, tone }: { badge: StandingBadge; tone: 'serious' | 'warning' }) {
@@ -898,8 +962,6 @@ interface PoolForm {
   preferSubscription: boolean;
   /** The threshold field as typed. */
   prefixTokens: string;
-  selectBelow: number;
-  selectBelowOn: boolean;
   sessionPlacement: SessionPlacement;
   sheddingCustom: boolean;
   status: 'active' | 'disabled';
@@ -933,8 +995,6 @@ const blankForm = (): PoolForm => ({
   overage: 'prefer_plan',
   preferSubscription: true,
   prefixTokens: String(POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens),
-  selectBelow: 80,
-  selectBelowOn: false,
   sessionPlacement: POOL_AFFINITY_DEFAULTS.sessionPlacement,
   sheddingCustom: false,
   status: 'active',
@@ -988,9 +1048,6 @@ const formFrom = (pool: Pool): PoolForm => ({
   // The stored answer, never the effective one, so reopening a pool shows what the operator chose.
   preferSubscription: pool.preferSubscription,
   prefixTokens: String(pool.minSharedPrefixTokens),
-  // The route serves no select-below threshold, so the form opens it as for a pool that sets none.
-  selectBelow: 80,
-  selectBelowOn: false,
   sessionPlacement: pool.sessionPlacement,
   sheddingCustom: sheddingPresetOf(pool) === 'custom',
   // Only the two settable states reach the form; a degraded or exhausted pool is still routing.
@@ -1041,7 +1098,6 @@ export function PoolDialog({
   sessions: Session[];
 }) {
   const now = useNow();
-  const { expertView } = useAppSettings();
   const [form, setForm] = useState<PoolForm>(blankForm);
   // The values the dialog opened with, which the discard question compares the form against.
   const [opened, setOpened] = useState(form);
@@ -1183,9 +1239,6 @@ export function PoolDialog({
     identity: { isNew: pool === null, poolIds: new Set(pools.map((p) => p.id)) },
   });
   const refusedFields = new Set(refusals.map((r) => r.field));
-  // The plain view leaves the select-below handle to the expert view unless a refusal shows its field there.
-  const handleShown = expertView || refusedFields.has('Select below utilization (%)');
-  const handleDrawn = handleShown && form.selectBelowOn;
   const refusedGroups = new Set<PoolGroup>(refusals.map((r) => r.group));
   const invalid = (field: string) => (refusedFields.has(field) ? true : undefined);
   const refusalOf = (field: string) => refusals.find((r) => r.field === field)?.text ?? null;
@@ -1217,14 +1270,13 @@ export function PoolDialog({
   const readings = memberAccounts.map((a) => {
     const shared = (id: '5h' | '7d') => {
       const w = windowOf(a, id);
-      return w === null ? null : { resetsAt: w.resetsAt, utilization: w.utilization };
+      return w === null ? null : { utilization: w.utilization };
     };
-    return { end: endOf(a, now), fiveHour: shared('5h'), id: a.id, label: a.label, sevenDay: shared('7d') };
+    return { fiveHour: shared('5h'), id: a.id, label: a.label, sevenDay: shared('7d') };
   });
   // The route's verdict per stored member, so a member in cooldown is no destination for a shed session.
   const verdict = new Map((pool?.members ?? []).map((m) => [m.accountId, m.eligible]));
-  const sized = useMemo(() => (settings.data ? sizedAccounts(accounts, settings.data.subscriptionCosts, 'five_hour') : new Set<string>()), [accounts, settings.data]);
-  const preview = shedPreview({ ...input, members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) })) }, accounts, sessions, now, sized);
+  const preview = shedPreview({ ...input, members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) })) }, accounts, sessions, now);
   const setCacheTtl = <K extends keyof PoolCacheTtl>(key: K, value: PoolCacheTtl[K]) => setForm((f) => ({ ...f, cacheTtl: { ...f.cacheTtl, [key]: value } }));
 
   const startMove = (k: ApiKey) => {
@@ -1720,41 +1772,38 @@ export function PoolDialog({
     utilization: (
       <>
         <p className="dialog-group__intro">
-          A window&apos;s pace is the share of it that has elapsed, to its reset, or to the subscription&apos;s end when that comes first. A member runs ahead of pace by the points its used share exceeds the elapsed share, read on its 5-hour and its 7-day window. The readings are the Quota page&apos;s.
+          The ceiling is the share of a window the router keeps every account under: a session lands only where its rewrite and its burn stay under it until the window resets, and a round moves sessions off an account whose sessions would take it over.
         </p>
         <div className="cells">
-          <Expert refused={refusedFields.has('Select below utilization (%)')}>
-            <div className="cell--half">
-              <SwitchedNumber
-                label="Select below utilization"
-                numberLabel="Utilization (%)"
-                checked={form.selectBelowOn}
-                onChange={(v) => set('selectBelowOn', v)}
-                input={{ min: 0, max: 100, value: form.selectBelow, onChange: (e) => set('selectBelow', Number(e.target.value)), 'aria-label': 'Select below utilization (%)', 'aria-invalid': invalid('Select below utilization (%)') }}
-                hint={
-                  <>
-                    A <GroupLink id="selection">fresh pick</GroupLink> passes over members at or above this 5-hour utilization, unless every member is.
-                  </>
-                }
-              />
-            </div>
-          </Expert>
+          <Field
+            label="Window ceiling (%)"
+            className="cell--half"
+            hint="A move or a new session lands on a member only where its windows stay under this share until they reset, or for the next five hours on a weekly window. A round runs on a member whose window would pass it."
+          >
+            <Input
+              type="number"
+              min={CEILING_PERCENT.min}
+              max={CEILING_PERCENT.max}
+              value={percentOf(form.engine.windowCeiling)}
+              onChange={(e) => setEngine('windowCeiling', Number(e.target.value) / 100)}
+              aria-label="Window ceiling (%)"
+              aria-invalid={invalid('Window ceiling (%)')}
+            />
+          </Field>
           <Field
             label="Member utilization"
             plain
             hint={
               <>
-                Each tick is a member&apos;s latest 5-hour or 7-day reading, as on the <PageLink to="/quota">Quota page</PageLink>. The lower track reads each window&apos;s lead over pace, from 100 points behind to 100 ahead, with the shedding margin and the cool band under it.
-                {handleDrawn && <> Drag the select-below threshold&apos;s handle, or focus it and use the arrow keys.</>}
+                Each tick is a member&apos;s latest 5-hour or 7-day reading, as on the <PageLink to="/quota">Quota page</PageLink>. Drag the ceiling&apos;s handle, or focus it and use the arrow keys.
               </>
             }
           >
             <UtilizationBar
-              expert={handleShown}
-              margin={null}
-              now={now}
+              ceiling={{ onChange: (v) => setEngine('windowCeiling', v / 100), value: percentOf(form.engine.windowCeiling) }}
+              min={CEILING_PERCENT.min}
+              max={CEILING_PERCENT.max}
               readings={readings}
-              selectBelow={form.selectBelowOn ? { onChange: (v) => set('selectBelow', v), value: form.selectBelow } : null}
             />
           </Field>
         </div>
@@ -1763,21 +1812,32 @@ export function PoolDialog({
     shedding: (
       <>
         <p className="dialog-group__intro">
-          A member ahead of its pace by the <GroupLink id="utilization">shedding margin</GroupLink> runs a round that marks some of its sessions, and each moves to a cooler sibling at its next request.
+          A member whose window would pass the <GroupLink id="utilization">ceiling</GroupLink> before its reset, or within five hours on a weekly window, runs a round that marks the sessions that cover the excess, and each moves to a sibling with runway at its next request.
         </p>
         <div className="cells">
+          <Field label="Load shedding" beside hint="Off, no round runs and nothing is marked. The ceiling still holds every move and new session, and Migrate when spent keeps its own switch.">
+            <Toggle checked={form.engine.loadShedding} onChange={(v) => setEngine('loadShedding', v)} label="Load shedding" />
+          </Field>
           <Expert>
             <Field label="Preset" plain hint={SHEDDING_HINT[sheddingPill]}>
               <PresetPills label="Load shedding preset" value={sheddingPill} onPick={pickShedding} hints={SHEDDING_HINT} />
             </Field>
           </Expert>
           <Expert refused={refusedFields.has('Shed cap (%)')}>
-            <Field label="Share (%)" className="cell--half" hint="The part of the member's recent burn one round marks to move.">
-              <Input type="number" min={0} max={100} value={percentOf(form.engine.shedCap)} onChange={(e) => setEngine('shedCap', Number(e.target.value) / 100)} disabled={sheddingPill !== 'custom'} aria-invalid={invalid('Shed cap (%)')} />
+            <Field label="Shed cap (%)" className="cell--half" hint="The most of the member's burn one round removes. The round removes what brings the window under the ceiling, up to this.">
+              <Input
+                type="number"
+                min={CAP_PERCENT.min}
+                max={CAP_PERCENT.max}
+                value={percentOf(form.engine.shedCap)}
+                onChange={(e) => setEngine('shedCap', Number(e.target.value) / 100)}
+                disabled={sheddingPill !== 'custom'}
+                aria-invalid={invalid('Shed cap (%)')}
+              />
             </Field>
           </Expert>
           <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.burnAverageSeconds)}>
-            <Field label={ENGINE_FIELD_LABELS.burnAverageSeconds} className="cell--half" hint="The span each session's burn is averaged over.">
+            <Field label={ENGINE_FIELD_LABELS.burnAverageSeconds} className="cell--half" hint="The time constant of each session's burn average. The projection and the round read it.">
               <Input
                 type="number"
                 min={ENGINE_BOUNDS.burnAverageSeconds.min}
@@ -1832,13 +1892,7 @@ export function PoolDialog({
           <Expert>
             <Field label="Preview" plain>
               <p className="shed-preview num" role="status">
-                {form.engine.loadShedding ? (
-                  shedPreviewLine(preview, true, settings.data ? 'ready' : settings.error ? 'missing' : 'loading', now)
-                ) : (
-                  <>
-                    No round runs while <GroupLink id="utilization">shed ahead of pace</GroupLink> is off.
-                  </>
-                )}
+                {shedPreviewLine(preview, now)}
               </p>
             </Field>
           </Expert>
@@ -1848,7 +1902,7 @@ export function PoolDialog({
     failover: (
       <>
         <p className="dialog-group__intro">
-          How long a request waits out a throttle on its member, how many requests one member serves at once, and how far <GroupLink id="selection">Pace</GroupLink> spends a member before it is the last resort.
+          How long a request waits out a throttle on its member, and how many requests one member serves at once.
         </p>
         <div className="cells">
           <Expert>
@@ -2150,6 +2204,7 @@ export function PoolDialog({
       </div>
     ),
   };
+  const warnings = pool?.warnings ?? [];
   const groups: DialogGroup[] = POOL_GROUPS.map((id) => ({ ...POOL_RAIL[id], body: bodies[id], expertOnly: EXPERT_ONLY.has(id), id, mark: pool ? undefined : CREATE_MARKS[id], refused: refusedGroups.has(id) }));
 
   return (
@@ -2169,16 +2224,26 @@ export function PoolDialog({
         status={stale ? 'Save is held: the pool changed since you opened it. Reload to edit the current version.' : first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
         hold={stale ? null : (first?.group ?? null)}
         held={first !== null || error !== null || stale !== null}
+        // The stale save's callout first, since only Reload clears it, then the saved pool's warnings, which a new pool
+        // has none of until the route computes them.
         notice={
-          stale &&
-          refusalCallout(
-            <>
-              {stale}{' '}
-              <Button variant="ghost" onClick={() => onClose(true)}>
-                Reload
-              </Button>
-            </>,
-          )
+          stale || warnings.length > 0 ? (
+            <div className="pool-notice">
+              {stale && (
+                <StaleNotice>
+                  {refusalCallout(
+                    <>
+                      {stale}{' '}
+                      <Button variant="ghost" onClick={() => onClose(true)}>
+                        Reload
+                      </Button>
+                    </>,
+                  )}
+                </StaleNotice>
+              )}
+              {warnings.length > 0 && <PoolWarnings warnings={warnings} />}
+            </div>
+          ) : null
         }
         footer={
           <>

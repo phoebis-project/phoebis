@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { cooldownBadge, fmtAbsolute, fmtPeriodEnd, fmtRelative, fmtShortTime, INELIGIBLE_LABEL, overageBadge, poolStatusSentence, selectionOrder, windingDownBadge } from './dist/api.js';
+import { cooldownBadge, fmtAbsolute, fmtPeriodEnd, fmtRelative, fmtShortTime, INELIGIBLE_LABEL, LAST_RESORT_LABEL, overageBadge, poolStatusSentence, selectionOrder, windingDownBadge } from './dist/api.js';
 
 const HOUR = 3_600_000;
 const MINUTE = 60_000;
@@ -28,9 +28,11 @@ const account = (id, over = {}) => ({
 });
 const window7d = (resetsAt, utilization = 0.5) => [{ id: '7d', label: '7-day', observedAt: '2026-09-18T00:00:00.000Z', periodHours: 168, resetsAt, utilization }];
 const extraUsageOn = { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 100, usedCredits: 10 };
-// The eligibility verdict rides on the member, because the router computes it against its own live cooldowns and
-// overages; a case states it there rather than re-deriving it from the account.
-const member = (accountId, priority, eligible = 'eligible') => ({ accountId, eligible, priority });
+// The eligibility verdict and the Pace score ride on the member, because the router computes both against its own
+// live state. A case states them there rather than re-deriving them from the account.
+const member = (accountId, priority, eligible = 'eligible', paceScore = null) => ({ accountId, eligible, paceScore, priority });
+/** An eligible member at priority 0 whose served Pace score is `paceScore`. */
+const scored = (accountId, paceScore) => member(accountId, 0, 'eligible', paceScore);
 const pool = (strategy, overagePolicy, members, over = {}) => {
   const merged = {
     activePins: 0,
@@ -50,22 +52,23 @@ const pool = (strategy, overagePolicy, members, over = {}) => {
     overagePolicy,
     preferSubscription: false,
     requests24h: 0,
-    shedAheadOfPace: null,
     status: 'active',
     strategy,
     traffic24h: [],
+    warnings: [],
     // The store's defaults, the balanced presets.
-    burnWindowSeconds: 600,
+    burnAverageSeconds: 1_800,
     inFlightCap: 16,
+    loadShedding: true,
     migrateWhenSpent: true,
     movesPerHour: {},
     overageMoveGraceMinutes: 30,
-    paceFloor: 0.05,
     retryInPlaceSeconds: 10,
-    shedShare: 0.5,
-    sourceDwellSeconds: 900,
+    shedCap: 0.5,
+    shedDwellSeconds: 900,
     warmSessions: 'when_needed',
     windDownMinutes: 30,
+    windowCeiling: 0.95,
     ...over,
   };
   return merged;
@@ -92,30 +95,28 @@ test('an overage P0 beside a plan-funded P1 follows each overage policy', () => 
   );
 });
 
-test('equal pace scores share a rank, an unsampled account outranks a used one, and every minimum is next', () => {
-  const tied = [
-    account('a', { windows: window7d(hoursFromNow(24), 0.5) }),
-    account('b', { windows: window7d(hoursFromNow(24), 0.5) }),
-    account('c', { windows: window7d(hoursFromNow(24), 0.9) }),
-  ];
-  const trio = tied.map((a) => member(a.id, 0));
-  const pace = selectionOrder(pool('pace', 'allow', trio), tied, NOW);
-  assert.deepEqual(pace[0].next.sort(), ['a', 'b'], 'two members with the same remaining allowance and reset are both next');
-  assert.deepEqual(
-    pace[0].placements.map((p) => [p.account.id, p.rank]),
-    [
-      ['a', 1],
-      ['b', 1],
-      ['c', 2],
-    ],
-  );
-  // Nearly spent over a whole week left is a worse rate than an untouched account's, which the fallback
-  // treats as a full week's remaining allowance.
-  const untouched = [account('a', { windows: window7d(hoursFromNow(168), 0.95) }), account('b')];
-  const ranked = selectionOrder(pool('pace', 'allow', untouched.map((a) => member(a.id, 0))), untouched, NOW);
-  assert.deepEqual(ranked[0].next, ['b'], 'an unsampled account counts as untouched, ahead of one with a worse remaining-over-hours rate');
-  const random = selectionOrder(pool('priority', 'allow', trio), tied, NOW);
-  assert.deepEqual(random[0].next.sort(), ['a', 'b', 'c'], 'priority makes every eligible member of the first tier next');
+test('pace ranks by the served score: a heavy burn behind an idle member, a member without one as untouched, and an API-key member by its own', () => {
+  // The account rows read the other way round, so the order follows the route's score and no arithmetic of the
+  // console's own: busy has more of its week left, but its sessions burn it faster than idle's pace allows.
+  const pair = [account('busy', { windows: window7d(hoursFromNow(24), 0.3) }), account('idle', { windows: window7d(hoursFromNow(24), 0.6) })];
+  const ranked = (tier) => tier.placements.map((p) => [p.account.id, p.rank]);
+  const spare = selectionOrder(pool('pace', 'allow', [scored('busy', -0.004), scored('idle', 0.0167)]), pair, NOW);
+  assert.deepEqual(ranked(spare[0]), [['idle', 1], ['busy', 2]], 'the spare rate ranks the idle member at 0.6 ahead of the busy one at 0.3');
+  assert.deepEqual(spare[0].next, ['idle']);
+  const tied = [...pair, account('third', { windows: window7d(hoursFromNow(24), 0.9) })];
+  const even = selectionOrder(pool('pace', 'allow', [scored('busy', 0.01), scored('idle', 0.01), scored('third', 0.002)]), tied, NOW);
+  assert.deepEqual(even[0].next.sort(), ['busy', 'idle'], 'two members with the same served score are both next');
+  assert.deepEqual(ranked(even[0]), [['busy', 1], ['idle', 1], ['third', 2]]);
+  // Nearly spent within the hour by its account row, yet the router has read no score for it.
+  const unread = [account('unread', { windows: window7d(hoursFromNow(1), 0.95) }), ...pair];
+  const fresh = selectionOrder(pool('pace', 'allow', [scored('busy', -0.004), scored('idle', 0.0167), scored('unread', null)]), unread, NOW);
+  assert.deepEqual(ranked(fresh[0]), [['unread', 1], ['idle', 2], ['busy', 3]], 'a member without a served score ranks as untouched, ahead of every scored member');
+  // The account rows carry no bucket, so only the served score tells the nearly full bucket from the untouched one.
+  const keys = [account('full', { kind: 'api_key' }), account('room', { kind: 'api_key' })];
+  const keyed = selectionOrder(pool('pace', 'allow', [scored('full', 0.03), scored('room', 1)]), keys, NOW);
+  assert.deepEqual(ranked(keyed[0]), [['room', 1], ['full', 2]], 'an API-key member ranks by its served score, a nearly full bucket behind an untouched one');
+  const random = selectionOrder(pool('priority', 'allow', [scored('busy', -0.004), scored('idle', 0.0167), scored('third', 0.002)]), tied, NOW);
+  assert.deepEqual(random[0].next.sort(), ['busy', 'idle', 'third'], 'priority makes every eligible member of the first tier next');
 });
 
 test("the router's verdict decides eligibility and an obstacle trails its tier", () => {
@@ -197,60 +198,62 @@ test('round robin with the subscription preference walks the kind tiers first an
   assert.deepEqual(flat.map((t) => [t.group, t.priority, t.next]), [[0, 0, ['key']], [0, 1, []]], 'without the preference priority alone orders the tiers');
 });
 
-test('pace places the floor group and a winding-down member last', () => {
+test('pace places a winding-down member last and knows no floor', () => {
   const subscription = (over) => ({ billingType: 'monthly', derivedEndsAt: null, endsAt: null, organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_5x', since: null, trialEndsAt: null, ...over });
   const trio = [
     account('fresh', { windows: window7d(hoursFromNow(24), 0.5) }),
-    // Its window resets in half an hour, so its rate would lead the tier if the floor did not hold it back.
+    // Nearly spent, with the lowest served score of the tier: it ranks last among the ranked members and is no last
+    // resort of its own.
     account('spent', { windows: window7d(hoursFromNow(0.5), 0.96) }),
-    // Cancelled and ten minutes from its end, inside the default half-hour wind-down, with the best rate of all.
+    // Cancelled and ten minutes from its end, inside the default half-hour wind-down, with the best score of all.
     account('ending', { cancelled: true, subscription: subscription({ endsAt: new Date(NOW + 10 * MINUTE).toISOString() }), windows: window7d(hoursFromNow(24), 0.1) }),
     account('other', { windows: window7d(hoursFromNow(24), 0.5) }),
+    account('key', { kind: 'api_key' }),
   ];
+  const scores = { ending: 0.05, fresh: 0.02, key: 0.03, other: 0.02, spent: 0.0009 };
+  const at = (id, priority = 0) => member(id, priority, 'eligible', scores[id]);
   const ranked = (tier) => tier.placements.map((p) => [p.account.id, p.lastResort, p.rank]);
-  const pace = selectionOrder(pool('pace', 'allow', [member('ending', 0), member('fresh', 0), member('spent', 0)]), trio, NOW);
+  assert.deepEqual(LAST_RESORT_LABEL, { winding_down: 'winding down' }, 'the wind-down is the one last resort');
+  const pace = selectionOrder(pool('pace', 'allow', [at('ending'), at('fresh'), at('spent')]), trio, NOW);
   assert.deepEqual(
     ranked(pace[0]),
     [
       ['fresh', null, 1],
-      ['spent', 'floor', 2],
+      ['spent', null, 2],
       ['ending', 'winding_down', 3],
     ],
-    'the floor group trails the ranked members, and the member winding down trails the floor group',
+    'the nearly spent member ranks by its score, and the member winding down trails it',
   );
   assert.deepEqual(pace[0].next, ['fresh']);
-  const lower = selectionOrder(pool('pace', 'allow', [member('ending', 0), member('other', 1), member('spent', 0)]), trio, NOW);
+  const lower = selectionOrder(pool('pace', 'allow', [at('ending'), at('other', 1)]), trio, NOW);
   assert.deepEqual(
     lower.map((t) => [t.priority, t.next]),
     [
       [0, []],
       [1, ['other']],
     ],
-    'a member above the floor one tier down is taken before the last resort of the tier above',
+    'a member one tier down is taken before the member winding down in the tier above',
   );
-  const lastResort = selectionOrder(pool('pace', 'allow', [member('ending', 0), member('spent', 0)]), trio, NOW);
-  assert.deepEqual(lastResort[0].next, ['spent'], 'with nothing else left, the floor group places before a member winding down');
-  const priority = selectionOrder(pool('priority', 'allow', [member('ending', 0), member('spent', 0)]), trio, NOW);
+  const lastResort = selectionOrder(pool('pace', 'allow', [at('ending'), at('spent')]), trio, NOW);
+  assert.deepEqual(lastResort[0].next, ['spent'], 'with nothing else left, the nearly spent member places before a member winding down');
+  const priority = selectionOrder(pool('priority', 'allow', [at('ending'), at('spent')]), trio, NOW);
   assert.deepEqual(
     ranked(priority[0]),
     [
       ['spent', null, 1],
       ['ending', 'winding_down', 2],
     ],
-    'priority reads no floor, but the wind-down holds under every strategy',
+    'the wind-down holds under every strategy',
   );
-  const unwound = selectionOrder(pool('pace', 'allow', [member('ending', 0), member('fresh', 0)], { windDownMinutes: 5 }), trio, NOW);
-  assert.deepEqual(unwound[0].next, ['ending'], "outside the pool's wind-down the end only shortens the hours its rate divides by");
-  const trial = [account('trial', { subscription: subscription({ trialEndsAt: hoursFromNow(2) }), windows: window7d(hoursFromNow(100), 0.5) }), trio[0]];
-  assert.deepEqual(selectionOrder(pool('pace', 'allow', [member('fresh', 0), member('trial', 0)]), trial, NOW)[0].next, ['trial'], 'a trial end ahead of the reset is the hours the allowance must last');
-  const keyed = [account('key', { kind: 'api_key', windows: [{ id: '5h', label: '5-hour', observedAt: '2026-09-18T00:00:00.000Z', periodHours: 5, resetsAt: hoursFromNow(1), utilization: 0.97 }] }), trio[0]];
+  const unwound = selectionOrder(pool('pace', 'allow', [at('ending'), at('fresh')], { windDownMinutes: 5 }), trio, NOW);
+  assert.deepEqual(unwound[0].next, ['ending'], "outside the pool's wind-down the member ranks by its score alone");
   assert.deepEqual(
-    ranked(selectionOrder(pool('pace', 'allow', [member('fresh', 0), member('key', 0)]), keyed, NOW)[0]),
+    ranked(selectionOrder(pool('pace', 'allow', [at('fresh'), at('key')]), trio, NOW)[0]),
     [
-      ['fresh', null, 1],
-      ['key', 'floor', 2],
+      ['key', null, 1],
+      ['fresh', null, 2],
     ],
-    'an API-key member reads its worst reported window against the floor',
+    'an API-key member ranks by its served score and is never a last resort',
   );
 });
 

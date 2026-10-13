@@ -1534,7 +1534,8 @@
   font-size: 13px;
 }
 
-/* Six tiles on two rows of three; the hairline between tiles runs between the rows too. */
+/* Seven tiles in rows of three, the seventh alone at the left of the third row. The hairline between tiles runs
+   between the rows too, and above the third row it spans the seventh tile alone. */
 .pool__stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -1785,39 +1786,6 @@
   background: var(--series-4);
 }
 
-/* The lead track's center mark, on pace, drawn first so a tick or the band at the center paints over it. */
-.ubar__track--lead::before {
-  content: '';
-  position: absolute;
-  top: -3px;
-  left: 50%;
-  width: 2px;
-  height: 14px;
-  margin-left: -1px;
-  background: var(--ink-2);
-  border-radius: 1px;
-}
-
-/* Taller than the ticks and standing past the track on both sides, so the margin reads apart from a reading. */
-.ubar__margin {
-  position: absolute;
-  top: -9px;
-  width: 2px;
-  height: 26px;
-  margin-left: -1px;
-  background: var(--serious);
-  border-radius: 1px;
-}
-
-/* Translucent, so the center mark and the track show through where the band starts. */
-.ubar__band {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  background: var(--good-soft);
-  opacity: 0.8;
-}
-
 .ubar__handle {
   position: absolute;
   top: 50%;
@@ -1832,7 +1800,7 @@
   touch-action: none;
 }
 
-.ubar__handle--select {
+.ubar__handle--ceiling {
   border-color: var(--accent);
 }
 
@@ -1846,6 +1814,14 @@
   height: 14px;
   font-size: 11px;
   color: var(--ink-2);
+}
+
+/* Above the pool dialog's groups: a stale save's callout, then the saved pool's warnings, one callout each. */
+.pool-notice,
+.pool-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .shed-preview {
@@ -3152,7 +3128,8 @@
     grid-template-columns: 110px 1fr;
   }
 
-  /* Two columns of three rows: the base rule's left hairline would land on the first column's third and fifth tile. */
+  /* Two columns of four rows, the last of one tile: the base rule's left hairline would land on the first column's
+     third and fifth tile. */
   .pool__stats {
     grid-template-columns: repeat(2, 1fr);
   }

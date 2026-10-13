@@ -66,9 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, requestsWiden, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, spanText, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
-// Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
-const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, requestsWiden, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, spanText, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -2805,12 +2803,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: '/pools the member column reads one pin per agent and model against the mock', ok: listedPools.length > 0 && twice && wrong.length === 0, missing: [`a member over one pin ${twice}`, ...wrong] });
   }
   const strip = (name) => [...(card(name)?.querySelectorAll('.pool__features .badge') ?? [])].map((b) => [b.textContent?.trim(), b.getAttribute('href'), b.getAttribute('title')]);
+  // The shedding badge draws on every card, reading the pool's ceiling with its switch on, so all reads its 75 % and
+  // jobs and work the store's 95 %.
+  const shedding = (id, ceiling) => [`sheds above ${ceiling} %`, `/pools?edit=${id}&group=shedding`, 'Opens the pool dialog on Load shedding'];
   results.push({
-    name: '/pools the strip badges the features a pool has on and opens the dialog on their groups',
+    name: "/pools the strip badges the features a pool has on, and the shedding's state, and opens the dialog on their groups",
     ok:
-      JSON.stringify(strip('all')) === JSON.stringify([['load shedding', '/pools?edit=all&group=shedding', 'Opens the pool dialog on Load shedding'], ['cache TTL', '/pools?edit=all&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=all&group=keepalive', 'Opens the pool dialog on Keepalive']]) &&
-      JSON.stringify(strip('jobs')) === JSON.stringify([['load shedding', '/pools?edit=jobs&group=shedding', 'Opens the pool dialog on Load shedding']]) &&
-      JSON.stringify(strip('work')) === JSON.stringify([['server-side auto mode off', '/pools?edit=work&group=autoMode', 'Opens the pool dialog on Auto mode'], ['cache TTL', '/pools?edit=work&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=work&group=keepalive', 'Opens the pool dialog on Keepalive']]),
+      JSON.stringify(strip('all')) === JSON.stringify([shedding('all', 75), ['cache TTL', '/pools?edit=all&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=all&group=keepalive', 'Opens the pool dialog on Keepalive']]) &&
+      JSON.stringify(strip('jobs')) === JSON.stringify([shedding('jobs', 95)]) &&
+      JSON.stringify(strip('work')) === JSON.stringify([['server-side auto mode off', '/pools?edit=work&group=autoMode', 'Opens the pool dialog on Auto mode'], shedding('work', 95), ['cache TTL', '/pools?edit=work&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=work&group=keepalive', 'Opens the pool dialog on Keepalive']]),
     missing: [...strip('all'), ...strip('jobs'), ...strip('work')].map((b) => b.join(' | ')),
   });
   const badged = [...cards.entries()].filter(([, c]) => [...c.querySelectorAll('.badge')].some((b) => b.textContent?.trim() === 'server-side auto mode off')).map(([name]) => name);
@@ -2871,14 +2872,24 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // path stands for it.
   const attentionRows = (name) =>
     [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.children[1]?.textContent?.trim(), li.children[1]?.getAttribute('href')?.split('?')[0] ?? null]);
-  // The story's items: jobs exhausted and holding a parked record; the laptop key's client drift, the Overflow
-  // workspace out of funding and secondary's poll backoff in all; nothing on work, whose one member and one key carry
-  // no item; and the routing state writer on no card, since it belongs to no pool.
+  // The story's items: jobs is exhausted and holds a parked record. all draws the laptop key's client drift, the
+  // Overflow workspace out of funding, secondary's poll backoff and the three routing conditions (the walls on nightly
+  // and secondary, nightly spent within the hour of a move, and all's round without a destination). work draws
+  // nothing, since its one member and one key carry no item, and the routing state writer belongs to no pool's card.
   results.push({
-    name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion, and a card with none draws no list",
+    name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, and a card with none draws no list",
     ok:
       JSON.stringify(attentionRows('jobs')) === JSON.stringify([['Pool exhausted', 'jobs', '/routing-log'], ['Priced record parked', 'jobs', null]]) &&
-      JSON.stringify(attentionRows('all')) === JSON.stringify([['Client drift', '2.1.271', '/keys#laptop'], ['Funding required', 'Overflow workspace', '/accounts/overflow'], ['Usage poll backing off', 'secondary', '/accounts/secondary']]) &&
+      JSON.stringify(attentionRows('all')) ===
+        JSON.stringify([
+          ['Client drift', '2.1.271', '/keys#laptop'],
+          ['Funding required', 'Overflow workspace', '/accounts/overflow'],
+          ['Usage poll backing off', 'secondary', '/accounts/secondary'],
+          ['Wall reached under the ceiling', 'nightly', '/routing-log'],
+          ['Wall reached under the ceiling', 'secondary', '/routing-log'],
+          ['Destination spent within the hour', 'nightly', '/routing-log'],
+          ['Rounds without a destination', 'all', '/routing-log'],
+        ]) &&
       card('work')?.querySelector('.attention') === null,
     missing: ['jobs', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))}`),
   });
@@ -2994,15 +3005,59 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     'fast lane cooling 1',
     "Opens the Routing log on pool all and the moved kind for the last hour, which lists a keepalive probe's move only with probe decisions chosen",
   ].join('\n');
+  // The route's sentences for all's two warnings, the affinity under the injected cache TTL and the ceiling under 80 %.
+  const allWarnings = [
+    'The session affinity ends before the cache TTL the pool injects, so a pin can expire while its cache is warm and the next request can land cold elsewhere.',
+    'A ceiling under 80 percent leaves a fifth of every window unused and moves sessions that would have finished the window warm.',
+  ].join(' ');
   results.push({
-    name: '/pools six tiles per card, the sixth the count of rule moves in the last hour with the reasons and the failovers left out in its title',
+    name: '/pools seven tiles per card, the sixth the count of the warnings with their sentences in its title, the seventh the count of rule moves in the last hour with the reasons and the failovers left out in its title',
     ok:
-      tiles('all').length === 6 &&
-      JSON.stringify(tiles('all')[5]) === JSON.stringify(['Moves in the last hour', '2', allTitle]) &&
-      JSON.stringify(tiles('jobs')[5]?.slice(0, 2)) === JSON.stringify(['Moves in the last hour', '0']) &&
-      tiles('jobs')[5]?.[2]?.split('\n')[0] === 'No rule moved a session in the last hour',
-    missing: [...(tiles('all')[5] ?? []), ...(tiles('jobs')[5] ?? [])].map(String),
+      tiles('all').length === 7 &&
+      JSON.stringify(tiles('all')[5]) === JSON.stringify(['Warnings', '2', allWarnings]) &&
+      JSON.stringify(tiles('work')[5]) === JSON.stringify(['Warnings', '0', null]) &&
+      JSON.stringify(tiles('all')[6]) === JSON.stringify(['Moves in the last hour', '2', allTitle]) &&
+      JSON.stringify(tiles('jobs')[6]?.slice(0, 2)) === JSON.stringify(['Moves in the last hour', '0']) &&
+      tiles('jobs')[6]?.[2]?.split('\n')[0] === 'No rule moved a session in the last hour',
+    missing: [...(tiles('all')[5] ?? []), ...(tiles('work')[5] ?? []), ...(tiles('all')[6] ?? []), ...(tiles('jobs')[6] ?? [])].map(String),
   });
+  {
+    // Each warning names the fields it reads, and the tile opens the dialog on the group of the first one's first
+    // field: all's affinity warning reads the affinity first, so Pinning, and jobs' spent moves warning the Load
+    // shedding group that holds Migrate when spent.
+    const tileLink = (name) => card(name)?.querySelector('.pool__stats > div:nth-child(6) dd a');
+    const hrefs = ['all', 'jobs', 'work'].map((name) => tileLink(name)?.getAttribute('href') ?? null);
+    const opener = await mount('/pools');
+    [...opener.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'all')?.querySelector('.pool__stats > div:nth-child(6) dd a')?.click();
+    await opener.settle(300);
+    const opened = opener.container.querySelector('dialog[open]');
+    const shownGroup = [...(opened?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
+    const title = opened?.querySelector('.dialog__title')?.textContent?.trim() ?? 'no dialog';
+    opener.unmount();
+    results.push({
+      name: "/pools the Warnings tile opens the pool dialog on the group of its first warning's first field, and a pool without one draws no link",
+      ok: JSON.stringify(hrefs) === JSON.stringify(['/pools?edit=all&group=pinning', '/pools?edit=jobs&group=shedding', null]) && title === 'Edit pool all' && shownGroup === 'Pinning',
+      missing: [...hrefs.map(String), title, shownGroup],
+    });
+  }
+  {
+    // The serving table orders a tier by the score the route serves, so a member whose account row reads more of its
+    // week left ranks behind one whose sessions leave it more spare rate: secondary out of its cooldown with a served
+    // score above primary's, though its 7-day window reads 88 % used to primary's 41 %.
+    const { listPools } = api;
+    api.listPools = async () =>
+      (await listPools.call(api)).map((p) => (p.id === 'all' ? { ...p, members: p.members.map((x) => (x.accountId === 'secondary' ? { ...x, eligible: 'eligible', paceScore: 0.02 } : x.accountId === 'primary' ? { ...x, paceScore: 0.0016 } : x)) } : p));
+    const served = await mount('/pools');
+    api.listPools = listPools;
+    const allCard = [...served.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'all');
+    const order = [...(allCard?.querySelectorAll('.serving tbody tr') ?? [])].map((tr) => [tr.children[1]?.querySelector('a')?.textContent?.trim(), tr.classList.contains('is-next')]);
+    served.unmount();
+    results.push({
+      name: '/pools the serving table orders by the served pace score',
+      ok: JSON.stringify(order) === JSON.stringify([['secondary', true], ['primary', false], ['nightly', false], ['Overflow workspace', false]]),
+      missing: order.map((o) => JSON.stringify(o)),
+    });
+  }
   results.push({ name: '/pools nothing of the recap, the selection-order strip, the member list or the key chips is left', ok: m.container.querySelector('.pool .pool__policy, .pool .selection-order, .pool .pool__members, .pool .pool__eligibility, .pool a.badge[href="/keys"]') === null, missing: [] });
 }
 {
@@ -3011,11 +3066,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const exhausted = (await api.getAttention()).find((i) => i.kind === 'pool_exhausted');
   const page = await mount('/pools', { now: CLOCK_ORIGIN });
   const card = (name) => [...page.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === name);
-  const figure = (name) => card(name)?.querySelector('.pool__stats > div:nth-child(6) dd a');
+  const figure = (name) => card(name)?.querySelector('.pool__stats > div:nth-child(7) dd a');
   const lastHour = (pool) => ({ path: '/routing-log', kinds: 'moved', pools: pool });
   const read = ['all', 'jobs'].map((name) => [figure(name)?.textContent?.trim() ?? null, logTarget(figure(name)?.getAttribute('href'))]);
   results.push({
-    name: "/pools the sixth tile's figure opens the log on the pool and the moved kind for the last hour",
+    name: "/pools the seventh tile's figure opens the log on the pool and the moved kind for the last hour",
     ok: JSON.stringify(read) === JSON.stringify([['2', lastHour('all')], ['0', lastHour('jobs')]]),
     missing: read.map((r) => JSON.stringify(r)),
   });
@@ -3023,7 +3078,17 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const row = (name, label) => rows(name).find((li) => li.querySelector('.badge')?.textContent?.trim() === label);
   const exhaustedRow = row('jobs', 'Pool exhausted');
   const link = exhaustedRow?.querySelector('a');
-  const others = [...rows('jobs'), ...rows('all')].filter((li) => li !== exhaustedRow).map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.querySelector('a')?.getAttribute('href') ?? null]);
+  // A routing condition's row opens the routing log on its subject since the condition began, read as its filters
+  // and its range.
+  const conditions = await api.getAttention();
+  const since = (kind, subject) => conditions.find((i) => i.kind === kind && i.subject.id === subject)?.since ?? '';
+  const sinceThen = (filters, from) => ({ path: '/routing-log', ...filters, from: isoAt(Date.parse(from)), to: isoAt(CLOCK_ORIGIN) });
+  const others = [...rows('jobs'), ...rows('all')]
+    .filter((li) => li !== exhaustedRow)
+    .map((li) => {
+      const href = li.querySelector('a')?.getAttribute('href') ?? null;
+      return [li.querySelector('.badge')?.textContent?.trim(), href?.startsWith('/routing-log') ? logTarget(href) : href];
+    });
   const last = (exhaustedRow?.getAttribute('title') ?? '').split('\n').pop();
   results.push({
     name: "/pools the card's pool exhausted row opens the log since the condition began and its other rows keep their targets",
@@ -3033,7 +3098,17 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       JSON.stringify(logTarget(link.getAttribute('href'))) === JSON.stringify({ path: '/routing-log', kinds: 'exhausted', pools: 'jobs', from: isoAt(Date.parse(exhausted.since)), to: isoAt(CLOCK_ORIGIN) }) &&
       exhausted.since.startsWith('2026-09-16T14:16:40') &&
       last === `Opens the Routing log: pool jobs, exhausted, since ${exhausted.since.slice(11, 16)}` &&
-      JSON.stringify(others) === JSON.stringify([['Priced record parked', null], ['Client drift', '/keys#laptop'], ['Funding required', '/accounts/overflow'], ['Usage poll backing off', '/accounts/secondary']]),
+      JSON.stringify(others) ===
+        JSON.stringify([
+          ['Priced record parked', null],
+          ['Client drift', '/keys#laptop'],
+          ['Funding required', '/accounts/overflow'],
+          ['Usage poll backing off', '/accounts/secondary'],
+          ['Wall reached under the ceiling', sinceThen({ accounts: 'nightly', kinds: 'window_spent' }, since('wall_reached', 'nightly'))],
+          ['Wall reached under the ceiling', sinceThen({ accounts: 'secondary', kinds: 'window_spent' }, since('wall_reached', 'secondary'))],
+          ['Destination spent within the hour', sinceThen({ accounts: 'nightly', kinds: 'pin_migrated,window_spent' }, since('destination_spent', 'nightly'))],
+          ['Rounds without a destination', sinceThen({ kinds: 'shedding_round', pools: 'all' }, since('shed_no_runway', 'all'))],
+        ]),
     missing: [link?.getAttribute('href') ?? 'no link', last ?? '', JSON.stringify(others)],
   });
   page.unmount();
@@ -3044,7 +3119,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     api.listPools = async () => (await listPools.call(api)).map((p) => (p.id === 'all' ? { ...p, movesPerHour: { cooldown: 1, mark: 1, spent: 1, unknown: 2 } } : p));
     const odd = await mount('/pools', { now: CLOCK_ORIGIN });
     api.listPools = listPools;
-    const tile = [...odd.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'all')?.querySelector('.pool__stats > div:nth-child(6) dd');
+    const tile = [...odd.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'all')?.querySelector('.pool__stats > div:nth-child(7) dd');
     const want = [
       'Rule moves in the last hour',
       'window spent 1',
@@ -3202,13 +3277,30 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   });
 }
 {
-  // The story's pool `all` sheds at 90 % ahead of pace; the dialog checks below drive the shedding controls from a
-  // pool that sheds nothing, the store's default, so the margin is cleared through the route and the page read again.
-  const all = (await api.listPools()).find((p) => p.id === 'all');
-  results.push({ name: "fixture: the story's pool all sheds at 90 % ahead of pace", ok: all?.shedAheadOfPace === 0.9, missing: [String(all?.shedAheadOfPace)] });
-  await api.updatePool('all', { ...all, members: all.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })), shedAheadOfPace: null });
-  m.unmount();
-  m = await mount('/pools');
+  // jobs' switch turned off in its dialog and saved reads on its badge, and the route adds the warning that says so;
+  // turned on again, the badge reads its ceiling once more.
+  const badge = () =>
+    [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'jobs')?.querySelector('.pool__features a[href="/pools?edit=jobs&group=shedding"]')?.textContent?.trim() ?? null;
+  const flipJobs = async () => {
+    [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool jobs')?.click();
+    await m.settle(300);
+    const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+    group(dlg, 'Load shedding')?.querySelector('button[role="switch"][aria-label="Load shedding"]')?.click();
+    await m.settle(120);
+    [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool')?.click();
+    await m.settle(700);
+  };
+  const before = badge();
+  await flipJobs();
+  const jobs = (await api.listPools()).find((p) => p.id === 'jobs');
+  const off = [badge(), jobs?.loadShedding, jobs?.warnings.map((w) => w.code)];
+  await flipJobs();
+  const on = [badge(), (await api.listPools()).find((p) => p.id === 'jobs')?.loadShedding];
+  results.push({
+    name: "/pools jobs' badge reads shedding off once its Load shedding switch is turned off in the dialog and saved, and its ceiling again once turned on",
+    ok: before === 'sheds above 95 %' && JSON.stringify(off) === JSON.stringify(['shedding off', false, ['shedding_off', 'spent_moves_off', 'warm_never']]) && JSON.stringify(on) === '["sheds above 95 %",true]' && m.container.querySelector('dialog[open]') === null,
+    missing: [String(before), JSON.stringify(off), JSON.stringify(on)],
+  });
 }
 {
   // A warming pool with no member resolves nothing: its card draws the chip and no line, and its dialog no figure.
@@ -3321,7 +3413,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request. Off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an API-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Cost reference', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a1c4e', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool. Rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request. Off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Window ceiling (%)', 'Load shedding', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an API-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Cost reference', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a1c4e', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool. Rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
   const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="shared"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   // A multi-select is the option list's listbox, which the Keys group would carry.
@@ -3330,7 +3422,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({ name: '/pools keys section is not a multi-select', ok: keysGroup !== undefined && keysMulti.length === 0, missing: keysGroup === undefined ? ['no Keys group'] : keysMulti });
 
   // Grouped dialog: a two-level rail beside one group at a time, one heading per group.
-  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
+  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Window ceiling', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
   const railParents = [...(dlg?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const railGroups = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   results.push({
@@ -3362,7 +3454,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: "/pools focus lands on the group's heading", ok: !!members && document.activeElement === members.querySelector('h3'), missing: [document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'] });
     dlg?.querySelector('.dialog-rail__parent[data-parent="Load"]')?.click();
     await m.settle(120);
-    results.push({ name: '/pools a parent heading chooses its first group', ok: JSON.stringify(shown()) === '["Utilization thresholds"]', missing: shown() });
+    results.push({ name: '/pools a parent heading chooses its first group', ok: JSON.stringify(shown()) === '["Window ceiling"]', missing: shown() });
 
     // A refusal typed while another group shows still marks its own group and names itself in the footer.
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -3383,7 +3475,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({
       name: '/pools a refusal marks its group and its parent and fills the footer line, and Go to focuses the field',
       ok:
-        JSON.stringify(marks) === '[true,true,"Utilization thresholds"]' &&
+        JSON.stringify(marks) === '[true,true,"Window ceiling"]' &&
         held[0] === true &&
         held[1].startsWith('Save is held: The minimum shared prefix is a whole number of tokens, 0 or more.') &&
         goTo !== undefined &&
@@ -3423,8 +3515,6 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const sw = (label) => dlg?.querySelector(`button[role="switch"][aria-label="${label}"]`);
     const num = (label) => dlg?.querySelector(`input[aria-label="${label}"]`);
     const switched = [
-      ['Shed ahead of pace', 'Shed ahead of pace (%)'],
-      ['Select below utilization', 'Select below utilization (%)'],
       ['Max parked (s)', 'Max parked (s)'],
       ['Scheduled horizon (s)', 'Scheduled horizon (s)'],
     ];
@@ -3512,10 +3602,24 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   chips.find((c) => c.textContent?.trim() === '10m')?.click();
   await m.settle(120);
 
-  // Migration is off by default; its switch enables the percent input, which is drawn either way.
-  const migrateSwitch = dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]');
-  const migratePercent = () => dlg?.querySelector('input[aria-label="Shed ahead of pace (%)"]');
-  results.push({ name: '/pools migrate starts off', ok: migrateSwitch?.getAttribute('aria-checked') === 'false' && migratePercent()?.disabled === true, missing: [String(migrateSwitch?.getAttribute('aria-checked')), String(migratePercent()?.disabled)] });
+  // The saved pool's warnings stand above the groups, one line each with a link to the group of its first field: all
+  // injects an hour's cache TTL past its ten minutes of affinity, and its ceiling sits under 80 %.
+  {
+    const lines = [...(dlg?.querySelectorAll('.dialog__body--grouped .pool-warnings > .callout--warning') ?? [])];
+    const read = lines.map((c) => [c.textContent?.replace(/\s+/g, ' ').trim(), [...c.querySelectorAll('button')].map((b) => b.textContent?.trim())]);
+    const wanted = [
+      ['The session affinity ends before the cache TTL the pool injects, so a pin can expire while its cache is warm and the next request can land cold elsewhere. Go to Pinning.', ['Pinning']],
+      ['A ceiling under 80 percent leaves a fifth of every window unused and moves sessions that would have finished the window warm. Go to Window ceiling.', ['Window ceiling']],
+    ];
+    [...(lines[1]?.querySelectorAll('button') ?? [])][0]?.click();
+    await m.settle(120);
+    const shownNow = [...(dlg?.querySelectorAll('section.dialog-group') ?? [])].filter((s) => !s.hidden).map((s) => s.getAttribute('aria-label'));
+    results.push({
+      name: "/pools the dialog lists the saved pool's warnings above its groups, each linking to the group of its first field",
+      ok: JSON.stringify(read) === JSON.stringify(wanted) && JSON.stringify(shownNow) === '["Window ceiling"]' && lines.every((c) => c.closest('section.dialog-group') === null),
+      missing: [...read.map((r) => JSON.stringify(r)), ...shownNow],
+    });
+  }
   {
     const card = (label) => group(dlg, label);
     const pills = (label) => [...(dlg?.querySelectorAll(`[aria-label="${label}"] .pill`) ?? [])];
@@ -3524,29 +3628,108 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       pills(label).find((p) => p.textContent?.trim() === name)?.click();
       await m.settle(120);
     };
-    const field = (groupLabel, label) => [...(card(groupLabel)?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input');
+    const fieldOf = (groupLabel, label) => [...(card(groupLabel)?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label);
+    const field = (groupLabel, label) => fieldOf(groupLabel, label)?.querySelector('input');
+    const hintOf = (groupLabel, label) => fieldOf(groupLabel, label)?.querySelector(':scope > .field__hint')?.textContent ?? null;
+    const labelsOf = (groupLabel) => [...(card(groupLabel)?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
+    const introOf = (groupLabel) => card(groupLabel)?.querySelector('.dialog-group__intro')?.textContent ?? null;
     const values = (groupLabel, labels) => labels.map((label) => field(groupLabel, label)?.value ?? null);
     const disabled = (groupLabel, labels) => labels.map((label) => field(groupLabel, label)?.disabled ?? null);
-    const SHED = ['Share (%)', 'Burn window (s)', 'Source dwell (s)'];
-    const FAIL = ['In flight', 'Retry in place (s)', 'Pace floor (%)'];
+    const SHED = ['Shed cap (%)', 'Burn average (s)', 'Shed dwell (s)'];
+    const FAIL = ['In flight', 'Retry in place (s)'];
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    expect('/pools the load groups draw the bar and the shedding, failover and overage controls', ['Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end'].map((label) => card(label)?.textContent ?? '').join(' '), [
+    const type = async (input, value) => {
+      if (!input) return;
+      setter.call(input, value);
+      input.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(120);
+    };
+    const shedSwitch = () => card('Load shedding')?.querySelector('button[role="switch"][aria-label="Load shedding"]');
+    const preview = () => card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
+    expect('/pools the load groups draw the ceiling, the bar and the shedding, failover and overage controls', ['Window ceiling', 'Load shedding', 'Failover', 'Overage and plan end'].map((label) => card(label)?.textContent ?? '').join(' '), [
+      'Window ceiling (%)',
       'Member utilization',
       'Load shedding',
       'Balanced',
       'Fast',
       'Conservative',
       'Custom',
+      'Shed cap (%)',
+      'Burn average (s)',
+      'Shed dwell (s)',
       'Migrate when spent',
       'Warm sessions',
       'Never:',
       'When needed:',
       'Always:',
-      'No round runs while shed ahead of pace is off.',
+      'Preview',
       'Failover',
       'Overage grace',
       'Wind down',
     ]);
+    const ceilingField = () => field('Window ceiling', 'Window ceiling (%)');
+    results.push({
+      name: '/pools the Window ceiling group opens with its intro and draws the ceiling from 50 to 100 with its hint, then the bar',
+      ok:
+        introOf('Window ceiling') ===
+          'The ceiling is the share of a window the router keeps every account under: a session lands only where its rewrite and its burn stay under it until the window resets, and a round moves sessions off an account whose sessions would take it over.' &&
+        JSON.stringify(labelsOf('Window ceiling')) === '["Window ceiling (%)","Member utilization"]' &&
+        hintOf('Window ceiling', 'Window ceiling (%)') === 'A move or a new session lands on a member only where its windows stay under this share until they reset, or for the next five hours on a weekly window. A round runs on a member whose window would pass it.' &&
+        ceilingField()?.value === '75' &&
+        ceilingField()?.getAttribute('min') === '50' &&
+        ceilingField()?.getAttribute('max') === '100',
+      missing: [String(introOf('Window ceiling')), JSON.stringify(labelsOf('Window ceiling')), String(hintOf('Window ceiling', 'Window ceiling (%)')), String(ceilingField()?.value), String(ceilingField()?.getAttribute('min')), String(ceilingField()?.getAttribute('max'))],
+    });
+    {
+      const util = card('Window ceiling');
+      const ticks = [...(util?.querySelectorAll('.ubar__track .ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
+      const handle = () => util?.querySelector('[role="slider"][aria-label="Window ceiling"]');
+      const atStored = [handle()?.className, handle()?.style.left, handle()?.getAttribute('aria-valuetext'), handle()?.getAttribute('aria-valuemin'), handle()?.getAttribute('aria-valuemax')];
+      await type(ceilingField(), '80');
+      const typed = handle()?.style.left;
+      await type(ceilingField(), '75');
+      const legend = [...(util?.querySelectorAll('.ubar .legend li') ?? [])].map((li) => li.textContent?.trim());
+      results.push({
+        name: "/pools the bar draws each member reading with the ceiling's handle at the field's value, and no lead track, margin or band",
+        ok:
+          ticks.length === 6 &&
+          ticks.includes('primary: 5-hour 62%') &&
+          JSON.stringify(atStored) === JSON.stringify(['ubar__handle ubar__handle--ceiling', '75%', '75%', '50', '100']) &&
+          typed === '80%' &&
+          util?.querySelector('.ubar__track--lead, .ubar__margin, .ubar__band') === null &&
+          JSON.stringify(legend) === '["5-hour reading","7-day reading"]',
+        missing: [...ticks.map(String), JSON.stringify(atStored), String(typed), JSON.stringify(legend)],
+      });
+    }
+    {
+      // A ceiling out of its range reads in the footer and on the rail, with no callout under the bar.
+      await type(ceilingField(), '120');
+      const status = dlg?.querySelector('.dialog__status')?.textContent ?? '';
+      const outOfRange = [card('Window ceiling')?.querySelector('.callout--critical')?.textContent ?? null, status, !!rail(dlg, 'utilization')?.querySelector('.dialog-rail__dot')];
+      await type(ceilingField(), '75');
+      results.push({
+        name: '/pools a ceiling out of range holds the save from the footer and the rail',
+        ok: outOfRange[0] === null && outOfRange[1] === 'Save is held: Window ceiling (%) is from 50 to 100.Go to Window ceiling' && outOfRange[2] === true,
+        missing: outOfRange.map(String),
+      });
+    }
+    const migrate = card('Load shedding')?.querySelector('button[role="switch"][aria-label="Migrate when spent"]');
+    results.push({
+      name: '/pools Load shedding opens with its intro and draws its switch first, as Migrate when spent is drawn, then the cap, the average and the dwell with their hints',
+      ok:
+        introOf('Load shedding') ===
+          'A member whose window would pass the ceiling before its reset, or within five hours on a weekly window, runs a round that marks the sessions that cover the excess, and each moves to a sibling with runway at its next request.' &&
+        JSON.stringify(labelsOf('Load shedding')) === JSON.stringify(['Load shedding', 'Preset', 'Shed cap (%)', 'Burn average (s)', 'Shed dwell (s)', 'Migrate when spent', 'Warm sessions', 'Preview']) &&
+        shedSwitch()?.getAttribute('aria-checked') === 'true' &&
+        shedSwitch()?.closest('.field')?.className === migrate?.closest('.field')?.className &&
+        migrate?.closest('.field')?.classList.contains('field--beside') === true &&
+        hintOf('Load shedding', 'Shed cap (%)') === "The most of the member's burn one round removes. The round removes what brings the window under the ceiling, up to this." &&
+        hintOf('Load shedding', 'Burn average (s)') === "The time constant of each session's burn average. The projection and the round read it." &&
+        hintOf('Load shedding', 'Shed dwell (s)') === 'The least time between two rounds on one member, and how long a moved session stays off it.' &&
+        field('Load shedding', 'Shed cap (%)')?.getAttribute('min') === '10' &&
+        field('Load shedding', 'Shed cap (%)')?.getAttribute('max') === '100',
+      missing: [String(introOf('Load shedding')), JSON.stringify(labelsOf('Load shedding')), String(shedSwitch()?.getAttribute('aria-checked')), String(shedSwitch()?.closest('.field')?.className), ...SHED.map((label) => String(hintOf('Load shedding', label)))],
+    });
     const names = (label) => JSON.stringify(pills(label).map((p) => p.textContent?.trim()));
     results.push({
       name: '/pools both presets offer Balanced, Fast, Conservative and Custom with the stored preset pressed and its fields drawn disabled',
@@ -3555,180 +3738,90 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         names('Failover preset') === '["Balanced","Fast","Conservative","Custom"]' &&
         JSON.stringify([pressed('Load shedding preset'), pressed('Failover preset')]) === '[["Balanced"],["Balanced"]]' &&
         JSON.stringify(disabled('Load shedding', SHED)) === '[true,true,true]' &&
-        JSON.stringify(disabled('Failover', FAIL)) === '[true,true,true]',
+        JSON.stringify(disabled('Failover', FAIL)) === '[true,true]',
       missing: [names('Load shedding preset'), names('Failover preset'), JSON.stringify([pressed('Load shedding preset'), pressed('Failover preset')]), JSON.stringify(disabled('Load shedding', SHED)), JSON.stringify(disabled('Failover', FAIL))],
     });
     await pick('Load shedding preset', 'Fast');
     const fast = [values('Load shedding', SHED), disabled('Load shedding', SHED)];
     await pick('Load shedding preset', 'Custom');
     const fromFast = [values('Load shedding', SHED), disabled('Load shedding', SHED)];
-    const burnWindow = field('Load shedding', 'Burn window (s)');
-    if (burnWindow) {
-      setter.call(burnWindow, '900');
-      burnWindow.dispatchEvent(new window.Event('input', { bubbles: true }));
-      await m.settle(120);
-    }
+    await type(field('Load shedding', 'Burn average (s)'), '1000');
     const edited = pressed('Load shedding preset');
+    await pick('Load shedding preset', 'Conservative');
+    const conservative = [values('Load shedding', SHED), disabled('Load shedding', SHED), (card('Load shedding')?.textContent ?? '').includes('Averages over an hour and waits longer between rounds: fewer cache rewrites, slower relief.')];
     await pick('Load shedding preset', 'Balanced');
     const balanced = [values('Load shedding', SHED), disabled('Load shedding', SHED)];
     results.push({
-      name: '/pools a shedding pill writes its values into the disabled fields, Custom enables them, and an edit stays custom until a preset is picked',
+      name: '/pools a shedding pill writes the cap, the average and the dwell into the disabled fields, Custom enables them, and an edit stays custom until a preset is picked',
       ok:
-        JSON.stringify(fast) === '[["50","300","600"],[true,true,true]]' &&
-        JSON.stringify(fromFast) === '[["50","300","600"],[false,false,false]]' &&
+        JSON.stringify(fast) === '[["50","900","600"],[true,true,true]]' &&
+        JSON.stringify(fromFast) === '[["50","900","600"],[false,false,false]]' &&
         JSON.stringify(edited) === '["Custom"]' &&
+        JSON.stringify(conservative) === '[["30","3600","1800"],[true,true,true],true]' &&
         JSON.stringify(pressed('Load shedding preset')) === '["Balanced"]' &&
-        JSON.stringify(balanced) === '[["50","600","900"],[true,true,true]]',
-      missing: [JSON.stringify(fast), JSON.stringify(fromFast), JSON.stringify(edited), JSON.stringify(balanced)],
+        JSON.stringify(balanced) === '[["50","1800","900"],[true,true,true]]',
+      missing: [JSON.stringify(fast), JSON.stringify(fromFast), JSON.stringify(edited), JSON.stringify(conservative), JSON.stringify(balanced)],
+    });
+    // At the mock's clock primary projects 81 % at its 5-hour reset, secondary 100 % and nightly 104 %, all past all's
+    // 75 %, and every sibling of each is over it too or out of the rotation. Under a ceiling of 100 nightly alone
+    // crosses, and primary has runway for its pins.
+    const stored = preview();
+    await type(ceilingField(), '100');
+    const raised = preview();
+    shedSwitch()?.click();
+    await m.settle(120);
+    const offRaised = preview();
+    await type(ceilingField(), '75');
+    const offLine = preview();
+    await pick('Load shedding preset', 'Fast');
+    const afterPreset = [shedSwitch()?.getAttribute('aria-checked'), disabled('Load shedding', SHED)];
+    await pick('Load shedding preset', 'Custom');
+    const customOff = disabled('Load shedding', SHED);
+    await pick('Load shedding preset', 'Balanced');
+    shedSwitch()?.click();
+    await m.settle(120);
+    results.push({
+      name: "/pools the shedding preview replays the trigger over every member's windows and the round's marks from the served figures",
+      ok:
+        stored === '3 members project over the ceiling: nightly, primary, secondary. No sibling has runway for them, so nothing would be marked.' &&
+        /^1 member projects over the ceiling: nightly\. A round there would mark 1 session \(0 warm\), \d+\.\d %\/h of the excess, to move to a sibling with runway\.$/.test(raised),
+      missing: [stored, raised],
+    });
+    results.push({
+      name: '/pools with the switch off the preview opens with its off line, a preset leaves the switch as it is, and the cap, the average and the dwell stay editable under Custom',
+      ok:
+        offRaised === 'Load shedding is off: no round runs. 1 member projects over the ceiling: nightly.' &&
+        offLine === 'Load shedding is off: no round runs. 3 members project over the ceiling: nightly, primary, secondary.' &&
+        JSON.stringify(afterPreset) === '["false",[true,true,true]]' &&
+        JSON.stringify(customOff) === '[false,false,false]' &&
+        shedSwitch()?.getAttribute('aria-checked') === 'true',
+      missing: [offRaised, offLine, JSON.stringify(afterPreset), JSON.stringify(customOff), String(shedSwitch()?.getAttribute('aria-checked'))],
     });
     await pick('Failover preset', 'Conservative');
-    const conservative = [(card('Failover')?.textContent ?? '').includes('Waits out a longer throttle before moving on.'), values('Failover', FAIL), disabled('Failover', FAIL)];
+    const failoverConservative = [(card('Failover')?.textContent ?? '').includes('Waits out a longer throttle before moving on.'), values('Failover', FAIL), disabled('Failover', FAIL)];
     await pick('Failover preset', 'Custom');
-    const fromConservative = [values('Failover', FAIL), disabled('Failover', FAIL)];
+    const fromConservative = [values('Failover', FAIL), disabled('Failover', FAIL), hintOf('Failover', 'Preset')];
     await pick('Failover preset', 'Balanced');
     results.push({
       name: '/pools a failover pill says what it trades and shows its values in the disabled fields, and Custom enables them from there',
-      ok: JSON.stringify(conservative) === '[true,["16","120","5"],[true,true,true]]' && JSON.stringify(fromConservative) === '[["16","120","5"],[false,false,false]]' && JSON.stringify(pressed('Failover preset')) === '["Balanced"]',
-      missing: [JSON.stringify(conservative), JSON.stringify(fromConservative), JSON.stringify(pressed('Failover preset'))],
+      ok: JSON.stringify(failoverConservative) === '[true,["16","120"],[true,true]]' && JSON.stringify(fromConservative) === '[["16","120"],[false,false],"Set the cap and the retry bound by hand."]' && JSON.stringify(pressed('Failover preset')) === '["Balanced"]',
+      missing: [JSON.stringify(failoverConservative), JSON.stringify(fromConservative), JSON.stringify(pressed('Failover preset'))],
+    });
+    results.push({
+      name: '/pools Failover draws the preset, the cap and the retry bound alone, and its intro names no Pace',
+      ok: JSON.stringify(labelsOf('Failover')) === '["Preset","In flight","Retry in place (s)"]' && introOf('Failover') === 'How long a request waits out a throttle on its member, and how many requests one member serves at once.',
+      missing: [JSON.stringify(labelsOf('Failover')), String(introOf('Failover'))],
     });
     expect('/pools the overage group states the grace and the wind down', card('Overage and plan end')?.textContent ?? '', [
       'Under Prefer plan quota, a session stays on an account in overage while its window resets within this many minutes; 0 moves it at once.',
       'This long before a cancelled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. The end is set on the Accounts page',
     ]);
-
-    migrateSwitch?.click();
-    await m.settle(120);
-    const util = card('Utilization thresholds');
-    results.push({
-      name: '/pools migrate on enables its percent field, proposing the default lead until a margin is typed',
-      ok:
-        migrateSwitch?.getAttribute('aria-checked') === 'true' &&
-        migratePercent()?.disabled === false &&
-        migratePercent()?.value === SHED_DEFAULT_PERCENT &&
-        (util?.textContent ?? '').includes('Read on the 5-hour and the 7-day window.'),
-      missing: [String(migrateSwitch?.getAttribute('aria-checked')), String(migratePercent()?.disabled), JSON.stringify(migratePercent()?.value)],
-    });
-    expect('/pools the Utilization thresholds group opens with its intro naming the two windows and the fresh placement', util?.textContent ?? '', [
-      "A window's pace is the share of it that has elapsed, to its reset, or to the subscription's end when that comes first. A member runs ahead of pace by the points its used share exceeds the elapsed share, read on its 5-hour and its 7-day window. The readings are the Quota page's.",
-      'A member whose used share runs ahead of the elapsed share by this many points starts a shedding round, and while the switch is on a member at or above the margin less 5 points is no cool destination either: a new session, and a moved one, lands on a cool sibling while one exists.',
-    ]);
-    // Pool all runs the Pace strategy, so the Strategy field draws its hint, and the Pace floor sits in the Failover group.
-    // The Accounts page link carries its screen-reader note after its words, so the closing sentence is read without its
-    // period.
-    expect('/pools the Pace strategy hint names the Fable week and the 7-day window', [card('Selection')?.textContent ?? '', card('Failover')?.textContent ?? ''].join(' '), [
-      "Pace scores each member by the allowance left in the window it reads, the model's own Fable week where the model has one, else the 7-day window, per hour until that window resets or the subscription ends, within the first priority tier that has an eligible account. An unsampled account counts as untouched, and ties are random.",
+    // Pool all runs the Pace strategy, so the Strategy field draws its hint. The Accounts page link carries its
+    // screen-reader note after its words, so the closing sentence is read without its period.
+    expect('/pools the Pace strategy hint names the spare rate over the Fable week or the 7-day window', card('Selection')?.textContent ?? '', [
+      "Pace scores each member by its spare rate: the allowance left in the window it reads, the model's own Fable week where the model has one, else the 7-day window, per hour until that window resets or the subscription ends, less what its sessions burn of that window an hour, within the first priority tier that has an eligible account. An API-key member scores the room left in its worst bucket. An unsampled account counts as untouched, and ties are random.",
       "Each account's windows are on the Accounts page",
-      'Under the Pace strategy, a member with this share or less of the window Pace reads left serves only as the last resort.',
     ]);
-    const percent = migratePercent();
-    if (percent) setter.call(percent, '50');
-    percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(120);
-    // The lead ticks share `.ubar__tick` for their size and place, so each track's ticks are read under their own track.
-    const ticks = [...(util?.querySelectorAll('.ubar__track:not(.ubar__track--lead) .ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
-    const leadTicks = () => [...(util?.querySelectorAll('.ubar__track--lead .ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
-    const marginLine = () => util?.querySelector('.ubar__margin');
-    results.push({
-      name: '/pools the bar draws each member reading with no migrate handle, the lead track its ticks with the margin line and the band, and the percent field holds the typed margin',
-      ok:
-        percent?.value === '50' &&
-        ticks.length === 6 &&
-        ticks.includes('primary: 5-hour 62%') &&
-        util?.querySelector('[role="slider"][aria-label="Shed ahead of pace"]') === null &&
-        leadTicks().length === 6 &&
-        marginLine()?.style.left === '75%' &&
-        marginLine()?.getAttribute('title') === 'Shedding margin: 50 points' &&
-        util?.querySelector('.ubar__band') !== null,
-      missing: [String(percent?.value), ...ticks, String(leadTicks().length), String(marginLine()?.style.left), String(marginLine()?.getAttribute('title')), String(util?.querySelector('.ubar__band') !== null)],
-    });
-    // This mount runs on the moving clock, so a 5-hour window's elapsed share drifts a point every three minutes of the
-    // run: primary's reads about 55% elapsed and 7 points ahead, and its figures are read by shape alone. The 7-day
-    // windows drift 5/168 of that, a point every hundred minutes, which still crosses a rounding edge that sits minutes
-    // away, so their elapsed and lead figures are read by shape too, under each window's used share: primary's 41% used
-    // reads about 54% elapsed and 13 points behind, secondary's 88% about 28% elapsed to its end, two hours before its
-    // reset, and 60 points ahead, nightly's 35% about 75% elapsed and 40 points behind. The margin line follows the
-    // typed value: 20 points sits at 60% of the track with the band 7.5% wide, 50 at 75%.
-    const leadTitle = /^\w+: (5-hour|7-day) \d+% used, \d+% elapsed( to its end at .+)?, (\d+ points? (ahead|behind)|on pace)$/;
-    const atFifty = leadTicks();
-    if (percent) setter.call(percent, '20');
-    percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(120);
-    const atTwenty = [marginLine()?.style.left, marginLine()?.getAttribute('title'), util?.querySelector('.ubar__band')?.style.width];
-    if (percent) setter.call(percent, '50');
-    percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(120);
-    results.push({
-      name: "/pools the lead track draws a tick per member and window with the margin line at the field's value",
-      ok:
-        atFifty.length === 6 &&
-        atFifty.every((title) => leadTitle.test(title ?? '')) &&
-        atFifty.some((title) => /^primary: 5-hour 62% used, \d+% elapsed, \d+ points ahead$/.test(title ?? '')) &&
-        atFifty.some((title) => /^primary: 7-day 41% used, \d+% elapsed, \d+ points behind$/.test(title ?? '')) &&
-        atFifty.some((title) => /^secondary: 7-day 88% used, \d+% elapsed to its end at .+, \d+ points ahead$/.test(title ?? '')) &&
-        atFifty.some((title) => /^nightly: 7-day 35% used, \d+% elapsed, \d+ points behind$/.test(title ?? '')) &&
-        util?.querySelector('.ubar__track--lead')?.getAttribute('aria-label') === 'Lead over pace by member and window' &&
-        JSON.stringify(atTwenty) === '["60%","Shedding margin: 20 points","7.5%"]' &&
-        marginLine()?.style.left === '75%',
-      missing: [...atFifty, JSON.stringify(atTwenty), String(marginLine()?.style.left)],
-    });
-    // At the mock's clock nightly's 5-hour window leads its pace by about 0.71 and secondary's 7-day window by about
-    // 0.60 to its end, both over the typed 50 %; primary leads by under 0.1 and is the cool destination.
-    expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', [
-      '2 members run ahead of pace by the margin',
-      'nightly (5-hour',
-      'secondary (7-day',
-      'A round there would move',
-      'warm',
-      "of the hot members' recent burn together, in window share",
-      'to a cool sibling',
-      '2 pins the cost model cannot price stay.',
-    ]);
-  }
-  migrateSwitch?.click();
-  await m.settle(120);
-
-  // The select-below threshold sits beside migration and reads the same way: a switch over its percent.
-  {
-    const util = group(dlg, 'Utilization thresholds');
-    const selectSwitch = util?.querySelector('button[role="switch"][aria-label="Select below utilization"]');
-    const percent = () => dlg?.querySelector('input[aria-label="Select below utilization (%)"]');
-    results.push({
-      name: '/pools select-below starts off beside migration',
-      ok: selectSwitch?.getAttribute('aria-checked') === 'false' && percent()?.disabled === true && !!util?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]'),
-      missing: [String(selectSwitch?.getAttribute('aria-checked')), String(percent()?.disabled)],
-    });
-    selectSwitch?.click();
-    await m.settle(120);
-    results.push({
-      name: '/pools select-below on enables a percent field from 0 to 100',
-      ok:
-        percent()?.value === '80' &&
-        percent()?.disabled === false &&
-        percent()?.getAttribute('min') === '0' &&
-        percent()?.getAttribute('max') === '100' &&
-        (util?.textContent ?? '').includes('A fresh pick passes over members at or above this 5-hour utilization, unless every member is.') &&
-        !(util?.textContent ?? '').includes('migrate line'),
-      missing: [percent()?.value ?? 'absent', String(percent()?.disabled), percent()?.getAttribute('min') ?? '', percent()?.getAttribute('max') ?? ''],
-    });
-    // A select-below out of its range reads in the footer and on the rail, with no callout under the bar.
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    const type = async (value) => {
-      if (!percent()) return;
-      setter.call(percent(), value);
-      percent().dispatchEvent(new window.Event('input', { bubbles: true }));
-      await m.settle(120);
-    };
-    await type('120');
-    const status = dlg?.querySelector('.dialog__status')?.textContent ?? '';
-    const outOfRange = [util?.querySelector('.callout--critical')?.textContent ?? null, status, !!rail(dlg, 'utilization')?.querySelector('.dialog-rail__dot')];
-    await type('80');
-    results.push({
-      name: '/pools a select-below out of range holds the save from the footer and the rail',
-      ok: outOfRange[0] === null && outOfRange[1] === 'Save is held: Select below utilization is from 0 to 100.Go to Utilization thresholds' && outOfRange[2] === true,
-      missing: outOfRange.map(String),
-    });
-    selectSwitch?.click();
-    await m.settle(120);
   }
 
   // Keepalive gate: 10m clears the 5-minute floor but still warns about 1-hour caches.
@@ -4413,7 +4506,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   });
   const story = (await api.listPools()).find((p) => p.id === 'all');
   const written = { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
-  const shedChip = () => m.container.querySelector('.pool__features a[href="/pools?edit=all&group=shedding"]') !== null;
+  const shedChip = () => m.container.querySelector('.pool__features a[href="/pools?edit=all&group=shedding"]')?.textContent?.trim() ?? null;
   const stale = await openAll();
   // Save pressed at the end of a long group, where the callout above the groups would sit out of view.
   rail(stale, 'keepalive')?.click();
@@ -4427,7 +4520,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     body.scrollTop = 1_200;
   }
   // Through the API, which the mock stamps later than the row the dialog opened with.
-  await api.updatePool('all', { ...written, shedAheadOfPace: 0.3 });
+  await api.updatePool('all', { ...written, loadShedding: false });
   const staleSave = countCalls('updatePool');
   footButton(stale, 'Save pool')?.click();
   await m.settle(600);
@@ -4443,8 +4536,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const refused = [stale?.hasAttribute('open') === true, callout?.textContent ?? '', !!reload, shedChip()];
   results.push({
     name: '/pools a save over a pool written since the dialog opened is refused as stale with a Reload in the callout',
-    ok: story.shedAheadOfPace === null && refused[0] && refused[1] === `${sentence} Reload` && refused[2] && !refused[3],
-    missing: [String(story.shedAheadOfPace), ...refused.map(String)],
+    ok: story.loadShedding === true && refused[0] && refused[1] === `${sentence} Reload` && refused[2] && refused[3] === 'sheds above 75 %',
+    missing: [String(story.loadShedding), ...refused.map(String)],
   });
   const footer = stale?.querySelector('.dialog__status');
   results.push({
@@ -4459,20 +4552,20 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const reloaded = await readsOn(() => reload?.click());
   results.push({
     name: '/pools Reload closes the dialog and reads the pools and keys once each, and the card shows the written value',
-    ok: JSON.stringify(reloaded) === '[1,1]' && m.container.querySelector('dialog[open]') === null && shedChip(),
+    ok: JSON.stringify(reloaded) === '[1,1]' && m.container.querySelector('dialog[open]') === null && shedChip() === 'shedding off',
     missing: [...reloaded.map(String), String(shedChip())],
   });
-  // The fresh edit turns the written margin off again, which puts the story's pool back for the checks below.
+  // The fresh edit turns the written switch on again, which puts the story's pool back for the checks below.
   const fresh = await openAll();
-  fresh?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]')?.click();
+  fresh?.querySelector('button[role="switch"][aria-label="Load shedding"]')?.click();
   await m.settle(150);
   footButton(fresh, 'Save pool')?.click();
   await m.settle(700);
   const saved = (await api.listPools()).find((p) => p.id === 'all');
   results.push({
     name: '/pools an edit opened after Reload saves over the fresh row',
-    ok: m.container.querySelector('dialog[open]') === null && saved?.shedAheadOfPace === null && !shedChip(),
-    missing: [String(saved?.shedAheadOfPace), String(shedChip())],
+    ok: m.container.querySelector('dialog[open]') === null && saved?.loadShedding === true && shedChip() === 'sheds above 75 %',
+    missing: [String(saved?.loadShedding), String(shedChip())],
   });
   // Cancel after a stale refusal reads the lists again, as after any refusal; the write through the API moves the
   // pool's stamp alone.
@@ -4594,18 +4687,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
   }
   {
-    const shedSwitch = dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]');
-    const shedPercent = () => dlg?.querySelector('input[aria-label="Shed ahead of pace (%)"]');
-    shedSwitch?.click();
-    await m.settle(120);
+    // A new pool starts where the route seeds one: the ceiling at 95 % and its switch on. The route computes the
+    // warnings, so an unsaved pool lists none.
+    const shedSwitch = group(dlg, 'Load shedding')?.querySelector('button[role="switch"][aria-label="Load shedding"]');
+    const ceiling = group(dlg, 'Window ceiling')?.querySelector('input[aria-label="Window ceiling (%)"]');
     results.push({
-      name: '/pools create dialog proposes the default lead the moment Shed ahead of pace turns on',
-      ok: shedSwitch?.getAttribute('aria-checked') === 'true' && shedPercent()?.disabled === false && shedPercent()?.value === SHED_DEFAULT_PERCENT,
-      missing: [String(shedSwitch?.getAttribute('aria-checked')), String(shedPercent()?.disabled), JSON.stringify(shedPercent()?.value)],
+      name: '/pools create dialog starts with Load shedding on under a ceiling of 95 %, and lists no warnings',
+      ok: shedSwitch?.getAttribute('aria-checked') === 'true' && ceiling?.value === '95' && dlg?.querySelector('.pool-warnings') === null,
+      missing: [String(shedSwitch?.getAttribute('aria-checked')), String(ceiling?.value), dlg?.querySelector('.pool-warnings')?.textContent ?? 'no warnings line'],
     });
-    // Off again, so the checks below read the form as the dialog opened it.
-    shedSwitch?.click();
-    await m.settle(120);
   }
   {
     const autoMode = group(dlg, 'Auto mode');
@@ -4839,11 +4929,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const footButton = (dialog, label) => [...(dialog?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
   const toast = () => page.container.querySelector('.toast')?.textContent ?? '';
   let dlg = await openAll();
-  failNextCall('updatePool', '/admin/pools/all', 'shed_share is between 0 and 1', { quiet: true, status: 400 });
+  failNextCall('updatePool', '/admin/pools/all', 'shed_cap is between 0.1 and 1.0', { quiet: true, status: 400 });
   footButton(dlg, 'Save pool')?.click();
   await page.settle(600);
   const refused = [String(dlg?.hasAttribute('open')), dlg?.querySelector('.dialog__status')?.textContent ?? '', toast()];
-  results.push({ name: '/pools a save the route refuses for a field reads in the dialog footer and raises no toast', ok: JSON.stringify(refused) === JSON.stringify(['true', 'shed_share is between 0 and 1', '']), missing: refused });
+  results.push({ name: '/pools a save the route refuses for a field reads in the dialog footer and raises no toast', ok: JSON.stringify(refused) === JSON.stringify(['true', 'shed_cap is between 0.1 and 1.0', '']), missing: refused });
   footButton(dlg, 'Cancel')?.click();
   await page.settle(400);
   dlg = await openAll();
@@ -4937,8 +5027,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 {
   // A round counts the triggering pool's pins alone: with primary moved from all into work and laptop moved into work,
   // work's two primary pins (the busy laptop sessions) are its slice, so its preview reads them alone, whatever
-  // desktop, still all's key, holds there. The mock's cost model has no weight for their Sonnet 4.6, so the round
-  // sheds nothing.
+  // desktop, still all's key, holds there. The mock's cost model has no weight for their Sonnet 4.6, so the round marks
+  // nothing, where desktop's priced pins on primary would give it a mark.
   const pools = await api.listPools();
   const story = (id) => pools.find((p) => p.id === id);
   const written = (p, members) => ({ ...p, members: members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
@@ -4965,19 +5055,16 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]')?.click();
-  await m.settle(120);
-  // primary leads its 5-hour pace by about 0.07 at the mock's clock, so a margin of 5 % makes it the one hot member.
-  const percent = dlg?.querySelector('input[aria-label="Shed ahead of pace (%)"]');
-  if (percent) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(percent, '5');
-  percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  // primary projects 81 % at its 5-hour reset, so a ceiling of 80 % makes it the one member over the ceiling, and
+  // studio, a sibling under it on every window, has runway for its pins.
+  const ceiling = dlg?.querySelector('input[aria-label="Window ceiling (%)"]');
+  if (ceiling) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(ceiling, '80');
+  ceiling?.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(120);
   const line = group(dlg, 'Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
   results.push({
     name: "/pools the shedding preview counts the pool's own pins alone on an account that left another pool",
-    // The unit shows the round ran over a pin, since a member with no pin in the slice reads none, and the unpriced
-    // count that it ran over laptop's two pins alone.
-    ok: /^1 member runs ahead of pace by the margin: primary \(5-hour, \d+ points ahead\)\. A round there would (move|mark) 0 sessions \(0 warm\), 0% of the hot members' recent burn together, in window share.* 2 pins the cost model cannot price stay\.$/.test(line),
+    ok: line === '1 member projects over the ceiling: primary. A round there would mark 0 sessions (0 warm), 0.0 %/h of the excess, to move to a sibling with runway.',
     missing: [line],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -4989,8 +5076,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   m = await mount('/pools');
 }
 {
-  // A threshold the API stored finer than a percent reopens as stored and survives a save of another field, and a
-  // margin over pace under 50 % saves whether stored or typed.
+  // A ceiling the API stored finer than a percent reopens as stored and survives a save of another field, and one
+  // typed out of its range holds the save until a value inside it is typed back.
   const story = (await api.listPools()).find((p) => p.id === 'all');
   const written = { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
   const openAll = async () => {
@@ -4998,99 +5085,70 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await m.settle(300);
     return [...m.container.querySelectorAll('dialog[open]')].pop();
   };
-  const percent = (dlg) => dlg?.querySelector('input[aria-label="Shed ahead of pace (%)"]');
+  const ceiling = (dlg) => dlg?.querySelector('input[aria-label="Window ceiling (%)"]');
   const footButton = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
-  // An edit of another field, so the threshold goes out as the dialog read it from the stored pool.
+  // An edit of another field, so the ceiling goes out as the dialog read it from the stored pool.
   const disable = async (dlg) => {
     const status = [...(group(dlg, 'Identity')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Status')?.querySelector('select');
     if (status) Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(status, 'disabled');
     status?.dispatchEvent(new window.Event('change', { bubbles: true }));
     await m.settle(120);
   };
-  const savedMigrate = async (dlg) => {
+  const savedCeiling = async (dlg) => {
     const spy = countCalls('updatePool');
     footButton(dlg, 'Save pool')?.click();
     await m.settle(700);
     spy.restore();
-    return spy.calls[0]?.[1]?.shedAheadOfPace;
+    return spy.calls[0]?.[1]?.windowCeiling;
   };
 
   // The page reads the pools once at mount, so a pool written through the API reaches the card after a remount.
-  await api.updatePool('all', { ...written, shedAheadOfPace: 0.875 });
+  await api.updatePool('all', { ...written, windowCeiling: 0.875 });
   m.unmount();
   m = await mount('/pools');
   let dlg = await openAll();
-  const fine = percent(dlg)?.value;
+  const fine = ceiling(dlg)?.value;
   await disable(dlg);
-  const fineSaved = await savedMigrate(dlg);
+  const fineSaved = await savedCeiling(dlg);
   results.push({
-    name: '/pools a stored migrate of 0.875 reopens as 87.5 and saves unchanged after another edit',
+    name: '/pools a stored ceiling of 0.875 reopens as 87.5 and saves unchanged after another edit',
     ok: fine === '87.5' && fineSaved === 0.875 && !m.container.querySelector('dialog[open]'),
     missing: [String(fine), String(fineSaved), m.container.querySelector('dialog[open] .dialog__status')?.textContent ?? 'closed'],
   });
 
   // Four decimals, which the two-decimal percent divided by 100 would send back one ulp off.
-  await api.updatePool('all', { ...written, shedAheadOfPace: 0.8333 });
+  await api.updatePool('all', { ...written, windowCeiling: 0.8333 });
   m.unmount();
   m = await mount('/pools');
   dlg = await openAll();
-  const finer = percent(dlg)?.value;
+  const finer = ceiling(dlg)?.value;
   await disable(dlg);
-  const finerSaved = await savedMigrate(dlg);
+  const finerSaved = await savedCeiling(dlg);
   results.push({
-    name: '/pools a stored migrate of 0.8333 reopens as 83.33 and saves as stored after another edit',
+    name: '/pools a stored ceiling of 0.8333 reopens as 83.33 and saves as stored after another edit',
     ok: finer === '83.33' && finerSaved === 0.8333 && !m.container.querySelector('dialog[open]'),
     missing: [String(finer), String(finerSaved), m.container.querySelector('dialog[open] .dialog__status')?.textContent ?? 'closed'],
   });
 
-  await api.updatePool('all', { ...written, shedAheadOfPace: 0.3 });
-  m.unmount();
-  m = await mount('/pools');
-  dlg = await openAll();
-  const low = percent(dlg)?.value;
-  await disable(dlg);
-  const lowSaved = await savedMigrate(dlg);
-  const closed = !m.container.querySelector('dialog[open]');
-  dlg = await openAll();
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  // A value the field does not already show first, so the second keystroke changes the form too.
-  for (const typed of ['31', '30']) {
-    if (percent(dlg)) setter.call(percent(dlg), typed);
-    percent(dlg)?.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(120);
-  }
-  const typed = [footButton(dlg, 'Save pool')?.disabled, dlg?.querySelector('.dialog__status')?.textContent ?? '', percent(dlg)?.getAttribute('aria-invalid')];
-  const typedSaved = await savedMigrate(dlg);
-  results.push({
-    name: '/pools a stored migrate of 0.3 saves untouched and saves again once typed to 30',
-    ok: low === '30' && lowSaved === 0.3 && closed && typed[0] === false && typed[1] === 'Every group saves together.' && typed[2] !== 'true' && typedSaved === 0.3 && !m.container.querySelector('dialog[open]'),
-    missing: [String(low), String(lowSaved), closed ? 'closed' : 'open', ...typed.map(String), String(typedSaved)],
-  });
-
-  // A pool storing no margin opens with the field at the proposed lead, holds the save once the field is cleared, and
-  // saves 20 % as 0.2.
   await api.updatePool('all', written);
   m.unmount();
   m = await mount('/pools');
   dlg = await openAll();
   rail(dlg, 'utilization')?.click();
   await m.settle(120);
-  dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]')?.click();
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  if (ceiling(dlg)) setter.call(ceiling(dlg), '40');
+  ceiling(dlg)?.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(120);
-  const proposed = percent(dlg)?.value;
-  if (percent(dlg)) setter.call(percent(dlg), '');
-  percent(dlg)?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  const low = [footButton(dlg, 'Save pool')?.disabled, dlg?.querySelector('.dialog__status')?.textContent ?? '', ceiling(dlg)?.getAttribute('aria-invalid')];
+  if (ceiling(dlg)) setter.call(ceiling(dlg), '80');
+  ceiling(dlg)?.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(120);
-  const hint = (group(dlg, 'Utilization thresholds')?.textContent ?? '').includes('Read on the 5-hour and the 7-day window.');
-  const empty = [percent(dlg)?.value, footButton(dlg, 'Save pool')?.disabled, dlg?.querySelector('.dialog__status')?.textContent ?? ''];
-  if (percent(dlg)) setter.call(percent(dlg), '20');
-  percent(dlg)?.dispatchEvent(new window.Event('input', { bubbles: true }));
-  await m.settle(120);
-  const fifth = await savedMigrate(dlg);
+  const eighty = await savedCeiling(dlg);
   results.push({
-    name: '/pools a cleared margin holds the save, and 20 % typed back saves as 0.2',
-    ok: proposed === SHED_DEFAULT_PERCENT && hint && empty[0] === '' && empty[1] === true && empty[2] === 'Save is held: Shed ahead of pace needs a value from 0 to 100.Go to Utilization thresholds' && fifth === 0.2 && !m.container.querySelector('dialog[open]'),
-    missing: [String(proposed), hint ? 'hint' : 'no hint', ...empty.map(String), String(fifth)],
+    name: '/pools a ceiling typed under 50 holds the save, and 80 % typed back saves as 0.8',
+    ok: low[0] === true && low[1] === 'Save is held: Window ceiling (%) is from 50 to 100.Go to Window ceiling' && low[2] === 'true' && eighty === 0.8 && !m.container.querySelector('dialog[open]'),
+    missing: [...low.map(String), String(eighty)],
   });
   // The story's pool back, so the checks below read the pool the fixture holds.
   await api.updatePool('all', written);
@@ -5193,71 +5251,6 @@ m.unmount();
   await m.settle(200);
   api.listAccounts = listAccounts;
   await api.updatePool('all', written);
-}
-m.unmount();
-{
-  // The dialog's settings read starts when the page mounts, so the hold goes in before the mount, and the preview
-  // calls its line builder only with migrate on, which `all` stores off.
-  const { getSettings } = api;
-  let release = () => {};
-  const held = new Promise((resolve) => {
-    release = resolve;
-  });
-  api.getSettings = async (...args) => {
-    await held;
-    return getSettings.apply(api, args);
-  };
-  m = await mount('/pools');
-  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
-  await m.settle(300);
-  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]')?.click();
-  await m.settle(120);
-  // The dialog checks run with all's margin cleared, so the story's 90 is typed back: under it no member is hot, and
-  // nightly's 5-hour window, about 71 points ahead at the mock's clock (the figure drifts a point every three minutes
-  // of the run on the moving clock), is the closest.
-  const percent = dlg?.querySelector('input[aria-label="Shed ahead of pace (%)"]');
-  if (percent) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(percent, '90');
-  percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
-  await m.settle(120);
-  rail(dlg, 'shedding')?.click();
-  await m.settle(120);
-  const line = () => group(dlg, 'Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
-  const loading = line();
-  release();
-  await m.settle(300);
-  const landed = line();
-  api.getSettings = getSettings;
-  results.push({
-    name: '/pools the preview says the cost model is loading while the settings read is held',
-    ok: loading === 'The cost model is loading, and window-share pins are counted once it is read.' && !loading.includes('Would move') && /^No member is ahead of pace by the margin: the closest is nightly, \d+ points ahead\.$/.test(landed),
-    missing: [loading, landed],
-  });
-  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
-  await m.settle(200);
-}
-m.unmount();
-{
-  // The shell's read fails beside the dialog's and raises its toast, which this mount leaves to its dwell.
-  const outage = failCalls({ getSettings: '/admin/settings' }, 'the settings are unavailable');
-  m = await mount('/pools');
-  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
-  await m.settle(300);
-  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]')?.click();
-  await m.settle(120);
-  rail(dlg, 'shedding')?.click();
-  await m.settle(120);
-  const line = group(dlg, 'Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
-  outage.recover();
-  outage.restore();
-  results.push({
-    name: '/pools the preview says the cost model did not load after a failed settings read',
-    ok: line === 'The cost model did not load, so window-share pins cannot be counted.' && !line.includes('Would move'),
-    missing: [line],
-  });
-  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
-  await m.settle(200);
 }
 m.unmount();
 localStorage.removeItem('phoebis.expertView');
@@ -5679,8 +5672,8 @@ localStorage.removeItem('phoebis.expertView');
   const headingsOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])].map((h) => h.textContent?.trim());
   const foot = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
   const PARENTS = ['Pool', 'Routing', 'Load', 'Caching', 'Visibility'];
-  const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Pinning', 'Utilization thresholds', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture'];
-  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
+  const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Pinning', 'Window ceiling', 'Load shedding', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture'];
+  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Window ceiling', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
   const KEEPALIVE = ['Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Return rate by idle age'];
   // Each group's labels and line with the mode off, the Interfaces' plain fields; the line is null where none draws.
   const PLAIN_FIELDS = {
@@ -5690,7 +5683,8 @@ localStorage.removeItem('phoebis.expertView');
     Models: [['Model rules'], null],
     Selection: [['Strategy', 'Prioritize subscription accounts'], null],
     Pinning: [['Session affinity'], '1 more setting in the '],
-    'Utilization thresholds': [['Shed ahead of pace', 'Lead over pace (%)', 'Member utilization'], '1 more setting in the '],
+    'Window ceiling': [['Window ceiling (%)', 'Member utilization'], null],
+    'Load shedding': [['Load shedding'], '7 more settings in the '],
     'Overage and plan end': [['Overage policy'], '2 more settings in the '],
     'Cache TTL': [['Set the cache TTL for this pool', 'Write cost'], '3 more settings in the '],
     Keepalive: [KEEPALIVE, null],
@@ -5701,9 +5695,8 @@ localStorage.removeItem('phoebis.expertView');
     'Auto mode': ['Support server-side auto mode'],
     Placement: ['Subagent placement', 'Session placement', 'Minimum shared prefix, tokens'],
     Pinning: ['Session affinity', 'Pin sessions'],
-    'Utilization thresholds': ['Shed ahead of pace', 'Lead over pace (%)', 'Select below utilization', 'Utilization (%)', 'Member utilization'],
-    'Load shedding': ['Preset', 'Share (%)', 'Burn window (s)', 'Source dwell (s)', 'Migrate when spent', 'Warm sessions', 'Preview'],
-    Failover: ['Preset', 'In flight', 'Retry in place (s)', 'Pace floor (%)'],
+    'Load shedding': ['Load shedding', 'Preset', 'Shed cap (%)', 'Burn average (s)', 'Shed dwell (s)', 'Migrate when spent', 'Warm sessions', 'Preview'],
+    Failover: ['Preset', 'In flight', 'Retry in place (s)'],
     'Overage and plan end': ['Overage policy', 'Overage grace (min)', 'Wind down (min)'],
     'Cache TTL': ['Set the cache TTL for this pool', 'Add a cache marker to a request without one', 'Write cost', 'Plan writes', 'Metered writes'],
     'Cache diagnostics': ['Cache diagnostics'],
@@ -5722,8 +5715,8 @@ localStorage.removeItem('phoebis.expertView');
   let dlg = await open('all');
   const plainRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
   results.push({
-    name: '/pools with the mode off the rail and the body hold eleven groups under the five parents, the five expert-only groups gone',
-    ok: JSON.stringify(plainRail) === JSON.stringify([PARENTS, PLAIN_GROUPS, PLAIN_GROUPS]) && (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 16,
+    name: '/pools with the mode off the rail and the body hold twelve groups under the five parents, the four expert-only groups gone',
+    ok: JSON.stringify(plainRail) === JSON.stringify([PARENTS, PLAIN_GROUPS, PLAIN_GROUPS]) && (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 17,
     missing: plainRail.map((x) => JSON.stringify(x)),
   });
   const plainRead = Object.fromEntries(PLAIN_GROUPS.map((label) => [label, [labelsIn(group(dlg, label)), lineIn(group(dlg, label))]]));
@@ -5734,14 +5727,14 @@ localStorage.removeItem('phoebis.expertView');
       .filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(PLAIN_FIELDS[label]))
       .map(([label, read]) => `${label}: ${JSON.stringify(read)}`),
   });
-  const memberHint = () => [...(group(dlg, 'Utilization thresholds')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Member utilization')?.querySelector('.field__hint')?.textContent ?? 'no hint';
+  const memberHint = () => [...(group(dlg, 'Window ceiling')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Member utilization')?.querySelector('.field__hint')?.textContent ?? 'no hint';
   const plainHint = memberHint();
   results.push({
-    name: '/pools with the mode off the member utilization hint names no handle, since the plain view draws none',
-    ok: plainHint !== 'no hint' && !plainHint.includes('handle') && !plainHint.includes('arrow keys'),
+    name: "/pools with the mode off the member utilization hint names the ceiling's handle, since every view draws it",
+    ok: plainHint.includes("the ceiling's handle") && plainHint.includes('arrow keys') && group(dlg, 'Window ceiling')?.querySelector('[role="slider"][aria-label="Window ceiling"]') != null,
     missing: [plainHint],
   });
-  const drawnExpert = ['input[aria-label="Select below utilization (%)"]', 'select[aria-label="Pin sessions"]', '[aria-label="Load shedding preset"]', '[aria-label="Failover preset"]', '[data-rule-set]', 'button[role="switch"][aria-label="Add a cache marker to a request without one"]', 'button[role="switch"][aria-label="Cache diagnostics"]', '[role="slider"][aria-label="Select-below threshold"]'].filter((s) => dlg?.querySelector(s) !== null);
+  const drawnExpert = ['select[aria-label="Pin sessions"]', '[aria-label="Load shedding preset"]', '[aria-label="Failover preset"]', '[data-rule-set]', 'button[role="switch"][aria-label="Add a cache marker to a request without one"]', 'button[role="switch"][aria-label="Cache diagnostics"]', 'button[role="switch"][aria-label="Migrate when spent"]'].filter((s) => dlg?.querySelector(s) !== null);
   results.push({ name: '/pools with the mode off no expert control is drawn', ok: drawnExpert.length === 0, missing: drawnExpert });
   group(dlg, 'Pinning')?.querySelector('.dialog-group__more button')?.click();
   await p.settle(150);
@@ -5760,46 +5753,10 @@ localStorage.removeItem('phoebis.expertView');
   foot(dlg, 'Cancel')?.click();
   await p.settle(200);
 
-  // Set in the expert view: a select-below, a failover floor and a plan override per model; then saved in the plain
-  // view, where none of the three is drawn.
+  // A plan override per model set in the expert view, then the pool saved in the plain view, where the override is not
+  // drawn and the ceiling's handle is.
   const story = (await api.listPools()).find((x) => x.id === 'all');
   dlg = await open('all');
-  rail(dlg, 'utilization')?.click();
-  await p.settle(120);
-  dlg?.querySelector('button[role="switch"][aria-label="Select below utilization"]')?.click();
-  await p.settle(120);
-  const selectBelow = dlg?.querySelector('input[aria-label="Select below utilization (%)"]');
-  if (selectBelow) {
-    setter.call(selectBelow, '70');
-    selectBelow.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await p.settle(120);
-  }
-  {
-    // The handle steps a percent on an arrow key and ten on a page key, and the steps back leave the 70 the save
-    // below reads.
-    const handle = () => dlg?.querySelector('[role="slider"][aria-label="Select-below threshold"]');
-    const percent = () => dlg?.querySelector('input[aria-label="Select below utilization (%)"]')?.value ?? 'absent';
-    const steps = [];
-    for (const key of ['ArrowUp', 'PageDown', 'PageUp', 'ArrowDown']) {
-      handle()?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key }));
-      await p.settle(60);
-      steps.push(percent());
-    }
-    const hint = memberHint();
-    results.push({
-      name: '/pools in the expert view the select-below handle steps by the arrow and page keys, and the hint names it',
-      ok: JSON.stringify(steps) === JSON.stringify(['71', '61', '71', '70']) && hint.includes('select-below') && hint.includes('arrow keys'),
-      missing: [JSON.stringify(steps), hint],
-    });
-  }
-  [...(dlg?.querySelectorAll('[aria-label="Failover preset"] .pill') ?? [])].find((b) => b.textContent?.trim() === 'Custom')?.click();
-  await p.settle(120);
-  const floor = [...(group(dlg, 'Failover')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Pace floor (%)')?.querySelector('input');
-  if (floor) {
-    setter.call(floor, '12');
-    floor.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await p.settle(120);
-  }
   const picker = dlg?.querySelector('[data-rule-set="plan"] select[aria-label^="Model to add"]');
   const added = [...(picker?.querySelectorAll('option') ?? [])].map((o) => o.value).find(Boolean);
   if (picker && added) {
@@ -5812,16 +5769,30 @@ localStorage.removeItem('phoebis.expertView');
   foot(dlg, 'Save pool')?.click();
   await p.settle(700);
   const stored = (await api.listPools()).find((x) => x.id === 'all');
-  const kept = (pool) => [pool?.selectBelowUtilization, pool?.paceFloor, pool?.cacheTtl.plan.models.map((x) => x.model)];
+  const kept = (pool) => pool?.cacheTtl.plan.models.map((x) => x.model);
   const typed = kept(stored);
   await flip();
   dlg = await open('all');
-  const hidden = [
-    dlg?.querySelector('input[aria-label="Select below utilization (%)"]') ?? null,
-    dlg?.querySelector('[role="slider"][aria-label="Select-below threshold"]') ?? null,
-    group(dlg, 'Failover') ?? null,
-    dlg?.querySelector('[data-rule-set="plan"]') ?? null,
-  ];
+  rail(dlg, 'utilization')?.click();
+  await p.settle(120);
+  {
+    // The handle steps a percent on an arrow key and ten on a page key, and the steps back leave the 75 the save
+    // below reads.
+    const handle = () => dlg?.querySelector('[role="slider"][aria-label="Window ceiling"]');
+    const ceiling = () => dlg?.querySelector('input[aria-label="Window ceiling (%)"]')?.value ?? 'absent';
+    const steps = [];
+    for (const key of ['ArrowUp', 'PageDown', 'PageUp', 'ArrowDown']) {
+      handle()?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key }));
+      await p.settle(60);
+      steps.push(ceiling());
+    }
+    results.push({
+      name: "/pools with the mode off the ceiling's handle steps by the arrow and page keys",
+      ok: localStorage.getItem('phoebis.expertView') === 'off' && JSON.stringify(steps) === JSON.stringify(['76', '66', '76', '75']),
+      missing: [String(localStorage.getItem('phoebis.expertView')), JSON.stringify(steps)],
+    });
+  }
+  const hidden = dlg?.querySelector('[data-rule-set="plan"]') ?? null;
   const updatePool = api.updatePool;
   const sent = [];
   api.updatePool = (id, input) => {
@@ -5836,62 +5807,73 @@ localStorage.removeItem('phoebis.expertView');
   }
   const reread = (await api.listPools()).find((x) => x.id === 'all');
   results.push({
-    name: '/pools a pool saved in the plain view keeps the select-below, the pace floor and the plan overrides the expert view set, none of them drawn',
+    name: '/pools a pool saved in the plain view keeps the plan overrides the expert view set, none of them drawn',
     ok:
-      JSON.stringify(typed) === JSON.stringify([0.7, 0.12, ['claude-haiku-4-5-20251001', added]]) &&
-      hidden.every((x) => x === null) &&
+      JSON.stringify(typed) === JSON.stringify(['claude-haiku-4-5-20251001', added]) &&
+      hidden === null &&
       sent.length === 1 &&
       JSON.stringify(kept(sent[0])) === JSON.stringify(typed) &&
       JSON.stringify(kept(reread)) === JSON.stringify(typed) &&
       !p.container.querySelector('dialog[open]'),
-    missing: [JSON.stringify(typed), ...hidden.map((x) => (x === null ? 'hidden' : `drawn: ${x.tagName}`)), `${sent.length} saves`, JSON.stringify(kept(sent[0])), JSON.stringify(kept(reread))],
+    missing: [JSON.stringify(typed), hidden === null ? 'hidden' : 'drawn', `${sent.length} saves`, JSON.stringify(kept(sent[0])), JSON.stringify(kept(reread))],
   });
   await api.updatePool('all', { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
   p.unmount();
 
-  // A select-below past 100 typed in the expert view, then the mode turned off: the refused field stays drawn and the
+  // A shed cap past 100 typed in the expert view, then the mode turned off: the refused field stays drawn and the
   // footer's Go to reaches it. The field is read hidden first, so the check fails where nothing hides it.
   localStorage.removeItem('phoebis.expertView');
   p = await mount('/pools');
   dlg = await open('all');
-  rail(dlg, 'utilization')?.click();
+  rail(dlg, 'shedding')?.click();
   await p.settle(120);
-  const util = () => group(dlg, 'Utilization thresholds');
-  const percent = () => dlg?.querySelector('input[aria-label="Select below utilization (%)"]');
-  const before = [percent() ? 'drawn' : 'hidden', lineIn(util())];
-  util()?.querySelector('.dialog-group__more button')?.click();
+  const shed = () => group(dlg, 'Load shedding');
+  const cap = () => [...(shed()?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Shed cap (%)')?.querySelector('input');
+  const before = [cap() ? 'drawn' : 'hidden', lineIn(shed())];
+  shed()?.querySelector('.dialog-group__more button')?.click();
   await p.settle(150);
-  dlg?.querySelector('button[role="switch"][aria-label="Select below utilization"]')?.click();
+  [...(dlg?.querySelectorAll('[aria-label="Load shedding preset"] .pill') ?? [])].find((b) => b.textContent?.trim() === 'Custom')?.click();
   await p.settle(120);
-  if (percent()) {
-    setter.call(percent(), '120');
-    percent().dispatchEvent(new window.Event('input', { bubbles: true }));
+  if (cap()) {
+    setter.call(cap(), '120');
+    cap().dispatchEvent(new window.Event('input', { bubbles: true }));
     await p.settle(120);
   }
   await flip();
   const status = () => dlg?.querySelector('.dialog__status');
-  const refused = [localStorage.getItem('phoebis.expertView'), percent()?.getAttribute('aria-invalid') ?? 'absent', status()?.textContent ?? '', !!rail(dlg, 'utilization')?.querySelector('.dialog-rail__dot'), lineIn(util())];
+  const refused = [localStorage.getItem('phoebis.expertView'), cap()?.getAttribute('aria-invalid') ?? 'absent', status()?.textContent ?? '', !!rail(dlg, 'shedding')?.querySelector('.dialog-rail__dot'), lineIn(shed())];
   rail(dlg, 'identity')?.click();
   await p.settle(120);
-  [...(status()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Go to Utilization thresholds')?.click();
+  [...(status()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Go to Load shedding')?.click();
   await p.settle(120);
   results.push({
     name: '/pools a refusal on a field the plain view hides shows the field, and the footer names it and reaches it with the mode still off',
     ok:
-      JSON.stringify(before) === '["hidden","1 more setting in the "]' &&
-      JSON.stringify(refused) === JSON.stringify(['off', 'true', 'Save is held: Select below utilization is from 0 to 100.Go to Utilization thresholds', true, null]) &&
-      util()?.hidden === false &&
-      !!percent() &&
-      document.activeElement === percent() &&
-      util()?.querySelector('[role="slider"][aria-label="Select-below threshold"]') != null &&
+      JSON.stringify(before) === '["hidden","7 more settings in the "]' &&
+      JSON.stringify(refused) === JSON.stringify(['off', 'true', 'Save is held: Shed cap (%) is from 10 to 100.Go to Load shedding', true, '6 more settings in the ']) &&
+      shed()?.hidden === false &&
+      !!cap() &&
+      document.activeElement === cap() &&
       localStorage.getItem('phoebis.expertView') === 'off',
-    missing: [JSON.stringify(before), JSON.stringify(refused), document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused', util()?.querySelector('[role="slider"][aria-label="Select-below threshold"]') ? 'handle drawn' : 'no select-below handle'],
+    missing: [JSON.stringify(before), JSON.stringify(refused), document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'],
   });
   {
-    const handle = util()?.querySelector('[role="slider"][aria-label="Select-below threshold"]');
+    // The cap back inside its bound, then a ceiling past 100 on the plain field: its handle stays on the track.
+    if (cap()) {
+      setter.call(cap(), '50');
+      cap().dispatchEvent(new window.Event('input', { bubbles: true }));
+      await p.settle(120);
+    }
+    const ceiling = dlg?.querySelector('input[aria-label="Window ceiling (%)"]');
+    if (ceiling) {
+      setter.call(ceiling, '120');
+      ceiling.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await p.settle(120);
+    }
+    const handle = group(dlg, 'Window ceiling')?.querySelector('[role="slider"][aria-label="Window ceiling"]');
     const drawn = [handle?.getAttribute('aria-valuenow'), handle?.getAttribute('aria-valuemax'), handle?.style.left, handle?.getAttribute('aria-valuetext')];
     results.push({
-      name: "/pools a refused select-below past the track draws its handle at the track's end, the field's value in its text",
+      name: "/pools a refused ceiling past the track draws its handle at the track's end, the field's value in its text",
       ok: JSON.stringify(drawn) === JSON.stringify(['100', '100', '100%', '120%']),
       missing: drawn.map(String),
     });
@@ -5899,17 +5881,25 @@ localStorage.removeItem('phoebis.expertView');
   foot(dlg, 'Cancel')?.click();
   await p.settle(200);
 
-  // The card's badge for an expert-only group turns the mode on before it opens the dialog there.
+  // The shedding badge opens Load shedding with the mode off, since the group draws its switch in the plain view, while
+  // the badge for an expert-only group turns the mode on before it opens the dialog there.
   localStorage.removeItem('phoebis.expertView');
   p.unmount();
   p = await mount('/pools');
-  [...p.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'jobs')?.querySelector('.pool__features a[href="/pools?edit=jobs&group=shedding"]')?.click();
+  const badgeOf = (pool, groupId) => [...p.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === pool)?.querySelector(`.pool__features a[href="/pools?edit=${pool}&group=${groupId}"]`);
+  badgeOf('jobs', 'shedding')?.click();
+  await p.settle(300);
+  dlg = p.container.querySelector('dialog[open]');
+  const plainShed = [localStorage.getItem('phoebis.expertView') ?? 'unset', group(dlg, 'Load shedding')?.hidden, rail(dlg, 'shedding')?.getAttribute('aria-current'), !!group(dlg, 'Load shedding')?.querySelector('button[role="switch"][aria-label="Load shedding"]')];
+  foot(dlg, 'Cancel')?.click();
+  await p.settle(200);
+  badgeOf('work', 'autoMode')?.click();
   await p.settle(300);
   dlg = p.container.querySelector('dialog[open]');
   results.push({
-    name: "/pools the load shedding badge turns the mode on and opens the dialog on its group",
-    ok: localStorage.getItem('phoebis.expertView') === 'on' && group(dlg, 'Load shedding')?.hidden === false && rail(dlg, 'shedding')?.getAttribute('aria-current') === 'true',
-    missing: [localStorage.getItem('phoebis.expertView') ?? 'unset', dlg?.querySelector('section.dialog-group:not([hidden])')?.getAttribute('aria-label') ?? 'no group shown'],
+    name: "/pools the shedding badge opens its group with the mode off, and the auto mode badge turns the mode on and opens the dialog on its group",
+    ok: JSON.stringify(plainShed) === JSON.stringify(['unset', false, 'true', true]) && localStorage.getItem('phoebis.expertView') === 'on' && group(dlg, 'Auto mode')?.hidden === false && rail(dlg, 'autoMode')?.getAttribute('aria-current') === 'true',
+    missing: [JSON.stringify(plainShed), localStorage.getItem('phoebis.expertView') ?? 'unset', dlg?.querySelector('section.dialog-group:not([hidden])')?.getAttribute('aria-label') ?? 'no group shown'],
   });
   p.unmount();
 
@@ -5964,15 +5954,6 @@ localStorage.removeItem('phoebis.expertView');
   await k.settle(200);
   k.unmount();
   localStorage.removeItem('phoebis.expertView');
-}
-
-{
-  // The dialog checks drove the shedding controls from a pool that sheds nothing; the story's margin comes back, so
-  // every later view reads pool `all` as the routing log's records do.
-  const all = (await api.listPools()).find((p) => p.id === 'all');
-  await api.updatePool('all', { ...all, members: all.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })), shedAheadOfPace: 0.9 });
-  const restored = (await api.listPools()).find((p) => p.id === 'all');
-  results.push({ name: "fixture: pool all sheds at 90 % again once the pool dialog checks are done", ok: restored?.shedAheadOfPace === 0.9, missing: [String(restored?.shedAheadOfPace)] });
 }
 
 // As on the pools, the key dialog checks below read the expert fields too.

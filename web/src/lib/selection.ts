@@ -15,11 +15,11 @@ export type Ineligible = Exclude<MemberEligibility, 'eligible'>;
 export const INELIGIBLE_LABEL: Record<Ineligible, string> = { budget: 'at budget', cooldown: 'in cooldown', overage: 'in overage', unavailable: 'not available' };
 
 /**
- * Why an eligible member takes a fresh session only once no other member can: under Pace its remaining allowance
- * is at or below the pool's floor, or, under every strategy, its subscription end is inside the pool's wind-down.
+ * Why an eligible member takes a fresh session only once no other member can: its subscription end is inside the
+ * pool's wind-down, under every strategy.
  */
-export type LastResort = 'floor' | 'winding_down';
-export const LAST_RESORT_LABEL: Record<LastResort, string> = { floor: 'at the Pace floor', winding_down: 'winding down' };
+export type LastResort = 'winding_down';
+export const LAST_RESORT_LABEL: Record<LastResort, string> = { winding_down: 'winding down' };
 
 /**
  * `deferred`: eligible but in overage under prefer_plan, so ranked after the plan-funded members of its tier. `end`:
@@ -40,9 +40,6 @@ export interface Tier {
   placements: Placement[];
   priority: number;
 }
-
-const HOUR_MS = 3_600_000;
-const WEEK_HOURS = 168;
 
 /** A Standing badge's words and the sentence its title carries. */
 export interface StandingBadge {
@@ -74,36 +71,17 @@ export function windingDownBadge(end: number, now: number): StandingBadge {
 }
 
 /**
- * Remaining allowance and the reset that refills it: a subscription account reads the shared 7-day window, an
- * API-key account the worst window its row reports, with no reset. A window whose reset has passed, or none at
- * all, reads as untouched. The router ranks an API-key account by its per-model buckets, which the account row
- * does not carry, so for one this order is a preview; the request drawer's trace shows the order the router took.
+ * The router's Pace score as the pools route serves it, whatever the member's kind: the spare rate for a subscription
+ * member, the remaining worst bucket for an API-key member. A member the router has not read carries none and ranks
+ * as untouched, ahead of every scored member, as an unsampled account ranks in the router.
  */
-function remainingOf(account: Account, now: number): { remaining: number; reset: number | null } {
-  const live = account.windows.filter((w) => w.resetsAt === null || Date.parse(w.resetsAt) > now);
-  if (account.kind === 'api_key') return { remaining: Math.max(1 - Math.max(0, ...live.map((w) => w.utilization)), 0), reset: null };
-  const w = live.find((x) => x.id === '7d');
-  if (!w) return { remaining: 1, reset: null };
-  return { remaining: Math.max(1 - w.utilization, 0), reset: w.resetsAt === null ? null : Date.parse(w.resetsAt) };
+function paceScore(member: PoolMember | undefined): number {
+  return member?.paceScore ?? Number.POSITIVE_INFINITY;
 }
 
-/**
- * Remaining allowance over the hours to the earlier of the window's reset and the account's end, so an account that
- * runs out sooner is spent first; an unsampled account counts as untouched, the full week's worth of it. An
- * API-key account scores by its remaining allowance alone, since its buckets refill within a minute.
- */
-function paceScore(account: Account, now: number): number {
-  const { remaining, reset } = remainingOf(account, now);
-  if (account.kind === 'api_key') return remaining;
-  const end = endOf(account, now);
-  const deadline = reset === null ? end : end === null ? reset : Math.min(reset, end);
-  const hours = deadline === null ? WEEK_HOURS : Math.max((deadline - now) / HOUR_MS, 1 / 60);
-  return remaining / hours;
-}
-
-/** The sort key the strategy ranks an eligible account by; lower first. `priority` scores nothing. */
-function keyOf(account: Account, strategy: PoolStrategy, now: number): number {
-  if (strategy === 'pace') return -paceScore(account, now);
+/** The sort key the strategy ranks an eligible member by, lower first. `priority` scores nothing. */
+function keyOf(member: PoolMember | undefined, strategy: PoolStrategy): number {
+  if (strategy === 'pace') return -paceScore(member);
   return 0;
 }
 
@@ -160,7 +138,8 @@ export function selectionOrder(pool: Pool, accounts: Account[], now: number = Da
   // The group the router settles in is the best one any eligible member of the pool reaches.
   const settled = Math.min(...resort.values());
   const orderOf = (p: Placement) => resort.get(p.account.id) ?? 0;
-  const strategy = pool.strategy;
+  const memberOf = new Map(pool.members.map((m) => [m.accountId, m]));
+  const keyFor = (p: Placement) => keyOf(memberOf.get(p.account.id), pool.strategy);
   let nextFound = false;
   return built.map(({ group, placements, priority }) => {
     // The last-resort group leads the sort, since the router narrows it away before it picks a tier. Inside a
@@ -172,13 +151,13 @@ export function selectionOrder(pool: Pool, accounts: Account[], now: number = Da
         (a, b) =>
           orderOf(a) - orderOf(b) ||
           Number(a.deferred) - Number(b.deferred) ||
-          keyOf(a.account, strategy, now) - keyOf(b.account, strategy, now) ||
+          keyFor(a) - keyFor(b) ||
           a.account.label.localeCompare(b.account.label),
       );
     let rank = 0;
     let previous: { deferred: boolean; order: number; score: number } | null = null;
     for (const p of eligible) {
-      const score = keyOf(p.account, strategy, now);
+      const score = keyFor(p);
       if (!previous || previous.order !== orderOf(p) || previous.deferred !== p.deferred || previous.score !== score) rank += 1;
       // Round robin and priority both score every member 0, so the rank only moves across the last-resort group
       // boundary and the deferred one: each member of a subtier is equally the next, and the router rotates the
