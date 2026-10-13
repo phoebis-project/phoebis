@@ -29,10 +29,10 @@ use crate::select::{
     SelectResult,
 };
 use crate::state::{
-    burn_folded, is_plan_window, mark_holds, AccountTicket, BurnUnit, CreditsState, EvidenceSource,
-    InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer,
-    StateWrite, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
-    SEVEN_DAY_FABLE,
+    burn_average_ms, burn_folded, is_plan_window, mark_holds, shed_dwell_ms, AccountTicket,
+    BurnUnit, CreditsState, EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef,
+    PinUsage, RateTable, RoutingState, SharePricer, StateWrite, UtilizationSample, WindowReading,
+    WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use crate::{resolve, term, window_for, KeyRefusal, Presented, RegistrySnapshot};
 
@@ -136,6 +136,18 @@ pub enum RouterEvent {
         agent_id: String,
         model: String,
         account_id: String,
+        at: i64,
+    },
+    /// A reservation left the account's prediction without the usage that would have replaced it: the request
+    /// ended without a committed usage (`cause` the relay's word for how), or the purge gave up on it (`timeout`).
+    /// `shares` is the rewrite the booking carried per plan window, `age_ms` how long it stood.
+    ReservationExpired {
+        account_id: String,
+        request_id: String,
+        attempt: u32,
+        cause: &'static str,
+        shares: BTreeMap<String, f64>,
+        age_ms: i64,
         at: i64,
     },
     /// One decision as the engine made it. The ledger stores the summary as the list row and the record as the
@@ -404,6 +416,16 @@ pub enum Report {
         state: CreditsState,
         incarnation: u64,
     },
+    /// A request that ended without a committed usage, sent once by the relay's end guard, which belongs to the
+    /// request across its wire attempts: the booking under `request_id` leaves the destination's prediction, and a
+    /// request that holds none changes nothing. `attempt` is the wire attempt that ended, a fact for the event.
+    /// `cause` is `canceled`, `exhausted`, `refused` or `transport_error`.
+    Ended {
+        request_id: String,
+        attempt: u32,
+        at: i64,
+        cause: &'static str,
+    },
     /// The ledger's latest read of a pool member's spend, replacing every row it names.
     MemberSpend(Vec<MemberSpend>),
     Overage {
@@ -455,6 +477,9 @@ pub enum Report {
         usage: PinUsage,
         /// The answer reported `usage.speed` `fast`.
         fast: bool,
+        /// The request whose booking the usage releases before it charges, and the wire attempt that answered.
+        request_id: String,
+        attempt: u32,
     },
 }
 
@@ -466,6 +491,7 @@ impl Report {
         "affinity",
         "cooldown",
         "credits",
+        "ended",
         "member_spend",
         "overage",
         "pin_invalidated",
@@ -484,6 +510,7 @@ impl Report {
             Report::Affinity(_) => "affinity",
             Report::Cooldown { .. } => "cooldown",
             Report::Credits { .. } => "credits",
+            Report::Ended { .. } => "ended",
             Report::MemberSpend(_) => "member_spend",
             Report::Overage { .. } => "overage",
             Report::PinInvalidated { .. } => "pin_invalidated",
@@ -588,6 +615,7 @@ impl Report {
             }),
             Report::Affinity(_)
             | Report::Cooldown { .. }
+            | Report::Ended { .. }
             | Report::PinInvalidated { .. }
             | Report::PinReleased { .. }
             | Report::PinRenewed { .. }
@@ -825,9 +853,9 @@ impl LoadCounts {
     fn of(load: &RoutingLoad, snapshot: &RegistrySnapshot, now: i64) -> LoadCounts {
         // A row of a pool the registry no longer holds has no dwell left to be read within.
         let within_dwell = |row: &ShedRoundRow| {
-            snapshot.pool(&row.pool_id).is_some_and(|pool| {
-                now - row.round_at < seconds_ms(pool.shedding.source_dwell_seconds)
-            })
+            snapshot
+                .pool(&row.pool_id)
+                .is_some_and(|pool| now - row.round_at < shed_dwell_ms(pool))
         };
         let holds = mark_holds(load);
         LoadCounts {
@@ -1422,6 +1450,7 @@ pub fn spawn(
     let in_flight = InFlight::default();
     state.set_in_flight(in_flight.clone());
     state.set_rates(config.rates.clone());
+    state.set_share(config.share.clone());
     // Shared the same way, so the relay's conversation climb reads the map under the same lock the report
     // handler writes, without a command round trip.
     let affinity = state.affinity();
@@ -3088,6 +3117,26 @@ impl Task {
                     self.write(rows.into_iter().map(StateWrite::UpsertWindow).collect());
                 }
             }
+            Report::Ended {
+                request_id,
+                attempt,
+                at,
+                cause,
+            } => {
+                // A request that holds no booking (a count, a probe, a fast request, a renewal, one the purge gave up
+                // on, one from before a restart) ends with nothing to release and nothing to say.
+                if let Some(reservation) = self.state.release_reservation(&request_id) {
+                    self.emit(RouterEvent::ReservationExpired {
+                        account_id: reservation.account_id,
+                        request_id,
+                        attempt,
+                        cause,
+                        shares: reservation.rewrite,
+                        age_ms: at - reservation.booked_at,
+                        at,
+                    });
+                }
+            }
             Report::Usage {
                 account_id,
                 at,
@@ -3095,7 +3144,12 @@ impl Task {
                 incarnation,
                 usage,
                 fast,
+                request_id,
+                attempt: _,
             } => {
+                // The usage replaces the booking, on every path below: a request that holds none (a renewal, a
+                // request from before a restart, one whose booking the purge expired) still charges its account.
+                self.state.release_reservation(&request_id);
                 // A fast completion draws usage credits and no plan window.
                 if self.moved_past(&account_id, incarnation) || fast {
                     return;
@@ -3358,14 +3412,13 @@ impl Task {
             .read()
             .expect("snapshot lock poisoned")
             .clone();
-        let seconds = snapshot
+        snapshot
             .key(key_id)
             .and_then(|k| snapshot.pool(&k.pool_id))
             .map_or(
-                phoebis_store::Shedding::default().burn_window_seconds,
-                |pool| pool.shedding.burn_window_seconds,
-            );
-        seconds_ms(seconds)
+                seconds_ms(phoebis_store::Shedding::default().burn_window_seconds),
+                burn_average_ms,
+            )
     }
 
     fn token(&mut self, account_id: &str) -> &CancellationToken {
@@ -3398,6 +3451,18 @@ impl Task {
         // A permit or a ticket whose guard's drop never reached the table: a panic, or a stream past the relay's
         // idle bound with no bound of its own.
         self.state.in_flight().expire(now);
+        // A booking whose request's end never reached the task, under the same bound.
+        for (request_id, reservation) in self.state.expire_reservations(now) {
+            self.emit(RouterEvent::ReservationExpired {
+                account_id: reservation.account_id,
+                request_id,
+                attempt: reservation.attempt,
+                cause: "timeout",
+                shares: reservation.rewrite,
+                age_ms: now - reservation.booked_at,
+                at: now,
+            });
+        }
         // The account a pin names is only readable while it is still held, so the rows come first.
         let held: HashMap<PinKey, String> = self
             .state
@@ -3467,11 +3532,7 @@ impl Task {
         // One cut over every pool, the longest dwell's: a faster pool's round stays on disk while a slower pool that
         // holds the account can still read the account's stamp from it after a restart. With no pool, nothing reads
         // a round.
-        let longest_dwell_ms = snapshot
-            .pools()
-            .map(|pool| seconds_ms(pool.shedding.source_dwell_seconds))
-            .max()
-            .unwrap_or(0);
+        let longest_dwell_ms = snapshot.pools().map(shed_dwell_ms).max().unwrap_or(0);
         writes.push(StateWrite::PurgeShedRounds {
             before: now - longest_dwell_ms,
         });

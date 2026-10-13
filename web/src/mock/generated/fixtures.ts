@@ -11764,6 +11764,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "affinity": 0,
           "cooldown": 0,
           "credits": 0,
+          "ended": 0,
           "member_spend": 0,
           "overage": 0,
           "pin_invalidated": 0,

@@ -22,9 +22,9 @@ use crate::LedgerDb;
 /// Rows read per mirror tick; a registry busier than this per tick is caught up on the next.
 const MIRROR_BATCH: usize = 500;
 
-/// `None` for the three variants that land as no row of their own here: a `Decision` and a `CacheMapWritten`, which
-/// the mirror maps to the ledger's own records, and an `AccountStateChanged`, a transition the mirror's account
-/// watch reads from the registry.
+/// `None` for the four variants that land as no row of their own here: a `Decision` and a `CacheMapWritten`, which
+/// the mirror maps to the ledger's own records, an `AccountStateChanged`, a transition the mirror's account watch
+/// reads from the registry, and a `ReservationExpired`, which has no row.
 pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
     let model_of = |scope: &str| scope.strip_prefix("model:").map(str::to_string);
     let row = match event {
@@ -324,7 +324,8 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
         },
         RouterEvent::Decision { .. }
         | RouterEvent::CacheMapWritten { .. }
-        | RouterEvent::AccountStateChanged { .. } => return None,
+        | RouterEvent::AccountStateChanged { .. }
+        | RouterEvent::ReservationExpired { .. } => return None,
     };
     Some(row)
 }

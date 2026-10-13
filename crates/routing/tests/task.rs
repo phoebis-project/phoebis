@@ -11,8 +11,8 @@ use phoebis_routing::{
     PinUsage, PredecessorQuery, Presented, RateTable, Rates, Refusal, RefusalFacts, RefusedRequest,
     ReloadError, Report, ResolveError, RouterConfig, RouterHandle, RoutingState, SelectRequest,
     SelectResult, SharePricer, UtilizationSample, WindowReading, WindowSource, WriterStatus,
-    COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
-    WRITER_DEPTH,
+    COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
+    SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
@@ -160,6 +160,7 @@ fn request(
         held_out: false,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         fast: false,
+        body_tokens: 0,
     }
 }
 
@@ -817,6 +818,12 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
         Report::Affinity(affinity_report(&handle, "a", 1_000)),
         model_cooldown("a", "model:claude-sonnet-5", 1_000),
         credits_at(true, None, None, 1_000),
+        Report::Ended {
+            request_id: "r-1".into(),
+            attempt: 1,
+            at: 1_000,
+            cause: "canceled",
+        },
         Report::MemberSpend(Vec::new()),
         Report::Overage {
             account_id: "a".into(),
@@ -856,6 +863,7 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
             | Report::Affinity(_)
             | Report::Cooldown { .. }
             | Report::Credits { .. }
+            | Report::Ended { .. }
             | Report::MemberSpend(_)
             | Report::Overage { .. }
             | Report::PinInvalidated { .. }
@@ -1054,6 +1062,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             held_out: false,
             lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
             fast: false,
+            body_tokens: 0,
         }
     };
     let epoch;
@@ -1189,6 +1198,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             held_out: false,
             lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
             fast: false,
+            body_tokens: 0,
         })
         .await
         .unwrap();
@@ -2685,6 +2695,8 @@ fn a_million_input_served(account: &str, at: i64, fast: bool) -> Report {
             ..PinUsage::default()
         },
         fast,
+        request_id: "r-1".into(),
+        attempt: 1,
     }
 }
 
@@ -2869,6 +2881,8 @@ async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week
             ..PinUsage::default()
         },
         fast: false,
+        request_id: "r-1".into(),
+        attempt: 1,
     };
     let windows = || async {
         let mut read_all = Vec::new();
@@ -7895,4 +7909,311 @@ async fn a_moved_account_state_emits_the_relay_s_cause() {
     })
     .await;
     no_further_event(&mut events).await;
+}
+
+/// Prices a million tokens of input or cache write at a tenth of either window, whatever the tier, the model or
+/// the instant: a 200 000 token body books 0.02 and a million input tokens charge 0.1.
+fn a_tenth_per_million_written() -> SharePricer {
+    SharePricer::new(|_, _, _, usage, _| {
+        Some((usage.input + usage.write_5m) as f64 / 1_000_000.0 * 0.1)
+    })
+}
+
+/// A million input tokens served on `a` for `request_id`'s wire attempt `attempt`.
+fn usage_of(request_id: &str, attempt: u32, at: i64) -> Report {
+    Report::Usage {
+        account_id: "a".into(),
+        at,
+        canonical_model: "claude-sonnet-5".into(),
+        incarnation: 1,
+        usage: PinUsage {
+            input: 1_000_000,
+            ..PinUsage::default()
+        },
+        fast: false,
+        request_id: request_id.into(),
+        attempt,
+    }
+}
+
+fn ended(request_id: &str, attempt: u32, at: i64, cause: &'static str) -> Report {
+    Report::Ended {
+        request_id: request_id.into(),
+        attempt,
+        at,
+        cause,
+    }
+}
+
+/// `request` for `session` under `request_id`, carrying a 200 000 token body.
+fn placement(handle: &RouterHandle, request_id: &str, session: &str, now: i64) -> SelectRequest {
+    SelectRequest {
+        request_id: request_id.into(),
+        body_tokens: 200_000,
+        ..request(handle, Some(session), now)
+    }
+}
+
+/// A router over the tiered OAuth account `a`, priced by `a_tenth_per_million_written` with the purge every 50 ms,
+/// once `a` reads 0.5 on its 5-hour window, and its events from before that reading.
+async fn priced_router(
+    now: &Arc<AtomicI64>,
+) -> (
+    RouterHandle,
+    tokio::sync::broadcast::Receiver<phoebis_routing::RouterEvent>,
+) {
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let handle = spawn(
+        store,
+        clock(now),
+        RouterConfig {
+            share: a_tenth_per_million_written(),
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let events = handle.subscribe_events();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.5, Some(10 * HOUR)),
+        ))
+        .await;
+    (handle, events)
+}
+
+/// The next `ReservationExpired` on `events`, every other event passed over.
+async fn next_expiry(
+    events: &mut tokio::sync::broadcast::Receiver<phoebis_routing::RouterEvent>,
+) -> phoebis_routing::RouterEvent {
+    loop {
+        let event = next_event(events).await;
+        if matches!(
+            event,
+            phoebis_routing::RouterEvent::ReservationExpired { .. }
+        ) {
+            return event;
+        }
+    }
+}
+
+/// Whether an expiry is among the events already on the broadcast.
+fn an_expiry_among(
+    events: &mut tokio::sync::broadcast::Receiver<phoebis_routing::RouterEvent>,
+) -> bool {
+    std::iter::from_fn(|| events.try_recv().ok()).any(|event| {
+        matches!(
+            event,
+            phoebis_routing::RouterEvent::ReservationExpired { .. }
+        )
+    })
+}
+
+#[tokio::test]
+async fn a_selection_books_a_reservation_the_usage_report_releases_before_its_charge() {
+    let now = Arc::new(AtomicI64::new(2_000));
+    let (handle, _events) = priced_router(&now).await;
+    handle
+        .select(placement(&handle, "r-1", "s1", 2_000))
+        .await
+        .unwrap();
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.52),
+        "the booking's rewrite joins the reading"
+    );
+    handle.report(usage_of("r-1", 1, 2_500)).await;
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.6),
+        "the usage's charge alone once the report lands"
+    );
+}
+
+#[tokio::test]
+async fn a_request_that_ends_without_usage_releases_its_reservation_and_the_task_emits_reservation_expired(
+) {
+    use phoebis_routing::RouterEvent;
+    let now = Arc::new(AtomicI64::new(2_000));
+    let (handle, mut events) = priced_router(&now).await;
+    handle
+        .select(placement(&handle, "r-1", "s1", 2_000))
+        .await
+        .unwrap();
+    assert!(close(read(&handle, "a", FIVE_HOUR).await, 0.52));
+    handle.report(ended("r-1", 1, 3_000, "canceled")).await;
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.5),
+        "the end releases the booking and charges nothing"
+    );
+    match next_expiry(&mut events).await {
+        RouterEvent::ReservationExpired {
+            account_id,
+            request_id,
+            attempt,
+            cause,
+            shares,
+            age_ms,
+            at,
+        } => {
+            assert_eq!(
+                (
+                    account_id.as_str(),
+                    request_id.as_str(),
+                    attempt,
+                    cause,
+                    age_ms,
+                    at
+                ),
+                ("a", "r-1", 1, "canceled", 1_000, 3_000)
+            );
+            assert!(close(shares.get(FIVE_HOUR).copied(), 0.02), "{shares:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn the_purge_expires_a_reservation_past_the_reclaim_bound_with_the_cause_timeout() {
+    use phoebis_routing::RouterEvent;
+    let now = Arc::new(AtomicI64::new(2_000));
+    let (handle, mut events) = priced_router(&now).await;
+    handle
+        .select(placement(&handle, "r-1", "s1", 2_000))
+        .await
+        .unwrap();
+    assert!(close(read(&handle, "a", FIVE_HOUR).await, 0.52));
+    now.store(2_000 + IN_FLIGHT_RECLAIM_MS + 1, Ordering::SeqCst);
+    match next_expiry(&mut events).await {
+        RouterEvent::ReservationExpired {
+            request_id,
+            attempt,
+            cause,
+            age_ms,
+            ..
+        } => assert_eq!(
+            (request_id.as_str(), attempt, cause, age_ms),
+            ("r-1", 1, "timeout", IN_FLIGHT_RECLAIM_MS + 1)
+        ),
+        other => panic!("{other:?}"),
+    }
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.5),
+        "the expired rewrite left the prediction"
+    );
+}
+
+#[tokio::test]
+async fn a_renewals_usage_charges_its_account_with_no_booking() {
+    let now = Arc::new(AtomicI64::new(2_000));
+    let (handle, _events) = priced_router(&now).await;
+    handle
+        .select(placement(&handle, "r-1", "s1", 2_000))
+        .await
+        .unwrap();
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.52),
+        "the placement books"
+    );
+    handle.report(usage_of("r-1", 1, 2_500)).await;
+    assert!(close(read(&handle, "a", FIVE_HOUR).await, 0.6));
+    let renewed = handle
+        .select(placement(&handle, "r-2", "s1", 3_000))
+        .await
+        .unwrap()
+        .result;
+    assert!(
+        matches!(&renewed, SelectResult::Selected(s) if s.trace.renewed),
+        "{renewed:?}"
+    );
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.6),
+        "a renewal books nothing"
+    );
+    handle.report(usage_of("r-2", 1, 3_500)).await;
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.7),
+        "its usage charges the account all the same"
+    );
+}
+
+#[tokio::test]
+async fn a_usage_after_its_bookings_expiry_charges_once() {
+    use phoebis_routing::RouterEvent;
+    let now = Arc::new(AtomicI64::new(2_000));
+    let (handle, mut events) = priced_router(&now).await;
+    handle
+        .select(placement(&handle, "r-1", "s1", 2_000))
+        .await
+        .unwrap();
+    now.store(2_000 + IN_FLIGHT_RECLAIM_MS + 1, Ordering::SeqCst);
+    assert!(matches!(
+        next_expiry(&mut events).await,
+        RouterEvent::ReservationExpired {
+            cause: "timeout",
+            ..
+        }
+    ));
+    handle
+        .report(usage_of("r-1", 1, 2_000 + IN_FLIGHT_RECLAIM_MS + 2))
+        .await;
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.6),
+        "the reading plus the usage's share once, the expired rewrite gone"
+    );
+}
+
+#[tokio::test]
+async fn a_retry_in_place_keeps_the_requests_booking_until_the_usage_of_its_second_attempt() {
+    let now = Arc::new(AtomicI64::new(2_000));
+    let (handle, mut events) = priced_router(&now).await;
+    handle
+        .select(placement(&handle, "r-1", "s1", 2_000))
+        .await
+        .unwrap();
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.52),
+        "the booking stands while attempt 2 is in flight, no report between the attempts"
+    );
+    handle.report(usage_of("r-1", 2, 4_000)).await;
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.6),
+        "attempt 2's usage releases the request's booking and charges once"
+    );
+    assert!(
+        !an_expiry_among(&mut events),
+        "no expiry between the attempts"
+    );
+}
+
+#[tokio::test]
+async fn a_request_dropped_before_its_selection_answer_is_read_releases_the_booking_on_its_ended_report(
+) {
+    use phoebis_routing::RouterEvent;
+    let now = Arc::new(AtomicI64::new(2_000));
+    let (handle, mut events) = priced_router(&now).await;
+    let park = handle.park_loop().await;
+    let asked = tokio::spawn({
+        let handle = handle.clone();
+        let request = placement(&handle, "r-7", "s7", 2_000);
+        async move { handle.select(request).await }
+    });
+    wait_for(WRITTEN, || (handle.queued() == 1).then_some(())).await;
+    // The answer's receiver drops unread, and the end report queues behind the selection.
+    asked.abort();
+    assert!(matches!(asked.await, Err(error) if error.is_cancelled()));
+    handle.report(ended("r-7", 1, 2_500, "canceled")).await;
+    drop(park);
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.5),
+        "the selection booked and the end behind it released"
+    );
+    assert!(matches!(
+        next_expiry(&mut events).await,
+        RouterEvent::ReservationExpired { cause: "canceled", ref request_id, .. } if request_id == "r-7"
+    ));
+    // An end for a request that holds no booking changes nothing and says nothing.
+    handle.report(ended("r-none", 1, 2_600, "canceled")).await;
+    assert!(close(read(&handle, "a", FIVE_HOUR).await, 0.5));
+    assert!(!an_expiry_among(&mut events));
 }

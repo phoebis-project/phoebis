@@ -1663,6 +1663,18 @@ impl Relay {
         // attempt that follows names the wait on its trace.
         let mut holds: Vec<HoldFacts> = Vec::new();
         let mut attempt: u8 = 0;
+        // The request's end report, armed before its first selection is enqueued so a request dropped while the
+        // selection waits still releases what it booked. A count and a probe book nothing, so neither arms one.
+        let mut end_guard = (trace.kind == Kind::Inference).then(|| {
+            EndGuard::armed(
+                self.router.clone(),
+                self.bodies.clone(),
+                self.clock.clone(),
+                trace.request_id.clone(),
+            )
+        });
+        // Once per request: every selection of it hands the same estimate in.
+        let body_tokens = body_tokens(&raw);
         // The selections asked for this request, the decision's `seq`: a hold and the placement after it are two
         // decisions of one wire attempt, and a retry in place or a refresh pass dispatches again under one.
         let mut selections: u32 = 0;
@@ -1687,6 +1699,7 @@ impl Relay {
             // One deadline for the whole request, the climb's waits included: past it the pool is answered as
             // exhausted rather than selected again.
             if admitted.deadline.is_some_and(|deadline| now >= deadline) {
+                ending(&mut end_guard, EXHAUSTED);
                 return self
                     .exhausted(
                         &admitted,
@@ -1750,11 +1763,13 @@ impl Relay {
                     held_out,
                     lane: admitted.lane.clone(),
                     fast: admitted.fast,
+                    body_tokens,
                 })
                 .await
             {
                 Ok(answer) => answer,
                 Err(_) => {
+                    ending(&mut end_guard, REFUSED);
                     return self
                         .refused(
                             &trace,
@@ -1764,7 +1779,7 @@ impl Relay {
                             Some(&identity),
                             admitted.client_version.as_deref(),
                         )
-                        .await
+                        .await;
                 }
             };
             let selection = match answer.result {
@@ -1774,6 +1789,7 @@ impl Relay {
                 // request and a probe agree.
                 SelectResult::Refused(Refusal::Key(refusal)) => {
                     tracing::debug!(%refusal, key = %key.id, "a request's key was refused after admission");
+                    ending(&mut end_guard, REFUSED);
                     return self
                         .refused(
                             &trace,
@@ -1788,6 +1804,7 @@ impl Relay {
                 // The registry moved after admission and no longer admits this request; the answer is the one the
                 // current registry would have given at admission.
                 SelectResult::Refused(Refusal::Resolve(ResolveError::ModelNotAllowed)) => {
+                    ending(&mut end_guard, REFUSED);
                     return self
                         .refused(
                             &trace,
@@ -1797,9 +1814,10 @@ impl Relay {
                             Some(&identity),
                             admitted.client_version.as_deref(),
                         )
-                        .await
+                        .await;
                 }
                 SelectResult::Exhausted(exhaustion) => {
+                    ending(&mut end_guard, EXHAUSTED);
                     return self
                         .exhausted(
                             &admitted,
@@ -1860,10 +1878,12 @@ impl Relay {
                     answer.ticket,
                     &mut attempt,
                     &mut key_permit,
+                    &mut end_guard,
                 )
                 .await
             {
                 Leg::AtCap => {
+                    ending(&mut end_guard, EXHAUSTED);
                     return self
                         .exhausted(
                             &admitted,
@@ -1987,7 +2007,8 @@ impl Relay {
 
     /// One account's leg of the request. `attempt` is the wire-submission index every bus event and attempt row
     /// carries. `seq` is the selecting decision's, which every pass of the leg reports its cache map under.
-    /// `key_permit` is the request's own, which a committed stream takes into its body. `selected` is the ticket the
+    /// `key_permit` is the request's own, which a committed stream takes into its body, and so is `end_guard`, the
+    /// request's end report, which every pass of the leg re-arms with its attempt. `selected` is the ticket the
     /// selection charged for the leg's first pass.
     ///
     /// An OAuth 401 runs the refresh ladder on this account: a refresh, and after one that failed without a
@@ -2005,6 +2026,7 @@ impl Relay {
         mut selected: Option<AccountTicket>,
         attempt: &mut u8,
         key_permit: &mut Option<KeyPermit>,
+        end_guard: &mut Option<EndGuard>,
     ) -> Leg {
         // The admission pinned this pool's policy and the row's attribution; a selection on a newer revision
         // resolved the key's current pool, so a key moved between the two would dispatch under one pool's policy
@@ -2036,6 +2058,7 @@ impl Relay {
             // `outcome_of` files an `accounts_unavailable` that carries an obstacle as rejected, so the pool's
             // exhaustion gauge and rollups never count a moved key as the pool's.
             outcome.obstacle = Some(POOL_MOVED);
+            ending(end_guard, REFUSED);
             return Leg::Respond(
                 self.answer(
                     admitted.trace,
@@ -2254,6 +2277,9 @@ impl Relay {
                 return Leg::AtCap;
             }
             *attempt += 1;
+            if let Some(guard) = end_guard.as_mut() {
+                guard.rearm(*attempt);
+            }
             // One per wire attempt. The first pass's was charged by its selection, so the count the selector read
             // is the one it charged; a later pass takes its own before the dial. A pass that ends without
             // committing a stream drops it with its response half, before the next pass or leg takes one. A
@@ -2349,6 +2375,7 @@ impl Relay {
                 credential_generation: credential.generation,
                 deadline: admitted.deadline,
                 diagnostics,
+                end_guard: &mut *end_guard,
                 fallback_ms: admitted.fallback_ms,
                 fast: admitted.fast,
                 floor_held: &admitted.floor_held,
@@ -2438,6 +2465,7 @@ impl Relay {
                 Err(failure) => {
                     let written = matches!(failure, AttemptFailure::Lost(_));
                     tracing::warn!(account = %account.id, %failure, "the upstream did not answer");
+                    ending(end_guard, TRANSPORT_ERROR);
                     let outcome = self.outcome(
                         admitted.trace,
                         Some(admitted.key),
@@ -2525,6 +2553,7 @@ impl Relay {
                         }
                         Err(error) => {
                             tracing::error!(account = %account.id, %error, "a strip retry could not rebuild the body it just stripped from");
+                            ending(end_guard, REFUSED);
                             return Leg::Respond(
                                 self.refused(
                                     admitted.trace,
@@ -3096,6 +3125,8 @@ impl Relay {
             );
         }
         let Some(reader) = reader else {
+            // The answer the client gets is the upstream's rejection, and the guards stay with this pass.
+            ctx.ending(REFUSED);
             return Next::Respond(
                 self.forward_buffered(
                     ctx.trace,
@@ -3150,6 +3181,7 @@ impl Relay {
         if let Some(release) = release {
             release.send((self.clock)(), head.status, None, false, &mut waiting);
         }
+        ctx.ending(EXHAUSTED);
         outcome.error_code = Some("accounts_unavailable".to_string());
         // A probe bound to its account never reaches the selector's exhaustion, so its own answer names the mark.
         if ctx.trace.kind == Kind::Probe && ctx.auth_marked {
@@ -3964,7 +3996,7 @@ impl Relay {
         outcome: RelayOutcome,
         renewal: Option<Renewal>,
         affinity: Option<AffinityFacts>,
-        guards: Guards,
+        mut guards: Guards,
     ) -> Response {
         // A buffered answer is never an event stream, so its status alone says whether it is a rate limit.
         let (builder, decoder) = match forward_head(head, caller, false) {
@@ -4019,17 +4051,21 @@ impl Relay {
                 &mut waiting,
             );
         }
-        if let Some(affinity) = affinity {
+        let usage_sent = match affinity {
             // A drained error names no answer.
-            affinity.send(
+            Some(affinity) => affinity.send(
                 (self.clock)(),
                 head.status,
                 usage.as_ref(),
                 fast,
                 None,
                 &mut waiting,
-            );
-        }
+            ),
+            None => false,
+        };
+        // A committed usage releases the request's booking itself, and a buffered answer without one is a rejection
+        // the relay forwards.
+        guards.ended((!usage_sent).then_some(REFUSED));
         let response = built(builder, Body::from(payload.clone()));
         // Not built through `self.answer`: that helper carries no relayed chunks for every other caller, but
         // this path published one above, and a bus that drops it must be detectable rather than uncounted.
@@ -4127,6 +4163,8 @@ struct Responding<'a> {
     /// The source of the member on this pass's body, read for the completion event, the session memory's hook and
     /// the affinity report's id: an answer is remembered only for a request that carried or received the member.
     diagnostics: Option<DiagnosticsSource>,
+    /// The request's end report, which a committed stream takes into its body with the permit and the ticket.
+    end_guard: &'a mut Option<EndGuard>,
     fallback_ms: i64,
     /// The request carried `speed: "fast"`, which a throttle's classification reads.
     fast: bool,
@@ -4163,12 +4201,111 @@ struct Responding<'a> {
 }
 
 impl Responding<'_> {
-    /// Both counts for a body that outlives the response half, so they are released when it ends.
+    /// Both counts and the end report for a body that outlives the response half, so they are released when it
+    /// ends.
     fn guards(&mut self) -> Guards {
         Guards {
             _key: self.key_permit.take(),
             _account: self.ticket.take(),
+            end: self.end_guard.take(),
         }
+    }
+
+    /// The cause the end report carries for an answer this pass ends the request with.
+    fn ending(&mut self, cause: &'static str) {
+        ending(self.end_guard, cause);
+    }
+}
+
+/// The words `Report::Ended` names for how a request ended without a committed usage.
+pub(crate) const CANCELED: &str = "canceled";
+pub(crate) const EXHAUSTED: &str = "exhausted";
+pub(crate) const REFUSED: &str = "refused";
+pub(crate) const TRANSPORT_ERROR: &str = "transport_error";
+
+/// The request's end report, armed before its first selection is enqueued and held across its wire attempts: a
+/// failover's selection replaces the booking under the request's id, a retry in place or a refresh pass keeps it,
+/// and the guard reports once, when the request ends. A committed usage disarms it, since the usage releases the
+/// booking itself. Every other end sends `Report::Ended` from the drop, with the cause the end set and `canceled`
+/// for an end that set none: a client gone before any verdict.
+pub(crate) struct EndGuard {
+    router: RouterHandle,
+    /// Where the report runs when the mailbox is full, so a shutdown waits for it.
+    bodies: TaskTracker,
+    clock: Clock,
+    request_id: String,
+    attempt: u32,
+    cause: &'static str,
+    armed: bool,
+}
+
+impl EndGuard {
+    fn armed(
+        router: RouterHandle,
+        bodies: TaskTracker,
+        clock: Clock,
+        request_id: String,
+    ) -> EndGuard {
+        EndGuard {
+            router,
+            bodies,
+            clock,
+            request_id,
+            attempt: 1,
+            cause: CANCELED,
+            armed: true,
+        }
+    }
+
+    /// A pass that dispatches again: its attempt, with the cause back at the default, since the pass has not ended.
+    fn rearm(&mut self, attempt: u8) {
+        self.attempt = u32::from(attempt);
+        self.cause = CANCELED;
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for EndGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let report = Report::Ended {
+            request_id: self.request_id.clone(),
+            attempt: self.attempt,
+            at: (self.clock)(),
+            cause: self.cause,
+        };
+        // A control fact takes a slot behind whatever waits in the mailbox, the request's own selection included, so
+        // a booking lands before the release that follows it.
+        if let Err(report) = self.router.try_report(report) {
+            let router = self.router.clone();
+            self.bodies.spawn(async move {
+                router.report(*report).await;
+            });
+        }
+    }
+}
+
+/// The relay's estimate of the body's prompt tokens: its canonical bytes over four, the estimate the static affinity
+/// entries carry, so a fresh session's rewrite is priced from the figure its cache entries will read. Zero for a body
+/// that is no JSON document.
+fn body_tokens(raw: &[u8]) -> u64 {
+    let Some(value) = crate::facts::tolerant_value(raw) else {
+        return 0;
+    };
+    let mut canonical = Vec::with_capacity(raw.len());
+    crate::chains::canonical(&value, &mut canonical);
+    (canonical.len() / 4) as u64
+}
+
+/// Sets the cause the end report will carry, on a request that arms one.
+fn ending(guard: &mut Option<EndGuard>, cause: &'static str) {
+    if let Some(guard) = guard {
+        guard.cause = cause;
     }
 }
 
@@ -4177,6 +4314,21 @@ impl Responding<'_> {
 pub(crate) struct Guards {
     _key: Option<KeyPermit>,
     _account: Option<AccountTicket>,
+    /// The request's end report, sent on drop unless the body's usage disarmed it.
+    end: Option<EndGuard>,
+}
+
+impl Guards {
+    /// How the body ended: a committed usage (`None`) disarms the end report, since the usage releases the booking
+    /// itself, and any other end names the cause the report carries.
+    pub(crate) fn ended(&mut self, cause: Option<&'static str>) {
+        if let Some(guard) = self.end.as_mut() {
+            match cause {
+                None => guard.disarm(),
+                Some(cause) => guard.cause = cause,
+            }
+        }
+    }
 }
 
 /// What the response half decided the account loop should do next.

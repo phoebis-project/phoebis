@@ -265,6 +265,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             "affinity",
             "cooldown",
             "credits",
+            "ended",
             "member_spend",
             "overage",
             "pin_invalidated",
@@ -3010,6 +3011,7 @@ async fn decide(parts: &common::Full, request_id: &str, seq: u32, attempt: u32, 
             held_out: false,
             lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
             fast: false,
+            body_tokens: 0,
         })
         .await
         .unwrap();

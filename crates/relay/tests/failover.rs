@@ -2,13 +2,16 @@ mod common;
 use std::time::Duration;
 
 use common::*;
-use fake_upstream::{FakeUpstream, Respond, Rule};
+use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery};
 use phoebis_ledger::{Assembler, Record};
 use phoebis_oauth::AcquireError;
-use phoebis_routing::{DecisionRecord, DecisionSummary, FactValue, RouterEvent};
-use phoebis_store::{AccountState, Failover, StateCause};
+use phoebis_routing::{
+    DecisionRecord, DecisionSummary, FactValue, Report, RouterConfig, RouterEvent, SharePricer,
+    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR,
+};
+use phoebis_store::{AccountState, Failover, StateCause, SubscriptionRow};
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
@@ -3848,5 +3851,216 @@ async fn a_model_404_over_the_buffer_bound_cools_the_model_and_fails_over() {
             .collect::<Vec<_>>(),
         [("a", "model:claude-sonnet-4-5-20250929", "model_rejected")]
     );
+    up.shutdown().await;
+}
+
+/// The rate-limit tier the priced harness puts every account on, which its pricer keys on.
+const TIER: &str = "default_claude_max_20x";
+
+/// A ten-millionth of either window per token of input or cache write on `TIER`, so a body of `n` tokens books
+/// `n / 10_000_000` and a usage of `n` input tokens charges the same.
+fn tenth_per_million() -> SharePricer {
+    SharePricer::new(|_, tier, _, usage, _| {
+        (tier == TIER).then(|| (usage.input + usage.write_5m) as f64 / 10_000_000.0)
+    })
+}
+
+/// `harness_with_router_config` over `accounts` on `TIER`, each reading 0.5 on its 5-hour window a second before the
+/// harness clock, so a booking and a charge at the clock move the prediction the test reads.
+async fn priced_harness(up: &FakeUpstream, accounts: &[TestAccount]) -> Harness {
+    let h = harness_with_router_config(
+        up,
+        accounts,
+        PoolSpec::default(),
+        RouterConfig {
+            share: tenth_per_million(),
+            ..RouterConfig::default()
+        },
+    )
+    .await;
+    for account in accounts {
+        h.store
+            .set_profile(
+                account.id,
+                "{}",
+                &SubscriptionRow {
+                    tier: Some(TIER.into()),
+                    ..SubscriptionRow::default()
+                },
+            )
+            .unwrap();
+    }
+    h.router.reload().await.unwrap();
+    for account in accounts {
+        h.router
+            .report(Report::Sample {
+                account_id: account.id.into(),
+                sample: UtilizationSample::default().with(
+                    FIVE_HOUR,
+                    WindowReading {
+                        utilization: 0.5,
+                        reset: None,
+                        observed_at: NOW - 1_000,
+                        source: WindowSource::Poll,
+                    },
+                ),
+                incarnation: 1,
+                source_request_id: None,
+            })
+            .await;
+    }
+    h
+}
+
+/// The 5-hour prediction of `account`, as the router answers it now.
+async fn five_hour(h: &Harness, account: &str) -> f64 {
+    h.router
+        .samples()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|(id, _)| id == account)
+        .and_then(|(_, sample)| sample.windows.get(FIVE_HOUR).map(|r| r.utilization))
+        .expect("a reading")
+}
+
+/// The expiries among `events`, as `(request, attempt, cause)`.
+fn expiries(events: &[RouterEvent]) -> Vec<(String, u32, &'static str)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            RouterEvent::ReservationExpired {
+                request_id,
+                attempt,
+                cause,
+                ..
+            } => Some((request_id.clone(), *attempt, *cause)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn ev(event: &str, data: &str) -> SseEvent {
+    SseEvent {
+        event: event.into(),
+        data: data.into(),
+    }
+}
+
+/// A committed stream of `input_tokens` the fake holds after its first event until the test releases it, so the
+/// request is in flight while the test reads the router.
+fn held_stream(input_tokens: u64) -> Respond {
+    Respond::SseGated {
+        status: 200,
+        headers: vec![],
+        events: vec![
+            ev(
+                "message_start",
+                &format!(
+                    r#"{{"type":"message_start","message":{{"id":"msg_1","usage":{{"input_tokens":{input_tokens}}}}}}}"#
+                ),
+            ),
+            ev("message_stop", r#"{"type":"message_stop"}"#),
+        ],
+    }
+}
+
+#[tokio::test]
+async fn a_failover_replaces_the_booking_and_a_usage_a_refusal_or_an_exhaustion_settles_it() {
+    // A 429 on `a` fails over to `b`, whose selection takes the booking: one live booking, on `b`, and the usage
+    // of its answer replaces it with no expiry.
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(A, "/v1/messages", json_429_unified(RESET, "five_hour"));
+    up.add_credential_rule(B, "/v1/messages", held_stream(100));
+    let h = priced_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1)]).await;
+    let mut events = h.router.subscribe_events();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    let o = outcome(&resp);
+    assert_eq!(
+        (resp.status().as_u16(), o.account_id.as_str(), o.attempt),
+        (200, "b", 2)
+    );
+    assert!(
+        (five_hour(&h, "a").await - 0.5).abs() < 1e-9,
+        "the failover's selection took the booking off a"
+    );
+    let on_b = five_hour(&h, "b").await;
+    assert!(on_b > 0.5, "and placed it on b: {on_b}");
+    up.release();
+    resp.into_body().collect().await.unwrap();
+    let written = router_events_until(&mut events, |event| {
+        matches!(event, RouterEvent::CacheMapWritten { request_id, .. } if *request_id == o.request_id)
+    })
+    .await;
+    assert!(
+        expiries(&written).is_empty(),
+        "a usage replaces the booking without an expiry: {written:?}"
+    );
+    let settled = five_hour(&h, "b").await;
+    assert!(
+        (settled - (0.5 + 100.0 / 10_000_000.0)).abs() < 1e-9,
+        "the reading plus the usage's share alone: {settled}"
+    );
+    up.shutdown().await;
+
+    // A committed answer the relay forwards with a status other than 200 ends the request refused.
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 500,
+            headers: vec![],
+            body: br#"{"type":"error","error":{"type":"api_error","message":"down"}}"#.to_vec(),
+        },
+    }])
+    .await;
+    let h = priced_harness(&up, &[oauth("a", A, 0)]).await;
+    let mut events = h.router.subscribe_events();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 500);
+    let id = outcome(&resp).request_id;
+    resp.into_body().collect().await.unwrap();
+    let seen = router_events_until(&mut events, |event| {
+        matches!(event, RouterEvent::ReservationExpired { .. })
+    })
+    .await;
+    assert_eq!(expiries(&seen), [(id, 1, "refused")]);
+    assert!(
+        (five_hour(&h, "a").await - 0.5).abs() < 1e-9,
+        "the booking left and nothing was charged"
+    );
+    up.shutdown().await;
+
+    // A 429 on the pool's one account leaves no account to fail over to: the request ends exhausted.
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_429_unified(RESET, "five_hour"),
+    }])
+    .await;
+    let h = priced_harness(&up, &[oauth("a", A, 0)]).await;
+    let mut events = h.router.subscribe_events();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    let o = outcome(&resp);
+    assert_eq!(o.error_code.as_deref(), Some("accounts_exhausted"));
+    let seen = router_events_until(&mut events, |event| {
+        matches!(event, RouterEvent::ReservationExpired { .. })
+    })
+    .await;
+    assert_eq!(expiries(&seen), [(o.request_id, 1, "exhausted")]);
+    assert!((five_hour(&h, "a").await - 0.5).abs() < 1e-9);
     up.shutdown().await;
 }

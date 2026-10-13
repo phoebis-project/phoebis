@@ -1,7 +1,7 @@
 //! One selection: the spec's seven steps over the snapshot and the routing state.
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use phoebis_store::{
@@ -21,9 +21,10 @@ use crate::record::{
     WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION, WALK_STEPS,
 };
 use crate::state::{
-    budget_reached, shed_marks, warm, BurnUnit, CreditsState, MemberSpend, PinRef, RoutingState,
-    StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, SEVEN_DAY,
-    SEVEN_DAY_FABLE, WEEK_MS,
+    budget_reached, burn_average_ms, burn_decayed, plan_windows, shed_cap, shed_dwell_ms,
+    shed_marks, warm, weekly_lead_margin, BurnUnit, CreditsState, MemberSpend, PinRef, PinUsage,
+    Reservation, RoutingState, StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR,
+    IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::windows::window_for;
 use crate::{term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
@@ -117,6 +118,9 @@ pub struct SelectRequest {
     pub lane: String,
     /// The body carried `speed: "fast"`: fast eligibility applies.
     pub fast: bool,
+    /// The relay's estimate of the body's prompt tokens from its bytes (canonical bytes over four, the byte
+    /// estimate the static affinity entries carry): a fresh session's rewrite, since it has no pin to read one from.
+    pub body_tokens: u64,
 }
 
 /// The cache lane key, `<model>|<speed>|<thinking>|<effort>`: the one spelling the relay composes and every pin,
@@ -587,6 +591,99 @@ fn budget_unknown(
     state.accounting_degraded() && budgeted_member(snapshot, pool_id, account_id).is_some()
 }
 
+/// The rewrite per plan window (the pin's last context, or `body_tokens` for a fresh session or a pin never renewed
+/// with usage, as one cache write at the lane's TTL on `tier` at the band of `now`) and the burn per plan window (the
+/// pin's own decayed burn, or the median of the pool's priced warm pins for a fresh session, absent with none, which
+/// reads as zero), on the windows the request's model draws. A window nothing prices is absent from both. The
+/// destination gate's fit and the shedding round read it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn pin_figures(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    request: &SelectRequest,
+    pin: Option<&PinRow>,
+    tier: &str,
+    now: i64,
+) -> (BTreeMap<String, f64>, BTreeMap<String, f64>) {
+    let share = state.share();
+    let model = request.canonical_model.as_str();
+    let average_ms = burn_average_ms(pool);
+    // A pin never renewed with usage reads its context from the body, as a fresh session does, and a fresh
+    // session's TTL is unknown before a pin exists, so its write prices at five minutes.
+    let (tokens, ttl_ms) = match pin {
+        Some(pin) if pin.last_input_tokens > 0 => (pin.last_input_tokens, pin.cache_ttl_ms),
+        Some(pin) => (request.body_tokens, pin.cache_ttl_ms),
+        None => (request.body_tokens, 300_000),
+    };
+    let write = if ttl_ms >= 3_600_000 {
+        PinUsage {
+            write_1h: tokens,
+            ..PinUsage::default()
+        }
+    } else {
+        PinUsage {
+            write_5m: tokens,
+            ..PinUsage::default()
+        }
+    };
+    // A fresh session's prior: the pool's warm pins, each priced per window below, the unpriced ones left out of
+    // the median so one of them does not zero it.
+    let warm_pins: Vec<PinRow> = match pin {
+        Some(_) => Vec::new(),
+        None => {
+            let members: HashSet<&str> = snapshot
+                .members(&pool.id)
+                .iter()
+                .map(|m| m.account_id.as_str())
+                .collect();
+            state
+                .pins()
+                .into_iter()
+                .filter(|p| members.contains(p.account_id.as_str()) && warm(p, now))
+                .collect()
+        }
+    };
+    let priced = |window: &str, p: &PinRow| {
+        share
+            .rate(window, tier, &p.model, &p.burn, now)
+            .map(|rate| burn_decayed(rate, p.burn_at, now, average_ms))
+    };
+    let mut rewrite = BTreeMap::new();
+    let mut burn = BTreeMap::new();
+    for window in plan_windows(model) {
+        // Nothing priced, or a share of nothing, is nothing to book.
+        if let Some(share) = share
+            .price(window, tier, model, write, now)
+            .filter(|s| *s > 0.0)
+        {
+            rewrite.insert(window.to_string(), share);
+        }
+        let rate = match pin {
+            Some(pin) => priced(window, pin),
+            None => median(warm_pins.iter().filter_map(|p| priced(window, p)).collect()),
+        };
+        if let Some(rate) = rate.filter(|r| *r > 0.0) {
+            burn.insert(window.to_string(), rate);
+        }
+    }
+    (rewrite, burn)
+}
+
+/// The median of `values`, the mean of the two middle ones for an even count, `None` for none.
+fn median(mut values: Vec<f64>) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(f64::total_cmp);
+    let mid = values.len() / 2;
+    Some(if values.len() % 2 == 1 {
+        values[mid]
+    } else {
+        (values[mid - 1] + values[mid]) / 2.0
+    })
+}
+
 /// Whether an account can still serve a request whose allowance is judged in `window` (`window_for`'s answer):
 /// for a model with a week of its own, that week and both shared plan windows, since its requests draw on the
 /// shared windows too; both shared plan windows otherwise. A prediction at 1.0 is spent. No sample, or a sample
@@ -969,12 +1066,7 @@ fn run(
                 "live"
             };
             let marked = found == "live"
-                && state.shed_marked(
-                    &pool.id,
-                    &key,
-                    request.now,
-                    seconds_ms(pool.shedding.source_dwell_seconds),
-                );
+                && state.shed_marked(&pool.id, &key, request.now, shed_dwell_ms(pool));
             rec.pin = Some(pin_facts(found, Some(&current), marked, request.now));
             if found == "live" {
                 pin = Some(current);
@@ -1171,6 +1263,8 @@ fn run(
     // creates no pin (step 7), so a move it made would leave the session with none.
     let mut migrated = None;
     let mut shed_from = None;
+    // The row a move takes off its source, whose burn and last prompt the new row carries.
+    let mut moving: Option<PinRow> = None;
     let mut selection_set: Vec<&Candidate> = eligible.clone();
     if let Some(current) = pin.as_ref() {
         let ended = snapshot
@@ -1229,6 +1323,7 @@ fn run(
                     rec.destinations = set.iter().map(|c| c.account_id.clone()).collect();
                     migrated = Some(reason);
                     selection_set = set;
+                    moving = Some(current.clone());
                     pin = None;
                 }
             }
@@ -1545,11 +1640,55 @@ fn run(
     };
     let cohort_hold = cohort_hold(&request.holds);
 
+    // A move or a fresh placement books its rewrite and burn on the destination until the usage replaces it or the
+    // request ends. A count writes no cache, a probe replays a recipe the account carries, and a fast request draws
+    // usage credits and no plan window, so none of them books. A destination without a tier prices nothing, and
+    // nothing priced is nothing to book, so an unpriced destination leaves no entry to expire or release.
+    if !(request.count || request.probe || request.fast) {
+        if let Some(tier) = snapshot.tier(&chosen.account_id) {
+            let (rewrite, burn) = pin_figures(
+                state,
+                snapshot,
+                pool,
+                request,
+                moving.as_ref(),
+                tier,
+                request.now,
+            );
+            if !(rewrite.is_empty() && burn.is_empty()) {
+                state.book_reservation(
+                    &request.request_id,
+                    Reservation {
+                        account_id: chosen.account_id.clone(),
+                        attempt: request.attempt,
+                        pin: session.map(|session| PinKey {
+                            key_id: request.key_id.clone(),
+                            session_id: session.to_string(),
+                            agent_id: request.agent_id.clone(),
+                            model: request.canonical_model.clone(),
+                        }),
+                        booked_at: request.now,
+                        rewrite,
+                        burn,
+                        expires_at: request.now + IN_FLIGHT_RECLAIM_MS,
+                    },
+                );
+            }
+        }
+    }
+
     // Step 7: a fresh pin with a fresh epoch. A token count touches no cache, so it creates none: a pin it left
     // on an account at its cap would carry the agent's next message past the cap, since a renewal never reads it.
     let pin_ref = session.filter(|_| !request.count).map(|session| {
         let epoch = state.fresh_epoch();
-        let row = fresh_pin(request, session, epoch, chosen, shed_from.clone());
+        let row = fresh_pin(
+            request,
+            session,
+            epoch,
+            chosen,
+            shed_from.clone(),
+            moving.as_ref(),
+        );
         let lane = row.lane.clone();
         rec.pin_written = Some(PinWritten {
             action: if migrated.is_some() {
@@ -1608,14 +1747,34 @@ fn run(
     )
 }
 
-/// A pin under `session` on `chosen`, created by this request with the request's hashes stamped.
+/// A pin under `session` on `chosen`, created by this request with the request's hashes stamped. `moving` is the
+/// row a move takes off its source, whose burn averages and last prompt the new row carries, so the destination's
+/// projection counts the pin from the moment it lands and a later move prices its rewrite from a figure.
 fn fresh_pin(
     request: &SelectRequest,
     session: &str,
     epoch: u64,
     chosen: &Candidate,
     shed_from: Option<String>,
+    moving: Option<&PinRow>,
 ) -> PinRow {
+    // The rates are typed tokens per second and carry no unit, so the copy needs no re-pricing.
+    let (burn, burn_at, burn_banded, burn_fast, last_input_tokens) = match moving {
+        Some(moving) => (
+            moving.burn,
+            moving.burn_at,
+            moving.burn_banded,
+            moving.burn_fast,
+            moving.last_input_tokens,
+        ),
+        None => (
+            PinBurn::default(),
+            None,
+            PinBurn::default(),
+            PinBurn::default(),
+            0,
+        ),
+    };
     let mut row = PinRow {
         key_id: request.key_id.clone(),
         session_id: session.to_string(),
@@ -1630,11 +1789,11 @@ fn fresh_pin(
         // this request's old one is choosing.
         key_generation: request.key_generation,
         incarnation: chosen.incarnation,
-        burn: PinBurn::default(),
-        burn_at: None,
-        burn_banded: PinBurn::default(),
-        burn_fast: PinBurn::default(),
-        last_input_tokens: 0,
+        burn,
+        burn_at,
+        burn_banded,
+        burn_fast,
+        last_input_tokens,
         // A fresh pin has no cache to be cold about, and its TTL is the default until the first report.
         last_refresh_at: request.now,
         cache_ttl_ms: 300_000,
@@ -1786,7 +1945,7 @@ fn under_band(
     account_id: &str,
     now: i64,
 ) -> bool {
-    let Some(threshold) = pool.shed_ahead_of_pace else {
+    let Some(threshold) = weekly_lead_margin(pool) else {
         return true;
     };
     match snapshot.account(account_id).map(|a| a.kind) {
@@ -1819,7 +1978,7 @@ fn band_facts(
     now: i64,
 ) -> (Vec<Fact>, bool) {
     let under = under_band(state, snapshot, pool, account_id, now);
-    let Some(threshold) = pool.shed_ahead_of_pace else {
+    let Some(threshold) = weekly_lead_margin(pool) else {
         return (Vec::new(), under);
     };
     let mut facts = Vec::with_capacity(6);
@@ -1924,7 +2083,7 @@ fn move_of<'a>(
     let (now, fallback_ms) = (request.now, request.fallback_ms);
     let prefer_plan = pool.overage_policy == OveragePolicy::PreferPlan;
     let kind = |id: &str| snapshot.account(id).map(|a| a.kind);
-    let dwell_ms = seconds_ms(pool.shedding.source_dwell_seconds);
+    let dwell_ms = shed_dwell_ms(pool);
     let cap = pool.failover.in_flight_cap;
     // A sibling the next round would not shed from again soon: every reading its sample holds cool (the shared windows'
     // leads over their pace under the band on a subscription account, room in the worst live bucket of an api_key one;
@@ -1970,7 +2129,7 @@ fn move_of<'a>(
         // A hot destination would shed the session again at its next round, so every move prefers a cool
         // one. The preference falls through to the rule's own set: each rule moves the pin for a reason a
         // hot sibling still answers, which staying put does not.
-        if pool.shed_ahead_of_pace.is_none() || set.is_empty() {
+        if weekly_lead_margin(pool).is_none() || set.is_empty() {
             return (set, None);
         }
         let mut facts = Vec::new();
@@ -2123,7 +2282,7 @@ fn move_of<'a>(
     // The trigger reads how far the prediction runs ahead of the window's pace, as the ceiling reads the
     // prediction itself: a week at 0.5 ten percent in is a session worth shedding, the same week at 0.5 sixty
     // percent in is not, and a refunded window reads zero at its reset.
-    let Some(threshold) = pool.shed_ahead_of_pace else {
+    let Some(threshold) = weekly_lead_margin(pool) else {
         rec.step(RULES[4], "no", vec![Fact::text("threshold", "off")]);
         return None;
     };
@@ -2310,14 +2469,9 @@ fn shed_round(
             .key(&p.key_id)
             .is_some_and(|k| k.pool_id == pool.id)
     };
-    let (mut pins, mut sum) = state.burn_of(
-        account_id,
-        &in_pool,
-        unit,
-        state.rates(),
-        now,
-        seconds_ms(pool.shedding.burn_window_seconds),
-    );
+    let average_ms = burn_average_ms(pool);
+    let (mut pins, mut sum) =
+        state.burn_of(account_id, &in_pool, unit, state.rates(), now, average_ms);
     let is_current = |p: &PinRow| p.key() == current.key();
     let is_cold = |p: &PinRow| {
         if is_current(p) {
@@ -2362,7 +2516,8 @@ fn shed_round(
     if pool.shedding.warm_sessions == WarmSessions::Always {
         ordered.sort_by(by_rewrite);
     }
-    let target = pool.shedding.shed_share * sum;
+    let cap = shed_cap(pool);
+    let target = cap * sum;
     let mut marks = shed_marks(&ordered, target);
     // `never` stops after the cold pins. The warm ones stay in the order all the same, so the last-pin rule
     // still counts them among the account's pins; the marks are priced pins alone, so the cold group's marks are
@@ -2393,7 +2548,9 @@ fn shed_round(
             },
         }
     };
-    let dwell_seconds = pool.shedding.source_dwell_seconds;
+    let dwell_ms = shed_dwell_ms(pool);
+    // The record echoes the two settings in their own unit, seconds.
+    let seconds = |ms: i64| u64::try_from(ms / 1_000).unwrap_or(u64::MAX);
     let round = ShedRoundFacts {
         window: hot.window.to_string(),
         utilization: hot.utilization,
@@ -2402,8 +2559,8 @@ fn shed_round(
         threshold: hot.threshold,
         margin: hot.ahead - hot.threshold,
         unit: unit.as_str(),
-        burn_window_seconds: pool.shedding.burn_window_seconds,
-        shed_share: pool.shedding.shed_share,
+        burn_window_seconds: seconds(average_ms),
+        shed_share: cap,
         burn_sum: sum,
         target,
         warm_sessions: pool.shedding.warm_sessions.as_str(),
@@ -2413,8 +2570,8 @@ fn shed_round(
             .chain(left_out.iter().map(|pin| pin_facts(pin, true)))
             .collect(),
         marks: marks.iter().map(pin_key_facts).collect(),
-        dwell_seconds,
-        dwell_until: now.saturating_add(seconds_ms(dwell_seconds)),
+        dwell_seconds: seconds(dwell_ms),
+        dwell_until: now.saturating_add(dwell_ms),
     };
     (marks, round)
 }
@@ -3988,7 +4145,7 @@ impl Readings<'_> {
         if renewal.cold {
             return cause();
         }
-        let threshold = self.pool.and_then(|p| p.shed_ahead_of_pace);
+        let threshold = self.pool.and_then(weekly_lead_margin);
         let member = self
             .outcome
             .account_id

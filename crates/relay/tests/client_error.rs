@@ -101,6 +101,7 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             held_out: false,
             lane,
             fast: false,
+            body_tokens: 0,
         })
         .await
         .unwrap();

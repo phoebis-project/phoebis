@@ -142,6 +142,14 @@ pub fn is_plan_window(window: &str) -> bool {
     window == FIVE_HOUR || window == SEVEN_DAY || window.starts_with("seven_day_")
 }
 
+/// The plan windows a model's requests draw: both shared windows, and the model's own week where it has one.
+pub(crate) fn plan_windows(canonical_model: &str) -> impl Iterator<Item = &'static str> {
+    let own = window_for(canonical_model);
+    [FIVE_HOUR, SEVEN_DAY]
+        .into_iter()
+        .chain((own != SEVEN_DAY).then_some(own))
+}
+
 /// The one fast-eligibility rule over a live cooldown row, which the selector's walk (through `blocking_cooldown`)
 /// and the keepalive's gate both call: whether the row keeps a request of this speed for `canonical_model` off its
 /// account. An `account` row holds either speed unless the request is fast and the row's window is a plan window,
@@ -311,10 +319,12 @@ pub struct PinUsage {
 pub struct SharePricer {
     price: Arc<Price>,
     measured: Arc<Measured>,
+    rate: Arc<Rate>,
 }
 
 type Price = dyn Fn(&str, &str, &str, PinUsage, i64) -> Option<f64> + Send + Sync;
 type Measured = dyn Fn(&str) -> bool + Send + Sync;
+type Rate = dyn Fn(&str, &str, &str, &PinBurn, i64) -> Option<f64> + Send + Sync;
 
 impl SharePricer {
     /// `price(window, tier, canonical_model, usage, at)`: the share of `window` on `tier` at `at` (the band
@@ -326,6 +336,7 @@ impl SharePricer {
         SharePricer {
             price: Arc::new(price),
             measured: Arc::new(|_| true),
+            rate: Arc::new(|_, _, _, _, _| None),
         }
     }
 
@@ -339,6 +350,30 @@ impl SharePricer {
             measured: Arc::new(measured),
             ..self
         }
+    }
+
+    /// `rate(window, tier, canonical_model, burn, at)`: the share of `window` on `tier` a pin burning `burn` typed
+    /// tokens a second consumes per second at the band of `at`, `None` for a model the tables do not weight or a
+    /// window the tier has no capacity on. Every pricer prices nothing here until it is set.
+    pub fn with_rate(
+        self,
+        rate: impl Fn(&str, &str, &str, &PinBurn, i64) -> Option<f64> + Send + Sync + 'static,
+    ) -> SharePricer {
+        SharePricer {
+            rate: Arc::new(rate),
+            ..self
+        }
+    }
+
+    pub fn rate(
+        &self,
+        window: &str,
+        tier: &str,
+        canonical_model: &str,
+        burn: &PinBurn,
+        at: i64,
+    ) -> Option<f64> {
+        (self.rate)(window, tier, canonical_model, burn, at)
     }
 
     pub fn price(
@@ -587,6 +622,55 @@ pub fn shed_marks(ordered: &[(PinRow, Option<f64>)], target: f64) -> Vec<PinKey>
 /// stream's silence, not its length, so a request older than the longest turn a client runs is one the table
 /// gives up waiting on.
 pub const IN_FLIGHT_RECLAIM_MS: i64 = 3_600_000;
+
+/// A move's or a placement's booking on its destination: the rewrite and the burn the request will land there,
+/// counted by `predicted` until the usage releases it before its charge, the request ends without usage, or the purge
+/// gives up on it.
+/// Memory only: a restart drops the map with the in-flight requests it belonged to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Reservation {
+    pub account_id: String,
+    /// The wire attempt whose selection booked it, a fact for the record and the expiry event. The map's key is the
+    /// request id alone, so a retry in place or a refresh pass keeps the booking and a failover's selection replaces it.
+    pub attempt: u32,
+    /// The pin the selection wrote, `None` for a request that pins nothing and still lands its body.
+    pub pin: Option<PinKey>,
+    pub booked_at: i64,
+    /// The rewrite's share per plan window, what `predicted` adds.
+    pub rewrite: BTreeMap<String, f64>,
+    /// The pin's burn as share per second per plan window, what `burn_shares` adds.
+    pub burn: BTreeMap<String, f64>,
+    pub expires_at: i64,
+}
+
+/// The ceiling every plan window reads until the pool row carries one: one constant, read through one function, so
+/// the column is a one-line change here.
+pub const DEFAULT_WINDOW_CEILING: f64 = 0.95;
+
+/// The utilization of `window` on `pool` above which no move or placement lands and the 5-hour round fires.
+pub fn ceiling(_pool: &PoolRow, _window: &str) -> f64 {
+    DEFAULT_WINDOW_CEILING
+}
+
+/// The lead over pace that fires the weekly round and the weekly cool band, `None` with both off.
+pub fn weekly_lead_margin(pool: &PoolRow) -> Option<f64> {
+    pool.shed_ahead_of_pace
+}
+
+/// The share of an account's burn one shedding round removes at most.
+pub fn shed_cap(pool: &PoolRow) -> f64 {
+    pool.shedding.shed_share
+}
+
+/// The time constant a pin's burn average decays with, in milliseconds.
+pub fn burn_average_ms(pool: &PoolRow) -> i64 {
+    seconds_ms(pool.shedding.burn_window_seconds)
+}
+
+/// How long a shedding round's marks hold and a source rests after one, in milliseconds.
+pub fn shed_dwell_ms(pool: &PoolRow) -> i64 {
+    seconds_ms(pool.shedding.source_dwell_seconds)
+}
 
 #[derive(Default)]
 struct InFlightTable {
@@ -887,11 +971,17 @@ pub struct RoutingState {
     /// created a pin releases the pin only while its key is absent here: a renewal means the pin serves another
     /// turn, however close in time. Memory only, since no request outlives a restart to report on a loaded pin.
     renewed: HashSet<PinKey>,
+    /// The moves and placements in flight, by request id: what `predicted` adds beside the charges until the usage
+    /// or the end releases each. Memory only, with the in-flight requests it belongs to.
+    reservations: HashMap<String, Reservation>,
     /// A folded spelling to the dated id it resolved to, so every lookup below can key a model's rows on the
     /// dated id once it is known, whichever spelling the caller names.
     resolutions: HashMap<String, String>,
     round_robin: HashMap<(String, Tier, String), usize>,
     samples: HashMap<String, UtilizationSample>,
+    /// The ledger's share pricer, handed in by the task as `rates` is. Until then one that prices nothing, so a
+    /// selection books no reservation and a burn reads empty.
+    share: SharePricer,
     /// The latest shedding round on each account, by the id of the pool that ran it and the account id.
     shed_rounds: HashMap<(String, String), ShedRound>,
 }
@@ -981,6 +1071,7 @@ impl RoutingState {
             pins: load.pins.into_iter().map(|p| (p.key(), p)).collect(),
             rates: BurnRates::default(),
             renewed: HashSet::new(),
+            reservations: HashMap::new(),
             resolutions: load
                 .resolutions
                 .into_iter()
@@ -988,6 +1079,7 @@ impl RoutingState {
                 .collect(),
             round_robin: HashMap::new(),
             samples,
+            share: SharePricer::default(),
             shed_rounds,
         }
     }
@@ -1548,6 +1640,8 @@ impl RoutingState {
                 .filter(|(at, _)| *at > after)
                 .fold(0.0, |sum, (_, share)| sum + share)
         };
+        // A booking counts whatever the reading's age: no reading carries a charge that has not happened.
+        let reserved = self.reserved(account_id, window);
         match reading.reset {
             Some(reset) if reset <= now => match window {
                 // The weekly windows reset at the same weekday time every week, so the reading's reset names every
@@ -1555,21 +1649,21 @@ impl RoutingState {
                 w if w.starts_with(SEVEN_DAY) => {
                     let next = reset + ((now - reset) / WEEK_MS + 1) * WEEK_MS;
                     Some(WindowReading {
-                        utilization: since(next - WEEK_MS),
+                        utilization: since(next - WEEK_MS) + reserved,
                         reset: Some(next),
                         observed_at: reading.observed_at,
                         source: WindowSource::Predicted,
                     })
                 }
                 _ => Some(WindowReading {
-                    utilization: since(reset),
+                    utilization: since(reset) + reserved,
                     reset: None,
                     observed_at: reading.observed_at,
                     source: WindowSource::Predicted,
                 }),
             },
             _ => {
-                let charged = since(reading.observed_at);
+                let charged = since(reading.observed_at) + reserved;
                 Some(WindowReading {
                     utilization: reading.utilization + charged,
                     source: if charged != 0.0 {
@@ -1675,6 +1769,70 @@ impl RoutingState {
         &self.rates
     }
 
+    /// Set by the task at spawn from its config, and by a test that prices a selection through its own closures.
+    pub fn set_share(&mut self, share: SharePricer) {
+        self.share = share;
+    }
+
+    pub fn share(&self) -> &SharePricer {
+        &self.share
+    }
+
+    /// Books under the request's id, replacing a booking the request already holds (a failover's new selection).
+    pub fn book_reservation(&mut self, request_id: &str, reservation: Reservation) {
+        self.reservations
+            .insert(request_id.to_string(), reservation);
+    }
+
+    pub fn reservation(&self, request_id: &str) -> Option<&Reservation> {
+        self.reservations.get(request_id)
+    }
+
+    /// The `Usage` and `Ended` paths: the booking leaves and nothing is charged, `None` when the request holds none.
+    /// The usage arm calls it before `charge`, which it calls on every usage as today.
+    pub fn release_reservation(&mut self, request_id: &str) -> Option<Reservation> {
+        self.reservations.remove(request_id)
+    }
+
+    /// Every booking past its `expires_at`, removed, for the purge's events.
+    pub fn expire_reservations(&mut self, now: i64) -> Vec<(String, Reservation)> {
+        let mut expired: Vec<String> = self
+            .reservations
+            .iter()
+            .filter(|(_, reservation)| reservation.expires_at <= now)
+            .map(|(request_id, _)| request_id.clone())
+            .collect();
+        // One order for the purge's events, whatever the map's.
+        expired.sort();
+        expired
+            .into_iter()
+            .filter_map(|request_id| {
+                self.reservations
+                    .remove(&request_id)
+                    .map(|reservation| (request_id, reservation))
+            })
+            .collect()
+    }
+
+    /// The live reservations' rewrite on the account and window summed, what `predicted` adds.
+    pub fn reserved(&self, account_id: &str, window: &str) -> f64 {
+        self.reservations
+            .values()
+            .filter(|reservation| reservation.account_id == account_id)
+            .filter_map(|reservation| reservation.rewrite.get(window))
+            .fold(0.0, |sum, share| sum + share)
+    }
+
+    pub fn reservations_on(&self, account_id: &str) -> Vec<&Reservation> {
+        let mut on: Vec<(&String, &Reservation)> = self
+            .reservations
+            .iter()
+            .filter(|(_, reservation)| reservation.account_id == account_id)
+            .collect();
+        on.sort_by(|a, b| a.0.cmp(b.0));
+        on.into_iter().map(|(_, reservation)| reservation).collect()
+    }
+
     /// Set by the task at spawn from its config, and by a test that prices a round through its own tables.
     pub fn set_rates(&mut self, rates: BurnRates) {
         self.rates = rates;
@@ -1776,6 +1934,54 @@ impl RoutingState {
         });
         let sum = pins.iter().filter_map(|(_, burn)| *burn).sum();
         (pins, sum)
+    }
+
+    /// The account's burn per plan window in share per second: the kept pins not named by a live reservation,
+    /// each `share.rate` of its plain average on `tier` at `now` decayed with `average_ms`, plus the live
+    /// reservations' `burn`. A window a pin's model does not draw is absent, an unpriced pin adds nothing.
+    pub fn burn_shares(
+        &self,
+        account_id: &str,
+        keep: &dyn Fn(&PinRow) -> bool,
+        tier: &str,
+        now: i64,
+        average_ms: i64,
+    ) -> BTreeMap<String, f64> {
+        // A pin a live booking names counts through the booking's burn alone, so a moved pin counts once while its
+        // move is in flight.
+        let reserved: HashSet<PinKey> = self
+            .reservations
+            .values()
+            .filter_map(|reservation| reservation.pin.clone())
+            .collect();
+        let mut shares = BTreeMap::new();
+        for pin in self
+            .pins
+            .values()
+            .filter(|pin| pin.account_id == account_id && keep(pin))
+        {
+            if reserved.contains(&pin.key()) {
+                continue;
+            }
+            for window in plan_windows(&pin.model) {
+                // The plain average, since the banded copy weighs past renewals' bands and the rate reads the band
+                // of now. Every type decays by one factor, so decaying the share equals pricing the decayed rates.
+                if let Some(rate) = self.share.rate(window, tier, &pin.model, &pin.burn, now) {
+                    *shares.entry(window.to_string()).or_insert(0.0) +=
+                        burn_decayed(rate, pin.burn_at, now, average_ms);
+                }
+            }
+        }
+        for reservation in self
+            .reservations
+            .values()
+            .filter(|reservation| reservation.account_id == account_id)
+        {
+            for (window, burn) in &reservation.burn {
+                *shares.entry(window.clone()).or_insert(0.0) += burn;
+            }
+        }
+        shares
     }
 
     /// Whether `pool_id`'s latest round on the pin's current account, run within `dwell_ms`, marked it. A pin
@@ -2073,11 +2279,10 @@ impl RoutingState {
         // A pool's marks are read within its own dwell alone, and a pool that left the registry has no round to
         // read. The account's newest round is read by the one pool holding the account, so its stamp stays until
         // that pool's dwell has passed.
-        let dwell_ms = |pool: &PoolRow| seconds_ms(pool.shedding.source_dwell_seconds);
         self.shed_rounds.retain(|(pool_id, _), (at, _)| {
             snapshot
                 .pool(pool_id)
-                .is_some_and(|pool| now - *at < dwell_ms(pool))
+                .is_some_and(|pool| now - *at < shed_dwell_ms(pool))
         });
         self.newest_shed.retain(|account_id, at| {
             snapshot
@@ -2088,7 +2293,7 @@ impl RoutingState {
                         .iter()
                         .any(|m| &m.account_id == account_id)
                 })
-                .is_some_and(|pool| now - *at < dwell_ms(pool))
+                .is_some_and(|pool| now - *at < shed_dwell_ms(pool))
         });
         let ttl_of = |key_id: &str| -> Option<i64> {
             snapshot
@@ -3163,5 +3368,206 @@ mod tests {
             .is_empty(),
             "a reading under the row's window text says nothing while the Fable week stays spent"
         );
+    }
+
+    /// A booking on `account` under `attempt`, standing from `booked_at` to `expires_at`.
+    fn reservation(
+        account: &str,
+        attempt: u32,
+        pin: Option<PinKey>,
+        rewrite: &[(&str, f64)],
+        burn: &[(&str, f64)],
+        booked_at: i64,
+        expires_at: i64,
+    ) -> Reservation {
+        let map = |entries: &[(&str, f64)]| -> BTreeMap<String, f64> {
+            entries.iter().map(|(w, s)| (w.to_string(), *s)).collect()
+        };
+        Reservation {
+            account_id: account.into(),
+            attempt,
+            pin,
+            booked_at,
+            rewrite: map(rewrite),
+            burn: map(burn),
+            expires_at,
+        }
+    }
+
+    /// A poll's reading of the 5-hour window alone, with no reset.
+    fn five_hour_reading(utilization: f64, observed_at: i64) -> UtilizationSample {
+        UtilizationSample::default().with(
+            FIVE_HOUR,
+            WindowReading {
+                utilization,
+                reset: None,
+                observed_at,
+                source: WindowSource::Poll,
+            },
+        )
+    }
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    /// `burn.input` priced a millionth of the 5-hour window and a ten-millionth of every other window per token a
+    /// second, whatever the tier or the model.
+    fn input_rates() -> SharePricer {
+        SharePricer::default().with_rate(|window, _, _, burn, _| {
+            Some(if window == FIVE_HOUR {
+                burn.input * 1e-6
+            } else {
+                burn.input * 1e-7
+            })
+        })
+    }
+
+    #[test]
+    fn a_reservation_counts_in_the_prediction_until_it_is_released_and_a_second_booking_replaces_the_first(
+    ) {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.record_sample("a", five_hour_reading(0.5, 1_000));
+        state.record_sample("b", five_hour_reading(0.2, 1_000));
+        let five_hour = |state: &RoutingState, account: &str| {
+            state
+                .predicted(account, FIVE_HOUR, 2_000)
+                .expect("a reading")
+        };
+        let booking = |account: &str, attempt: u32| {
+            reservation(
+                account,
+                attempt,
+                None,
+                &[(FIVE_HOUR, 0.1)],
+                &[],
+                2_000,
+                3_000,
+            )
+        };
+        state.book_reservation("r", booking("a", 1));
+        let raised = five_hour(&state, "a");
+        assert!(
+            close(raised.utilization, 0.6) && raised.source == WindowSource::Predicted,
+            "the booking's rewrite joins the reading and names the prediction: {raised:?}"
+        );
+        assert!(state.release_reservation("r").is_some());
+        let back = five_hour(&state, "a");
+        assert!(
+            close(back.utilization, 0.5) && back.source == WindowSource::Poll,
+            "the reading returns once the booking leaves: {back:?}"
+        );
+        state.book_reservation("r", booking("a", 1));
+        assert!(state.release_reservation("r").is_some());
+        state.charge("a", 2_500, &[(FIVE_HOUR, 0.08)]);
+        assert!(
+            close(five_hour(&state, "a").utilization, 0.58),
+            "the charge alone, the released booking gone"
+        );
+        assert!(state.reservation("r").is_none() && state.release_reservation("r").is_none());
+        state.book_reservation("r", booking("a", 1));
+        state.book_reservation("r", booking("b", 2));
+        let booked = state
+            .reservation("r")
+            .expect("one booking under the request");
+        assert_eq!(
+            (booked.account_id.as_str(), booked.attempt),
+            ("b", 2),
+            "a failover's selection replaces the booking under the request id"
+        );
+        assert_eq!(state.reserved("a", FIVE_HOUR), 0.0);
+        assert!(close(state.reserved("b", FIVE_HOUR), 0.1));
+        assert!(state.reservations_on("a").is_empty());
+        assert_eq!(state.reservations_on("b").len(), 1);
+    }
+
+    #[test]
+    fn expired_reservations_leave_at_their_instant_and_a_restart_loads_none() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.book_reservation(
+            "r1",
+            reservation("a", 1, None, &[(FIVE_HOUR, 0.1)], &[], 0, 10),
+        );
+        state.book_reservation(
+            "r2",
+            reservation("a", 1, None, &[(FIVE_HOUR, 0.1)], &[], 0, 20),
+        );
+        let expired = state.expire_reservations(15);
+        assert_eq!(
+            expired
+                .iter()
+                .map(|(id, _)| id.as_str())
+                .collect::<Vec<_>>(),
+            ["r1"]
+        );
+        assert!(state.reservation("r1").is_none() && state.reservation("r2").is_some());
+        let mut loaded = RoutingState::from_load(RoutingLoad {
+            pins: vec![burning("s", 1.0).0],
+            ..RoutingLoad::default()
+        });
+        assert!(
+            loaded.reservations_on("a").is_empty()
+                && loaded.expire_reservations(i64::MAX).is_empty(),
+            "a load carries no booking"
+        );
+    }
+
+    #[test]
+    fn burn_shares_prices_each_kept_pin_per_window_leaves_a_reserved_pin_out_and_adds_the_reservations_burn(
+    ) {
+        let (heavy, _) = burning("heavy", 40_000.0);
+        let (light, _) = burning("light", 10_000.0);
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![heavy, light.clone()],
+            ..RoutingLoad::default()
+        });
+        state.set_share(input_rates());
+        state.book_reservation(
+            "r",
+            reservation("a", 1, Some(light.key()), &[], &[(FIVE_HOUR, 0.002)], 0, 10),
+        );
+        let shares = state.burn_shares("a", &|_| true, "t", 0, 1_800_000);
+        assert_eq!(
+            shares.keys().map(String::as_str).collect::<Vec<_>>(),
+            [FIVE_HOUR, SEVEN_DAY]
+        );
+        assert!(
+            close(shares[FIVE_HOUR], 0.04 + 0.002),
+            "the heavy pin priced, the reserved light pin left out, the booking's burn added: {shares:?}"
+        );
+        assert!(close(shares[SEVEN_DAY], 0.004), "{shares:?}");
+        assert!(state.release_reservation("r").is_some());
+        state.set_share(SharePricer::default().with_rate(|_, _, _, _, _| None));
+        assert!(
+            state
+                .burn_shares("a", &|_| true, "t", 0, 1_800_000)
+                .is_empty(),
+            "an unpriced pin adds nothing"
+        );
+    }
+
+    #[test]
+    fn a_models_week_is_a_burn_window_only_for_the_models_that_draw_it() {
+        let windows_of = |model: &str| {
+            let (pin, _) = burning("s", 1.0);
+            let mut state = RoutingState::from_load(RoutingLoad {
+                pins: vec![PinRow {
+                    model: model.into(),
+                    ..pin
+                }],
+                ..RoutingLoad::default()
+            });
+            state.set_share(SharePricer::default().with_rate(|_, _, _, burn, _| Some(burn.input)));
+            state
+                .burn_shares("a", &|_| true, "t", 0, 1_800_000)
+                .into_keys()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            windows_of("claude-fable-5-1"),
+            [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE],
+            "a Fable pin burns its own week beside the shared windows"
+        );
+        assert_eq!(windows_of("claude-sonnet-5"), [FIVE_HOUR, SEVEN_DAY]);
     }
 }

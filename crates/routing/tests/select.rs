@@ -6,9 +6,9 @@ use phoebis_routing::{
     HoldOutcome, LaneFacts, LongContextRates, MemberSpend, MigrateReason,
     OverageEvidence, PinKeyFacts, PinRef, Placement, RateTable, Rates, RefusalFacts,
     RefusedRequest, RegistrySnapshot, RequestFlags, RoutingState, SelectRequest, SelectResult,
-    StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading, WindowSource,
-    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, MODEL_REJECTED_REASON, SEVEN_DAY,
-    SEVEN_DAY_FABLE, WEEK_MS,
+    SharePricer, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading,
+    WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
+    MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -412,6 +412,7 @@ fn select_request(
         held_out: false,
         lane: lane_key(model, "standard", "none", "-"),
         fast: false,
+        body_tokens: 0,
     }
 }
 
@@ -14120,4 +14121,435 @@ fn a_pins_fast_usage_prices_at_the_fast_cells_in_the_round_and_counts_toward_no_
         "as a window share the banded copy alone counts, since fast usage draws usage credits and never the plan's \
          window"
     );
+}
+
+/// The rate-limit tier every member of a priced pool carries, which the test pricers key on.
+const TIER: &str = "default_claude_max_20x";
+
+/// `snapshot_with_terms` with every member of `pool` on `TIER`, so a selection on it prices through the pool's
+/// pricer rather than reading an untiered destination.
+fn tiered(pool: Pool) -> RegistrySnapshot {
+    let terms = pool
+        .members
+        .iter()
+        .map(|(id, _)| SubscriptionTerm {
+            account_id: (*id).into(),
+            since: None,
+            trial_ends_at: None,
+            cancelled: false,
+            ends_at: None,
+            tier: Some(TIER.into()),
+        })
+        .collect();
+    snapshot_with_terms(pool, terms)
+}
+
+/// One cache-write token a ten-millionth of the 5-hour window, a sixty-millionth of the 7-day window and a
+/// thirty-millionth of the Fable week on `TIER`, the same ratios per input token a second for a burn, and nothing
+/// for a model spelled `unpriced`, so a case can hold a pin the tables do not weight.
+fn ratio_pricer() -> SharePricer {
+    fn ratio(window: &str, tier: &str, model: &str, tokens: f64) -> Option<f64> {
+        if tier != TIER || model.contains("unpriced") {
+            return None;
+        }
+        let per_token = match window {
+            FIVE_HOUR => 10_000_000.0,
+            SEVEN_DAY => 60_000_000.0,
+            SEVEN_DAY_FABLE => 30_000_000.0,
+            _ => return None,
+        };
+        Some(tokens / per_token)
+    }
+    SharePricer::new(|window, tier, model, usage, _| {
+        ratio(
+            window,
+            tier,
+            model,
+            (usage.write_5m + usage.write_1h) as f64,
+        )
+    })
+    .with_rate(|window, tier, model, burn, _| ratio(window, tier, model, burn.input))
+}
+
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-9
+}
+
+/// The 5-hour prediction of `account` at `now`.
+fn five_hour(st: &RoutingState, account: &str, now: i64) -> f64 {
+    st.predicted(account, FIVE_HOUR, now)
+        .expect("a reading")
+        .utilization
+}
+
+/// `request` for `session` under `request_id`, carrying a 200 000 token body.
+fn placing(s: &RegistrySnapshot, request_id: &str, session: &str, now: i64) -> SelectRequest {
+    SelectRequest {
+        request_id: request_id.into(),
+        body_tokens: 200_000,
+        ..request(s, Some(session), "claude-sonnet-5", true, &[], now)
+    }
+}
+
+/// A fast request of `session` under `request_id`, on the fast lane.
+fn fast_request(s: &RegistrySnapshot, request_id: &str, session: &str, now: i64) -> SelectRequest {
+    SelectRequest {
+        fast: true,
+        lane: lane_key("claude-sonnet-5", "fast", "none", "-"),
+        ..placing(s, request_id, session, now)
+    }
+}
+
+/// Credits with room on `account`, so a fast request may land there.
+fn credits_on(st: &mut RoutingState, account: &str, now: i64) {
+    st.record_credits(
+        account,
+        CreditsState {
+            enabled: true,
+            disabled_reason: None,
+            utilization: Some(0.1),
+            observed_at: now,
+            incarnation: 1,
+        },
+    );
+}
+
+#[test]
+fn a_placement_books_its_rewrite_on_the_destination_until_the_usage_replaces_it_or_the_request_ends(
+) {
+    let s = tiered(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.set_share(ratio_pricer());
+    st.record_sample("a", sample(0.5, 0.1, T));
+    let req = placing(&s, "r-1", "s1", T);
+    assert_eq!(
+        landed(select(&mut st, &s, &req, &mut rng()).0),
+        ("a".into(), None)
+    );
+    let booked = st
+        .reservation(&req.request_id)
+        .expect("the placement books under the request")
+        .clone();
+    assert_eq!(
+        (
+            booked.account_id.as_str(),
+            booked.attempt,
+            booked.pin.as_ref(),
+            booked.booked_at,
+            booked.expires_at,
+        ),
+        (
+            "a",
+            req.attempt,
+            Some(&pin_key("s1")),
+            T,
+            T + IN_FLIGHT_RECLAIM_MS
+        )
+    );
+    assert!(
+        close(booked.rewrite[FIVE_HOUR], 0.02),
+        "200 000 tokens at a ten-millionth each: {booked:?}"
+    );
+    assert!(
+        close(booked.rewrite[SEVEN_DAY], 200_000.0 / 60_000_000.0),
+        "{booked:?}"
+    );
+    assert_eq!(
+        booked.rewrite.len(),
+        2,
+        "a Sonnet request draws the two shared windows alone"
+    );
+    assert!(
+        close(five_hour(&st, "a", T), 0.52),
+        "the prediction carries the booking"
+    );
+    assert!(st.release_reservation(&req.request_id).is_some());
+    assert!(
+        close(five_hour(&st, "a", T), 0.5),
+        "and reads the reading once the booking leaves"
+    );
+    st.record_sample("a", with_fable(sample(0.5, 0.1, T), 0.3, None));
+    let fable = SelectRequest {
+        request_id: "r-2".into(),
+        body_tokens: 200_000,
+        ..request(&s, Some("s2"), "claude-fable-5-1", true, &[], T)
+    };
+    assert_eq!(
+        landed(select(&mut st, &s, &fable, &mut rng()).0),
+        ("a".into(), None)
+    );
+    let booked = st.reservation("r-2").expect("the Fable placement books");
+    assert_eq!(
+        booked
+            .rewrite
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE],
+        "a Fable request books its own week too"
+    );
+}
+
+#[test]
+fn a_moving_pin_keeps_its_burn_and_its_last_prompt_on_the_new_row() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        shedding: Shedding {
+            migrate_when_spent: true,
+            ..Shedding::default()
+        },
+        ..Pool::default()
+    });
+    let old = PinRow {
+        last_input_tokens: 813_365,
+        burn_fast: input_rate(5.0),
+        ..burning("s1", "a", 40_000.0, true, T)
+    };
+    let mut st = loaded(vec![old.clone()]);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    st.record_sample("b", refreshing(0.2, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000);
+    assert_eq!(
+        landed(select(&mut st, &s, &req, &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    let moved = pinned(&st, "s1");
+    assert_eq!(moved.account_id, "b");
+    assert_eq!(
+        (
+            moved.burn,
+            moved.burn_at,
+            moved.burn_banded,
+            moved.burn_fast,
+            moved.last_input_tokens,
+        ),
+        (
+            old.burn,
+            old.burn_at,
+            old.burn_banded,
+            old.burn_fast,
+            old.last_input_tokens,
+        ),
+        "the new row carries the averages and the last prompt over"
+    );
+    let fresh = request(&s, Some("s2"), "claude-sonnet-5", true, &[], T + 1_000);
+    select(&mut st, &s, &fresh, &mut rng());
+    let placed = pinned(&st, "s2");
+    assert_eq!(
+        (
+            placed.burn,
+            placed.burn_at,
+            placed.burn_banded,
+            placed.burn_fast,
+            placed.last_input_tokens,
+        ),
+        (
+            PinBurn::default(),
+            None,
+            PinBurn::default(),
+            PinBurn::default(),
+            0,
+        ),
+        "a fresh placement starts at zero"
+    );
+}
+
+#[test]
+fn a_fresh_session_takes_the_median_burn_of_the_pools_warm_priced_pins() {
+    let s = tiered(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![
+        burning("s1", "a", 10_000.0, true, T),
+        burning("s2", "a", 30_000.0, true, T),
+        burning("s3", "a", 50_000.0, true, T),
+        PinRow {
+            model: "claude-unpriced-1".into(),
+            ..burning("s4", "a", 90_000.0, true, T)
+        },
+    ]);
+    st.set_share(ratio_pricer());
+    st.record_sample("a", sample(0.5, 0.1, T));
+    let req = SelectRequest {
+        body_tokens: 1_000,
+        ..placing(&s, "r-1", "s9", T)
+    };
+    select(&mut st, &s, &req, &mut rng());
+    let booked = st.reservation("r-1").expect("the placement books");
+    assert!(
+        close(booked.burn[FIVE_HOUR], 30_000.0 / 10_000_000.0),
+        "the median of the three priced pins, the unpriced one left out: {booked:?}"
+    );
+    assert!(
+        close(booked.burn[SEVEN_DAY], 30_000.0 / 60_000_000.0),
+        "{booked:?}"
+    );
+    let mut cold = loaded(vec![burning("s1", "a", 10_000.0, false, T)]);
+    cold.set_share(ratio_pricer());
+    cold.record_sample("a", sample(0.5, 0.1, T));
+    select(&mut cold, &s, &req, &mut rng());
+    let booked = cold
+        .reservation("r-1")
+        .expect("the placement books its rewrite");
+    assert_eq!(
+        booked.burn.get(FIVE_HOUR).copied().unwrap_or(0.0),
+        0.0,
+        "no warm pin, no prior: {booked:?}"
+    );
+}
+
+#[test]
+fn a_count_request_a_probe_and_a_renewal_book_nothing() {
+    let s = tiered(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.set_share(ratio_pricer());
+    st.record_sample("a", sample(0.5, 0.1, T));
+    // Each absence is read beside a placement that books, so the case holds only once the booking exists.
+    let placed = |st: &mut RoutingState, id: &str, session: &str| {
+        let before = five_hour(st, "a", T);
+        select(st, &s, &placing(&s, id, session, T), &mut rng());
+        assert!(st.reservation(id).is_some(), "{id} books");
+        assert!(
+            close(five_hour(st, "a", T), before + 0.02),
+            "{id} raises the prediction by its rewrite"
+        );
+        assert!(st.release_reservation(id).is_some());
+    };
+    select(
+        &mut st,
+        &s,
+        &SelectRequest {
+            count: true,
+            ..placing(&s, "r-count", "s1", T)
+        },
+        &mut rng(),
+    );
+    assert!(
+        st.reservation("r-count").is_none(),
+        "a token count writes no cache and books nothing"
+    );
+    placed(&mut st, "r-1", "s2");
+    select(
+        &mut st,
+        &s,
+        &SelectRequest {
+            probe: true,
+            ..placing(&s, "r-probe", "s3", T)
+        },
+        &mut rng(),
+    );
+    assert!(
+        st.reservation("r-probe").is_none(),
+        "a probe replays a recipe the account carries and books nothing"
+    );
+    placed(&mut st, "r-2", "s4");
+    assert_eq!(pinned(&st, "s2").account_id, "a");
+    select(&mut st, &s, &placing(&s, "r-renew", "s2", T), &mut rng());
+    assert!(
+        st.reservation("r-renew").is_none(),
+        "a renewal in place books nothing"
+    );
+    placed(&mut st, "r-3", "s5");
+}
+
+#[test]
+fn a_fast_request_books_nothing_and_leaves_the_prediction_unchanged() {
+    let s = tiered(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.set_share(ratio_pricer());
+    st.record_sample("a", sample(0.5, 0.1, T));
+    credits_on(&mut st, "a", T);
+    assert_eq!(
+        landed(select(&mut st, &s, &fast_request(&s, "r-1", "s1", T), &mut rng()).0),
+        ("a".into(), None)
+    );
+    assert!(
+        st.reservation("r-1").is_none(),
+        "a fast request draws usage credits and books no plan window"
+    );
+    assert!(
+        close(five_hour(&st, "a", T), 0.5),
+        "the prediction stands where the reading left it"
+    );
+    // A fast move: a cold pin on an api_key member returns to plan on the OAuth sibling and books nothing there.
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        kinds: vec![("a", AccountKind::ApiKey)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![burning("s2", "a", 40_000.0, false, T)]);
+    st.set_share(ratio_pricer());
+    st.record_sample("b", sample(0.5, 0.1, T));
+    credits_on(&mut st, "b", T);
+    assert_eq!(
+        landed(select(&mut st, &s, &fast_request(&s, "r-2", "s2", T), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::ReturnToPlan))
+    );
+    assert!(
+        st.reservation("r-2").is_none(),
+        "a fast move books nothing on its destination"
+    );
+    assert!(close(five_hour(&st, "b", T), 0.5));
+}
+
+#[test]
+fn a_hold_books_nothing_and_the_selection_after_it_books_for_the_request() {
+    let s = tiered(Pool {
+        members: vec![("a", 0)],
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.set_share(ratio_pricer());
+    st.record_sample("a", sample(0.5, 0.1, T));
+    let ticket = st.in_flight().dispatched("a", T);
+    let req = placing(&s, "r-1", "s1", T);
+    assert!(
+        matches!(
+            select(&mut st, &s, &req, &mut rng()).0,
+            SelectResult::Held { .. }
+        ),
+        "every member at its cap holds the request"
+    );
+    assert!(
+        st.reservation("r-1").is_none() && st.reservations_on("a").is_empty(),
+        "a hold books nothing"
+    );
+    assert!(close(five_hour(&st, "a", T), 0.5));
+    drop(ticket);
+    let after = SelectRequest {
+        seq: 2,
+        holds: vec![HoldFacts {
+            account_id: "a".into(),
+            cohort: None,
+            held_ms: 10,
+            attempt: 1,
+            seq: 1,
+            ran_out: false,
+        }],
+        ..req
+    };
+    assert_eq!(
+        landed(select(&mut st, &s, &after, &mut rng()).0),
+        ("a".into(), None)
+    );
+    let booked = st
+        .reservation("r-1")
+        .expect("the placement after the hold books for the request");
+    assert_eq!(booked.attempt, 1);
+    assert!(close(five_hour(&st, "a", T), 0.52));
 }

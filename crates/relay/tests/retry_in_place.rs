@@ -6,10 +6,14 @@ mod common;
 use std::time::{Duration, Instant};
 
 use common::*;
-use fake_upstream::{FakeUpstream, Respond, Rule};
+use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event};
-use phoebis_routing::{DecisionRecord, DecisionSummary, RouterEvent};
+use phoebis_routing::{
+    DecisionRecord, DecisionSummary, Report, RouterConfig, RouterEvent, SharePricer,
+    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR,
+};
+use phoebis_store::SubscriptionRow;
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
@@ -524,5 +528,136 @@ async fn a_throttle_the_request_deadline_would_outlast_fails_over_at_once_and_on
         "the Retry-After was waited out: {waited:?}"
     );
     drain(resp).await;
+    up.shutdown().await;
+}
+
+/// The rate-limit tier the priced harness puts every account on, which its pricer keys on.
+const TIER: &str = "default_claude_max_20x";
+
+/// A ten-millionth of either window per token of input or cache write on `TIER`, so a body of `n` tokens books
+/// `n / 10_000_000` and a usage of `n` input tokens charges the same.
+fn tenth_per_million() -> SharePricer {
+    SharePricer::new(|_, tier, _, usage, _| {
+        (tier == TIER).then(|| (usage.input + usage.write_5m) as f64 / 10_000_000.0)
+    })
+}
+
+/// `harness_with_router_config` over `accounts` on `TIER`, each reading 0.5 on its 5-hour window a second before the
+/// harness clock, so a booking and a charge at the clock move the prediction the test reads.
+async fn priced_harness(up: &FakeUpstream, accounts: &[TestAccount]) -> Harness {
+    let h = harness_with_router_config(
+        up,
+        accounts,
+        PoolSpec::default(),
+        RouterConfig {
+            share: tenth_per_million(),
+            ..RouterConfig::default()
+        },
+    )
+    .await;
+    for account in accounts {
+        h.store
+            .set_profile(
+                account.id,
+                "{}",
+                &SubscriptionRow {
+                    tier: Some(TIER.into()),
+                    ..SubscriptionRow::default()
+                },
+            )
+            .unwrap();
+    }
+    h.router.reload().await.unwrap();
+    for account in accounts {
+        h.router
+            .report(Report::Sample {
+                account_id: account.id.into(),
+                sample: UtilizationSample::default().with(
+                    FIVE_HOUR,
+                    WindowReading {
+                        utilization: 0.5,
+                        reset: None,
+                        observed_at: NOW - 1_000,
+                        source: WindowSource::Poll,
+                    },
+                ),
+                incarnation: 1,
+                source_request_id: None,
+            })
+            .await;
+    }
+    h
+}
+
+/// The 5-hour prediction of `account`, as the router answers it now.
+async fn five_hour(h: &Harness, account: &str) -> f64 {
+    h.router
+        .samples()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|(id, _)| id == account)
+        .and_then(|(_, sample)| sample.windows.get(FIVE_HOUR).map(|r| r.utilization))
+        .expect("a reading")
+}
+
+fn ev(event: &str, data: &str) -> SseEvent {
+    SseEvent {
+        event: event.into(),
+        data: data.into(),
+    }
+}
+
+/// A committed stream of `input_tokens` the fake holds after its first event until the test releases it, so the
+/// request is in flight while the test reads the router.
+fn held_stream(input_tokens: u64) -> Respond {
+    Respond::SseGated {
+        status: 200,
+        headers: vec![],
+        events: vec![
+            ev(
+                "message_start",
+                &format!(
+                    r#"{{"type":"message_start","message":{{"id":"msg_1","usage":{{"input_tokens":{input_tokens}}}}}}}"#
+                ),
+            ),
+            ev("message_stop", r#"{"type":"message_stop"}"#),
+        ],
+    }
+}
+
+#[tokio::test]
+async fn a_retry_in_place_sends_no_ended_between_its_attempts_and_one_usage_for_the_request() {
+    let up = FakeUpstream::start(messages(json_200())).await;
+    up.push_credential_rule(A, "/v1/messages", json_429_retry_after("1"));
+    up.push_credential_rule(A, "/v1/messages", held_stream(100));
+    let h = priced_harness(&up, &[oauth("a", A, 0)]).await;
+    let mut events = h.router.subscribe_events();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    let o = outcome(&resp);
+    assert_eq!((resp.status().as_u16(), o.attempt), (200, 2));
+    let standing = five_hour(&h, "a").await;
+    assert!(
+        standing > 0.5,
+        "the booking of attempt 1's selection stands while attempt 2 streams: {standing}"
+    );
+    up.release();
+    drain(resp).await;
+    let seen = events_through_cache_map(&mut events, &o.request_id).await;
+    assert!(
+        seen.iter()
+            .all(|event| !matches!(event, RouterEvent::ReservationExpired { .. })),
+        "no end report between the attempts: {seen:?}"
+    );
+    let settled = five_hour(&h, "a").await;
+    assert!(
+        (settled - (0.5 + 100.0 / 10_000_000.0)).abs() < 1e-9,
+        "the usage of attempt 2 replaced the booking once: {settled}"
+    );
     up.shutdown().await;
 }

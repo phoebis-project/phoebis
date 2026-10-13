@@ -22,7 +22,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::catalog::CatalogService;
 use crate::identity::PendingReports;
-use crate::messages::{Guards, RelayOutcome, Trace};
+use crate::messages::{Guards, RelayOutcome, Trace, CANCELED, REFUSED, TRANSPORT_ERROR};
 use crate::observe::{answer_from_json, is_tool_use_delta, message_id_from_json};
 use crate::sse::{SseEvent, SseParser};
 
@@ -273,6 +273,7 @@ impl AffinityFacts {
     /// (`cache_touched` and `prefix_tokens` from the usage's three cache fields, false and 0 without them) and
     /// sends `Report::Affinity` through `waiting`, filing the sequence it took in `pending` once it has one; a
     /// committed answer only (`status == 200`), since a rejection continues no conversation and consumes no window.
+    /// Answers whether the usage went out, which is what releases the request's booking.
     pub(crate) fn send(
         self,
         now: i64,
@@ -281,11 +282,12 @@ impl AffinityFacts {
         fast: bool,
         message_id: Option<String>,
         waiting: &mut Waiting,
-    ) {
+    ) -> bool {
         // A rejection continues no conversation, so it leaves no link to resolve a later request by.
         if status != 200 {
-            return;
+            return false;
         }
+        let mut usage_sent = false;
         if let Some(counted) = usage.filter(|u| !u.is_empty()) {
             waiting.send(
                 &self.router,
@@ -296,8 +298,11 @@ impl AffinityFacts {
                     incarnation: self.incarnation,
                     usage: pin_usage(counted),
                     fast,
+                    request_id: self.request_id.clone(),
+                    attempt: self.attempt,
                 },
             );
+            usage_sent = true;
         }
         let cached = |field: fn(&Usage) -> Option<u64>| usage.and_then(field).unwrap_or(0);
         let prefix_tokens = cached(|u| u.cache_read_tokens)
@@ -351,6 +356,7 @@ impl AffinityFacts {
                 file(&router, seq);
             }),
         }
+        usage_sent
     }
 }
 
@@ -518,8 +524,8 @@ impl Publish {
         }
     }
 
-    /// The answer's end reports go through `waiting`, ahead of the completion.
-    async fn finish(mut self, end: &BodyEnd, waiting: &mut Waiting) {
+    /// The answer's end reports go through `waiting`, ahead of the completion. Answers whether the usage went out.
+    async fn finish(mut self, end: &BodyEnd, waiting: &mut Waiting) -> bool {
         // A stream cut off after its last event never sent the empty line that would close it, so the event, an
         // error among them, can still be sitting in the parser.
         let last = self.parser.as_mut().and_then(|parser| parser.finish());
@@ -575,16 +581,17 @@ impl Publish {
         if let Some(renewal) = self.renewal.take() {
             renewal.send((self.clock)(), self.status, usage.as_ref(), fast, waiting);
         }
-        if let Some(affinity) = self.affinity.take() {
-            affinity.send(
+        let usage_sent = match self.affinity.take() {
+            Some(affinity) => affinity.send(
                 (self.clock)(),
                 self.status,
                 usage.as_ref(),
                 fast,
                 self.message_id.clone(),
                 waiting,
-            );
-        }
+            ),
+            None => false,
+        };
         self.trace
             .complete(
                 &self.outcome,
@@ -599,6 +606,7 @@ impl Publish {
                 (self.clock)(),
             )
             .await;
+        usage_sent
     }
 
     /// The id is handed off once, on first sight: `message_start` names it for a stream, the whole document for a
@@ -681,7 +689,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
             cancel,
             checkin,
             mut decoder,
-            guards,
+            mut guards,
             idle_timeout,
             keep_alive,
             prefix,
@@ -794,9 +802,22 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                 }
             }
         }
-        if let Some(publish) = publish {
-            publish.finish(&end, &mut waiting).await;
-        }
+        let usage_sent = match publish {
+            Some(publish) => publish.finish(&end, &mut waiting).await,
+            None => false,
+        };
+        // A committed usage releases the request's booking itself. Any other end names the cause of the end report
+        // the guards send when they drop below: a body that ran to its end without a usage is an answer the
+        // upstream refused, a cut or a stall is the transport's, and a caller or an account that left is a cancel.
+        guards.ended(if usage_sent {
+            None
+        } else {
+            Some(match end {
+                BodyEnd::Complete => REFUSED,
+                BodyEnd::Failed(_) => TRANSPORT_ERROR,
+                BodyEnd::Cancelled | BodyEnd::ClientGone => CANCELED,
+            })
+        });
         if waiting.is_empty() {
             // Ahead of the sender's drop, so a caller that has read the body's end finds both counts released.
             drop(guards);
