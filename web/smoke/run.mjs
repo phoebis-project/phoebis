@@ -12820,11 +12820,14 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const read = PLAN_CARDS.map((t) => ({ items: legendItems(t), lines: lineLabels(t), t }));
     const estimated = read.map((r) => r.items.filter((li) => labelOf(li) === 'estimated'));
     const swatch = (li) => li?.querySelector('.legend__swatch')?.getAttribute('style') ?? '';
+    // An equivalent names its window in the legend's short form, "0.0611% 20x 5h", and a share would read bare.
+    const shortOf = { '5-hour per hour': '5h', '7-day per hour': '7d' };
+    const equivalentValue = (t, value) => new RegExp(`^~?\\d[\\d.e-]*% 20x ${shortOf[t]}$`).test(value);
     results.push({
-      name: "/analytics under native the 5-hour and 7-day cards draw every subscription account in 20x equivalents, the Sonnet 4.6 account's through its model tier, no API-key account and no model unlisted entry",
+      name: "/analytics under native the 5-hour and 7-day cards draw every subscription account in 20x equivalents named by their window, the Sonnet 4.6 account's through its model tier, no API-key account and no model unlisted entry",
       ok:
         read.every((r) => JSON.stringify([...r.lines].sort()) === JSON.stringify(subscribed)) &&
-        read.every((r) => r.items.filter((li) => subscribed.includes(labelOf(li))).every((li) => valueOf(li).endsWith('%'))) &&
+        read.every((r) => r.items.filter((li) => subscribed.includes(labelOf(li))).every((li) => equivalentValue(r.t, valueOf(li)))) &&
         read.every((r) => !r.items.some((li) => labelOf(li) === 'model unlisted')) &&
         subtitleOf('5-hour per hour').startsWith('The subscription traffic per hour in 20x 5-hour equivalents, weighed by the peak band, whose hours are shaded.') &&
         subtitleOf('7-day per hour').startsWith('The subscription traffic per hour in 20x 7-day equivalents.'),
@@ -12835,6 +12838,19 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       ok: estimated.every((e) => e.length === 1 && /background: transparent/.test(swatch(e[0])) && /border: 1px solid/.test(swatch(e[0])) && e[0].getAttribute('title') === 'A bucket whose model has no measured weight and reads the latest weighed model of its model tier'),
       missing: estimated.map((e) => `${e.length} entries ${swatch(e[0])} ${e[0]?.getAttribute('title') ?? ''}`),
     });
+    {
+      // A line whose range held an estimated bucket marks its legend figure with the tilde and names the estimate in its
+      // title, and a line with none carries neither: read per account off the mock's own answer.
+      const burned = await api.getAnalyticsBurn({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() }, 'account');
+      const marked = new Set(burned.points.filter((p) => p.estimated).map((p) => p.group));
+      const lines = PLAN_CARDS.flatMap((t) => legendItems(t).filter((li) => subscribed.includes(labelOf(li))).map((li) => ({ account: labelOf(li), t, title: li.getAttribute('title') ?? '', value: valueOf(li) })));
+      const wrong = lines.filter((l) => (marked.has(l.account) ? !l.value.startsWith('~') || !l.title.endsWith(`${ESTIMATED_TITLE}.`) : l.value.startsWith('~') || l.title.includes(ESTIMATED_TITLE)));
+      results.push({
+        name: "/analytics a plan card's legend marks an estimated line's figure with the tilde and names the estimate in its title, and an unestimated line's with neither",
+        ok: [...marked].some((a) => subscribed.includes(a)) && [...subscribed].some((a) => !marked.has(a)) && lines.length === 2 * subscribed.length && wrong.length === 0,
+        missing: [`estimated ${[...marked].join(',')}`, ...wrong.map((l) => JSON.stringify(l))],
+      });
+    }
     // The story's Fable traffic gives its accounts a model week of their own, which its own card charts.
     const week = lineLabels('Model week per hour');
     const drawn = lineLabels('5-hour per hour');
@@ -12900,17 +12916,35 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   });
 
   {
-    // The burn route takes the page's grouping, its Accounts filter and its user agent groups.
-    const spy = countCalls('getAnalyticsBurn');
-    await burnGroup('model');
-    const [, modelGroup, modelFilters] = spy.calls.at(-1) ?? [];
-    spy.restore();
-    await burnGroup('account');
-    const lines = legendOf('Spend per minute');
+    // With one account named the route answers that account's shares under every grouping, so under Window shares the
+    // Burn reads the page's grouping and the named account, and the plan cards draw a line per model and per request
+    // class of the account under the named account's subtitle. The account is the story's subscription account that
+    // burned its 5-hour window, read off the mock.
+    const day = { from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() };
+    const named = (await api.getAnalyticsBurn(day, 'account')).points.find((p) => p.unit === 'window_share' && (p.fiveHourShare ?? 0) > 0)?.group;
+    const reads = [];
+    for (const by of ['model', 'request_class']) {
+      localStorage.removeItem('phoebis.unit');
+      const spy = countCalls('getAnalyticsBurn');
+      const page = await mount(`/analytics?accounts=${named}&by=${by}&unit=share#burn`);
+      const sent = spy.calls.at(-1) ?? [];
+      spy.restore();
+      const plan = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === '5-hour per hour');
+      const lines = [...(plan?.querySelectorAll('.legend li') ?? [])].map(labelOf).filter((l) => !MUTED.includes(l));
+      const groups = new Set((await api.getAnalyticsBurn(day, by, { accountIds: [named] })).points.filter((p) => p.fiveHourShare !== null).map((p) => p.group));
+      reads.push({ by, groups: [...groups], lines, noted: plan?.textContent?.includes(GROUPED_SHARE_NOTE) ?? true, sent: [sent[1], sent[2]?.accountIds], subtitle: plan?.querySelector('.card__subtitle')?.textContent ?? '' });
+      page.unmount();
+    }
+    localStorage.removeItem('phoebis.unit');
+    const [byModel, byClass] = reads;
     results.push({
-      name: "/analytics the Burn section reads the page's grouping and its Accounts filter and user agent groups, and charts the models under the model grouping",
-      ok: modelGroup === 'model' && Array.isArray(modelFilters?.accountIds) && 'userAgentGroups' in (modelFilters ?? {}) && lines.length > 0,
-      missing: [`group ${modelGroup}`, JSON.stringify(modelFilters ?? null)],
+      name: "/analytics with one account named under Window shares the Burn reads that account under the page's grouping and the plan cards draw a line per model and per request class under the named account's subtitle",
+      ok:
+        named !== undefined &&
+        reads.every((r) => JSON.stringify(r.sent) === JSON.stringify([r.by, [named]]) && !r.noted && r.subtitle.startsWith("The share of the named account's own 5-hour window")) &&
+        byModel.lines.length === Math.min(byModel.groups.length, 7) && byModel.lines.every((l) => byModel.groups.includes(l)) &&
+        JSON.stringify(byClass.lines) === JSON.stringify(['conversation', 'overhead']),
+      missing: [`named ${named}`, ...reads.map((r) => JSON.stringify(r))],
     });
   }
 
@@ -13003,7 +13037,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
           hollow.length === want((p) => p.fiveHourEquivalent) &&
           sevenDay.length === want((p) => p.sevenDayEquivalent) &&
           accounts.length > 0 &&
-          hollow.every((dot) => dot.getAttribute('r') === '3' && dot.getAttribute('stroke-width') === '2'),
+          hollow.every((dot) => dot.getAttribute('r') === '3' && dot.getAttribute('stroke-width') === '2' && !!dot.getAttribute('stroke') && dot.getAttribute('stroke') === dot.closest('.recharts-line')?.querySelector('.recharts-line-curve')?.getAttribute('stroke')),
         missing: [`5-hour ${hollow.length} of ${want((p) => p.fiveHourEquivalent)}`, `7-day ${sevenDay.length} of ${want((p) => p.sevenDayEquivalent)}`, `accounts ${accounts.join(',')}`],
       });
       // The peak band shades the 5-hour card alone, the one window the band weighs.
@@ -13025,7 +13059,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       delete api.getAnalyticsBurn;
       results.push({
         name: "/analytics an estimated hour's tooltip marks its figure and titles it with the estimate",
-        ok: JSON.stringify(tip.rows.map((r) => [r.label, r.value, r.hint])) === JSON.stringify([['secondary', `~${fmtShare(0.02)}`, 'A bucket whose model has no measured weight and reads the latest weighed model of its model tier']]),
+        ok: JSON.stringify(tip.rows.map((r) => [r.label, r.value, r.hint])) === JSON.stringify([['secondary', `~${fmtEquivalent('five_hour', 0.02)}`, 'A bucket whose model has no measured weight and reads the latest weighed model of its model tier']]),
         missing: [JSON.stringify(tip)],
       });
     }

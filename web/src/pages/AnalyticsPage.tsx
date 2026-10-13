@@ -19,7 +19,7 @@ import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, ANALYTICS_RANGES, type AnalyticsAddress } from '@/lib/address';
-import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, isolatedSlots, moveLabel, nativeCellOf, niceAxisTop, oneAccountShares, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, isolatedSlots, moveLabel, nativeCellOf, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -1283,17 +1283,6 @@ function probeTileOf(unit: UnitPosition, namedAccount: string | null, group: Ana
   return { note: `${fmtInt(probesOf(totals))} probes, ${UNIT_SPLIT[dollarsOf(unit)]}`, value: loading ? null : fmtUsd(totals.probeCostUsd) };
 }
 
-/** A plan group carries both shared windows unless one could not be priced on it. */
-const planRowsRequired = (g: AnalyticsGroup) => g.planRequests === null || g.planRequests > 0;
-const addReadWrite = (a: { read: number; write: number }, b: { read: number; write: number }) => ({ read: a.read + b.read, write: a.write + b.write });
-/** The named account's whole: the position's totals with its shares summed over the groups the route answered them on. */
-const oneAccountGroupOf = (totals: AnalyticsGroup, groups: AnalyticsGroup[]): AnalyticsGroup => ({
-  ...totals,
-  cacheShares: oneAccountShares(groups, (g) => g.cacheShares, addReadWrite, planRowsRequired),
-  costShares: oneAccountShares(groups, (g) => g.costShares, (a, b) => a + b, planRowsRequired),
-  probeShares: oneAccountShares(groups, (g) => g.probeShares, (a, b) => ({ cost: a.cost + b.cost, wasted: a.wasted === null || b.wasted === null ? null : a.wasted + b.wasted })),
-});
-
 /** The named account's cache share of its 7-day window on one side, read off its group, a dash where none is priced. */
 const cacheShareOf = (group: AnalyticsGroup | null, side: 'read' | 'write'): string => {
   const shares = group?.cacheShares ?? null;
@@ -2082,6 +2071,10 @@ const PARTIAL_NOTE = 'The last bucket is partial, rated over the part of its wid
 interface PlanWindow {
   band: boolean;
   equivalent: string;
+  /** The window's key, which names it on an equivalent ("1.47% of 20x 5-hour"). */
+  key: string;
+  /** Whether the slot's figure is one the route marked estimated, a zero the fold filled in never being one. */
+  marked: (r: BurnRow, slot: number) => boolean;
   perHour: (l: BurnLine) => number | null;
   read: (r: BurnRow) => (number | null)[];
   share: (whose: string) => string;
@@ -2093,6 +2086,8 @@ const PLAN_WINDOWS: PlanWindow[] = [
   {
     band: true,
     equivalent: 'The subscription traffic per hour in 20x 5-hour equivalents, weighed by the peak band, whose hours are shaded',
+    key: 'five_hour',
+    marked: (r, slot) => r.estimated[slot],
     perHour: (l) => l.fiveHourPerHour,
     read: (r) => r.fiveHour,
     share: (whose) => `The share of ${whose} own 5-hour window its traffic used per hour, weighed by the peak band, whose hours are shaded`,
@@ -2103,6 +2098,8 @@ const PLAN_WINDOWS: PlanWindow[] = [
   {
     band: false,
     equivalent: 'The subscription traffic per hour in 20x 7-day equivalents',
+    key: 'seven_day',
+    marked: (r, slot) => r.estimated[slot],
     perHour: (l) => l.sevenDayPerHour,
     read: (r) => r.sevenDay,
     share: (whose) => `The share of ${whose} own 7-day window its traffic used per hour`,
@@ -2113,6 +2110,8 @@ const PLAN_WINDOWS: PlanWindow[] = [
   {
     band: false,
     equivalent: `The subscription traffic per hour in 20x equivalents of its model's own week, the ${weekLabelOf(undefined)} window`,
+    key: 'seven_day_fable',
+    marked: (r, slot) => r.estimated[slot] && r.weekAnswered[slot],
     perHour: (l) => l.weekPerHour,
     read: (r) => r.week,
     share: (whose) => `The share of ${whose} own model week its traffic used per hour, the ${weekLabelOf(undefined)} window`,
@@ -2204,7 +2203,13 @@ function BurnCharts({
     .map((l, i) => ({ i, l }))
     .filter(({ l }) => !l.other && (figure === 'share' ? l.unit === 'window_share' : l.unpriced.fiveHour || l.unpriced.sevenDay || [l.fiveHourPerHour, l.sevenDayPerHour, l.weekPerHour].some((v) => v !== null && v > 0)));
   const unpriced = figure === 'share' && shared ? lines.filter((l) => !l.other && l.unit === 'unknown') : [];
-  const shareOf = (share: number | null) => (share === null ? '-' : fmtShare(share));
+  // A share reads bare, its card naming the window, while an equivalent names its window ("1.47% of 20x 5-hour"), in
+  // the short form in the legend.
+  const figureOf = (w: PlanWindow, v: number | null, estimated: boolean, form: 'full' | 'short') => {
+    if (v === null) return '-';
+    if (figure === 'share') return `${estimated ? '~' : ''}${fmtShare(v)}`;
+    return form === 'full' ? equivalentOrDash(w.key, v, estimated) : `${estimated ? '~' : ''}${equivalentShort(w.key, v)}`;
+  };
   const partial = rows[rows.length - 1]?.partial === true;
   // The band's own hours over the instants the plan chart spans: the buckets are UTC multiples whose starts fall off
   // the band's edges, so shading whole buckets would mark the wrong hours.
@@ -2230,8 +2235,8 @@ function BurnCharts({
         color: colorOf(l),
         label: nameOf(l),
         shape: 'line' as const,
-        title: withEstimate(w.band && l.fiveHourPeak !== null ? `Highest hour ${fmtShare(l.fiveHourPeak)}` : '', l.estimated) || undefined,
-        value: `${l.estimated && w.perHour(l) !== null ? '~' : ''}${shareOf(w.perHour(l))}`,
+        title: withEstimate(w.band && l.fiveHourPeak !== null ? `Highest hour ${figureOf(w, l.fiveHourPeak, false, 'full')}` : '', l.estimated) || undefined,
+        value: figureOf(w, w.perHour(l), l.estimated, 'short'),
       })),
       // One entry for every figure the cost model cannot price on the window, whichever line it fell on. Muted, since it
       // draws no line of its own.
@@ -2277,15 +2282,15 @@ function BurnCharts({
             content={timeTip<BurnRow>((r) =>
               drawn.map(({ i, l }) => {
                 const v = w.read(r)[i];
-                const marked = r.estimated[i] && v !== null;
-                return { color: colorOf(l), label: nameOf(l), title: w.unpriced(l) && slotUnpriced(v, r.tokens[i]) ? MODEL_UNLISTED_HINT : marked ? ESTIMATED_HINT : undefined, value: `${marked ? '~' : ''}${shareOf(v)}` };
+                const marked = w.marked(r, i) && v !== null;
+                return { color: colorOf(l), label: nameOf(l), title: w.unpriced(l) && slotUnpriced(v, r.tokens[i]) ? MODEL_UNLISTED_HINT : marked ? ESTIMATED_HINT : undefined, value: figureOf(w, v, marked, 'full') };
               }),
             )}
           />
           {w.band && band.map((run) => <ReferenceArea key={run.from} x1={run.from} x2={run.to} fill={ink.series[6]} fillOpacity={0.34} ifOverflow="hidden" />)}
           {drawn.map(({ i, l }) => (
             // A null slot draws no point, and the gap stays since the lines do not connect across it.
-            <Line key={i} type="monotone" dataKey={(r: BurnRow) => w.read(r)[i]} stroke={colorOf(l)} strokeWidth={2} dot={estimatedDot(rows.map((r) => w.read(r)[i]), rows.map((r) => r.estimated[i]), colorOf(l), ink.surface)} isAnimationActive={false} />
+            <Line key={i} type="monotone" dataKey={(r: BurnRow) => w.read(r)[i]} stroke={colorOf(l)} strokeWidth={2} dot={estimatedDot(rows.map((r) => w.read(r)[i]), rows.map((r) => w.marked(r, i)), colorOf(l), ink.surface)} isAnimationActive={false} />
           ))}
         </LineChart>
       </ChartCard>

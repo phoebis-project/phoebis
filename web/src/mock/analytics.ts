@@ -4,7 +4,7 @@ import type {
 } from '@/api/types';
 import { bucketShare } from '@/lib/analytics';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
-import { equivalentOf, modelWeeks, shareOrFallback, tierCapacity, type Usage } from '@/lib/costs';
+import { equivalentOf, modelWeeks, pricedWindow, shareOrFallback, tierCapacity, type Usage } from '@/lib/costs';
 import { emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, placementHit } from '@/lib/format';
 import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
@@ -510,7 +510,9 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
       const sized = (window: 'five_hour' | 'seven_day') => tier !== undefined && tierCapacity(TABLES, tier, window) !== null;
       if (sized('five_hour')) s.fiveHour.push(0);
       if (sized('seven_day')) s.sevenDay.push(0);
-      if (week !== undefined && sized('seven_day')) s.week.push(0);
+      // The week's own capacity, as the route reads it: the shared window the week prices on.
+      const weekWindow = week === undefined ? null : pricedWindow(TABLES, week);
+      if (weekWindow !== null && sized(weekWindow.priced)) s.week.push(0);
       continue;
     }
     // The row's own shares, its requests priced one by one at their completions, and its equivalents, which read no

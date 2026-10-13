@@ -405,6 +405,20 @@ test('a filter naming one account sizes every group by that account, so its shar
   assert.deepEqual(fold(new Set(['primary']), null), ['usd', 'usd'], 'with no account named the grouping mixes accounts');
 });
 
+test('under the request class grouping a filter naming one account sizes both class lines by that account', () => {
+  const p = (group) => point(0, group, { fiveHourShare: 0.01, sevenDayShare: 0.002, tokens: 100, uncachedTokens: 100, unit: 'window_share' });
+  const answered = [p('main'), p('subagent'), p('auxiliary')];
+  const fold = (sized) => d.foldBurn(answered, 'request_class', 3_600, sized, d.MAX_BURN_LINES, undefined, undefined, { account: 'primary' }).lines.map((l) => [l.key, l.unit]);
+  assert.deepEqual(fold(new Set(['primary'])), [['conversation', 'window_share'], ['overhead', 'window_share']], "the named account's tier sizes the two folded lines");
+  assert.deepEqual(fold(NONE), [['conversation', 'unknown'], ['overhead', 'unknown']], 'an account whose tier the cost model does not size reads tier unknown on both');
+});
+
+test("the model week's rows say which slots the route answered, so a zero the fold filled in marks no estimate", () => {
+  const p = (at, over) => point(at * HOUR, 'desktop', { estimated: true, fiveHourEquivalent: 0.02, modelWeekEquivalent: null, sevenDayEquivalent: 0.004, tokens: 100, uncachedTokens: 100, ...over });
+  const { rows } = d.foldBurn([p(0, { modelWeekEquivalent: 0.008 }), p(1)], 'key', 3_600, NONE, d.MAX_BURN_LINES, undefined, undefined, { figure: 'equivalent' });
+  assert.deepEqual(rows.map((r) => [r.week[0], r.weekAnswered[0], r.estimated[0]]), [[0.008, true, true], [0, false, true]], 'the second bucket ran on no model with a week of its own, so its zero is the fold\'s');
+});
+
 test('the key grouping names an earlier holder of a key id as the breakdown does', () => {
   const generation = 1_791_720_940_000;
   const { lines } = d.foldBurn([point(0, 'desktop', { uncachedTokens: 60 }), point(0, `desktop@${generation}`, { uncachedTokens: 30 })], 'key', 60, NONE);
@@ -599,6 +613,15 @@ test("one named account's shares sum over the groups the route answered them on,
   assert.equal(sum([g(null), g(null)]), null, 'no group answered a share map');
   const probes = d.oneAccountShares([accountGroup({ probeShares: { seven_day: { cost: 0.25, wasted: 0.125 } } }), accountGroup({ probeShares: {} })], (x) => x.probeShares, (a, b) => ({ cost: a.cost + b.cost, wasted: a.wasted === null || b.wasted === null ? null : a.wasted + b.wasted }));
   assert.deepEqual(probes, { seven_day: { cost: 0.25, wasted: 0.125 } }, 'a group without probes adds none, whatever its plan requests');
+});
+
+test("the named account's whole leaves out a probe window that a group with probes priced none on", () => {
+  const base = accountGroup();
+  const probed = (probeShares, ok) => accountGroup({ probeShares, probes: { ...base.probes, failed: 0, held: 0, ok, skipped: 0 } });
+  const whole = d.oneAccountGroupOf(base, [probed({ five_hour: { cost: 0.25, wasted: 0.125 }, seven_day: { cost: 0.125, wasted: 0 } }, 2), probed({ five_hour: { cost: 0.5, wasted: 0 } }, 3)]);
+  assert.deepEqual(whole.probeShares, { five_hour: { cost: 0.75, wasted: 0.125 } }, 'the second group ran probes and priced no 7-day share, so a 7-day whole would be a part');
+  const idle = d.oneAccountGroupOf(base, [probed({ five_hour: { cost: 0.25, wasted: 0.125 }, seven_day: { cost: 0.125, wasted: 0 } }, 2), probed({}, 0)]);
+  assert.deepEqual(idle.probeShares, { five_hour: { cost: 0.25, wasted: 0.125 }, seven_day: { cost: 0.125, wasted: 0 } }, 'a group without probes adds none and lacks none');
 });
 
 test('the model week is labeled by the key the share map carries, so a second model week reads under its own name', () => {

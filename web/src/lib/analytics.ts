@@ -123,6 +123,11 @@ export interface BurnRow {
   usd: number[];
   /** The model week's figure per hour, null where no row of the bucket ran on a model with a week of its own. */
   week: (number | null)[];
+  /**
+   * Per slot, whether a point of the bucket carried a model week figure: the line's fold fills the other slots with
+   * zero, which no estimate priced.
+   */
+  weekAnswered: boolean[];
 }
 
 /** One window's running figure over a slot's points: null until a point carries one, and latched once a point with
@@ -244,6 +249,19 @@ export function oneAccountShares<T>(groups: AnalyticsGroup[], read: (g: Analytic
   for (const window of left) delete out[window];
   return out;
 }
+
+/** A plan group carries both shared windows unless one could not be priced on it. */
+export const planRowsRequired = (g: AnalyticsGroup): boolean => g.planRequests === null || g.planRequests > 0;
+export const addReadWrite = (a: { read: number; write: number }, b: { read: number; write: number }) => ({ read: a.read + b.read, write: a.write + b.write });
+/** A group that ran probes carries both shared windows on its probe shares unless one could not be priced on it. */
+const probesRequired = (g: AnalyticsGroup): boolean => g.probes.ok + g.probes.held + g.probes.skipped + g.probes.failed > 0;
+/** The named account's whole: the position's totals with its shares summed over the groups the route answered them on. */
+export const oneAccountGroupOf = (totals: AnalyticsGroup, groups: AnalyticsGroup[]): AnalyticsGroup => ({
+  ...totals,
+  cacheShares: oneAccountShares(groups, (g) => g.cacheShares, addReadWrite, planRowsRequired),
+  costShares: oneAccountShares(groups, (g) => g.costShares, (a, b) => a + b, planRowsRequired),
+  probeShares: oneAccountShares(groups, (g) => g.probeShares, (a, b) => ({ cost: a.cost + b.cost, wasted: a.wasted === null || b.wasted === null ? null : a.wasted + b.wasted }), probesRequired),
+});
 
 /** The model week's key in a share map, the one key beside the two shared windows, undefined where the map has none. */
 export const weekKeyOf = (shares: Record<string, unknown>): string | undefined => Object.keys(shares).find((k) => !SHARED_WINDOWS.includes(k));
@@ -470,9 +488,9 @@ const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
  * every other grouping keeps the groups with the most tokens and sums the rest as other, which draws no plan line, so
  * its plan figures stay empty. Under the account grouping the rest folds once per unit, since a subscription account's
  * window share and an API-key account's dollars chart on different axes. Where the shares answer (that grouping, or
- * `account`, the one account the Accounts filter names) a line's unit is its account's. `sized` names the accounts whose tier the cost model sizes, which chart in
- * window share whatever their buckets priced. `figure` picks what the plan rows carry: the shares, or the 20x window
- * equivalents, which add across accounts and tiers.
+ * `account`, the one account the Accounts filter names) a line's unit is its account's. `sized` names the accounts
+ * whose tier the cost model sizes, which chart in window share whatever their buckets priced. `figure` picks what the
+ * plan rows carry: the shares, or the 20x window equivalents, which add across accounts and tiers.
  *
  * `rangeEndMs` is the end of the range the points were read for and `nowMs` the instant of that read, the end when
  * absent. The route reads whole hours through the hour ceiling of the end, so a bucket covers its width up to the hour
@@ -497,7 +515,8 @@ export function foldBurn(
   // ran on unweighted models alone still charts as a plan line and its unpriced windows show.
   const byAccount = groupBy === 'account';
   const shared = byAccount || account !== null;
-  const subscribed = new Set(shared ? points.filter((p) => p.unit === 'window_share').map((p) => p.group) : []);
+  // Keyed by the line, so the request class grouping's two folded lines read their classes' unit.
+  const subscribed = new Set(shared ? points.filter((p) => p.unit === 'window_share').map((p) => lineOf(p.group)) : []);
   const unitOf = (group: string): BurnLineUnit => (subscribed.has(group) ? (sized.has(byAccount ? group : (account ?? '')) ? 'window_share' : 'unknown') : 'usd');
   const ranked = [...tokens.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k]) => k);
   const kept: string[] = groupBy === 'request_class' ? LEGEND_ORDER : ranked.slice(0, max);
@@ -557,6 +576,7 @@ export function foldBurn(
         uncached: sums.map((s) => s.uncached / minutes),
         usd: sums.map((s) => s.usd / minutes),
         week: sums.map((s) => (s.week === null ? null : s.week / hours)),
+        weekAnswered: sums.map((s) => s.week !== null),
       };
     });
   // Weighed by the share of its width a bucket covers rather than its seconds: the same mean, and a range of full
