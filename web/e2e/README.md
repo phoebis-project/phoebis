@@ -15,70 +15,86 @@ expert field's wrapper (a half cell beside the plain one, a lone field the grid'
 mark's box 36 px square with the logo drawn 26 px square in it, the name 17 px at weight 600 on one line and inside the
 sidebar's content box), the dashboard's attention line (one 22 px row per line of badges, each badge the pool card's
 strip badge, in the content box and clear of the tiles, with the story's nine items in the mock pass, the seeded
-exhaustion or the quiet line in the router pass), the sidebar's Expert view row above the version line, the routing
-log's columns at 1280 by 800 and 1440 by 900 (Fact 150 px at both, Account 246 then 256 px, Model at 1440 alone, the
-table its card's width with nothing to scroll sideways), the Diagnostics group (neither its heading nor the Routing log
-link on the dashboard with the expert view off, both with the log open and the link active), pool chips, the caching
-controls, the select-below threshold, the load groups, the pool card's serving table and tiles, the serving table's
-columns (Account the fill), the pool dialog's members table (Account the fill, each Priority and budget input at least
-its column's 96, 140 or 150 px less the cell's padding) and keys table (Key the fill), each read while its group shows,
-and in the mock pass's expert view its model rules table (Model the fill, each select holding its widest option's text
-inside its padding), which the router's seed draws no override for, the settings cards' order, the listener hint's gaps
-and size and About's lines (their order, one type and one gap), the cooling-down block's columns (Reason the fill), the
-Delete account button, the account lines, the Quota cards' poll lines (short of the Refresh pill and inside the card,
-the backoff line in the serious ink, none wrapping, a failed poll's reason cut inside its line and whole in its title),
-the Quota cards' chips and reset cells (each on one line inside its column, the window grid inside its card) and each
-live window's pace mark (inside its meter and taller than the track), the timeline's chips on the Quota windows section
-(each inside its column, a chip with a share in the background and ink of the card chip of the same tone, primary's used
-fill at the share the page computed, and the lane label's ink at 4.5:1 or better over each tone's fill), the Quota
-cards' one height (the head's and the foot's rules at one offset on every card), every Quota card's meters at least 120
-px wide, its window cells inside its padding, its chip column as wide as its widest chip and its reset column as wide as
-its widest label within its 114 px bound, at 1280 by 800 and in a window that sets two cards on the card grid's floor
-(one card in a row 1 px narrower), and at 375 by 800 and 390 by 844 with no sideways scroll on the page and each card
-inside the window (the reset label on a row of its own there, so its column goes unread), the remaining cards, the error
-state, the lines under the quota rings, the recent requests' model cells and their table's fit, the recent requests'
-columns (Key the fill), the cost-cap rows, the wasted-probe rows, the burn cards, the plan legend's model unlisted
-entry, the placement and budget tables, the Analytics tables' columns, each read on the tab that draws it (the Traffic
-breakdown's group column the fill, Key on the misses-by-reason breakdown under its wrapped headers, Rung on the
-placements table, Pool and Account on the member budgets, whose Spent column is as wide as its meter's 140 px floor),
-the request table's fit (asserted in the router pass and recorded in the mock pass, whose story runs past the card at
-1280 by 800), its columns (Client the fill, the Status, Attempts and links cells wrapping, the width
-past the card recorded in the mock pass), its text at 1920 by 1080 in the mock pass (no client class or agent type
-cut, each read on its own span), the request pages' widths, walked on a load of their own once every
-view's shot is taken, the speed filter, and the cache miss reason, effort and request class filters
-(each against Turn origin), the traffic cards (each Analytics check opens the tab it reads and returns to Traffic), the
-tab strip docked under the filter bar at the end of the Latency tab, the Unit select in the Cost, Cache and Cache
-warming heads (inside the head, below the tab strip and inside the viewport at 1280 and 400 px), the fast lane, the
-request drawer, which opens once the request list's shot is taken (its chips in the status badge's type, and the
-Estimated cost row's share chips and muted equivalent on one line each inside the cell at 1280 by 800 and 1440 by 900),
-a reasons panel link landing on a list whose first row's drawer reads the reason (mock pass, on a load of its own once
-every view's shot is taken), the routing log's decision card, which opens once the log's shot is taken (the strip and
-the candidate table inside the card at 1280 by 800 and 1440 by 900 with nothing scrolling sideways, the table 958 then
-1118 px, the strip's drawing as wide as the strip at each width, every station badge in the kind badge's box, the
-station labels clear of the leaf rows and the brackets, every station's and way out's dot, the gap to its words and its
-word taking the pointer for its own button and the line on either side of the dot and a station's side of the line away
-from its label not taking it (in the mock pass on the shed move's card too, and there at the strip's 640 px floor for
-the dots and the line), the strip's height from its rows, a moved row's badge the Move station's color, the chosen row's
-Prefix chips on the first rung placement the log lists, and a station's popover inside the card and the card's part on
-screen less 8 px either side at both viewports and at 700 by 800 (the Move list, the widest, among them), visible with
-no transition once placed, its width bound the least of 720 px, the window less 16, the card less 16 and the card's part
-on screen less 16, its table's heads on at most two lines and nothing in it scrolling sideways (the Cool reading's ten
-columns among them), and the Pick table's rows striped as the candidate table's are, every station's and way out's word
-at the card's muted contrast or better on the open row's tint in both themes with an idle way out among them, the
-strip's station count the record's steps and placeholders at both viewports, and in the mock pass the fresh placement's
-Pick station opened by Enter and by Space with the focus inside its popover and closed by Escape with the focus back on
-the station), the subscription end editor, the catalog popup and its columns (Model and Name the fills), the Keys
-table's columns (Name, Models and Status the fills) and the badges of its fill cells (each ending inside its cell and
-cutting its own label with the ellipsis), the Models rules table's columns (Pattern the fill), the key dialog's Access
-selects, the Pool select against the Status select, the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900
-(the head's height closed and open, the button on the sentence's last line or flush left on the next, the opened
-paragraph 6 px under the lead, Cost reference one line at the head's top right), the cost reference, the session table's
-fit and its columns (each fit column as wide as its content, the Session column the fill), the session id's width, the
-session row menu, the agent lines, the fork badges (inside their cell and whole),
-the fork link, which is followed once the session list's shot is taken,
-the copy fallback (Copied on the Settings snippet with the clipboard API removed, on the Settings view's own load, and
-on a Key created dialog's secret in the mock pass, on a load of its own)). A check that opens an editor, a dialog or a
-row closes it again before the view's shot, and one that turns a column on turns it off again. The script exits non-zero
+exhaustion or the quiet line in the router pass), the top bar's controls (Log out and the theme control 32 px at one
+top), the sidebar's Expert view row above the version line, the routing log's columns at 1280 by 800 and 1440 by 900
+(Fact 150 px at both, Account 246 then 256 px, Model at 1440 alone, the table its card's width with nothing to scroll
+sideways), the Diagnostics group (neither its heading nor the Routing log link on the dashboard with the expert view
+off, both with the log open and the link active), pool chips, the caching controls, the select-below threshold, the load
+groups, the pool card's serving table and tiles, the serving table's columns (Account the fill), the chevron of the pool
+dialog's Identity select (12 px square at a 1.5 stroke), the pool dialog's members table (Account the fill, each
+Priority and budget input at least its column's 96, 140 or 150 px less the cell's padding) and keys table (Key the
+fill), each read while its group shows, and in the mock pass's expert view its model rules table (Model the fill, each
+select holding its widest option's text inside its padding), which the router's seed draws no override for, the Create
+key dialog's Key group (the Name input, the Pool select and the footer's buttons 32 px, the Notes field 72 px, each
+label above its control), the settings cards' order, the listener hint's gaps and size and About's lines (their order,
+one type and one gap), the cooling-down block's columns (Reason the fill), the Delete account button, the account lines,
+the Quota cards' poll lines (short of the Refresh pill and inside the card, the backoff line in the serious ink, none
+wrapping, a failed poll's reason cut inside its line and whole in its title), the Quota cards' chips and reset cells
+(each on one line inside its column, the window grid inside its card) and each live window's pace mark (inside its meter
+and taller than the track), the timeline's chips on the Quota windows section (each inside its column, a chip with a
+share in the background and ink of the card chip of the same tone, primary's used fill at the share the page computed,
+and the lane label's ink at 4.5:1 or better over each tone's fill), the Quota cards' one height (the head's and the
+foot's rules at one offset on every card), every Quota card's meters at least 120 px wide, its window cells inside its
+padding, its chip column as wide as its widest chip and its reset column as wide as its widest label within its 114 px
+bound, at 1280 by 800 and in a window that sets two cards on the card grid's floor (one card in a row 1 px narrower),
+and at 375 by 800 and 390 by 844 with no sideways scroll on the page and each card inside the window (the reset label on
+a row of its own there, so its column goes unread), the remaining cards, the error state, the lines under the quota
+rings, the recent requests' model cells and their table's fit, the recent requests' columns (Key the fill), the cost-cap
+rows, the wasted-probe rows, the burn cards, the plan legend's model unlisted entry, the placement and budget tables,
+the Analytics tables' columns, each read on the tab that draws it (the Traffic breakdown's group column the fill, Key on
+the misses-by-reason breakdown under its wrapped headers, Rung on the placements table, Pool and Account on the member
+budgets, whose Spent column is as wide as its meter's 140 px floor), the request table's fit (asserted in the router
+pass and recorded in the mock pass, whose story runs past the card at 1280 by 800), its columns (Client the fill,
+the Status, Attempts and links cells wrapping, the width past the card recorded in the mock pass), its
+text at 1920 by 1080 in the mock pass (no client class or agent type cut, each read on its own span),
+the request pages' widths, walked on a load of their own once every view's shot is taken, the
+pagers of the request log and the routing log (three buttons 32 px square, the page-size select 32 px, the footer one
+control tall with its padding and its border), the request log's range control (the group 32 px with its six pills 28 px
+at one top, the group against the split Refresh button and the search field on height and top, the Custom pill's width
+recorded), the speed chip, and the cache miss reason, effort and request class chips (each against the turn origin chip
+at 26 px, on an address that holds them), the filter bar of every list view at 1280 by 800 and 1440 by 900, at rest,
+with the view's chips and, on a ranged view, with a span across midnight (the row 32 px on one line with every control
+32 px at one top and a segmented's pills 28 px, the bar 32 px at rest and 66 px with a chip line, 49 and 83 px as the
+Analytics sticky bar, each chip 26 px with its word in `--ink-2` and its values in `--ink`, the chip line on one line,
+the first card's head below the bar, on a card view the next element and the tiles below it, on Analytics the Group by
+select against Add filter, and on the routing log and Analytics the width of the row's slots and gaps at rest under the
+view's bound), the Kinds list through Add filter on the routing log (Select all, the eight presets and the 35 kinds, its
+popover 8 px inside the window at 1280 by 800), the split Refresh button on the request log (one width at Off, at 5 s
+and paused under the drawer, so the count beside it never moves), the traffic cards (each Analytics check opens the tab
+it reads and returns to Traffic), the tab strip docked under the filter bar at the end of the Latency tab (the bar 49 px
+at rest and 83 px with a chip line, read on an address of its own), the Unit select in the Cost, Cache and Cache warming
+heads (inside the head, below the tab strip and inside the viewport at 1280 and 400 px), the fast lane, the request
+drawer, which opens once the request list's shot is taken (its chips in the status badge's type, and the Estimated cost
+row's share chips and muted equivalent on one line each inside the cell at 1280 by 800 and 1440 by 900), a reasons panel
+link landing on a list whose first row's drawer reads the reason (mock pass, on a load of its own once every view's shot
+is taken), the routing log's decision card, which opens once the log's shot is taken (the strip and the candidate table
+inside the card at 1280 by 800 and 1440 by 900 with nothing scrolling sideways, the table 958 then 1118 px, the strip's
+drawing as wide as the strip at each width, every station badge in the kind badge's box, the station labels clear of the
+leaf rows and the brackets, every station's and way out's dot, the gap to its words and its word taking the pointer for
+its own button and the line on either side of the dot and a station's side of the line away from its label not taking it
+(in the mock pass on the shed move's card too, and there at the strip's 640 px floor for the dots and the line), the
+strip's height from its rows, a moved row's badge the Move station's color, the chosen row's Prefix chips on the first
+rung placement the log lists, and a station's popover inside the card and the card's part on screen less 8 px either
+side at both viewports and at 700 by 800 (the Move list, the widest, among them), visible with no transition once
+placed, its width bound the least of 720 px, the window less 16, the card less 16 and the card's part on screen less 16,
+its table's heads on at most two lines and nothing in it scrolling sideways (the Cool reading's ten columns among them),
+and the Pick table's rows striped as the candidate table's are, every station's and way out's word at the card's muted
+contrast or better on the open row's tint in both themes with an idle way out among them, the strip's station count the
+record's steps and placeholders at both viewports, and in the mock pass the fresh placement's Pick station opened by
+Enter and by Space with the focus inside its popover and closed by Escape with the focus back on the station), the
+subscription end editor, the catalog popup and its columns (Model and Name the fills), the Keys table's columns (Name,
+Models and Status the fills) and the badges of its fill cells (each ending inside its cell and cutting its own label
+with the ellipsis), the Models rules table's columns (Pattern the fill), the key dialog's Access selects, the Keys bar's
+pool chip against its status chip (26 px, on an address that holds both), the Sessions lead and its disclosure at 1280
+by 800 and 1440 by 900 (the head under the bar's bottom, its height closed and open, the button on the sentence's last
+line or flush left on the next, the opened paragraph 6 px under the lead, Cost reference one line at the head's top
+right), the cost reference, the session table's fit and its columns (each fit column as wide as its content, the Session
+column the fill), the session id's width, the session row menu, the agent lines, the fork
+badges (inside their cell and whole), the session row's chevron
+(14 px square at the icon's 1.75 stroke), the fork link, which is followed once the session list's shot is taken, the
+copy fallback (Copied on the Settings snippet with the clipboard API removed, on the Settings view's own load, and on a
+Key created dialog's secret in the mock pass, on a load of its own)). A check that opens an editor, a dialog or a row
+closes it again before the view's shot, and one that turns a column on turns it off again. The script exits non-zero
 with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git

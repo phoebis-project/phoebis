@@ -90,7 +90,7 @@ test('the text inks reach 4.5 to 1 on every surface in both themes', () => {
   assert.deepEqual(short, []);
 });
 
-test('only placeholders, disabled controls and decorative strokes read --ink-3', () => {
+test('only placeholders, disabled controls, muted states and decorative strokes read --ink-3', () => {
   const stray = [];
   for (const name of ['base', 'components', 'pages']) {
     for (const rule of rules(sheet(name))) {

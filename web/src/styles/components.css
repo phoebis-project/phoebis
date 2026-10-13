@@ -691,8 +691,6 @@ textarea.input {
   transform: translateX(16px);
 }
 
-/* Multi select */
-.mselect__list,
 .menu__list {
   position: absolute;
   top: calc(100% + 4px);

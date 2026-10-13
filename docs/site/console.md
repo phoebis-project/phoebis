@@ -7,13 +7,15 @@ mechanism behind a view lives on its own page, which each section links.
 
 Every list view (Accounts, Analytics, Keys, Pools, Quota, Requests, the Routing log and Sessions) opens on one filter
 bar, which draws the slots the view has in one order: the range pills, the search, Add filter, the view's own controls
-with its primary action last, and at the right edge the split Refresh button and the count of what the view lists. Add
-filter opens a popover over the view's filters, and each filter in force stands as a chip on a line under the bar. The
-Refresh button's body reads the view again now, and its dropdown sets auto reload to Off, 5 s, 10 s, 30 s or 1 min, 5 s
-when a view opens and off on Requests and the Routing log. Auto reload waits while the tab is hidden, while a drawer, a
-dialog or a menu is open and on an older page, with a muted mark and the cause in the dropdown's hover. The filters, the
-search and the range live in the view's address, so a reload or a shared link keeps them, and the interval stays with
-the open page.
+with its primary action last, and at the right edge the split Refresh button and the count of what the view lists. On a
+window 720 px wide or narrower the bar's controls wrap onto a second row. Add filter opens a popover over the view's
+filters, and each filter in force stands as a chip on a line under the bar. The Refresh button's body reads the view
+again now, and its dropdown sets auto reload to Off, 5 s, 10 s, 30 s or 1 min, 5 s when a view opens and off on Requests
+and the Routing log. Auto reload waits while the tab is hidden, while a drawer, a dialog or a menu is open and on an
+older page, with a muted mark and the cause in the dropdown's hover. The filters, the search and the range live in the
+view's address, so a reload or a shared link keeps them, and the interval stays with the open page. An Accounts address
+that names no account, or names one the router no longer holds, opens the first account the router lists among the rows
+the list shows, or the router's first account where the filters hide every row.
 
 ## The shell
 
@@ -451,7 +453,8 @@ begun, moves the window's end to now and reads every chart again, so a page left
 while a menu or popover under the bar is open or the tab is hidden. Off, the window's end holds where it was read and
 the dropdown's title adds "the window ends {time}" until a filter, the range or Refresh moves it. The split Refresh
 button's body moves the end to now and reads every chart again. A custom range holds its own end either way, and one
-that had ended when the page took it reads Off in the dropdown, disabled.
+whose end lay more than a minute in the past when the page took it reads Off in the dropdown, disabled, while a link
+whose range ends at the moment it was made reads on.
 
 Filtered to one session the view sums the request log instead of the hourly rollups and says so, over the first 10,000
 requests of the range, and a session with more reads "Partial: the first 10,000 requests of the range" on a line under
@@ -544,12 +547,13 @@ and Next probe, with Agents, Last request and Next probe hidden by default. The 
 id with an ellipsis, whole on hover.
 A session that branched from another conversation at depth 2 or deeper carries
 a fork badge under its id, `fork, on another account` or `fork, same account` where the session it branched from is
-listed with a pinned account, and `fork at 3` otherwise, with the base, the depth and the base's account on hover, and
-following the badge scrolls to the base's row. Companion reads the mod's state, `reporting` with how long ago the person
-was last seen at the terminal, `silent` or `none`. Cache warming reads the pin state badge, `busy`, `idle`, `parked`,
-`released` or `unknown`, with the recipe summary, or "no recipe". Next probe reads the instant, "pending" or "not
-scheduled". Before the first session the card reads "No live sessions" with "A session appears here on its first
-request, or as soon as the keepalive mod registers it, and drops off once it passes the session expiry."
+listed with a pinned account, and `fork at 3` otherwise, with the base, the depth and the base's account on hover, and a
+click on the badge scrolls to the base's row where the list holds it. Companion reads the mod's state, `reporting` with
+how long ago the person was last seen at the terminal, `silent` or `none`. Cache warming reads the pin state badge,
+`busy`, `idle`, `parked`, `released` or `unknown`, with the recipe summary, or "no recipe". Next probe reads the
+instant, "pending" or "not scheduled". Before the first session the card reads "No live sessions" with "A session
+appears here on its first request, or as soon as the keepalive mod registers it, and drops off once it passes the
+session expiry."
 
 A row's menu offers "View in analytics" and "View in requests" once the session has ledgered traffic, "View in routing
 log", which opens the log on that session's decisions an hour either side of its last request, and "Release". Release
@@ -653,8 +657,9 @@ Off, 5 s, 10 s, 30 s or 1 min, out of the page's address, and each read takes ev
 before, up to eight pages, a new row landing at the top in the accent tint. Past eight pages a line reads "More rows
 arrived than auto reload could fetch. Reload to read them.", and Next reads on from the last row the poll fetched. The
 poll waits while the tab is hidden, on an older page until you go back to the first, and while a menu or popover under
-the bar is open, with the interval kept and the cause named in the dropdown's title. A custom range that had ended when
-the page took it has nothing new to read, so the dropdown reads Off and stays disabled.
+the bar is open, with the interval kept and the cause named in the dropdown's title. A custom range whose end lay more
+than a minute in the past when the page took it has nothing new to read, so the dropdown reads Off and stays disabled,
+while a link whose range ends at the moment it was made reads on, each read refreshing the rows inside it.
 
 A row reads Time (a decision's request beneath it as a link to the request's drawer), Kind (a decision in a filled
 badge with `attempt 2/3` beneath a failover attempt, an event in an outlined one), Session (the first eight characters
@@ -689,9 +694,9 @@ facts", "Pin and warmth" (a record that pins nothing reads why: not looked up or
 registry"), stay closed until opened. "Outcome" lists the pin written, the cache-map entries the answer wrote
 (`pending` until it ends), the cache read with the TTL tier of its deepest entry, the hold, the answer an exhaustion or
 a refusal gave, and the spend against a budget. The foot offers the three widenings after "Widen to", this minute,
-this session and this account, names the record's version as `Record v{n}`, and "Copy as JSON" copies the record
-route's answer whole. A record the retention purged
-reads "The record left with the retention", and one still loading "Loading the record".
+this session and this account, names the record's version as `Record v{n}`, and "Copy as JSON" copies the record route's
+answer whole. A record the retention purged reads "The record left with the retention", and one still loading "Loading
+the record".
 
 An event row opens to a panel of pairs: When to the second in UTC, the account and the pool as links, then the kind's
 own pairs. An event that names a request ends with "Source request", which opens the log on that request a quarter
