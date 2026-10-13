@@ -3220,7 +3220,12 @@ async function diagnosticsFilters(theme) {
 }
 
 /** The address `barRow` reads a view's chip line on, five chips on its own dimensions. A view without one is measured at rest. */
-const BAR_CHIPS = { '/requests': '?accounts=primary&keys=laptop&models=claude-opus-5&pools=jobs&statuses=200' };
+const BAR_CHIPS = {
+  '/requests': '?accounts=primary&keys=laptop&models=claude-opus-5&pools=jobs&statuses=200',
+  '/routing-log': '?accounts=primary&keys=laptop&kinds=moved,held,shedding_round,wind_down_started&models=claude-opus-5&pools=jobs',
+};
+/** A view whose row draws no search holds its slots under this width at rest, far from a second line. */
+const ROW_BOUND = { '/routing-log': 700 };
 /** A span from 23:00 the day before the pass's clock to 01:00 on its day, the Custom pill's widest words. */
 const MIDNIGHT = (origin) => {
   const day = new Date(origin).toISOString().slice(0, 10);
@@ -3232,7 +3237,8 @@ const MIDNIGHT = (origin) => {
  * The bar's measure on `view`, called after its shot: the row 32 px at rest and the bar 66 with a chip line, every row
  * child 32 px at one top (a segmented's pills 28 inside their group), the chips 26 with the word in --ink-2 and the
  * values in --ink, one line (scrollWidth equal to clientWidth) at 1280 by 800 and 1440 by 900 at rest, with the view's
- * chips and, on a ranged view, with a span across midnight, and the row against the first card's head. Records to
+ * chips and, on a ranged view, with a span across midnight, and the row against the first card's head. The row's
+ * `width`, its slots' widths and the gaps between them, holds under the view's ROW_BOUND at rest. Records to
  * `measurements`.
  */
 async function barRow(theme, view) {
@@ -3256,6 +3262,7 @@ async function barRow(theme, view) {
       };
       const head = document.querySelector('.card--table .card__head') ?? document.querySelector('.card--table thead th, table thead th');
       const chips = [...(line?.querySelectorAll('.chip--filter') ?? [])].filter((c) => !c.hidden);
+      const slots = [...row.children];
       return {
         bar: Math.round(box(bar).height),
         bottom: Math.round(box(bar).bottom),
@@ -3267,6 +3274,7 @@ async function barRow(theme, view) {
         line: line ? { client: line.clientWidth, scroll: line.scrollWidth } : null,
         pills: [...(row.querySelectorAll('.segmented button') ?? [])].map((b) => Math.round(box(b).height)),
         row: { client: row.clientWidth, height: Math.round(box(row).height), scroll: row.scrollWidth, top: Math.round(box(row).top), width: Math.round(box(row).width) },
+        width: Math.round(slots.reduce((sum, el) => sum + box(el).width, 0) + (parseFloat(getComputedStyle(row).columnGap) || 0) * Math.max(0, slots.length - 1)),
       };
     });
   const check = (at, got, chipped) => {
@@ -3302,6 +3310,7 @@ async function barRow(theme, view) {
         const got = await read();
         measurements.push(`${theme} ${view} bar row at ${width} by ${height} ${label} ${JSON.stringify(got)}`);
         check(`${width} by ${height} ${label}`, got, chipped);
+        if (label === 'at rest' && ROW_BOUND[view] !== undefined && got !== null && got.width >= ROW_BOUND[view]) say(`${width} by ${height} at rest: the row's slots take ${got.width} px, not under ${ROW_BOUND[view]}`);
       }
     }
   } finally {
@@ -3311,6 +3320,34 @@ async function barRow(theme, view) {
     await advance(LOAD_MS);
     await atRest();
   }
+}
+
+/**
+ * The Kinds list through Add filter on the routing log at 1280 by 800, Select all, the eight presets and the 35 kinds:
+ * its popover keeps 8 px inside the window above and below, where the list scrolls. Records the box.
+ */
+async function kindsPopoverInside(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: the Kinds popover ${what}`);
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await page.locator('.filter-bar__row > button', { hasText: /^Add filter$/ }).click();
+  await advance(CLOCK_STEP_MS);
+  await page.locator('.popover .add-filter__row').filter({ has: page.locator('.add-filter__label', { hasText: /^Kinds$/ }) }).click();
+  await advance(CLOCK_STEP_MS);
+  const read = await page.evaluate(() => {
+    const box = document.querySelector('.popover .add-filter')?.closest('.popover');
+    if (!box) return null;
+    const r = box.getBoundingClientRect();
+    return { bottom: Math.round(r.bottom), client: box.clientHeight, rows: box.querySelectorAll('.option-list [role="option"]').length, scroll: box.scrollHeight, top: Math.round(r.top), view: window.innerHeight };
+  });
+  measurements.push(`${theme} /routing-log kinds popover inside ${JSON.stringify(read)}`);
+  if (read === null) say('did not open');
+  else {
+    if (read.rows !== 44) say(`lists ${read.rows} rows, not Select all, the eight presets and the 35 kinds`);
+    if (read.top < 8 || read.bottom > read.view - 8) say(`spans ${read.top} to ${read.bottom} px, outside the ${read.view} px window less 8 px above and below`);
+  }
+  await page.keyboard.press('Escape');
+  await advance(CLOCK_STEP_MS);
+  await atRest();
 }
 
 /**
@@ -4509,45 +4546,50 @@ async function shedPopoverHeight(theme, where, short) {
 }
 
 /**
- * With the Accounts filter's list open and the focus in it, a pointer resting on `station` opens its popover, and one
- * Escape closes both: a popover a hover opened lets the key run on to the focused filter, which closes its list and
- * keeps the focus, on its trigger.
+ * With the Add filter popover open on its Account step and the focus in its option list, a pointer resting on `station`
+ * opens its popover, and one Escape closes both: the hover popover closes on the key in the capture phase, before the
+ * Add filter popover takes it, closes and hands the focus back to Add filter.
  */
 async function escapeReachesFilter(theme, what, station) {
-  const say = (message) => failures.push(`${theme} /routing-log: ${what} over the open Accounts filter: ${message}`);
+  const say = (message) => failures.push(`${theme} /routing-log: ${what} over the open Add filter popover: ${message}`);
   if ((await station.count()) === 0) {
     say('no station to hover');
     return;
   }
-  const filter = page.locator('.mselect').filter({ has: page.locator('.mselect__trigger', { hasText: /^Accounts/ }) });
-  if ((await filter.count()) !== 1) {
-    say(`the page draws ${await filter.count()} Accounts filters, not one`);
+  const button = page.locator('.filter-bar__row > button', { hasText: /^Add filter$/ });
+  if ((await button.count()) !== 1) {
+    say(`the bar draws ${await button.count()} Add filter buttons, not one`);
     return;
   }
   const read = () =>
-    filter.evaluate((el) => {
+    page.evaluate(() => {
       const at = document.activeElement;
+      const box = document.querySelector('.popover .add-filter')?.closest('.popover') ?? null;
+      const add = [...document.querySelectorAll('.filter-bar__row > button')].find((b) => b.textContent?.trim() === 'Add filter');
       return {
-        focus: at === el.querySelector('.mselect__trigger') ? 'trigger' : el.querySelector('.mselect__list')?.contains(at) ? 'list' : (at?.tagName ?? null),
-        list: el.querySelector('.mselect__list') !== null,
+        box: box !== null,
+        focus: at === add ? 'add filter' : box?.querySelector('.option-list')?.contains(at) ? 'list' : (at?.tagName ?? null),
         open: document.querySelectorAll('.strip-popover').length,
         pinned: document.querySelector('.strip-popover')?.classList.contains('is-pinned') ?? null,
+        step: box?.querySelector('.popover__title')?.textContent?.trim() ?? null,
       };
     });
-  await filter.locator('.mselect__trigger').click();
+  await button.click();
+  await advance(CLOCK_STEP_MS);
+  await page.locator('.popover .add-filter__row').filter({ has: page.locator('.add-filter__label', { hasText: /^Account$/ }) }).click();
   await advance(CLOCK_STEP_MS);
   await station.hover();
   await advance(CLOCK_STEP_MS);
   const before = await read();
-  measurements.push(`${theme} /routing-log ${what} hovered over the open Accounts filter ${JSON.stringify(before)}`);
-  if (!before.list || before.focus !== 'list' || before.open !== 1 || before.pinned !== false) say(`the hover left ${JSON.stringify(before)}, not the filter's list open with the focus in it under one hover popover`);
+  measurements.push(`${theme} /routing-log ${what} hovered over the open Add filter popover ${JSON.stringify(before)}`);
+  if (!before.box || before.step !== 'Account' || before.focus !== 'list' || before.open !== 1 || before.pinned !== false) say(`the hover left ${JSON.stringify(before)}, not the Account step open with the focus in its list under one hover popover`);
   await page.keyboard.press('Escape');
   await advance(CLOCK_STEP_MS);
   const after = await read();
-  measurements.push(`${theme} /routing-log ${what} after one Escape over the open Accounts filter ${JSON.stringify(after)}`);
-  if (after.open !== 0 || after.list || after.focus !== 'trigger') say(`one Escape left ${JSON.stringify(after)}, not the popover closed and the filter's list closed with the focus kept on its trigger`);
-  // A list left open would stand over the rest of the pass.
-  if (after.list) {
+  measurements.push(`${theme} /routing-log ${what} after one Escape over the open Add filter popover ${JSON.stringify(after)}`);
+  if (after.open !== 0 || after.box || after.focus !== 'add filter') say(`one Escape left ${JSON.stringify(after)}, not the hover popover and the Add filter popover closed with the focus on Add filter`);
+  // A box left open would stand over the rest of the pass.
+  if (after.box) {
     await page.keyboard.press('Escape');
     await advance(CLOCK_STEP_MS);
   }
@@ -4641,8 +4683,8 @@ async function stripIdleContrast(theme) {
  * read on the seeded router's first card and on the mock's fresh placement, whose Pick station the mock pass then opens
  * and closes by Enter, Escape, Space and Escape. The shed move's shed station's popover keeps inside the window less 8
  * px above and below at both viewports and in a window shorter than its content, where it scrolls. One Escape over the
- * open Accounts filter closes a hovered station's popover and the filter's list alike, on the seeded router's first
- * card's host station and on the mock's fresh placement's Pick station.
+ * Add filter popover open on its Account step closes a hovered station's popover and the Add filter popover alike, on
+ * the seeded router's first card's host station and on the mock's fresh placement's Pick station.
  */
 async function decisionCard(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -6190,6 +6232,9 @@ try {
       if (view.path === '/requests') await wideBodyDialog(theme);
       if (view.path === '/routing-log') await stripIdleContrast(theme);
       if (view.path === '/routing-log') await decisionCard(theme);
+      // The bar's measure loads each address itself and leaves the bare log, where the Kinds list opens.
+      if (view.path === '/routing-log') await barRow(theme, view.path);
+      if (view.path === '/routing-log') await kindsPopoverInside(theme);
       if (view.path === '/sessions') await forkLink(theme);
       if (view.path === '/settings') await copyFallback(theme);
     }

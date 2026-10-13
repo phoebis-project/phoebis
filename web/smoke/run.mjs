@@ -9673,8 +9673,14 @@ m.unmount();
   const LABELS = ['5h', '7d', 'Fable', 'answer', 'attempt', 'capture', 'cause', 'client', 'depth', 'epoch', 'field', 'fields', 'gap', 'held', 'idle', 'in flight', 'key', 'lasted', 'models', 'next', 'over', 'pick', 'pins', 'prefix', 'rank', 'resets', 'retry', 'spent', 'state', 'to', 'turn', 'until', 'was'];
   const trs = (page) => [...page.container.querySelectorAll('.routing-log__table tbody tr')].filter((tr) => !tr.querySelector('.skeleton, .empty'));
   const cell = (tr, name) => tr?.querySelector(`td.routing-log__${name}`) ?? null;
-  const scope = (page) => page.container.querySelector('.routing-log__scope');
-  const kindsFilter = (page) => [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Kinds'));
+  const partTitle = (page) => intervalPart(page)?.getAttribute('title') ?? null;
+  const barCount = (page) => page.container.querySelector('.filter-bar__count')?.textContent ?? null;
+  const rowKeyOf = (r) => (r.type === 'decision' ? `${r.requestId}/${r.seq}` : `event/${r.id}`);
+  /** Clicks the open option list's row reading `label`, once the read it starts lands. */
+  const clickOption = async (page, label) => {
+    [...(filterBox()?.querySelectorAll('.option-list [role="option"]') ?? [])].find((o) => o.textContent?.trim() === label)?.click();
+    await page.settle(700);
+  };
   const params = (href) => Object.fromEntries([...new URL(href ?? '/', 'http://phoebis.test').searchParams].sort(([a], [b]) => a.localeCompare(b)));
 
   const spy = countCalls('listRoutingLog');
@@ -9682,47 +9688,122 @@ m.unmount();
   spy.restore();
   const sent = spy.calls[0]?.[0] ?? {};
   const hour = await api.listRoutingLog({ ...sent, limit: 200 });
-  const hidden = await api.listRoutingLog({ from: sent.from, kinds: ['probe', 'warm_prefix_expired'], limit: 200, to: sent.to });
+  // The two kinds read alone, each of which the hour's default read holds too.
+  const named = await api.listRoutingLog({ from: sent.from, kinds: ['probe', 'warm_prefix_expired'], limit: 200, to: sent.to });
   {
     const drawn = trs(m);
     const expected = hour.rows.slice(0, 25);
     const times = drawn.map((tr) => cell(tr, 'time')?.firstChild?.textContent ?? '');
     const ids = drawn.map((tr) => cell(tr, 'time')?.querySelector('a')?.textContent ?? null);
-    const hiddenIds = hidden.rows.filter((r) => r.type === 'decision').map((r) => r.requestId);
-    const badges = drawn.map((tr) => cell(tr, 'kind')?.querySelector('.badge')?.textContent ?? '');
+    const listed = new Set(hour.rows.map(rowKeyOf));
     results.push({
-      name: '/routing-log lists the default hour, 25 rows, newest first, with the two hidden kinds absent',
+      name: '/routing-log lists the default hour, 25 rows, newest first, with a probe decision and a warm prefix expiry among the rows',
       ok:
         sent.from === iso(CLOCK_ORIGIN - HOUR) && sent.to === iso(CLOCK_ORIGIN) && sent.kinds === undefined && sent.limit === 25 && sent.cursor === undefined &&
-        hour.rows.length === 51 && hour.nextCursor === null && drawn.length === 25 &&
+        hour.rows.length > 25 && hour.nextCursor === null && drawn.length === 25 &&
         JSON.stringify(times) === JSON.stringify(expected.map((r) => clockText(r.at))) &&
         JSON.stringify(ids) === JSON.stringify(expected.map((r) => (r.type === 'decision' ? r.requestId : null))) &&
-        hidden.rows.length === 2 && hidden.rows.some((r) => r.type === 'decision' && r.probe) && hidden.rows.some((r) => r.type === 'event' && r.kind === 'warm_prefix_expired') &&
-        !ids.some((id) => hiddenIds.includes(id)) && !badges.includes('warm prefix expired'),
-      missing: [JSON.stringify(sent), `${hour.rows.length} rows in the hour, ${drawn.length} drawn`, `hidden ${hidden.rows.map((r) => r.kind).join(',')}`, times.join(' ')],
+        named.rows.some((r) => r.type === 'decision' && r.probe) && named.rows.some((r) => r.type === 'event' && r.kind === 'warm_prefix_expired') && named.rows.every((r) => listed.has(rowKeyOf(r))),
+      missing: [JSON.stringify(sent), `${hour.rows.length} rows in the hour, ${drawn.length} drawn`, `named ${named.rows.map((r) => `${r.kind}${r.probe ? ' probe' : ''}`).join(',')}`, times.join(' ')],
     });
   }
   {
-    const filter = kindsFilter(m);
-    const trigger = filter?.querySelector('.mselect__trigger')?.textContent?.trim() ?? '';
-    filter?.querySelector('.mselect__trigger')?.click();
-    await m.settle(100);
-    const entries = [...(filter?.querySelectorAll(`.mselect__group, ${CHOICE}`) ?? [])].map((e) => (e.classList.contains('mselect__group') ? `# ${e.textContent?.trim()}` : `${e.getAttribute('aria-selected') === 'true' ? '+' : '-'} ${e.textContent?.trim()}`));
-    filter?.querySelector('.mselect__trigger')?.click();
-    await m.settle(100);
-    const events = entries.indexOf('# Events');
+    const rest = { address: m.location().search, chips: m.container.querySelectorAll('.chip--filter').length };
     const probes = await api.listRoutingLog({ from: sent.from, kinds: ['probe'], limit: 25, to: sent.to });
     const only = await mount(`/routing-log?kinds=probe`, { now: CLOCK_ORIGIN });
-    const listed = trs(only).map((tr) => cell(tr, 'time')?.querySelector('a')?.textContent ?? null);
-    const onlyTrigger = kindsFilter(only)?.querySelector('.mselect__trigger')?.textContent?.trim() ?? '';
+    const listed = trs(only).map((tr) => tr.getAttribute('data-row'));
+    const chip = { text: chipRead(only, 'kinds'), title: chipOf(only, 'kinds')?.getAttribute('title') ?? null };
     only.unmount();
     results.push({
-      name: '/routing-log the Kinds trigger reads 2 hidden and kinds=probe lists the probe alone',
+      name: '/routing-log draws no Kinds chip at rest and kinds=probe lists the probe alone under a probe decisions chip',
       ok:
-        trigger === 'Kinds (2 hidden)' && entries[0] === '# Decisions' && events > 0 && entries[events - 1] === '- Probe decisions (hidden by default)' && entries[entries.length - 1] === '- Warm prefix expired (hidden by default)' &&
-        entries.filter((e) => e.startsWith('-')).length === 2 && entries.filter((e) => e.startsWith('+')).length === 33 &&
-        probes.rows.length === 1 && probes.rows[0].probe && JSON.stringify(listed) === JSON.stringify([probes.rows[0].requestId]) && onlyTrigger === 'Kinds (1)',
-      missing: [trigger, ...entries.slice(0, 3), `${probes.rows.length} probes, listed ${listed.join(',')}`, onlyTrigger],
+        rest.address === '' && rest.chips === 0 &&
+        probes.rows.length > 0 && probes.rows.every((r) => r.type === 'decision' && r.probe) && JSON.stringify(listed) === JSON.stringify(probes.rows.map(rowKeyOf)) &&
+        chip.text === 'kinds: probe decisions' && chip.title === 'probe decisions',
+      missing: [JSON.stringify(rest), `${probes.rows.length} probes, listed ${listed.join(',')}`, JSON.stringify(chip)],
+    });
+  }
+  {
+    // An empty Kinds value is every kind, so the list opens with every row checked.
+    const box = await addFilter(m, 'Kinds');
+    const entries = [...(box?.querySelectorAll('.option-list .mselect__group, .option-list [role="option"]') ?? [])].map((e) => (e.classList.contains('mselect__group') ? `# ${e.textContent?.trim()}` : `${e.getAttribute('aria-selected') === 'true' ? '+' : '-'} ${e.textContent?.trim()}`));
+    await closeBoxes(m);
+    const presets = ['placements and pins', 'moves and holds', 'exhaustion and refusals', 'account state and windows', 'cooldowns and backoff', 'keepalive', 'registry changes', 'router life cycle'];
+    const decisions = ['Exhausted', 'Held', 'Moved', 'Placed', 'Refused', 'Renewed', 'Probe decisions'];
+    const at = (heading) => entries.indexOf(`# ${heading}`);
+    const events = entries.slice(at('Events') + 1);
+    results.push({
+      name: '/routing-log the Kinds list opens on Select all, the eight presets in order, then Decisions and Events with no hidden mark',
+      ok:
+        box !== null && entries[0] === '+ Select all' && at('Presets') === 1 && JSON.stringify(entries.slice(2, 10)) === JSON.stringify(presets.map((p) => `+ ${p}`)) &&
+        at('Decisions') === 10 && JSON.stringify(entries.slice(11, 18)) === JSON.stringify(decisions.map((k) => `+ ${k}`)) && at('Events') === 18 &&
+        events.length === 28 && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
+        !entries.some((e) => e.includes('hidden')),
+      missing: entries.slice(0, 20),
+    });
+  }
+  {
+    // From a link's one kind, since at rest every kind is on and every preset row reads checked.
+    const page = await mount('/routing-log?kinds=moved', { now: CLOCK_ORIGIN });
+    const kindsOf = () => new URLSearchParams(page.location().search).get('kinds');
+    const spy = countCalls('listRoutingLog');
+    await addFilter(page, 'Kinds');
+    await clickOption(page, 'moves and holds');
+    const one = { address: kindsOf(), chip: chipRead(page, 'kinds') };
+    await clickOption(page, 'cooldowns and backoff');
+    const two = { address: kindsOf(), chip: chipRead(page, 'kinds') };
+    await clickOption(page, 'Held');
+    const edited = { address: kindsOf(), chip: chipRead(page, 'kinds'), title: chipOf(page, 'kinds')?.getAttribute('title') ?? null };
+    await closeBoxes(page);
+    spy.restore();
+    const read = spy.calls.at(-1)?.[0]?.kinds?.join(',') ?? null;
+    page.unmount();
+    results.push({
+      name: "/routing-log a preset row checks its members and the chip reads the preset's name, a second preset reads both names, and a hand edit reads the kinds' words",
+      ok:
+        one.address === 'moved,held,shedding_round,wind_down_started' && one.chip === 'kinds: moves and holds' &&
+        two.address === 'moved,held,shedding_round,wind_down_started,cooldown_set,cooldown_cleared,poll_backoff_started,poll_backoff_ended' && two.chip === 'kinds: moves and holds, cooldowns and backoff' &&
+        edited.address === 'moved,shedding_round,wind_down_started,cooldown_set,cooldown_cleared,poll_backoff_started,poll_backoff_ended' && edited.chip === 'kinds: moved, shedding round, wind-down started +4' &&
+        edited.title === 'moved, shedding round, wind-down started, cooldown set, cooldown cleared, poll backoff started, poll backoff ended' && read === edited.address,
+      missing: [JSON.stringify(one), JSON.stringify(two), JSON.stringify(edited), String(read)],
+    });
+  }
+  {
+    // The links the dashboard, the pool cards and the Models view write name their kinds, which read as any set does.
+    const chips = [];
+    for (const kinds of ['exhausted', 'model_rejected,model_permitted', 'moved,held,shedding_round,wind_down_started', 'wind_down_started,held,shedding_round,moved']) {
+      const page = await mount(`/routing-log?kinds=${kinds}`, { now: CLOCK_ORIGIN });
+      chips.push(chipRead(page, 'kinds'));
+      page.unmount();
+    }
+    results.push({
+      name: "/routing-log a link's kinds read as a hand-picked set or a preset",
+      ok: JSON.stringify(chips) === JSON.stringify(['kinds: exhausted', 'kinds: model rejected, model permitted', 'kinds: moves and holds', 'kinds: moves and holds']),
+      missing: chips,
+    });
+  }
+  {
+    // The range, Add filter and the edge, with no search slot drawn empty and no extras.
+    const row = m.container.querySelector('.routing-log > .filter-bar:first-child > .filter-bar__row');
+    const slotOf = (el) =>
+      el.matches('.segmented[aria-label="Range"]')
+        ? 'range'
+        : el.matches('button') && el.textContent?.trim() === 'Add filter'
+          ? 'add filter'
+          : el.matches('.filter-bar__edge')
+            ? 'edge'
+            : `${el.tagName.toLowerCase()}.${el.className}`;
+    const slots = [...(row?.children ?? [])];
+    const read = {
+      edge: [...(row?.querySelector('.filter-bar__edge')?.children ?? [])].map((el) => (el.classList.contains('refresh-control') ? 'refresh' : el.classList.contains('filter-bar__count') ? 'count' : el.className)),
+      empty: slots.filter((el) => el.childElementCount === 0 && (el.textContent?.trim() ?? '') === '').map(slotOf),
+      search: barSearch(m) !== null,
+      slots: slots.map(slotOf),
+    };
+    results.push({
+      name: '/routing-log mounts the bar first with the range, Add filter and the edge, no search and no empty slot',
+      ok: JSON.stringify(read.slots) === JSON.stringify(['range', 'add filter', 'edge']) && read.empty.length === 0 && JSON.stringify(read.edge) === JSON.stringify(['refresh', 'count']) && !read.search,
+      missing: [JSON.stringify(read)],
     });
   }
   {
@@ -9797,46 +9878,69 @@ m.unmount();
     });
   }
   {
-    // A link in reads the request a quarter hour either side of its first decision.
+    // A link in reads the request a quarter hour either side of its first decision. The card of that decision widens
+    // around the decision's own instant.
     const id = 'req_1d9c3e55-0b2';
     const own = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 2 * HOUR), limit: 200, request: id, to: iso(CLOCK_ORIGIN) })).rows.filter((r) => r.type === 'decision');
-    const at = Math.min(...own.map((r) => Date.parse(r.at)));
+    const first = own.filter((r) => r.sessionId !== null && r.accountId !== null).sort((a, b) => Date.parse(a.at) - Date.parse(b.at))[0];
+    const at = Date.parse(first.at);
     const from = at - 15 * MINUTE;
     const to = Math.min(at + 15 * MINUTE, CLOCK_ORIGIN);
-    const page = await mount(`/routing-log?request=${id}&from=${iso(from)}&to=${iso(to)}`, { now: CLOCK_ORIGIN });
+    const address = `/routing-log?request=${id}&from=${iso(from)}&to=${iso(to)}`;
+    const page = await mount(address, { now: CLOCK_ORIGIN });
     const counted = await api.listRoutingLog({ from: iso(from), limit: 25, request: id, to: iso(to) });
-    const line = scope(page);
-    const head = line?.querySelector('span')?.textContent ?? '';
-    const widen = Object.fromEntries([...(line?.querySelectorAll('.routing-log__widen a') ?? [])].map((a) => [a.textContent?.trim(), params(a.getAttribute('href'))]));
-    const newest = own.find((r) => r.accountId !== null);
+    const chip = { text: chipRead(page, 'request'), title: chipOf(page, 'request')?.getAttribute('title') ?? null };
+    const scoped = page.container.querySelector('.routing-log__scope') !== null;
+    // A widening shuts every row, so the card is opened again on the request's address before each one.
+    const openCard = async () => {
+      const shown = () => page.container.querySelector('.routing-log__panel .decision-card__foot');
+      if (shown() === null) {
+        page.container.querySelector(`tr.routing-log__row[data-row="${rowKeyOf(first)}"]`)?.click();
+        await page.settle(600);
+      }
+      return shown();
+    };
+    const foot = await openCard();
+    const lead = foot?.querySelector('.muted')?.textContent ?? null;
+    const labels = [...(foot?.querySelectorAll('button.link-btn') ?? [])].map((b) => b.textContent);
+    const went = {};
+    for (const label of labels) {
+      [...((await openCard())?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent === label)?.click();
+      await page.settle(300);
+      went[label] = params(`/x${page.location().search}`);
+      await page.navigate(address);
+    }
     const minute = Math.floor(at / MINUTE) * MINUTE;
     const expected = {
-      'this session': { from: iso(at - HOUR), session: own[0].sessionId, to: iso(Math.min(at + HOUR, CLOCK_ORIGIN)) },
-      'this account': { accounts: newest.accountId, from: iso(at - 15 * MINUTE), to: iso(Math.min(at + 15 * MINUTE, CLOCK_ORIGIN)) },
-      'this minute': { from: iso(minute), to: iso(minute + MINUTE - 1) },
+      'this minute': { from: iso(minute), to: iso(Math.min(minute + MINUTE - 1, CLOCK_ORIGIN)) },
+      'this session': { from: iso(at - HOUR), session: first.sessionId, to: iso(Math.min(at + HOUR, CLOCK_ORIGIN)) },
+      'this account': { accounts: first.accountId, from: iso(at - 15 * MINUTE), to: iso(Math.min(at + 15 * MINUTE, CLOCK_ORIGIN)) },
     };
     const plural = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`;
     results.push({
-      name: "/routing-log a request filter draws the scope line with the three widenings' URLs",
+      name: "/routing-log a request filter draws the request chip with its counts in the title and the card foot's three widenings in the order this minute, this session, this account",
       ok:
-        own.length === 2 && counted.counts !== null && head === `Request ${id}: ${plural(counted.counts.decisions, 'decision')}, ${plural(counted.counts.events, 'event')}` &&
-        line?.querySelector('a')?.getAttribute('href') === `/requests/${id}` && JSON.stringify(widen) === JSON.stringify(expected) && (line?.textContent ?? '').includes('Widen to') &&
-        [...(line?.querySelectorAll('button') ?? [])].some((b) => b.textContent?.trim() === 'Clear'),
-      missing: [head, JSON.stringify(widen), JSON.stringify(expected)],
+        own.length === 2 && first !== undefined && counted.counts !== null &&
+        chip.text === `request: ${id.slice(0, 8)}…` && chip.title === `${id}: ${plural(counted.counts.decisions, 'decision')}, ${plural(counted.counts.events, 'event')}` && !scoped &&
+        lead === 'Widen to' && JSON.stringify(labels) === JSON.stringify(['this minute', 'this session', 'this account']) && JSON.stringify(went) === JSON.stringify(expected),
+      missing: [JSON.stringify(chip), `scope line ${scoped}`, String(lead), JSON.stringify(went), JSON.stringify(expected)],
     });
     page.unmount();
   }
   {
-    const page = await mount('/routing-log?accounts=secondary', { now: CLOCK_ORIGIN });
-    const answer = await api.listRoutingLog({ accountIds: ['secondary'], from: iso(CLOCK_ORIGIN - HOUR), limit: 25, to: iso(CLOCK_ORIGIN) });
-    const line = scope(page);
-    const said = line?.querySelector('span')?.textContent ?? '';
+    // A session prefix, an account and two kinds that a row of the hour carries, so the narrowed page holds it.
+    const row = hour.rows.find((r) => r.type === 'decision' && r.sessionId !== null && r.accountId !== null && !r.probe);
+    const query = { accountIds: [row.accountId], from: iso(CLOCK_ORIGIN - HOUR), kinds: [row.kind, 'cooldown_set'], limit: 25, session: row.sessionId.slice(0, 8), to: iso(CLOCK_ORIGIN) };
+    const page = await mount(`/routing-log?accounts=${row.accountId}&kinds=${row.kind},cooldown_set&session=${query.session}`, { now: CLOCK_ORIGIN });
+    const answer = await api.listRoutingLog(query);
+    const words = [...page.container.querySelectorAll('.chip-line .chip--filter .chip__word')].map((w) => w.textContent);
     const n = trs(page).length;
-    const expected = `Narrowed to account secondary, 13:30 to 14:30: ${n} row${n === 1 ? '' : 's'}${answer.nextCursor ? ', more' : ''}`;
     results.push({
-      name: '/routing-log a narrowing draws the scope line without widenings',
-      ok: n > 0 && n === answer.rows.length && said === expected && line?.querySelector('.routing-log__widen') === null && line?.querySelector('a')?.getAttribute('href') === '/accounts/secondary',
-      missing: [said, expected],
+      name: '/routing-log a narrowing draws its chips and the count, with no scope line',
+      ok:
+        n > 0 && n === answer.rows.length && JSON.stringify(words) === JSON.stringify(['kinds:', 'account:', 'session:']) &&
+        barCount(page) === `${n} shown${answer.nextCursor ? ', more available' : ''}` && page.container.querySelector('.routing-log__scope') === null,
+      missing: [JSON.stringify(words), `${n} rows of ${answer.rows.length}`, String(barCount(page))],
     });
     page.unmount();
   }
@@ -9846,10 +9950,9 @@ m.unmount();
     const t = Date.parse(top.at);
     const page = await mount('/routing-log', { now: t - 2_000 });
     const firstBefore = cell(trs(page)[0], 'time')?.firstChild?.textContent ?? '';
-    const toggle = () => page.container.querySelector('.routing-log__follow button[role="switch"]');
-    const label = () => page.container.querySelector('.routing-log__follow .secondary')?.textContent ?? '';
-    toggle()?.click();
-    await page.settle(100);
+    const start = { title: partTitle(page), word: intervalWord(page) };
+    await chooseInterval(page, '5 s');
+    const chosen = { title: partTitle(page), word: intervalWord(page) };
     const polls = countCalls('listRoutingLog');
     tick(5_000);
     await page.settle();
@@ -9863,12 +9966,13 @@ m.unmount();
     const after = { calls: polls.calls.length, isNew: page.container.querySelectorAll('.routing-log__table tbody tr.is-new').length };
     polls.restore();
     results.push({
-      name: '/routing-log Follow polls every 5 s with the range\'s end at now and lands a new row in the accent tint',
+      name: "/routing-log auto reload at 5 s polls with the range's end at now and lands a new row in the accent tint",
       ok:
-        firstBefore !== clockText(top.at) && label() === 'polling every 5 s, the range ends now' &&
+        start.word === 'Off' && start.title === 'Auto reload off' && chosen.word === '5 s' && chosen.title === 'Auto reload every 5 s' &&
+        firstBefore !== clockText(top.at) &&
         landed.calls === 2 && landed.cursor === undefined && landed.to === iso(t + 3_000) && landed.isNew && landed.time === clockText(top.at) &&
         after.calls === 3 && after.isNew === 0,
-      missing: [firstBefore, label(), JSON.stringify(landed), JSON.stringify(after)],
+      missing: [firstBefore, JSON.stringify(start), JSON.stringify(chosen), JSON.stringify(landed), JSON.stringify(after)],
     });
     [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'Next page')?.click();
     await page.settle();
@@ -9876,22 +9980,32 @@ m.unmount();
     tick(5_000);
     await page.settle();
     older.restore();
+    const paged = { calls: older.calls.length, rows: trs(page).length, title: partTitle(page), word: intervalWord(page) };
+    [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'First page')?.click();
+    await page.settle();
+    // The first page arms the poll again, which reads at once since the last answer is a full interval old, and the
+    // next tick reads up to it.
+    const back = countCalls('listRoutingLog');
+    tick(5_000);
+    await page.settle();
+    back.restore();
+    const resumed = { calls: back.calls.length, title: partTitle(page), to: back.calls.at(-1)?.[0]?.to ?? null };
     results.push({
-      name: '/routing-log paging to an older page pauses auto reload and keeps the switch on',
-      ok: older.calls.length === 0 && toggle()?.getAttribute('aria-checked') === 'true' && label() === 'polling every 5 s, the range ends now' && trs(page).length > 0,
-      missing: [`${older.calls.length} reads on the older page`, String(toggle()?.getAttribute('aria-checked')), label()],
+      name: '/routing-log paging to an older page pauses auto reload with the interval kept and the cause in its title, and the first page resumes it',
+      ok:
+        paged.calls === 0 && paged.rows > 0 && paged.word === '5 s' && paged.title === 'Auto reload every 5 s, paused on an older page' &&
+        resumed.calls > 0 && resumed.to === iso(t + 18_000) && resumed.title === 'Auto reload every 5 s',
+      missing: [JSON.stringify(paged), JSON.stringify(resumed)],
     });
     page.unmount();
   }
-  const followToggle = (page) => page.container.querySelector('.routing-log__follow button[role="switch"]');
   const tinted = (page) => page.container.querySelectorAll('.routing-log__table tbody tr.is-new').length;
   const pagerButton = (page, label) => [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === label);
   {
     // The poll lands the hour's newest row in the tint, then the reader pages away before the next poll clears it.
     const t = Date.parse(hour.rows[0].at);
     const page = await mount('/routing-log', { now: t - 2_000 });
-    followToggle(page)?.click();
-    await page.settle(100);
+    await chooseInterval(page, '5 s');
     tick(5_000);
     await page.settle();
     const landed = tinted(page);
@@ -9908,24 +10022,22 @@ m.unmount();
     page.unmount();
   }
   {
-    // The poll is in flight when the reader turns Follow off, and its answer lands after.
+    // The poll is in flight when the reader turns auto reload off, and its answer lands after.
     const t = Date.parse(hour.rows[0].at);
     const page = await mount('/routing-log', { now: t - 2_000 });
-    followToggle(page)?.click();
-    await page.settle(100);
+    await chooseInterval(page, '5 s');
     const held = deferNextCall('listRoutingLog');
     tick(5_000);
     await page.settle(100);
-    followToggle(page)?.click();
-    await page.settle(100);
+    await chooseInterval(page, 'Off');
     held.release();
     await page.settle();
     // The held page brings the new row, so the poll reads its second page, and no later poll starts a first one.
-    const after = { calls: held.calls.length, first: cell(trs(page)[0], 'time')?.firstChild?.textContent ?? '', pages: held.calls.map((c) => c[0]?.cursor === undefined), tinted: tinted(page) };
+    const after = { calls: held.calls.length, first: cell(trs(page)[0], 'time')?.firstChild?.textContent ?? '', pages: held.calls.map((c) => c[0]?.cursor === undefined), tinted: tinted(page), word: intervalWord(page) };
     held.restore();
     results.push({
-      name: '/routing-log a poll that answers after Follow is turned off lands nothing',
-      ok: after.calls === 2 && JSON.stringify(after.pages) === JSON.stringify([true, false]) && after.first !== clockText(hour.rows[0].at) && after.tinted === 0,
+      name: '/routing-log a poll that answers after auto reload is turned off lands nothing',
+      ok: after.calls === 2 && JSON.stringify(after.pages) === JSON.stringify([true, false]) && after.first !== clockText(hour.rows[0].at) && after.tinted === 0 && after.word === 'Off',
       missing: [JSON.stringify(after)],
     });
     page.unmount();
@@ -9933,8 +10045,7 @@ m.unmount();
   {
     // The new filter's list is held, so the poll that fires under it answers before the list does.
     const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
-    followToggle(page)?.click();
-    await page.settle(100);
+    await chooseInterval(page, '5 s');
     const held = deferNextCall('listRoutingLog');
     await page.navigate('/routing-log?accounts=secondary');
     tick(5_000);
@@ -9948,8 +10059,8 @@ m.unmount();
     const drawn = trs(page).map((tr) => `${cell(tr, 'time')?.firstChild?.textContent ?? ''} ${cell(tr, 'time')?.querySelector('a')?.textContent ?? '-'}`);
     const strays = drawn.filter((k) => !answered.has(k));
     results.push({
-      name: "/routing-log a filter change while following never carries the old filter's rows",
-      ok: list?.accountIds?.join() === 'secondary' && poll?.accountIds?.join() === 'secondary' && drawn.length > 0 && strays.length === 0 && followToggle(page)?.getAttribute('aria-checked') === 'true',
+      name: "/routing-log a filter change while auto reload is on never carries the old filter's rows",
+      ok: list?.accountIds?.join() === 'secondary' && poll?.accountIds?.join() === 'secondary' && drawn.length > 0 && strays.length === 0 && intervalWord(page) === '5 s',
       missing: [`${drawn.length} drawn, ${strays.length} from the old filter`, ...strays.slice(0, 4)],
     });
     page.unmount();
@@ -9985,14 +10096,28 @@ m.unmount();
   }
   const rowKey = (r) => `${clockText(r.at)} ${r.type === 'decision' ? r.requestId : '-'}`;
   const drawnKeys = (page) => trs(page).map((tr) => `${cell(tr, 'time')?.firstChild?.textContent ?? ''} ${cell(tr, 'time')?.querySelector('a')?.textContent ?? '-'}`);
+  /**
+   * Mounts the default hour `back` before the pinned clock, chooses 5 s, and holds the poll with the interval menu open
+   * while the clock moves to the pinned origin, so the first poll after the menu closes finds everything that arrived.
+   */
+  const arrivedSince = async (back) => {
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN - back });
+    const listed = trs(page).length;
+    await chooseInterval(page, '5 s');
+    intervalPart(page)?.click();
+    await page.settle(100);
+    const held = countCalls('listRoutingLog');
+    tick(back);
+    await page.settle();
+    held.restore();
+    await closeBoxes(page);
+    return { held: held.calls.length, listed, page };
+  };
   {
     // The list ends an hour back, so the first poll, whose range ends now, finds the whole last hour arrived: more
     // rows than two pages hold.
     const from = CLOCK_ORIGIN - 2 * HOUR;
-    const page = await mount(`/routing-log?from=${iso(from)}&to=${iso(CLOCK_ORIGIN - HOUR)}`, { now: CLOCK_ORIGIN });
-    const listed = trs(page).length;
-    followToggle(page)?.click();
-    await page.settle(100);
+    const { held, listed, page } = await arrivedSince(HOUR);
     const polls = countCalls('listRoutingLog');
     tick(5_000);
     await page.settle(1_000);
@@ -10004,11 +10129,11 @@ m.unmount();
     const drawn = drawnKeys(page);
     // The poll reads every page an arrival is on, then the first page that brings none.
     results.push({
-      name: '/routing-log Follow reads every page that arrived between two polls, each row once and in order',
+      name: '/routing-log auto reload reads every page that arrived between two polls, each row once and in order',
       ok:
-        listed > 0 && arrived > 50 && sent.length === Math.ceil(arrived / 25) + 1 && sent[0].cursor === undefined && sent.slice(1).every((q) => typeof q.cursor === 'string') && sent.every((q) => q.to === iso(CLOCK_ORIGIN + 5_000)) &&
+        held === 0 && listed > 0 && arrived > 50 && sent.length === Math.ceil(arrived / 25) + 1 && sent[0].cursor === undefined && sent.slice(1).every((q) => typeof q.cursor === 'string') && sent.every((q) => q.from === iso(from) && q.to === iso(CLOCK_ORIGIN + 5_000)) &&
         JSON.stringify(drawn) === JSON.stringify(expected) && page.container.querySelector('.routing-log__overrun') === null,
-      missing: [`${listed} listed, ${arrived} arrived, ${drawn.length} drawn of ${expected.length}`, JSON.stringify(sent.map((q) => [q.cursor, q.to]))],
+      missing: [`${held} reads while held, ${listed} listed, ${arrived} arrived, ${drawn.length} drawn of ${expected.length}`, JSON.stringify(sent.map((q) => [q.cursor, q.from, q.to]))],
     });
     page.unmount();
   }
@@ -10016,10 +10141,7 @@ m.unmount();
     // A day back, the poll finds more arrived than its eight pages read: it draws the newest of them, says so above the
     // list, and Next reads on from the last row it read.
     const from = CLOCK_ORIGIN - 24 * HOUR;
-    const page = await mount(`/routing-log?from=${iso(from)}&to=${iso(from + HOUR)}`, { now: CLOCK_ORIGIN });
-    const listed = trs(page).length;
-    followToggle(page)?.click();
-    await page.settle(100);
+    const { held, listed, page } = await arrivedSince(23 * HOUR);
     const polls = countCalls('listRoutingLog');
     tick(5_000);
     await page.settle(2_000);
@@ -10031,12 +10153,12 @@ m.unmount();
     await page.settle();
     const next = drawnKeys(page);
     results.push({
-      name: '/routing-log Follow past its eight pages says more rows arrived and Next reads the rows it left',
+      name: '/routing-log auto reload past its eight pages says more rows arrived and Next reads the rows it left',
       ok:
-        polls.calls.length === 8 && line === 'More rows arrived than auto reload could fetch. Reload to read them.' && all.length > 200 + listed + 25 &&
+        held === 0 && polls.calls.length === 8 && line === 'More rows arrived than auto reload could fetch. Reload to read them.' && all.length > 200 + listed + 25 &&
         JSON.stringify(drawn.slice(0, 200)) === JSON.stringify(all.slice(0, 200).map(rowKey)) && drawn.length === 200 + listed &&
         JSON.stringify(next) === JSON.stringify(all.slice(200, 225).map(rowKey)),
-      missing: [`${polls.calls.length} reads, line ${line}`, `${drawn.length} drawn`, `next ${next.slice(0, 2).join(' | ')}`, `gap ${all.slice(200, 202).map(rowKey).join(' | ')}`],
+      missing: [`${held} reads while held, ${polls.calls.length} reads, line ${line}`, `${drawn.length} drawn`, `next ${next.slice(0, 2).join(' | ')}`, `gap ${all.slice(200, 202).map(rowKey).join(' | ')}`],
     });
     page.unmount();
   }
@@ -10045,8 +10167,7 @@ m.unmount();
     // notice again at the third.
     const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
     const toasts = () => [...page.container.querySelectorAll('.toast')].map((t) => t.textContent);
-    followToggle(page)?.click();
-    await page.settle(100);
+    await chooseInterval(page, '5 s');
     const outage = failCalls({ listRoutingLog: '/admin/routing-log' }, 'ledger locked');
     const seen = [];
     for (let i = 0; i < 3; i += 1) {
@@ -10058,7 +10179,7 @@ m.unmount();
     page.unmount();
     const notice = '/admin/routing-log failed: ledger locked';
     results.push({
-      name: '/routing-log a failing Follow poll toasts once',
+      name: '/routing-log a failing auto reload poll toasts once',
       ok: JSON.stringify(seen) === JSON.stringify([[notice], [notice], []]),
       missing: [JSON.stringify(seen)],
     });
@@ -10067,8 +10188,7 @@ m.unmount();
     // The streak's notice is still on screen, inside its 6-second dwell, when the next poll answers.
     const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
     const toasts = () => [...page.container.querySelectorAll('.toast')].map((t) => t.textContent);
-    followToggle(page)?.click();
-    await page.settle(100);
+    await chooseInterval(page, '5 s');
     const outage = failCalls({ listRoutingLog: '/admin/routing-log' }, 'ledger locked');
     tick(5_000);
     await page.settle();
@@ -10080,29 +10200,26 @@ m.unmount();
     outage.restore();
     page.unmount();
     results.push({
-      name: "/routing-log the Follow poll that recovers takes its streak's notice down",
+      name: "/routing-log the auto reload poll that recovers takes its streak's notice down",
       ok: JSON.stringify(raised) === JSON.stringify(['/admin/routing-log failed: ledger locked']) && recovered.length === 0,
       missing: [JSON.stringify(raised), JSON.stringify(recovered)],
     });
   }
   {
-    // Follow turned off inside a failing streak and on again while the route still fails: the new run toasts once.
+    // Auto reload turned off inside a failing streak and on again while the route still fails: the new run toasts once.
     const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
     const toasts = () => [...page.container.querySelectorAll('.toast')].map((t) => t.textContent);
-    followToggle(page)?.click();
-    await page.settle(100);
+    await chooseInterval(page, '5 s');
     const outage = failCalls({ listRoutingLog: '/admin/routing-log' }, 'ledger locked');
     tick(5_000);
     await page.settle();
     const first = toasts();
-    followToggle(page)?.click();
-    await page.settle(100);
+    await chooseInterval(page, 'Off');
     // Past the notice's 6-second dwell, so a toast after it is the new run's.
     tick(7_000);
     await page.settle();
     const quiet = toasts();
-    followToggle(page)?.click();
-    await page.settle(100);
+    await chooseInterval(page, '5 s');
     tick(5_000);
     await page.settle();
     const again = toasts();
@@ -10110,9 +10227,120 @@ m.unmount();
     page.unmount();
     const notice = '/admin/routing-log failed: ledger locked';
     results.push({
-      name: '/routing-log each Follow run toasts its failing streak once',
+      name: '/routing-log each auto reload run toasts its failing streak once',
       ok: JSON.stringify([first, quiet, again]) === JSON.stringify([[notice], [], [notice]]),
       missing: [JSON.stringify([first, quiet, again])],
+    });
+  }
+  {
+    // The interval is page state: a range and a filter change write their keys alone, and the part keeps its word.
+    const [pool] = await api.listPools();
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    await chooseInterval(page, '5 s');
+    const on = page.location().search;
+    rangePill(page, '6h')?.click();
+    await page.settle();
+    await pick(page, 'Pool', pool.name);
+    await closeBoxes(page);
+    const changed = page.location().search;
+    results.push({
+      name: '/routing-log the auto reload interval is never in the address',
+      ok: on === '' && changed === `?pools=${encodeURIComponent(pool.id)}&range=6h` && intervalWord(page) === '5 s',
+      missing: [JSON.stringify(on), JSON.stringify(changed), String(intervalWord(page))],
+    });
+    page.unmount();
+  }
+  {
+    // Each cause holds the poll with no read at the tick and names itself after the interval in the part's title.
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    await chooseInterval(page, '5 s');
+    const held = async (cause) => {
+      const spy = countCalls('listRoutingLog');
+      tick(5_000);
+      await page.settle();
+      spy.restore();
+      return { cause, reads: spy.calls.length, title: partTitle(page) };
+    };
+    const causes = [];
+    intervalPart(page)?.click();
+    await page.settle(100);
+    causes.push(await held('the interval menu'));
+    await closeBoxes(page);
+    addFilterButton(page)?.click();
+    await page.settle(100);
+    causes.push(await held('Add filter'));
+    await closeBoxes(page);
+    pagerButton(page, 'Next page')?.click();
+    await page.settle();
+    causes.push(await held('an older page'));
+    pagerButton(page, 'First page')?.click();
+    await page.settle();
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    document.dispatchEvent(new window.Event('visibilitychange'));
+    await page.settle(100);
+    causes.push(await held('a hidden tab'));
+    delete document.hidden;
+    document.dispatchEvent(new window.Event('visibilitychange'));
+    await page.settle();
+    const words = (cause) => `Auto reload every 5 s, ${cause}`;
+    const wanted = [words('paused while a menu is open'), words('paused while a menu is open'), words('paused on an older page'), words('paused while the tab is hidden')];
+    results.push({
+      name: "/routing-log each pause cause reads in the split button's title, an open interval menu and an open Add filter popover among them with no read at the tick",
+      ok: causes.every((c) => c.reads === 0) && JSON.stringify(causes.map((c) => c.title)) === JSON.stringify(wanted) && partTitle(page) === 'Auto reload every 5 s',
+      missing: [...causes.map((c) => JSON.stringify(c)), String(partTitle(page))],
+    });
+    page.unmount();
+  }
+  {
+    // A span that ended a day before the clock has nothing new to read: the part reads Off, disabled, with why, and a
+    // tick reads nothing, while 5 s stays chosen for the preset a later choice returns to.
+    const ENDED = `/routing-log?from=${iso(CLOCK_ORIGIN - 25 * HOUR)}&to=${iso(CLOCK_ORIGIN - 24 * HOUR)}`;
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    await chooseInterval(page, '5 s');
+    await page.navigate(ENDED);
+    const spy = countCalls('listRoutingLog');
+    tick(5_000);
+    await page.settle();
+    spy.restore();
+    const ended = { disabled: intervalPart(page)?.disabled ?? null, reads: spy.calls.length, title: partTitle(page), word: intervalWord(page) };
+    await page.navigate('/routing-log');
+    const preset = { disabled: intervalPart(page)?.disabled ?? null, word: intervalWord(page) };
+    page.unmount();
+    const opened = await mount(ENDED, { now: CLOCK_ORIGIN });
+    const fresh = { disabled: intervalPart(opened)?.disabled ?? null, word: intervalWord(opened) };
+    opened.unmount();
+    results.push({
+      name: '/routing-log an ended custom span reads Off and disabled and polls nothing at the tick',
+      ok:
+        ended.disabled === true && ended.word === 'Off' && ended.title === 'A custom range that has ended has nothing new to read' && ended.reads === 0 &&
+        preset.disabled === false && preset.word === '5 s' &&
+        fresh.disabled === true && fresh.word === 'Off',
+      missing: [JSON.stringify(ended), JSON.stringify(preset), JSON.stringify(fresh)],
+    });
+  }
+  {
+    // The count reads the page's rows at the bar's right edge once the list has answered: a cursor left, the rows
+    // alone, or none. Before the first answer it reads nothing.
+    const held = deferNextCall('listRoutingLog');
+    const more = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    const waiting = barCount(more);
+    held.release();
+    await more.settle();
+    held.restore();
+    const several = barCount(more);
+    more.unmount();
+    const none = await mount('/routing-log?session=zzzzzzzz', { now: CLOCK_ORIGIN });
+    const empty = barCount(none);
+    none.unmount();
+    const id = 'req_1d9c3e55-0b2';
+    const own = await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 2 * HOUR), limit: 25, request: id, to: iso(CLOCK_ORIGIN) });
+    const single = await mount(`/routing-log?request=${id}&from=${iso(CLOCK_ORIGIN - 2 * HOUR)}&to=${iso(CLOCK_ORIGIN)}`, { now: CLOCK_ORIGIN });
+    const alone = barCount(single);
+    single.unmount();
+    results.push({
+      name: '/routing-log the count reads No rows, n shown and more available',
+      ok: waiting === '' && several === '25 shown, more available' && empty === 'No rows' && own.nextCursor === null && alone === `${own.rows.length} shown`,
+      missing: [JSON.stringify(waiting), String(several), String(empty), `${own.rows.length} rows, read ${alone}`],
     });
   }
   {
@@ -10510,7 +10738,7 @@ m.unmount();
     results.push({
       name: '/routing-log the foot reads Record v1 and Copy as JSON copies the record whole with the full hash',
       ok:
-        foot?.querySelector('.decision-card__record')?.textContent === 'Record v1' && JSON.stringify(widen) === JSON.stringify(['this session', 'this account', 'this minute']) && copied !== null &&
+        foot?.querySelector('.decision-card__record')?.textContent === 'Record v1' && foot.querySelector('.muted')?.textContent === 'Widen to' && JSON.stringify(widen) === JSON.stringify(['this minute', 'this session', 'this account']) && copied !== null &&
         copied === JSON.stringify(record.raw, null, 2) && copied.includes(`"${chosen.prefix.staticMatch.hash}"`) && chosen.prefix.staticMatch.hash.length === 64,
       missing: [foot?.textContent ?? 'no foot', String(copied).slice(0, 80)],
     });
@@ -16149,7 +16377,8 @@ m.unmount();
   const read = (page, label, key) => {
     const filter = filterOf(page, label);
     const head = filter?.querySelector('.mselect__option--all');
-    const choices = [...(filter?.querySelectorAll(CHOICE) ?? [])];
+    // A preset row sets its members, so the choices are the options alone.
+    const choices = [...(filter?.querySelectorAll(`${CHOICE}:not(.mselect__option--preset)`) ?? [])];
     const chip = barred(page) ? chipOf(page, label.toLowerCase()) : undefined;
     return {
       address: new URLSearchParams(page.location().search).get(key)?.split(',') ?? null,
@@ -16181,18 +16410,20 @@ m.unmount();
   const PICKERS = [
     ['/analytics', [['Key', 'keys'], ['Pool', 'pools'], ['Account', 'accounts'], ['Model', 'models']]],
     ['/requests', [['Key', 'keys'], ['Pool', 'pools'], ['Account', 'accounts'], ['Model', 'models'], ['Status', 'statuses'], ['Outcome', 'outcomes'], ['Cache miss reason', 'cache_miss_reasons'], ['Agent type', 'agent_types'], ['Turn origin', 'turn_origins'], ['Effort', 'efforts'], ['Request class', 'request_classes'], ['Speed', 'speeds']]],
-    ['/routing-log', [['Kinds', 'kinds'], ['Keys', 'keys'], ['Pools', 'pools'], ['Accounts', 'accounts'], ['Models', 'models']]],
+    ['/routing-log', [['Kinds', 'kinds'], ['Key', 'keys'], ['Pool', 'pools'], ['Account', 'accounts'], ['Model', 'models']]],
   ];
-  // The list each view searches under a query, and the query: one whose options pass the length that draws a search
-  // field.
-  const QUERIED = { '/requests': ['Status', '50'], '/routing-log': ['Models', 'sonnet'] };
+  // The list each view searches under a query, and the query: one whose options draw a search field.
+  const QUERIED = { '/requests': ['Status', '50'], '/routing-log': ['Model', 'sonnet'] };
+  // A kind's chip word is its option label with the first letter in lower case.
+  const kindWords = (labels) => labels.map((l) => `${l.charAt(0).toLowerCase()}${l.slice(1)}`);
   for (const [view, pickers] of PICKERS) {
     const page = await mount(view, { now: CLOCK_ORIGIN });
     for (const [label, key] of pickers) {
-      // The Kinds filter's empty value is the route's default set: every kind but the two hidden ones.
+      // An empty Kinds value is every kind, so Select all on the full list changes nothing, unchecking one kind writes
+      // the others under a chip, and Select all then returns every kind to no chip.
       const kinds = label === 'Kinds';
       const name = kinds
-        ? `${view} Select all on Kinds checks every kind and a second click returns the default set`
+        ? `${view} Select all on Kinds keeps every kind with no chip, unchecking one writes the others, and Select all returns every kind`
         : `${view} Select all on ${label} checks every option and a second click clears them`;
       await openList(page, label);
       if (!filterOf(page, label)) {
@@ -16202,29 +16433,53 @@ m.unmount();
       const before = read(page, label, key);
       await clickHead(page, label);
       const all = read(page, label, key);
+      let picked = null;
+      if (kinds) {
+        filterOf(page, label)?.querySelector(`${CHOICE}:not(.mselect__option--preset)`)?.click();
+        await page.settle(700);
+        picked = read(page, label, key);
+      }
       await clickHead(page, label);
       const none = read(page, label, key);
-      const opened = kinds ? before.head?.checked === 'mixed' && before.head.selected === 'false' : before.head?.checked === null && before.head.selected === 'false' && before.checked.length === 0;
-      const cleared = kinds
-        ? none.trigger === 'Kinds (2 hidden)' && !none.set && none.address === null && none.checked.length === none.choices.length - 2 && sameSet(none.checked, before.checked)
-        : (barred(page) || none.trigger === label) && !none.set && none.address === null && none.checked.length === 0;
+      const everyKind = (r) => r.trigger === 'no Kinds chip' && !r.set && r.address === null && r.choices.length > 0 && r.checked.length === r.choices.length && r.head?.selected === 'true' && r.head.checked === null;
+      const kindsHeld = () => {
+        const words = kindWords(picked.checked);
+        return (
+          everyKind(before) &&
+          everyKind(all) &&
+          picked.set &&
+          picked.checked.length === picked.choices.length - 1 &&
+          picked.address?.length === picked.checked.length &&
+          picked.head?.checked === 'mixed' &&
+          picked.trigger === `kinds: ${words.slice(0, 3).join(', ')} +${words.length - 3}` &&
+          picked.title === words.join(', ') &&
+          everyKind(none)
+        );
+      };
       const wanted = summary(page, label, all.checked);
       results.push({
         name,
         ok:
           before.first &&
           before.head?.text === 'Select all' &&
-          opened &&
-          all.choices.length > 0 &&
-          all.checked.length === all.choices.length &&
-          all.head?.selected === 'true' &&
-          all.head.checked === null &&
-          all.trigger === wanted.trigger &&
-          all.title === wanted.title &&
-          all.address?.length === all.choices.length &&
-          cleared &&
-          none.head?.selected === 'false',
-        missing: [`opened: ${brief(before)}`, `first click: ${brief(all)}`, `wanted: ${JSON.stringify(wanted)}`, `second click: ${brief(none)}`],
+          (kinds
+            ? kindsHeld()
+            : before.head?.checked === null &&
+              before.head.selected === 'false' &&
+              before.checked.length === 0 &&
+              all.choices.length > 0 &&
+              all.checked.length === all.choices.length &&
+              all.head?.selected === 'true' &&
+              all.head.checked === null &&
+              all.trigger === wanted.trigger &&
+              all.title === wanted.title &&
+              all.address?.length === all.choices.length &&
+              (barred(page) || none.trigger === label) &&
+              !none.set &&
+              none.address === null &&
+              none.checked.length === 0 &&
+              none.head?.selected === 'false'),
+        missing: [`opened: ${brief(before)}`, `first click: ${brief(all)}`, ...(picked ? [`one unchecked: ${brief(picked)}`] : [`wanted: ${JSON.stringify(wanted)}`]), `second click: ${brief(none)}`],
       });
       // A searchable list's row reaches the options its query leaves, and the hidden ones keep their state.
       const [queried, query] = QUERIED[view] ?? [];

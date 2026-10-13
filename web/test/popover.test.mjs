@@ -545,3 +545,46 @@ test('a list with one group draws no group heading', () => {
   click(b.button());
   assert.deepEqual([box().querySelectorAll('.mselect__group').length, b.rows().map((r) => r.firstElementChild.textContent)], [0, ['Pool', 'Status']]);
 });
+
+test('a disabled row draws its reason as a description line under its label, beside its title, and names it as its description', () => {
+  const b = bar({}, { disabled: { keys: 'The key list did not load: offline' } });
+  click(b.button());
+  const key = b.rowOf('Key');
+  const line = key.querySelector('.add-filter__description');
+  assert.deepEqual([key.title, line?.textContent, key.getAttribute('aria-describedby') === line?.id && line?.id !== ''], ['The key list did not load: offline', 'The key list did not load: offline', true]);
+  assert.equal(b.rowOf('Account').querySelector('.add-filter__description'), null, 'a row that loaded draws no description');
+});
+
+test('a searchable list opens on its search field whatever the number of its options', () => {
+  const models = ['claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-haiku-4-5'].map((id) => ({ label: id, value: id }));
+  const dimensions = [
+    { field: 'accounts', group: 'Routing', kind: 'list', label: 'Account', word: 'account' },
+    { field: 'models', group: 'Routing', kind: 'list', label: 'Model', mono: true, searchable: true, word: 'model' },
+  ];
+  const b = bar({ models: [] }, { dimensions, options: { ...OPTIONS, models } });
+  click(b.button());
+  click(b.rowOf('Model'));
+  const search = box().querySelector('.mselect__search');
+  assert.ok(search !== null && document.activeElement === search, 'six searchable options draw the search field, focused');
+  click(box().querySelector('[aria-label="Back to the filter list"]'));
+  click(b.rowOf('Account'));
+  assert.equal(box().querySelector('.mselect__search'), null, 'two options without the flag draw none');
+});
+
+test('an empty value under emptyMeansAll draws every row checked, and unchecking one writes the others', () => {
+  const kinds = [
+    { group: 'Decisions', label: 'Moved', value: 'moved' },
+    { group: 'Decisions', label: 'Placed', value: 'placed' },
+    { group: 'Events', label: 'Cooldown set', value: 'cooldown_set' },
+  ];
+  const dimensions = [{ emptyMeansAll: true, field: 'kinds', group: 'Kinds', kind: 'list', label: 'Kinds', word: 'kinds' }];
+  const b = bar({ kinds: [] }, { dimensions, options: { kinds } });
+  click(b.button());
+  click(b.rowOf('Kinds'));
+  const head = box().querySelector('.mselect__option--all');
+  const rows = [...box().querySelectorAll('.mselect__option:not(.mselect__option--all)')];
+  assert.deepEqual([head?.getAttribute('aria-selected'), rows.map((o) => o.getAttribute('aria-selected'))], ['true', ['true', 'true', 'true']]);
+  assert.equal(box().querySelector('.popover__head .link-btn'), null, 'every kind holds no value to remove');
+  click(rows.find((o) => o.textContent === 'Placed'));
+  assert.deepEqual(b.writes, [{ kinds: ['moved', 'cooldown_set'] }]);
+});

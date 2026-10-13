@@ -10,7 +10,7 @@ export interface AddFilterProps {
   /** The "Add filter" button, for the chip line's focus fallback. */
   buttonRef: RefObject<HTMLButtonElement | null>;
   dimensions: Dimension[];
-  /** A dimension whose options did not load, by field, with the failure's words for its title. */
+  /** A dimension whose options did not load, by field, with the failure's words for its title and its description line. */
   disabled?: Record<string, string>;
   /** A chip's click: step two for `field` anchored to the chip. Null while nothing is edited. */
   edit: { anchor: HTMLElement; field: string } | null;
@@ -138,9 +138,14 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
                   {d.group}
                 </div>
               )}
-              <button type="button" role="option" className="add-filter__row" aria-disabled={reason !== undefined ? true : undefined} title={reason} onClick={() => choose(d)}>
+              <button type="button" role="option" className="add-filter__row" aria-disabled={reason !== undefined ? true : undefined} aria-describedby={reason !== undefined ? `${boxId}-${d.field}` : undefined} title={reason} onClick={() => choose(d)}>
                 <span className="add-filter__label">{d.label}</span>
                 {words !== '' && <span className={d.mono ? 'add-filter__value mono' : 'add-filter__value'}>{words}</span>}
+                {reason !== undefined && (
+                  <span className="add-filter__description" id={`${boxId}-${d.field}`}>
+                    {reason}
+                  </span>
+                )}
               </button>
             </Fragment>
           );
@@ -167,7 +172,20 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
             </button>
           )}
         </div>
-        {d.kind === 'list' && <OptionList key={d.field} autoFocus label={d.label} mono={d.mono} onChange={(next) => update({ [d.field]: next })} options={known} presets={presets[d.field]} searchable={known.length > SEARCHED} value={Array.isArray(value) ? value : []} />}
+        {d.kind === 'list' && (
+          <OptionList
+            key={d.field}
+            autoFocus
+            label={d.label}
+            mono={d.mono}
+            onChange={(next) => update({ [d.field]: next })}
+            options={known}
+            presets={presets[d.field]}
+            searchable={d.searchable === true || known.length > SEARCHED}
+            // An empty value that means every option reads every row checked, so a click unchecks one.
+            value={Array.isArray(value) && value.length > 0 ? value : d.emptyMeansAll ? known.map((o) => o.value) : []}
+          />
+        )}
         {(d.kind === 'id' || d.kind === 'pattern') && (
           <>
             <Input

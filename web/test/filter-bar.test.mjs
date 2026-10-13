@@ -106,3 +106,52 @@ test("a dimension whose list did not load carries the failure's words, and a lis
   assert.deepEqual(d.notLoadedReason('pools', 'pool', { data: [], error: null }), {});
   assert.deepEqual(d.notLoadedReason('models', 'model', { data: [{ id: 'm' }], error: 'a refresh failed' }), {}, 'a refresh that fails keeps the list it read');
 });
+
+test('every kind belongs to exactly one preset and a preset is exactly its members', () => {
+  const members = d.KIND_PRESETS.flatMap((p) => p.members);
+  assert.equal(d.ALL_KINDS.length, 35);
+  assert.equal(new Set(members).size, members.length, 'no kind stands in two presets');
+  assert.deepEqual([...members].sort(), [...d.ALL_KINDS].sort(), 'the presets together are every kind the Kinds list offers');
+  assert.deepEqual(
+    d.KIND_PRESETS.map((p) => [p.label, p.members.length]),
+    [
+      ['placements and pins', 6],
+      ['moves and holds', 4],
+      ['exhaustion and refusals', 4],
+      ['account state and windows', 9],
+      ['cooldowns and backoff', 4],
+      ['keepalive', 2],
+      ['registry changes', 4],
+      ['router life cycle', 2],
+    ],
+  );
+  assert.deepEqual(d.KIND_PRESETS.find((p) => p.label === 'keepalive').members, ['probe', 'warm_prefix_expired']);
+  assert.deepEqual([d.kindWord('probe'), d.kindWord('moved'), d.kindWord('pin_migrated')], ['probe decisions', 'moved', 'pin moved']);
+});
+
+test('the Kinds chip names a whole preset, a union of whole presets in the table\'s order, else the kinds\' words three then +N, and nothing for every kind', () => {
+  assert.deepEqual(d.kindsChipText(['shedding_round', 'moved', 'wind_down_started', 'held']), {
+    text: 'kinds: moves and holds',
+    title: 'shedding round, moved, wind-down started, held',
+    values: 'moves and holds',
+  });
+  assert.deepEqual(d.kindsChipText(['cooldown_set', 'cooldown_cleared', 'poll_backoff_started', 'poll_backoff_ended', 'moved', 'held', 'shedding_round', 'wind_down_started']), {
+    text: 'kinds: moves and holds, cooldowns and backoff',
+    title: 'cooldown set, cooldown cleared, poll backoff started, poll backoff ended, moved, held, shedding round, wind-down started',
+    values: 'moves and holds, cooldowns and backoff',
+  });
+  assert.deepEqual(d.kindsChipText(['moved', 'held', 'placed', 'probe', 'cooldown_set']), {
+    text: 'kinds: moved, held, placed +2',
+    title: 'moved, held, placed, probe decisions, cooldown set',
+    values: 'moved, held, placed +2',
+  });
+  const nothing = { text: '', title: '', values: '' };
+  assert.deepEqual([d.kindsChipText(d.ALL_KINDS), d.kindsChipText([...d.ALL_KINDS].reverse()), d.kindsChipText([])], [nothing, nothing, nothing]);
+});
+
+test('the Kinds dimension reads its chip through the presets, and the Model dimension opens on its search field', () => {
+  const kinds = d.ROUTING_LOG_DIMENSIONS.find((x) => x.field === 'kinds');
+  assert.deepEqual(d.chipsOf(d.ROUTING_LOG_DIMENSIONS, { kinds: ['probe', 'warm_prefix_expired'] }, {}), [{ field: 'kinds', label: 'kinds', mono: false, text: 'kinds: keepalive', title: 'probe decisions, warm prefix expired', values: 'keepalive' }]);
+  assert.equal(kinds.emptyMeansAll, true, 'an empty Kinds value is every kind');
+  assert.deepEqual([d.REQUESTS_DIMENSIONS, d.ROUTING_LOG_DIMENSIONS].map((list) => list.find((x) => x.field === 'models').searchable), [true, true]);
+});

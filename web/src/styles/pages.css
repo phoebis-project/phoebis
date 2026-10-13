@@ -2191,10 +2191,6 @@
   white-space: nowrap;
 }
 
-.routing-log__id {
-  width: 132px;
-}
-
 /* The decision card spans the open row's tint, so its candidate table is the log's card less 16 px either side. The
    event detail is a bordered panel on the same tint. Chips in both are one line high. */
 .decision-card,
@@ -2713,28 +2709,6 @@
 .event-detail__pins th,
 .event-detail__pins td {
   padding: 5px 12px 5px 0;
-}
-
-.routing-log__scope {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-  align-items: center;
-  padding: 10px 14px;
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-  border-radius: var(--radius);
-}
-
-.routing-log__widen {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: baseline;
-}
-
-.routing-log__clear {
-  margin-left: auto;
 }
 
 .filters {

@@ -620,10 +620,6 @@ pub const DECISION_KINDS: &[&str] = &["exhausted", "held", "moved", "placed", "r
 /// The pseudo-kind that names a probe's decision of any kind in `kinds`.
 pub const PROBE_KIND: &str = "probe";
 
-/// The one event kind the default set leaves out beside the probe decisions: the purge writes it per conversation
-/// root on every tick, so it would bury the decisions it follows unless asked for.
-const HIDDEN_EVENT_KIND: &str = "warm_prefix_expired";
-
 /// The decision kinds that sent the request upstream, and so have an attempt that answered for them: the same three
 /// as `COMPLETING_ATTEMPT` names.
 const DISPATCHING_KINDS: &[&str] = &["moved", "placed", "renewed"];
@@ -639,8 +635,8 @@ pub struct RoutingLogFilter {
     pub pools: Vec<String>,
     pub accounts: Vec<String>,
     pub models: Vec<String>,
-    /// `None` is the default set (every decision kind with `probe` 0, every event kind but `warm_prefix_expired`).
-    /// `Some` is exactly the kinds named, `probe` the pseudo-kind for a probe decision of any kind.
+    /// `None` is every decision and event kind, the probe decisions among them. `Some` is exactly the kinds named,
+    /// `probe` the pseudo-kind for a probe decision of any kind.
     pub kinds: Option<Vec<String>>,
 }
 
@@ -902,25 +898,22 @@ fn decision_statement(filter: &RoutingLogFilter) -> Option<LogStatement> {
             "(d.account_id IN ({marks}) OR d.from_account_id IN ({marks}))"
         ));
     }
-    match &filter.kinds {
-        None => statement.clauses.push("d.probe = 0".into()),
-        Some(kinds) => {
-            let named: Vec<String> = kinds
-                .iter()
-                .filter(|k| DECISION_KINDS.contains(&k.as_str()))
-                .cloned()
-                .collect();
-            let probes = kinds.iter().any(|k| k == PROBE_KIND);
-            let mut of_kind = Vec::new();
-            in_list("d.kind", &named, &mut statement.args, &mut of_kind);
-            let clause = match (of_kind.pop(), probes) {
-                (None, false) => return None,
-                (None, true) => "d.probe = 1".to_string(),
-                (Some(kind), false) => format!("{kind} AND d.probe = 0"),
-                (Some(kind), true) => format!("(({kind} AND d.probe = 0) OR d.probe = 1)"),
-            };
-            statement.clauses.push(clause);
-        }
+    if let Some(kinds) = &filter.kinds {
+        let named: Vec<String> = kinds
+            .iter()
+            .filter(|k| DECISION_KINDS.contains(&k.as_str()))
+            .cloned()
+            .collect();
+        let probes = kinds.iter().any(|k| k == PROBE_KIND);
+        let mut of_kind = Vec::new();
+        in_list("d.kind", &named, &mut statement.args, &mut of_kind);
+        let clause = match (of_kind.pop(), probes) {
+            (None, false) => return None,
+            (None, true) => "d.probe = 1".to_string(),
+            (Some(kind), false) => format!("{kind} AND d.probe = 0"),
+            (Some(kind), true) => format!("(({kind} AND d.probe = 0) OR d.probe = 1)"),
+        };
+        statement.clauses.push(clause);
     }
     Some(statement)
 }
@@ -934,26 +927,21 @@ fn event_statement(filter: &RoutingLogFilter) -> Option<LogStatement> {
         &mut statement.args,
         &mut statement.clauses,
     );
-    match &filter.kinds {
-        None => statement
-            .clauses
-            .push(format!("e.kind != '{HIDDEN_EVENT_KIND}'")),
-        Some(kinds) => {
-            let named: Vec<String> = kinds
-                .iter()
-                .filter(|k| EVENT_KINDS.contains(&k.as_str()))
-                .cloned()
-                .collect();
-            if named.is_empty() {
-                return None;
-            }
-            in_list(
-                "e.kind",
-                &named,
-                &mut statement.args,
-                &mut statement.clauses,
-            );
+    if let Some(kinds) = &filter.kinds {
+        let named: Vec<String> = kinds
+            .iter()
+            .filter(|k| EVENT_KINDS.contains(&k.as_str()))
+            .cloned()
+            .collect();
+        if named.is_empty() {
+            return None;
         }
+        in_list(
+            "e.kind",
+            &named,
+            &mut statement.args,
+            &mut statement.clauses,
+        );
     }
     Some(statement)
 }

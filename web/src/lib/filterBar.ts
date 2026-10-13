@@ -1,5 +1,6 @@
 // A type-only import, so the API bundle the unit tests load stays free of React.
 import type { Option } from '@/components/ui/OptionList';
+import { kindsChipText } from './routingLog';
 
 export type DimensionKind = 'choice' | 'flag' | 'id' | 'list' | 'pattern';
 
@@ -9,6 +10,8 @@ export interface Dimension {
   anyLabel?: string;
   /** A choice's value that means none, which hasValue, Remove, Clear all and the any row read and write: the empty string unless set, `all` on the Keys Status. */
   defaultValue?: string;
+  /** A list whose empty value means every option, which its values step draws with every row checked. */
+  emptyMeansAll?: true;
   /** The codec field the dimension reads and writes. */
   field: string;
   /** The Add filter list's group heading. */
@@ -18,6 +21,8 @@ export interface Dimension {
   label: string;
   /** The chip's values and the option rows in the mono face. */
   mono?: boolean;
+  /** A list that opens on its search field however few its options, where a list draws one past twelve alone. */
+  searchable?: true;
   /** The chip's text, title and values for a value, in place of chipText's forms. The chip draws `values` as given, whatever `text` reads. */
   text?: (value: unknown, options: Option[]) => ChipText;
   /** The word before the colon: the label in lower case unless named ("kinds", "client"). */
@@ -128,6 +133,8 @@ export function foldChips(chips: Chip[], fits: (count: number) => boolean): { fo
 const ACCOUNT: Dimension = { field: 'accounts', group: 'Routing', kind: 'list', label: 'Account', word: 'account' };
 const KEY: Dimension = { field: 'keys', group: 'Routing', kind: 'list', label: 'Key', mono: true, word: 'key' };
 const MODEL: Dimension = { field: 'models', group: 'Routing', kind: 'list', label: 'Model', mono: true, word: 'model' };
+/** The whole catalog, which Requests and the Routing log offer, so the list opens on its search field. */
+const CATALOG_MODEL: Dimension = { ...MODEL, searchable: true };
 const POOL: Dimension = { field: 'pools', group: 'Routing', kind: 'list', label: 'Pool', mono: true, word: 'pool' };
 const USER_AGENT: Dimension = { field: 'agent', group: 'Request', kind: 'pattern', label: 'User agent', mono: true, word: 'user agent' };
 
@@ -143,7 +150,7 @@ export function notLoadedReason(field: string, name: string, read: { data: unkno
 export const REQUESTS_DIMENSIONS: Dimension[] = [
   ACCOUNT,
   KEY,
-  MODEL,
+  CATALOG_MODEL,
   POOL,
   { field: 'cacheMissReasons', group: 'Outcome', kind: 'list', label: 'Cache miss reason', word: 'cache miss reason' },
   { field: 'held', group: 'Outcome', kind: 'flag', label: 'Held only', word: 'held only' },
@@ -173,10 +180,10 @@ export const REQUESTS_DIMENSIONS: Dimension[] = [
 
 /** Kinds, Routing, Subject: the kinds lead, since their presets are the way to narrow this view. */
 export const ROUTING_LOG_DIMENSIONS: Dimension[] = [
-  { field: 'kinds', group: 'Kinds', kind: 'list', label: 'Kinds', word: 'kinds' },
+  { emptyMeansAll: true, field: 'kinds', group: 'Kinds', kind: 'list', label: 'Kinds', text: (value) => kindsChipText(value as string[]), word: 'kinds' },
   ACCOUNT,
   KEY,
-  MODEL,
+  CATALOG_MODEL,
   POOL,
   { field: 'request', group: 'Subject', kind: 'id', label: 'Request', mono: true, word: 'request' },
   { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' },

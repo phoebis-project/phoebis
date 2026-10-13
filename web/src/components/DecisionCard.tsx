@@ -41,7 +41,8 @@ function PaceCell({ title, value }: { title: string | null; value: string }) {
 
 /**
  * The open decision row's card: loads the record on mount and draws the six parts of the spec's card. The record is
- * read again when the row's answer moves, so a card opened on a running request completes when Follow brings it.
+ * read again when the row's answer moves, so a card opened on a running request completes when an auto reload poll
+ * brings it.
  */
 export function DecisionCard({ now, onWiden, row }: { now: number; onWiden: (link: LogLink) => void; row: DecisionSummary }) {
   const answer = JSON.stringify([row.status, row.attemptCount, row.cache]);
@@ -61,10 +62,11 @@ export function DecisionCard({ now, onWiden, row }: { now: number; onWiden: (lin
 function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogLink) => void; record: DecisionRecord; row: DecisionSummary }) {
   const at = Date.parse(row.at);
   const settings = settingsRows(record);
+  // Narrow to wide, as the Requests drawer orders its own.
   const widenings: { label: string; link: LogLink }[] = [
+    { label: 'this minute', link: clockMinute(at, now) },
     ...(row.sessionId !== null ? [{ label: 'this session', link: { session: row.sessionId, ...aroundSubject(at, now) } }] : []),
     ...(row.accountId !== null ? [{ label: 'this account', link: { accounts: [row.accountId], ...aroundRequest(at, null, now) } }] : []),
-    { label: 'this minute', link: clockMinute(at, now) },
   ];
   return (
     <div className="decision-card">
@@ -168,7 +170,7 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
       </section>
 
       <footer className="decision-card__foot">
-        <span className="muted">Widen:</span>
+        <span className="muted">Widen to</span>
         {widenings.map((w) => (
           <button key={w.label} type="button" className="link-btn" onClick={() => onWiden(w.link)}>
             {w.label}

@@ -589,18 +589,29 @@ open, and every link into the log opens it whatever the mode. It is one stream o
 that explain them, newest first, 25 rows a page with First, Previous and Next. The rules a decision follows are on
 [Pools, keys and routing](routing.md).
 
-The filter bar reads the range (Last hour by default, Last 6 hours, Last 24 hours, Last 7 days, Last 30 days or Custom
-range with From and To, the pills and the popover as on the Requests view), "Kinds" (the decision kinds, then the
-events, with "Probe decisions (hidden by default)" and "Warm prefix expired (hidden by default)" last in their groups,
-the button reading "Kinds (2 hidden)" until another set is chosen), Keys, Pools, Accounts, Models, "Session id" (a
-prefix matches) and "Request id", the "Follow" switch, which reads "polling every 5 s, the range ends now" while on, and
-Refresh. Every filter lives in the page's address (a preset range by its name as in `range=6h`, a custom range as `from`
-and `to`, two UTC instants, the lists as comma lists), so a filtered view is a link and Back returns to the view before
-it. A request filter opens a line above the table that counts the request's decisions and events and offers three
-widenings, "this session" (an hour either side), "this account" (a quarter hour either side) and "this minute", and any
-other narrowing draws the same line with what the rows are narrowed to. The switch's poll behaves as on the Requests
-view, up to eight pages a read and the line "More rows arrived than auto reload could fetch. Reload to read them." past
-them. An empty range reads "No decisions or events in this range." with "Widen the range or clear a filter."
+The filter bar holds one row: the range, Add filter, and at the right edge the split Refresh button and the count of
+rows shown ("25 shown, more available"). The range offers the pills 1h (the default), 6h, 24h, 7d, 30d and Custom, with
+From and To in a popover as on the Requests view. Add filter opens a "Filter by" field over the filters in three groups:
+Kinds, Routing (Account, Key, Model, Pool) and Subject (Request, and Session, which a prefix matches). Every decision
+and event kind lists by default. The Kinds filter opens with eight presets above the kinds: placements and pins, moves
+and holds, exhaustion and refusals, account state and windows, cooldowns and backoff, keepalive, registry changes,
+router life cycle. A preset checks its members, two presets combine, and a hand edit after a preset is one click apart.
+Each filter in force stands as a chip on a line under the bar, as on the Requests view: a set of whole presets reads
+their names ("kinds: moves and holds"), any other set of kinds reads their words ("kinds: moved, held, placed +5"), and
+the request chip's hover counts the request's decisions and events ("1 decision, 0 events"). The widenings stand on each
+decision's card, after "Widen to": "this minute", "this session" (an hour either side) and "this account" (a quarter
+hour either side). Every filter lives in the page's address (a preset range by its name as in `range=6h`, a custom range
+as `from` and `to`, two UTC instants, the lists as comma lists), so a filtered view is a link and Back returns to the
+view before it. A `kinds` value names exactly the kinds listed, so `kinds=probe` lists probe decisions alone. An empty
+range reads "No decisions or events in this range." with "Widen the range or clear a filter."
+
+Auto reload is off when the view opens and reads as on the Requests view. The split Refresh button's dropdown sets it to
+Off, 5 s, 10 s, 30 s or 1 min, out of the page's address, and each read takes every row that arrived since the read
+before, up to eight pages, a new row landing at the top in the accent tint. Past eight pages a line reads "More rows
+arrived than auto reload could fetch. Reload to read them.", and Next reads on from the last row the poll fetched. The
+poll waits while the tab is hidden, on an older page until you go back to the first, and while a menu or popover under
+the bar is open, with the interval kept and the cause named in the dropdown's title. A custom range that had ended when
+the page took it has nothing new to read, so the dropdown reads Off and stays disabled.
 
 A row reads Time (a decision's request beneath it as a link to the request's drawer), Kind (a decision in a filled
 badge with `attempt 2/3` beneath a failover attempt, an event in an outlined one), Session (the first eight characters
@@ -634,8 +645,9 @@ facts", "Pin and warmth" (a record that pins nothing reads why: not looked up or
 "Settings in force" (the nineteen settings, or "The key and its pool had left the
 registry"), stay closed until opened. "Outcome" lists the pin written, the cache-map entries the answer wrote
 (`pending` until it ends), the cache read with the TTL tier of its deepest entry, the hold, the answer an exhaustion or
-a refusal gave, and the spend against a budget. The foot repeats the three widenings after "Widen:", names the record's
-version as `Record v{n}`, and "Copy as JSON" copies the record route's answer whole. A record the retention purged
+a refusal gave, and the spend against a budget. The foot offers the three widenings after "Widen to", this minute,
+this session and this account, names the record's version as `Record v{n}`, and "Copy as JSON" copies the record
+route's answer whole. A record the retention purged
 reads "The record left with the retention", and one still loading "Loading the record".
 
 An event row opens to a panel of pairs: When to the second in UTC, the account and the pool as links, then the kind's
@@ -670,7 +682,7 @@ account's last row reads `deleted`. The kinds and what each row records:
 | registry changed | An operator edited a pool, a key or an account, field by field where the change names them. |
 | router started | The router started and loaded its pins, shedding marks, window readings and affinity entries. |
 | shedding round | A round marked pins on an account ahead of pace and kept the marks across a restart. |
-| warm prefix expired | A warm prefix's cache-map entry lapsed past its TTL, listed only when the kind is chosen. |
+| warm prefix expired | A warm prefix's cache-map entry lapsed past its TTL. |
 | wind-down started | An account's subscription end entered the pool's wind-down, so no fresh session starts on it. |
 | window reset | A quota window reset, with the reading before it. |
 | window spent | A response head or the poll read a quota window at its limit. |

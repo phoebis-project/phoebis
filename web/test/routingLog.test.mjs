@@ -382,7 +382,7 @@ function arrivals(count) {
   return { read, reads, rows };
 }
 
-test('a Follow poll reads every page that arrived down to a row the list holds', async () => {
+test('an auto reload poll reads every page that arrived down to a row the list holds', async () => {
   // The list holds the oldest 25, and 100 more arrived before the poll.
   const route = arrivals(125);
   const shown = route.rows.slice(100);
@@ -392,7 +392,7 @@ test('a Follow poll reads every page that arrived down to a row the list holds',
   assert.deepEqual(d.merged(shown, polled.rows, d.identityOf, d.compareRows).map(d.identityOf), route.rows.map(d.identityOf), 'every row once, in the route order');
 });
 
-test('a Follow poll stops at eight pages and names the cursor that reaches the rows it left', async () => {
+test('an auto reload poll stops at eight pages and names the cursor that reaches the rows it left', async () => {
   // 300 arrived over the 25 the list holds: eight pages bring the newest 200.
   const route = arrivals(325);
   const shown = route.rows.slice(300);
