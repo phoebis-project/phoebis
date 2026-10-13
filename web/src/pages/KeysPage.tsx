@@ -182,7 +182,7 @@ export function KeysPage() {
     <div className="stack" ref={pageRef}>
       <FilterBar
         address={address}
-        count={`${rows.length} ${rows.length === 1 ? 'key' : 'keys'}`}
+        count={keys.data === null ? '' : `${rows.length} ${rows.length === 1 ? 'key' : 'keys'}`}
         dimensions={KEYS_DIMENSIONS}
         disabled={notLoadedReason('pools', 'pool', pools)}
         filters={filters}

@@ -282,7 +282,7 @@ export function PoolsPage() {
     <div className="stack" ref={pageRef}>
       <FilterBar
         address="/pools"
-        count={`${pools.data?.length ?? 0} ${pools.data?.length === 1 ? 'pool' : 'pools'}`}
+        count={pools.data === null ? '' : `${pools.data.length} ${pools.data.length === 1 ? 'pool' : 'pools'}`}
         filters={{}}
         onOpenChange={setBarOpen}
         refresh={{

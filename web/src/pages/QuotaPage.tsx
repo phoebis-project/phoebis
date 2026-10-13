@@ -80,10 +80,14 @@ export function QuotaPage() {
       <FilterBar
         address="/quota"
         count={
-          <>
-            {total} {total === 1 ? 'account' : 'accounts'}
-            {attention > 0 && <span className="filter-bar__count--critical">, {attention} {attention === 1 ? 'needs' : 'need'} attention</span>}
-          </>
+          accounts.data === null ? (
+            ''
+          ) : (
+            <>
+              {total} {total === 1 ? 'account' : 'accounts'}
+              {attention > 0 && <span className="filter-bar__count--critical">, {attention} {attention === 1 ? 'needs' : 'need'} attention</span>}
+            </>
+          )
         }
         filters={{}}
         onOpenChange={setBarOpen}

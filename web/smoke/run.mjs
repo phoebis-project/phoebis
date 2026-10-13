@@ -1751,8 +1751,9 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   {
     // A confirm whose reload fails: the list keeps its rows, so the page lands on the first account rather than
     // holding a URL no row answers, where the detail pane would draw nothing until the next refresh. On a mount of
-    // its own, so the failed read's standing reaches none of the checks that follow.
-    const lost = await mount('/accounts/primary');
+    // its own, so the failed read's standing reaches none of the checks that follow, and on the pinned clock, so no
+    // auto reload tick or the read that resumes it as the dialog closes takes the armed failure in the reload's place.
+    const lost = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
     const fieldIn = (dlg, label) => [...(dlg?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input') ?? null;
     const type = async (input, value) => {
       if (!input) return;
@@ -14710,6 +14711,42 @@ const CARD_VIEWS = [
       read['/quota'].text === `${plural(accounts.filter((a) => a.kind === 'oauth').length, 'account', 'accounts')}${attention}`,
     missing: Object.entries(read).map(([path, r]) => `${path} ${JSON.stringify(r)}`),
   });
+}
+
+{
+  // The count reads what the list answered, so it stays empty while the first read is out and after it failed, as the
+  // logs' counts do, rather than read 0 beside a placeholder or an error.
+  const name = 'the five card views draw an empty count while the first read is out, then the count once it answers';
+  const [accounts, keys, pools] = [await api.listAccounts(), await api.listKeys(), await api.listPools()];
+  const counted = (page) => page.container.querySelector('.filter-bar__count')?.textContent ?? null;
+  const read = [];
+  for (const [path, method] of CARD_VIEWS) {
+    const held = deferNextCall(method);
+    const page = await mount(path, { now: CLOCK_ORIGIN });
+    const waiting = counted(page);
+    held.release();
+    held.restore();
+    await page.settle();
+    read.push({ answered: counted(page), held: held.calls.length, path, sessions: page.container.querySelectorAll('.sessions-table tbody tr.srow').length, waiting });
+    page.unmount();
+  }
+  const subscriptions = accounts.filter((a) => a.kind === 'oauth').length;
+  const wanted = { '/accounts': `${accounts.length} accounts`, '/keys': `${keys.length} keys`, '/pools': `${pools.length} pools` };
+  const answered = (r) => (r.path === '/quota' ? r.answered?.startsWith(`${subscriptions} accounts`) === true : r.path === '/sessions' ? r.sessions > 0 && r.answered === `${r.sessions} sessions` : r.answered === wanted[r.path]);
+  results.push({ name, ok: read.length === 5 && read.every((r) => r.held > 0 && r.waiting === '' && answered(r)), missing: read.map((r) => JSON.stringify(r)) });
+}
+{
+  const name = 'the five card views draw an empty count beside the error when the first read fails';
+  const ERRORS = { '/accounts': 'Could not load the accounts', '/keys': 'Could not load the keys', '/pools': 'Could not load the pools', '/quota': 'Could not load the accounts', '/sessions': 'Could not load the sessions' };
+  const ROUTES = { listAccounts: '/admin/accounts', listKeys: '/admin/keys', listPools: '/admin/pools', listSessions: '/admin/sessions' };
+  const read = [];
+  for (const [path, method] of CARD_VIEWS) {
+    failNextCall(method, ROUTES[method], 'the store is unavailable', { quiet: true });
+    const page = await mount(path, { now: CLOCK_ORIGIN });
+    read.push({ count: page.container.querySelector('.filter-bar__count')?.textContent ?? null, error: page.text().includes(ERRORS[path]), path });
+    page.unmount();
+  }
+  results.push({ name, ok: read.length === 5 && read.every((r) => r.count === '' && r.error), missing: read.map((r) => JSON.stringify(r)) });
 }
 
 m = await mount('/sessions');

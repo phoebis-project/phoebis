@@ -282,7 +282,7 @@ export function SessionsPage() {
     <div className="stack">
       <FilterBar
         address="/sessions"
-        count={`${(rows ?? []).length} ${(rows ?? []).length === 1 ? 'session' : 'sessions'}`}
+        count={rows === null ? '' : `${rows.length} ${rows.length === 1 ? 'session' : 'sessions'}`}
         filters={{}}
         onOpenChange={setBarOpen}
         refresh={{

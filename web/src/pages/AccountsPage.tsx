@@ -85,7 +85,7 @@ export function AccountsPage() {
     <div className="accounts">
       <FilterBar
         address={address}
-        count={`${list.length} ${list.length === 1 ? 'account' : 'accounts'}`}
+        count={accounts.data === null ? '' : `${list.length} ${list.length === 1 ? 'account' : 'accounts'}`}
         dimensions={ACCOUNTS_DIMENSIONS}
         filters={filters}
         onOpenChange={setBarOpen}
