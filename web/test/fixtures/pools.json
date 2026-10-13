@@ -98,7 +98,9 @@
                 "period_end": 1793491200000
               }
             ],
-            "active_pins": 1
+            "active_pins": 1,
+            "pace_score": 0.005952380952380952,
+            "burn": null
           },
           {
             "account_id": "direct",
@@ -115,14 +117,16 @@
                 "period_end": 1793491200000
               }
             ],
-            "active_pins": 0
+            "active_pins": 0,
+            "pace_score": 1.0,
+            "burn": null
           }
         ],
         "keys": [
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "JZkFmCwM",
+            "prefix": "xJtLSLB5",
             "enabled": true
           }
         ],

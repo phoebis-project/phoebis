@@ -8,7 +8,7 @@ use std::sync::Arc;
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction};
 
-use phoebis_routing::PinUsage;
+use phoebis_routing::{PinUsage, FIVE_HOUR, WEEK_MS};
 use phoebis_store::AccountKind;
 
 use crate::db::LedgerDb;
@@ -701,7 +701,8 @@ pub struct AccountRollupRow {
     pub pins_migrated_out: u64,
     /// Cache-write tokens of the first request after each move that landed on the account in the hour.
     pub rewrite_tokens: u64,
-    /// Moves that landed on the account in the hour, by the `pin_migrated` reason.
+    /// Moves that landed on the account in the hour, keyed `{reason}/{fit}` by the `pin_migrated` reason and the
+    /// destination's fit, `unknown` for a move whose event names no fit.
     pub migrations: BTreeMap<String, u64>,
 }
 
@@ -978,11 +979,12 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
         ),
         ("pin_migrated", Some(to)) => {
             let reason = detail["reason"].as_str().unwrap_or("unknown");
+            let fit = detail["fit"].as_str().unwrap_or("unknown");
             fold_account(
                 tx,
                 &AccountRollupRow {
                     pins_migrated_in: 1,
-                    migrations: BTreeMap::from([(reason.to_string(), 1)]),
+                    migrations: BTreeMap::from([(format!("{reason}/{fit}"), 1)]),
                     ..row(to)
                 },
             )?;
@@ -1062,6 +1064,211 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
         }
         _ => Ok(()),
     }
+}
+
+/// How far back the routing conditions read: a condition holds while one qualifying event lies this close to the fold.
+const CONDITION_SPAN_MS: i64 = 24 * 3_600_000;
+
+/// How soon after a move a spent window on its destination counts against the move.
+const SPENT_AFTER_MOVE_MS: i64 = 3_600_000;
+
+const FIVE_HOURS_MS: i64 = 5 * 3_600_000;
+
+/// The settings each condition names, the ones an operator reads the condition against.
+const CEILING_SETTING: &[&str] = &["window_ceiling"];
+const WALL_SETTINGS: &[&str] = &["shed_cap", "window_ceiling"];
+
+/// One condition of the fold before it is written.
+struct Held {
+    pool_id: Option<String>,
+    since: i64,
+    count: u64,
+    detail: serde_json::Value,
+}
+
+/// The three conditions over the trailing 24 hours of events, written whole into `routing_conditions`:
+/// `shed_no_runway` per pool from its rounds that marked nothing for want of a destination with runway,
+/// `destination_spent` per account from the moves onto it that a spent window of any source followed within the hour,
+/// and `wall_reached` per account from its spent windows of any source, a predicted wall among them. `since` is the
+/// oldest qualifying event's time. A wall's `projection_error` is one less the projection of the newest round on the
+/// account inside the newest wall's window length before it, null with none. The ledger reads no registry, so a
+/// detail names its settings and the reader adds a pool's value.
+pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), LedgerError> {
+    struct Row {
+        at: i64,
+        kind: String,
+        account_id: Option<String>,
+        pool_id: Option<String>,
+        detail: serde_json::Value,
+    }
+    let events: Vec<Row> = tx
+        .prepare(
+            "SELECT at, kind, account_id, pool_id, detail FROM events \
+             WHERE kind IN ('shedding_round', 'pin_migrated', 'window_spent') AND at >= ?1 AND at <= ?2 \
+             ORDER BY at, rowid",
+        )?
+        .query_map(params![now - CONDITION_SPAN_MS, now], |r| {
+            Ok(Row {
+                at: r.get(0)?,
+                kind: r.get(1)?,
+                account_id: r.get(2)?,
+                pool_id: r.get(3)?,
+                detail: r
+                    .get::<_, Option<String>>(4)?
+                    .and_then(|d| serde_json::from_str(&d).ok())
+                    .unwrap_or(serde_json::Value::Null),
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    let mut held: BTreeMap<(&'static str, &'static str, String), Held> = BTreeMap::new();
+    let setting = |names: &[&str]| serde_json::json!(names);
+
+    let mut rounds: BTreeMap<&str, (i64, u64, BTreeSet<&str>)> = BTreeMap::new();
+    for event in events.iter().filter(|e| e.kind == "shedding_round") {
+        let no_runway =
+            event.detail["outcome"] == "nothing_to_mark" && event.detail["reason"] == "no_runway";
+        let Some(pool) = event.pool_id.as_deref().filter(|_| no_runway) else {
+            continue;
+        };
+        let entry = rounds.entry(pool).or_insert((event.at, 0, BTreeSet::new()));
+        entry.1 += 1;
+        entry.2.extend(event.account_id.as_deref());
+    }
+    for (pool, (since, count, accounts)) in rounds {
+        held.insert(
+            ("shed_no_runway", "pool", pool.to_string()),
+            Held {
+                pool_id: Some(pool.to_string()),
+                since,
+                count,
+                detail: serde_json::json!({
+                    "accounts": accounts,
+                    "rounds": count,
+                    "setting": setting(CEILING_SETTING),
+                }),
+            },
+        );
+    }
+
+    let spent: Vec<(&str, i64, &str)> = events
+        .iter()
+        .filter(|e| e.kind == "window_spent")
+        .filter_map(|e| {
+            let account = e.account_id.as_deref()?;
+            Some((
+                account,
+                e.at,
+                e.detail["window"].as_str().unwrap_or("unknown"),
+            ))
+        })
+        .collect();
+    type Moves<'a> = (i64, u64, BTreeMap<&'a str, u64>, BTreeSet<&'a str>);
+    let mut moves: BTreeMap<&str, Moves> = BTreeMap::new();
+    for event in events.iter().filter(|e| e.kind == "pin_migrated") {
+        let Some(to) = event.account_id.as_deref() else {
+            continue;
+        };
+        let followed: Vec<&str> = spent
+            .iter()
+            .filter(|(account, at, _)| {
+                *account == to && *at >= event.at && *at - event.at <= SPENT_AFTER_MOVE_MS
+            })
+            .map(|(_, _, window)| *window)
+            .collect();
+        if followed.is_empty() {
+            continue;
+        }
+        let entry = moves
+            .entry(to)
+            .or_insert((event.at, 0, BTreeMap::new(), BTreeSet::new()));
+        entry.1 += 1;
+        *entry
+            .2
+            .entry(event.detail["fit"].as_str().unwrap_or("unknown"))
+            .or_default() += 1;
+        entry.3.extend(followed);
+    }
+    for (account, (since, count, fits, windows)) in moves {
+        held.insert(
+            ("destination_spent", "account", account.to_string()),
+            Held {
+                pool_id: None,
+                since,
+                count,
+                detail: serde_json::json!({
+                    "fits": fits,
+                    "moves": count,
+                    "setting": setting(CEILING_SETTING),
+                    "windows": windows,
+                }),
+            },
+        );
+    }
+
+    // Per account: the oldest wall, the count, the windows and the newest wall with its window.
+    type Walls<'a> = (i64, u64, BTreeSet<&'a str>, (i64, &'a str));
+    let mut walls: BTreeMap<&str, Walls> = BTreeMap::new();
+    for (account, at, window) in &spent {
+        let entry = walls
+            .entry(account)
+            .or_insert((*at, 0, BTreeSet::new(), (*at, window)));
+        entry.1 += 1;
+        entry.2.insert(window);
+        entry.3 = (*at, window);
+    }
+    for (account, (since, count, windows, (newest, window))) in walls {
+        // A round's projection that came true reads 1.0 at the wall, so the error is how far under the wall the newest
+        // round on the account projected it. A round a weekly window's length back can sit outside the trailing day.
+        let length = if window == FIVE_HOUR {
+            FIVE_HOURS_MS
+        } else {
+            WEEK_MS
+        };
+        let projection: Option<f64> = tx
+            .query_row(
+                "SELECT detail FROM events WHERE kind = 'shedding_round' AND account_id = ?1 \
+                 AND at >= ?2 AND at <= ?3 ORDER BY at DESC, rowid DESC LIMIT 1",
+                params![account, newest - length, newest],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten()
+            .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
+            .and_then(|d| d["projection"].as_f64());
+        held.insert(
+            ("wall_reached", "account", account.to_string()),
+            Held {
+                pool_id: None,
+                since,
+                count,
+                detail: serde_json::json!({
+                    "projection_error": projection.map(|p| 1.0 - p),
+                    "setting": setting(WALL_SETTINGS),
+                    "walls": count,
+                    "windows": windows,
+                }),
+            },
+        );
+    }
+
+    tx.execute("DELETE FROM routing_conditions", [])?;
+    for ((kind, subject_kind, subject_id), row) in &held {
+        tx.execute(
+            "INSERT INTO routing_conditions (kind, subject_kind, subject_id, pool_id, since, count, detail_json, \
+             computed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                kind,
+                subject_kind,
+                subject_id,
+                row.pool_id,
+                row.since,
+                row.count as i64,
+                row.detail.to_string(),
+                now
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 pub fn fold_account(tx: &Transaction<'_>, delta: &AccountRollupRow) -> Result<(), LedgerError> {
@@ -1580,6 +1787,7 @@ mod tests {
         "quota_samples",
         "requests",
         "rollups_hourly",
+        "routing_conditions",
     ];
 
     /// What a migration added since version 1 is the migration's alone: a column it adds that `SCHEMA` already
@@ -1839,7 +2047,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 34);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 35);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
@@ -1903,7 +2111,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 34);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 35);
         let columns: Vec<String> = db
             .read_blocking(|c| {
                 let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -1999,7 +2207,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 34);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 35);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -3575,7 +3783,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 34);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 35);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();

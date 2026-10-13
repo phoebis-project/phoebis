@@ -76,7 +76,7 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
     let parts = common::admin_parts_full().await;
     let app = &parts.app;
     let cookie = login(app, "admin-secret").await;
-    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#, Some(&cookie)).await;
+    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","window_ceiling":0.9,"members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#, Some(&cookie)).await;
     post(
         app,
         "/admin/pools",
@@ -145,6 +145,57 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
         .attention
         .observe(&complete("r-drift", Outcome::Rejected, Some("hash"), later));
     common::park_unreadable(&parts.db, "main", "business", later - 1_000);
+    // The three routing conditions as the ledger's fold writes them, each older than everything above, which they
+    // still rank after: none of them stops traffic.
+    let condition = |kind: &str, subject_kind: &str, subject: &str, pool: Option<&str>, detail| {
+        phoebis_ledger::RoutingCondition {
+            kind: kind.into(),
+            subject_kind: subject_kind.into(),
+            subject_id: subject.into(),
+            pool_id: pool.map(String::from),
+            since: run_started - 60_000,
+            count: 1,
+            detail,
+            computed_at: later,
+        }
+    };
+    common::seed_conditions(
+        &parts,
+        &[
+            condition(
+                "shed_no_runway",
+                "pool",
+                "main",
+                Some("main"),
+                j!({ "accounts": ["business"], "rounds": 1, "setting": ["window_ceiling"] }),
+            ),
+            condition(
+                "destination_spent",
+                "account",
+                "business",
+                None,
+                j!({
+                    "fits": { "rewrite_only": 1 },
+                    "moves": 1,
+                    "setting": ["window_ceiling"],
+                    "windows": ["five_hour"],
+                }),
+            ),
+            condition(
+                "wall_reached",
+                "account",
+                "business",
+                None,
+                j!({
+                    "projection_error": null,
+                    "setting": ["shed_cap", "window_ceiling"],
+                    "walls": 1,
+                    "windows": ["five_hour"],
+                }),
+            ),
+        ],
+    )
+    .await;
     let first_read = parts.clock_cell.load(std::sync::atomic::Ordering::SeqCst);
     let body = json(get(app, "/admin/attention", Some(&cookie)).await).await;
     let items = body["items"].as_array().unwrap();
@@ -164,6 +215,9 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
             ("funding_required", "direct"),
             ("refresh_failed", "business"),
             ("ledger_record_parked", "main"),
+            ("wall_reached", "business"),
+            ("destination_spent", "business"),
+            ("shed_no_runway", "main"),
         ],
         "{body}"
     );
@@ -226,6 +280,36 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
             "detail": { "accounts": ["business"], "count": 1, "pool": "main" },
         }),
         "a parked record opens its pool's card and dates from the oldest row"
+    );
+    assert_eq!(
+        items[9],
+        j!({
+            "kind": "shed_no_runway",
+            "subject": { "type": "pool", "id": "main", "label": "Main" },
+            "link": { "page": "pools", "id": "main" },
+            "pools": ["main"],
+            "since": run_started - 60_000,
+            "detail": {
+                "accounts": ["business"],
+                "rounds": 1,
+                "setting": ["window_ceiling"],
+                "setting_value": 0.9,
+            },
+        }),
+        "a pool's condition carries the pool's ceiling beside the setting it names"
+    );
+    assert_eq!(
+        (
+            &items[7]["link"],
+            &items[7]["pools"],
+            items[7]["detail"].get("setting_value")
+        ),
+        (
+            &j!({ "page": "accounts", "id": "business" }),
+            &j!(["main"]),
+            None
+        ),
+        "an account's condition opens the account and names its setting with no pool's value"
     );
 }
 

@@ -295,6 +295,10 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// join the primary key after the funding, so a row's counts price at the cells and the windows its key names. The
 /// table is rebuilt as version 24 rebuilt it. No backfill: a row from before files under `standard` and `-` with no
 /// wasted count and prices from its own counts.
+///
+/// Version 35: the routing conditions an hourly fold reads off the trailing day of events, one row per kind and
+/// subject, so a scrape or a console poll reads a lookup rather than scanning the events. The fold writes the table
+/// whole, so it holds what the last fold found and nothing older.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -930,5 +934,13 @@ DROP TABLE rollups_hourly;
 ALTER TABLE rollups_hourly_next RENAME TO rollups_hourly;
 CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_generation, hour);
 CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, account_id, hour);",
+    ),
+    (
+        35,
+        "CREATE TABLE routing_conditions (
+  kind TEXT NOT NULL, subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL, pool_id TEXT,
+  since INTEGER NOT NULL, count INTEGER NOT NULL, detail_json TEXT NOT NULL, computed_at INTEGER NOT NULL,
+  PRIMARY KEY (kind, subject_kind, subject_id)
+);",
     ),
 ];

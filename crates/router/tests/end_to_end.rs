@@ -2546,11 +2546,26 @@ fn request_on(
 async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_prices_it_in_window_share(
 ) {
     let up = FakeUpstream::start(vec![
+        // The answer carries a 5-hour reading, which the relay lands on the account, so the router projects the
+        // window and the account route serves its burn.
         Rule {
             path_prefix: "/v1/messages".into(),
             respond: Respond::Json {
                 status: 200,
-                headers: vec![],
+                headers: vec![
+                    (
+                        "anthropic-ratelimit-unified-5h-status".into(),
+                        "allowed".into(),
+                    ),
+                    (
+                        "anthropic-ratelimit-unified-5h-utilization".into(),
+                        "0.25".into(),
+                    ),
+                    (
+                        "anthropic-ratelimit-unified-5h-reset".into(),
+                        (jiff::Timestamp::now().as_second() + 3_600).to_string(),
+                    ),
+                ],
                 body: br#"{"id":"msg_1","type":"message","model":"claude-opus-5-5","usage":{"input_tokens":1000,"output_tokens":100}}"#.to_vec(),
             },
         },
@@ -2645,16 +2660,37 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         .unwrap();
     assert_eq!(resp.status(), 200);
     let _ = resp.text().await.unwrap();
+    // The routes decay the burn to their read on the binary's wall clock, so each read is bracketed by two clock
+    // reads and its figure lies between the fold's decayed to the later and to the earlier.
+    let wall = || jiff::Timestamp::now().as_millisecond();
+    let sessions_from = wall();
     let sessions = wait_json(&client, &admin("/sessions"), |v| {
         v["sessions"][0]["burn"].as_f64().is_some_and(|b| b > 0.0)
     })
     .await;
+    let sessions_to = wall();
     let row = &sessions["sessions"][0];
     assert_eq!(
         row["burn_unit"], "window_share",
         "an oauth account funded by its plan reads the share of its window: {row}"
     );
-    let burn_at = row["burn_at"].as_i64().unwrap();
+    let served_at = row["burn_at"].as_i64().unwrap();
+    assert!(
+        (sessions_from..=sessions_to).contains(&served_at),
+        "the burn is served at the instant it is decayed to, the read's: {row}"
+    );
+    let five_hour = |account: &serde_json::Value| {
+        account["windows"]
+            .as_array()
+            .and_then(|windows| windows.iter().find(|w| w["id"] == "five_hour"))
+            .and_then(|w| w["burn"].as_f64())
+    };
+    let account_from = wall();
+    let account = wait_json(&client, &admin("/accounts/a"), |v| {
+        five_hour(v).is_some_and(|b| b > 0.0)
+    })
+    .await;
+    let account_to = wall();
     let settings: serde_json::Value = client
         .get(admin("/settings"))
         .send()
@@ -2671,28 +2707,6 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         (&serde_json::json!("shipped"), &serde_json::json!("shipped")),
         "both tables in force are the shipped ones the figures below are read from"
     );
-    let tables = phoebis_ledger::PlanTables::shipped();
-    let usage = phoebis_routing::PinUsage {
-        input: 1_000,
-        output: 100,
-        ..Default::default()
-    };
-    // The default `burn_average_seconds` (no pool override above): a single renewal from a cold average is the
-    // usage spread over that window, weighed by the band at the renewal, read per hour on Max 20x.
-    let share = tables
-        .share_at(
-            phoebis_routing::FIVE_HOUR,
-            "default_claude_max_20x",
-            "claude-opus-5-5",
-            usage,
-            burn_at,
-        )
-        .unwrap();
-    let expected_burn = share / 1_800.0 * 3_600.0;
-    assert!(
-        (row["burn"].as_f64().unwrap() - expected_burn).abs() < 1e-12,
-        "{row} against {expected_burn}"
-    );
     let _ = stop_tx.send(());
     server.await.unwrap().unwrap();
     let store = phoebis_store::Store::open(
@@ -2707,6 +2721,64 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         .into_iter()
         .find(|p| p.key_id == "desktop" && p.session_id == "burn-e2e")
         .expect("the pin the request created is on disk once the binary has stopped");
+    let burn_at = pin
+        .burn_at
+        .expect("the renewal with usage folded the pin's burn");
+    // The default `burn_average_seconds` (no pool override above), the constant the routes decay with too.
+    let decayed = |figure: f64, to: i64| figure * (-((to - burn_at) as f64) / 1_800_000.0).exp();
+    let bracketed = |served: f64, figure: f64, from: i64, to: i64| {
+        decayed(figure, to) - 1e-12 <= served && served <= decayed(figure, from) + 1e-12
+    };
+    let tables = phoebis_ledger::PlanTables::shipped();
+    let usage = phoebis_routing::PinUsage {
+        input: 1_000,
+        output: 100,
+        ..Default::default()
+    };
+    // A single renewal from a cold average is the usage spread over the average, weighed by the band at the renewal,
+    // read per hour on Max 20x.
+    let share = tables
+        .share_at(
+            phoebis_routing::FIVE_HOUR,
+            "default_claude_max_20x",
+            "claude-opus-5-5",
+            usage,
+            burn_at,
+        )
+        .unwrap();
+    let expected_burn = share / 1_800.0 * 3_600.0;
+    assert!(
+        bracketed(
+            row["burn"].as_f64().unwrap(),
+            expected_burn,
+            sessions_from,
+            sessions_to
+        ),
+        "{row} against {expected_burn} decayed to the read"
+    );
+    // The account's 5-hour burn is the pin's plain average priced through the cost model the binary wires into the
+    // router, at the band of the read, in share per hour, decayed to the read.
+    let rate_at = |at: i64| {
+        tables
+            .share_rate_at(
+                phoebis_routing::FIVE_HOUR,
+                "default_claude_max_20x",
+                &pin.model,
+                &pin.burn,
+                at,
+            )
+            .unwrap()
+            * 3_600.0
+    };
+    let (low, high) = (
+        rate_at(account_from).min(rate_at(account_to)),
+        rate_at(account_from).max(rate_at(account_to)),
+    );
+    let served = five_hour(&account).unwrap();
+    assert!(
+        decayed(low, account_to) - 1e-9 <= served && served <= decayed(high, account_from) + 1e-9,
+        "{account} against {low}..{high} decayed to the read"
+    );
     let per_second = |tokens: f64| tokens / 1_800.0;
     let band = tables.band_factor(phoebis_routing::FIVE_HOUR, burn_at);
     assert_eq!(

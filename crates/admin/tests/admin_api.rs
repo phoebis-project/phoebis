@@ -1686,6 +1686,18 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
     const HOUR: i64 = 3_600_000;
     let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
+    // A pool member, so the account reads its projections under that pool's settings.
+    assert_eq!(
+        common::post(
+            &h.app,
+            "/admin/pools",
+            r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#,
+            Some(&cookie),
+        )
+        .await
+        .status(),
+        201
+    );
     let read_at = NOW - 30 * HOUR;
     let reading = |utilization, reset| WindowReading {
         utilization,
@@ -1708,11 +1720,16 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
         v["error"].is_null()
     })
     .await;
-    // The 5-hour window's reset has passed, so the router predicts it empty until the next reading names one.
+    // The 5-hour window's reset has passed, so the router predicts it empty until the next reading names one. No pin
+    // burns, so each window projects its prediction at its horizon: five hours on, the weekly windows' resets lying
+    // further out. The Fable week reads under the endpoint's key, mapped from the routing name.
     let held = serde_json::json!([
-        { "id": "five_hour", "observed_at": read_at, "resets_at": null, "utilization": 0.0 },
-        { "id": "seven_day", "observed_at": read_at, "resets_at": NOW + 72 * HOUR, "utilization": 0.5 },
-        { "id": "fable", "observed_at": read_at, "resets_at": NOW + 72 * HOUR, "utilization": 0.2 },
+        { "id": "five_hour", "observed_at": read_at, "resets_at": null, "utilization": 0.0,
+          "projection": 0.0, "horizon": NOW + 5 * HOUR, "burn": 0.0 },
+        { "id": "seven_day", "observed_at": read_at, "resets_at": NOW + 72 * HOUR, "utilization": 0.5,
+          "projection": 0.5, "horizon": NOW + 5 * HOUR, "burn": 0.0 },
+        { "id": "fable", "observed_at": read_at, "resets_at": NOW + 72 * HOUR, "utilization": 0.2,
+          "projection": 0.2, "horizon": NOW + 5 * HOUR, "burn": 0.0 },
     ]);
     let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
     assert_eq!(account["windows"], held, "{account}");
@@ -2719,7 +2736,8 @@ fn burning_opus_pin(
         key_generation,
         incarnation: 1,
         burn: input(plain),
-        burn_at: Some(now - 5),
+        // At the rig's fixed clock, so a read decays nothing and the figures below are the fold's own.
+        burn_at: Some(now),
         burn_banded: input(banded),
         burn_fast: phoebis_store::PinBurn::default(),
         last_input_tokens: 1_000,
@@ -2872,8 +2890,8 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
         * 3_600.0;
     assert_eq!(
         row(&sessions, "s1")["burn_at"].as_i64(),
-        Some(now - 5),
-        "the fold's own timestamp, not the cache clock"
+        Some(now),
+        "the instant the served burn is decayed to, the read's own"
     );
     let equivalent_per_hour = phoebis_ledger::PlanTables::shipped()
         .equivalent_at(
@@ -3201,6 +3219,381 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
         close(equivalent_of(&on_team).0, equivalent),
         "while the 20x equivalent still reads on a tier the cost model does not size: {:?} against {equivalent}",
         equivalent_of(&on_team)
+    );
+}
+
+/// The case's own rates: a pin burning a thousand input tokens a second burns five points of the 5-hour window an hour
+/// and two tenths of a point of the 7-day window, whatever the account tier, model or instant.
+fn round_rates(
+    window: &str,
+    _tier: &str,
+    _model: &str,
+    burn: &phoebis_store::PinBurn,
+    _at: i64,
+) -> Option<f64> {
+    let per_hour = match window {
+        phoebis_routing::FIVE_HOUR => 0.05,
+        phoebis_routing::SEVEN_DAY => 0.002,
+        _ => return None,
+    };
+    Some(burn.input / 1_000.0 * per_hour / 3_600.0)
+}
+
+/// `sessions_harness_with` with the router pricing the pins' burn through `round_rates`, the pool's ceiling at 0.95
+/// and its burn average at 1,800 seconds.
+async fn sessions_harness_rated(pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>) -> common::Full {
+    use common::{generation, login, post};
+    let seed = common::admin_parts_full().await;
+    let seeding = login(&seed.app, "admin-secret").await;
+    post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","window_ceiling":0.95,"burn_average_seconds":1800,"members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#, Some(&seeding)).await;
+    post(
+        &seed.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&seeding),
+    )
+    .await;
+    name_the_tier(&seed.store, "business", "default_claude_max_20x");
+    for pin in pins(generation(&seed.store, "desktop")) {
+        seed.store.upsert_pin(&pin).unwrap();
+    }
+    common::admin_parts_full_on_rated(seed.store.clone(), round_rates).await
+}
+
+/// Reports `readings` of `account` as an answer's head would land them, read a minute before the rig's clock.
+async fn read_windows(parts: &common::Full, account: &str, readings: &[(&str, f64, Option<i64>)]) {
+    let sample = readings.iter().fold(
+        phoebis_routing::UtilizationSample::default(),
+        |sample, (window, utilization, reset)| {
+            sample.with(
+                window,
+                phoebis_routing::WindowReading {
+                    utilization: *utilization,
+                    reset: *reset,
+                    observed_at: common::NOW - 60_000,
+                    source: phoebis_routing::WindowSource::Head,
+                },
+            )
+        },
+    );
+    parts
+        .router
+        .report(phoebis_routing::Report::Sample {
+            account_id: account.into(),
+            sample,
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+}
+
+fn within(a: Option<f64>, b: f64) -> bool {
+    a.is_some_and(|a| (a - b).abs() < 1e-9)
+}
+
+#[tokio::test]
+async fn a_pinned_sessions_runway_reads_its_accounts_own_projection_with_its_burn_counted_once() {
+    use common::{login, wait_json, NOW};
+    const HOUR: i64 = 3_600_000;
+    // One pin on `business` burning five points of its 5-hour window an hour, the window at 0.80 and resetting in four
+    // hours, under the pool's ceiling of 0.95: the account reaches the ceiling in (0.95 - 0.80) / 0.05 = 3 hours.
+    // `fit_of`'s arithmetic for a destination would add the pin's burn a second time and its cold rewrite, which the
+    // rig prices at none, so it would read (0.15 - 0) / 0.10 = 1.5 hours.
+    let parts = sessions_harness_rated(|generation| {
+        vec![phoebis_store::PinRow {
+            model: "claude-opus-5-5".into(),
+            ..burning_opus_pin("s1", "business", generation, NOW, 1_000.0, 1_000.0)
+        }]
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    read_windows(
+        &parts,
+        "business",
+        &[
+            (phoebis_routing::FIVE_HOUR, 0.80, Some(NOW + 4 * HOUR)),
+            (phoebis_routing::SEVEN_DAY, 0.30, Some(NOW + 50 * HOUR)),
+        ],
+    )
+    .await;
+    let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        !session_row(v, "s1")["runway_ms"].is_null()
+    })
+    .await;
+    let row = session_row(&sessions, "s1");
+    assert_eq!(
+        (&row["runway_ms"], &row["runway_bounded"]),
+        (&serde_json::json!(10_800_000), &serde_json::json!(true)),
+        "the runway on the 5-hour window, the shorter of the two the model draws: {row}"
+    );
+}
+
+#[tokio::test]
+async fn a_pinned_sessions_runway_reads_null_without_a_projection_unbounded_without_a_burn_and_its_burn_decays_to_the_read(
+) {
+    use common::{get, json, login, wait_json, NOW};
+    const HOUR: i64 = 3_600_000;
+    // The default pricer prices no burn, so `business` projects its reading alone and its pins' runway is unbounded,
+    // and `direct` is an api_key account with no plan window to project. `s-old` burns as `s1` does but folded ten
+    // minutes before the read, so it reads its burn decayed over the pool's 1,800-second average.
+    let parts = sessions_harness_with(|generation| {
+        vec![
+            phoebis_store::PinRow {
+                model: "claude-opus-5-5".into(),
+                ..burning_opus_pin("s1", "business", generation, NOW, 100.0, 100.0)
+            },
+            phoebis_store::PinRow {
+                model: "claude-opus-5-5".into(),
+                burn_at: Some(NOW - 600_000),
+                ..burning_opus_pin("s-old", "business", generation, NOW, 100.0, 100.0)
+            },
+            burning_opus_pin("s2", "direct", generation, NOW, 100.0, 100.0),
+        ]
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let before = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let s1 = session_row(&before, "s1");
+    assert_eq!(
+        (&s1["runway_ms"], &s1["runway_bounded"]),
+        (&serde_json::Value::Null, &serde_json::Value::Null),
+        "no reading of a window the model draws, no projection: {s1}"
+    );
+    read_windows(
+        &parts,
+        "business",
+        &[(phoebis_routing::FIVE_HOUR, 0.80, Some(NOW + 4 * HOUR))],
+    )
+    .await;
+    let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        !session_row(v, "s1")["runway_bounded"].is_null()
+    })
+    .await;
+    let (s1, s_old, s2) = (
+        session_row(&sessions, "s1"),
+        session_row(&sessions, "s-old"),
+        session_row(&sessions, "s2"),
+    );
+    assert_eq!(
+        (&s1["runway_ms"], &s1["runway_bounded"]),
+        (&serde_json::Value::Null, &serde_json::json!(false)),
+        "a projection with no burn never reaches the ceiling: {s1}"
+    );
+    assert_eq!(
+        (&s2["runway_ms"], &s2["runway_bounded"]),
+        (&serde_json::Value::Null, &serde_json::Value::Null),
+        "an api_key account has no projection: {s2}"
+    );
+    let decay = (-600_000.0_f64 / 1_800_000.0).exp();
+    assert!(
+        within(
+            s_old["burn"].as_f64().map(|b| b / s1["burn"].as_f64().unwrap()),
+            decay
+        ),
+        "the older fold reads its burn decayed to the read by the pool's average: {s_old} against {s1}"
+    );
+    assert_eq!(
+        (s_old["burn_at"].as_i64(), s1["burn_at"].as_i64()),
+        (Some(NOW), Some(NOW)),
+        "both burns are served at the read's instant"
+    );
+}
+
+#[tokio::test]
+async fn an_account_window_carries_its_projection_horizon_and_burn_and_null_where_nothing_is_projected(
+) {
+    use common::{get, json, login, post, wait_json, NOW};
+    use phoebis_ledger::QuotaSampleRecord;
+    const HOUR: i64 = 3_600_000;
+    let parts = sessions_harness_rated(|generation| {
+        vec![phoebis_store::PinRow {
+            model: "claude-opus-5-5".into(),
+            ..burning_opus_pin("s1", "business", generation, NOW, 1_000.0, 1_000.0)
+        }]
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    assert_eq!(
+        post(
+            &parts.app,
+            "/admin/accounts",
+            r#"{"id":"outside","kind":"oauth","label":"Outside"}"#,
+            Some(&cookie),
+        )
+        .await
+        .status(),
+        201
+    );
+    for account in ["business", "outside"] {
+        read_windows(
+            &parts,
+            account,
+            &[
+                (phoebis_routing::FIVE_HOUR, 0.80, Some(NOW + 4 * HOUR)),
+                (phoebis_routing::SEVEN_DAY, 0.30, Some(NOW + 50 * HOUR)),
+            ],
+        )
+        .await;
+    }
+    // The ledger's rows: `business`'s two plan windows and a model week the router keeps no reading of, the same
+    // 5-hour row on `outside`, which no pool holds, and one on the api_key account.
+    let bucket = phoebis_ledger::bucket_of(NOW - 60_000);
+    let row = |account: &str, window: &str, utilization: f64| QuotaSampleRecord {
+        account_id: account.into(),
+        bucket,
+        window: window.into(),
+        utilization: Some(utilization),
+        reset_at: None,
+        source: "head".into(),
+        observed_at: None,
+    };
+    parts
+        .db
+        .insert_samples(
+            &[
+                row("business", "five_hour", 0.80),
+                row("business", "seven_day", 0.30),
+                row("business", "seven_day_opus", 0.03),
+                row("outside", "five_hour", 0.80),
+                row("direct", "five_hour", 0.10),
+            ],
+            None,
+        )
+        .unwrap();
+    let account = wait_json(&parts.app, "/admin/accounts/business", &cookie, |v| {
+        v["windows"].as_array().is_some_and(|w| w.len() == 3)
+    })
+    .await;
+    let window = |account: &serde_json::Value, id: &str| {
+        account["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["id"] == id)
+            .unwrap_or_else(|| panic!("no {id} window: {account}"))
+            .clone()
+    };
+    // Five points an hour over the four hours to the reset, and two tenths of a point an hour over the five hours a
+    // weekly horizon reaches.
+    let five_hour = window(&account, "five_hour");
+    assert!(
+        within(five_hour["projection"].as_f64(), 0.80 + 0.05 * 4.0)
+            && five_hour["horizon"] == NOW + 4 * HOUR
+            && within(five_hour["burn"].as_f64(), 0.05),
+        "{five_hour}"
+    );
+    let seven_day = window(&account, "seven_day");
+    assert!(
+        within(seven_day["projection"].as_f64(), 0.30 + 0.002 * 5.0)
+            && seven_day["horizon"] == NOW + 5 * HOUR
+            && within(seven_day["burn"].as_f64(), 0.002),
+        "{seven_day}"
+    );
+    let unread = window(&account, "seven_day_opus");
+    assert_eq!(
+        (&unread["projection"], &unread["horizon"], &unread["burn"]),
+        (
+            &serde_json::Value::Null,
+            &serde_json::Value::Null,
+            &serde_json::Value::Null
+        ),
+        "a window the router holds no reading of projects nothing: {unread}"
+    );
+    let listed = json(get(&parts.app, "/admin/accounts", Some(&cookie)).await).await;
+    let listed_row = |id: &str| {
+        listed["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == id)
+            .unwrap_or_else(|| panic!("no {id} row: {listed}"))
+            .clone()
+    };
+    assert_eq!(
+        window(&listed_row("business"), "five_hour"),
+        five_hour,
+        "the list reads the same projection as the account's own route"
+    );
+    for (id, why) in [
+        ("direct", "an api_key account projects no plan window"),
+        (
+            "outside",
+            "an account in no pool has no pool's settings to project with",
+        ),
+    ] {
+        let five_hour = window(&listed_row(id), "five_hour");
+        assert_eq!(
+            (
+                &five_hour["projection"],
+                &five_hour["horizon"],
+                &five_hour["burn"]
+            ),
+            (
+                &serde_json::Value::Null,
+                &serde_json::Value::Null,
+                &serde_json::Value::Null
+            ),
+            "{why}: {five_hour}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_pool_member_answers_the_engines_pace_score_whatever_its_kind() {
+    use common::{login, wait_json, NOW};
+    const HOUR: i64 = 3_600_000;
+    let parts = sessions_harness_rated(|generation| {
+        vec![phoebis_store::PinRow {
+            model: "claude-opus-5-5".into(),
+            ..burning_opus_pin("s1", "business", generation, NOW, 1_000.0, 1_000.0)
+        }]
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // Half the week left over the fifty hours to its reset, less the pin's two tenths of a point an hour.
+    read_windows(
+        &parts,
+        "business",
+        &[(phoebis_routing::SEVEN_DAY, 0.5, Some(NOW + 50 * HOUR))],
+    )
+    .await;
+    // The api_key account's worst live bucket stands at 0.7.
+    read_windows(
+        &parts,
+        "direct",
+        &[("itpm:claude-opus-5-5", 0.7, Some(NOW + 30_000))],
+    )
+    .await;
+    let member = |pools: &serde_json::Value, id: &str| {
+        pools["pools"][0]["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["account_id"] == id)
+            .unwrap_or_else(|| panic!("no member {id}: {pools}"))
+            .clone()
+    };
+    let pools = wait_json(&parts.app, "/admin/pools", &cookie, |v| {
+        member(v, "direct")["pace_score"]
+            .as_f64()
+            .is_some_and(|score| score < 1.0)
+            && member(v, "business")["burn"].as_f64().is_some()
+    })
+    .await;
+    let (business, direct) = (member(&pools, "business"), member(&pools, "direct"));
+    assert!(
+        within(business["pace_score"].as_f64(), 0.5 / 50.0 - 0.002)
+            && within(business["burn"].as_f64(), 0.002),
+        "an OAuth member scores its spare rate on the 7-day window and burns its pins' share of it: {business}"
+    );
+    assert!(
+        within(direct["pace_score"].as_f64(), 1.0 - 0.7),
+        "an api_key member scores the room its worst bucket leaves: {direct}"
+    );
+    assert_eq!(
+        direct["burn"],
+        serde_json::Value::Null,
+        "an api_key member has no plan window to burn: {direct}"
     );
 }
 

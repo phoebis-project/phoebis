@@ -7,7 +7,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use phoebis_bus::{spawn_subscriber, Bus, Delivery, Event};
-use phoebis_ledger::{parked_summary, AttentionGaugeSource, AttentionGauges, Ledger, LedgerError};
+use phoebis_ledger::{
+    parked_summary, routing_conditions, AttentionGaugeSource, AttentionGauges, Ledger, LedgerError,
+};
 use phoebis_oauth::{Clock, UsageService};
 use phoebis_routing::RouterHandle;
 use phoebis_store::{Store, StoreError};
@@ -47,9 +49,10 @@ pub trait TlsPairs: Send + Sync {
 pub struct AttentionParts {
     pub bus: Bus,
     pub clock: Clock,
-    /// The ledger's degraded flag, its parked rows and the unweighted models its landing saw. `None` where a harness
-    /// builds no ledger, and then `writer_degraded` for the ledger reads 0 and neither `ledger_record_parked` nor
-    /// `model_unweighted` has a series.
+    /// The ledger's degraded flag, its parked rows, the unweighted models its landing saw and the routing conditions
+    /// its fold wrote. `None` where a harness builds no ledger, and then `writer_degraded` for the ledger reads 0 and
+    /// none of `ledger_record_parked`, `model_unweighted`, `wall_reached`, `destination_spent` and `shed_no_runway`
+    /// has a series.
     pub ledger: Option<Ledger>,
     pub router: RouterHandle,
     pub store: Arc<Store>,
@@ -107,6 +110,13 @@ impl Attention {
             .as_ref()
             .map(Ledger::unweighted_served)
             .unwrap_or_default();
+        // The fold's table, read before the lock as the parked rows are: one lookup, since the ledger folds the
+        // routing log into it hourly and at start rather than on this read.
+        let routing = self
+            .ledger
+            .as_ref()
+            .map(|ledger| ledger.db().read_blocking(routing_conditions))
+            .transpose()?;
         let mut state = self.state.lock().expect(STATE_POISONED);
         reader::conditions(
             &mut state,
@@ -116,6 +126,7 @@ impl Attention {
             self.ledger.as_ref().is_some_and(Ledger::degraded),
             parked.as_deref(),
             &unweighted,
+            routing.as_deref(),
             pairs.as_deref(),
             self.usage.as_deref(),
             now,

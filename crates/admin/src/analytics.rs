@@ -9,9 +9,10 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{
     breakdown_paged, bucket_seconds, burn_groups_paged, hour_ceil, hour_of, hourly_window_samples,
-    lead_over_pace, moves_by_reason, names_one_account, parse_range, read_account_rollups,
-    rewrite_series, series_paged, session_burn_series, AccountRollupRow, FundingFilter,
-    HourlyWindowSample, LedgerError, LiveKeys, RollupFilter, SeriesFilter, SharePricing, GROUP_BYS,
+    lead_over_pace, moves_by_reason, moves_by_reason_and_fit, names_one_account, parse_range,
+    read_account_rollups, rewrite_series, series_paged, session_burn_series, AccountRollupRow,
+    FundingFilter, HourlyWindowSample, LedgerError, LiveKeys, RollupFilter, SeriesFilter,
+    SharePricing, GROUP_BYS,
 };
 use phoebis_routing::{term, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountKind, SubscriptionTerm};
@@ -968,8 +969,11 @@ pub(crate) struct Rewrites {
     pub to: i64,
     pub bucket_seconds: i64,
     pub points: Vec<RewritePoint>,
-    /// Move counts by reason, summed over the range.
+    /// Move counts by reason, summed over the range: each reason's sum over its fits.
     pub moves: BTreeMap<String, u64>,
+    /// Move counts by reason, then by the destination's fit (`fits`, `rewrite_only`, `least_bad`, or `unknown` for a
+    /// move the fit gate did not read), summed over the range.
+    pub moves_by_reason_and_fit: BTreeMap<String, BTreeMap<String, u64>>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -1011,9 +1015,15 @@ pub(crate) async fn rewrites(
     let read = state
         .ledger
         .db()
-        .read(move |c| Ok((rewrite_series(c, &filter)?, moves_by_reason(c, &filter)?)))
+        .read(move |c| {
+            Ok((
+                rewrite_series(c, &filter)?,
+                moves_by_reason(c, &filter)?,
+                moves_by_reason_and_fit(c, &filter)?,
+            ))
+        })
         .await;
-    let (series, moves): (Vec<(i64, u64)>, std::collections::BTreeMap<String, u64>) = match read {
+    let (series, moves, moves_by_reason_and_fit) = match read {
         Ok(x) => x,
         Err(e) => return ledger_failure(e),
     };
@@ -1026,6 +1036,7 @@ pub(crate) async fn rewrites(
             .map(|(at, rewrite_tokens)| RewritePoint { at, rewrite_tokens })
             .collect(),
         moves,
+        moves_by_reason_and_fit,
     })
     .into_response()
 }

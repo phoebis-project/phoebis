@@ -1066,6 +1066,61 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // One priced record parked on the harness's pool, so the attention capture carries the parked item beside the
     // exhaustion.
     common::park_unreadable(&parts.db, "main", "business", now);
+    // One row of each routing condition, as the ledger's hourly fold writes them, so the attention capture carries the
+    // three kinds beside the others.
+    let condition =
+        |kind: &str, subject_kind: &str, subject: &str, pool: Option<&str>, since: i64, detail| {
+            phoebis_ledger::RoutingCondition {
+                kind: kind.into(),
+                subject_kind: subject_kind.into(),
+                subject_id: subject.into(),
+                pool_id: pool.map(String::from),
+                since,
+                count: 1,
+                detail,
+                computed_at: now,
+            }
+        };
+    common::seed_conditions(
+        &parts,
+        &[
+            condition(
+                "wall_reached",
+                "account",
+                "business",
+                None,
+                hour_ago + 40 * 60_000,
+                j!({
+                    "projection_error": 0.04,
+                    "setting": ["shed_cap", "window_ceiling"],
+                    "walls": 1,
+                    "windows": ["five_hour"],
+                }),
+            ),
+            condition(
+                "destination_spent",
+                "account",
+                "business",
+                None,
+                hour_ago + 10 * 60_000,
+                j!({
+                    "fits": { "rewrite_only": 1 },
+                    "moves": 1,
+                    "setting": ["window_ceiling"],
+                    "windows": ["five_hour"],
+                }),
+            ),
+            condition(
+                "shed_no_runway",
+                "pool",
+                "main",
+                Some("main"),
+                hour_ago + 5 * 60_000,
+                j!({ "accounts": ["business"], "rounds": 1, "setting": ["window_ceiling"] }),
+            ),
+        ],
+    )
+    .await;
     // The GET reads no endpoint of its own, so the capture reads a clean poll's snapshot and standing.
     parts.usage.poll("business").await.unwrap();
     // The affinity report above stands for an earlier request, `r-0`, whose decision the ledger never stored, so its
@@ -1868,7 +1923,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
                     per_rewrite: Some(0.004),
                     marked: true,
                     rewrite: Some(0.005),
-                    planned: Some("personal".into()),
+                    planned: Some("business".into()),
                     runway_ms: Some(5_400_000),
                     skip: None,
                     note: None,

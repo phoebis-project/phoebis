@@ -25,10 +25,10 @@ use phoebis_profile::{
     fixtures::{control_response, ControlFixture},
 };
 use phoebis_relay::{AccountingSource, CatalogService, Limits, Relay, UpstreamGzip};
-use phoebis_routing::{spawn, RouterConfig, RouterHandle};
+use phoebis_routing::{spawn, RouterConfig, RouterHandle, SharePricer};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AttemptOutcome, Identity, NewBundle, Secret, StateCause,
-    StorageKey, Store,
+    AccountKind, AccountRow, AccountState, AttemptOutcome, Identity, NewBundle, PinBurn, Secret,
+    StateCause, StorageKey, Store,
 };
 use phoebis_transport::{
     connector_builder,
@@ -168,6 +168,32 @@ pub async fn admin_parts_full_priced(prices: PriceRevisions) -> Full {
     )
 }
 
+/// The full harness over a store the caller holds, its router pricing a pin's burn per window through `rate`, the
+/// closure `SharePricer::with_rate` takes, where the default pricer prices nothing: a case reads a projection, a
+/// runway and a spare rate of its own rates rather than the shipped cost model's.
+pub async fn admin_parts_full_on_rated(
+    store: Arc<Store>,
+    rate: impl Fn(&str, &str, &str, &PinBurn, i64) -> Option<f64> + Send + Sync + 'static,
+) -> Full {
+    full_from(
+        build_app_routed(
+            None,
+            ACCOUNT_UUID,
+            false,
+            Some(store),
+            None,
+            None,
+            None,
+            None,
+            RouterConfig {
+                share: SharePricer::default().with_rate(rate),
+                ..RouterConfig::default()
+            },
+        )
+        .await,
+    )
+}
+
 /// The full harness reading the subscription cost model `costs` rather than the shipped one, over a fresh store, so a
 /// case names a model the list leaves unweighted without reading the shipped file.
 pub async fn admin_parts_full_costed(costs: PlanTables) -> Full {
@@ -221,6 +247,38 @@ fn full_from(parts: Parts) -> Full {
         up: parts.up,
         usage: parts.usage,
     }
+}
+
+/// Writes `rows` into the ledger's `routing_conditions` as its hourly fold would, once the fold the ledger runs at
+/// start has finished, so that one never lands over them.
+pub async fn seed_conditions(parts: &Full, rows: &[phoebis_ledger::RoutingCondition]) {
+    let stats = parts.ledger.stats();
+    wait_for(Duration::from_secs(5), || {
+        (stats.condition_folds.load(Ordering::SeqCst) >= 1).then_some(())
+    })
+    .await;
+    parts
+        .db
+        .write(|c| {
+            for row in rows {
+                c.execute(
+                    "INSERT INTO routing_conditions (kind, subject_kind, subject_id, pool_id, since, count, \
+                     detail_json, computed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![
+                        row.kind,
+                        row.subject_kind,
+                        row.subject_id,
+                        row.pool_id,
+                        row.since,
+                        row.count as i64,
+                        row.detail.to_string(),
+                        row.computed_at
+                    ],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
 }
 
 /// Parks one priced record of `pool` on `account` at `at`. Its record is not JSON, so the ledger's start pass, which
@@ -783,6 +841,33 @@ async fn build_app(
     tls_reload: Option<Arc<dyn TlsReload>>,
     costs: Option<PlanTables>,
 ) -> Parts {
+    build_app_routed(
+        identity,
+        upstream_uuid,
+        tls,
+        store,
+        accounting,
+        prices,
+        tls_reload,
+        costs,
+        RouterConfig::default(),
+    )
+    .await
+}
+
+/// `build_app` with the router spawned on `routing`.
+#[allow(clippy::too_many_arguments)]
+async fn build_app_routed(
+    identity: Option<Identity>,
+    upstream_uuid: &str,
+    tls: bool,
+    store: Option<Arc<Store>>,
+    accounting: Option<AccountingSource>,
+    prices: Option<PriceRevisions>,
+    tls_reload: Option<Arc<dyn TlsReload>>,
+    costs: Option<PlanTables>,
+    routing: RouterConfig,
+) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_269_linux_x64();
     let clock_cell = Arc::new(AtomicI64::new(NOW));
@@ -893,7 +978,7 @@ async fn build_app(
         4,
         Duration::from_secs(60),
     ));
-    let router_handle = spawn(store.clone(), clock.clone(), RouterConfig::default()).unwrap();
+    let router_handle = spawn(store.clone(), clock.clone(), routing).unwrap();
     let catalog = Arc::new(CatalogService::new(
         store.clone(),
         manager.clone(),

@@ -1,4 +1,4 @@
-//! The eleven conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear,
+//! The fourteen conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear,
 //! the router's own components among them, a deleted subject's series gone unless a parked record still names it, a
 //! refresh run read back by a second reader, a listener's pair read on the read's clock, an unweighted model the
 //! ledger's landing saw, and the gauge the metrics listener scrapes from the same read.
@@ -52,6 +52,7 @@ async fn every_subject_a_kind_applies_to_has_a_series_at_zero_while_nothing_hold
     assert_eq!(
         series(&read(&attention, NOW)),
         [
+            ("destination_spent", "business".to_string(), false),
             ("funding_required", "direct".to_string(), false),
             ("ledger_record_parked", "main".to_string(), false),
             ("poll_backoff", "business".to_string(), false),
@@ -59,11 +60,14 @@ async fn every_subject_a_kind_applies_to_has_a_series_at_zero_while_nothing_hold
             ("reauth_required", "business".to_string(), false),
             ("reauth_required", "direct".to_string(), false),
             ("refresh_failed", "business".to_string(), false),
+            ("shed_no_runway", "main".to_string(), false),
+            ("wall_reached", "business".to_string(), false),
             ("writer_degraded", "ledger".to_string(), false),
             ("writer_degraded", "routing".to_string(), false),
         ],
-        "every account carries its re-auth state, an API key its funding, and an OAuth account its refresh run \
-         and, before any poll status exists, its backoff; every pool its parked records, and each writer its state"
+        "every account carries its re-auth state, an API key its funding, and an OAuth account its refresh run, \
+         its spent destinations and its walls and, before any poll status exists, its backoff; every pool its \
+         parked records and its rounds without runway, and each writer its state"
     );
 }
 
@@ -83,6 +87,7 @@ async fn each_loaded_pair_has_a_series_of_both_certificate_kinds_at_zero_while_n
             ("certificate_expiring", "proxy.tls".to_string(), false),
             ("certificate_reload_failed", "admin.tls".to_string(), false),
             ("certificate_reload_failed", "proxy.tls".to_string(), false),
+            ("destination_spent", "business".to_string(), false),
             ("funding_required", "direct".to_string(), false),
             ("ledger_record_parked", "main".to_string(), false),
             ("poll_backoff", "business".to_string(), false),
@@ -90,6 +95,8 @@ async fn each_loaded_pair_has_a_series_of_both_certificate_kinds_at_zero_while_n
             ("reauth_required", "business".to_string(), false),
             ("reauth_required", "direct".to_string(), false),
             ("refresh_failed", "business".to_string(), false),
+            ("shed_no_runway", "main".to_string(), false),
+            ("wall_reached", "business".to_string(), false),
             ("writer_degraded", "ledger".to_string(), false),
             ("writer_degraded", "routing".to_string(), false),
         ],
@@ -1138,6 +1145,288 @@ async fn a_parked_record_without_a_pool_holds_under_the_router_subject_until_its
     );
 }
 
+/// One routing event row as the router's mirror writes it, through the ledger's file.
+fn routing_event(
+    rig: &Rig,
+    at: i64,
+    kind: &str,
+    account: &str,
+    pool: Option<&str>,
+    detail: serde_json::Value,
+) {
+    let pool = pool.map_or("NULL".to_string(), |p| format!("'{p}'"));
+    let detail = detail.to_string().replace('\'', "''");
+    ledger_sql(
+        rig,
+        &format!(
+            "INSERT INTO events (at, kind, account_id, pool_id, detail) \
+             VALUES ({at}, '{kind}', '{account}', {pool}, '{detail}');"
+        ),
+    );
+}
+
+/// Folds the routing conditions at `at` through the ledger's writer, as the hourly tick does, after the ledger's own
+/// fold at start has run, so that one never lands over this one. The rig's clock moves to `at` too.
+async fn fold_at(rig: &Rig, at: i64) {
+    let stats = rig.ledger.stats();
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        (stats
+            .condition_folds
+            .load(std::sync::atomic::Ordering::SeqCst)
+            >= 1)
+            .then_some(())
+    })
+    .await;
+    rig.at(at);
+    rig.db
+        .write(|c| {
+            let tx = c.transaction()?;
+            phoebis_ledger::fold_routing_conditions(&tx, at)?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+fn account_subject(id: &str) -> Subject {
+    Subject {
+        kind: SubjectKind::Account,
+        id: id.into(),
+        label: id.into(),
+    }
+}
+
+const MINUTE: i64 = 60_000;
+
+#[tokio::test]
+async fn a_round_that_marked_nothing_for_want_of_runway_holds_the_condition_on_its_pool_for_a_day()
+{
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    routing_event(
+        &rig,
+        NOW - 30 * MINUTE,
+        "shedding_round",
+        "business",
+        Some("main"),
+        json!({ "window": "five_hour", "projection": 0.99, "outcome": "nothing_to_mark", "reason": "no_runway" }),
+    );
+    fold_at(&rig, NOW).await;
+    let conditions = read(&attention, NOW);
+    let held = find(&conditions, Kind::ShedNoRunway, "main").unwrap();
+    assert_eq!(
+        (
+            held.holds,
+            held.since,
+            &held.subject,
+            &held.pools,
+            &held.link,
+            &held.detail
+        ),
+        (
+            true,
+            Some(NOW - 30 * MINUTE),
+            &pool_subject("main", "Main"),
+            &vec!["main".to_string()],
+            &Some(Link {
+                page: "pools",
+                id: "main".into()
+            }),
+            &json!({
+                "accounts": ["business"],
+                "rounds": 1,
+                "setting": ["window_ceiling"],
+                "setting_value": 0.95,
+            })
+        ),
+        "the condition dates from the round, opens the pool's card and carries the pool's ceiling beside its name"
+    );
+    let (status, text) = scrape(&rig, &attention).await;
+    assert_eq!(status, 200);
+    assert!(
+        text.contains(r#"phoebis_attention{kind="shed_no_runway",subject="main"} 1"#),
+        "{text}"
+    );
+    fold_at(&rig, NOW + 25 * HOUR).await;
+    let cleared = find(
+        &read(&attention, NOW + 25 * HOUR),
+        Kind::ShedNoRunway,
+        "main",
+    )
+    .cloned()
+    .expect("a pool keeps its series once its rounds are a day old");
+    assert_eq!(
+        (cleared.holds, cleared.since, &cleared.detail),
+        (
+            false,
+            None,
+            &json!({ "accounts": [], "rounds": 0, "setting": ["window_ceiling"] })
+        ),
+        "the condition clears once the trailing day holds no such round"
+    );
+}
+
+#[tokio::test]
+async fn a_move_whose_destination_was_spent_within_the_hour_holds_the_condition_on_that_account() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    routing_event(
+        &rig,
+        NOW - 50 * MINUTE,
+        "pin_migrated",
+        "business",
+        None,
+        json!({ "reason": "spent", "from_account": "direct", "fit": "fits" }),
+    );
+    routing_event(
+        &rig,
+        NOW - 10 * MINUTE,
+        "window_spent",
+        "business",
+        None,
+        json!({ "window": "five_hour", "source": "head" }),
+    );
+    fold_at(&rig, NOW).await;
+    let conditions = read(&attention, NOW);
+    let held = find(&conditions, Kind::DestinationSpent, "business").unwrap();
+    assert_eq!(
+        (
+            held.holds,
+            held.since,
+            &held.subject,
+            &held.pools,
+            &held.link,
+            &held.detail
+        ),
+        (
+            true,
+            Some(NOW - 50 * MINUTE),
+            &account_subject("business"),
+            &vec!["main".to_string()],
+            &Some(Link {
+                page: "accounts",
+                id: "business".into()
+            }),
+            &json!({
+                "fits": { "fits": 1 },
+                "moves": 1,
+                "setting": ["window_ceiling"],
+                "windows": ["five_hour"],
+            })
+        ),
+        "the condition dates from the move, opens the account and names the setting with no pool's value"
+    );
+    let (status, text) = scrape(&rig, &attention).await;
+    assert_eq!(status, 200);
+    assert!(
+        text.contains(r#"phoebis_attention{kind="destination_spent",subject="business"} 1"#),
+        "{text}"
+    );
+    fold_at(&rig, NOW + 25 * HOUR).await;
+    let cleared = find(
+        &read(&attention, NOW + 25 * HOUR),
+        Kind::DestinationSpent,
+        "business",
+    )
+    .cloned()
+    .expect("an OAuth account keeps its series once its moves are a day old");
+    assert_eq!(
+        (cleared.holds, cleared.since, &cleared.detail),
+        (
+            false,
+            None,
+            &json!({ "fits": {}, "moves": 0, "setting": ["window_ceiling"], "windows": [] })
+        ),
+        "the condition clears once the trailing day holds no such move"
+    );
+}
+
+#[tokio::test]
+async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_with_the_projection_error(
+) {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    // A round two hours before the wall projected the 5-hour window at 0.97, so the wall came 0.03 past it.
+    routing_event(
+        &rig,
+        NOW - 2 * HOUR,
+        "shedding_round",
+        "business",
+        Some("main"),
+        json!({ "window": "five_hour", "projection": 0.97, "outcome": "marked 1", "reason": null }),
+    );
+    routing_event(
+        &rig,
+        NOW - HOUR,
+        "window_spent",
+        "business",
+        None,
+        json!({ "window": "five_hour", "source": "predicted" }),
+    );
+    fold_at(&rig, NOW).await;
+    let conditions = read(&attention, NOW);
+    assert!(
+        !find(&conditions, Kind::ShedNoRunway, "main").unwrap().holds,
+        "a round that marked a pin holds no pool's condition"
+    );
+    let held = find(&conditions, Kind::WallReached, "business").unwrap();
+    assert_eq!(
+        (
+            held.holds,
+            held.since,
+            &held.subject,
+            &held.pools,
+            &held.link,
+            &held.detail
+        ),
+        (
+            true,
+            Some(NOW - HOUR),
+            &account_subject("business"),
+            &vec!["main".to_string()],
+            &Some(Link {
+                page: "accounts",
+                id: "business".into()
+            }),
+            &json!({
+                "projection_error": 1.0 - 0.97,
+                "setting": ["shed_cap", "window_ceiling"],
+                "walls": 1,
+                "windows": ["five_hour"],
+            })
+        ),
+        "a predicted wall counts, and the error is how far under the wall the round projected"
+    );
+    let (status, text) = scrape(&rig, &attention).await;
+    assert_eq!(status, 200);
+    assert!(
+        text.contains(r#"phoebis_attention{kind="wall_reached",subject="business"} 1"#),
+        "{text}"
+    );
+    fold_at(&rig, NOW + 25 * HOUR).await;
+    let cleared = find(
+        &read(&attention, NOW + 25 * HOUR),
+        Kind::WallReached,
+        "business",
+    )
+    .cloned()
+    .expect("an OAuth account keeps its series once its walls are a day old");
+    assert_eq!(
+        (cleared.holds, cleared.since, &cleared.detail),
+        (
+            false,
+            None,
+            &json!({
+                "projection_error": null,
+                "setting": ["shed_cap", "window_ceiling"],
+                "walls": 0,
+                "windows": [],
+            })
+        ),
+        "the condition clears once the trailing day holds no wall"
+    );
+}
+
 #[tokio::test]
 async fn a_parked_record_keeps_its_condition_after_its_pool_is_deleted() {
     let rig = rig().await;
@@ -1744,6 +2033,7 @@ async fn a_held_unweighted_model_has_its_series_and_ranks_after_every_degraded_s
     assert_eq!(
         series(&conditions),
         [
+            ("destination_spent", "business".to_string(), false),
             ("funding_required", "direct".to_string(), false),
             ("ledger_record_parked", "main".to_string(), false),
             ("model_unweighted", "claude-opus-5".to_string(), true),
@@ -1752,6 +2042,8 @@ async fn a_held_unweighted_model_has_its_series_and_ranks_after_every_degraded_s
             ("reauth_required", "business".to_string(), false),
             ("reauth_required", "direct".to_string(), false),
             ("refresh_failed", "business".to_string(), false),
+            ("shed_no_runway", "main".to_string(), false),
+            ("wall_reached", "business".to_string(), false),
             ("writer_degraded", "ledger".to_string(), false),
             ("writer_degraded", "routing".to_string(), false),
         ],

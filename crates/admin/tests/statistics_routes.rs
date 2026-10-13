@@ -287,8 +287,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(34), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that keys the rollups by band and tier"
+        (Some(35), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that adds the routing conditions' table"
     );
     assert_eq!(
         (
@@ -2914,7 +2914,7 @@ async fn the_session_series_sizes_its_buckets_like_the_account_series_on_long_ra
 }
 
 #[tokio::test]
-async fn the_rewrites_route_answers_the_series_and_the_moves_by_reason() {
+async fn the_rewrites_route_answers_the_series_and_the_moves_by_reason_and_by_fit() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
@@ -2961,7 +2961,23 @@ async fn the_rewrites_route_answers_the_series_and_the_moves_by_reason() {
         model: Some("claude-sonnet-5".into()),
         actor: None,
         detail: Some(
-            serde_json::json!({ "from_account": "direct", "epoch": 2, "reason": "shed" })
+            serde_json::json!({ "from_account": "direct", "epoch": 2, "reason": "shed", "fit": "least_bad" })
+                .to_string(),
+        ),
+        pool_id: None,
+        agent_id: None,
+        request_id: None,
+    }));
+    parts.ledger.record(Record::Event(EventRecord {
+        at: hour_ago + 200,
+        kind: "pin_migrated".into(),
+        account_id: Some("direct".into()),
+        key_id: Some("desktop".into()),
+        session_id: Some("s2".into()),
+        model: Some("claude-sonnet-5".into()),
+        actor: None,
+        detail: Some(
+            serde_json::json!({ "from_account": "business", "epoch": 1, "reason": "spent", "fit": "fits" })
                 .to_string(),
         ),
         pool_id: None,
@@ -2972,13 +2988,12 @@ async fn the_rewrites_route_answers_the_series_and_the_moves_by_reason() {
         parts.db.request("r-rewrite").await.unwrap()
     })
     .await;
-    let rewrites = json(
-        get(
-            &parts.app,
-            "/admin/analytics/rewrites?range=24h",
-            Some(&cookie),
-        )
-        .await,
+    // The two moves land in the writer's batches after the request, so the read waits for both.
+    let rewrites = wait_json(
+        &parts.app,
+        "/admin/analytics/rewrites?range=24h",
+        &cookie,
+        |v| v["moves"]["spent"] == 1,
     )
     .await;
     let total: u64 = rewrites["points"]
@@ -2988,7 +3003,16 @@ async fn the_rewrites_route_answers_the_series_and_the_moves_by_reason() {
         .map(|p| p["rewrite_tokens"].as_u64().unwrap())
         .sum();
     assert_eq!(total, 500, "the moved attempt's cache write is the rewrite");
-    assert_eq!(rewrites["moves"]["shed"].as_u64(), Some(1));
+    assert_eq!(
+        rewrites["moves"],
+        serde_json::json!({ "shed": 1, "spent": 1 }),
+        "the moves by reason, each the sum over its fits"
+    );
+    assert_eq!(
+        rewrites["moves_by_reason_and_fit"],
+        serde_json::json!({ "shed": { "least_bad": 1 }, "spent": { "fits": 1 } }),
+        "each reason keeps its destinations' own fits"
+    );
 }
 
 #[tokio::test]

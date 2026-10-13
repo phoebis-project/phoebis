@@ -63,25 +63,37 @@ export const FIXTURES: Record<string, Fixture> = {
           "id": "five_hour",
           "utilization": 0.62,
           "resets_at": 1791724600000,
-          "observed_at": 1791720900000
+          "observed_at": 1791720900000,
+          "projection": null,
+          "horizon": null,
+          "burn": null
         },
         {
           "id": "seven_day",
           "utilization": 0.41,
           "resets_at": 1791807400000,
-          "observed_at": 1791720900000
+          "observed_at": 1791720900000,
+          "projection": null,
+          "horizon": null,
+          "burn": null
         },
         {
           "id": "seven_day_fable",
           "utilization": 0.12,
           "resets_at": 1791807400000,
-          "observed_at": 1791720900000
+          "observed_at": 1791720900000,
+          "projection": null,
+          "horizon": null,
+          "burn": null
         },
         {
           "id": "seven_day_opus",
           "utilization": 0.03,
           "resets_at": 1791807400000,
-          "observed_at": 1791720900000
+          "observed_at": 1791720900000,
+          "projection": null,
+          "horizon": null,
+          "burn": null
         }
       ],
       "fast_lane": {
@@ -325,25 +337,37 @@ export const FIXTURES: Record<string, Fixture> = {
               "id": "five_hour",
               "utilization": 0.62,
               "resets_at": 1791724600000,
-              "observed_at": 1791720900000
+              "observed_at": 1791720900000,
+              "projection": null,
+              "horizon": null,
+              "burn": null
             },
             {
               "id": "seven_day",
               "utilization": 0.41,
               "resets_at": 1791807400000,
-              "observed_at": 1791720900000
+              "observed_at": 1791720900000,
+              "projection": null,
+              "horizon": null,
+              "burn": null
             },
             {
               "id": "seven_day_fable",
               "utilization": 0.12,
               "resets_at": 1791807400000,
-              "observed_at": 1791720900000
+              "observed_at": 1791720900000,
+              "projection": null,
+              "horizon": null,
+              "burn": null
             },
             {
               "id": "seven_day_opus",
               "utilization": 0.03,
               "resets_at": 1791807400000,
-              "observed_at": 1791720900000
+              "observed_at": 1791720900000,
+              "projection": null,
+              "horizon": null,
+              "burn": null
             }
           ],
           "fast_lane": {
@@ -3810,6 +3834,11 @@ export const FIXTURES: Record<string, Fixture> = {
       ],
       "moves": {
         "spent": 1
+      },
+      "moves_by_reason_and_fit": {
+        "spent": {
+          "unknown": 1
+        }
       }
     }
   },
@@ -6377,6 +6406,87 @@ export const FIXTURES: Record<string, Fixture> = {
             ],
             "count": 1,
             "pool": "main"
+          }
+        },
+        {
+          "kind": "wall_reached",
+          "subject": {
+            "type": "account",
+            "id": "business",
+            "label": "Business"
+          },
+          "link": {
+            "page": "accounts",
+            "id": "business"
+          },
+          "pools": [
+            "main"
+          ],
+          "since": 1791719800000,
+          "detail": {
+            "projection_error": 0.04,
+            "setting": [
+              "shed_cap",
+              "window_ceiling"
+            ],
+            "walls": 1,
+            "windows": [
+              "five_hour"
+            ]
+          }
+        },
+        {
+          "kind": "destination_spent",
+          "subject": {
+            "type": "account",
+            "id": "business",
+            "label": "Business"
+          },
+          "link": {
+            "page": "accounts",
+            "id": "business"
+          },
+          "pools": [
+            "main"
+          ],
+          "since": 1791718000000,
+          "detail": {
+            "fits": {
+              "rewrite_only": 1
+            },
+            "moves": 1,
+            "setting": [
+              "window_ceiling"
+            ],
+            "windows": [
+              "five_hour"
+            ]
+          }
+        },
+        {
+          "kind": "shed_no_runway",
+          "subject": {
+            "type": "pool",
+            "id": "main",
+            "label": "Main"
+          },
+          "link": {
+            "page": "pools",
+            "id": "main"
+          },
+          "pools": [
+            "main"
+          ],
+          "since": 1791717700000,
+          "detail": {
+            "accounts": [
+              "business"
+            ],
+            "rounds": 1,
+            "setting": [
+              "window_ceiling"
+            ],
+            "setting_value": 0.95
           }
         }
       ]
@@ -9071,7 +9181,9 @@ export const FIXTURES: Record<string, Fixture> = {
                   "period_end": 1793491200000
                 }
               ],
-              "active_pins": 1
+              "active_pins": 1,
+              "pace_score": 0.005952380952380952,
+              "burn": null
             },
             {
               "account_id": "direct",
@@ -9088,14 +9200,16 @@ export const FIXTURES: Record<string, Fixture> = {
                   "period_end": 1793491200000
                 }
               ],
-              "active_pins": 0
+              "active_pins": 0,
+              "pace_score": 1,
+              "burn": null
             }
           ],
           "keys": [
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "JZkFmCwM",
+              "prefix": "xJtLSLB5",
               "enabled": true
             }
           ],
@@ -12624,7 +12738,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 "per_rewrite": 0.004,
                 "marked": true,
                 "rewrite": 0.005,
-                "planned": "personal",
+                "planned": "business",
                 "runway_ms": 5400000,
                 "skip": null,
                 "note": null
@@ -12761,6 +12875,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "burn_equivalent": 0,
           "estimated": false,
           "burn_at": null,
+          "runway_ms": null,
+          "runway_bounded": null,
           "cache_ttl_ms": 300000,
           "last_input_tokens": 0,
           "last_refresh_at": 1791721000000,
@@ -12797,6 +12913,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "burn_equivalent": null,
           "estimated": false,
           "burn_at": null,
+          "runway_ms": null,
+          "runway_bounded": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
           "last_refresh_at": null,
@@ -12833,6 +12951,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "burn_equivalent": null,
           "estimated": false,
           "burn_at": null,
+          "runway_ms": null,
+          "runway_bounded": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
           "last_refresh_at": null,
@@ -12869,6 +12989,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "burn_equivalent": null,
           "estimated": false,
           "burn_at": null,
+          "runway_ms": null,
+          "runway_bounded": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
           "last_refresh_at": null,
@@ -12905,6 +13027,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "burn_equivalent": null,
           "estimated": false,
           "burn_at": null,
+          "runway_ms": null,
+          "runway_bounded": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
           "last_refresh_at": null,
@@ -13552,7 +13676,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "ready": true,
       "dead": [],
       "ledger": {
-        "schema_version": 34,
+        "schema_version": 35,
         "written": 18,
         "dropped": 0,
         "write_failures": 0,

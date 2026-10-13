@@ -1,14 +1,15 @@
-//! The eleven conditions, read fresh on every call: the account states and the pools from the registry, the refresh
-//! runs from the store, the parked records, the ledger's degraded state and the unweighted models its landing saw from
-//! the ledger, the routing state writer's and the listeners' pairs from the router, the poll's standing from the usage
-//! service, and the exhaustions and drift refusals from the request outcomes the bus arm keeps.
+//! The fourteen conditions, read fresh on every call: the account states and the pools from the registry, the refresh
+//! runs from the store, the parked records, the ledger's degraded state, the unweighted models its landing saw and
+//! the routing conditions its hourly fold wrote from the ledger, the routing state writer's and the listeners' pairs
+//! from the router, the poll's standing from the usage service, and the exhaustions and drift refusals from the
+//! request outcomes the bus arm keeps.
 
 use std::collections::{HashMap, HashSet};
 
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome};
-use phoebis_ledger::{polled, ParkedSummary, UnweightedModel};
+use phoebis_ledger::{polled, ParkedSummary, RoutingCondition, UnweightedModel};
 use phoebis_oauth::UsageService;
-use phoebis_routing::RouterHandle;
+use phoebis_routing::{RegistrySnapshot, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, PoolRow, ResolvedAttempt, Store, StoreError,
 };
@@ -53,7 +54,10 @@ const RELEASE_VERSION_MAX_BYTES: usize = 32;
 /// back), a listener serving a pair whose replacement did not load (the next start would refuse the files as they
 /// stand), an account that serves nothing until the operator acts, an account's credential about to lapse, the
 /// router's own certificate about to lapse, priced records the ledger file keeps until the next start or a replay
-/// lands them, windows that read stale, and a model whose window share is an estimate while nothing is broken.
+/// lands them, windows that read stale, and a model whose window share is an estimate while nothing is broken. The
+/// three routing conditions stop no traffic and rank under every kind that does, worst first among themselves: an
+/// account that reached its wall, a move whose destination was spent within the hour, and a pool whose rounds found no
+/// destination with runway.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     PoolExhausted,
@@ -67,6 +71,9 @@ pub enum Kind {
     LedgerRecordParked,
     PollBackoff,
     ModelUnweighted,
+    WallReached,
+    DestinationSpent,
+    ShedNoRunway,
 }
 
 impl Kind {
@@ -83,6 +90,9 @@ impl Kind {
             Kind::LedgerRecordParked => "ledger_record_parked",
             Kind::PollBackoff => "poll_backoff",
             Kind::ModelUnweighted => "model_unweighted",
+            Kind::WallReached => "wall_reached",
+            Kind::DestinationSpent => "destination_spent",
+            Kind::ShedNoRunway => "shed_no_runway",
         }
     }
 }
@@ -390,9 +400,10 @@ pub(crate) fn refresh_runs(
 /// so a cleared condition reads 0 on the scrape rather than vanishing. The metrics listener and the admin route read
 /// this one function, so a scrape and the dashboard never disagree. The caller reads the registry's `accounts` and
 /// their `refresh_runs`, and the parked rows, before it takes the reader's state, and a read that fails fails the
-/// whole answer, since a series answered without its evidence could clear a real alarm. `parked` is `None` where no
-/// ledger is built, and `ledger_record_parked` then has no series. `pairs` is `None` where no listener is built, and
-/// neither certificate kind then has a series. `unweighted` is the ledger's map, empty where no ledger is built.
+/// whole answer, since a series answered without its evidence could clear a real alarm. `parked` and `routing` are
+/// `None` where no ledger is built, and neither `ledger_record_parked` nor the three routing conditions then have a
+/// series. `pairs` is `None` where no listener is built, and neither certificate kind then has a series. `unweighted`
+/// is the ledger's map, empty where no ledger is built.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn conditions(
     state: &mut ReaderState,
@@ -402,6 +413,7 @@ pub(crate) fn conditions(
     ledger_degraded: bool,
     parked: Option<&[ParkedSummary]>,
     unweighted: &[UnweightedModel],
+    routing: Option<&[RoutingCondition]>,
     pairs: Option<&[PairFacts]>,
     usage: Option<&UsageService>,
     now: i64,
@@ -658,8 +670,132 @@ pub(crate) fn conditions(
             }),
         });
     }
+    if let Some(rows) = routing {
+        out.extend(routing_conditions(&snapshot, accounts, rows));
+    }
     // A cleared state, a deleted account and an account that changed kind all lose their first-seen time, so the
     // next holding read dates the state afresh.
     state.state_since.retain(|entry, _| seen.contains(entry));
     Ok(out)
+}
+
+/// The three conditions the ledger's hourly fold wrote: one per pool for `shed_no_runway` and one per OAuth account
+/// for `wall_reached` and `destination_spent`, each holding where a row names its subject, with the row's oldest event
+/// as `since` and its detail. A row whose pool the snapshot holds gains that pool's `window_ceiling` as
+/// `setting_value` beside the `setting` it names, since the ledger reads no registry. A subject the registry no longer
+/// holds keeps its row's condition, labeled by its id and opening nothing, until the fold's trailing day lets the row
+/// go.
+fn routing_conditions(
+    snapshot: &RegistrySnapshot,
+    accounts: &[AccountRow],
+    rows: &[RoutingCondition],
+) -> Vec<Condition> {
+    let row = |kind: Kind, id: &str| {
+        rows.iter()
+            .find(|r| r.kind == kind.as_str() && r.subject_id == id)
+    };
+    let detail_of = |row: Option<&RoutingCondition>, cleared: serde_json::Value| {
+        let Some(row) = row else {
+            return cleared;
+        };
+        let mut detail = row.detail.clone();
+        if let Some(pool) = row.pool_id.as_deref().and_then(|id| snapshot.pool(id)) {
+            detail["setting_value"] = json!(pool.window_ceiling);
+        }
+        detail
+    };
+    let mut out = Vec::new();
+    let mut pools: Vec<(String, String, bool)> = snapshot
+        .pools()
+        .map(|pool| (pool.id.clone(), pool.label.clone(), true))
+        .collect();
+    for r in rows
+        .iter()
+        .filter(|r| r.kind == Kind::ShedNoRunway.as_str())
+    {
+        if !pools.iter().any(|(id, _, _)| *id == r.subject_id) {
+            pools.push((r.subject_id.clone(), r.subject_id.clone(), false));
+        }
+    }
+    for (pool_id, label, live) in pools {
+        let held = row(Kind::ShedNoRunway, &pool_id);
+        let mut condition = condition_for(
+            Kind::ShedNoRunway,
+            Subject {
+                kind: SubjectKind::Pool,
+                id: pool_id.clone(),
+                label,
+            },
+            held.is_some(),
+            held.map(|r| r.since),
+            detail_of(
+                held,
+                json!({ "accounts": [], "rounds": 0, "setting": ["window_ceiling"] }),
+            ),
+        );
+        if !live {
+            condition.link = None;
+            condition.pools.clear();
+        }
+        out.push(condition);
+    }
+    let mut subjects: Vec<(String, String, bool)> = accounts
+        .iter()
+        .filter(|a| a.kind == AccountKind::Oauth)
+        .map(|a| (a.id.clone(), a.label.clone(), true))
+        .collect();
+    for r in rows.iter().filter(|r| {
+        r.kind == Kind::WallReached.as_str() || r.kind == Kind::DestinationSpent.as_str()
+    }) {
+        if !subjects.iter().any(|(id, _, _)| *id == r.subject_id) {
+            subjects.push((r.subject_id.clone(), r.subject_id.clone(), false));
+        }
+    }
+    for (account_id, label, live) in subjects {
+        let mut pools: Vec<String> = snapshot
+            .pools()
+            .filter(|p| {
+                snapshot
+                    .members(&p.id)
+                    .iter()
+                    .any(|m| m.account_id == account_id)
+            })
+            .map(|p| p.id.clone())
+            .collect();
+        pools.sort();
+        for (kind, cleared) in [
+            (
+                Kind::WallReached,
+                json!({
+                    "projection_error": null,
+                    "setting": ["shed_cap", "window_ceiling"],
+                    "walls": 0,
+                    "windows": [],
+                }),
+            ),
+            (
+                Kind::DestinationSpent,
+                json!({ "fits": {}, "moves": 0, "setting": ["window_ceiling"], "windows": [] }),
+            ),
+        ] {
+            let held = row(kind, &account_id);
+            out.push(Condition {
+                kind,
+                subject: Subject {
+                    kind: SubjectKind::Account,
+                    id: account_id.clone(),
+                    label: label.clone(),
+                },
+                holds: held.is_some(),
+                since: held.map(|r| r.since),
+                pools: if live { pools.clone() } else { Vec::new() },
+                link: live.then(|| Link {
+                    page: "accounts",
+                    id: account_id.clone(),
+                }),
+                detail: detail_of(held, cleared),
+            });
+        }
+    }
+    out
 }

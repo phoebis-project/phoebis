@@ -1122,6 +1122,14 @@ pub(crate) struct PoolMemberView {
     pub spends: Vec<SpendReport>,
     /// The pins under the pool's keys on that member's account, one per agent and model.
     pub active_pins: usize,
+    /// The score Pace ranks the member by under this pool's settings, whatever its kind: the spare rate on the 7-day
+    /// window for an OAuth member (the share it can spend an hour until the window resets, less its pins' burn), the
+    /// room its worst live bucket leaves for an api_key member. A member's score reads no model, and the 7-day window
+    /// is the one every model draws. Null while the router does not answer.
+    pub pace_score: Option<f64>,
+    /// The pins' burn on the member's 7-day window under this pool, in share per hour, null for an api_key member and
+    /// a member with no reading of the window.
+    pub burn: Option<f64>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -1163,6 +1171,7 @@ fn member_json(
     eligible: &str,
     now: i64,
     active_pins: usize,
+    projection: Option<&phoebis_routing::AccountProjection>,
 ) -> PoolMemberView {
     let kind = accounts
         .iter()
@@ -1188,6 +1197,10 @@ fn member_json(
         budget_until: phoebis_routing::budget_deadline(m, &rows, now),
         spends: reports,
         active_pins,
+        pace_score: projection.map(|p| p.pace_score),
+        burn: projection
+            .and_then(|p| p.windows.get(phoebis_routing::SEVEN_DAY))
+            .map(|w| w.burn),
     }
 }
 
@@ -1203,6 +1216,8 @@ pub(crate) struct PoolContext {
     overages: Vec<(String, OverageEvidence)>,
     pins: Vec<PinRow>,
     pools: Vec<PoolRow>,
+    /// The router's projections of each pool's members under that pool's settings, by pool.
+    projections: BTreeMap<String, Vec<phoebis_routing::AccountProjection>>,
     snapshot: Arc<RegistrySnapshot>,
     spends: Vec<MemberSpend>,
 }
@@ -1226,6 +1241,12 @@ pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, Stor
         })
         .await
         .unwrap_or_default();
+    let mut projections = BTreeMap::new();
+    for pool in &registry.pools {
+        if let Ok(members) = state.router.projections(&pool.id).await {
+            projections.insert(pool.id.clone(), members);
+        }
+    }
     Ok(PoolContext {
         accounts: registry.accounts,
         cooldowns: state.router.cooldowns().await.unwrap_or_default(),
@@ -1236,6 +1257,7 @@ pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, Stor
         overages: state.router.overages().await.unwrap_or_default(),
         pins: state.router.pins().await.unwrap_or_default(),
         pools: registry.pools,
+        projections,
         snapshot: state.router.snapshot(),
         spends: state.router.member_spends().await.unwrap_or_default(),
     })
@@ -1415,6 +1437,10 @@ pub(crate) async fn pool_json_from(
                     .iter()
                     .filter(|p| key_ids.contains(&p.key_id) && p.account_id == m.account_id)
                     .count();
+                let projection = context
+                    .projections
+                    .get(&row.id)
+                    .and_then(|members| members.iter().find(|p| p.account_id == m.account_id));
                 member_json(
                     m,
                     accounts,
@@ -1422,6 +1448,7 @@ pub(crate) async fn pool_json_from(
                     ineligible(m).unwrap_or("eligible"),
                     now,
                     active_pins,
+                    projection,
                 )
             })
             .collect(),

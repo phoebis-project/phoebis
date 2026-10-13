@@ -38,10 +38,11 @@ pub(crate) struct Session {
     pub last_request_at: Option<i64>,
     pub requests: Option<u64>,
     pub pinned: bool,
-    /// The pin's typed burn per hour priced in `burn_unit` when read: the share of the account's own 5-hour
-    /// window on plan quota, dollars otherwise, null when the account's tier is unknown, when neither the model nor
-    /// its model tier has a weight on the 5-hour window, or when the account tier has no capacity on it. Null as
-    /// well on a pinned row whose account has left the registry.
+    /// The pin's typed burn per hour, decayed to the read with its pool's `burn_average_seconds` as a shedding round
+    /// decays it, priced in `burn_unit`: the share of the account's own 5-hour window on plan quota, dollars
+    /// otherwise, null when the account's tier is unknown, when neither the model nor its model tier has a weight on
+    /// the 5-hour window, or when the account tier has no capacity on it. Null as well on a pinned row whose account
+    /// has left the registry.
     pub burn: Option<f64>,
     /// `window_share` or `usd`, also null when the pin's account has left the registry, with no kind left to pick
     /// a unit from.
@@ -54,8 +55,16 @@ pub(crate) struct Session {
     /// Whether `burn_equivalent` priced at the weight of the model tier's latest weighted model, for a model the cost
     /// model does not weight.
     pub estimated: bool,
-    /// When `burn` was last folded, the instant the shedding preview decays it forward from.
+    /// The instant the served burn is decayed to, the read's own, so a reader that decays it again from here adds
+    /// nothing at the read. Null for a pin never renewed with usage, whose burn has nothing to decay.
     pub burn_at: Option<i64>,
+    /// The time until the pin's account's projection reaches the pool's ceiling on the window that binds among those
+    /// the pin's model draws, with the pin's burn counted once and no rewrite. Null for an unbounded runway and where
+    /// the account projects none of those windows.
+    pub runway_ms: Option<i64>,
+    /// Null where the account projects none of the windows the pin's model draws, false for an unbounded runway,
+    /// true where `runway_ms` is set.
+    pub runway_bounded: Option<bool>,
     /// The cache TTL in force at the pin's last refresh.
     pub cache_ttl_ms: Option<i64>,
     pub last_input_tokens: Option<u64>,
@@ -143,7 +152,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, Response> {
-    let Ok(pins) = state.router.pins().await else {
+    let Ok(pins) = state.router.pins_standing().await else {
         return Err(failure(
             StatusCode::SERVICE_UNAVAILABLE,
             "the router is not available",
@@ -164,9 +173,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         Err(e) => return Err(crate::routes::store_failure(e)),
     };
     let overages = state.router.overages().await.unwrap_or_default();
-    // Asked after the `live` snapshot so the pins ask and that read stay adjacent. A renewal landing between the
-    // pins ask and this one moves one pin's figure by one fold, which the next read shows.
-    let fast_burns = state.router.fast_burns().await.unwrap_or_default();
     let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
     let cutoff = now - state.session_expiry.as_millis() as i64;
     let activity = match state
@@ -203,7 +209,10 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     };
     let mut tiers: std::collections::HashMap<String, Option<String>> =
         std::collections::HashMap::new();
-    for p in pins.into_iter().filter(|p| p.last_used_at >= cutoff) {
+    // The router decays each pin's copies to the read and reads its runway in the same ask, so the burn priced below
+    // and the runway are one instant's, and this crate projects nothing.
+    for standing in pins.into_iter().filter(|s| s.pin.last_used_at >= cutoff) {
+        let p = &standing.pin;
         // `delete_api_key` deletes the key's pins, so a pin always names the live generation of its id.
         let Some(&generation) = live.get(&p.key_id) else {
             continue;
@@ -243,9 +252,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                     .any(|(id, e)| *id == p.account_id && e.stands(now, fallback_ms));
                 BurnUnit::of(kind, in_overage)
             });
-        let fast = fast_burns.get(&p.key()).copied().unwrap_or_default();
+        let fast = p.burn_fast;
         let equivalent = (unit == Some(BurnUnit::WindowShare))
-            .then(|| rates.price_pin(BurnUnit::WindowShare, &p, &fast))
+            .then(|| rates.price_pin(BurnUnit::WindowShare, p, &fast))
             .flatten()
             .map(|b| b * 3_600.0);
         // The mark is the equivalent's alone: a dollar burn reads the price table's own cells.
@@ -256,7 +265,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         let burn = match unit {
             None => None,
             Some(BurnUnit::Usd) => rates
-                .price_pin(BurnUnit::Usd, &p, &fast)
+                .price_pin(BurnUnit::Usd, p, &fast)
                 .map(|b| b * 3_600.0),
             Some(BurnUnit::WindowShare) => {
                 if !tiers.contains_key(&p.account_id) {
@@ -279,7 +288,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             json!({
                 "key_id": p.key_id, "key_generation": generation, "session_id": p.session_id, "agent_id": p.agent_id, "model": p.model, "account_id": p.account_id, "epoch": p.epoch,
                 "created_at": p.created_at, "last_used_at": p.last_used_at, "last_request_at": null, "requests": null, "pinned": true,
-                "burn": burn, "burn_unit": unit, "burn_equivalent": equivalent, "estimated": estimated, "burn_at": p.burn_at, "cache_ttl_ms": p.cache_ttl_ms,
+                "burn": burn, "burn_unit": unit, "burn_equivalent": equivalent, "estimated": estimated, "burn_at": p.burn_at, "runway_ms": standing.runway_ms, "runway_bounded": standing.runway_bounded, "cache_ttl_ms": p.cache_ttl_ms,
                 "last_input_tokens": p.last_input_tokens, "last_refresh_at": p.last_refresh_at, "shed_from": p.shed_from,
             }),
         );
@@ -291,7 +300,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 json!({
                     "key_id": a.key_id, "key_generation": a.key_generation, "session_id": a.session_id, "agent_id": null, "model": a.model, "account_id": null, "epoch": null,
                     "created_at": null, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
-                    "burn": null, "burn_unit": null, "burn_equivalent": null, "estimated": false, "burn_at": null, "cache_ttl_ms": null, "last_input_tokens": null,
+                    "burn": null, "burn_unit": null, "burn_equivalent": null, "estimated": false, "burn_at": null, "runway_ms": null, "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null,
                     "last_refresh_at": null, "shed_from": null,
                 })
             });
@@ -319,7 +328,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             json!({
                 "key_id": key.0, "key_generation": key.1, "session_id": key.2, "agent_id": null, "model": null, "account_id": null, "epoch": null,
                 "created_at": null, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
-                "burn": null, "burn_unit": null, "burn_equivalent": null, "estimated": false, "burn_at": null, "cache_ttl_ms": null, "last_input_tokens": null,
+                "burn": null, "burn_unit": null, "burn_equivalent": null, "estimated": false, "burn_at": null, "runway_ms": null, "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null,
                 "last_refresh_at": null, "shed_from": null,
             })
         });

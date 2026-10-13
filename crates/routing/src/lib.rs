@@ -48,9 +48,10 @@ pub use state::{
     MAX_BUCKETS_PER_ACCOUNT, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 pub use task::{
-    credits_from_usage, sample_from_usage, spawn, BandWeight, BurnRates, LoadCounts, ReloadError,
-    Report, RouterConfig, RouterEvent, RouterGone, RouterHandle, SelectAnswer, WriterStatus,
-    COMMANDS, UNATTRIBUTED_POOL, WRITER_DEPTH,
+    credits_from_usage, sample_from_usage, spawn, AccountProjection, BandWeight, BurnRates,
+    LoadCounts, PinStanding, ReloadError, Report, RouterConfig, RouterEvent, RouterGone,
+    RouterHandle, SelectAnswer, WindowProjection, WriterStatus, COMMANDS, UNATTRIBUTED_POOL,
+    WRITER_DEPTH,
 };
 #[cfg(any(test, feature = "debug-hooks"))]
 pub use task::{LoopPark, ReportHold};

@@ -3890,23 +3890,78 @@ pub fn rewrite_series(
 }
 
 /// The moves the account rollups counted over the range, summed by reason across every bucket and account the
-/// filter admits.
+/// filter admits: each reason's sum over its fits.
 pub fn moves_by_reason(
     conn: &Connection,
     filter: &SeriesFilter,
 ) -> Result<BTreeMap<String, u64>, LedgerError> {
+    Ok(moves_by_reason_and_fit(conn, filter)?
+        .into_iter()
+        .map(|(reason, fits)| (reason, fits.values().sum()))
+        .collect())
+}
+
+/// The moves of the range by reason, then by destination fit (`fits`, `rewrite_only`, `least_bad`, `unknown`), from
+/// the rollups' `{reason}/{fit}` key, so a chart can split each reason by its own fits. A key without `/` reads fit
+/// `unknown`.
+pub fn moves_by_reason_and_fit(
+    conn: &Connection,
+    filter: &SeriesFilter,
+) -> Result<BTreeMap<String, BTreeMap<String, u64>>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
     let rows = read_account_rollups(conn, first, last)?;
-    let mut out = BTreeMap::new();
+    let mut out: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
     for row in rows
         .iter()
         .filter(|r| filter.accounts.is_empty() || filter.accounts.contains(&r.account_id))
     {
-        for (reason, count) in &row.migrations {
-            *out.entry(reason.clone()).or_default() += count;
+        for (key, count) in &row.migrations {
+            let (reason, fit) = key.split_once('/').unwrap_or((key, "unknown"));
+            *out.entry(reason.to_string())
+                .or_default()
+                .entry(fit.to_string())
+                .or_default() += count;
         }
     }
     Ok(out)
+}
+
+/// One routing condition the hourly fold wrote: the kind, its subject, the oldest qualifying event's time, the count
+/// and the kind's detail. `pool_id` is the pool the condition's events name, null for an account's condition, whose
+/// events name none.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RoutingCondition {
+    pub kind: String,
+    pub subject_kind: String,
+    pub subject_id: String,
+    pub pool_id: Option<String>,
+    pub since: i64,
+    pub count: u64,
+    pub detail: Value,
+    pub computed_at: i64,
+}
+
+/// Every row of `routing_conditions`, by kind and subject: what the last fold found over its trailing day.
+pub fn routing_conditions(conn: &Connection) -> Result<Vec<RoutingCondition>, LedgerError> {
+    let mut stmt = conn.prepare(
+        "SELECT kind, subject_kind, subject_id, pool_id, since, count, detail_json, computed_at \
+         FROM routing_conditions ORDER BY kind, subject_kind, subject_id",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(RoutingCondition {
+                kind: r.get(0)?,
+                subject_kind: r.get(1)?,
+                subject_id: r.get(2)?,
+                pool_id: r.get(3)?,
+                since: r.get(4)?,
+                count: r.get::<_, i64>(5)?.max(0) as u64,
+                detail: serde_json::from_str(&r.get::<_, String>(6)?).unwrap_or(Value::Null),
+                computed_at: r.get(7)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 /// How many sessions `session_burn_series` answers: the burn chart's own row cap, so a busy range's read stays

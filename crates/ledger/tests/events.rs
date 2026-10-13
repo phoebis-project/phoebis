@@ -545,12 +545,268 @@ fn a_pin_migrated_event_counts_under_its_reason_on_the_destination() {
         .read_blocking(|c| phoebis_ledger::read_account_rollups(c, 0, i64::MAX))
         .unwrap();
     let to = rows.iter().find(|r| r.account_id == "b").unwrap();
-    assert_eq!(to.migrations.get("overage"), Some(&1));
+    assert_eq!(
+        to.migrations.get("overage/unknown"),
+        Some(&1),
+        "a move without a fit files under the fit unknown"
+    );
     let from = rows.iter().find(|r| r.account_id == "a").unwrap();
     assert_eq!(
-        from.migrations.get("overage"),
+        from.migrations.get("overage/unknown"),
         None,
         "the source row counts pins_migrated_out, not a reason of its own"
+    );
+}
+
+/// Folds `events` into the account rollups of `db` in one transaction.
+fn fold_events(db: &LedgerDb, events: &[EventRecord]) {
+    db.write(|c| {
+        let tx = c.transaction()?;
+        for event in events {
+            phoebis_ledger::fold_event(&tx, event)?;
+        }
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// A move onto `to` for `reason`, its detail naming the destination's `fit` where the gate read one.
+fn moved(at: i64, to: &str, reason: &str, fit: Option<&str>) -> EventRecord {
+    EventRecord {
+        at,
+        kind: "pin_migrated".into(),
+        account_id: Some(to.into()),
+        detail: Some(
+            serde_json::json!({ "reason": reason, "from_account": "a", "fit": fit }).to_string(),
+        ),
+        ..Default::default()
+    }
+}
+
+/// The first two hours, in one-hour buckets.
+fn two_hours() -> phoebis_ledger::SeriesFilter {
+    phoebis_ledger::SeriesFilter {
+        from: 0,
+        to: 7_200_000,
+        bucket_seconds: 3_600,
+        ..phoebis_ledger::SeriesFilter::default()
+    }
+}
+
+#[test]
+fn a_pin_migrated_event_counts_under_its_reason_and_its_fit_on_the_destination() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    fold_events(&db, &[moved(3_600_000, "b", "overage", Some("fits"))]);
+    let rows = db
+        .read_blocking(|c| phoebis_ledger::read_account_rollups(c, 0, i64::MAX))
+        .unwrap();
+    let to = rows.iter().find(|r| r.account_id == "b").unwrap();
+    assert_eq!(
+        to.migrations,
+        std::collections::BTreeMap::from([("overage/fits".to_string(), 1)]),
+        "the key joins the reason and the destination's fit"
+    );
+    let filter = two_hours();
+    let by_reason = |db: &LedgerDb| {
+        db.read_blocking(|c| phoebis_ledger::moves_by_reason(c, &filter))
+            .unwrap()
+    };
+    let by_fit = |db: &LedgerDb| {
+        db.read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
+            .unwrap()
+    };
+    assert_eq!(
+        by_reason(&db),
+        std::collections::BTreeMap::from([("overage".to_string(), 1)])
+    );
+    assert_eq!(
+        by_fit(&db),
+        std::collections::BTreeMap::from([(
+            "overage".to_string(),
+            std::collections::BTreeMap::from([("fits".to_string(), 1)])
+        )])
+    );
+    // A move outside the gate carries no fit, so it reads under the fit unknown beside the gated one.
+    fold_events(&db, &[moved(3_600_100, "b", "overage", None)]);
+    assert_eq!(
+        by_reason(&db),
+        std::collections::BTreeMap::from([("overage".to_string(), 2)])
+    );
+    assert_eq!(
+        by_fit(&db),
+        std::collections::BTreeMap::from([(
+            "overage".to_string(),
+            std::collections::BTreeMap::from([("fits".to_string(), 1), ("unknown".to_string(), 1)])
+        )])
+    );
+}
+
+#[test]
+fn two_reasons_keep_their_own_fit_counts_in_the_moves_by_reason_and_fit() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    fold_events(
+        &db,
+        &[
+            moved(3_600_000, "b", "spent", Some("fits")),
+            moved(3_600_100, "c", "spent", Some("fits")),
+            moved(3_600_200, "b", "shed", Some("least_bad")),
+        ],
+    );
+    let filter = two_hours();
+    assert_eq!(
+        db.read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
+            .unwrap(),
+        std::collections::BTreeMap::from([
+            (
+                "shed".to_string(),
+                std::collections::BTreeMap::from([("least_bad".to_string(), 1)])
+            ),
+            (
+                "spent".to_string(),
+                std::collections::BTreeMap::from([("fits".to_string(), 2)])
+            ),
+        ]),
+        "each reason keeps its own fits, summed over the accounts"
+    );
+    assert_eq!(
+        db.read_blocking(|c| phoebis_ledger::moves_by_reason(c, &filter))
+            .unwrap(),
+        std::collections::BTreeMap::from([("shed".to_string(), 1), ("spent".to_string(), 2)]),
+        "the moves by reason are the sum over each reason's fits"
+    );
+}
+
+#[test]
+fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day_passes() {
+    const MINUTE: i64 = 60_000;
+    const HOUR: i64 = 60 * MINUTE;
+    let t = 1_000 * HOUR;
+    let event =
+        |at: i64, kind: &str, account: &str, pool: Option<&str>, detail: serde_json::Value| {
+            EventRecord {
+                at,
+                kind: kind.into(),
+                account_id: Some(account.into()),
+                pool_id: pool.map(String::from),
+                detail: Some(detail.to_string()),
+                ..Default::default()
+            }
+        };
+    let round = |at: i64, account: &str, outcome: &str, reason: Option<&str>, projection: f64| {
+        event(
+            at,
+            "shedding_round",
+            account,
+            Some("p"),
+            serde_json::json!({
+                "window": "five_hour",
+                "projection": projection,
+                "outcome": outcome,
+                "reason": reason,
+            }),
+        )
+    };
+    let spent = |at: i64, account: &str, source: &str| {
+        event(
+            at,
+            "window_spent",
+            account,
+            None,
+            serde_json::json!({ "window": "five_hour", "source": source }),
+        )
+    };
+    let db = LedgerDb::open_in_memory().unwrap();
+    for row in [
+        // A round on `a` that found no destination with runway, projecting 0.97 at its horizon, and a round on `c`
+        // that marked a pin, which no condition reads.
+        round(t, "a", "nothing_to_mark", Some("no_runway"), 0.97),
+        round(t + 30 * MINUTE, "c", "marked 1", None, 0.99),
+        // A move onto `b` rewrote its cache there, and b's 5-hour window was spent 20 minutes later. A move onto
+        // `c` was followed by no spent window.
+        moved(t + HOUR, "b", "shed", Some("rewrite_only")),
+        moved(t + HOUR, "c", "spent", Some("fits")),
+        spent(t + HOUR + 20 * MINUTE, "b", "head"),
+        // `a` reached its wall on the router's own prediction, two hours after its round projected 0.97.
+        spent(t + 2 * HOUR, "a", "predicted"),
+    ] {
+        db.insert_event(&row).unwrap();
+    }
+    let fold = |now: i64| {
+        db.write(|c| {
+            let tx = c.transaction()?;
+            phoebis_ledger::fold_routing_conditions(&tx, now)?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap()
+    };
+    let now = t + 3 * HOUR;
+    fold(now);
+    let rows = db
+        .read_blocking(phoebis_ledger::routing_conditions)
+        .unwrap();
+    let ceiling = serde_json::json!(["window_ceiling"]);
+    let wall_settings = serde_json::json!(["shed_cap", "window_ceiling"]);
+    assert_eq!(
+        rows.iter()
+            .map(|r| (
+                r.kind.as_str(),
+                r.subject_kind.as_str(),
+                r.subject_id.as_str(),
+                r.pool_id.as_deref(),
+                r.since,
+                r.count,
+                r.computed_at,
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("destination_spent", "account", "b", None, t + HOUR, 1, now),
+            ("shed_no_runway", "pool", "p", Some("p"), t, 1, now),
+            ("wall_reached", "account", "a", None, t + 2 * HOUR, 1, now),
+            (
+                "wall_reached",
+                "account",
+                "b",
+                None,
+                t + HOUR + 20 * MINUTE,
+                1,
+                now
+            ),
+        ],
+        "one row per subject, dated by its oldest qualifying event: {rows:?}"
+    );
+    assert_eq!(
+        rows.iter().map(|r| r.detail.clone()).collect::<Vec<_>>(),
+        [
+            serde_json::json!({
+                "fits": { "rewrite_only": 1 },
+                "moves": 1,
+                "setting": ceiling,
+                "windows": ["five_hour"],
+            }),
+            serde_json::json!({ "accounts": ["a"], "rounds": 1, "setting": ceiling }),
+            serde_json::json!({
+                "projection_error": 1.0 - 0.97,
+                "setting": wall_settings,
+                "walls": 1,
+                "windows": ["five_hour"],
+            }),
+            serde_json::json!({
+                "projection_error": null,
+                "setting": wall_settings,
+                "walls": 1,
+                "windows": ["five_hour"],
+            }),
+        ],
+        "a wall with no round on its account inside the window's length before it has no projection error"
+    );
+    fold(now + 25 * HOUR);
+    assert_eq!(
+        db.read_blocking(phoebis_ledger::routing_conditions)
+            .unwrap(),
+        Vec::new(),
+        "a day later the trailing 24 hours hold none of the events, so every condition clears"
     );
 }
 

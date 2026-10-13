@@ -43,7 +43,11 @@ pub(crate) struct AttentionItem {
     /// one. The two certificate items carry `cert_file`. `certificate_reload_failed` adds `key_file`, `error` (the
     /// loader's line) and `serving_since` (when the pair the listener still serves was loaded).
     /// `certificate_expiring` adds `expires` (the leaf's end) and `days_left` (whole days from the read, negative
-    /// once past).
+    /// once past). The routing conditions carry `setting`, the names of the settings they read against:
+    /// `wall_reached` with `walls`, `windows` and `projection_error` (one less the projection of the newest shedding
+    /// round on the account inside the window's length before the wall, null with none), `destination_spent` with
+    /// `moves`, `fits` (the moves' destination fits with counts) and `windows`, and `shed_no_runway` with `rounds`,
+    /// `accounts` and `setting_value` (the pool's `window_ceiling`).
     #[schema(value_type = Object)]
     pub detail: Value,
 }
@@ -76,8 +80,10 @@ pub(crate) struct AttentionLink {
 ///
 /// Answers the operator conditions that hold now, worst first (`pool_exhausted`, `client_drift`, `writer_degraded`,
 /// `certificate_reload_failed`, `reauth_required`, `funding_required`, `refresh_failed`, `certificate_expiring`,
-/// `ledger_record_parked`, `poll_backoff`) and the oldest first within a kind. The same reader feeds the
-/// `phoebis_attention` gauge on the metrics listener, so a scrape and this answer never disagree.
+/// `ledger_record_parked`, `poll_backoff`, `wall_reached`, `destination_spent`, `shed_no_runway`) and the oldest first
+/// within a kind. The last three read the routing log of the trailing 24 hours, which the ledger folds hourly. The
+/// same reader feeds the `phoebis_attention` gauge on the metrics listener, so a scrape and this answer never
+/// disagree.
 #[utoipa::path(
     get,
     path = "/admin/attention",

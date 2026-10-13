@@ -108,6 +108,11 @@
     ],
     "moves": {
       "spent": 1
+    },
+    "moves_by_reason_and_fit": {
+      "spent": {
+        "unknown": 1
+      }
     }
   }
 }

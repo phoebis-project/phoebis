@@ -111,6 +111,9 @@ pub struct LedgerStats {
     pub parked_priced: AtomicU64,
     /// Retention passes the purge task finished since start, whatever each one cut.
     pub purge_passes: AtomicU64,
+    /// Folds of the routing conditions the purge task finished since start, the one at start among them, whatever
+    /// each one found.
+    pub condition_folds: AtomicU64,
     /// Cache-map writes whose decision row the ledger never stored (dropped under pressure, or purged), counted
     /// and never retried, since the decision precedes its answer's end by the upstream's whole turn.
     pub cache_map_orphans: AtomicU64,
@@ -426,6 +429,13 @@ pub fn spawn(
         let mut tick = tokio::time::interval(purge_config.purge_interval);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         tick.tick().await;
+        // The conditions read the trailing day of events, so a start folds them at once rather than serving none
+        // until the first tick an hour on.
+        fold_conditions(purging.db(), purge_clock()).await;
+        purging
+            .stats
+            .condition_folds
+            .fetch_add(1, Ordering::Relaxed);
         loop {
             tick.tick().await;
             run_purge(
@@ -437,6 +447,11 @@ pub fn spawn(
             )
             .await;
             purging.stats.purge_passes.fetch_add(1, Ordering::Relaxed);
+            fold_conditions(purging.db(), purge_clock()).await;
+            purging
+                .stats
+                .condition_folds
+                .fetch_add(1, Ordering::Relaxed);
         }
     });
     ledger.track(purge);
@@ -1895,6 +1910,26 @@ fn note_unweighted(
             }
         }
         None => {}
+    }
+}
+
+/// One fold of the routing conditions at `now` on the purge task's connection, off the runtime thread. A fold that
+/// fails leaves the last one's rows, which the next tick replaces.
+async fn fold_conditions(db: &Arc<LedgerDb>, now: i64) {
+    let db = db.clone();
+    let folded = tokio::task::spawn_blocking(move || {
+        db.purge(|conn| {
+            let tx = crate::db::begin_write(conn)?;
+            crate::rollup::fold_routing_conditions(&tx, now)?;
+            tx.commit()?;
+            Ok(())
+        })
+    })
+    .await;
+    match folded {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::warn!(%error, "the routing conditions could not be folded"),
+        Err(error) => tracing::warn!(%error, "the routing conditions' fold did not finish"),
     }
 }
 

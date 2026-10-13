@@ -25,8 +25,8 @@ use phoebis_oauth::{
 };
 use phoebis_relay::DiscoveryError;
 use phoebis_routing::{
-    is_plan_window, MemberSpend, OverageEvidence, ReloadError, UtilizationSample, WindowReading,
-    SEVEN_DAY_FABLE,
+    is_plan_window, AccountProjection, MemberSpend, OverageEvidence, ReloadError,
+    UtilizationSample, WindowReading, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, CooldownRow, Identity,
@@ -1822,8 +1822,49 @@ pub(crate) struct AccountContext {
     pub lifetime: BTreeMap<String, phoebis_ledger::Totals>,
     pub members: Vec<PoolMember>,
     pub overages: BTreeMap<String, OverageEvidence>,
+    /// The router's projections per account under the settings of the first of its pools by id, absent for an account
+    /// in no pool.
+    pub projections: BTreeMap<String, AccountProjection>,
     pub quota: Vec<phoebis_ledger::QuotaSampleRecord>,
     pub week: BTreeMap<String, phoebis_ledger::Totals>,
+}
+
+/// One `projections` ask per pool with members, in pool id order, each account keeping the first pool's answer, since
+/// every figure reads a pool's settings and an account the pools share has to read one of them.
+async fn projections_by_account(
+    state: &AdminState,
+    members: &[PoolMember],
+) -> BTreeMap<String, AccountProjection> {
+    let pools: std::collections::BTreeSet<&str> =
+        members.iter().map(|m| m.pool_id.as_str()).collect();
+    let mut out = BTreeMap::new();
+    for pool_id in pools {
+        for projection in state.router.projections(pool_id).await.unwrap_or_default() {
+            out.entry(projection.account_id.clone())
+                .or_insert(projection);
+        }
+    }
+    out
+}
+
+/// The projection of an account window as the router reads it, its id mapped back to the routing name: `(projection,
+/// horizon, burn)`, all null without one.
+fn window_projection(
+    ctx: &AccountContext,
+    account_id: &str,
+    id: &str,
+) -> (Option<f64>, Option<i64>, Option<f64>) {
+    let window = if id == FABLE_WINDOW_KEY {
+        SEVEN_DAY_FABLE
+    } else {
+        id
+    };
+    ctx.projections
+        .get(account_id)
+        .and_then(|p| p.windows.get(window))
+        .map_or((None, None, None), |w| {
+            (Some(w.projection), Some(w.horizon), Some(w.burn))
+        })
 }
 
 pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
@@ -1893,6 +1934,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
             .into_iter()
             .collect(),
         lifetime,
+        projections: projections_by_account(state, &members).await,
         members,
         overages: state
             .router
@@ -2038,6 +2080,14 @@ pub(crate) struct AccountWindow {
     pub utilization: Option<f64>,
     pub resets_at: Option<i64>,
     pub observed_at: i64,
+    /// The router's projection of the window at its horizon, null on an api_key account, a window the router holds no
+    /// reading of and an account in no pool.
+    pub projection: Option<f64>,
+    /// When the projection is read: the earlier of the reset and the account's end on the 5-hour window, the
+    /// earliest of five hours on, the reset and the end on a weekly one. Null where `projection` is.
+    pub horizon: Option<i64>,
+    /// The pins' burn on the window, in share per hour. Null where `projection` is.
+    pub burn: Option<f64>,
 }
 
 /// The fast lane's input and output buckets as the router last read them off an answer's head.
@@ -2245,11 +2295,17 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         .quota
         .iter()
         .filter(|q| q.account_id == row.id)
-        .map(|q| AccountWindow {
-            id: q.window.clone(),
-            utilization: q.utilization,
-            resets_at: q.reset_at,
-            observed_at: q.bucket * 1_000,
+        .map(|q| {
+            let (projection, horizon, burn) = window_projection(ctx, &row.id, &q.window);
+            AccountWindow {
+                id: q.window.clone(),
+                utilization: q.utilization,
+                resets_at: q.reset_at,
+                observed_at: q.bucket * 1_000,
+                projection,
+                horizon,
+                burn,
+            }
         })
         .collect();
     // The ledger's samples reach back a day, and the router keeps routing on older windows persisted across a
@@ -2258,11 +2314,17 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         if let Some(sample) = ctx.held.get(&row.id) {
             windows = held_windows(sample)
                 .into_iter()
-                .map(|(key, reading)| AccountWindow {
-                    id: key,
-                    utilization: Some(reading.utilization),
-                    resets_at: reading.reset,
-                    observed_at: reading.observed_at,
+                .map(|(key, reading)| {
+                    let (projection, horizon, burn) = window_projection(ctx, &row.id, &key);
+                    AccountWindow {
+                        id: key,
+                        utilization: Some(reading.utilization),
+                        resets_at: reading.reset,
+                        observed_at: reading.observed_at,
+                        projection,
+                        horizon,
+                        burn,
+                    }
                 })
                 .collect();
         }

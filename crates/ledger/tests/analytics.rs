@@ -4572,6 +4572,17 @@ fn the_rewrite_series_and_the_moves_by_reason_read_the_account_rollups() {
     assert_eq!(series.iter().map(|(_, n)| n).sum::<u64>(), 40);
     let moves = db.read_blocking(|c| moves_by_reason(c, &filter)).unwrap();
     assert_eq!(moves.get("shed"), Some(&1));
+    let by_fit = db
+        .read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
+        .unwrap();
+    assert_eq!(
+        by_fit,
+        BTreeMap::from([(
+            "shed".to_string(),
+            BTreeMap::from([("unknown".to_string(), 1)])
+        )]),
+        "a move without a fit reads under the fit unknown"
+    );
 }
 
 #[test]
@@ -4620,6 +4631,23 @@ fn moves_by_reason_invents_no_vocabulary_for_a_reason_no_code_names_or_none_at_a
         Some(&1),
         "no reason at all falls back to unknown"
     );
+    let by_fit = db
+        .read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
+        .unwrap();
+    assert_eq!(
+        by_fit,
+        BTreeMap::from([
+            (
+                "future_reason".to_string(),
+                BTreeMap::from([("unknown".to_string(), 1)])
+            ),
+            (
+                "unknown".to_string(),
+                BTreeMap::from([("unknown".to_string(), 1)])
+            ),
+        ]),
+        "the compound key splits into the reason and the fit, each unknown where the event names none"
+    );
 }
 
 #[test]
@@ -4629,6 +4657,9 @@ fn a_zero_bucket_seconds_answers_the_range_error_rather_than_panicking() {
     // would otherwise panic on it.
     let filter = SeriesFilter::default();
     assert!(db.read_blocking(|c| moves_by_reason(c, &filter)).is_err());
+    assert!(db
+        .read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
+        .is_err());
     assert!(db.read_blocking(|c| rewrite_series(c, &filter)).is_err());
     let tables = PlanTables::shipped();
     assert!(db

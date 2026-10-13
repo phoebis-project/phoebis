@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use phoebis_oauth::{Clock, UsageSnapshot};
 use phoebis_store::{
-    AccountState, CooldownRow, PinBurn, PinKey, PinRow, RegistryLoad, RekeyWrite, RoutingLoad,
-    RoutingTx, ShedRoundRow, StateCause, Store, StoreError,
+    AccountState, CooldownRow, PinBurn, PinKey, PinRow, PoolRow, RegistryLoad, RekeyWrite,
+    RoutingLoad, RoutingTx, ShedRoundRow, StateCause, Store, StoreError,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, Notify};
 use tokio::time::Instant;
@@ -25,16 +25,17 @@ use crate::record::{
     ShedRoundFacts,
 };
 use crate::select::{
-    decide, release_reasons, Decided, MigrateReason, Refusal, SelectRequest, SelectResult,
-    FIVE_HOUR_MS,
+    decide, pace_of, projection_of, release_reasons, Decided, MigrateReason, Refusal,
+    SelectRequest, SelectResult, FIVE_HOUR_MS,
 };
 use crate::state::{
-    burn_average_ms, burn_folded, default_burn_average_ms, is_plan_window, mark_holds,
-    shed_dwell_ms, AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight, MemberSpend,
-    OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer, StateWrite,
-    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms, is_plan_window,
+    mark_holds, plan_windows, shed_dwell_ms, AccountTicket, BurnUnit, CreditsState, EvidenceSource,
+    InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer,
+    StateWrite, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
+    SEVEN_DAY_FABLE, WEEK_MS,
 };
-use crate::{resolve, term, window_for, KeyRefusal, Presented, RegistrySnapshot};
+use crate::{resolve, term, window_for, Candidate, KeyRefusal, Presented, RegistrySnapshot};
 
 /// The router loop's command queue size, which `/admin/system` reports. A report that finds the queue full waits for a
 /// slot; one the closed queue refuses at shutdown is dropped and counted under its kind.
@@ -764,6 +765,13 @@ enum Command {
     PinsByPool {
         reply: oneshot::Sender<Vec<(String, u64)>>,
     },
+    PinsStanding {
+        reply: oneshot::Sender<Vec<PinStanding>>,
+    },
+    Projections {
+        pool_id: String,
+        reply: oneshot::Sender<Vec<AccountProjection>>,
+    },
     /// A request the relay refused before asking for a selection. The loop records it as the request's decision.
     RecordRefusal {
         request: RefusedRequest,
@@ -898,6 +906,45 @@ impl LoadCounts {
                 .count(),
         }
     }
+}
+
+/// One account's projection per plan window, read under the state lock at one instant, and its Pace score, all with the
+/// settings of the pool the ask named.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AccountProjection {
+    pub account_id: String,
+    pub windows: BTreeMap<String, WindowProjection>,
+    /// `pace_of`'s score whatever the account's kind: the spare rate on `seven_day` for an OAuth account, the
+    /// remaining worst bucket for an api_key account (whose `windows` is empty).
+    pub pace_score: f64,
+}
+
+/// One plan window of an account's projection: a window the account holds no reading of has none.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowProjection {
+    pub predicted: f64,
+    /// At the horizon.
+    pub projection: f64,
+    pub horizon: i64,
+    /// Share per hour, the account's `burn_shares` on the window.
+    pub burn: f64,
+    /// `remaining / hours - burn` on this window, what Pace scores a candidate by for a model that draws it.
+    pub spare_rate: f64,
+}
+
+/// A pin with its burn decayed to now and its runway on its account: the time until the account's projection reaches
+/// the ceiling on the window that binds among those the pin's model draws.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PinStanding {
+    /// The pin with its three burn copies decayed with its pool's burn average and `burn_at` the instant they are
+    /// decayed to. A pin never folded keeps its burn and its `burn_at` as stored.
+    pub pin: PinRow,
+    pub runway_ms: Option<i64>,
+    /// `None` where the pin's account has no projection on any window the model draws (`runway_ms` null too),
+    /// `Some(false)` for an unbounded runway (`runway_ms` null), `Some(true)` for a bounded one (`runway_ms` set).
+    pub runway_bounded: Option<bool>,
+    /// The window the runway reads, `None` unless it is bounded.
+    pub binding: Option<String>,
 }
 
 #[derive(Clone)]
@@ -1199,6 +1246,18 @@ impl RouterHandle {
     }
     pub async fn pins(&self) -> Result<Vec<PinRow>, RouterGone> {
         self.ask(|reply| Command::Pins { reply }).await
+    }
+    /// The pins with their standing, the one ask the sessions list makes.
+    pub async fn pins_standing(&self) -> Result<Vec<PinStanding>, RouterGone> {
+        self.ask(|reply| Command::PinsStanding { reply }).await
+    }
+    /// Every member of `pool_id` with its projections and Pace score under that pool's settings (the pins the pool
+    /// keeps, its burn average, its ceiling), one ask, one instant, by account: an api_key account answers its score
+    /// alone, and a pool the registry does not hold answers none.
+    pub async fn projections(&self, pool_id: &str) -> Result<Vec<AccountProjection>, RouterGone> {
+        let pool_id = pool_id.to_string();
+        self.ask(|reply| Command::Projections { pool_id, reply })
+            .await
     }
     /// Each pin's fast usage by key, the copy `BurnRates::price_pin` sums beside the row under `BurnUnit::Usd`.
     /// A pin without fast usage has no entry.
@@ -2190,6 +2249,158 @@ fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
     Some(PinEventFacts { kind, reason })
 }
 
+/// The members of `pool_id` in account order, each with its projection per plan window and its Pace score at `now`
+/// under that pool's settings: the windows from `projection_of` with `pace_of`'s spare rate on each, the score from
+/// `pace_of` on `seven_day`, the window Pace reads for a model without a week of its own. Empty for a pool the snapshot
+/// does not hold.
+fn projections(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool_id: &str,
+    now: i64,
+) -> Vec<AccountProjection> {
+    let Some(pool) = snapshot.pool(pool_id) else {
+        return Vec::new();
+    };
+    let mut members: Vec<(&str, u32)> = snapshot
+        .members(pool_id)
+        .iter()
+        .map(|m| (m.account_id.as_str(), m.priority))
+        .collect();
+    members.sort();
+    members.dedup_by(|a, b| a.0 == b.0);
+    members
+        .into_iter()
+        .map(|(account_id, priority)| {
+            let candidate = Candidate {
+                account_id: account_id.to_string(),
+                incarnation: snapshot.account(account_id).map_or(0, |a| a.incarnation),
+                priority,
+                upstream_model: String::new(),
+            };
+            let tier = snapshot.tier(account_id).unwrap_or_default();
+            let windows = [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE]
+                .into_iter()
+                .filter_map(|window| {
+                    let projection =
+                        projection_of(state, snapshot, pool, account_id, tier, window, now)?;
+                    Some((
+                        window.to_string(),
+                        WindowProjection {
+                            predicted: projection.predicted,
+                            projection: projection.at_horizon,
+                            horizon: projection.horizon,
+                            burn: projection.burn * 3_600.0,
+                            spare_rate: pace_of(state, snapshot, pool, &candidate, window, now)
+                                .score,
+                        },
+                    ))
+                })
+                .collect();
+            AccountProjection {
+                account_id: account_id.to_string(),
+                windows,
+                pace_score: pace_of(state, snapshot, pool, &candidate, SEVEN_DAY, now).score,
+            }
+        })
+        .collect()
+}
+
+/// Every pin with its burn decayed to `now` by its pool's burn average (the default preset's for a key whose pool left
+/// the registry) and its runway on its own account, read once per account and pool.
+fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) -> Vec<PinStanding> {
+    state
+        .pins()
+        .into_iter()
+        .map(|pin| {
+            let pool = snapshot
+                .key(&pin.key_id)
+                .and_then(|key| snapshot.pool(&key.pool_id));
+            let average_ms = pool.map_or_else(default_burn_average_ms, burn_average_ms);
+            let runway = pool.and_then(|pool| {
+                standing_runway(state, snapshot, pool, &pin.account_id, &pin.model, now)
+            });
+            let (runway_ms, runway_bounded, binding) = match runway {
+                None => (None, None, None),
+                Some((runway_ms, binding)) => (runway_ms, Some(runway_ms.is_some()), binding),
+            };
+            PinStanding {
+                pin: decayed(pin, now, average_ms),
+                runway_ms,
+                runway_bounded,
+                binding,
+            }
+        })
+        .collect()
+}
+
+/// The pin's three burn copies decayed from their last fold to `now`. Every type decays by one factor, as
+/// `burn_shares` decays the share, so pricing the decayed copy equals decaying the priced one.
+fn decayed(pin: PinRow, now: i64, average_ms: i64) -> PinRow {
+    let Some(at) = pin.burn_at else {
+        return pin;
+    };
+    let factor = burn_decayed(1.0, Some(at), now, average_ms);
+    let scale = |burn: PinBurn| PinBurn {
+        cache_read: burn.cache_read * factor,
+        input: burn.input * factor,
+        output: burn.output * factor,
+        write_1h: burn.write_1h * factor,
+        write_5m: burn.write_5m * factor,
+    };
+    PinRow {
+        burn: scale(pin.burn),
+        burn_banded: scale(pin.burn_banded),
+        burn_fast: scale(pin.burn_fast),
+        // A fold dated past `now` (two relays' clocks) decays nothing, so its burn stands at its own instant.
+        burn_at: Some(now.max(at)),
+        ..pin
+    }
+}
+
+/// A standing pin's runway on its own account: per window the model draws, `(ceiling - predicted) / burn` from
+/// `projection_of`, whose `burn` already holds the pin, so neither the pin's burn nor a rewrite is added again (that
+/// is `fit_of`'s arithmetic for a destination). `Some(0)` where `predicted` already reaches the ceiling, an unbounded
+/// runway (`None` with no binding window) where the account's burn on every drawn window it projects is zero, and the
+/// binding window the shortest. The outer `None` where the account projects none of the drawn windows: an api_key
+/// account, or one with no reading of them.
+fn standing_runway(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    account_id: &str,
+    model: &str,
+    now: i64,
+) -> Option<(Option<i64>, Option<String>)> {
+    let tier = snapshot.tier(account_id).unwrap_or_default();
+    let mut projected = false;
+    let mut bounded: Vec<(&str, i64)> = Vec::new();
+    for window in plan_windows(model) {
+        let Some(projection) = projection_of(state, snapshot, pool, account_id, tier, window, now)
+        else {
+            continue;
+        };
+        projected = true;
+        let limit = ceiling(pool, window);
+        let runway_ms = if projection.predicted >= limit {
+            0
+        } else if projection.burn <= 0.0 {
+            continue;
+        } else {
+            ((limit - projection.predicted) / projection.burn * 1_000.0).round() as i64
+        };
+        bounded.push((window, runway_ms));
+    }
+    projected.then(|| {
+        bounded
+            .iter()
+            .min_by_key(|(_, runway_ms)| *runway_ms)
+            .map_or((None, None), |(window, runway_ms)| {
+                (Some(*runway_ms), Some(window.to_string()))
+            })
+    })
+}
+
 impl Task {
     /// A send with no receiver is an error and means nothing: the loop must never depend on anyone listening.
     fn emit(&self, event: RouterEvent) {
@@ -2717,6 +2928,27 @@ impl Task {
             }
             Command::Pins { reply } => {
                 let _ = reply.send(self.state.pins());
+            }
+            Command::PinsStanding { reply } => {
+                let snapshot = self
+                    .snapshot
+                    .read()
+                    .expect("snapshot lock poisoned")
+                    .clone();
+                let _ = reply.send(pins_standing(&self.state, &snapshot, (self.clock)()));
+            }
+            Command::Projections { pool_id, reply } => {
+                let snapshot = self
+                    .snapshot
+                    .read()
+                    .expect("snapshot lock poisoned")
+                    .clone();
+                let _ = reply.send(projections(
+                    &self.state,
+                    &snapshot,
+                    &pool_id,
+                    (self.clock)(),
+                ));
             }
             Command::FastBurns { reply } => {
                 let _ = reply.send(self.state.fast_burns());
