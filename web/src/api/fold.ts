@@ -317,12 +317,19 @@ const SHARED_WINDOWS = ['five_hour', 'seven_day'];
  * where it carries a window at all, as `sidesOf` reads it.
  */
 const carriesShared = (g: AnalyticsGroup): boolean => (g.planRequests === null ? Object.keys(g.costEquivalent).length > 0 : g.planRequests > 0 && g.planOutputTokens !== 0);
+/**
+ * Whether a group's probes oblige its probe equivalents to carry both shared windows: answered probes alone, since a
+ * held or skipped probe never ran, on a group with plan rows, since a group of billed traffic alone (an API-key
+ * account's, or one in overage) runs billed probes, which carry no plan window to lack.
+ */
+const probesCarryShared = (g: AnalyticsGroup): boolean => g.probes.ok > 0 && carriesShared(g);
 
 /**
  * Several groups of one point summed into one, for the charts and tiles that draw totals. A figure one group
  * cannot supply leaves the sum unknown, so a total never passes a partial sum off as the whole: a shared window a
- * group with plan rows lacks leaves the equivalents, as it leaves the one account's shares. The plan counts are the
- * exception: a fold outside the account grouping counts none, and the groups that carry them still total.
+ * group with plan rows lacks leaves the equivalents, and one a group with plan probes lacks the probe equivalents, as
+ * each leaves the one account's shares. The plan counts are the exception: a fold outside the account grouping counts
+ * none, and the groups that carry them still total.
  */
 export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
   const out = empty('all');
@@ -352,6 +359,7 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
       if (!own(g.cacheEquivalent, window)) delete out.cacheEquivalent[window];
     }
   }
+  for (const g of groups.filter(probesCarryShared)) for (const window of SHARED_WINDOWS) if (!own(g.probeEquivalent, window)) delete out.probeEquivalent[window];
   for (const m of METRICS) {
     out.histograms[m] = mergeHistograms(groups.map((g) => g.histograms[m]));
     out.percentiles[m] = quartet(out.histograms[m]);

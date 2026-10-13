@@ -835,6 +835,28 @@ test('native reads a dash on the subscription side where the route priced its pl
   assert.deepEqual([unpriced.tile.figures, unpriced.meta, unpriced.estimated], [[{ text: '-', word: 'subscription' }, { text: billed, word: 'billed' }], `- and ${billed} in range`, false], 'the dash carries no mark, since no estimate priced it');
 });
 
+test('a sum of groups leaves out a shared probe window a group with answered probes lacks, so no partial sum reads as the whole', () => {
+  const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  const base = accountGroup();
+  const window = { cost: 0.002, wasted: 0.001 };
+  const probed = (over = {}) => accountGroup({ probeEquivalent: { five_hour: window, seven_day: window }, probes: { ...base.probes, ok: 3 }, ...over });
+  const priced = probed();
+  assert.ok(priced.planRequests > 0, 'the captured group holds plan rows');
+  const summed = d.sumGroups([priced, probed({ probeEquivalent: { five_hour: window } })]);
+  assert.equal(own(summed.probeEquivalent, 'seven_day'), false, 'the 7-day window a group with probes lacks stays out of the sum');
+  assert.deepEqual(summed.probeEquivalent.five_hour, { cost: 0.004, wasted: 0.002 }, 'a window both carry still sums');
+  // A group whose probes carry no plan window to lack leaves the other's windows whole: one with no probe, one whose
+  // probes never ran, and one of billed traffic alone, whose probes are billed too.
+  const none = { ...base.probes, failed: 0, held: 0, ok: 0, skipped: 0 };
+  for (const [what, over] of [
+    ['no probe', { probes: none }],
+    ['probes that never ran', { probes: { ...none, held: 1, skipped: 2 } }],
+    ['billed traffic alone', { cacheEquivalent: {}, costEquivalent: {}, planOutputTokens: 0, planRequests: 0 }],
+  ]) {
+    assert.deepEqual(d.sumGroups([priced, probed({ probeEquivalent: {}, ...over })]).probeEquivalent, priced.probeEquivalent, what);
+  }
+});
+
 test('a native table cell reads the short 20x form with the billed dollars under it, the full reading and the estimate on its title', () => {
   const g = accountGroup();
   const sevenDay = g.costEquivalent.seven_day;

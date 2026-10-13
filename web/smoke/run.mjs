@@ -12399,11 +12399,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         missing: [JSON.stringify(unpricedBoth), JSON.stringify(unpricedPlan)],
       });
       // Beside a priced plan group, one the route priced nothing on the window would leave the priced group's figure
-      // standing as the whole, so the pair reads the dash too.
+      // standing as the whole, so the pair reads the dash too, its probes' as well. Groups that ran probes lead the
+      // pair, and the billed read keeps the pair's own groups, so the Probe cost tile's plan probes are the pair's.
       const pricedPlan = (g) => g.planRequests > 0 && g.planOutputTokens > 0 && g.costEquivalent.seven_day !== undefined;
+      let keyPair = [];
       api.getAnalyticsBreakdown = async (q) => {
-        const plan = (await breakdownOf.call(api, q)).filter(pricedPlan);
-        return plan.length < 2 ? plan : [plan[0], { ...plan[1], cacheEquivalent: {}, costEquivalent: {}, equivalentSplit: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 } }];
+        const pair = (await breakdownOf.call(api, { ...q, funding: undefined })).filter(pricedPlan).sort((a, b) => Number(b.probes.ok > 0) - Number(a.probes.ok > 0)).slice(0, 2);
+        if (q.groupBy === 'key' && q.funding === undefined) keyPair = pair;
+        if (q.funding !== undefined) return (await breakdownOf.call(api, q)).filter((g) => pair.some((p) => p.key === g.key));
+        return pair.length < 2 ? pair : [pair[0], { ...pair[1], cacheEquivalent: {}, costEquivalent: {}, equivalentSplit: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 }, probeEquivalent: {} }];
       };
       const pairPage = await mount('/analytics#cost', { now: CLOCK_ORIGIN });
       const pairMeta = pairPage.container.querySelector('#cost .analytics-section__meta')?.textContent ?? '';
@@ -12411,12 +12415,19 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const pairSplit = [...pairPage.container.querySelectorAll('#cost .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost split');
       const pairRings = [...(pairSplit?.querySelectorAll('svg.donut .donut__label') ?? [])].map((x) => x.textContent ?? '');
       pairPage.unmount();
+      const warmPage = await mount('/analytics#cache-warming', { now: CLOCK_ORIGIN });
+      const probeCost = [...warmPage.container.querySelectorAll('#cache-warming .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
+      const pairProbe = [...(probeCost?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => [textOf(l), l.querySelector('.stat__pair-word')?.textContent?.trim() ?? '']);
+      const pairProbed = keyPair.map((g) => g.probes.ok);
+      warmPage.unmount();
       delete api.getAnalyticsBreakdown;
       const pricedKeys = keyQuery ? (await breakdownOf.call(api, keyQuery)).filter(pricedPlan).length : 0;
       results.push({
-        name: "/analytics under native a priced plan group beside one the route priced nothing on the 7-day window sums to a dash on the Cost tile and the meta, and the Cost split draws no subscription ring",
-        ok: pricedKeys >= 2 && JSON.stringify(pairTile[0]) === JSON.stringify(['-', 'subscription']) && /^- (and \$[\d,.]+ )?in range$/.test(pairMeta) && !pairRings.includes('subscription'),
-        missing: [`${pricedKeys} priced plan keys`, JSON.stringify(pairTile), pairMeta, JSON.stringify(pairRings)],
+        name: "/analytics under native a priced plan group beside one the route priced nothing on the 7-day window sums to a dash on the Cost tile, the meta and the Probe cost tile, and the Cost split draws no subscription ring",
+        ok:
+          pricedKeys >= 2 && JSON.stringify(pairTile[0]) === JSON.stringify(['-', 'subscription']) && /^- (and \$[\d,.]+ )?in range$/.test(pairMeta) && !pairRings.includes('subscription') &&
+          pairProbed.length === 2 && pairProbed.every((ok) => ok > 0) && JSON.stringify(pairProbe[0]) === JSON.stringify(['-', 'subscription']),
+        missing: [`${pricedKeys} priced plan keys`, JSON.stringify(pairTile), pairMeta, JSON.stringify(pairRings), `answered probes ${JSON.stringify(pairProbed)}`, JSON.stringify(pairProbe)],
       });
     }
     {
