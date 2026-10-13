@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, CACHE_MODEL_SHARE_NOTE, CACHE_SHARE_NOTE, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareLabel, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, CACHE_MODEL_SHARE_NOTE, CACHE_SHARE_NOTE, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -659,6 +659,69 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   });
   await chooseUnit(m, 'native');
   localStorage.removeItem('phoebis.unit');
+}
+{
+  // The day's tile sums both fundings, so under native it stacks the plan rows' 20x 5-hour equivalent over the billed
+  // rows' dollars, each with its word, and its note reads the billed dollars per hour. The story's day holds estimated
+  // plan rows, so the equivalent leads with the tilde and the tile carries the estimate's title. Billed dollars reads
+  // the billed side alone, and under Window shares no one account's share answers on this page, so the tile reads a
+  // dash under the share note while its note and its spark still draw.
+  const day = await api.getOverview();
+  const tileRead = (page) => {
+    const tile = [...page.container.querySelectorAll('.stat-grid .stat')].find((t) => t.querySelector('.stat__label')?.textContent === 'Estimated cost, 24h');
+    return {
+      lines: [...(tile?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => [l.querySelector('.cost-figure')?.textContent ?? '', l.querySelector('.stat__pair-word')?.textContent ?? '']),
+      note: tile?.querySelector('.stat__note')?.textContent ?? '',
+      placeholders: tile ? tile.querySelectorAll('.skeleton').length : -1,
+      spark: !!tile?.querySelector('.stat__spark svg.sparkline'),
+      title: tile?.getAttribute('title') ?? null,
+      value: tile?.querySelector('.stat__value')?.textContent ?? '',
+    };
+  };
+  const native = tileRead(m);
+  const lead = `~${fmtEquivalent('five_hour', day.equivalent24h.fiveHour)}`;
+  results.push({
+    name: "/ under native the Estimated cost, 24h tile stacks the day's 20x 5-hour equivalent over subscription, marked as an estimate, above the billed dollars over billed, and its note reads the billed dollars per hour",
+    ok:
+      shellUnit(m)?.value === 'native' &&
+      day.estimated24h &&
+      day.equivalent24h.fiveHour > 0 &&
+      day.billed24h > 0 &&
+      JSON.stringify(native.lines) === JSON.stringify([[lead, 'subscription'], [fmtUsd(day.billed24h), 'billed']]) &&
+      /^\$[\d,.]+ billed per hour$/.test(native.note) &&
+      native.note === `${fmtUsd(day.billed24h / 24)} billed per hour` &&
+      native.title === ESTIMATED_TITLE &&
+      native.spark,
+    missing: [JSON.stringify(native), lead, `estimated ${day.estimated24h}`],
+  });
+  await chooseUnit(m, 'usd');
+  const billed = tileRead(m);
+  results.push({
+    name: "/ under Billed dollars the Estimated cost, 24h tile reads the day's billed dollars alone, the native tile's billed line, unmarked",
+    ok: shellUnit(m)?.value === 'usd' && billed.lines.length === 0 && billed.value === fmtUsd(day.billed24h) && billed.value === native.lines[1]?.[0] && billed.note === `${fmtUsd(day.billed24h / 24)} per hour` && billed.title === null && billed.spark,
+    missing: [JSON.stringify(billed)],
+  });
+  await chooseUnit(m, 'share');
+  const shares = tileRead(m);
+  results.push({
+    name: '/ under Window shares the Estimated cost, 24h tile reads a dash titled with the share note, and its note and spark draw with no placeholder',
+    ok: shellUnit(m)?.value === 'share' && shares.value === '-' && shares.title === SHARE_NOTE && shares.note !== '' && shares.placeholders === 0 && shares.spark,
+    missing: [JSON.stringify(shares)],
+  });
+  await chooseUnit(m, 'native');
+  localStorage.removeItem('phoebis.unit');
+  // The same day with every plan row weighted, so nothing the tile draws is an estimate.
+  const overviewOf = api.getOverview;
+  api.getOverview = async () => ({ ...(await overviewOf.call(api)), estimated24h: false });
+  const weighted = await mount('/');
+  const plain = tileRead(weighted);
+  weighted.unmount();
+  delete api.getOverview;
+  results.push({
+    name: '/ under native a day whose plan rows are all weighted reads no tilde and no estimate title on the Estimated cost, 24h tile',
+    ok: plain.lines.length === 2 && !plain.lines.some(([figure]) => figure.startsWith('~')) && plain.title === null,
+    missing: [JSON.stringify(plain)],
+  });
 }
 m.unmount();
 
@@ -2791,6 +2854,133 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     ok: heads.length > 0 && heads.some(([, head]) => head > 0) && heads.every(([, head, length, sum]) => length === 25 && head === sum),
     missing: heads.map((h) => h.join(' ')),
   });
+  {
+    // The pools' day sums both fundings, so under native the Cost, 24h tile stacks their 20x 7-day equivalent over
+    // subscription and their billed dollars over billed, and each card's Cost 24h reads its own two sides with a side
+    // that has no rows left out: the story's jobs pool serves an API key account alone and reads dollars, and its work
+    // pool serves one subscription account and reads the equivalent. The card's title carries the 5-hour figure too.
+    // The all pool's day priced plan rows through the model tier's fallback, so the tile and that card carry the mark.
+    const listed = await api.listPools();
+    const tileRead = (page) => {
+      const tile = [...page.container.querySelectorAll('.stat-grid .stat')].find((t) => t.querySelector('.stat__label')?.textContent === 'Cost, 24h');
+      return { lines: [...(tile?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => [l.querySelector('.cost-figure')?.textContent ?? '', l.querySelector('.stat__pair-word')?.textContent ?? '']), title: tile?.getAttribute('title') ?? null, value: tile?.querySelector('.stat__value')?.textContent ?? '' };
+    };
+    const costRead = (page, name) => {
+      const pool = [...page.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === name);
+      const dd = [...(pool?.querySelectorAll('.pool__stats dt') ?? [])].find((dt) => dt.textContent?.trim() === 'Cost 24h')?.nextElementSibling;
+      return { lines: [...(dd?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => [l.querySelector('.cost-figure')?.textContent ?? '', l.querySelector('.stat__pair-word')?.textContent ?? '']), text: dd?.textContent?.trim() ?? '', title: dd?.getAttribute('title') ?? null };
+    };
+    const sum = (read) => listed.reduce((n, p) => n + read(p), 0);
+    const tile = tileRead(m);
+    results.push({
+      name: "/pools under native the Cost, 24h tile stacks the pools' 20x 7-day equivalent over subscription, marked while a pool's day priced an estimate, above their billed dollars over billed",
+      ok:
+        shellUnit(m)?.value === 'native' &&
+        listed.some((p) => p.estimated24h) &&
+        JSON.stringify(tile.lines) === JSON.stringify([[`~${fmtEquivalent('seven_day', sum((p) => p.equivalent24h.sevenDay))}`, 'subscription'], [fmtUsd(sum((p) => p.billed24h)), 'billed']]) &&
+        tile.title === ESTIMATED_TITLE,
+      missing: [JSON.stringify(tile)],
+    });
+    const plan = (p) => p.equivalent24h.sevenDay > 0;
+    const billed = (p) => p.billed24h > 0;
+    const wantLines = (p) => [...(plan(p) ? [[`${p.estimated24h ? '~' : ''}${fmtEquivalent('seven_day', p.equivalent24h.sevenDay)}`, 'subscription']] : []), ...(billed(p) ? [[fmtUsd(p.billed24h), 'billed']] : [])];
+    const cells = listed.map((p) => ({ id: p.id, read: costRead(m, p.name), want: wantLines(p), pool: p }));
+    const wrongCells = cells.filter(
+      ({ pool, read, want }) =>
+        JSON.stringify(read.lines) !== JSON.stringify(want) ||
+        (plan(pool) && !(read.title ?? '').includes(fmtEquivalent('five_hour', pool.equivalent24h.fiveHour))) ||
+        (pool.estimated24h && plan(pool)) !== (read.title ?? '').includes(ESTIMATED_TITLE),
+    );
+    const both = cells.filter((c) => c.want.length === 2);
+    const planOnly = cells.filter((c) => c.want.length === 1 && plan(c.pool));
+    const billedOnly = cells.filter((c) => c.want.length === 1 && billed(c.pool));
+    results.push({
+      name: "/pools under native each card's Cost 24h stacks its 20x 7-day equivalent over its billed dollars, a pool of one funding reads that side alone, and the title carries the 5-hour figure",
+      ok: both.some((c) => c.want[0][0].startsWith('~')) && planOnly.length > 0 && billedOnly.length > 0 && wrongCells.length === 0,
+      missing: [`${both.length} two-sided, ${planOnly.length} subscription alone, ${billedOnly.length} billed alone`, ...wrongCells.map((c) => `${c.id}: ${JSON.stringify(c.read)} against ${JSON.stringify(c.want)}`)],
+    });
+    await chooseUnit(m, 'usd');
+    const usdTile = tileRead(m);
+    const usdCells = listed.map((p) => [p.id, costRead(m, p.name).text, fmtUsd(p.billed24h)]);
+    results.push({
+      name: "/pools under Billed dollars the Cost, 24h tile and each card's Cost 24h read the day's billed dollars alone",
+      ok: shellUnit(m)?.value === 'usd' && usdTile.lines.length === 0 && usdTile.value === fmtUsd(sum((p) => p.billed24h)) && usdTile.title === null && usdCells.every(([, text, want]) => text === want) && listed.some((p) => p.billed24h !== p.cost24h),
+      missing: [JSON.stringify(usdTile), ...usdCells.map((c) => c.join(' '))],
+    });
+    // Under Window shares a card whose one member is a subscription account reads that account's own 7-day share of
+    // the pool's day, as the breakdown route prices it when the request names the account, so the check reads the
+    // page's own read through the wrapper. Every other card and the tile name no one account and read dashes.
+    const breakdownOf = api.getAnalyticsBreakdown;
+    const reads = [];
+    api.getAnalyticsBreakdown = async (q) => {
+      const groups = await breakdownOf.call(api, q);
+      reads.push({ groups, q });
+      return groups;
+    };
+    await chooseUnit(m, 'share');
+    const shareTile = tileRead(m);
+    const single = listed.filter((p) => p.members.length === 1 && p.members[0].kind === 'oauth');
+    const shareCells = listed.map((p) => {
+      const read = reads.find((r) => JSON.stringify(r.q.poolIds) === JSON.stringify([p.id]));
+      const group = read?.groups.find((g) => g.key === p.id);
+      const seven = group?.costShares?.seven_day;
+      const want = single.includes(p) ? (typeof seven === 'number' ? `${group.estimated ? '~' : ''}${shareLabel('seven_day', seven)}` : '-') : '-';
+      return { id: p.id, priced: typeof seven === 'number', query: read?.q ?? null, read: costRead(m, p.name), want };
+    });
+    const dayLong = (q) => q !== null && JSON.stringify(q.accountIds) === JSON.stringify([listed.find((p) => p.id === q.poolIds[0]).members[0].accountId]) && q.groupBy === 'pool' && Date.parse(q.to) - Date.parse(q.from) === 24 * 3_600_000;
+    const wrongShares = shareCells.filter((c) => c.read.text !== c.want || (c.want === '-' && !c.read.title) || (single.some((p) => p.id === c.id) ? !dayLong(c.query) : c.query !== null));
+    results.push({
+      name: "/pools under Window shares the Cost, 24h tile reads a dash titled with the share note, a card of one subscription member reads that account's 7-day share of the pool's last day as the breakdown route answers it, and every other card a dash that says why",
+      ok: shellUnit(m)?.value === 'share' && shareTile.value === '-' && shareTile.title === SHARE_NOTE && single.length > 0 && shareCells.some((c) => c.priced && c.want !== '-') && reads.length === single.length && wrongShares.length === 0,
+      missing: [JSON.stringify(shareTile), `${reads.length} breakdown reads for ${single.length} cards`, ...shareCells.map((c) => JSON.stringify(c))],
+    });
+    delete api.getAnalyticsBreakdown;
+    await chooseUnit(m, 'native');
+    localStorage.removeItem('phoebis.unit');
+    // The share is the route's, priced row by row at the account tier each row recorded, so the card reads it as
+    // answered: a wired figure the pool's equivalent times no tier's capacity ratio reaches, and an answer with no share
+    // (the account's tier unrecorded) reads a dash that says why.
+    const wiredRead = async (shares) => {
+      let wired = null;
+      api.getAnalyticsBreakdown = async (q) => {
+        const groups = await breakdownOf.call(api, q);
+        if (q.groupBy !== 'pool' || q.accountIds?.length !== 1) return groups;
+        const pool = listed.find((p) => p.id === q.poolIds?.[0]);
+        wired = shares(pool);
+        return groups.map((g) => ({ ...g, costShares: wired }));
+      };
+      localStorage.setItem('phoebis.unit', 'share');
+      const page = await mount('/pools');
+      const read = single.map((p) => [p.id, costRead(page, p.name)]);
+      page.unmount();
+      delete api.getAnalyticsBreakdown;
+      localStorage.removeItem('phoebis.unit');
+      return { read, wired };
+    };
+    const priced = await wiredRead((p) => ({ five_hour: p.equivalent24h.fiveHour * 3.7, seven_day: p.equivalent24h.sevenDay * 3.7 }));
+    const unpriced = await wiredRead(() => null);
+    results.push({
+      name: "/pools under Window shares the card of one subscription member reads the 7-day share the route priced with the 5-hour share on its title, and a dash that says why where the route answered no share",
+      ok:
+        priced.wired !== null &&
+        priced.read.length > 0 &&
+        priced.read.every(([, r]) => r.text.replace(/^~/, '') === shareLabel('seven_day', priced.wired.seven_day) && (r.title ?? '').includes(shareLabel('five_hour', priced.wired.five_hour))) &&
+        unpriced.read.every(([, r]) => r.text === '-' && !!r.title && r.title !== SHARE_NOTE),
+      missing: [JSON.stringify(priced), JSON.stringify(unpriced)],
+    });
+    // The same day with every plan row weighted, so nothing the tile and the cards draw is an estimate.
+    const poolsOf = api.listPools;
+    api.listPools = async () => (await poolsOf.call(api)).map((p) => ({ ...p, estimated24h: false }));
+    const weighted = await mount('/pools');
+    const plain = [tileRead(weighted), ...listed.map((p) => costRead(weighted, p.name))];
+    weighted.unmount();
+    delete api.listPools;
+    results.push({
+      name: '/pools under native a day whose plan rows are all weighted reads no tilde and no estimate title on the Cost, 24h tile and the cards',
+      ok: plain[0].lines.length === 2 && !plain.some((r) => r.lines.some(([figure]) => figure.startsWith('~')) || (r.title ?? '').includes(ESTIMATED_TITLE)),
+      missing: plain.map((r) => JSON.stringify(r)),
+    });
+  }
   {
     // Without the accounts the order has no members to place, so until they land the sentence says what the pool's
     // own verdicts carry, the serving table's word for it, and names no account.
@@ -5995,6 +6185,122 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   const bar = [...m.container.querySelectorAll('.hbars li')].find((li) => li.querySelector('.hbars__head > span')?.firstChild?.textContent?.trim() === 'notebook');
   const count = bar?.querySelector('.hbars__head .num .muted')?.textContent?.trim();
   results.push({ name: '/keys a key with one lifetime request reads 1 request', ok: count === '1 request', missing: [count ?? 'no notebook bar'] });
+}
+{
+  // A key's lifetime and week sum both fundings, so under native the Lifetime cost tile stacks the keys' 20x 7-day
+  // equivalent over subscription and their billed dollars over billed, and each bar's label and each row's 7-day line
+  // read the key's two sides with a side that has no rows left out: the story's keys on its API key account read
+  // dollars alone, and a key no request reached reads a dash that says why. The bars rank by the equivalent. The
+  // story's keys priced plan rows through the model tier's fallback, so their figures carry the mark and its title.
+  const listed = await api.listKeys();
+  const sidesText = (side, estimated) => {
+    const parts = [...(side.equivalent.sevenDay > 0 ? [`${estimated ? '~' : ''}${fmtEquivalent('seven_day', side.equivalent.sevenDay)}`] : []), ...(side.billedUsd > 0 ? [`${fmtUsd(side.billedUsd)} billed`] : [])];
+    return parts.length ? parts.join(', ') : '-';
+  };
+  const tileRead = (page) => {
+    const tile = [...page.container.querySelectorAll('.stat-grid .stat')].find((t) => t.querySelector('.stat__label')?.textContent === 'Lifetime cost');
+    return { lines: [...(tile?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => [l.querySelector('.cost-figure')?.textContent ?? '', l.querySelector('.stat__pair-word')?.textContent ?? '']), title: tile?.getAttribute('title') ?? null, value: tile?.querySelector('.stat__value')?.textContent ?? '' };
+  };
+  const barsRead = (page) =>
+    [...page.container.querySelectorAll('.hbars li')].map((li) => {
+      const figure = li.querySelector('.hbars__head .num')?.firstElementChild;
+      return { figure: figure?.textContent?.trim() ?? '', prefix: li.querySelector('.hbars__head > span .mono')?.textContent?.replace('…', '') ?? '', requests: li.querySelector('.hbars__head .num .muted')?.textContent?.trim() ?? '', title: figure?.getAttribute('title') ?? null, width: li.querySelector('.hbars__fill')?.style.width ?? '' };
+    });
+  const subsRead = (page) =>
+    [...page.container.querySelectorAll('.card--table tbody tr.key-row')].map((tr) => {
+      const sub = tr.children[4]?.querySelector('.sub');
+      return { id: tr.id, text: sub?.textContent?.trim() ?? '', title: sub?.getAttribute('title') ?? null };
+    });
+  const byPrefix = new Map(listed.map((k) => [k.prefix, k]));
+  const sum = (read) => listed.reduce((n, k) => n + read(k), 0);
+  const tile = tileRead(m);
+  results.push({
+    name: "/keys under native the Lifetime cost tile stacks the keys' lifetime 20x 7-day equivalent over subscription, marked while a key priced an estimate, above their billed dollars over billed",
+    ok:
+      shellUnit(m)?.value === 'native' &&
+      listed.some((k) => k.lifetime.estimated) &&
+      JSON.stringify(tile.lines) === JSON.stringify([[`~${fmtEquivalent('seven_day', sum((k) => k.lifetime.equivalent.sevenDay))}`, 'subscription'], [fmtUsd(sum((k) => k.lifetime.billedUsd)), 'billed']]) &&
+      tile.title === ESTIMATED_TITLE,
+    missing: [JSON.stringify(tile)],
+  });
+  const bars = barsRead(m);
+  const keyOf = (bar) => byPrefix.get(bar.prefix);
+  const requestsOf = (k) => `${fmtCompact(k.lifetime.requests)} ${k.lifetime.requests === 1 ? 'request' : 'requests'}`;
+  const wrongBars = bars.filter((b) => {
+    const k = keyOf(b);
+    return k === undefined || b.figure !== sidesText(k.lifetime, k.lifetime.estimated) || b.requests !== requestsOf(k) || (b.figure === '-' ? !b.title : b.title !== (k.lifetime.estimated && k.lifetime.equivalent.sevenDay > 0 ? ESTIMATED_TITLE : null));
+  });
+  const planned = bars.filter((b) => keyOf(b)?.lifetime.equivalent.sevenDay > 0);
+  const dollarsOnly = bars.filter((b) => keyOf(b)?.lifetime.equivalent.sevenDay === 0 && keyOf(b)?.lifetime.billedUsd > 0);
+  const unused = bars.filter((b) => keyOf(b)?.lifetime.equivalent.sevenDay === 0 && keyOf(b)?.lifetime.billedUsd === 0);
+  const ranks = bars.map((b) => keyOf(b)?.lifetime.equivalent.sevenDay ?? -1);
+  results.push({
+    name: "/keys under native each key with plan rows labels its bar x% of 20x 7-day, $y billed before its requests, a key of billed rows alone its dollars, a key no request reached a dash titled why, and the bars rank by the equivalent",
+    ok:
+      bars.length === listed.length &&
+      planned.length > 0 &&
+      planned.every((b) => /^~?[\d.]+% of 20x 7-day(, \$[\d,.]+ billed)?$/.test(b.figure)) &&
+      planned.some((b) => b.figure.startsWith('~') && b.figure.includes(', $')) &&
+      dollarsOnly.length > 0 &&
+      dollarsOnly.every((b) => /^\$[\d,.]+ billed$/.test(b.figure)) &&
+      unused.length > 0 &&
+      wrongBars.length === 0 &&
+      ranks.every((r, i) => i === 0 || r <= ranks[i - 1]) &&
+      bars[0]?.width === '100%',
+    missing: [`${bars.length} bars of ${listed.length} keys, ${planned.length} planned, ${dollarsOnly.length} dollars alone, ${unused.length} unused`, JSON.stringify(ranks), ...wrongBars.map((b) => JSON.stringify(b))],
+  });
+  const subs = subsRead(m);
+  const keyById = new Map(listed.map((k) => [k.id, k]));
+  const wrongSubs = subs.filter(({ id, text, title }) => {
+    const k = keyById.get(id);
+    return k === undefined || text !== sidesText(k.usage7d, k.usage7d.estimated) || (text === '-' ? !title : title !== (k.usage7d.estimated && k.usage7d.equivalent.sevenDay > 0 ? ESTIMATED_TITLE : null));
+  });
+  results.push({
+    name: "/keys under native each row's 7-day line reads x% of 20x 7-day, $y billed with a side that has no rows left out",
+    ok: subs.length === listed.length && subs.some((s) => /^~[\d.]+% of 20x 7-day, \$[\d,.]+ billed$/.test(s.text)) && wrongSubs.length === 0,
+    missing: wrongSubs.map((s) => JSON.stringify(s)),
+  });
+  await chooseUnit(m, 'usd');
+  const usdTile = tileRead(m);
+  const usdBars = barsRead(m);
+  const usdSubs = subsRead(m);
+  const usdRanks = usdBars.map((b) => keyOf(b)?.lifetime.billedUsd ?? -1);
+  const wrongUsd = [...usdBars.filter((b) => b.figure !== fmtUsd(keyOf(b)?.lifetime.billedUsd ?? NaN)), ...usdSubs.filter((s) => s.text !== fmtUsd(keyById.get(s.id)?.usage7d.billedUsd ?? NaN))];
+  results.push({
+    name: "/keys under Billed dollars the Lifetime cost tile, each bar's label and each row's 7-day line read the billed dollars alone, and the bars rank by them",
+    ok:
+      shellUnit(m)?.value === 'usd' &&
+      usdTile.lines.length === 0 &&
+      usdTile.value === fmtUsd(sum((k) => k.lifetime.billedUsd)) &&
+      listed.some((k) => k.lifetime.billedUsd !== k.lifetime.cost) &&
+      usdBars.length === listed.length &&
+      wrongUsd.length === 0 &&
+      usdRanks.every((r, i) => i === 0 || r <= usdRanks[i - 1]),
+    missing: [JSON.stringify(usdTile), JSON.stringify(usdRanks), ...wrongUsd.map((r) => JSON.stringify(r))],
+  });
+  await chooseUnit(m, 'share');
+  const shareTile = tileRead(m);
+  const shareFigures = [...barsRead(m), ...subsRead(m)].map((r) => ({ text: r.figure ?? r.text, title: r.title }));
+  results.push({
+    name: "/keys under Window shares the Lifetime cost tile, each bar's label and each row's 7-day line read a dash titled with the share note",
+    ok: shellUnit(m)?.value === 'share' && shareTile.value === '-' && shareTile.title === SHARE_NOTE && shareFigures.length === 2 * listed.length && shareFigures.every((f) => f.text === '-' && f.title === SHARE_NOTE),
+    missing: [JSON.stringify(shareTile), ...shareFigures.filter((f) => f.text !== '-' || f.title !== SHARE_NOTE).map((f) => JSON.stringify(f))],
+  });
+  await chooseUnit(m, 'native');
+  localStorage.removeItem('phoebis.unit');
+  // The same keys with every plan row weighted, so nothing the tile, the bars and the rows draw is an estimate.
+  const keysOf = api.listKeys;
+  api.listKeys = async () => (await keysOf.call(api)).map((k) => ({ ...k, lifetime: { ...k.lifetime, estimated: false }, usage7d: { ...k.usage7d, estimated: false } }));
+  const weighted = await mount('/keys');
+  const plainTile = tileRead(weighted);
+  const plain = [...plainTile.lines.map(([figure]) => ({ text: figure, title: plainTile.title })), ...barsRead(weighted).map((b) => ({ text: b.figure, title: b.title })), ...subsRead(weighted)];
+  weighted.unmount();
+  delete api.listKeys;
+  results.push({
+    name: '/keys under native keys whose plan rows are all weighted read no tilde and no estimate title on the tile, the bars or the 7-day lines',
+    ok: plainTile.lines.length === 2 && plain.length > 2 * listed.length && !plain.some((f) => f.text.startsWith('~') || (f.title ?? '').includes(ESTIMATED_TITLE)),
+    missing: plain.filter((f) => f.text.startsWith('~') || (f.title ?? '').includes(ESTIMATED_TITLE)).map((f) => JSON.stringify(f)),
+  });
 }
 // The Pool select is the address: `?pools=<id>` filters the rows, All pools clears it, and an unknown id reads as All
 // pools and leaves the address.
@@ -15665,6 +15971,7 @@ m.unmount();
 {
   localStorage.setItem('phoebis.mockEmpty', '1');
   const zeroTiles = (c) => [...c.querySelectorAll('.stat-grid .stat__value')].map((v) => v.textContent);
+  const pairLines = (c) => [...c.querySelectorAll('.stat-grid .stat__pair-line')].map((l) => `${l.querySelector('.cost-figure')?.textContent} ${l.querySelector('.stat__pair-word')?.textContent}`);
   // A closed dialog keeps its markup in the DOM and reaches nobody, so the pairing dialog's link placeholder is no
   // wait.
   const skeletonIn = (c) => [...c.querySelectorAll('.skeleton')].some((s) => s.closest('dialog:not([open])') === null);
@@ -15672,7 +15979,8 @@ m.unmount();
     ['/', (c, t) => t.includes('No subscription accounts') && t.includes('No requests'), 'No subscription accounts, No requests'],
     ['/quota', (c, t) => t.includes('0 accounts') && c.querySelector('.qcard') === null, '0 accounts, no account card'],
     ['/accounts', (c, t) => t.includes('The router holds no account yet'), 'The router holds no account yet'],
-    ['/pools', (c) => c.querySelector('.pool-grid')?.childElementCount === 0 && zeroTiles(c).join(' ') === '0 0 0 0 $0.00', 'no pool card, tiles 0 0 0 0 $0.00'],
+    // Under native, the shell's default, the cost tile reads an empty day's zero in each unit.
+    ['/pools', (c) => c.querySelector('.pool-grid')?.childElementCount === 0 && zeroTiles(c).slice(0, 4).join(' ') === '0 0 0 0' && pairLines(c).join(' over ') === '0% subscription over $0.00 billed', 'no pool card, tiles 0 0 0 0, the cost tile 0% subscription over $0.00 billed'],
     ['/keys', (c, t) => t.includes('No keys yet'), 'No keys yet'],
     ['/models', (c, t) => t.includes("No keys: a key's processed rules show here once one exists."), 'No keys: ...'],
     ['/requests', (c, t) => t.includes('No requests match'), 'No requests match'],

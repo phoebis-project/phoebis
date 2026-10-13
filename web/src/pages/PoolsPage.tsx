@@ -21,9 +21,10 @@ import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { KEYS_CODEC } from '@/lib/address';
-import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, moveLabel, sizedAccounts } from '@/lib/analytics';
+import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, SHARE_NOTE, moveLabel, sizedAccounts } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
-import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, shortModel } from '@/lib/format';
+import { clock } from '@/lib/clock';
+import { fmtAbsolute, fmtCompact, fmtDuration, fmtEquivalent, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, shareLabel, shortModel, withEstimate } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
 import { refreshAttention, useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
@@ -32,7 +33,7 @@ import { endOf, windowOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
 import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, overageBadge, poolStatusSentence, selectionOrder, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
-import { KeyDialog } from './KeysPage';
+import { dollarsUnder, KeyDialog, nativeSidesOf, sumTileOf, type FundedSum } from './KeysPage';
 
 const KEY_STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
@@ -174,6 +175,7 @@ const STRATEGY_HINT: Record<PoolStrategy, ReactNode> = {
 };
 
 export function PoolsPage() {
+  const { unit } = useAppSettings();
   const pools = useAsync(() => api.listPools(), []);
   const accounts = useAsync(() => api.listAccounts(), []);
   const keys = useAsync(() => api.listKeys(), []);
@@ -267,9 +269,15 @@ export function PoolsPage() {
         // Null until the key list is read, so the tile waits as the cards' Keys tiles do rather than reading 0.
         keys: keysRead === 'loaded' && keys.data ? keys.data.length : null,
         requests: pools.data.reduce((s, p) => s + p.requests24h, 0),
-        cost: pools.data.reduce((s, p) => s + p.cost24h, 0),
+        day: {
+          billedUsd: pools.data.reduce((s, p) => s + p.billed24h, 0),
+          cost: pools.data.reduce((s, p) => s + p.cost24h, 0),
+          equivalent: { fiveHour: pools.data.reduce((s, p) => s + p.equivalent24h.fiveHour, 0), sevenDay: pools.data.reduce((s, p) => s + p.equivalent24h.sevenDay, 0) },
+          estimated: pools.data.some((p) => p.estimated24h),
+        },
       }
     : null;
+  const dayTile = totals ? sumTileOf(unit, totals.day) : null;
 
   return (
     <div className="stack" ref={pageRef}>
@@ -284,7 +292,7 @@ export function PoolsPage() {
         <Tile label="Accounts in pools" value={totals ? fmtInt(totals.accounts) : null} />
         <Tile label="Keys" value={totals && totals.keys !== null ? fmtInt(totals.keys) : keysRead === 'failed' ? <span className="muted">n/a</span> : null} />
         <Tile label="Requests, 24h" value={totals ? fmtInt(totals.requests) : null} />
-        <Tile label="Cost, 24h" value={totals ? fmtUsd(totals.cost) : null} />
+        <Tile label="Cost, 24h" value={dayTile?.value ?? null} title={dayTile?.title} />
       </div>
       {/* A failed read leaves the cards on the last answer's items, or none before the first; this line says so. */}
       {attention.error !== null && <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} refresh={refreshAttention} />}
@@ -489,6 +497,56 @@ function CacheTtlOverrides({
         </Button>
       </div>
     </Field>
+  );
+}
+
+const DAY_MS = 24 * 3_600_000;
+const dayOf = (p: Pool): FundedSum => ({ billedUsd: p.billed24h, cost: p.cost24h, equivalent: p.equivalent24h, estimated: p.estimated24h });
+
+/**
+ * A pool card's Cost 24h under the unit. Native stacks the day's 20x 7-day equivalent over its billed dollars, a side
+ * with no rows left out, the 5-hour figure on the title. Under the shares a card whose one member is a subscription
+ * account reads that account's own 7-day share of the pool's day, which the breakdown route prices when a read names
+ * the one account, and the console converts no equivalent into a share. Every other card names no one account.
+ */
+function PoolCost({ pool, accountById }: { accountById: Map<string, Account>; pool: Pool }) {
+  const { unit } = useAppSettings();
+  const only = pool.members.length === 1 ? pool.members[0] : null;
+  const member = unit === 'share' && only?.kind === 'oauth' ? only.accountId : null;
+  const read = useAsync(() => {
+    if (member === null) return Promise.resolve(null);
+    const to = clock.now();
+    return api.getAnalyticsBreakdown({ accountIds: [member], from: new Date(to - DAY_MS).toISOString(), groupBy: 'pool', poolIds: [pool.id], to: new Date(to).toISOString() });
+  }, [pool.id, member]);
+  const dash = (title?: string) => (
+    <dd className="num" title={title}>
+      -
+    </dd>
+  );
+  const day = dayOf(pool);
+  if (unit === 'share') {
+    if (member === null) return dash(SHARE_NOTE);
+    if (read.error !== null) return dash(`Could not load the share: ${read.error}`);
+    if (read.loading || read.stale || read.data === null) return dash();
+    const group = read.data.find((g) => g.key === pool.id);
+    const seven = group?.costShares?.seven_day;
+    if (group === undefined || typeof seven !== 'number') return dash(`No share of ${accountById.get(member)?.label ?? member}'s 7-day window priced in the last 24 hours`);
+    const five = group.costShares?.five_hour;
+    return (
+      <dd className="num" title={withEstimate([shareLabel('seven_day', seven), ...(typeof five === 'number' ? [shareLabel('five_hour', five)] : [])].join(', '), group.estimated)}>
+        {group.estimated ? '~' : ''}
+        {shareLabel('seven_day', seven)}
+      </dd>
+    );
+  }
+  if (unit !== 'native') return <dd className="num">{fmtUsd(dollarsUnder(unit, day))}</dd>;
+  const sides = nativeSidesOf(day);
+  if (sides.equivalent === null && sides.billed === null) return dash('No request in the last 24 hours');
+  const reading = [...(sides.equivalent === null ? [] : [`${fmtEquivalent('seven_day', day.equivalent.sevenDay)}, ${fmtEquivalent('five_hour', day.equivalent.fiveHour)}`]), ...(sides.billed === null ? [] : [`${sides.billed} billed`])];
+  return (
+    <dd className="num" title={withEstimate(reading.join(', '), sides.marked)}>
+      {sumTileOf(unit, day).value}
+    </dd>
   );
 }
 
@@ -734,7 +792,7 @@ function PoolCard({
         </div>
         <div>
           <dt>Cost 24h</dt>
-          <dd className="num">{fmtUsd(pool.cost24h)}</dd>
+          <PoolCost pool={pool} accountById={accountById} />
         </div>
         <div>
           <dt>Active pins</dt>

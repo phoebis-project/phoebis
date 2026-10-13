@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
-import type { Account, KeepaliveState, RequestLog, Session, Settings, SubscriptionCosts } from '@/api/types';
+import type { Account, KeepaliveState, Overview, RequestLog, Session, Settings, SubscriptionCosts } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { Donut } from '@/components/charts/Donut';
 import { Sparkline } from '@/components/charts/Sparkline';
@@ -11,7 +11,9 @@ import { AttentionLine } from '@/components/ui/AttentionLine';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Badge, Button, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
-import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, shortModel, tokensTotal } from '@/lib/format';
+import { PairValue } from '@/components/ui/Tile';
+import { SHARE_NOTE } from '@/lib/analytics';
+import { ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
 import { costUnitOf, glanceCellOf, revisionsTitle } from '@/lib/requests';
@@ -38,11 +40,52 @@ function asOfLine(reads: [string, Loaded<unknown>][], now: number): { text: stri
   return { text: failed ? `Last refresh of the ${failed[0]} failed: ${failed[1].error}. Showing data as of ${asOf}` : `As of ${asOf}`, title: fmtAbsolute(oldest) };
 }
 
+/** The day's cost tile as `StatTile` draws it. */
+interface CostTile {
+  note: string;
+  spark: number[];
+  title?: string;
+  value: ReactNode;
+}
+/**
+ * The day's cost tile under a position. Native stacks the plan rows' 20x 5-hour equivalent, the window a day's figure
+ * leads with, over the billed rows' dollars, a side with no rows left out, and an empty day reads its zero in each unit.
+ * The dollar positions read their dollars. The shares are one account's, and the tile sums every account, so it reads
+ * a dash, its note saying why and its spark kept so the tile never waits on a placeholder.
+ */
+function costTileOf(unit: UnitPosition, o: Overview): CostTile {
+  if (unit === 'all') return { note: `${fmtUsd(o.cost24h / 24)} per hour`, spark: o.hourly.map((h) => h.cost), value: fmtUsd(o.cost24h) };
+  if (unit === 'usd') return { note: `${fmtUsd(o.billed24h / 24)} per hour`, spark: o.hourly.map((h) => h.billed), value: fmtUsd(o.billed24h) };
+  if (unit === 'equivalent') return { note: 'at the API price list, the subscription requests', spark: o.hourly.map((h) => h.cost - h.billed), value: fmtUsd(o.cost24h - o.billed24h) };
+  if (unit === 'share') return { note: 'shares do not add across accounts', spark: o.hourly.map((h) => h.cost), title: SHARE_NOTE, value: '-' };
+  const plan = o.equivalent24h.fiveHour > 0 || o.equivalent24h.sevenDay > 0;
+  const billed = o.billed24h > 0;
+  const marked = plan && o.estimated24h;
+  const subscription = <span className="cost-figure">{`${marked ? '~' : ''}${fmtEquivalent('five_hour', o.equivalent24h.fiveHour)}`}</span>;
+  const dollars = <span className="cost-figure">{fmtUsd(o.billed24h)}</span>;
+  return {
+    note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${marked ? '~' : ''}${fmtEquivalent('five_hour', o.equivalent24h.fiveHour / 24)} per hour`,
+    // In percent: the spark's scale floors at one, a dollar an hour on the dollar positions, and a floor of a whole
+    // window an hour would flatten the day.
+    spark: plan || !billed ? o.hourly.map((h) => h.equivalent.fiveHour * 100) : o.hourly.map((h) => h.billed),
+    title: marked ? ESTIMATED_TITLE : undefined,
+    value:
+      plan && !billed ? (
+        <PairValue first={subscription} firstLabel="subscription" />
+      ) : billed && !plan ? (
+        <PairValue first={dollars} firstLabel="billed" />
+      ) : (
+        <PairValue first={subscription} firstLabel="subscription" second={dollars} secondLabel="billed" />
+      ),
+  };
+}
+
 function ReadFailed({ title, error, retry }: { error: string | null; retry: () => void; title: string }) {
   return <ErrorState title={title} body={error} action={<Button size="sm" onClick={retry}>Try again</Button>} />;
 }
 
 export function DashboardPage() {
+  const { unit } = useAppSettings();
   const overview = useAsync(() => api.getOverview(), [], { refreshMs: 30_000 });
   const accounts = useAsync(() => api.listAccounts(), [], { refreshMs: 30_000 });
   const requests = useAsync(() => api.listRequests({ limit: 10 }), [], { refreshMs: 30_000 });
@@ -54,6 +97,7 @@ export function DashboardPage() {
 
   const o = overview.data;
   const hourly = o?.hourly ?? [];
+  const costTile = o ? costTileOf(unit, o) : null;
   const costs = settings.data?.subscriptionCosts ?? null;
   const ringFailure = failedFirst(accounts) ? (
     <ReadFailed title="Could not load the accounts" error={accounts.error} retry={accounts.reload} />
@@ -84,7 +128,7 @@ export function DashboardPage() {
         <div className="stat-grid">
           <StatTile label="Requests, 24h" value={o ? fmtInt(o.requests24h) : null} note={o ? `${(o.requests24h / 24).toFixed(1)} per hour` : null} spark={hourly.map((h) => h.requests)} color={ink.series[0]} />
           <StatTile label="Tokens, 24h" value={o ? fmtCompact(o.tokens24h) : null} note={o ? `${fmtPct(o.tokens24h ? o.tokensCached24h / o.tokens24h : 0)} served from cache` : null} spark={hourly.map((h) => h.tokens)} color={ink.series[2]} />
-          <StatTile label="Estimated cost, 24h" value={o ? fmtUsd(o.cost24h) : null} note={o ? `${fmtUsd(o.cost24h / 24)} per hour` : null} spark={hourly.map((h) => h.cost)} color={ink.series[1]} />
+          <StatTile label="Estimated cost, 24h" value={costTile?.value ?? null} note={costTile?.note ?? null} spark={costTile?.spark ?? []} title={costTile?.title} color={ink.series[1]} />
           <StatTile
             label="Error rate, 24h"
             value={o ? fmtPct(o.errorRate24h ?? 0, 1) : null}
@@ -153,9 +197,9 @@ export function DashboardPage() {
   );
 }
 
-function StatTile({ label, value, note, spark, color }: { color: string; label: string; note: string | null; spark: number[]; value: string | null }) {
+function StatTile({ label, value, note, spark, color, title }: { color: string; label: string; note: string | null; spark: number[]; title?: string; value: ReactNode }) {
   return (
-    <div className="stat">
+    <div className="stat" title={title}>
       <span className="stat__label">{label}</span>
       <span className="stat__value">{value ?? <Skeleton width={96} height={26} />}</span>
       <span className="stat__note">{note ?? <Skeleton width={120} />}</span>

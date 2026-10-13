@@ -20,7 +20,7 @@ export { call };
 // The fold the Cost section sums its groups by, so a check reads the totals the page draws from one derivation.
 export { sumGroups } from '@/api/fold';
 export { AttentionRows } from '@/components/AttentionRows';
-export { CACHE_MODEL_SHARE_NOTE, CACHE_SHARE_NOTE, NATIVE_SUBSET } from '@/lib/analytics';
+export { CACHE_MODEL_SHARE_NOTE, CACHE_SHARE_NOTE, NATIVE_SUBSET, SHARE_NOTE } from '@/lib/analytics';
 export { ATTENTION_REFRESH_MS } from '@/lib/attention';
 export { default as React } from 'react';
 export { AttemptCount, AttemptTrail } from '@/components/ui/AttemptTrail';
