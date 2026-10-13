@@ -8,8 +8,26 @@ use common::*;
 use fake_upstream::FakeUpstream;
 use phoebis_ledger::{
     fold_keepalive, hour_of, read_rollups, AttemptRecord, KeepaliveDelta, LedgerConfig, LedgerDb,
-    LiveKeys, Record, RequestRecord, RollupSelect, Speed,
+    LiveKeys, PlanTables, PriceRevisions, Record, RequestRecord, RollupSelect, Speed,
 };
+
+/// The dollars of `counts` on Sonnet 5 at the shipped revision in force at `at`, the list `insert_request` folds with
+/// and the readers here price at.
+fn sonnet_usd(at: i64, input: u64, cache_read: u64, output: u64) -> f64 {
+    PriceRevisions::shipped()
+        .in_force(at)
+        .estimate(
+            "claude-sonnet-5",
+            Speed::Standard,
+            input,
+            cache_read,
+            0,
+            0,
+            output,
+        )
+        .expect("the shipped list carries the model")
+        .0
+}
 
 fn delta(at: i64, kind: &str) -> KeepaliveDelta {
     KeepaliveDelta {
@@ -62,7 +80,6 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
                 kept_warm_request_id: Some("r1".into()),
                 kept_warm_requests: 1,
                 kept_warm_tokens: 2_000,
-                saved_usd_gross: 0.0036,
                 ..delta(at, "inference")
             },
         )?;
@@ -72,13 +89,6 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     .unwrap();
     db.write(|c| {
         let tx = c.transaction()?;
-        fold_keepalive(
-            &tx,
-            &KeepaliveDelta {
-                probe_cost_usd: 0.0004,
-                ..delta(at + 1_000, "probe")
-            },
-        )?;
         fold_keepalive(
             &tx,
             &KeepaliveDelta {
@@ -97,7 +107,8 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
             &tx,
             &KeepaliveDelta {
                 wasted_probes: 3,
-                wasted_probe_usd: 0.0012,
+                wasted_input_tokens: 100,
+                wasted_output_tokens: 20,
                 wasted_probe_reasons: BTreeMap::from([("idle_limit".to_string(), 3)]),
                 ..delta(at + 4_000, "probe")
             },
@@ -124,22 +135,21 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         (
             inference.kept_warm_requests,
             inference.kept_warm_tokens,
-            inference.saved_usd_gross,
             inference.requests
         ),
-        (1, 2_000, 0.0036, 0),
+        (1, 2_000, 0),
         "the delta touches no request counter"
     );
     let probe = rows.iter().find(|r| r.kind == "probe").unwrap();
     assert_eq!(
         (
-            probe.probe_cost_usd,
             probe.probe_migrated,
             probe.probes_skipped,
             probe.wasted_probes,
-            probe.wasted_probe_usd
+            (probe.wasted_input_tokens, probe.wasted_output_tokens)
         ),
-        (0.0004, 1, 2, 3, 0.0012)
+        (1, 2, 3, (100, 20)),
+        "the settlement's counts fold beside the probe counters"
     );
     assert_eq!(
         probe.wasted_probe_reasons.get("idle_limit").copied(),
@@ -200,6 +210,7 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
             account_id: "a".into(),
             account_kind: "api_key".into(),
             outcome: "succeeded".into(),
+            cache_read_tokens: Some(2_000),
             ..Default::default()
         }],
         None,
@@ -247,6 +258,7 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     };
     // The rows above carry the generation a record defaults to, so that is what holds the id here.
     let live = LiveKeys(BTreeMap::from([("desktop".to_string(), 0)]));
+    let (prices, costs) = (PriceRevisions::shipped(), PlanTables::shipped());
     let groups = phoebis_ledger::breakdown(
         &phoebis_ledger::apply_filter(rows.clone(), &with_probes),
         "key",
@@ -254,6 +266,8 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         &live,
         &[],
         None,
+        &prices,
+        &costs,
     );
     let desktop = groups.iter().find(|g| g.key == "desktop").unwrap();
     assert_eq!(
@@ -277,6 +291,8 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         &live,
         &[],
         None,
+        &prices,
+        &costs,
     );
     let desktop = without.iter().find(|g| g.key == "desktop").unwrap();
     assert_eq!(
@@ -294,13 +310,16 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         ),
         (1, 1, 1, 2)
     );
+    // The probe's own request row's counts and the settlement's, each priced when read.
+    let (probe_usd, wasted_usd) = (sonnet_usd(at, 0, 2_000, 0), sonnet_usd(at, 100, 0, 20));
+    assert!(probe_usd > 0.0 && wasted_usd > 0.0);
     assert_eq!(
         (
             desktop.probe_cost_usd,
             desktop.wasted_probes,
             desktop.wasted_probe_usd
         ),
-        (0.0004, 3, 0.0012)
+        (probe_usd, 3, wasted_usd)
     );
     // A request without a user agent shares the reserved row with the credits of its key. Replacing it under
     // another account moves its own counters and leaves the credit where it was.
@@ -338,7 +357,6 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
                 kept_warm_request_id: Some("r3".into()),
                 kept_warm_requests: 1,
                 kept_warm_tokens: 500,
-                saved_usd_gross: 0.0009,
                 ..delta(at, "inference")
             },
         )?;
@@ -455,7 +473,10 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         // column a later migration adds has to go first. The rollup table keeps the generation column it
         // cannot drop (it is in the primary key); the rebuild that replays over it names its own columns and
         // never reads that one.
-        let mut sql = String::from("ALTER TABLE attempts DROP COLUMN written_at; ALTER TABLE requests DROP COLUMN diagnostics_source; ALTER TABLE requests DROP COLUMN stream_end_at; ALTER TABLE rollups_hourly DROP COLUMN probes_held; ALTER TABLE requests DROP COLUMN key_generation; ALTER TABLE rollups_hourly DROP COLUMN probes_skipped; DROP TABLE kept_warm_marks; ALTER TABLE bodies DROP COLUMN request_len_seen; ALTER TABLE bodies DROP COLUMN response_len_seen; ALTER TABLE account_rollups_hourly DROP COLUMN rewrite_tokens; ALTER TABLE account_rollups_hourly DROP COLUMN migrations_json; ");
+        // Migration 34 drops the rollup's eight dollar columns and keys it by band and tier, so the table goes back to
+        // the version-33 shape before the drops below, rebuilt since a primary-key column cannot be dropped in place.
+        let mut sql = format!("{VERSION_33_ROLLUPS} ");
+        sql.push_str("ALTER TABLE attempts DROP COLUMN written_at; ALTER TABLE requests DROP COLUMN diagnostics_source; ALTER TABLE requests DROP COLUMN stream_end_at; ALTER TABLE rollups_hourly DROP COLUMN probes_held; ALTER TABLE requests DROP COLUMN key_generation; ALTER TABLE rollups_hourly DROP COLUMN probes_skipped; DROP TABLE kept_warm_marks; ALTER TABLE bodies DROP COLUMN request_len_seen; ALTER TABLE bodies DROP COLUMN response_len_seen; ALTER TABLE account_rollups_hourly DROP COLUMN rewrite_tokens; ALTER TABLE account_rollups_hourly DROP COLUMN migrations_json; ");
         for column in [
             "cleared_input_tokens",
             "inference_geo",
@@ -507,6 +528,19 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         ] {
             sql.push_str(&format!("ALTER TABLE requests DROP COLUMN {column}; "));
         }
+        // Migration 33 drops the attempt's five dollar columns and its stamp and adds the tier, so the attempts table
+        // goes back to the shape a version-four file has before the replay runs it.
+        sql.push_str("ALTER TABLE attempts DROP COLUMN tier; ");
+        for column in [
+            "cache_read_usd REAL",
+            "cache_write_usd REAL",
+            "estimated_usd REAL",
+            "input_usd REAL",
+            "output_usd REAL",
+            "pricing_version TEXT",
+        ] {
+            sql.push_str(&format!("ALTER TABLE attempts ADD COLUMN {column}; "));
+        }
         sql.push_str("ALTER TABLE quota_samples DROP COLUMN observed_at; ");
         sql.push_str("DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; ");
         sql.push_str("DROP TABLE decisions; DROP INDEX IF EXISTS events_account; ");
@@ -523,7 +557,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 32);
+    assert_eq!(db.schema_version().await.unwrap(), 34);
     let (_, attempts) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         attempts.len(),
@@ -561,7 +595,8 @@ async fn the_writer_lands_a_keepalive_record_in_its_batch() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     h.ledger.record(Record::Keepalive(KeepaliveDelta {
-        probe_cost_usd: 0.5,
+        wasted_probes: 1,
+        wasted_output_tokens: 5,
         ..delta(NOW, "probe")
     }));
     let rows = wait_for(Duration::from_secs(5), || {
@@ -571,7 +606,10 @@ async fn the_writer_lands_a_keepalive_record_in_its_batch() {
         (!rows.is_empty()).then_some(rows)
     })
     .await;
-    assert_eq!(rows[0].probe_cost_usd, 0.5);
+    assert_eq!(
+        (rows[0].wasted_probes, rows[0].wasted_output_tokens),
+        (1, 5)
+    );
     up.shutdown().await;
 }
 
@@ -587,7 +625,7 @@ fn a_fast_recipes_credit_files_under_speed_fast() {
             &tx,
             &KeepaliveDelta {
                 kept_warm_requests: 1,
-                saved_usd_gross: 0.018,
+                kept_warm_tokens: 5_000,
                 speed: Some(Speed::Fast),
                 ..delta(at, "inference")
             },
@@ -596,7 +634,7 @@ fn a_fast_recipes_credit_files_under_speed_fast() {
             &tx,
             &KeepaliveDelta {
                 kept_warm_requests: 1,
-                saved_usd_gross: 0.0036,
+                kept_warm_tokens: 1_000,
                 ..delta(at, "inference")
             },
         )?;
@@ -614,12 +652,12 @@ fn a_fast_recipes_credit_files_under_speed_fast() {
             )
         })
         .unwrap();
-    let mut by_speed: Vec<(&str, f64)> = rows
+    let mut by_speed: Vec<(&str, u64)> = rows
         .iter()
-        .map(|r| (r.speed.as_str(), r.saved_usd_gross))
+        .map(|r| (r.speed.as_str(), r.kept_warm_tokens))
         .collect();
     by_speed.sort_by(|a, b| a.0.cmp(b.0));
-    assert_eq!(by_speed, [("fast", 0.018), ("standard", 0.0036)]);
+    assert_eq!(by_speed, [("fast", 5_000), ("standard", 1_000)]);
     assert_eq!(
         rows.iter()
             .find(|r| r.speed == "fast")

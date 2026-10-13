@@ -7,7 +7,7 @@ use phoebis_keepalive::{
     break_even_ms, factors_for, resolve, BreakEvenFactors, Funding, KeepalivePolicy,
     KeepaliveTiming, Range, FIVE_MINUTES_MS, ONE_HOUR_MS,
 };
-use phoebis_ledger::{PlanTables, PriceTable, SubscriptionCosts};
+use phoebis_ledger::{CostRevisions, PlanTables, PriceRevisions, PriceTable};
 use phoebis_store::{ModelRule, PoolRow};
 
 fn factors(read: f64, write: f64) -> BreakEvenFactors {
@@ -165,47 +165,56 @@ fn the_idle_share_is_the_windows_probes_over_one_rewrite() {
 
 /// One weighted model and one model the plan leaves unweighted, written here so the figures follow from the text.
 const COSTS: &str = r#"
-effective: 2026-01-01
-unit:
-  defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
-  units_per_window: 100
-capacity:
-  default_claude_max_20x: {five_hour: 100, seven_day: 1000}
-peak:
-  zone: America/Los_Angeles
-  weekdays: true
-  from_hour: 5
-  to_hour: 11
-  capacity_factor: {five_hour: 0.5, seven_day: 1}
-type_multiplier: {cache_read: 0.025, cache_write_1h: 1.25, cache_write_5m: 1.25, input: 1, output: 5}
-model_weight:
-  claude-opus-5-5: 2
-  claude-sonnet-5-5: null
-model_windows: {}
-overrides: {}
+revisions:
+  - effective: 2026-01-01
+    unit:
+      defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
+      units_per_window: 100
+    capacity:
+      default_claude_max_20x: {five_hour: 100, seven_day: 1000}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 0.5, seven_day: 1}
+    type_multiplier: {cache_read: 0.025, cache_write_1h: 1.25, cache_write_5m: 1.25, input: 1, output: 5}
+    model_weight:
+      claude-opus-5-5: 2
+      claude-sonnet-5-5: null
+    model_windows: {}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-opus-5-5: opus
+      claude-sonnet-5-5: sonnet
 "#;
 
 /// The tightest row is Sonnet's at both TTLs: its read is the largest share of its writes.
 const PRICES: &str = r#"
-effective: 2026-01-01
-models:
-  claude-fable-5-1: {input: 10, cache_write_5m: 12.5, cache_write_1h: 20, cache_read: 0.25, output: 50}
-  claude-opus-5-5: {input: 4, cache_write_5m: 5, cache_write_1h: 8, cache_read: 0.2, output: 20}
-  claude-sonnet-5-5: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.2, output: 10}
+revisions:
+  - effective: 2026-01-01
+    models:
+      claude-fable-5-1: {input: 10, cache_write_5m: 12.5, cache_write_1h: 20, cache_read: 0.25, output: 50}
+      claude-opus-5-5: {input: 4, cache_write_5m: 5, cache_write_1h: 8, cache_read: 0.2, output: 20}
+      claude-sonnet-5-5: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.2, output: 10}
 "#;
 
 #[test]
 fn a_plan_recipe_reads_the_plans_multipliers_on_every_model_and_a_dollar_recipe_its_row_or_the_tightest_row(
 ) {
-    let pricing = PriceTable::from_yaml(PRICES, "test").unwrap();
+    let pricing = PriceRevisions::from_yaml(PRICES, "test")
+        .unwrap()
+        .latest()
+        .clone();
     let tables = PlanTables {
-        costs: SubscriptionCosts::from_yaml(COSTS).unwrap(),
+        revisions: CostRevisions::from_yaml(COSTS).unwrap(),
         path: None,
         source: "test".to_string(),
     };
     let timing = KeepaliveTiming::default();
     let both = |funding: Funding, model: &str| {
-        let factors = factors_for(&pricing, &tables, funding, model, false, 0);
+        let factors = factors_for(&pricing, &tables, funding, model, false, 0, common::NOW);
         (
             break_even_ms(factors, FIVE_MINUTES_MS, &timing),
             break_even_ms(factors, ONE_HOUR_MS, &timing),
@@ -228,7 +237,8 @@ fn a_plan_recipe_reads_the_plans_multipliers_on_every_model_and_a_dollar_recipe_
             Funding::ApiKey,
             "claude-opus-5-5",
             false,
-            0
+            0,
+            common::NOW
         ),
         BreakEvenFactors {
             read: 0.2 / 1_000_000.0,
@@ -268,13 +278,14 @@ fn a_plan_recipe_reads_the_plans_multipliers_on_every_model_and_a_dollar_recipe_
 fn a_plan_recipe_breaks_even_on_the_plans_multipliers_whatever_the_models_weight() {
     let timing = KeepaliveTiming::default();
     let both = |pricing: &PriceTable, tables: &PlanTables, model: &str| {
-        let factors = factors_for(pricing, tables, Funding::Plan, model, false, 0);
+        let factors = factors_for(pricing, tables, Funding::Plan, model, false, 0, common::NOW);
         (
             break_even_ms(factors, FIVE_MINUTES_MS, &timing),
             break_even_ms(factors, ONE_HOUR_MS, &timing),
         )
     };
-    let (prices, plan) = (PriceTable::shipped(), PlanTables::shipped());
+    let (revisions, plan) = (PriceRevisions::shipped(), PlanTables::shipped());
+    let prices = revisions.in_force(common::NOW).clone();
     assert_eq!(
         both(&prices, &plan, "claude-opus-5"),
         (Some(11_760_000), Some(158_760_000)),
@@ -287,16 +298,16 @@ fn a_plan_recipe_breaks_even_on_the_plans_multipliers_whatever_the_models_weight
     );
     let costs = COSTS.replace(
         "overrides: {}",
-        "overrides:\n  claude-sonnet-5-5: {type_multiplier: {cache_read: 0.05}}",
+        "overrides:\n      claude-sonnet-5-5: {type_multiplier: {cache_read: 0.05}}",
     );
     let overridden = PlanTables {
-        costs: SubscriptionCosts::from_yaml(&costs).unwrap(),
+        revisions: CostRevisions::from_yaml(&costs).unwrap(),
         path: None,
         source: "test".to_string(),
     };
     assert_eq!(
         both(
-            &PriceTable::from_yaml(PRICES, "test").unwrap(),
+            PriceRevisions::from_yaml(PRICES, "test").unwrap().latest(),
             &overridden,
             "claude-sonnet-5-5"
         ),
@@ -309,24 +320,36 @@ fn a_plan_recipe_breaks_even_on_the_plans_multipliers_whatever_the_models_weight
 /// `claude-late-1` on a one-hour write, so a model priced nowhere takes each TTL's smallest excess rather than one
 /// whole row.
 const SPLIT_PRICES: &str = r#"
-effective: 2026-01-01
-models:
-  claude-early-1: {input: 1, cache_write_5m: 2, cache_write_1h: 10, cache_read: 1, output: 1}
-  claude-late-1: {input: 1, cache_write_5m: 5, cache_write_1h: 3, cache_read: 1, output: 1}
+revisions:
+  - effective: 2026-01-01
+    models:
+      claude-early-1: {input: 1, cache_write_5m: 2, cache_write_1h: 10, cache_read: 1, output: 1}
+      claude-late-1: {input: 1, cache_write_5m: 5, cache_write_1h: 3, cache_read: 1, output: 1}
 "#;
 
 #[test]
 fn a_model_priced_nowhere_takes_the_tightest_row_of_each_ttl() {
-    let pricing = PriceTable::from_yaml(SPLIT_PRICES, "test").unwrap();
+    let pricing = PriceRevisions::from_yaml(SPLIT_PRICES, "test")
+        .unwrap()
+        .latest()
+        .clone();
     let tables = PlanTables {
-        costs: SubscriptionCosts::from_yaml(COSTS).unwrap(),
+        revisions: CostRevisions::from_yaml(COSTS).unwrap(),
         path: None,
         source: "test".to_string(),
     };
     let timing = KeepaliveTiming::default();
     let at = |model: &str, ttl_ms: i64| {
         break_even_ms(
-            factors_for(&pricing, &tables, Funding::ApiKey, model, false, 0),
+            factors_for(
+                &pricing,
+                &tables,
+                Funding::ApiKey,
+                model,
+                false,
+                0,
+                common::NOW,
+            ),
             ttl_ms,
             &timing,
         )
@@ -354,9 +377,9 @@ fn a_model_priced_nowhere_takes_the_tightest_row_of_each_ttl() {
 #[tokio::test]
 async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
     let rig = common::rig(common::RigSpec {
-        pricing: PriceTable::from_yaml(PRICES, "test").unwrap(),
+        pricing: PriceRevisions::from_yaml(PRICES, "test").unwrap(),
         tables: PlanTables {
-            costs: SubscriptionCosts::from_yaml(COSTS).unwrap(),
+            revisions: CostRevisions::from_yaml(COSTS).unwrap(),
             path: None,
             source: "test".to_string(),
         },
@@ -542,30 +565,42 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
 
 /// Fast cells that are no multiple of the standard ones, and a second model with no fast cells of its own.
 const FAST_PRICES: &str = r#"
-effective: 2026-01-01
-models:
-  claude-opus-5-5:
-    input: 4
-    cache_write_5m: 1.25
-    cache_write_1h: 2.0
-    cache_read: 0.1
-    output: 20
-    fast: {input: 8, cache_write_5m: 2.5, cache_write_1h: 4.0, cache_read: 0.4, output: 40}
-  claude-sonnet-5-5: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.2, output: 10}
+revisions:
+  - effective: 2026-01-01
+    models:
+      claude-opus-5-5:
+        input: 4
+        cache_write_5m: 1.25
+        cache_write_1h: 2.0
+        cache_read: 0.1
+        output: 20
+        fast: {input: 8, cache_write_5m: 2.5, cache_write_1h: 4.0, cache_read: 0.4, output: 40}
+      claude-sonnet-5-5: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.2, output: 10}
 "#;
 
 #[test]
 fn a_fast_recipe_reads_the_fast_cells_and_a_model_without_them_its_standard_ones() {
-    let pricing = PriceTable::from_yaml(FAST_PRICES, "test").unwrap();
+    let pricing = PriceRevisions::from_yaml(FAST_PRICES, "test")
+        .unwrap()
+        .latest()
+        .clone();
     let tables = PlanTables {
-        costs: SubscriptionCosts::from_yaml(COSTS).unwrap(),
+        revisions: CostRevisions::from_yaml(COSTS).unwrap(),
         path: None,
         source: "test".to_string(),
     };
     let timing = KeepaliveTiming::default();
     let at = |model: &str, fast: bool| {
         break_even_ms(
-            factors_for(&pricing, &tables, Funding::ApiKey, model, fast, 0),
+            factors_for(
+                &pricing,
+                &tables,
+                Funding::ApiKey,
+                model,
+                fast,
+                0,
+                common::NOW,
+            ),
             FIVE_MINUTES_MS,
             &timing,
         )
@@ -593,11 +628,12 @@ fn a_fast_recipe_reads_the_fast_cells_and_a_model_without_them_its_standard_ones
 /// Sonnet 4.5's row, keyed undated, is the tightest at five minutes, so whether it stays in a pool's range shows in the
 /// range's low end: 960 s against Sonnet 5.5's 2,760 s and Fable's 11,760 s.
 const UNDATED_PRICES: &str = r#"
-effective: 2026-01-01
-models:
-  claude-fable-5-1: {input: 10, cache_write_5m: 12.5, cache_write_1h: 20, cache_read: 0.25, output: 50}
-  claude-sonnet-4-5: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.5, output: 10}
-  claude-sonnet-5-5: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.2, output: 10}
+revisions:
+  - effective: 2026-01-01
+    models:
+      claude-fable-5-1: {input: 10, cache_write_5m: 12.5, cache_write_1h: 20, cache_read: 0.25, output: 50}
+      claude-sonnet-4-5: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.5, output: 10}
+      claude-sonnet-5-5: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.2, output: 10}
 "#;
 
 /// A request on an undated spelling the catalog lists dated runs under the dated id, which is what the pool's rules
@@ -606,7 +642,7 @@ models:
 #[tokio::test]
 async fn a_deny_naming_the_dated_id_drops_the_undated_row_the_router_maps_to_it() {
     let rig = common::rig(common::RigSpec {
-        pricing: PriceTable::from_yaml(UNDATED_PRICES, "test").unwrap(),
+        pricing: PriceRevisions::from_yaml(UNDATED_PRICES, "test").unwrap(),
         timing: KeepaliveTiming::default(),
         ..common::RigSpec::default()
     })
@@ -659,22 +695,26 @@ async fn a_deny_naming_the_dated_id_drops_the_undated_row_the_router_maps_to_it(
 /// One row priced by prompt length whose set over the threshold reads dearer against its writes: a read of 0.1
 /// against a 1.25 write up to 1,000 prompt tokens, and 0.5 against 2.5 over them.
 const LONG_CONTEXT_PRICES: &str = r#"
-effective: 2026-01-01
-models:
-  claude-haiku-5-5:
-    input: 1
-    cache_write_5m: 1.25
-    cache_write_1h: 2
-    cache_read: 0.1
-    output: 5
-    long_context: {over: 1000, input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.5, output: 10}
+revisions:
+  - effective: 2026-01-01
+    models:
+      claude-haiku-5-5:
+        input: 1
+        cache_write_5m: 1.25
+        cache_write_1h: 2
+        cache_read: 0.1
+        output: 5
+        long_context: {over: 1000, input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.5, output: 10}
 "#;
 
 #[test]
 fn a_prompt_over_the_threshold_breaks_even_at_the_long_context_cells() {
-    let pricing = PriceTable::from_yaml(LONG_CONTEXT_PRICES, "test").unwrap();
+    let pricing = PriceRevisions::from_yaml(LONG_CONTEXT_PRICES, "test")
+        .unwrap()
+        .latest()
+        .clone();
     let tables = PlanTables {
-        costs: SubscriptionCosts::from_yaml(COSTS).unwrap(),
+        revisions: CostRevisions::from_yaml(COSTS).unwrap(),
         path: None,
         source: "test".to_string(),
     };
@@ -688,6 +728,7 @@ fn a_prompt_over_the_threshold_breaks_even_at_the_long_context_cells() {
                 model,
                 fast,
                 prompt_tokens,
+                common::NOW,
             ),
             FIVE_MINUTES_MS,
             &timing,

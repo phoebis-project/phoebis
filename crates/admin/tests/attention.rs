@@ -1,13 +1,21 @@
 //! `GET /admin/attention`: the conditions that hold now, worst first, oldest first within a kind.
 mod common;
 
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::body::Body;
+use axum::http::Request;
 use common::{get, json, login, post};
+use http_body_util::BodyExt;
 use phoebis_bus::{
     ClientFacts, Event, Kind, Origin, Outcome, RequestComplete, RequestObserved, RequestShape,
     ResponseFacts,
 };
+use phoebis_ledger::{AttemptRecord, Metrics, Record, RequestRecord};
 use phoebis_store::{AccountState, AttemptOutcome, StateCause};
 use serde_json::json as j;
+use tower::ServiceExt;
 
 fn observed(id: &str, key: &str, pool: &str) -> Event {
     Event::RequestObserved(RequestObserved {
@@ -310,4 +318,100 @@ async fn the_system_route_answers_without_an_engine_stats_member() {
     let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
     assert!(system["keepalive"].is_object(), "{system}");
     assert!(system.get("alerts").is_none(), "{system}"); // removed name
+}
+
+/// The console at main reads a kind it does not know as an exhausted pool, so the route leaves the unweighted model's
+/// item out until the console names it, while the reader holds it and the metrics listener carries its series.
+#[tokio::test]
+async fn a_held_model_unweighted_condition_stays_off_the_route_while_the_gauge_carries_it() {
+    // The test cost model leaves `claude-opus-5` unweighted under the `opus` model tier at the rig's clock, so the
+    // case reads no shipped figure.
+    let parts =
+        common::admin_parts_full_costed(phoebis_ledger::test_tables::subscription_costs()).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts
+        .store
+        .set_state(
+            "direct",
+            AccountState::FundingRequired,
+            StateCause::Operator,
+        )
+        .unwrap();
+    parts
+        .ledger
+        .record_request(Record::Request {
+            request: RequestRecord {
+                id: "r1".into(),
+                received_at: common::NOW,
+                finished_at: Some(common::NOW + 500),
+                model: "claude-opus-5".into(),
+                canonical_model: "claude-opus-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            attempts: vec![AttemptRecord {
+                request_id: "r1".into(),
+                attempt: 1,
+                account_id: "business".into(),
+                account_kind: "oauth".into(),
+                outcome: "succeeded".into(),
+                input_tokens: Some(1_000),
+                ..Default::default()
+            }],
+            bodies: None,
+        })
+        .await;
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        parts
+            .attention
+            .conditions(common::NOW)
+            .unwrap()
+            .iter()
+            .any(|c| c.kind == phoebis_attention::Kind::ModelUnweighted && c.holds)
+            .then_some(())
+    })
+    .await;
+    let body = json(get(&parts.app, "/admin/attention", Some(&cookie)).await).await;
+    assert_eq!(
+        body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["funding_required"],
+        "every other held kind answers as before: {body}"
+    );
+    let metrics = phoebis_ledger::metrics_router(
+        Arc::new(Metrics::new()),
+        parts.router.clone(),
+        parts.pricing.clone(),
+        parts.bus.clone(),
+        Arc::new(|| common::NOW),
+        Duration::from_secs(60),
+        None,
+        Some(parts.attention.gauge_source()),
+        Some(parts.ledger.clone()),
+    );
+    let response = metrics
+        .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let text = String::from_utf8(
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(
+        text.contains(r#"phoebis_attention{kind="model_unweighted",subject="claude-opus-5"} 1"#),
+        "{text}"
+    );
 }

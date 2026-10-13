@@ -20,9 +20,9 @@ use phoebis_routing::RouterHandle;
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::query::hour_ceil;
+use crate::query::{hour_ceil, priced};
 use crate::rollup::{hour_of, read_rollups_for_key, RollupRow};
-use crate::{LedgerDb, LedgerError};
+use crate::{LedgerDb, LedgerError, PlanTables, PriceRevisions, Pricing};
 
 const DAY_MS: i64 = 86_400_000;
 
@@ -79,18 +79,28 @@ fn add(tokens: &mut UsageTokens, row: &RollupRow) {
 ///
 /// The generation is the presenting key's own `created_at`, so an id an earlier key used answers only what
 /// this key spent, whole hours included: nothing is left out and each window starts where its name says.
+///
+/// Each row's dollars price from its counts at the revision in force at its hour.
 pub fn key_usage_windows(
     conn: &Connection,
     key_id: &str,
     key_generation: i64,
     now: i64,
+    prices: &PriceRevisions,
+    costs: &PlanTables,
 ) -> Result<(KeyUsageWindow, KeyUsageWindow), LedgerError> {
     let day_hour = hour_of(now - DAY_MS);
     let week_hour = hour_of(now - 7 * DAY_MS);
     let rows = read_rollups_for_key(conn, key_id, key_generation, week_hour, hour_ceil(now))?;
     Ok((
-        window(rows.iter().filter(|r| r.hour >= day_hour), day_hour, now),
-        window(rows.iter(), week_hour, now),
+        window(
+            rows.iter().filter(|r| r.hour >= day_hour),
+            day_hour,
+            now,
+            prices,
+            costs,
+        ),
+        window(rows.iter(), week_hour, now, prices, costs),
     ))
 }
 
@@ -100,6 +110,8 @@ fn window<'a>(
     rows: impl Iterator<Item = &'a RollupRow>,
     from_hour: i64,
     to: i64,
+    prices: &PriceRevisions,
+    costs: &PlanTables,
 ) -> KeyUsageWindow {
     let mut out = KeyUsageWindow {
         from: from_hour * 1_000,
@@ -115,7 +127,10 @@ fn window<'a>(
         out.succeeded += row.succeeded;
         out.failed += row.failed + row.rate_limited + row.exhausted + row.rejected;
         out.incomplete += row.incomplete;
-        out.cost_usd += row.estimated_usd;
+        let usd = priced(row, prices, costs)
+            .usd
+            .map_or(0.0, |usd| usd.total());
+        out.cost_usd += usd;
         add(&mut out.tokens, row);
         let model = row.canonical_model.clone();
         let entry = models.entry(model.clone()).or_insert_with(|| ModelUsage {
@@ -123,7 +138,7 @@ fn window<'a>(
             ..ModelUsage::default()
         });
         entry.requests += row.requests;
-        entry.cost_usd += row.estimated_usd;
+        entry.cost_usd += usd;
         add(&mut entry.tokens, row);
     }
     out.models = models.into_values().collect();
@@ -155,14 +170,28 @@ struct Windows {
 struct UsageState {
     clock: Clock,
     db: Arc<LedgerDb>,
+    pricing: Arc<Pricing>,
     router: RouterHandle,
+    tables: Arc<PlanTables>,
 }
 
 /// The self-service route on the proxy listener: `GET /v1/usage` behind the caller's own API key.
-pub fn usage_router(db: Arc<LedgerDb>, router: RouterHandle, clock: Clock) -> Router {
+pub fn usage_router(
+    db: Arc<LedgerDb>,
+    router: RouterHandle,
+    clock: Clock,
+    pricing: Arc<Pricing>,
+    tables: Arc<PlanTables>,
+) -> Router {
     Router::new()
         .route(USAGE_PATH, get(usage))
-        .with_state(Arc::new(UsageState { clock, db, router }))
+        .with_state(Arc::new(UsageState {
+            clock,
+            db,
+            pricing,
+            router,
+            tables,
+        }))
 }
 
 fn no_store(mut response: Response) -> Response {
@@ -196,9 +225,11 @@ async fn usage(State(state): State<Arc<UsageState>>, request: Request<Body>) -> 
         Err(refusal) => return no_store(key_refusal_response(&refusal, &request_id)),
     };
     let key_id = key.id.clone();
+    let prices = state.pricing.revisions();
+    let tables = Arc::clone(&state.tables);
     let (day, week) = match state
         .db
-        .read(move |c| key_usage_windows(c, &key_id, generation, now))
+        .read(move |c| key_usage_windows(c, &key_id, generation, now, &prices, &tables))
         .await
     {
         Ok(windows) => windows,

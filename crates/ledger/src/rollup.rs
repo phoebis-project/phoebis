@@ -1,5 +1,6 @@
-//! The hourly fold: each completed request adds one delta to the row for its hour and its eight-part key, in
-//! the same transaction as its raw rows, so a rollup never disagrees with the requests it summarises.
+//! The hourly fold: each completed request adds its deltas to the rows for its hour and key, one per band, speed and
+//! funding its answered attempts fell in, in the same transaction as its raw rows, so a rollup never disagrees with
+//! the requests it summarises.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -7,6 +8,7 @@ use std::sync::Arc;
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction};
 
+use phoebis_routing::PinUsage;
 use phoebis_store::AccountKind;
 
 use crate::db::LedgerDb;
@@ -14,7 +16,7 @@ use crate::db::LedgerDb;
 use crate::histogram::bucket_index;
 use crate::histogram::Histogram;
 use crate::plan::funding_of;
-use crate::pricing::Speed;
+use crate::pricing::{prompt_tokens, Band, PriceRevisions, Speed};
 use crate::record::{AttemptRecord, EventRecord, KeepaliveDelta, RequestRecord};
 use crate::LedgerError;
 
@@ -42,6 +44,11 @@ pub const FAST_FUNDING: &str = "fast";
 /// The funding of an attempt an api_key account served: billed in dollars whatever its speed or the head's overage
 /// flag, as `funding_of` reads the kind first.
 pub const BILLED_FUNDING: &str = "billed";
+
+/// The prompt-length band a row's attempts priced at: the key word of `Band::Standard`.
+pub const STANDARD_BAND: &str = "standard";
+/// The key word of `Band::LongContext`.
+pub const LONG_BAND: &str = "long";
 
 /// The folded vocabulary the hour row is keyed on; the request row keeps the raw values. A caller picks its user
 /// agent, its effort and its class, and the client is derived from both headers, so an unbounded value would grow
@@ -72,6 +79,19 @@ pub fn fold_user_agent(raw: &str) -> String {
         }
         _ => OTHER_DIMENSION.into(),
     }
+}
+
+/// The speed an answered attempt's row files and prices under: the speed its answer reported, `STANDARD_SPEED` for an
+/// answer that reported none, whatever the request asked for, so the row prices at the cells the attempt was charged.
+fn answered_speed(a: &AttemptRecord) -> &str {
+    a.speed.as_deref().unwrap_or(STANDARD_SPEED)
+}
+
+/// The speed of a request no attempt answered: the serving attempt's reported speed, else what `fold_speed` reads off
+/// the speed the request asked for.
+fn unanswered_speed<'a>(a: Option<&'a AttemptRecord>, requested: Option<&str>) -> &'a str {
+    a.and_then(|a| a.speed.as_deref())
+        .unwrap_or_else(|| fold_speed(requested))
 }
 
 /// `fast` for a request that asked for it, else `STANDARD_SPEED`: the request row keeps the body's `speed` text as
@@ -131,16 +151,11 @@ impl CostSplit {
         self.input_usd + self.cache_read_usd + self.cache_write_usd + self.output_usd
     }
 
-    /// The split a request was folded with is read back from its own rows, so a replace subtracts exactly what
-    /// its first write added rather than a reconstruction.
-    pub fn from_attempts(attempts: &[AttemptRecord]) -> CostSplit {
-        let sum = |f: fn(&AttemptRecord) -> Option<f64>| attempts.iter().filter_map(f).sum::<f64>();
-        CostSplit {
-            input_usd: sum(|a| a.input_usd),
-            cache_read_usd: sum(|a| a.cache_read_usd),
-            cache_write_usd: sum(|a| a.cache_write_usd),
-            output_usd: sum(|a| a.output_usd),
-        }
+    pub fn add(&mut self, o: &CostSplit) {
+        self.input_usd += o.input_usd;
+        self.cache_read_usd += o.cache_read_usd;
+        self.cache_write_usd += o.cache_write_usd;
+        self.output_usd += o.output_usd;
     }
 }
 
@@ -166,15 +181,21 @@ pub struct RollupRow {
     /// The class the client named, `NO_CLASS` for a classless request and for a keepalive credit; a dimension,
     /// so it sits in the key.
     pub request_class: String,
-    /// The speed the last attempt's answer reported, else `fast` when the request asked for it, else
-    /// `STANDARD_SPEED`; a dimension, so it sits in the key.
+    /// The speed the row's attempts' answers reported, `STANDARD_SPEED` for an answer that reported none, so the row
+    /// prices at the cells its attempts were charged. A request with no answered attempt files under its serving
+    /// attempt's, else `fast` when the request asked for it, else `STANDARD_SPEED`. A dimension, so it sits in the key.
     pub speed: String,
-    /// Who paid for the attempt, `funding_of`'s answer as a key word: `billed` for an api_key account's answer
+    /// Who paid for the row's attempts, `funding_of`'s answer as a key word: `billed` for an api_key account's answer
     /// whatever its speed or overage flag; else `fast` when it was served fast, whose answer draws usage credits in
     /// dollars whatever the overage flag; else `overage` when the head's unified headers said overage was in use;
     /// else `plan`. Written with the row, so a reader needs no registry to tell billed spend from plan spend, and a
     /// deleted or recreated account moves none of its rows. A dimension, so it sits in the key.
     pub funding: String,
+    /// The cells the row's attempts priced at (`STANDARD_BAND` or `LONG_BAND`), read against the threshold in
+    /// force at the request's instant. A dimension, so it sits in the key.
+    pub band: String,
+    /// The serving attempt's account tier, `UNATTRIBUTED` for none. A dimension, so it sits in the key.
+    pub tier: String,
     pub requests: u64,
     pub succeeded: u64,
     pub rate_limited: u64,
@@ -195,18 +216,16 @@ pub struct RollupRow {
     pub thinking_tokens: u64,
     pub web_search_requests: u64,
     pub web_fetch_requests: u64,
-    pub estimated_usd: f64,
-    pub input_usd: f64,
-    pub cache_read_usd: f64,
-    pub cache_write_usd: f64,
-    pub output_usd: f64,
     pub kept_warm_requests: u64,
     pub kept_warm_tokens: u64,
-    pub saved_usd_gross: f64,
-    pub probe_cost_usd: f64,
     pub probe_migrated: u64,
     pub wasted_probes: u64,
-    pub wasted_probe_usd: f64,
+    /// The wasted probes' own five token counts, priced when read at the cells the row's band names.
+    pub wasted_input_tokens: u64,
+    pub wasted_cache_read_tokens: u64,
+    pub wasted_cache_write_5m_tokens: u64,
+    pub wasted_cache_write_1h_tokens: u64,
+    pub wasted_output_tokens: u64,
     pub wasted_probe_reasons: BTreeMap<String, u64>,
     pub probes_skipped: u64,
     /// Probes the router refused with `503 ledger_behind` while its ledger caught up, sent again later; outside
@@ -221,6 +240,7 @@ pub struct RollupRow {
 }
 
 impl RollupRow {
+    /// Fifteen key parts: `band` and `tier` after `funding`.
     #[allow(clippy::too_many_arguments)]
     pub fn key(
         hour: i64,
@@ -236,6 +256,8 @@ impl RollupRow {
         request_class: &str,
         speed: &str,
         funding: &str,
+        band: &str,
+        tier: &str,
     ) -> RollupRow {
         RollupRow {
             hour,
@@ -251,6 +273,8 @@ impl RollupRow {
             request_class: request_class.into(),
             speed: speed.into(),
             funding: funding.into(),
+            band: band.into(),
+            tier: tier.into(),
             requests: 0,
             succeeded: 0,
             rate_limited: 0,
@@ -271,18 +295,15 @@ impl RollupRow {
             thinking_tokens: 0,
             web_search_requests: 0,
             web_fetch_requests: 0,
-            estimated_usd: 0.0,
-            input_usd: 0.0,
-            cache_read_usd: 0.0,
-            cache_write_usd: 0.0,
-            output_usd: 0.0,
             kept_warm_requests: 0,
             kept_warm_tokens: 0,
-            saved_usd_gross: 0.0,
-            probe_cost_usd: 0.0,
             probe_migrated: 0,
             wasted_probes: 0,
-            wasted_probe_usd: 0.0,
+            wasted_input_tokens: 0,
+            wasted_cache_read_tokens: 0,
+            wasted_cache_write_5m_tokens: 0,
+            wasted_cache_write_1h_tokens: 0,
+            wasted_output_tokens: 0,
             wasted_probe_reasons: BTreeMap::new(),
             probes_skipped: 0,
             probes_held: 0,
@@ -316,18 +337,15 @@ impl RollupRow {
         self.thinking_tokens += o.thinking_tokens;
         self.web_search_requests += o.web_search_requests;
         self.web_fetch_requests += o.web_fetch_requests;
-        self.estimated_usd += o.estimated_usd;
-        self.input_usd += o.input_usd;
-        self.cache_read_usd += o.cache_read_usd;
-        self.cache_write_usd += o.cache_write_usd;
-        self.output_usd += o.output_usd;
         self.kept_warm_requests += o.kept_warm_requests;
         self.kept_warm_tokens += o.kept_warm_tokens;
-        self.saved_usd_gross += o.saved_usd_gross;
-        self.probe_cost_usd += o.probe_cost_usd;
         self.probe_migrated += o.probe_migrated;
         self.wasted_probes += o.wasted_probes;
-        self.wasted_probe_usd += o.wasted_probe_usd;
+        self.wasted_input_tokens += o.wasted_input_tokens;
+        self.wasted_cache_read_tokens += o.wasted_cache_read_tokens;
+        self.wasted_cache_write_5m_tokens += o.wasted_cache_write_5m_tokens;
+        self.wasted_cache_write_1h_tokens += o.wasted_cache_write_1h_tokens;
+        self.wasted_output_tokens += o.wasted_output_tokens;
         add_counts(&mut self.wasted_probe_reasons, &o.wasted_probe_reasons);
         self.probes_skipped += o.probes_skipped;
         self.probes_held += o.probes_held;
@@ -337,6 +355,63 @@ impl RollupRow {
         self.output_tps_hist.merge(&o.output_tps_hist);
         add_counts(&mut self.errors, &o.errors);
         add_counts(&mut self.cache_miss_reasons, &o.cache_miss_reasons);
+    }
+
+    /// The row's counts as the five-count usage `price_row` takes.
+    pub fn usage(&self) -> PinUsage {
+        PinUsage {
+            input: self.input_tokens,
+            cache_read: self.cache_read_tokens,
+            write_5m: self.cache_write_5m_tokens,
+            write_1h: self.cache_write_1h_tokens,
+            output: self.output_tokens,
+        }
+    }
+
+    /// The wasted probes' counts the same way.
+    pub fn wasted_usage(&self) -> PinUsage {
+        PinUsage {
+            input: self.wasted_input_tokens,
+            cache_read: self.wasted_cache_read_tokens,
+            write_5m: self.wasted_cache_write_5m_tokens,
+            write_1h: self.wasted_cache_write_1h_tokens,
+            output: self.wasted_output_tokens,
+        }
+    }
+
+    /// Whether every count the fold adds is zero: the request counters (`requests`, `probes_held`), `attempts`, the
+    /// five token counts, `thinking_tokens`, `web_search_requests`, `web_fetch_requests`, the keepalive counters
+    /// (`kept_warm_requests`, `kept_warm_tokens`, `probe_migrated`, `probes_skipped`, `wasted_probes`) and the five
+    /// wasted counts. `fold_request` deletes a row it subtracted from only when this holds: a non-serving band row
+    /// has `requests == 0` while another request's attempts still sit in it.
+    pub fn holds_nothing(&self) -> bool {
+        let usage = self.usage();
+        let wasted = self.wasted_usage();
+        [
+            self.requests,
+            self.probes_held,
+            self.attempts,
+            usage.input,
+            usage.cache_read,
+            usage.write_5m,
+            usage.write_1h,
+            usage.output,
+            self.thinking_tokens,
+            self.web_search_requests,
+            self.web_fetch_requests,
+            self.kept_warm_requests,
+            self.kept_warm_tokens,
+            self.probe_migrated,
+            self.probes_skipped,
+            self.wasted_probes,
+            wasted.input,
+            wasted.cache_read,
+            wasted.write_5m,
+            wasted.write_1h,
+            wasted.output,
+        ]
+        .iter()
+        .all(|count| *count == 0)
     }
 }
 
@@ -370,18 +445,25 @@ impl RollupRow {
             .web_search_requests
             .saturating_sub(o.web_search_requests);
         self.web_fetch_requests = self.web_fetch_requests.saturating_sub(o.web_fetch_requests);
-        self.estimated_usd -= o.estimated_usd;
-        self.input_usd -= o.input_usd;
-        self.cache_read_usd -= o.cache_read_usd;
-        self.cache_write_usd -= o.cache_write_usd;
-        self.output_usd -= o.output_usd;
         self.kept_warm_requests = self.kept_warm_requests.saturating_sub(o.kept_warm_requests);
         self.kept_warm_tokens = self.kept_warm_tokens.saturating_sub(o.kept_warm_tokens);
-        self.saved_usd_gross -= o.saved_usd_gross;
-        self.probe_cost_usd -= o.probe_cost_usd;
         self.probe_migrated = self.probe_migrated.saturating_sub(o.probe_migrated);
         self.wasted_probes = self.wasted_probes.saturating_sub(o.wasted_probes);
-        self.wasted_probe_usd -= o.wasted_probe_usd;
+        self.wasted_input_tokens = self
+            .wasted_input_tokens
+            .saturating_sub(o.wasted_input_tokens);
+        self.wasted_cache_read_tokens = self
+            .wasted_cache_read_tokens
+            .saturating_sub(o.wasted_cache_read_tokens);
+        self.wasted_cache_write_5m_tokens = self
+            .wasted_cache_write_5m_tokens
+            .saturating_sub(o.wasted_cache_write_5m_tokens);
+        self.wasted_cache_write_1h_tokens = self
+            .wasted_cache_write_1h_tokens
+            .saturating_sub(o.wasted_cache_write_1h_tokens);
+        self.wasted_output_tokens = self
+            .wasted_output_tokens
+            .saturating_sub(o.wasted_output_tokens);
         subtract_counts(&mut self.wasted_probe_reasons, &o.wasted_probe_reasons);
         self.probes_skipped = self.probes_skipped.saturating_sub(o.probes_skipped);
         self.probes_held = self.probes_held.saturating_sub(o.probes_held);
@@ -411,10 +493,44 @@ fn subtract_counts(into: &mut BTreeMap<String, u64>, from: &BTreeMap<String, u64
     }
 }
 
-pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRow {
-    let costs = CostSplit::from_attempts(attempts);
+/// One delta per distinct (band, speed, funding) triple among the attempts with usage, the band from the attempt's
+/// own prompt against the revision in force at the request's `received_at`, the speed the attempt's own and the
+/// funding `funding_of` reads off the attempt's three facts, each delta summing its attempts' five counts,
+/// `thinking_tokens`, `web_search_requests`, `web_fetch_requests` and its attempt count. The request counters,
+/// `failovers`, the cache figures, the histograms and the errors sit on the serving attempt's delta alone (its band,
+/// its speed, its funding). A request with no attempt with usage files one delta under `STANDARD_BAND` keyed by the
+/// serving attempt's speed and funding. The tier is the serving attempt's on every delta, so a fast retry beside a
+/// standard answer prices at the fast cells and a standard one at the standard cells.
+pub fn deltas_of(
+    request: &RequestRecord,
+    attempts: &[AttemptRecord],
+    prices: &PriceRevisions,
+) -> Vec<RollupRow> {
+    let table = prices.in_force(request.received_at);
+    let model = request.canonical_model.as_str();
     let last = attempts.last();
-    let mut d = RollupRow::key(
+
+    // An attempt's funding whole, read off its own three facts, so the key tells billed spend from plan spend without
+    // the registry. A request no attempt served files under `plan`.
+    let funding_word = |a: Option<&AttemptRecord>| {
+        a.map_or(PLAN_FUNDING, |a| {
+            funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()).rollup_word()
+        })
+    };
+    let band_of = |a: &AttemptRecord| {
+        table
+            .band_of(
+                model,
+                prompt_tokens(
+                    a.input_tokens.unwrap_or(0),
+                    a.cache_read_tokens.unwrap_or(0),
+                    a.cache_write_5m_tokens.unwrap_or(0),
+                    a.cache_write_1h_tokens.unwrap_or(0),
+                ),
+            )
+            .as_str()
+    };
+    let base = RollupRow::key(
         hour_of(request.received_at),
         request.key_id.as_deref().unwrap_or(UNATTRIBUTED),
         request.key_generation,
@@ -435,17 +551,62 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
             .request_class
             .as_deref()
             .map_or_else(|| NO_CLASS.into(), fold_identifier),
-        // A fast request refused before any attempt served (the fast lane spent, the credits unavailable, a local
-        // refusal) still asked for fast: it files under that speed, while its funding reads the served answer,
-        // which spent nothing.
-        last.and_then(|a| a.speed.as_deref())
-            .unwrap_or_else(|| fold_speed(request.requested_speed.as_deref())),
-        // The served attempt's funding whole, read off its own three facts, so the key tells billed spend from plan
-        // spend without the registry. A request no attempt served files under `plan`.
-        last.map_or(PLAN_FUNDING, |a| {
-            funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()).rollup_word()
-        }),
+        STANDARD_SPEED,
+        PLAN_FUNDING,
+        STANDARD_BAND,
+        last.and_then(|a| a.tier.as_deref()).unwrap_or(UNATTRIBUTED),
     );
+    let mut deltas: Vec<RollupRow> = Vec::new();
+    let mut delta_for = |band: &str, speed: &str, funding: &str| -> usize {
+        deltas
+            .iter()
+            .position(|d| d.band == band && d.speed == speed && d.funding == funding)
+            .unwrap_or_else(|| {
+                deltas.push(RollupRow {
+                    band: band.into(),
+                    speed: speed.into(),
+                    funding: funding.into(),
+                    ..base.clone()
+                });
+                deltas.len() - 1
+            })
+    };
+    // Every answered attempt adds its own counts at the cells its own prompt, speed and funding selected, so the row
+    // prices them as the attempt was charged, and an attempt with no usage has no count to add.
+    let mut placed = Vec::with_capacity(attempts.len());
+    for a in attempts.iter().filter(|a| a.has_usage()) {
+        placed.push((
+            delta_for(band_of(a), answered_speed(a), funding_word(Some(a))),
+            a,
+        ));
+    }
+    // A fast request refused before any attempt served (the fast lane spent, the credits unavailable, a local
+    // refusal) still asked for fast: its counters file under that speed, while its funding reads the served answer,
+    // which spent nothing.
+    let serving = match last.filter(|a| a.has_usage()) {
+        Some(a) => delta_for(band_of(a), answered_speed(a), funding_word(Some(a))),
+        None => delta_for(
+            STANDARD_BAND,
+            unanswered_speed(last, request.requested_speed.as_deref()),
+            funding_word(last),
+        ),
+    };
+    for (index, a) in placed {
+        let d = &mut deltas[index];
+        d.attempts += 1;
+        d.input_tokens += a.input_tokens.unwrap_or(0);
+        d.cache_read_tokens += a.cache_read_tokens.unwrap_or(0);
+        d.cache_write_5m_tokens += a.cache_write_5m_tokens.unwrap_or(0);
+        d.cache_write_1h_tokens += a.cache_write_1h_tokens.unwrap_or(0);
+        d.output_tokens += a.output_tokens.unwrap_or(0);
+        d.thinking_tokens += a.thinking_tokens.unwrap_or(0);
+        d.web_search_requests += a.web_search_requests.unwrap_or(0);
+        d.web_fetch_requests += a.web_fetch_requests.unwrap_or(0);
+    }
+    let d = &mut deltas[serving];
+    // The attempts that never answered count beside the request's other counters, so a request's attempts sum to
+    // every attempt it made whichever rows its answers landed in.
+    d.attempts += attempts.iter().filter(|a| !a.has_usage()).count() as u64;
     // Read off the row's kind, status and code rather than its outcome: the relay files a refusal before any attempt
     // as `rejected`, the router's own `503 ledger_behind` among them, though no account was asked.
     let held = request.kind == "probe"
@@ -465,7 +626,6 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
             _ => {}
         }
     }
-    d.attempts = attempts.len() as u64;
     // A 401 replay and an unsent retry both run again on the account the request was already on, so only a
     // move between accounts counts.
     d.failovers = attempts
@@ -485,34 +645,14 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
             d.uncached_requests = 1
         }
     }
-    if let Some(a) = last {
-        d.input_tokens = a.input_tokens.unwrap_or(0);
-        d.cache_read_tokens = a.cache_read_tokens.unwrap_or(0);
-        d.cache_write_5m_tokens = a.cache_write_5m_tokens.unwrap_or(0);
-        d.cache_write_1h_tokens = a.cache_write_1h_tokens.unwrap_or(0);
-        d.output_tokens = a.output_tokens.unwrap_or(0);
-        d.thinking_tokens = a.thinking_tokens.unwrap_or(0);
-        d.web_search_requests = a.web_search_requests.unwrap_or(0);
-        d.web_fetch_requests = a.web_fetch_requests.unwrap_or(0);
-        if let Some(reason) = &a.cache_miss_reason {
-            *d.cache_miss_reasons.entry(reason.clone()).or_default() += 1;
-            if reason == "none" && read == 0 {
-                *d.cache_miss_reasons
-                    .entry("expired_between_turns".into())
-                    .or_default() += 1;
-            }
+    if let Some(reason) = last.and_then(|a| a.cache_miss_reason.as_ref()) {
+        *d.cache_miss_reasons.entry(reason.clone()).or_default() += 1;
+        if reason == "none" && read == 0 {
+            *d.cache_miss_reasons
+                .entry("expired_between_turns".into())
+                .or_default() += 1;
         }
     }
-    // Folded onto a positive zero rather than summed: `Sum<f64>` starts at -0.0, so an hour of unpriced
-    // requests would carry a signed zero into the rollups and out to the wire.
-    d.estimated_usd = attempts
-        .iter()
-        .filter_map(|a| a.estimated_usd)
-        .fold(0.0, |a, b| a + b);
-    d.input_usd = costs.input_usd;
-    d.cache_read_usd = costs.cache_read_usd;
-    d.cache_write_usd = costs.cache_write_usd;
-    d.output_usd = costs.output_usd;
     if !held {
         if let Some(t) = request.ttfb_ms {
             d.ttfb_hist.record(t as f64);
@@ -540,7 +680,7 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
             *d.errors.entry(code.clone()).or_default() += 1;
         }
     }
-    d
+    deltas
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -590,60 +730,24 @@ pub fn fold_request(
     request: &RequestRecord,
     attempts: &[AttemptRecord],
     previous: Option<(&RequestRecord, &[AttemptRecord])>,
+    prices: &PriceRevisions,
 ) -> Result<(), LedgerError> {
-    // A replaced request first leaves the row it was folded into, under the key it had then: the same id can
+    // A replaced request first leaves the rows it was folded into, under the keys it had then: the same id can
     // land under another account or hour once its attempts are known. A request folded under its raw dimensions by
     // an earlier build and replaced after the upgrade keeps its old contribution in the raw row, while the
     // subtraction lands on whatever row the folded key names: none while no request wrote it, so the request counts
-    // in both rows, and a later request's row otherwise, where the counters saturate at zero and the dollar columns
-    // can go below zero while the totals still balance. Accepted for a record replaced across one restart.
+    // in both rows, and a later request's row otherwise, where the counters saturate at zero while the totals still
+    // balance. Accepted for a record replaced across one restart.
     if let Some((old_request, old_attempts)) = previous {
-        let old = delta_of(old_request, old_attempts);
-        if let Some(mut row) = read_rollup(tx, &old)? {
-            row.subtract(&old);
-            // Every delta sets `requests` to 1 but a held probe's, which leaves it at 0 and sets `probes_held`, one
-            // of the counters `keepalive_empty` reads. A row at zero on both holds no request any more: a replace
-            // that moved keys, not one that landed back on its own row. Leaving a row of zeros would surface as a
-            // phantom group in every reader that lists keys rather than summing values.
-            //
-            // A request without a user agent shares the reserved row with its key's keepalive deltas, which
-            // no request row backs; the row goes only when nothing of either is left in it.
-            let keepalive_empty = row.kept_warm_requests == 0
-                && row.kept_warm_tokens == 0
-                && row.saved_usd_gross == 0.0
-                && row.probe_cost_usd == 0.0
-                && row.probe_migrated == 0
-                && row.probes_skipped == 0
-                && row.probes_held == 0
-                && row.wasted_probes == 0
-                && row.wasted_probe_usd == 0.0;
-            if row.requests == 0 && keepalive_empty {
-                delete_rollup(tx, &row)?;
-            } else {
-                write_rollup(tx, &row)?;
-            }
+        for old in deltas_of(old_request, old_attempts, prices) {
+            unfold(tx, &old)?;
         }
     }
-    let delta = delta_of(request, attempts);
-    let mut row = read_rollup(tx, &delta)?.unwrap_or_else(|| {
-        RollupRow::key(
-            delta.hour,
-            &delta.key_id,
-            delta.key_generation,
-            &delta.pool_id,
-            &delta.account_id,
-            &delta.canonical_model,
-            &delta.kind,
-            &delta.user_agent,
-            &delta.client,
-            &delta.effort,
-            &delta.request_class,
-            &delta.speed,
-            &delta.funding,
-        )
-    });
-    row.add(&delta);
-    write_rollup(tx, &row)?;
+    for delta in deltas_of(request, attempts, prices) {
+        let mut row = read_rollup(tx, &delta)?.unwrap_or_else(|| empty_row(&delta));
+        row.add(&delta);
+        write_rollup(tx, &row)?;
+    }
     for a in attempts {
         if reads_utilization(a) {
             fold_account(
@@ -689,6 +793,43 @@ pub fn fold_request(
             .collect();
         for (hour, account_id) in touched {
             reread_utilization(tx, hour, account_id)?;
+        }
+    }
+    Ok(())
+}
+
+/// The row under `delta`'s key with nothing in it yet.
+pub(crate) fn empty_row(delta: &RollupRow) -> RollupRow {
+    RollupRow::key(
+        delta.hour,
+        &delta.key_id,
+        delta.key_generation,
+        &delta.pool_id,
+        &delta.account_id,
+        &delta.canonical_model,
+        &delta.kind,
+        &delta.user_agent,
+        &delta.client,
+        &delta.effort,
+        &delta.request_class,
+        &delta.speed,
+        &delta.funding,
+        &delta.band,
+        &delta.tier,
+    )
+}
+
+/// Takes a delta that was added before back out of its row. A row left holding nothing of any request or probe
+/// goes, since a row of zeros would surface as a phantom group in every reader that lists keys rather than summing
+/// values. A row that keeps another request's counts (a band row its own request does not serve, which carries no
+/// request counter) or a keepalive delta's stays.
+pub(crate) fn unfold(tx: &Transaction<'_>, delta: &RollupRow) -> Result<(), LedgerError> {
+    if let Some(mut row) = read_rollup(tx, delta)? {
+        row.subtract(delta);
+        if row.holds_nothing() {
+            delete_rollup(tx, &row)?;
+        } else {
+            write_rollup(tx, &row)?;
         }
     }
     Ok(())
@@ -749,10 +890,11 @@ fn reread_utilization(
     Ok(())
 }
 
-/// The keepalive engine's own delta: one row of its key, holding what a kept-warm request saved, what a probe
-/// cost, and what a stopped recipe wasted. The user agent and the client are both the reserved id, since a
-/// probe's own request row carries the agent and class the recipe replays and a credit belongs to the key
-/// rather than to one caller.
+/// The keepalive engine's own delta: one row of its key, holding a kept-warm request's credit, a probe's migration
+/// mark, a skip, and the counts a stopped recipe wasted. The user agent and the client are both the reserved id,
+/// since a probe's own request row carries the agent and class the recipe replays and a credit belongs to the key
+/// rather than to one caller. The row keys the delta's own instant, band and account tier, so a settlement filed after
+/// its probe sits in the probe's hour and prices at the cells and the revision the probe ran at.
 pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<(), LedgerError> {
     let key = RollupRow::key(
         hour_of(delta.at),
@@ -772,8 +914,8 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
             STANDARD_SPEED
         },
         // A credit files beside its probe's request row, in the order `funding_of` reads an attempt: `billed` on an
-        // api_key account, `fast` for a fast recipe (whose request row `delta_of` keys `fast` whatever the overage
-        // flag), else the overage fact the probe's answer reported, else `plan`.
+        // api_key account, `fast` for a fast delta (a fast answer's request row `deltas_of` keys `fast` whatever the
+        // overage flag), else the overage fact the probe's answer reported, else `plan`.
         if delta.account_kind == Some(AccountKind::ApiKey) {
             BILLED_FUNDING
         } else if delta.speed == Some(Speed::Fast) {
@@ -783,16 +925,20 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
         } else {
             PLAN_FUNDING
         },
+        delta.band.map_or(STANDARD_BAND, Band::as_str),
+        delta.tier.as_deref().unwrap_or(UNATTRIBUTED),
     );
     let mut row = read_rollup(tx, &key)?.unwrap_or(key);
     row.kept_warm_requests += delta.kept_warm_requests;
     row.kept_warm_tokens += delta.kept_warm_tokens;
-    row.saved_usd_gross += delta.saved_usd_gross;
-    row.probe_cost_usd += delta.probe_cost_usd;
     row.probe_migrated += delta.probe_migrated;
     row.probes_skipped += delta.probes_skipped;
     row.wasted_probes += delta.wasted_probes;
-    row.wasted_probe_usd += delta.wasted_probe_usd;
+    row.wasted_input_tokens += delta.wasted_input_tokens;
+    row.wasted_cache_read_tokens += delta.wasted_cache_read_tokens;
+    row.wasted_cache_write_5m_tokens += delta.wasted_cache_write_5m_tokens;
+    row.wasted_cache_write_1h_tokens += delta.wasted_cache_write_1h_tokens;
+    row.wasted_output_tokens += delta.wasted_output_tokens;
     add_counts(&mut row.wasted_probe_reasons, &delta.wasted_probe_reasons);
     write_rollup(tx, &row)?;
     if let Some(id) = &delta.kept_warm_request_id {
@@ -1065,7 +1211,7 @@ fn take_segments(
     Ok(segments)
 }
 
-const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held";
+const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held";
 const ACCOUNT_SELECT: &str = "SELECT hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json FROM account_rollups_hourly";
 
 pub(crate) fn read_rollup(
@@ -1074,8 +1220,8 @@ pub(crate) fn read_rollup(
 ) -> Result<Option<RollupRow>, LedgerError> {
     Ok(conn
         .query_row(
-            &format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9 AND client = ?10 AND request_class = ?11 AND speed = ?12 AND funding = ?13"),
-            params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort, key.client, key.request_class, key.speed, key.funding],
+            &format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9 AND client = ?10 AND request_class = ?11 AND speed = ?12 AND funding = ?13 AND band = ?14 AND tier = ?15"),
+            params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort, key.client, key.request_class, key.speed, key.funding, key.band, key.tier],
             row_to_rollup,
         )
         .optional()?)
@@ -1083,8 +1229,8 @@ pub(crate) fn read_rollup(
 
 pub(crate) fn delete_rollup(conn: &Connection, key: &RollupRow) -> Result<(), LedgerError> {
     conn.execute(
-        "DELETE FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9 AND client = ?10 AND request_class = ?11 AND speed = ?12 AND funding = ?13",
-        params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort, key.client, key.request_class, key.speed, key.funding],
+        "DELETE FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9 AND client = ?10 AND request_class = ?11 AND speed = ?12 AND funding = ?13 AND band = ?14 AND tier = ?15",
+        params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort, key.client, key.request_class, key.speed, key.funding, key.band, key.tier],
     )?;
     Ok(())
 }
@@ -1093,15 +1239,17 @@ pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), Ledge
     let counts =
         |m: &BTreeMap<String, u64>| serde_json::to_string(m).unwrap_or_else(|_| "{}".into());
     conn.execute(
-        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54)"),
+        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53)"),
         params![
-            r.hour, r.key_id, r.key_generation, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.client, r.effort, r.request_class, r.speed, r.funding, r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
+            r.hour, r.key_id, r.key_generation, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.client, r.effort, r.request_class, r.speed, r.funding, r.band, r.tier,
+            r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
             r.exhausted as i64, r.rejected as i64, r.attempts as i64, r.failovers as i64, r.cache_hits as i64, r.cache_misses as i64, r.uncached_requests as i64,
             r.input_tokens as i64, r.cache_read_tokens as i64, r.cache_write_5m_tokens as i64, r.cache_write_1h_tokens as i64, r.output_tokens as i64,
             r.thinking_tokens as i64, r.web_search_requests as i64, r.web_fetch_requests as i64,
-            r.estimated_usd, r.input_usd, r.cache_read_usd, r.cache_write_usd, r.output_usd, r.kept_warm_requests as i64, r.kept_warm_tokens as i64,
-            r.saved_usd_gross, r.probe_cost_usd, r.probe_migrated as i64, r.wasted_probes as i64, r.wasted_probe_usd, counts(&r.wasted_probe_reasons),
-            r.probes_skipped as i64, r.ttfb_hist.to_le_bytes(), r.ttfc_hist.to_le_bytes(), r.duration_hist.to_le_bytes(), r.output_tps_hist.to_le_bytes(), counts(&r.errors), counts(&r.cache_miss_reasons),
+            r.kept_warm_requests as i64, r.kept_warm_tokens as i64, r.probe_migrated as i64, r.wasted_probes as i64, counts(&r.wasted_probe_reasons),
+            r.probes_skipped as i64, r.wasted_input_tokens as i64, r.wasted_cache_read_tokens as i64, r.wasted_cache_write_5m_tokens as i64,
+            r.wasted_cache_write_1h_tokens as i64, r.wasted_output_tokens as i64,
+            r.ttfb_hist.to_le_bytes(), r.ttfc_hist.to_le_bytes(), r.duration_hist.to_le_bytes(), r.output_tps_hist.to_le_bytes(), counts(&r.errors), counts(&r.cache_miss_reasons),
             r.incomplete as i64, r.probes_held as i64,
         ],
     )?;
@@ -1136,47 +1284,46 @@ fn row_to_rollup_at(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Ro
         request_class: r.get(offset + 10)?,
         speed: r.get(offset + 11)?,
         funding: r.get(offset + 12)?,
-        requests: u(13)?,
-        succeeded: u(14)?,
-        rate_limited: u(15)?,
-        failed: u(16)?,
-        exhausted: u(17)?,
-        rejected: u(18)?,
-        attempts: u(19)?,
-        failovers: u(20)?,
-        cache_hits: u(21)?,
-        cache_misses: u(22)?,
-        uncached_requests: u(23)?,
-        input_tokens: u(24)?,
-        cache_read_tokens: u(25)?,
-        cache_write_5m_tokens: u(26)?,
-        cache_write_1h_tokens: u(27)?,
-        output_tokens: u(28)?,
-        thinking_tokens: u(29)?,
-        web_search_requests: u(30)?,
-        web_fetch_requests: u(31)?,
-        estimated_usd: r.get(offset + 32)?,
-        input_usd: r.get(offset + 33)?,
-        cache_read_usd: r.get(offset + 34)?,
-        cache_write_usd: r.get(offset + 35)?,
-        output_usd: r.get(offset + 36)?,
-        kept_warm_requests: u(37)?,
-        kept_warm_tokens: u(38)?,
-        saved_usd_gross: r.get(offset + 39)?,
-        probe_cost_usd: r.get(offset + 40)?,
-        probe_migrated: u(41)?,
-        wasted_probes: u(42)?,
-        wasted_probe_usd: r.get(offset + 43)?,
-        wasted_probe_reasons: counts(44)?,
-        probes_skipped: u(45)?,
-        ttfb_hist: hist(46)?,
-        ttfc_hist: hist(47)?,
-        duration_hist: hist(48)?,
-        output_tps_hist: hist(49)?,
-        errors: counts(50)?,
-        cache_miss_reasons: counts(51)?,
-        incomplete: u(52)?,
-        probes_held: u(53)?,
+        band: r.get(offset + 13)?,
+        tier: r.get(offset + 14)?,
+        requests: u(15)?,
+        succeeded: u(16)?,
+        rate_limited: u(17)?,
+        failed: u(18)?,
+        exhausted: u(19)?,
+        rejected: u(20)?,
+        attempts: u(21)?,
+        failovers: u(22)?,
+        cache_hits: u(23)?,
+        cache_misses: u(24)?,
+        uncached_requests: u(25)?,
+        input_tokens: u(26)?,
+        cache_read_tokens: u(27)?,
+        cache_write_5m_tokens: u(28)?,
+        cache_write_1h_tokens: u(29)?,
+        output_tokens: u(30)?,
+        thinking_tokens: u(31)?,
+        web_search_requests: u(32)?,
+        web_fetch_requests: u(33)?,
+        kept_warm_requests: u(34)?,
+        kept_warm_tokens: u(35)?,
+        probe_migrated: u(36)?,
+        wasted_probes: u(37)?,
+        wasted_probe_reasons: counts(38)?,
+        probes_skipped: u(39)?,
+        wasted_input_tokens: u(40)?,
+        wasted_cache_read_tokens: u(41)?,
+        wasted_cache_write_5m_tokens: u(42)?,
+        wasted_cache_write_1h_tokens: u(43)?,
+        wasted_output_tokens: u(44)?,
+        ttfb_hist: hist(45)?,
+        ttfc_hist: hist(46)?,
+        duration_hist: hist(47)?,
+        output_tps_hist: hist(48)?,
+        errors: counts(49)?,
+        cache_miss_reasons: counts(50)?,
+        incomplete: u(51)?,
+        probes_held: u(52)?,
     })
 }
 
@@ -1261,7 +1408,7 @@ fn select_statement(from_hour: i64, to_hour: i64, select: &RollupSelect) -> (Str
     }
     (
         format!(
-            "SELECT {COLUMNS} FROM rollups_hourly WHERE {} ORDER BY hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding",
+            "SELECT {COLUMNS} FROM rollups_hourly WHERE {} ORDER BY hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier",
             clauses.join(" AND ")
         ),
         binds,
@@ -1343,7 +1490,7 @@ pub fn read_rollups_for_key(
     from_hour: i64,
     to_hour: i64,
 ) -> Result<Vec<RollupRow>, LedgerError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE} ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE} ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier"))?;
     let rows = stmt.query_map(
         params![key_id, key_generation, from_hour, to_hour],
         row_to_rollup,
@@ -1369,10 +1516,14 @@ mod tests {
     use crate::db::read_version;
     use crate::record::*;
 
+    /// The rollup columns as version 33 held them, the last shape with the dollar columns and without the band, the
+    /// tier and the wasted counts, which the older versions' column lists strip further.
+    const V33_COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held";
+
     /// The rollup columns as version 2 held them, which is the shape a stored database still has when the
     /// migration runs over it.
     fn v2_columns() -> String {
-        COLUMNS
+        V33_COLUMNS
             .replace(", user_agent", "")
             .replace(", client", "")
             .replace(", effort", "")
@@ -1449,6 +1600,133 @@ mod tests {
             !rollups.iter().any(|c| c == "probes_skipped"),
             "probes_skipped is migration 5's column: {rollups:?}"
         );
+        assert!(
+            attempts.iter().any(|c| c == "estimated_usd")
+                && attempts.iter().any(|c| c == "pricing_version")
+                && !attempts.iter().any(|c| c == "tier"),
+            "estimated_usd and pricing_version are version 1's own, which migration 33 drops, and the tier is \
+             migration 33's: {attempts:?}"
+        );
+    }
+
+    /// The attempt columns migration 33 drops: the five dollar figures, which a reader prices from the counts, and
+    /// the stamp of the table that priced them.
+    const DROPPED_ATTEMPT_COLUMNS: [&str; 6] = [
+        "cache_read_usd",
+        "cache_write_usd",
+        "estimated_usd",
+        "input_usd",
+        "output_usd",
+        "pricing_version",
+    ];
+
+    /// The rollup columns migration 34 drops: the eight dollar figures, which a reader prices from the counts.
+    const DROPPED_ROLLUP_COLUMNS: [&str; 8] = [
+        "cache_read_usd",
+        "cache_write_usd",
+        "estimated_usd",
+        "input_usd",
+        "output_usd",
+        "probe_cost_usd",
+        "saved_usd_gross",
+        "wasted_probe_usd",
+    ];
+
+    /// The rollup columns migration 34 adds: the wasted probes' five counts beside the two key parts.
+    const ADDED_ROLLUP_COLUMNS: [&str; 7] = [
+        "band",
+        "tier",
+        "wasted_cache_read_tokens",
+        "wasted_cache_write_1h_tokens",
+        "wasted_cache_write_5m_tokens",
+        "wasted_input_tokens",
+        "wasted_output_tokens",
+    ];
+
+    /// The rollup table at the newest version: no dollar column, the five wasted counts, and the band and the tier
+    /// as the last two of fifteen key parts.
+    fn assert_rollups_carry_counts_and_no_dollars(conn: &Connection) {
+        let (_, _, rollups) = shape(conn);
+        for dropped in DROPPED_ROLLUP_COLUMNS {
+            assert!(
+                !rollups.iter().any(|c| c == dropped),
+                "migration 34 dropped {dropped}: {rollups:?}"
+            );
+        }
+        for added in ADDED_ROLLUP_COLUMNS {
+            assert!(
+                rollups.iter().any(|c| c == added),
+                "migration 34 added {added}: {rollups:?}"
+            );
+        }
+        let mut stmt = conn
+            .prepare(
+                "SELECT name FROM pragma_table_info('rollups_hourly') WHERE pk > 0 ORDER BY pk",
+            )
+            .unwrap();
+        let key: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(
+            key,
+            [
+                "hour",
+                "key_id",
+                "key_generation",
+                "pool_id",
+                "account_id",
+                "canonical_model",
+                "kind",
+                "user_agent",
+                "client",
+                "effort",
+                "request_class",
+                "speed",
+                "funding",
+                "band",
+                "tier"
+            ],
+            "the band and the tier key the row after the funding"
+        );
+    }
+
+    /// A row folded before migration 34 reads under the standard band and the reserved tier with no wasted count.
+    fn assert_pre_upgrade_rows_file_under_standard_and_no_tier(conn: &Connection) {
+        let mut stmt = conn
+            .prepare(
+                "SELECT band, tier, wasted_input_tokens + wasted_cache_read_tokens + wasted_cache_write_5m_tokens \
+                 + wasted_cache_write_1h_tokens + wasted_output_tokens FROM rollups_hourly",
+            )
+            .unwrap();
+        let rows: Vec<(String, String, i64)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(!rows.is_empty());
+        for row in rows {
+            assert_eq!(
+                row,
+                (STANDARD_BAND.to_string(), UNATTRIBUTED.to_string(), 0),
+                "nothing is backfilled: the row files under the standard band and the reserved tier"
+            );
+        }
+    }
+
+    /// The attempt holds no dollar column and no stamp at the newest version, and carries the account's tier.
+    fn assert_attempts_carry_the_tier_and_no_dollars(attempts: &[String]) {
+        for dropped in DROPPED_ATTEMPT_COLUMNS {
+            assert!(
+                !attempts.iter().any(|c| c == dropped),
+                "migration 33 dropped {dropped}: {attempts:?}"
+            );
+        }
+        assert!(
+            attempts.iter().any(|c| c == "tier"),
+            "migration 33 added the tier: {attempts:?}"
+        );
     }
 
     /// A file holding exactly what version 1 created reaches the newest version with the newest shape.
@@ -1464,6 +1742,21 @@ mod tests {
                 [],
             )
             .unwrap();
+            conn.execute(
+                "INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, \
+                 outcome, input_tokens, estimated_usd, pricing_version) \
+                 VALUES ('r1', 1, 'a', 'oauth', 1000, 'succeeded', 10, 0.5, '2026-09-08')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                &format!(
+                    "INSERT INTO rollups_hourly ({}) VALUES ({V2_ROW})",
+                    v2_columns()
+                ),
+                [],
+            )
+            .unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
         assert_eq!(
@@ -1472,6 +1765,27 @@ mod tests {
         );
         let (tables, attempts, _) = db.read_blocking(|c| Ok(shape(c))).unwrap();
         assert_eq!(tables, FINAL_TABLES);
+        assert_attempts_carry_the_tier_and_no_dollars(&attempts);
+        db.read_blocking(|c| {
+            assert_rollups_carry_counts_and_no_dollars(c);
+            assert_pre_upgrade_rows_file_under_standard_and_no_tier(c);
+            Ok(())
+        })
+        .unwrap();
+        let row: (Option<String>, Option<i64>) = db
+            .read_blocking(|c| {
+                Ok(c.query_row(
+                    "SELECT tier, input_tokens FROM attempts WHERE request_id = 'r1'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(
+            row,
+            (None, Some(10)),
+            "a row from before the column reads no tier and keeps its counts"
+        );
     }
 
     /// The fresh path is the upgrade path from version 1, so a file that did not exist reads the same version and
@@ -1488,8 +1802,14 @@ mod tests {
         );
         let (tables, attempts, rollups) = db.read_blocking(|c| Ok(shape(c))).unwrap();
         assert_eq!(tables, FINAL_TABLES);
+        assert_attempts_carry_the_tier_and_no_dollars(&attempts);
         assert!(rollups.iter().any(|c| c == "probes_skipped"));
         assert!(rollups.iter().any(|c| c == "probes_held"));
+        db.read_blocking(|c| {
+            assert_rollups_carry_counts_and_no_dollars(c);
+            Ok(())
+        })
+        .unwrap();
     }
 
     /// A stored ledger has rollup rows under the six-part key, and SQLite cannot add a seventh to a primary
@@ -1519,7 +1839,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 32);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 34);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
@@ -1535,6 +1855,12 @@ mod tests {
             (UNATTRIBUTED, 3_600, "k", 5, 6),
             "a row folded before the column existed takes the reserved id and keeps its counts"
         );
+        db.read_blocking(|c| {
+            assert_rollups_carry_counts_and_no_dollars(c);
+            assert_pre_upgrade_rows_file_under_standard_and_no_tier(c);
+            Ok(())
+        })
+        .unwrap();
     }
 
     /// A stored ledger at version 15 has no client column on its rows or its rollup key. The migration adds
@@ -1563,7 +1889,7 @@ mod tests {
                      (3600, 'k', 0, 'p', 'a', 'm', 'inference', 'ua/1', 'none', 5, 5, 0, 0, 0, 0, 5, 0, 0, 0, 5, \
                      1, 2, 3, 4, 6, 0, 0, 0, 0.5, 0.1, 0.1, 0.1, 0.2, 0, 0, 0.0, 0.0, 0, 0, 0.0, '{{}}', 0, \
                      x'', x'', x'', x'', '{{}}', '{{}}')",
-                    COLUMNS
+                    V33_COLUMNS
                         .replace(", client", "")
                         .replace(", request_class", "")
                         .replace(", speed", "")
@@ -1577,7 +1903,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 32);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 34);
         let columns: Vec<String> = db
             .read_blocking(|c| {
                 let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -1629,8 +1955,9 @@ mod tests {
                     client: Some("claude-code/cli".into()),
                     ..Default::default()
                 },
-                &[attempt(1, "a", None, None, None, None)],
+                &[attempt(1, "a", None, None, None)],
                 None,
+                &prices(),
             )?;
             tx.commit()?;
             Ok(())
@@ -1672,7 +1999,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 32);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 34);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -1688,6 +2015,56 @@ mod tests {
             20,
             "the interval folds on a ledger that predates the table it is kept in"
         );
+    }
+
+    /// The test price list. The requests here arrive before its first date, so each prices at its first entry.
+    fn prices() -> PriceRevisions {
+        crate::test_tables::api_prices()
+    }
+
+    /// A model the test list carries without a long-context block, so its attempts fold under the standard band.
+    const SONNET: &str = "claude-sonnet-5-5";
+
+    /// The test list's model priced by prompt length.
+    const HAIKU: &str = "claude-haiku-5-5";
+
+    /// `HAIKU`'s threshold in the entry in force at `at`.
+    fn haiku_over(at: i64) -> u64 {
+        prices().in_force(at).models[HAIKU]
+            .long_context
+            .as_ref()
+            .expect("the test list's Haiku 5.5 is priced by prompt length")
+            .over
+    }
+
+    /// The one delta a request files, for a case whose attempts fall in one band, speed and funding.
+    fn one_delta(
+        r: &RequestRecord,
+        attempts: &[AttemptRecord],
+        prices: &PriceRevisions,
+    ) -> RollupRow {
+        let mut deltas = deltas_of(r, attempts, prices);
+        assert_eq!(deltas.len(), 1, "{deltas:?}");
+        deltas.remove(0)
+    }
+
+    /// An answered attempt whose prompt is `prompt` uncached input tokens, with ten output tokens.
+    fn prompted(n: u32, account: &str, prompt: u64) -> AttemptRecord {
+        AttemptRecord {
+            input_tokens: Some(prompt),
+            ..attempt(n, account, None, None, Some(10))
+        }
+    }
+
+    /// An attempt with no answer, so no usage: a 429 before the stream, say.
+    fn unanswered(n: u32, account: &str) -> AttemptRecord {
+        AttemptRecord {
+            input_tokens: None,
+            outcome: "failed".into(),
+            upstream_status: Some(429),
+            thinking_tokens: Some(7),
+            ..attempt(n, account, None, None, None)
+        }
     }
 
     fn request(outcome: &str, status: Option<u16>, key: Option<&str>) -> RequestRecord {
@@ -1717,7 +2094,6 @@ mod tests {
         read: Option<u64>,
         write: Option<u64>,
         out: Option<u64>,
-        usd: Option<f64>,
     ) -> AttemptRecord {
         AttemptRecord {
             request_id: "r".into(),
@@ -1729,7 +2105,6 @@ mod tests {
             cache_write_5m_tokens: write,
             output_tokens: out,
             input_tokens: Some(10),
-            estimated_usd: usd,
             cache_miss_reason: Some("none".into()),
             ratelimit_5h_utilization: Some(0.5),
             ..Default::default()
@@ -1776,7 +2151,7 @@ mod tests {
         r.client = Some(long.clone());
         r.effort = Some(long.clone());
         r.request_class = Some(long.clone());
-        let d = delta_of(&r, &[]);
+        let d = one_delta(&r, &[], &prices());
         assert_eq!(
             (
                 d.user_agent.as_str(),
@@ -1793,12 +2168,12 @@ mod tests {
             "the key files the folded values"
         );
         r.user_agent = Some("no product token".into());
-        assert_eq!(delta_of(&r, &[]).user_agent, OTHER_DIMENSION);
+        assert_eq!(one_delta(&r, &[], &prices()).user_agent, OTHER_DIMENSION);
         r.user_agent = None;
         r.client = None;
         r.effort = None;
         r.request_class = None;
-        let d = delta_of(&r, &[]);
+        let d = one_delta(&r, &[], &prices());
         assert_eq!(
             (
                 d.user_agent.as_str(),
@@ -1820,7 +2195,7 @@ mod tests {
             requested_speed: Some("fast".into()),
             ..request("exhausted", Some(429), Some("k"))
         };
-        let d = delta_of(&refused, &[]);
+        let d = one_delta(&refused, &[], &prices());
         assert_eq!(
             (d.speed.as_str(), d.funding.as_str()),
             ("fast", PLAN_FUNDING),
@@ -1831,14 +2206,14 @@ mod tests {
             ..refused.clone()
         };
         assert_eq!(
-            delta_of(&caller_text, &[]).speed,
+            one_delta(&caller_text, &[], &prices()).speed,
             STANDARD_SPEED,
             "the caller's text never keys a row"
         );
-        let mut served = attempt(1, "a", None, None, Some(5), None);
+        let mut served = attempt(1, "a", None, None, Some(5));
         served.speed = Some(STANDARD_SPEED.into());
         assert_eq!(
-            delta_of(&refused, &[served]).speed,
+            one_delta(&refused, &[served], &prices()).speed,
             STANDARD_SPEED,
             "the speed the answer reported outranks the one the request asked for"
         );
@@ -1855,7 +2230,7 @@ mod tests {
             attempts: 0,
             ..request("rejected", Some(503), Some("k"))
         };
-        let d = delta_of(&held, &[]);
+        let d = one_delta(&held, &[], &prices());
         assert_eq!(
             (
                 (d.probes_held, d.requests),
@@ -1903,18 +2278,17 @@ mod tests {
 
     #[test]
     fn the_key_is_the_serving_account_and_the_reserved_id_stands_in_for_what_is_missing() {
-        let d = delta_of(
-            &request("succeeded", Some(200), Some("k")),
+        let r = RequestRecord {
+            canonical_model: SONNET.into(),
+            ..request("succeeded", Some(200), Some("k"))
+        };
+        let d = one_delta(
+            &r,
             &[
-                attempt(1, "a", None, None, None, Some(0.1)),
-                AttemptRecord {
-                    input_usd: Some(0.1),
-                    cache_read_usd: Some(0.05),
-                    cache_write_usd: Some(0.0),
-                    output_usd: Some(0.15),
-                    ..attempt(2, "b", Some(5), None, Some(20), Some(0.2))
-                },
+                attempt(1, "a", None, None, None),
+                attempt(2, "b", Some(5), None, Some(20)),
             ],
+            &prices(),
         );
         assert_eq!(
             (
@@ -1925,7 +2299,7 @@ mod tests {
                 d.canonical_model.as_str(),
                 d.kind.as_str()
             ),
-            (3_600, "k", "p", "b", "m", "inference")
+            (3_600, "k", "p", "b", SONNET, "inference")
         );
         assert_eq!(
             (
@@ -1939,12 +2313,18 @@ mod tests {
             ),
             (1, 1, 2, 1, 1, 0, 0)
         );
+        // Both attempts answered under one band, speed and funding, so both are counted on the serving account's
+        // row: ten input tokens each, and the second's cache read and output.
         assert_eq!(
-            (d.input_tokens, d.cache_read_tokens, d.output_tokens),
-            (10, 5, 20)
+            (
+                d.input_tokens,
+                d.cache_read_tokens,
+                d.output_tokens,
+                d.band.as_str(),
+                d.tier.as_str()
+            ),
+            (20, 5, 20, STANDARD_BAND, UNATTRIBUTED)
         );
-        assert!((d.estimated_usd - 0.3).abs() < 1e-9);
-        assert!((d.input_usd - 0.1).abs() < 1e-9 && (d.output_usd - 0.15).abs() < 1e-9);
         assert_eq!(
             d.ttfb_hist.count()
                 + d.ttfc_hist.count()
@@ -1964,7 +2344,7 @@ mod tests {
             "a none with a cache read is a hit"
         );
         assert!(d.errors.is_empty());
-        let d = delta_of(&request("rejected", Some(401), None), &[]);
+        let d = one_delta(&request("rejected", Some(401), None), &[], &prices());
         assert_eq!(
             (
                 d.key_id.as_str(),
@@ -1977,9 +2357,10 @@ mod tests {
             (UNATTRIBUTED, UNATTRIBUTED, UNATTRIBUTED, 1, 0, 1)
         );
         assert_eq!(d.errors.get("upstream_unreachable"), Some(&1));
-        let d = delta_of(
+        let d = one_delta(
             &request("failed", Some(429), Some("k")),
-            &[attempt(1, "a", None, Some(3), None, None)],
+            &[attempt(1, "a", None, Some(3), None)],
+            &prices(),
         );
         assert_eq!((d.rate_limited, d.failed, d.cache_misses), (1, 0, 1));
         assert_eq!(
@@ -1990,9 +2371,10 @@ mod tests {
             (Some(&1), Some(&1)),
             "a none with no cache read expired between turns"
         );
-        let d = delta_of(
+        let d = one_delta(
             &request("canceled", Some(503), Some("k")),
-            &[attempt(1, "a", None, None, None, None)],
+            &[attempt(1, "a", None, None, None)],
+            &prices(),
         );
         assert_eq!((d.rate_limited, d.failed), (0, 1));
     }
@@ -2231,12 +2613,13 @@ mod tests {
     #[test]
     fn a_failover_is_a_move_between_accounts_not_every_extra_attempt() {
         let two = |first: &str, second: &str| {
-            delta_of(
+            one_delta(
                 &request("succeeded", Some(200), Some("k")),
                 &[
-                    attempt(1, first, None, None, None, None),
-                    attempt(2, second, None, None, None, None),
+                    attempt(1, first, None, None, None),
+                    attempt(2, second, None, None, None),
                 ],
+                &prices(),
             )
         };
         let replayed = two("a", "a");
@@ -2252,34 +2635,33 @@ mod tests {
     fn folding_two_requests_adds_a_replacement_subtracts_its_old_self_and_the_row_round_trips() {
         let db = crate::LedgerDb::open_in_memory().unwrap();
         let (req, attempts) = (
-            request("succeeded", Some(200), Some("k")),
-            vec![AttemptRecord {
-                input_usd: Some(0.05),
-                cache_read_usd: Some(0.02),
-                cache_write_usd: Some(0.0),
-                output_usd: Some(0.13),
-                thinking_tokens: Some(25),
-                web_search_requests: Some(2),
-                web_fetch_requests: Some(1),
-                ..attempt(1, "a", Some(5), None, Some(20), Some(0.2))
-            }],
-        );
-        let (req2, attempts2) = (
             RequestRecord {
-                id: "r2".into(),
+                canonical_model: SONNET.into(),
                 ..request("succeeded", Some(200), Some("k"))
             },
             vec![AttemptRecord {
                 thinking_tokens: Some(25),
                 web_search_requests: Some(2),
                 web_fetch_requests: Some(1),
-                ..attempt(1, "a", Some(5), None, Some(20), Some(0.2))
+                ..attempt(1, "a", Some(5), None, Some(20))
+            }],
+        );
+        let (req2, attempts2) = (
+            RequestRecord {
+                id: "r2".into(),
+                ..req.clone()
+            },
+            vec![AttemptRecord {
+                thinking_tokens: Some(25),
+                web_search_requests: Some(2),
+                web_fetch_requests: Some(1),
+                ..attempt(1, "a", Some(5), None, Some(20))
             }],
         );
         db.write(|c| {
             let tx = c.transaction()?;
-            fold_request(&tx, &req, &attempts, None)?;
-            fold_request(&tx, &req2, &attempts2, None)?;
+            fold_request(&tx, &req, &attempts, None, &prices())?;
+            fold_request(&tx, &req2, &attempts2, None, &prices())?;
             tx.commit()?;
             Ok(())
         })
@@ -2288,8 +2670,8 @@ mod tests {
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
         assert_eq!(rows.len(), 1);
-        let mut expected = delta_of(&req, &attempts);
-        expected.add(&delta_of(&req2, &attempts2));
+        let mut expected = one_delta(&req, &attempts, &prices());
+        expected.add(&one_delta(&req2, &attempts2, &prices()));
         assert_eq!(rows[0], expected, "two requests, two contributions");
         let accounts = db
             .read_blocking(|c| read_account_rollups(c, 0, i64::MAX))
@@ -2301,21 +2683,17 @@ mod tests {
             ),
             ("a", Some(0.5))
         );
-        // The first request is written again with more output and a different split: its earlier split goes,
-        // the new one lands whole, never mixed with what it replaced.
+        // The first request is written again with more output and a cache write: its earlier split goes, the new
+        // one lands whole, never mixed with what it replaced.
         let more = vec![AttemptRecord {
-            input_usd: Some(0.3),
-            cache_read_usd: Some(0.1),
-            cache_write_usd: Some(0.05),
-            output_usd: Some(0.45),
             thinking_tokens: Some(30),
             web_search_requests: Some(1),
             web_fetch_requests: Some(0),
-            ..attempt(1, "a", Some(5), None, Some(50), Some(0.9))
+            ..attempt(1, "a", Some(5), Some(100), Some(50))
         }];
         db.write(|c| {
             let tx = c.transaction()?;
-            fold_request(&tx, &req, &more, Some((&req, &attempts)))?;
+            fold_request(&tx, &req, &more, Some((&req, &attempts)), &prices())?;
             tx.commit()?;
             Ok(())
         })
@@ -2323,8 +2701,12 @@ mod tests {
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
-        let mut expected = delta_of(&req2, &attempts2);
-        expected.add(&delta_of(&req, &more));
+        let mut expected = one_delta(&req2, &attempts2, &prices());
+        expected.add(&one_delta(&req, &more, &prices()));
+        assert_eq!(
+            rows[0], expected,
+            "the replacement stands in for what it took back"
+        );
         assert_eq!(
             (rows[0].requests, rows[0].output_tokens),
             (2, 70),
@@ -2339,35 +2721,594 @@ mod tests {
             (55, 3, 1),
             "the replacement's counts stand in for the ones it took back"
         );
-        assert!((rows[0].estimated_usd - expected.estimated_usd).abs() < 1e-9);
         assert_eq!(
             rows[0].output_tps_hist, expected.output_tps_hist,
             "the old sample left the histogram"
         );
-        assert!(
-            (rows[0].input_usd - 0.3).abs() < 1e-9
-                && (rows[0].cache_read_usd - 0.1).abs() < 1e-9
-                && (rows[0].cache_write_usd - 0.05).abs() < 1e-9
-                && (rows[0].output_usd - 0.45).abs() < 1e-9,
-            "the replaced request's split lands whole, unblended with what it replaced"
+        // The second request's counts and the replacement's: ten input tokens and five cache reads each, the
+        // replacement's hundred cache writes, and 20 + 50 output tokens.
+        assert_eq!(
+            (
+                rows[0].input_tokens,
+                rows[0].cache_read_tokens,
+                rows[0].cache_write_5m_tokens
+            ),
+            (20, 10, 100),
+            "the replaced request's counts land whole, unblended with what it replaced"
         );
-        assert!(
-            rows[0].input_usd >= 0.0
-                && rows[0].cache_read_usd >= 0.0
-                && rows[0].cache_write_usd >= 0.0
-                && rows[0].output_usd >= 0.0,
-            "a replace never drives a stored split column negative"
+        // A request whose two answered attempts fall in two bands, replaced by a version its serving account moved
+        // under: both of its band rows go back to zero and leave, and the new row stands under the new account.
+        let two_bands = RequestRecord {
+            id: "r3".into(),
+            canonical_model: HAIKU.into(),
+            ..request("succeeded", Some(200), Some("k"))
+        };
+        let over = haiku_over(two_bands.received_at);
+        let answered = vec![prompted(1, "c", over + 1), prompted(2, "c", over)];
+        let moved = vec![prompted(1, "d", over)];
+        let haiku_rows = |account: &str| -> Vec<(String, u64, u64)> {
+            db.read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+                .unwrap()
+                .into_iter()
+                .filter(|r| r.canonical_model == HAIKU && r.account_id == account)
+                .map(|r| (r.band, r.attempts, r.input_tokens))
+                .collect()
+        };
+        db.write(|c| {
+            let tx = c.transaction()?;
+            fold_request(&tx, &two_bands, &answered, None, &prices())?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            haiku_rows("c"),
+            [
+                (LONG_BAND.to_string(), 1, over + 1),
+                (STANDARD_BAND.to_string(), 1, over)
+            ],
+            "one row per band before the replace"
+        );
+        db.write(|c| {
+            let tx = c.transaction()?;
+            fold_request(
+                &tx,
+                &two_bands,
+                &moved,
+                Some((&two_bands, &answered)),
+                &prices(),
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            haiku_rows("c"),
+            [],
+            "both band rows went back to zero and left"
+        );
+        assert_eq!(
+            haiku_rows("d"),
+            [(STANDARD_BAND.to_string(), 1, over)],
+            "the replacement files under its own serving account"
         );
     }
 
+    /// An attempt whose answer named no cache counts reads its prompt as its input alone, so the input decides which
+    /// side of the threshold its row falls on.
     #[test]
-    fn an_hour_of_unpriced_requests_rolls_up_an_unsigned_zero() {
-        let delta = delta_of(&RequestRecord::default(), &[]);
+    fn an_attempts_missing_counts_read_as_zero_in_its_prompt_length() {
+        let r = RequestRecord {
+            canonical_model: HAIKU.into(),
+            ..request("succeeded", Some(200), Some("k"))
+        };
+        let band = |input: u64| {
+            let a = AttemptRecord {
+                input_tokens: Some(input),
+                cache_read_tokens: None,
+                cache_write_5m_tokens: None,
+                cache_write_1h_tokens: None,
+                ..attempt(1, "a", None, None, None)
+            };
+            one_delta(&r, &[a], &prices()).band
+        };
+        let over = haiku_over(r.received_at);
         assert_eq!(
-            serde_json::to_string(&delta.estimated_usd).unwrap(),
-            "0.0",
-            "a signed zero on the wire is read back as -$0.00"
+            (band(over), band(over + 1)),
+            (STANDARD_BAND.to_string(), LONG_BAND.to_string())
         );
+    }
+
+    /// The fold reads a request's band at the threshold in force when it arrived, whichever revision is the latest:
+    /// a prompt between the two entries' thresholds files under `long` before the second entry and `standard` from
+    /// its instant on.
+    #[test]
+    fn the_fold_reads_a_requests_band_at_the_revision_in_force_when_it_arrived() {
+        let february = crate::effective_instant("2026-02-01").expect("a date");
+        let (january_over, february_over) = (haiku_over(february - 1), haiku_over(february));
+        assert!(
+            january_over < february_over,
+            "the second entry raises the threshold"
+        );
+        let band = |received_at: i64| {
+            let r = RequestRecord {
+                received_at,
+                canonical_model: HAIKU.into(),
+                ..request("succeeded", Some(200), Some("k"))
+            };
+            one_delta(&r, &[prompted(1, "a", january_over + 1)], &prices()).band
+        };
+        assert_eq!(
+            (band(february - 1), band(february)),
+            (LONG_BAND.to_string(), STANDARD_BAND.to_string())
+        );
+    }
+
+    /// Two answered attempts on either side of the threshold fold into one delta per band, each with its own
+    /// attempt's counts and an attempt count of one, the request counters and the errors on the serving (last)
+    /// attempt's delta alone and the serving attempt's tier on both. A request no attempt answered files one delta
+    /// under the standard band.
+    #[test]
+    fn a_request_whose_answered_attempts_fall_in_two_bands_folds_one_delta_per_band() {
+        let r = RequestRecord {
+            canonical_model: HAIKU.into(),
+            ..request("incomplete", Some(200), Some("k"))
+        };
+        let over = haiku_over(r.received_at);
+        let deltas = deltas_of(
+            &r,
+            &[
+                AttemptRecord {
+                    tier: Some("default_claude_max_5x".into()),
+                    ..prompted(1, "a", over + 1)
+                },
+                AttemptRecord {
+                    tier: Some("default_claude_max_20x".into()),
+                    ..prompted(2, "a", over)
+                },
+            ],
+            &prices(),
+        );
+        let seen: Vec<_> = deltas
+            .iter()
+            .map(|d| {
+                (
+                    d.band.as_str(),
+                    d.tier.as_str(),
+                    d.input_tokens,
+                    d.output_tokens,
+                    d.attempts,
+                    (d.requests, d.incomplete, d.errors.len()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (
+                    LONG_BAND,
+                    "default_claude_max_20x",
+                    over + 1,
+                    10,
+                    1,
+                    (0, 0, 0)
+                ),
+                (
+                    STANDARD_BAND,
+                    "default_claude_max_20x",
+                    over,
+                    10,
+                    1,
+                    (1, 1, 1)
+                ),
+            ]
+        );
+        let none = one_delta(
+            &request("failed", Some(529), Some("k")),
+            &[AttemptRecord {
+                input_tokens: None,
+                ..attempt(1, "a", None, None, None)
+            }],
+            &prices(),
+        );
+        assert_eq!(
+            (none.band.as_str(), none.requests, none.failed),
+            (STANDARD_BAND, 1, 1)
+        );
+    }
+
+    /// An attempt without usage, a 429 before the answer, adds no count to any delta: the request's one delta holds
+    /// the answered attempt's counts alone. Its attempt still counts beside the request's other counters, so a
+    /// request's attempts sum to every attempt it made.
+    #[test]
+    fn an_attempt_without_usage_adds_no_counts_to_any_delta() {
+        let d = one_delta(
+            &RequestRecord {
+                canonical_model: SONNET.into(),
+                ..request("succeeded", Some(200), Some("k"))
+            },
+            &[unanswered(1, "a"), attempt(2, "b", Some(5), None, Some(20))],
+            &prices(),
+        );
+        assert_eq!(
+            (
+                d.input_tokens,
+                d.cache_read_tokens,
+                d.output_tokens,
+                d.thinking_tokens
+            ),
+            (10, 5, 20, 0),
+            "the answered attempt's counts alone"
+        );
+        assert_eq!(
+            (d.account_id.as_str(), d.attempts, d.failovers, d.requests),
+            ("b", 2, 1, 1)
+        );
+    }
+
+    /// A serving attempt without usage, a request that failed before an answer after an earlier attempt answered,
+    /// files the request counters, the failover, the cache figures, the timings and the errors on a delta of their
+    /// own under the standard band, keyed by the serving attempt's speed and funding, with no count in it.
+    #[test]
+    fn a_serving_attempt_without_usage_files_the_request_counters_under_standard_with_no_counts() {
+        let r = RequestRecord {
+            canonical_model: HAIKU.into(),
+            ..request("failed", Some(529), Some("k"))
+        };
+        let over = haiku_over(r.received_at);
+        let deltas = deltas_of(
+            &r,
+            &[prompted(1, "a", over + 1), unanswered(2, "b")],
+            &prices(),
+        );
+        let seen: Vec<_> = deltas
+            .iter()
+            .map(|d| {
+                (
+                    (d.band.as_str(), d.speed.as_str(), d.funding.as_str()),
+                    (d.input_tokens, d.output_tokens, d.thinking_tokens),
+                    (d.attempts, d.requests, d.failed, d.failovers),
+                    (d.uncached_requests, d.duration_hist.count(), d.errors.len()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (
+                    (LONG_BAND, STANDARD_SPEED, PLAN_FUNDING),
+                    (over + 1, 10, 0),
+                    (1, 0, 0, 0),
+                    (0, 0, 0)
+                ),
+                (
+                    (STANDARD_BAND, STANDARD_SPEED, PLAN_FUNDING),
+                    (0, 0, 0),
+                    (1, 1, 1, 1),
+                    (1, 1, 1)
+                ),
+            ]
+        );
+    }
+
+    /// An answer that reported no speed was served standard whatever the request asked for, so its row files and
+    /// prices at the standard cells, as the session burn prices the same attempt.
+    #[test]
+    fn an_answer_that_reported_no_speed_folds_and_prices_at_the_standard_cells_on_a_fast_request() {
+        const OPUS: &str = "claude-opus-5-5";
+        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let r = RequestRecord {
+            canonical_model: OPUS.into(),
+            requested_speed: Some("fast".into()),
+            ..request("succeeded", Some(200), Some("k"))
+        };
+        let answered = AttemptRecord {
+            input_tokens: Some(1_000_000),
+            speed: None,
+            account_kind: "oauth".into(),
+            ..attempt(1, "a", None, None, None)
+        };
+        db.write(|c| {
+            let tx = c.transaction()?;
+            fold_request(&tx, &r, std::slice::from_ref(&answered), None, &prices())?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        let rows = db
+            .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+            .unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.speed.as_str(), row.funding.as_str(), row.input_tokens))
+                .collect::<Vec<_>>(),
+            [(STANDARD_SPEED, PLAN_FUNDING, 1_000_000)],
+            "the answer's own speed keys the row"
+        );
+        let row = &rows[0];
+        let key = crate::price::RowKey {
+            model: &row.canonical_model,
+            speed: Speed::of(Some(row.speed.as_str())),
+            band: Band::of_rollup(&row.band),
+            funding: crate::plan::Funding::of_rollup(&row.funding),
+            kind: row.kind.as_str(),
+            tier: None,
+            at: row.hour * 1_000,
+            band_at: None,
+        };
+        let costs = crate::test_tables::subscription_costs();
+        let usd = crate::price::price_row(&prices(), &costs, &key, row.usage())
+            .usd
+            .expect("the test list carries the model")
+            .total();
+        let standard = prices().in_force(r.received_at).models[OPUS].standard.input;
+        let attempt_usd = prices()
+            .in_force(r.received_at)
+            .estimate(
+                OPUS,
+                Speed::of(answered.speed.as_deref()),
+                1_000_000,
+                0,
+                0,
+                0,
+                0,
+            )
+            .expect("the test list carries the model")
+            .0;
+        assert!(
+            (usd - standard).abs() < 1e-9 && (usd - attempt_usd).abs() < 1e-9,
+            "{usd} against the standard input cell {standard} and the attempt's own price {attempt_usd}"
+        );
+    }
+
+    /// A fast retry beside a standard answer folds into two deltas, each at its own speed and funding, so each
+    /// prices at its own cells once the row carries no dollar: a million input tokens at the fast cell and a million
+    /// at the standard one.
+    #[test]
+    fn a_fast_attempt_beside_a_standard_one_folds_into_two_deltas_priced_at_their_own_cells() {
+        const OPUS: &str = "claude-opus-5-5";
+        let r = RequestRecord {
+            canonical_model: OPUS.into(),
+            ..request("succeeded", Some(200), Some("k"))
+        };
+        let million = |n: u32, speed: &str| AttemptRecord {
+            input_tokens: Some(1_000_000),
+            speed: Some(speed.into()),
+            account_kind: "oauth".into(),
+            ..attempt(n, "a", None, None, None)
+        };
+        let deltas = deltas_of(
+            &r,
+            &[million(1, "fast"), million(2, STANDARD_SPEED)],
+            &prices(),
+        );
+        let seen: Vec<_> = deltas
+            .iter()
+            .map(|d| {
+                (
+                    (d.band.as_str(), d.speed.as_str(), d.funding.as_str()),
+                    (d.input_tokens, d.attempts, d.requests),
+                )
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ((STANDARD_BAND, "fast", FAST_FUNDING), (1_000_000, 1, 0)),
+                (
+                    (STANDARD_BAND, STANDARD_SPEED, PLAN_FUNDING),
+                    (1_000_000, 1, 1)
+                ),
+            ]
+        );
+        let costs = crate::test_tables::subscription_costs();
+        let priced: f64 = deltas
+            .iter()
+            .map(|d| {
+                let key = crate::price::RowKey {
+                    model: &d.canonical_model,
+                    speed: Speed::of(Some(d.speed.as_str())),
+                    band: Band::of_rollup(&d.band),
+                    funding: crate::plan::Funding::of_rollup(&d.funding),
+                    kind: d.kind.as_str(),
+                    tier: None,
+                    at: d.hour * 1_000,
+                    band_at: None,
+                };
+                crate::price::price_row(&prices(), &costs, &key, d.usage())
+                    .usd
+                    .expect("the test list carries the model")
+                    .total()
+            })
+            .sum();
+        let list = prices();
+        let row = &list.in_force(r.received_at).models[OPUS];
+        let fast = row
+            .fast
+            .as_ref()
+            .expect("the test list's Opus 5.5 serves fast");
+        assert!(
+            (priced - (fast.input + row.standard.input)).abs() < 1e-9,
+            "{priced} against the fast and the standard input cells over a million each"
+        );
+    }
+
+    /// Two requests whose earlier attempts both fall under `long` and whose serving attempts fall under `standard`
+    /// share the `long` row, which no request counter backs. Replacing one with a version without its earlier
+    /// attempt takes its counts out of the shared row and leaves the other request's there, while its own standard
+    /// row moves as any replace moves it.
+    #[test]
+    fn a_replaced_request_leaves_the_counts_another_request_holds_in_the_band_row_they_share() {
+        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let first = RequestRecord {
+            canonical_model: HAIKU.into(),
+            ..request("succeeded", Some(200), Some("k"))
+        };
+        let second = RequestRecord {
+            id: "r2".into(),
+            ..first.clone()
+        };
+        let over = haiku_over(first.received_at);
+        let both = vec![prompted(1, "a", over + 1), prompted(2, "a", over)];
+        let serving_alone = vec![prompted(1, "a", over)];
+        db.write(|c| {
+            let tx = c.transaction()?;
+            fold_request(&tx, &first, &both, None, &prices())?;
+            fold_request(&tx, &second, &both, None, &prices())?;
+            fold_request(
+                &tx,
+                &first,
+                &serving_alone,
+                Some((&first, &both)),
+                &prices(),
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        let rows: Vec<_> = db
+            .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.band, r.attempts, r.requests, r.input_tokens))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (LONG_BAND.to_string(), 1, 0, over + 1),
+                (STANDARD_BAND.to_string(), 2, 2, 2 * over),
+            ],
+            "the shared long row keeps the second request's counts"
+        );
+    }
+
+    /// A keepalive delta keys the probe's own hour, band and tier: a settlement carrying the wasted counts of a
+    /// long-context probe files them under `long` at the probe's hour, and a delta with no band under `standard`.
+    #[test]
+    fn a_keepalive_delta_files_its_wasted_counts_under_its_own_hour_band_and_tier() {
+        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let settled = KeepaliveDelta {
+            at: 7_300_000,
+            key_id: "k".into(),
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            canonical_model: HAIKU.into(),
+            kind: "probe".into(),
+            wasted_probes: 1,
+            wasted_input_tokens: 1,
+            wasted_cache_read_tokens: 2,
+            wasted_cache_write_5m_tokens: 3,
+            wasted_cache_write_1h_tokens: 4,
+            wasted_output_tokens: 5,
+            tier: Some("default_claude_max_20x".into()),
+            band: Some(Band::LongContext),
+            ..Default::default()
+        };
+        let skipped = KeepaliveDelta {
+            probes_skipped: 1,
+            tier: None,
+            band: None,
+            ..settled.clone()
+        };
+        db.write(|c| {
+            let tx = c.transaction()?;
+            fold_keepalive(&tx, &settled)?;
+            fold_keepalive(
+                &tx,
+                &KeepaliveDelta {
+                    wasted_probes: 0,
+                    wasted_input_tokens: 0,
+                    wasted_cache_read_tokens: 0,
+                    wasted_cache_write_5m_tokens: 0,
+                    wasted_cache_write_1h_tokens: 0,
+                    wasted_output_tokens: 0,
+                    ..skipped
+                },
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        let rows: Vec<_> = db
+            .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+            .unwrap()
+            .into_iter()
+            .map(|r| {
+                (
+                    (r.hour, r.band.clone(), r.tier.clone()),
+                    (r.wasted_probes, r.probes_skipped),
+                    r.wasted_usage(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (
+                    (
+                        hour_of(7_300_000),
+                        LONG_BAND.to_string(),
+                        "default_claude_max_20x".to_string()
+                    ),
+                    (1, 0),
+                    PinUsage {
+                        input: 1,
+                        cache_read: 2,
+                        write_5m: 3,
+                        write_1h: 4,
+                        output: 5
+                    }
+                ),
+                (
+                    (
+                        hour_of(7_300_000),
+                        STANDARD_BAND.to_string(),
+                        UNATTRIBUTED.to_string()
+                    ),
+                    (0, 1),
+                    PinUsage::default()
+                ),
+            ]
+        );
+    }
+
+    /// A row holds something while any count the fold adds is above zero, a wasted count, a kept-warm count or an
+    /// attempt's tokens alone among them, and nothing once every one is zero.
+    #[test]
+    fn a_row_holds_nothing_only_when_every_count_the_fold_adds_is_zero() {
+        let zeros = RollupRow::key(
+            3_600,
+            "k",
+            0,
+            "p",
+            "a",
+            "m",
+            "inference",
+            "-",
+            "-",
+            "-",
+            "-",
+            "standard",
+            "plan",
+            "long",
+            "-",
+        );
+        assert!(zeros.holds_nothing());
+        let with = |set: fn(&mut RollupRow)| {
+            let mut row = zeros.clone();
+            set(&mut row);
+            row.holds_nothing()
+        };
+        assert!(!with(|r| r.wasted_cache_read_tokens = 1), "a wasted count");
+        assert!(!with(|r| r.kept_warm_tokens = 1), "a kept-warm count");
+        assert!(
+            !with(|r| {
+                r.attempts = 1;
+                r.input_tokens = 10;
+            }),
+            "an attempt's tokens"
+        );
+        assert!(!with(|r| r.output_tokens = 1), "a token count alone");
     }
 
     /// Every numeric column carries its own value, so a read off the wrong index cannot pass.
@@ -2386,6 +3327,8 @@ mod tests {
             "subagent",
             "fast",
             "overage",
+            "long",
+            "default_claude_max_20x",
         );
         r.requests = 10;
         r.succeeded = 11;
@@ -2407,18 +3350,15 @@ mod tests {
         r.thinking_tokens = 25;
         r.web_search_requests = 2;
         r.web_fetch_requests = 1;
-        r.estimated_usd = 28.5;
-        r.input_usd = 29.5;
-        r.cache_read_usd = 30.5;
-        r.cache_write_usd = 31.5;
-        r.output_usd = 32.5;
         r.kept_warm_requests = 33;
         r.kept_warm_tokens = 34;
-        r.saved_usd_gross = 35.5;
-        r.probe_cost_usd = 36.5;
         r.probe_migrated = 37;
         r.wasted_probes = 38;
-        r.wasted_probe_usd = 39.5;
+        r.wasted_input_tokens = 50;
+        r.wasted_cache_read_tokens = 51;
+        r.wasted_cache_write_5m_tokens = 52;
+        r.wasted_cache_write_1h_tokens = 53;
+        r.wasted_output_tokens = 54;
         r.wasted_probe_reasons = BTreeMap::from([("idle_limit".to_string(), 40)]);
         r.probes_skipped = 41;
         r.probes_held = 49;
@@ -2466,10 +3406,24 @@ mod tests {
         assert_eq!(
             (
                 read.effort.as_str(),
-                read.estimated_usd,
+                read.band.as_str(),
+                read.tier.as_str(),
+                read.wasted_usage(),
                 read.cache_miss_reasons["none"]
             ),
-            ("high", 28.5, 47)
+            (
+                "high",
+                LONG_BAND,
+                "default_claude_max_20x",
+                PinUsage {
+                    input: 50,
+                    cache_read: 51,
+                    write_5m: 52,
+                    write_1h: 53,
+                    output: 54
+                },
+                47
+            )
         );
     }
 
@@ -2480,7 +3434,7 @@ mod tests {
             thinking_tokens: Some(25),
             web_search_requests: Some(2),
             web_fetch_requests: Some(1),
-            ..attempt(n, "a", Some(5), None, Some(40), Some(0.2))
+            ..attempt(n, "a", Some(5), None, Some(40))
         };
         let first = (request("succeeded", Some(200), Some("k")), vec![counted(1)]);
         let second = (
@@ -2492,8 +3446,8 @@ mod tests {
         );
         db.write(|c| {
             let tx = c.transaction()?;
-            fold_request(&tx, &first.0, &first.1, None)?;
-            fold_request(&tx, &second.0, &second.1, None)?;
+            fold_request(&tx, &first.0, &first.1, None, &prices())?;
+            fold_request(&tx, &second.0, &second.1, None, &prices())?;
             tx.commit()?;
             Ok(())
         })
@@ -2528,6 +3482,13 @@ mod tests {
         old.web_fetch_requests = 0;
         old.incomplete = 0;
         old.probes_held = 0;
+        old.band = STANDARD_BAND.into();
+        old.tier = UNATTRIBUTED.into();
+        old.wasted_input_tokens = 0;
+        old.wasted_cache_read_tokens = 0;
+        old.wasted_cache_write_5m_tokens = 0;
+        old.wasted_cache_write_1h_tokens = 0;
+        old.wasted_output_tokens = 0;
         {
             let mut conn = Connection::open(&path).unwrap();
             conn.execute_batch(crate::schema::SCHEMA).unwrap();
@@ -2540,9 +3501,9 @@ mod tests {
                 [],
             )
             .unwrap();
-            // The version-7 column list: every column a later migration added, stripped back out of the live
-            // constant, so a column a later migration adds needs its own strip here.
-            let v7 = COLUMNS
+            // The version-7 column list: every column a later migration added, stripped back out of the version-33
+            // list, so a column a later migration adds needs its own strip here.
+            let v7 = V33_COLUMNS
                 .replace(", client", "")
                 .replace(", effort", "")
                 .replace(", request_class", "")
@@ -2588,18 +3549,18 @@ mod tests {
                     old.cache_write_5m_tokens as i64,
                     old.cache_write_1h_tokens as i64,
                     old.output_tokens as i64,
-                    old.estimated_usd,
-                    old.input_usd,
-                    old.cache_read_usd,
-                    old.cache_write_usd,
-                    old.output_usd,
+                    28.5,
+                    29.5,
+                    30.5,
+                    31.5,
+                    32.5,
                     old.kept_warm_requests as i64,
                     old.kept_warm_tokens as i64,
-                    old.saved_usd_gross,
-                    old.probe_cost_usd,
+                    35.5,
+                    36.5,
                     old.probe_migrated as i64,
                     old.wasted_probes as i64,
-                    old.wasted_probe_usd,
+                    39.5,
                     counts(&old.wasted_probe_reasons),
                     old.probes_skipped as i64,
                     old.ttfb_hist.to_le_bytes(),
@@ -2614,7 +3575,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 32);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 34);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
@@ -2627,8 +3588,8 @@ mod tests {
         expected.funding = PLAN_FUNDING.into();
         assert_eq!(
             rows[0], expected,
-            "every old value is where it was, effort is none, and the three sums, the incomplete count and the \
-             held count are zero"
+            "every old value is where it was, effort is none, the three sums, the incomplete count, the held count \
+             and the wasted counts are zero, and the row files under the standard band and the reserved tier"
         );
     }
 }

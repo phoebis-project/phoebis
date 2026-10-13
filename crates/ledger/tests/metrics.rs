@@ -10,7 +10,7 @@ use common::*;
 use fake_upstream::{FakeUpstream, Rule};
 use phoebis_bus::SubscriberStats;
 use phoebis_ledger::{
-    AttemptRecord, AttentionGaugeSource, AttentionGauges, LedgerConfig, Metrics, PriceTable,
+    AttemptRecord, AttentionGaugeSource, AttentionGauges, LedgerConfig, Metrics, PriceRevisions,
     Pricing, QuotaSampleRecord, RequestRecord, RoutingGauges,
 };
 use tower::ServiceExt;
@@ -25,7 +25,8 @@ fn series_of(text: &str) -> BTreeSet<String> {
 #[test]
 fn ten_thousand_sessions_and_models_leave_the_label_set_bounded() {
     let metrics = Metrics::new();
-    let table = PriceTable::shipped();
+    let revisions = PriceRevisions::shipped();
+    let table = revisions.in_force(0);
     for i in 0..10_000u32 {
         let model = format!("vendor/model-{i}");
         let request = RequestRecord {
@@ -55,7 +56,7 @@ fn ten_thousand_sessions_and_models_leave_the_label_set_bounded() {
             ttfb_ms: request.ttfb_ms,
             ..Default::default()
         };
-        metrics.observe_request(&table, &request, &[attempt]);
+        metrics.observe_request(table, &request, &[attempt]);
     }
     let priced = RequestRecord {
         id: "p".into(),
@@ -71,7 +72,7 @@ fn ten_thousand_sessions_and_models_leave_the_label_set_bounded() {
         ..Default::default()
     };
     metrics.observe_request(
-        &table,
+        table,
         &priced,
         &[AttemptRecord {
             request_id: "p".into(),
@@ -121,7 +122,8 @@ fn ten_thousand_sessions_and_models_leave_the_label_set_bounded() {
 #[test]
 fn a_response_past_the_last_finite_bucket_is_exported_as_inf_only() {
     let metrics = Metrics::new();
-    let table = PriceTable::shipped();
+    let revisions = PriceRevisions::shipped();
+    let table = revisions.in_force(0);
     let observe = |ttfb_ms: i64| {
         let request = RequestRecord {
             id: "r".into(),
@@ -138,7 +140,7 @@ fn a_response_past_the_last_finite_bucket_is_exported_as_inf_only() {
             ..Default::default()
         };
         metrics.observe_request(
-            &table,
+            table,
             &request,
             &[AttemptRecord {
                 request_id: "r".into(),
@@ -329,7 +331,7 @@ async fn a_scrape_reads_the_routers_drop_counters_at_gather() {
         .await;
     let gauges = phoebis_ledger::gather(
         &router,
-        &PriceTable::shipped(),
+        PriceRevisions::shipped().in_force(1_000),
         1_000,
         60_000,
         None,
@@ -397,7 +399,7 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
     .unwrap();
     let gauges = phoebis_ledger::gather(
         &router,
-        &PriceTable::shipped(),
+        PriceRevisions::shipped().in_force(1_000),
         1_000,
         60_000,
         None,
@@ -468,7 +470,7 @@ async fn an_overage_observations_reset_decides_the_gauge_rather_than_the_raw_fla
         .await;
     let gauges = phoebis_ledger::gather(
         &router,
-        &PriceTable::shipped(),
+        PriceRevisions::shipped().in_force(2_000),
         2_000,
         60_000,
         None,
@@ -549,7 +551,7 @@ async fn the_pin_gauge_reads_the_routing_loops_count_per_pool() {
     );
     let gauges = phoebis_ledger::gather(
         &h.router,
-        &PriceTable::shipped(),
+        PriceRevisions::shipped().in_force(0),
         0,
         60_000,
         None,
@@ -678,6 +680,7 @@ fn the_attention_gauge_reads_one_series_per_condition_with_its_labels_escaped() 
                 ("pool_exhausted", "main".into(), true),
                 ("client_drift", "2.1.274".into(), false),
                 ("pool_exhausted", "odd\"pool".into(), false),
+                ("model_unweighted", "claude-opus-5".into(), true),
             ],
         },
         ..RoutingGauges::default()
@@ -688,6 +691,7 @@ fn the_attention_gauge_reads_one_series_per_condition_with_its_labels_escaped() 
         r#"phoebis_attention{kind="pool_exhausted",subject="main"} 1"#,
         r#"phoebis_attention{kind="client_drift",subject="2.1.274"} 0"#,
         r#"phoebis_attention{kind="pool_exhausted",subject="odd\"pool"} 0"#,
+        r#"phoebis_attention{kind="model_unweighted",subject="claude-opus-5"} 1"#,
     ] {
         assert!(text.contains(line), "missing {line} in:\n{text}");
     }
@@ -709,7 +713,7 @@ async fn an_attention_read_that_fails_answers_the_scrape_500_with_no_family() {
         let app = phoebis_ledger::metrics_router(
             Arc::new(Metrics::new()),
             router.clone(),
-            Arc::new(Pricing::new(PriceTable::shipped())),
+            Arc::new(Pricing::new(PriceRevisions::shipped())),
             phoebis_bus::Bus::new(),
             Arc::new(|| 1_000),
             Duration::from_secs(60),
@@ -750,5 +754,179 @@ async fn an_attention_read_that_fails_answers_the_scrape_500_with_no_family() {
     assert!(
         !text.contains("disk gone"),
         "the listener asks for no credential, so the store's words stay in the log"
+    );
+}
+
+/// A price revision that lists a model under another key moves its `model` label at its own date: the landing labels
+/// each request off the revision in force when the request arrived, so a request before the date keeps the dated key
+/// and one after it reads the undated key the later revision lists.
+#[tokio::test]
+async fn a_landed_request_reads_its_model_label_off_the_revision_in_force_when_it_arrived() {
+    const RENAMED: &str = "\
+revisions:
+  - effective: 2026-01-01
+    models:
+      claude-renamed-1-20260101: {input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, output: 1}
+  - effective: 2026-02-01
+    models:
+      claude-renamed-1: {input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, output: 1}
+";
+    let revisions = PriceRevisions::from_yaml(RENAMED, "test").expect("the renamed list parses");
+    let january = phoebis_ledger::test_tables::JANUARY_2026;
+    let february = phoebis_ledger::effective_instant("2026-02-01").unwrap() + 43_200_000;
+    let store = Arc::new(
+        phoebis_store::Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap(),
+    );
+    let clock: phoebis_oauth::Clock = Arc::new(move || february);
+    let router = phoebis_routing::spawn(store.clone(), clock.clone(), Default::default()).unwrap();
+    let db = Arc::new(phoebis_ledger::LedgerDb::open_in_memory().unwrap());
+    let metrics = Arc::new(Metrics::new());
+    let ledger = phoebis_ledger::spawn(
+        db,
+        Arc::new(Pricing::new(revisions)),
+        Arc::new(phoebis_ledger::PlanTables::shipped()),
+        store,
+        &phoebis_bus::Bus::new(),
+        router,
+        clock,
+        metrics.clone(),
+        LedgerConfig::default(),
+    );
+    for (id, at) in [("r-january", january), ("r-february", february)] {
+        ledger
+            .record_request(phoebis_ledger::Record::Request {
+                request: RequestRecord {
+                    id: id.into(),
+                    received_at: at,
+                    finished_at: Some(at + 500),
+                    key_id: Some("k".into()),
+                    model: "claude-renamed-1-20260101".into(),
+                    canonical_model: "claude-renamed-1-20260101".into(),
+                    kind: "inference".into(),
+                    origin: "client".into(),
+                    status: Some(200),
+                    outcome: "succeeded".into(),
+                    attempts: 1,
+                    ..Default::default()
+                },
+                attempts: vec![AttemptRecord {
+                    request_id: id.into(),
+                    attempt: 1,
+                    account_id: "a".into(),
+                    account_kind: "oauth".into(),
+                    outcome: "succeeded".into(),
+                    input_tokens: Some(10),
+                    output_tokens: Some(5),
+                    ..Default::default()
+                }],
+                bodies: None,
+            })
+            .await;
+    }
+    let (dated, undated) = (
+        r#"phoebis_attempts_total{account="a",model="claude-renamed-1-20260101",outcome="succeeded"} 1"#,
+        r#"phoebis_attempts_total{account="a",model="claude-renamed-1",outcome="succeeded"} 1"#,
+    );
+    let text = wait_for(Duration::from_secs(5), || {
+        let text = metrics.render(&RoutingGauges::default(), &[], 0);
+        (text.contains(dated) && text.contains(undated)).then_some(text)
+    })
+    .await;
+    assert!(
+        text.contains(
+            r#"phoebis_tokens_total{account="a",kind="input",model="claude-renamed-1"} 10"#
+        ),
+        "the token series take the same label:\n{text}"
+    );
+}
+
+/// The unknown-model total and the unweighted models count a request after its batch commits, so a try the file
+/// refused counts nothing and the retry that lands it counts it once.
+#[tokio::test]
+async fn a_batch_the_file_refused_once_counts_its_request_once_when_its_retry_lands() {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    let january = phoebis_ledger::test_tables::JANUARY_2026;
+    let clock_cell = Arc::new(AtomicI64::new(january));
+    let clock: phoebis_oauth::Clock = {
+        let c = clock_cell.clone();
+        Arc::new(move || c.load(Ordering::SeqCst))
+    };
+    let store = Arc::new(
+        phoebis_store::Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap(),
+    );
+    let router = phoebis_routing::spawn(store.clone(), clock.clone(), Default::default()).unwrap();
+    let db = Arc::new(phoebis_ledger::LedgerDb::open_in_memory().unwrap());
+    let sql = |sql: &str| {
+        db.write(|c| {
+            c.execute_batch(sql)?;
+            Ok(())
+        })
+        .unwrap()
+    };
+    sql("CREATE TRIGGER refuse BEFORE INSERT ON requests BEGIN SELECT RAISE(ABORT, 'refused by test'); END;");
+    let pricing = Arc::new(Pricing::new(phoebis_ledger::test_tables::api_prices()));
+    let ledger = phoebis_ledger::spawn(
+        db.clone(),
+        pricing.clone(),
+        Arc::new(phoebis_ledger::test_tables::subscription_costs()),
+        store,
+        &phoebis_bus::Bus::new(),
+        router,
+        clock,
+        Arc::new(Metrics::new()),
+        LedgerConfig::default(),
+    );
+    // Listed by neither test file: its id names the `opus` model tier, so the cost model's fallback prices it.
+    let model = "claude-opus-9";
+    ledger
+        .record_request(phoebis_ledger::Record::Request {
+            request: RequestRecord {
+                id: "r1".into(),
+                received_at: january,
+                finished_at: Some(january + 500),
+                model: model.into(),
+                canonical_model: model.into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            attempts: vec![AttemptRecord {
+                request_id: "r1".into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "oauth".into(),
+                outcome: "succeeded".into(),
+                input_tokens: Some(10),
+                ..Default::default()
+            }],
+            bodies: None,
+        })
+        .await;
+    wait_for(Duration::from_secs(5), || ledger.degraded().then_some(())).await;
+    sql("DROP TRIGGER refuse;");
+    clock_cell.fetch_add(
+        phoebis_ledger::BATCH_RETRY_DELAYS[0].as_millis() as i64,
+        Ordering::SeqCst,
+    );
+    // The spend read after the retry's commit clears the flag, so the counts are in once it reads clear.
+    wait_for(Duration::from_secs(5), || {
+        (!ledger.degraded()).then_some(())
+    })
+    .await;
+    assert_eq!(
+        (pricing.unknown_models(), ledger.unweighted_served()),
+        (
+            1,
+            vec![phoebis_ledger::UnweightedModel {
+                model: model.into(),
+                tier: "opus".into(),
+                weight_of: "claude-opus-5-5".into(),
+                since: Some(january),
+                requests: 1,
+            }]
+        ),
+        "the refused try counted nothing"
     );
 }

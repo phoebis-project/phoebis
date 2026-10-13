@@ -1,8 +1,8 @@
 {
   "route": "GET /admin/analytics/placements?range=24h",
   "body": {
-    "from": -85400000,
-    "to": 1000000,
+    "from": 1791634600000,
+    "to": 1791721000000,
     "rows": [
       {
         "rung": "content",

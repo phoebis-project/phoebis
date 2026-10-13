@@ -251,11 +251,13 @@ test('the placements read sends the range and the key and pool lists, the budget
   const camel = (name) => name.replace(/_(\w)/g, (_, c) => c.toUpperCase());
   const decoded = (row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [camel(k), k === 'period_end' ? new Date(v).toISOString() : v]));
   assert.deepEqual(budgets, bodies['/admin/analytics/budgets'].members.map(decoded));
-  const end = new Date(2_678_400_000).toISOString();
+  // The month end and the subscription's spend follow the capture's clock, so they are read from the capture.
+  const wire = Object.fromEntries(bodies['/admin/analytics/budgets'].members.map((m) => [m.account_id, m]));
+  const end = new Date(wire.direct.period_end).toISOString();
   assert.deepEqual(
     budgets.map((b) => [b.accountId, b.kind, b.spentUsd, b.periodEnd]),
     [
-      ['business', 'oauth', 0, end],
+      ['business', 'oauth', wire.business.spent_usd, end],
       ['direct', 'api_key', 0.0036, end],
     ],
   );

@@ -23,7 +23,6 @@ mod rules;
 mod session;
 mod sessions;
 mod settings;
-mod tiers;
 mod tls;
 
 use std::collections::HashMap;

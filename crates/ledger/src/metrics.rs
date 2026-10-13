@@ -593,10 +593,10 @@ pub fn metrics_router(
                                 .into_response();
                         }
                     };
-                    let table = pricing.current();
+                    let revisions = pricing.revisions();
                     let gauges = gather(
                         &router,
-                        &table,
+                        revisions.in_force(clock()),
                         clock(),
                         fallback_ms,
                         keepalive.as_ref(),

@@ -8,8 +8,8 @@
         "kind": "oauth",
         "budget_usd": 30.0,
         "budget_period": "month",
-        "spent_usd": 0.0,
-        "period_end": 2678400000
+        "spent_usd": 0.00355,
+        "period_end": 1793491200000
       },
       {
         "pool_id": "main",
@@ -18,7 +18,7 @@
         "budget_usd": 50.0,
         "budget_period": "month",
         "spent_usd": 0.0036,
-        "period_end": 2678400000
+        "period_end": 1793491200000
       }
     ]
   }

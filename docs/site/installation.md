@@ -53,7 +53,6 @@ sudo install -m 0755 target/release/phoebis /usr/local/bin/phoebis
 sudo useradd --system --home /var/lib/phoebis --shell /usr/sbin/nologin phoebis
 sudo install -d -m 0755 /etc/phoebis
 sudo install -m 0644 deploy/phoebis.service /etc/systemd/system/phoebis.service
-sudo install -m 0644 crates/ledger/api_prices.yaml /etc/phoebis/api_prices.yaml
 sudo phoebis init --config /etc/phoebis/config.yaml --data-dir /var/lib/phoebis \
   --env-file /etc/phoebis/phoebis.env --owner phoebis
 sudo systemctl daemon-reload
@@ -68,17 +67,17 @@ environment file as root. A proxy listener that serves the LAN takes `--proxy-li
 `deploy/phoebis.service` runs the process as the `phoebis` user from `/var/lib/phoebis` with
 `EnvironmentFile=/etc/phoebis/phoebis.env`, which systemd reads and hands over, so the process never opens the file.
 `TimeoutStopSec=40` covers the 35-second shutdown budget, and `ProtectSystem=strict` with `StateDirectory=phoebis` and
-`ProtectHome=true` is the hardening around it. The file `init` wrote names `/etc/phoebis/subscription_costs.yaml` as
-`stats.subscription_costs_path`, beside the price table. Leave that file uninstalled: the shipped model is the plan
-meter's current measurement and a release updates it, and a copy there would shadow every later release's constants
-until it was copied again.
+`ProtectHome=true` is the hardening around it. The file `init` wrote names `/etc/phoebis/api_prices.yaml` as
+`stats.api_prices_path` and `/etc/phoebis/subscription_costs.yaml` as `stats.subscription_costs_path`. Leave both files
+uninstalled: the shipped files carry every revision and a release adds the next, and a copy at either path would shadow
+every later release's revisions until it was copied again.
 
 A router that already runs from a file in your home directory moves under the unit after every line of the block but
 `init`, which refuses every file that exists: stop the router, create `/var/lib/phoebis` at `0700` (`useradd --system`
 creates no home directory), move the bootstrap file to `/etc/phoebis/config.yaml`, the key file to
 `/etc/phoebis/storage.key`, the two price files to `/etc/phoebis/` (`api_prices.yaml` and `subscription_costs.yaml`
-beside the bootstrap file, where `init` pointed their path keys, each where it exists, the first in place of the shipped
-table the block installed) and the data directory's contents into `/var/lib/phoebis`, give the key file, that directory
+beside the bootstrap file, where `init` pointed their path keys, each where it exists, in place of the shipped
+revisions) and the data directory's contents into `/var/lib/phoebis`, give the key file, that directory
 and everything moved into it to `phoebis` (`chown phoebis:phoebis /etc/phoebis/storage.key` and
 `chown -R phoebis:phoebis /var/lib/phoebis`, since a moved file keeps its owner), and edit the five path keys `init`
 wrote absolute to those places, since `ProtectHome=true` keeps the service out of `/home`:
@@ -93,6 +92,19 @@ Then validate the file before enabling the service:
 ```sh
 sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-config --config /etc/phoebis/config.yaml'
 ```
+
+With both price files left uninstalled, `check-config` names the shipped revisions on its two table lines:
+
+```text
+api prices: built in (2 revisions, in force 2026-10-08, 9 models), since /etc/phoebis/api_prices.yaml was not found
+subscription costs: built in (1 revision, in force 2026-10-05, 6 weighted models, 8 more by model tier, 3 account tiers), since /etc/phoebis/subscription_costs.yaml was not found
+```
+
+While a file holds an entry dated after the one in force, its line adds `next {date}` after the date in force, the date
+of the first such entry. Every price read from that date on takes the entry, and the burn rates the router builds at
+start take it at the first start after the date. The start's `ledger opened` log line names the same for the price
+table: `pricing`, the date in force, `pricing_revisions`, the count, and `pricing_next`, the held date, recorded only
+while an entry is held.
 
 `check-config` reads `admin.secret_env` from the process environment when it is set and prints `warning: environment
 variable PHOEBIS_ADMIN_SECRET is unset or empty` when it is not, so sourcing the environment file is optional for it.
@@ -196,11 +208,14 @@ against a production file while the router is up. It prints, in order:
 6. `profile {the build's profile}`
 7. `routing: cooldown_fallback {n}s, model_rejection {n}s, catalog refresh {n}s, startup fetch {n}s`
 8. `ledger at {config.stats.ledger_path}`
-9. `api prices: {path} (file, effective {date}, {n} models)` when `stats.api_prices_path` names a file that exists,
-   `api prices: built in (effective {date}, {n} models), since {path} was not found` when it names a file that is
-   missing, or `api prices: built in (effective {date}, {n} models)` when the key is set to `null`
-10. `subscription costs: {path} (file, effective {date}, {n} models, {n} tiers)`, in the same three shapes, from
-    `stats.subscription_costs_path`
+9. `api prices: {path} (file, {n} revisions, in force {date}, {n} models)` when `stats.api_prices_path` names a file
+   that exists, `api prices: built in ({n} revisions, in force {date}, {n} models), since {path} was not found` when it
+   names a file that is missing, or `api prices: built in ({n} revisions, in force {date}, {n} models)` when the key is
+   set to `null`, with `revision` for a list of one entry and `, next {date}` after the date in force while an entry is
+   held
+10. `subscription costs: {path} (file, {n} revisions, in force {date}, {n} weighted models, {n} more by model tier, {n}
+    account tiers)`, in the same three shapes, from `stats.subscription_costs_path`, where `more by model tier` counts
+    the models `model_tier` names without a weight whose model tier has a weighed model
 11. `retention {n days|forever}, rollups {n days|forever}`
 12. `keepalive: {n} sessions, {n} agents, {n} MiB retained`
 13. the registry line, `registry at {config.storage.path} does not exist yet, and the first start creates it` when the
@@ -596,9 +611,8 @@ Defaults whole.
 Refused with:
 
 - `api_prices_path`: `loading the price table from {path}` with the rule under it, `pricing table: {rule}`, for a
-  malformed file, a repeated key, a cell that is not a finite non-negative number or a `long_context.over` that is
-  not a whole number of tokens above zero, and with the read error under it for a file that is there and cannot be
-  read
+  malformed file, a repeated key or a rule the table below gives, and with the read error under it for a file that is
+  there and cannot be read
 - `body_capture_max_hours`: `stats.body_capture_max_hours must be between 1 and 168, not {value}`
 - `ledger_path`: `stats.ledger_path {path} must name a database file inside a directory`, and
   `stats.ledger_path and storage.path must name different files, not {path}` when the two paths match
@@ -607,7 +621,24 @@ Refused with:
 - `rollup_retention_days`: `stats.rollup_retention_days must be 0 or at least stats.retention_days
   ({retention_days}), not {value}`
 - `subscription_costs_path`: `loading the subscription cost model from {path}` with the rule under it,
-  `plan table: {key}: {rule}`, and with the read error under it for a file that is there and cannot be read
+  `plan table: {rule}`, in the same cases, and with the read error under it for a file that is there and cannot be read
+
+The rules under either line, after `pricing table: ` for the price table and `plan table: ` for the subscription cost
+model:
+
+| Rule | File | Refused for |
+| --- | --- | --- |
+| `revisions: at least one entry` | both | an empty list |
+| ``revisions[{i}].effective: a date in YYYY-MM-DD form, not `{date}` `` | both | an entry's date in another form |
+| `revisions: two entries dated {date}` | both | two entries with one date |
+| ``unknown field `{key}`, expected `revisions` at line {n} column {n}`` | both | a top-level key other than `revisions` |
+| `revision {date}: model {model}, cell {cell} must be a finite non-negative number` | price table | a cell of that entry that is negative, `NaN` or infinite |
+| `revision {date}: model {model}, cell long_context.over must be a whole number of tokens above zero` | price table | a threshold of that entry at zero |
+| `revision {date}: {key}: {rule}` | cost model | a key of that entry the cost model refuses, such as a weight at zero |
+| `revision {date}: tier_order: a list of distinct tier names` | cost model | an empty `tier_order`, or one naming a tier twice |
+| `revision {date}: model_tier.{model}: {tier} is not in tier_order` | cost model | a model tier `tier_order` does not list |
+| `revision {date}: model_tier.{model}: a dated id, where the file keys undated ids` | cost model | a dated `model_tier` key |
+| `revision {date}: model_tier: no tier for {model}` | cost model | a `model_weight` or `overrides` key `model_tier` does not name |
 
 ### storage
 

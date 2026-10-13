@@ -1001,6 +1001,14 @@ pub(crate) struct Pool {
     pub status: String,
     pub requests_24h: u64,
     pub cost_24h: f64,
+    /// The dollars of the day's billed rows alone (fast mode, overage and API key accounts), a part of `cost_24h`.
+    pub billed_24h: f64,
+    /// The day's plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
+    #[schema(value_type = crate::openapi::SharedEquivalentView)]
+    pub equivalent_24h: phoebis_ledger::SharedEquivalent,
+    /// Whether a plan-funded row of the day priced at its model tier's latest weight, for a model the cost model does
+    /// not weight.
+    pub estimated_24h: bool,
     /// The pins under the pool's keys.
     pub active_pins: usize,
     /// 25 hourly buckets from 24 hours before the current hour's start, the current partial hour last, whose
@@ -1123,10 +1131,17 @@ pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, Stor
     let registry = state.store.load_registry()?;
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
+    // The end of the current hour rather than `hour_ceil(now)`, which is `now` itself on the hour's first millisecond
+    // and would leave out the hour a request just landed in.
+    let to = hour + 3_600;
+    let prices = state.pricing.revisions();
+    let tables = state.tables.clone();
     let day = state
         .ledger
         .db()
-        .read(move |c| phoebis_ledger::request_totals(c, "pool_id", hour - 24 * 3_600))
+        .read(move |c| {
+            phoebis_ledger::request_totals(c, "pool_id", hour - 24 * 3_600, to, &prices, &tables)
+        })
         .await
         .unwrap_or_default();
     Ok(PoolContext {
@@ -1186,6 +1201,8 @@ pub(crate) async fn pool_json_from(
         hour - 24 * 3_600,
         hour + 3_600,
         3_600,
+        &state.pricing.revisions(),
+        &state.tables,
     )
     .await
     .unwrap_or_default();
@@ -1323,6 +1340,12 @@ pub(crate) async fn pool_json_from(
         status: status.to_string(),
         requests_24h: day.get(&row.id).map_or(0, |t| t.requests),
         cost_24h: day.get(&row.id).map_or(0.0, |t| t.cost_usd),
+        billed_24h: day.get(&row.id).map_or(0.0, |t| t.billed_usd),
+        equivalent_24h: day
+            .get(&row.id)
+            .map(|t| t.equivalent.clone())
+            .unwrap_or_default(),
+        estimated_24h: day.get(&row.id).is_some_and(|t| t.estimated),
         active_pins,
         traffic_24h: traffic,
     }
@@ -1374,6 +1397,8 @@ pub(crate) async fn traffic(
         phoebis_ledger::hour_of(from),
         phoebis_ledger::hour_ceil(to),
         bucket,
+        &state.pricing.revisions(),
+        &state.tables,
     )
     .await
     {
@@ -1394,7 +1419,7 @@ mod tests {
     use crate::openapi::round_trip::{round_trips, round_trips_each};
     use crate::openapi::{
         CacheTtlPolicyView, KeepalivePolicyView, ModelRuleView, ResolvedCeilingsView,
-        TrafficBucketView,
+        SharedEquivalentView, TrafficBucketView,
     };
     use std::collections::BTreeMap;
 
@@ -1441,6 +1466,9 @@ mod tests {
         status: String,
         requests_24h: u64,
         cost_24h: f64,
+        billed_24h: f64,
+        equivalent_24h: SharedEquivalentView,
+        estimated_24h: bool,
         active_pins: usize,
         traffic_24h: Vec<TrafficBucketView>,
     }

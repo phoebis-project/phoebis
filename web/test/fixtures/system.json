@@ -8,7 +8,7 @@
     "ready": true,
     "dead": [],
     "ledger": {
-      "schema_version": 32,
+      "schema_version": 34,
       "written": 18,
       "dropped": 0,
       "write_failures": 0,
@@ -66,12 +66,16 @@
       "api_prices": {
         "path": null,
         "source": "shipped",
-        "effective": "2026-10-08"
+        "effective": "2026-10-08",
+        "revisions": 2,
+        "next": null
       },
       "subscription_costs": {
         "path": null,
         "source": "shipped",
-        "effective": "2026-10-11"
+        "effective": "2026-10-05",
+        "revisions": 1,
+        "next": null
       }
     },
     "gaps": [],

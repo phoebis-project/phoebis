@@ -17,7 +17,7 @@ use phoebis_bus::Bus;
 use phoebis_keepalive::{Engine, EngineParts, KeepaliveLimits, KeepaliveTiming};
 use phoebis_ledger::{
     spawn as spawn_ledger, AttemptRecord, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables,
-    PriceTable, Pricing, Record, RequestRecord, BATCH_RETRY_HOLD,
+    PriceRevisions, Pricing, Record, RequestRecord, BATCH_RETRY_HOLD,
 };
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
 use phoebis_profile::{
@@ -47,8 +47,26 @@ pub const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-000000000001";
 /// The key stored on the API-key account, which the verify test expects to see on the wire.
 pub const API_KEY: &str = "sk-ant-api03-PLACEHOLDER";
 
-/// Unix milliseconds every clock in these tests reports, so no deadline moves under a test.
-pub const NOW: i64 = 1_000_000;
+/// Unix milliseconds every clock in these tests reports, so no deadline moves under a test: 2026-10-11 12:16:40 UTC,
+/// inside the latest revision of both shipped price files, so the routes read the shipped tables in force and hold
+/// no pending revision. It sits off the hour boundary, so a 24-hour range touches 25 hour buckets and a seed an hour
+/// back lands in the hour before the clock's own.
+pub const NOW: i64 = 1_791_721_000_000;
+
+/// The first instant of the UTC calendar month after the one `NOW` falls in, where a monthly budget's period ends.
+pub fn month_end() -> i64 {
+    let first = jiff::Timestamp::from_millisecond(NOW)
+        .expect("the rig's clock is a timestamp")
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .date()
+        .first_of_month();
+    first
+        .checked_add(jiff::Span::new().months(1))
+        .and_then(|next| next.to_zoned(jiff::tz::TimeZone::UTC))
+        .expect("the next month's first midnight exists in UTC")
+        .timestamp()
+        .as_millisecond()
+}
 
 const BODY_CAPTURE_MAX_HOURS: u32 = 72;
 
@@ -121,6 +139,7 @@ pub async fn admin_parts_full_with_accounting(accounting: AccountingSource) -> F
             Some(accounting),
             None,
             None,
+            None,
         )
         .await,
     )
@@ -133,12 +152,42 @@ pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
 }
 
 /// The full harness pricing dollars through `prices` rather than the shipped table, over a fresh store.
-pub async fn admin_parts_full_priced(prices: PriceTable) -> Full {
-    full_from(build_app(None, ACCOUNT_UUID, false, None, None, Some(prices), None).await)
+pub async fn admin_parts_full_priced(prices: PriceRevisions) -> Full {
+    full_from(
+        build_app(
+            None,
+            ACCOUNT_UUID,
+            false,
+            None,
+            None,
+            Some(prices),
+            None,
+            None,
+        )
+        .await,
+    )
+}
+
+/// The full harness reading the subscription cost model `costs` rather than the shipped one, over a fresh store, so a
+/// case names a model the list leaves unweighted without reading the shipped file.
+pub async fn admin_parts_full_costed(costs: PlanTables) -> Full {
+    full_from(
+        build_app(
+            None,
+            ACCOUNT_UUID,
+            false,
+            None,
+            None,
+            None,
+            None,
+            Some(costs),
+        )
+        .await,
+    )
 }
 
 /// The same over a store the caller holds (the router task loads its pins at spawn, so a pin is written first).
-pub async fn admin_parts_full_on_priced(store: Arc<Store>, prices: PriceTable) -> Full {
+pub async fn admin_parts_full_on_priced(store: Arc<Store>, prices: PriceRevisions) -> Full {
     full_from(
         build_app(
             None,
@@ -147,6 +196,7 @@ pub async fn admin_parts_full_on_priced(store: Arc<Store>, prices: PriceTable) -
             Some(store),
             None,
             Some(prices),
+            None,
             None,
         )
         .await,
@@ -254,7 +304,17 @@ pub async fn admin_app() -> (Router, FakeUpstream) {
 
 /// The app with `reload` standing in for the router's certificate pairs, so the reload route answers its outcomes.
 pub async fn admin_app_reloading(reload: Arc<dyn TlsReload>) -> (Router, FakeUpstream) {
-    let parts = build_app(None, ACCOUNT_UUID, false, None, None, None, Some(reload)).await;
+    let parts = build_app(
+        None,
+        ACCOUNT_UUID,
+        false,
+        None,
+        None,
+        None,
+        Some(reload),
+        None,
+    )
+    .await;
     (parts.app, parts.up)
 }
 
@@ -281,6 +341,7 @@ pub async fn admin_parts_polled() -> Polled {
         Some(fixture_identity()),
         ACCOUNT_UUID,
         false,
+        None,
         None,
         None,
         None,
@@ -708,17 +769,19 @@ async fn app_with(
     tls: bool,
     store: Option<Arc<Store>>,
 ) -> Parts {
-    build_app(identity, upstream_uuid, tls, store, None, None, None).await
+    build_app(identity, upstream_uuid, tls, store, None, None, None, None).await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn build_app(
     identity: Option<Identity>,
     upstream_uuid: &str,
     tls: bool,
     store: Option<Arc<Store>>,
     accounting: Option<AccountingSource>,
-    prices: Option<PriceTable>,
+    prices: Option<PriceRevisions>,
     tls_reload: Option<Arc<dyn TlsReload>>,
+    costs: Option<PlanTables>,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_269_linux_x64();
@@ -843,11 +906,13 @@ async fn build_app(
     ));
     let bus = Bus::new();
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-    let pricing = Arc::new(Pricing::new(prices.unwrap_or_else(PriceTable::shipped)));
+    let pricing = Arc::new(Pricing::new(prices.unwrap_or_else(PriceRevisions::shipped)));
     let metrics = Arc::new(Metrics::new());
+    let tables = Arc::new(costs.unwrap_or_else(PlanTables::shipped));
     let ledger = spawn_ledger(
         db.clone(),
         pricing.clone(),
+        tables.clone(),
         store.clone(),
         &bus,
         router_handle.clone(),
@@ -886,7 +951,6 @@ async fn build_app(
         Some(source) => relay.with_accounting(source),
         None => relay,
     });
-    let tables = Arc::new(PlanTables::shipped());
     let keepalive = Engine::new(EngineParts {
         bus: bus.clone(),
         clock: clock.clone(),
@@ -1136,4 +1200,37 @@ impl Captured {
     pub fn text(&self) -> String {
         String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
     }
+}
+
+/// One seeded request's row as the readers price it: at the start of its hour, at the cells its prompt selects, with
+/// no account tier, which the 20x window equivalent never reads.
+pub fn priced_row(
+    model: &str,
+    funding: phoebis_ledger::Funding,
+    at: i64,
+    usage: phoebis_routing::PinUsage,
+) -> phoebis_ledger::Priced {
+    let prices = phoebis_ledger::PriceRevisions::shipped();
+    let hour = at.div_euclid(3_600_000) * 3_600_000;
+    let prompt = phoebis_ledger::prompt_tokens(
+        usage.input,
+        usage.cache_read,
+        usage.write_5m,
+        usage.write_1h,
+    );
+    phoebis_ledger::price_row(
+        &prices,
+        &phoebis_ledger::PlanTables::shipped(),
+        &phoebis_ledger::RowKey {
+            model,
+            speed: phoebis_ledger::Speed::Standard,
+            band: prices.in_force(hour).band_of(model, prompt),
+            funding,
+            kind: "inference",
+            tier: None,
+            at: hour,
+            band_at: None,
+        },
+        usage,
+    )
 }

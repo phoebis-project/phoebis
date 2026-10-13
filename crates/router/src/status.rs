@@ -964,9 +964,21 @@ mod tests {
         }
     }
 
-    /// The fixtures' own clock: their `since`, `set_at` and `last_used_at` read 1,000,000 ms, 00:16 UTC.
+    /// The fixtures' own clock, the admin harness's: their `since`, `set_at` and `last_used_at` read it, 2026-10-11
+    /// 12:16:40 UTC.
+    const NOW_MS: i64 = 1_791_721_000_000;
+
     fn now() -> Timestamp {
-        Timestamp::from_millisecond(1_000_000).unwrap()
+        Timestamp::from_millisecond(NOW_MS).unwrap()
+    }
+
+    /// An instant of the clock's own day as the screen prints it in UTC.
+    fn hh_mm(at_ms: i64) -> String {
+        Timestamp::from_millisecond(at_ms)
+            .unwrap()
+            .to_zoned(TimeZone::UTC)
+            .strftime("%H:%M")
+            .to_string()
     }
 
     /// The lines from the one equal to `heading` up to the next blank line, the heading excluded.
@@ -996,13 +1008,13 @@ mod tests {
         for i in 0..count {
             let mut row = pinned.clone();
             row["session_id"] = json!(format!("s-ext-{i:02}"));
-            row["last_used_at"] = json!(1_000_000 - i as i64 * 60_000);
+            row["last_used_at"] = json!(NOW_MS - i as i64 * 60_000);
             if i % 5 == 0 {
                 row["shed_from"] = json!("direct");
             }
             if i % 3 == 0 {
                 row["keepalive"]["state"] = json!("idle");
-                row["keepalive"]["next_probe_at"] = json!(1_200_000);
+                row["keepalive"]["next_probe_at"] = json!(NOW_MS + 200_000);
             }
             rows.push(row);
         }
@@ -1094,9 +1106,10 @@ mod tests {
             .iter()
             .map(|item| {
                 format!(
-                    "    {} {} since 00:16",
+                    "    {} {} since {}",
                     item["kind"].as_str().unwrap(),
-                    item["subject"]["label"].as_str().unwrap()
+                    item["subject"]["label"].as_str().unwrap(),
+                    hh_mm(item["since"].as_i64().unwrap())
                 )
             })
             .collect();
@@ -1157,13 +1170,20 @@ mod tests {
                 && pools_block[3].starts_with("  main "),
             "the pools by id, a priority's members by account id: {screen}"
         );
+        let cooldown_until = fixture("accounts")["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|account| account["id"] == "business")
+            .and_then(|account| account["cooldowns"][0]["until"].as_i64())
+            .expect("the fixture's Business account carries a cooldown");
         // The windows and the cooldown of `main`'s first member, cut at the width, and the dashes of a member with no
         // sample.
         assert!(
             pools_block[4].contains("5h 62%")
                 && pools_block[4].contains("7d 41%")
                 && pools_block[4].contains("fable 12%")
-                && pools_block[4].contains("until 00:46 model:")
+                && pools_block[4].contains(&format!("until {} model:", hh_mm(cooldown_until)))
                 && pools_block[4].ends_with('…'),
             "{screen}"
         );
@@ -1274,8 +1294,11 @@ mod tests {
         assert_eq!(
             block(&one_lines, "pins (one per session, the main agent's)"),
             [
-                "  session   agent  account  state",
-                "  s-ext-00  -      Direct   pinned 0s ago, m, keepalive idle next probe 00:20"
+                "  session   agent  account  state".to_string(),
+                format!(
+                    "  s-ext-00  -      Direct   pinned 0s ago, m, keepalive idle next probe {}",
+                    hh_mm(NOW_MS + 200_000)
+                )
             ],
             "{one_screen}"
         );
@@ -1305,7 +1328,7 @@ mod tests {
             json!({
                 "kind": kind,
                 "subject": {"type": "pool", "id": label, "label": label},
-                "since": 1_000_000,
+                "since": NOW_MS,
             })
         };
         let two = Reads {
@@ -1320,8 +1343,11 @@ mod tests {
         assert_eq!(
             block(&lines, "  attention:"),
             [
-                "    pool_exhausted Main since 00:16",
-                "    refresh_failed alice@example.com since 00:16",
+                format!("    pool_exhausted Main since {}", hh_mm(NOW_MS)),
+                format!(
+                    "    refresh_failed alice@example.com since {}",
+                    hh_mm(NOW_MS)
+                ),
             ],
             "{screen}"
         );
@@ -1468,26 +1494,32 @@ mod tests {
 
     #[test]
     fn a_cooldown_narrower_than_the_account_names_its_scope() {
-        let cooldown = |scope: &str, until: i64, reason: &str| json!({"scope": scope, "until": until, "reason": reason, "window": null, "set_at": 1_000_000});
+        let cooldown = |scope: &str, until: i64, reason: &str| json!({"scope": scope, "until": until, "reason": reason, "window": null, "set_at": NOW_MS});
+        let (later, sooner) = (NOW_MS + 1_800_000, NOW_MS + 800_000);
         // The fixture's own cooldown holds one model; its scope comes before the reason, so the cut keeps it.
         let model = member_line_with(json!([cooldown(
             "model:claude-haiku-4-5-20251001",
-            2_800_000,
+            later,
             "model_rejected"
         )]));
-        assert!(model.contains("  until 00:46 model:"), "{model}");
-        let fast = member_line_with(json!([cooldown("fast", 2_800_000, "rate_limit")]));
-        assert!(fast.contains("  until 00:46 fast rate"), "{fast}");
+        assert!(
+            model.contains(&format!("  until {} model:", hh_mm(later))),
+            "{model}"
+        );
+        let fast = member_line_with(json!([cooldown("fast", later, "rate_limit")]));
+        assert!(
+            fast.contains(&format!("  until {} fast rate", hh_mm(later))),
+            "{fast}"
+        );
         // The account scope holds every request, names the line ahead of a narrower one, and reads without a scope.
         let account = member_line_with(json!([
-            cooldown(
-                "model:claude-haiku-4-5-20251001",
-                2_800_000,
-                "model_rejected"
-            ),
-            cooldown("account", 1_800_000, "rate_limit"),
+            cooldown("model:claude-haiku-4-5-20251001", later, "model_rejected"),
+            cooldown("account", sooner, "rate_limit"),
         ]));
-        assert!(account.ends_with("  until 00:30 rate_limit"), "{account}");
+        assert!(
+            account.ends_with(&format!("  until {} rate_limit", hh_mm(sooner))),
+            "{account}"
+        );
     }
 
     /// Thirty columns, past what a pin line or a member line leaves a label beside the cells it keeps whole.
@@ -1496,7 +1528,7 @@ mod tests {
     #[test]
     fn a_shedding_pin_prints_its_age_whole_however_long_the_labels() {
         assert_eq!(LONG_LABEL.chars().count(), 30);
-        let twelve_seconds_ago = 1_000_000 - 12_000;
+        let twelve_seconds_ago = NOW_MS - 12_000;
         let pin = |session: &str, agent: Value, account: &str, from: &str| {
             json!({
                 "session_id": session, "agent_id": agent, "account_id": account, "shed_from": from,
@@ -1557,8 +1589,8 @@ mod tests {
             if account["id"] == "direct" {
                 account["label"] = json!(LONG_LABEL);
                 account["cooldowns"] = json!([{
-                    "scope": "model:claude-opus-5", "until": 55_800_000, "reason": "rate_limited",
-                    "window": null, "set_at": 1_000_000,
+                    "scope": "model:claude-opus-5", "until": NOW_MS + 11_600_000, "reason": "rate_limited",
+                    "window": null, "set_at": NOW_MS,
                 }]);
             }
         }
@@ -1575,7 +1607,10 @@ mod tests {
         let member = block(&lines, "pools")[1];
         assert!(member.chars().count() <= WIDTH, "{screen}");
         assert!(
-            member.contains("  until 15:30 model:claude-opus-5 "),
+            member.contains(&format!(
+                "  until {} model:claude-opus-5 ",
+                hh_mm(NOW_MS + 11_600_000)
+            )),
             "{screen}"
         );
         let label = member.trim_start().split("  ").next().unwrap();

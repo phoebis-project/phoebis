@@ -1,10 +1,12 @@
 //! The subscription cost model: a token costs a weight times a multiplier in units, a window holds a capacity per
 //! tier, and the peak band is a capacity factor per window. Every expected figure is worked out by hand from the
-//! round numbers of the test table (`tests/fixtures/subscription_costs.yaml`); the shipped file is held to its shape.
+//! round numbers of the test table (`tests/fixtures/subscription_costs.yaml`), on its first revision unless a case
+//! crosses to the second. The shipped file is held to its shape.
 
-use phoebis_ledger::test_tables::{self, SUBSCRIPTION_COSTS};
+use phoebis_ledger::test_tables::{self, JANUARY_2026, SUBSCRIPTION_COSTS};
 use phoebis_ledger::{
-    funding_of, Funding, LedgerError, PlanTables, SubscriptionCosts, BILLED_FUNDING, FAST_FUNDING,
+    effective_instant, funding_of, price_equivalent, price_shares, CostRevisions, Funding,
+    LedgerError, PlanTables, SubscriptionCosts, BILLED_FUNDING, FAST_FUNDING,
 };
 use phoebis_routing::{PinUsage, Rates, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 
@@ -28,6 +30,8 @@ const NOVEMBER_HALF_PAST_SIX: i64 = 1_793_644_200_000;
 /// Inside the band and outside it, on the same weekday.
 const IN_BAND: i64 = SEPTEMBER_AFTERNOON;
 const OUT_OF_BAND: i64 = SEPTEMBER_BEFORE_NOON;
+/// Thursday 2026-01-15 at 14:00 UTC, inside the band and inside the test table's first revision.
+const JANUARY_IN_BAND: i64 = 1_768_485_600_000;
 
 const MAX_20X: &str = "default_claude_max_20x";
 const MAX_5X: &str = "default_claude_max_5x";
@@ -35,6 +39,7 @@ const PRO: &str = "default_claude_ai";
 const TEAM: &str = "default_claude_team";
 const OPUS: &str = "claude-opus-5-5";
 const HAIKU: &str = "claude-haiku-4-5";
+const FABLE: &str = "claude-fable-5-1";
 
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-9 * b.abs().max(1.0)
@@ -59,8 +64,20 @@ fn cache_read(tokens: u64) -> PinUsage {
     }
 }
 
+fn output(tokens: u64) -> PinUsage {
+    PinUsage {
+        output: tokens,
+        ..Default::default()
+    }
+}
+
 fn tables() -> PlanTables {
     test_tables::subscription_costs()
+}
+
+/// The test table's first revision, whose round numbers the figures below are worked out from.
+fn first() -> SubscriptionCosts {
+    tables().revisions.in_force(JANUARY_2026).clone()
 }
 
 fn per_type(rates: Rates) -> [Option<f64>; 5] {
@@ -86,7 +103,7 @@ fn all_close(got: [Option<f64>; 5], want: [Option<f64>; 5]) -> bool {
 #[test]
 fn one_input_token_spends_its_weight_over_the_tiers_five_hour_capacity_and_twice_that_inside_the_band(
 ) {
-    let tables = tables();
+    let tables = first();
     assert_share(
         tables.share_at(FIVE_HOUR, MAX_20X, OPUS, input(1), OUT_OF_BAND),
         0.02,
@@ -102,7 +119,7 @@ fn one_input_token_spends_its_weight_over_the_tiers_five_hour_capacity_and_twice
 // The week holds 1000 units on Max 20x and its capacity factor is 1, so the band leaves it at 2 / 1000.
 #[test]
 fn the_week_prices_on_its_own_capacity_and_its_factor_of_one_leaves_it_unbanded() {
-    let tables = tables();
+    let tables = first();
     for at in [IN_BAND, OUT_OF_BAND] {
         assert_share(
             tables.share_at(SEVEN_DAY, MAX_20X, OPUS, input(1), at),
@@ -116,7 +133,7 @@ fn the_week_prices_on_its_own_capacity_and_its_factor_of_one_leaves_it_unbanded(
 #[test]
 fn a_pro_account_spends_the_same_units_over_its_own_smaller_capacity() {
     assert_share(
-        tables().share_at(FIVE_HOUR, PRO, OPUS, input(1), OUT_OF_BAND),
+        first().share_at(FIVE_HOUR, PRO, OPUS, input(1), OUT_OF_BAND),
         0.4,
         "Pro",
     );
@@ -126,7 +143,7 @@ fn a_pro_account_spends_the_same_units_over_its_own_smaller_capacity() {
 #[test]
 fn a_model_week_reads_the_seven_day_share_over_its_capacity_factor() {
     assert_share(
-        tables().share_at(SEVEN_DAY_FABLE, MAX_20X, OPUS, input(1), OUT_OF_BAND),
+        first().share_at(SEVEN_DAY_FABLE, MAX_20X, OPUS, input(1), OUT_OF_BAND),
         0.004,
         "the Fable week",
     );
@@ -144,7 +161,7 @@ fn every_token_type_costs_the_weight_times_its_shared_multiplier() {
         output: 1,
     };
     assert_share(
-        tables().share_at(FIVE_HOUR, MAX_20X, OPUS, one_of_each, OUT_OF_BAND),
+        first().share_at(FIVE_HOUR, MAX_20X, OPUS, one_of_each, OUT_OF_BAND),
         0.302,
         "one token of each type",
     );
@@ -153,7 +170,7 @@ fn every_token_type_costs_the_weight_times_its_shared_multiplier() {
 // Haiku weighs 0.5, and its override sets the cache read multiplier to 0.2 and its weight on `seven_day` to 1.
 #[test]
 fn an_override_replaces_its_multiplier_everywhere_and_its_weight_on_the_window_it_names_alone() {
-    let tables = tables();
+    let tables = first();
     assert_share(
         tables.share_at(SEVEN_DAY, MAX_20X, HAIKU, cache_read(1), OUT_OF_BAND),
         0.0002,
@@ -188,7 +205,7 @@ fn an_override_replaces_its_multiplier_everywhere_and_its_weight_on_the_window_i
 #[test]
 fn a_dated_id_prices_at_its_undated_weight() {
     assert_share(
-        tables().share_at(
+        first().share_at(
             FIVE_HOUR,
             MAX_20X,
             "claude-opus-5-5-20260401",
@@ -200,10 +217,28 @@ fn a_dated_id_prices_at_its_undated_weight() {
     );
 }
 
+// Opus 5 (a null weight), Opus 4.8 (a tier entry and no weight) and Opus 9 (no row at all) read Opus 5.5's 2,
+// the latest weighted model of their tier. The mystery tier has no weighted model, and GPT-5 no tier.
 #[test]
-fn a_model_with_a_null_weight_or_no_row_prices_nothing() {
-    let tables = tables();
-    for model in ["claude-opus-5", "claude-opus-9"] {
+fn a_model_without_a_weight_prices_at_its_tiers_latest_weight_and_a_model_of_no_weighted_tier_prices_nothing(
+) {
+    let tables = first();
+    assert_share(
+        tables.share_at(FIVE_HOUR, MAX_20X, "claude-opus-5", input(1), OUT_OF_BAND),
+        0.02,
+        "Opus 5 at Opus 5.5's weight: 2 / 100",
+    );
+    for model in ["claude-opus-5", "claude-opus-4-8", "claude-opus-9"] {
+        for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
+            assert_eq!(
+                tables.share_at(window, MAX_20X, model, input(1), OUT_OF_BAND),
+                tables.share_at(window, MAX_20X, OPUS, input(1), OUT_OF_BAND),
+                "{model} on {window}"
+            );
+            assert!(tables.priced(window, MAX_20X, model), "{model} on {window}");
+        }
+    }
+    for model in ["claude-mystery-2", "gpt-5"] {
         for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
             assert_eq!(
                 tables.share_at(window, MAX_20X, model, input(1), OUT_OF_BAND),
@@ -219,10 +254,144 @@ fn a_model_with_a_null_weight_or_no_row_prices_nothing() {
     assert!(tables.priced(FIVE_HOUR, MAX_20X, OPUS));
 }
 
+// The second revision doubles every weight, so one Opus 5.5 input token reads 4 / 100 from 2026-02-01 on.
+#[test]
+fn the_tables_price_at_the_revision_in_force_at_the_instant_and_hold_the_next_one() {
+    let tables = tables();
+    assert_share(
+        tables.share_at(FIVE_HOUR, MAX_20X, OPUS, input(1), JANUARY_2026),
+        0.02,
+        "the first revision in January",
+    );
+    assert_share(
+        tables.share_at(FIVE_HOUR, MAX_20X, OPUS, input(1), OUT_OF_BAND),
+        0.04,
+        "the second revision in September",
+    );
+    assert_eq!(
+        tables
+            .revisions
+            .pending(JANUARY_2026)
+            .map(|r| r.effective.as_str()),
+        Some("2026-02-01")
+    );
+    assert_eq!(tables.revisions.pending(OUT_OF_BAND), None);
+    assert!(tables.priced(FIVE_HOUR, MAX_20X, OPUS, JANUARY_2026));
+    assert!(tables.measured(SEVEN_DAY_FABLE, JANUARY_2026));
+    assert_eq!(tables.tier_factor(PRO, FIVE_HOUR, JANUARY_2026), Some(0.05));
+    assert_eq!(tables.band_factor(FIVE_HOUR, IN_BAND), 2.0);
+    assert_eq!(
+        tables.rate_table(FIVE_HOUR, OUT_OF_BAND).rows[OPUS].input,
+        Some(0.04)
+    );
+}
+
+#[test]
+fn a_model_reads_its_listed_tier_then_its_undated_tier_then_the_tier_its_id_names() {
+    let tables = tables();
+    for (model, tier) in [
+        ("claude-opus-5-5", Some("opus")),
+        ("claude-opus-5-5-20260401", Some("opus")),
+        ("claude-opus-6", Some("opus")),
+        ("claude-mystery-2", Some("mystery")),
+        ("gpt-5", None),
+    ] {
+        assert_eq!(tables.tier_of(model, JANUARY_2026), tier, "{model}");
+    }
+}
+
+#[test]
+fn the_model_order_reads_the_tier_order_then_the_newer_version_then_the_id() {
+    let shuffled = [
+        "claude-haiku-4-5",
+        "gpt-5",
+        "claude-opus-4-8",
+        "claude-mystery-2",
+        "claude-sonnet-5-5",
+        "claude-opus-5",
+        "claude-fable-5-1",
+        "claude-opus-5-5",
+    ];
+    assert_eq!(
+        tables().model_order(&shuffled, JANUARY_2026),
+        [
+            "claude-fable-5-1",
+            "claude-opus-5-5",
+            "claude-opus-5",
+            "claude-opus-4-8",
+            "claude-sonnet-5-5",
+            "claude-haiku-4-5",
+            "claude-mystery-2",
+            "gpt-5",
+        ]
+    );
+}
+
+#[test]
+fn the_latest_weighted_model_of_a_tier_is_the_first_in_the_model_order_with_a_weight() {
+    let tables = tables();
+    for (tier, model) in [
+        ("fable", Some("claude-fable-5-1")),
+        ("opus", Some("claude-opus-5-5")),
+        ("sonnet", Some("claude-sonnet-5-5")),
+        ("haiku", Some("claude-haiku-4-5")),
+        ("mystery", None),
+    ] {
+        assert_eq!(tables.latest_weighted(tier, JANUARY_2026), model, "{tier}");
+    }
+}
+
+#[test]
+fn a_model_without_a_weight_reads_its_tiers_latest_weight_marked_as_a_fallback() {
+    let costs = first();
+    assert_eq!(
+        costs.weight_or_fallback(OPUS, FIVE_HOUR),
+        Some((2.0, false))
+    );
+    for model in ["claude-opus-5", "claude-opus-4-8", "claude-opus-9"] {
+        assert_eq!(
+            costs.weight_or_fallback(model, FIVE_HOUR),
+            Some((2.0, true)),
+            "{model}"
+        );
+    }
+    for model in ["claude-mystery-2", "gpt-5"] {
+        assert_eq!(costs.weight_or_fallback(model, FIVE_HOUR), None, "{model}");
+    }
+}
+
+// Haiku 4.5 weighs 0.5 with an override of 1 on the week, which names Haiku 4.5 alone.
+#[test]
+fn a_fallback_reads_the_donors_base_weight_and_never_its_override() {
+    let costs = first();
+    for window in [FIVE_HOUR, SEVEN_DAY] {
+        assert_eq!(
+            costs.weight_or_fallback("claude-haiku-9", window),
+            Some((0.5, true)),
+            "{window}"
+        );
+    }
+    assert_eq!(
+        costs.weight_or_fallback(HAIKU, FIVE_HOUR),
+        Some((0.5, false))
+    );
+    assert_eq!(
+        costs.weight_or_fallback(HAIKU, SEVEN_DAY),
+        Some((1.0, false))
+    );
+}
+
+// Opus 5 and Opus 4.8 have a tier entry and no weight while Opus 5.5 weighs, and Mystery 2's tier has none.
+#[test]
+fn the_by_tier_count_reads_the_tier_entries_without_a_weight_whose_tier_has_one() {
+    assert_eq!(first().by_tier_count(), 2);
+    assert_eq!(first().weighted_model_count(), 4);
+}
+
 // Team holds 10 units on the 5-hour window and none on the week.
 #[test]
 fn a_tier_the_file_lacks_or_a_null_capacity_prices_nothing_on_that_window() {
-    let tables = tables();
+    let tables = first();
     assert_eq!(
         tables.share_at(FIVE_HOUR, "claude_enterprise", OPUS, input(1), OUT_OF_BAND),
         None
@@ -244,10 +413,249 @@ fn a_tier_the_file_lacks_or_a_null_capacity_prices_nothing_on_that_window() {
     assert!(tables.priced(FIVE_HOUR, TEAM, OPUS));
 }
 
+// The equivalent is the share of the anchor account tier, Max 20x: one Opus 5.5 input token is 2 units, 2 / 100 of
+// the 5-hour window out of band and over the band's 0.5 inside it, 2 / 1000 of the week, and one Fable 5.1 input
+// token is 10 units over the week's 1000 and the Fable week's 0.5.
+#[test]
+fn the_equivalent_is_the_share_of_the_max_20x_windows_on_the_three_columns() {
+    let tables = tables();
+    assert_share(
+        tables.equivalent_at(FIVE_HOUR, OPUS, input(1), JANUARY_2026),
+        0.02,
+        "the 5-hour window out of band",
+    );
+    assert_share(
+        tables.equivalent_at(FIVE_HOUR, OPUS, input(1), JANUARY_IN_BAND),
+        0.04,
+        "the 5-hour window inside the band",
+    );
+    assert_share(
+        first().equivalent_at(FIVE_HOUR, OPUS, input(1), IN_BAND),
+        0.04,
+        "one revision's equivalent reads the band at its instant",
+    );
+    assert_share(
+        tables.equivalent_at(SEVEN_DAY, OPUS, input(1), JANUARY_2026),
+        0.002,
+        "the week",
+    );
+    assert_share(
+        tables.equivalent_at(SEVEN_DAY_FABLE, FABLE, input(1), JANUARY_2026),
+        0.02,
+        "the Fable week: 10 / 1000 / 0.5",
+    );
+    for window in [FIVE_HOUR, SEVEN_DAY] {
+        assert_eq!(
+            tables.equivalent_at(window, "claude-mystery-2", input(1), JANUARY_2026),
+            None,
+            "a model tier with no weighted model on {window}"
+        );
+    }
+}
+
+#[test]
+fn the_equivalent_answers_the_model_week_for_a_model_that_carries_one_and_the_fallback_marked() {
+    let tables = tables();
+    let fable = price_equivalent(&tables, FABLE, input(1), JANUARY_2026, JANUARY_2026);
+    assert_eq!(
+        fable.shares.keys().copied().collect::<Vec<_>>(),
+        [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE]
+    );
+    for (window, want) in [(FIVE_HOUR, 0.1), (SEVEN_DAY, 0.01), (SEVEN_DAY_FABLE, 0.02)] {
+        assert_share(fable.shares[window], want, window);
+        assert!(!fable.estimated[window], "{window}");
+    }
+    let opus = price_equivalent(&tables, OPUS, input(1), JANUARY_2026, JANUARY_2026);
+    assert_eq!(
+        opus.shares.keys().copied().collect::<Vec<_>>(),
+        [FIVE_HOUR, SEVEN_DAY]
+    );
+    assert_share(
+        opus.shares[FIVE_HOUR],
+        0.02,
+        "Opus 5.5 on the 5-hour window",
+    );
+    assert_share(opus.shares[SEVEN_DAY], 0.002, "Opus 5.5 on the week");
+    assert!(!opus.any_estimated());
+    let unweighted = price_equivalent(
+        &tables,
+        "claude-opus-5",
+        input(1),
+        JANUARY_2026,
+        JANUARY_2026,
+    );
+    assert_eq!(
+        unweighted.shares, opus.shares,
+        "Opus 5 at Opus 5.5's weight"
+    );
+    assert!(
+        unweighted.estimated.values().all(|estimated| *estimated),
+        "{unweighted:?}"
+    );
+}
+
+#[test]
+fn a_share_priced_at_its_model_tiers_latest_weight_is_marked_estimated() {
+    let tables = tables();
+    let unweighted = price_shares(
+        &tables,
+        MAX_20X,
+        "claude-opus-5",
+        input(1),
+        JANUARY_2026,
+        JANUARY_2026,
+    );
+    assert_eq!(
+        unweighted.estimated.into_iter().collect::<Vec<_>>(),
+        [(FIVE_HOUR, true), (SEVEN_DAY, true)]
+    );
+    let weighted = price_shares(&tables, MAX_20X, OPUS, input(1), JANUARY_2026, JANUARY_2026);
+    assert_eq!(
+        weighted.estimated.into_iter().collect::<Vec<_>>(),
+        [(FIVE_HOUR, false), (SEVEN_DAY, false)]
+    );
+    assert_eq!(unweighted.shares, weighted.shares);
+}
+
+// Haiku 4.5 keeps its override of 1 on the week with its shared weight set to null, and Haiku 5.5 weighs 0.25: the
+// week prices on the override's own weight, the 5-hour window on Haiku 5.5's as the estimate.
+#[test]
+fn a_null_weight_with_an_override_on_one_window_marks_the_other_windows_alone_as_estimated() {
+    let text = test_tables::first_entry_costs_text()
+        .replace(
+            "      claude-haiku-4-5: 0.5\n",
+            "      claude-haiku-4-5: null\n      claude-haiku-5-5: 0.25\n",
+        )
+        .replace(
+            "      claude-haiku-4-5: haiku\n",
+            "      claude-haiku-4-5: haiku\n      claude-haiku-5-5: haiku\n",
+        );
+    let edited = PlanTables {
+        revisions: CostRevisions::from_yaml(&text).expect("the edited model loads"),
+        path: None,
+        source: "test".to_string(),
+    };
+    for priced in [
+        price_shares(
+            &edited,
+            MAX_20X,
+            HAIKU,
+            input(1),
+            JANUARY_2026,
+            JANUARY_2026,
+        ),
+        price_equivalent(&edited, HAIKU, input(1), JANUARY_2026, JANUARY_2026),
+    ] {
+        assert_share(priced.shares[FIVE_HOUR], 0.0025, "Haiku 5.5's 0.25 / 100");
+        assert_share(priced.shares[SEVEN_DAY], 0.001, "the override's 1 / 1000");
+        assert_eq!(
+            priced
+                .estimated
+                .iter()
+                .map(|(w, e)| (*w, *e))
+                .collect::<Vec<_>>(),
+            [(FIVE_HOUR, true), (SEVEN_DAY, false)]
+        );
+        assert!(priced.any_estimated());
+    }
+    let unedited = price_shares(
+        &tables(),
+        MAX_20X,
+        HAIKU,
+        input(1),
+        JANUARY_2026,
+        JANUARY_2026,
+    );
+    assert!(!unedited.any_estimated(), "{unedited:?}");
+}
+
+// The worked figures on the shipped file, each derived from its members rather than written down, so a revision edits
+// no test: one million input tokens of Opus 5.5 out of the band and inside it and of Fable 5.1, one million Opus 5.5
+// output tokens, and the Opus 5.5 request as a share of a Pro account's own 5-hour window.
+#[test]
+fn the_shipped_equivalent_is_the_units_over_the_max_20x_capacity_and_a_pro_share_scales_it_by_the_capacities(
+) {
+    let shipped = CostRevisions::shipped();
+    let costs = shipped.latest().clone();
+    // The instants are found inside the latest entry rather than written down, so its date and weekday edit no test:
+    // the first half hour after its date outside the band, and the first inside it.
+    let from = effective_instant(&costs.effective).expect("the entry's date");
+    let half_hours = (0..7 * 48).map(|n| from + n * 1_800_000 + 900_000);
+    let out_of_band = half_hours
+        .clone()
+        .find(|at| costs.band_factor(FIVE_HOUR, *at) == 1.0)
+        .expect("an instant out of band");
+    let in_band = half_hours
+        .clone()
+        .find(|at| costs.band_factor(FIVE_HOUR, *at) > 1.0)
+        .expect("the band falls inside a week");
+    for at in [out_of_band, in_band] {
+        assert_eq!(
+            shipped.in_force(at).effective,
+            costs.effective,
+            "the entry is in force at {at}"
+        );
+    }
+    for model in [OPUS, FABLE] {
+        assert!(
+            !costs.overrides.contains_key(model),
+            "{model} carries no override"
+        );
+    }
+    let anchor = &costs.capacity[&costs.unit.defined_by.tier];
+    let (five_hour, seven_day) = (anchor.five_hour.unwrap(), anchor.seven_day.unwrap());
+    let fable_week = costs.model_windows[SEVEN_DAY_FABLE].capacity_factor;
+    let million = 1_000_000;
+    let units = |model: &str, multiplier: f64| {
+        million as f64 * costs.model_weight[model].unwrap() * multiplier
+    };
+    let multiplier = &costs.type_multiplier;
+    let opus = units(OPUS, multiplier.input);
+    let opus_equivalent = opus / five_hour;
+    assert_share(
+        costs.equivalent_at(FIVE_HOUR, OPUS, input(million), out_of_band),
+        opus_equivalent,
+        "Opus 5.5 input on the 5-hour window",
+    );
+    assert_share(
+        costs.equivalent_at(FIVE_HOUR, OPUS, input(million), in_band),
+        opus_equivalent / costs.peak.capacity_factor.five_hour,
+        "Opus 5.5 input on the 5-hour window inside the band",
+    );
+    assert_share(
+        costs.equivalent_at(SEVEN_DAY, OPUS, input(million), out_of_band),
+        opus / seven_day,
+        "Opus 5.5 input on the week",
+    );
+    let fable = units(FABLE, multiplier.input);
+    for (window, want) in [
+        (FIVE_HOUR, fable / five_hour),
+        (SEVEN_DAY, fable / seven_day),
+        (SEVEN_DAY_FABLE, fable / seven_day / fable_week),
+    ] {
+        assert_share(
+            costs.equivalent_at(window, FABLE, input(million), out_of_band),
+            want,
+            &format!("Fable 5.1 input on {window}"),
+        );
+    }
+    assert_share(
+        costs.equivalent_at(FIVE_HOUR, OPUS, output(million), out_of_band),
+        units(OPUS, multiplier.output) / five_hour,
+        "Opus 5.5 output on the 5-hour window",
+    );
+    let pro = costs.capacity[PRO].five_hour.unwrap();
+    assert_share(
+        costs.share_at(FIVE_HOUR, PRO, OPUS, input(million), out_of_band),
+        opus_equivalent * five_hour / pro,
+        "the Pro share is the equivalent times the anchor's capacity over Pro's",
+    );
+}
+
 // Pro holds 5 of the anchor's 100 on the 5-hour window, Max 5x 250 of its 1000 on the week.
 #[test]
 fn the_tier_factor_is_the_capacity_over_the_anchors_and_reads_a_tier_with_or_without_its_prefix() {
-    let tables = tables();
+    let tables = first();
     assert_share(
         tables.tier_factor("claude_ai", FIVE_HOUR),
         0.05,
@@ -268,7 +676,7 @@ fn the_tier_factor_is_the_capacity_over_the_anchors_and_reads_a_tier_with_or_wit
 // The 5-hour capacity factor is 0.5 inside the band, so the band weighs a 5-hour charge 2; the week's is 1.
 #[test]
 fn the_band_factor_is_the_reciprocal_of_the_windows_capacity_factor_inside_the_band() {
-    let tables = tables();
+    let tables = first();
     assert_eq!(tables.band_factor(FIVE_HOUR, IN_BAND), 2.0);
     assert_eq!(tables.band_factor(FIVE_HOUR, OUT_OF_BAND), 1.0);
     assert_eq!(tables.band_factor(SEVEN_DAY, IN_BAND), 1.0);
@@ -278,7 +686,7 @@ fn the_band_factor_is_the_reciprocal_of_the_windows_capacity_factor_inside_the_b
 
 #[test]
 fn the_band_covers_weekday_hours_in_its_zone_and_follows_the_zones_daylight_rule() {
-    let tables = tables();
+    let tables = first();
     let factor = |at: i64| tables.band_factor(FIVE_HOUR, at);
     assert_eq!(factor(SEPTEMBER_AFTERNOON), 2.0);
     assert_eq!(factor(SEPTEMBER_NOON), 2.0, "the band's first minute");
@@ -306,7 +714,7 @@ fn the_band_covers_weekday_hours_in_its_zone_and_follows_the_zones_daylight_rule
 
 #[test]
 fn the_shared_windows_and_every_model_week_the_file_names_read_measured() {
-    let tables = tables();
+    let tables = first();
     for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
         assert!(tables.measured(window), "{window}");
     }
@@ -317,7 +725,7 @@ fn the_shared_windows_and_every_model_week_the_file_names_read_measured() {
 
 #[test]
 fn a_week_the_file_does_not_name_prices_the_seven_day_share_once_and_any_other_window_nothing() {
-    let tables = tables();
+    let tables = first();
     assert_share(
         tables.share_at("seven_day_other", MAX_20X, OPUS, input(1), OUT_OF_BAND),
         0.002,
@@ -331,10 +739,12 @@ fn a_week_the_file_does_not_name_prices_the_seven_day_share_once_and_any_other_w
 }
 
 // Per token on the anchor's 5-hour window of 100: Opus 5.5 at 2 times (1, 0.1, 2, 2, 10), Haiku at 0.5 times
-// (1, 0.2, 2, 2, 10) with its cache read override.
+// (1, 0.2, 2, 2, 10) with its cache read override. Opus 5 (a null weight) and Opus 4.8 (a model tier entry alone)
+// take Opus 5.5's 2 and the shared multipliers, and the Mystery model tier has no weighted model, so Mystery 2's row
+// carries no rate.
 #[test]
-fn the_rate_table_carries_a_row_per_weighted_model_on_the_anchor_and_no_rate_for_any_other() {
-    let rates = tables().rate_table(FIVE_HOUR);
+fn the_rate_table_carries_a_row_per_weighted_model_and_per_unweighted_model_of_a_weighted_tier() {
+    let rates = first().rate_table(FIVE_HOUR);
     assert!(
         all_close(
             per_type(rates.rows[OPUS]),
@@ -351,24 +761,108 @@ fn the_rate_table_carries_a_row_per_weighted_model_on_the_anchor_and_no_rate_for
         "{:?}",
         rates.rows[HAIKU]
     );
-    assert_eq!(rates.rows.get("claude-opus-5"), None);
+    for model in ["claude-opus-5", "claude-opus-4-8"] {
+        let row = rates
+            .rows
+            .get(model)
+            .unwrap_or_else(|| panic!("{model}: no row"));
+        assert!(
+            all_close(per_type(*row), per_type(rates.rows[OPUS])),
+            "{model} at Opus 5.5's weight: {row:?}"
+        );
+    }
+    assert_eq!(
+        rates.rows.get("claude-mystery-2").copied().map(per_type),
+        Some([None; 5])
+    );
     assert_eq!(per_type(rates.fallback), [None; 5]);
     assert_eq!(
         per_type(rates.rates_for("claude-opus-5-5-20260401", 0)),
         per_type(rates.rows[OPUS]),
         "a dated id reads its undated row"
     );
-    assert!(tables().rate_table("one_hour").rows.is_empty());
+    assert!(first().rate_table("one_hour").rows.is_empty());
 }
 
-/// The test table with `from` replaced by `to`, refused: the `Plan` message.
+// An id no file lists prices through the model tier its id names: Opus 9 at the opus model tier's latest weighted
+// model, Opus 5.5 at 2, with the shared multipliers, the share the meter charges it. Mystery 9's model tier has no
+// weighted model and GPT 5 names no model tier, so neither has a rate.
+#[test]
+fn an_unlisted_id_naming_a_weighted_tier_rates_at_its_latest_weight_as_the_meter_charges_it() {
+    let costs = first();
+    let rates = costs.rate_table(FIVE_HOUR);
+    assert_eq!(rates.rows.get("claude-opus-9"), None, "no file lists it");
+    let usage = PinUsage {
+        input: 1_000,
+        cache_read: 10_000,
+        write_5m: 100,
+        write_1h: 200,
+        output: 500,
+    };
+    for model in ["claude-opus-9", "claude-opus-9-20270101"] {
+        let rated = rates
+            .price(model, usage, 0)
+            .unwrap_or_else(|| panic!("{model}: no rate"));
+        let charged = costs
+            .share_at(FIVE_HOUR, MAX_20X, model, usage, OUT_OF_BAND)
+            .expect("the meter charges it");
+        assert!(close(rated, charged), "{model}: {rated} against {charged}");
+    }
+    assert!(
+        all_close(
+            per_type(rates.rates_for("claude-opus-9", 0)),
+            per_type(rates.rows[OPUS])
+        ),
+        "at Opus 5.5's base weight: {:?}",
+        rates.rates_for("claude-opus-9", 0)
+    );
+    for model in ["claude-mystery-9", "gpt-5"] {
+        assert_eq!(per_type(rates.rates_for(model, 0)), [None; 5], "{model}");
+    }
+}
+
+// A file can list an id under a model tier other than the one its id names. Opus 7 listed under the Mystery model
+// tier, which has no weighted model, is unpriced on the meter, so its rate row carries no rate where its id's own
+// model tier would rate it.
+#[test]
+fn a_listed_id_its_model_tier_leaves_unpriced_takes_no_rate_from_the_model_tier_its_id_names() {
+    let text = SUBSCRIPTION_COSTS.replace(
+        "      claude-mystery-2: mystery\n",
+        "      claude-mystery-2: mystery\n      claude-opus-7: mystery\n",
+    );
+    assert_ne!(text, SUBSCRIPTION_COSTS);
+    let costs = CostRevisions::from_yaml(&text)
+        .unwrap()
+        .in_force(JANUARY_2026)
+        .clone();
+    assert_eq!(
+        costs.share_at(FIVE_HOUR, MAX_20X, "claude-opus-7", input(1), OUT_OF_BAND),
+        None,
+        "the meter leaves it unpriced"
+    );
+    let rates = costs.rate_table(FIVE_HOUR);
+    assert_eq!(per_type(rates.rates_for("claude-opus-7", 0)), [None; 5]);
+    assert_eq!(rates.price("claude-opus-7", input(1), 0), None);
+}
+
+/// The test table with the first `from` replaced by `to`, refused: the `Plan` message. Both revisions carry most
+/// keys, so an edit of one lands in the first and the refusal names it.
 fn refused(from: &str, to: &str) -> String {
-    let text = SUBSCRIPTION_COSTS.replacen(from, to, 1);
-    assert_ne!(text, SUBSCRIPTION_COSTS, "the edit of `{from}` lands");
-    match SubscriptionCosts::from_yaml(&text) {
+    refused_all(&[(from, to)])
+}
+
+/// The test table with each edit's first `from` replaced by its `to`, refused: the `Plan` message.
+fn refused_all(edits: &[(&str, &str)]) -> String {
+    let mut text = SUBSCRIPTION_COSTS.to_string();
+    for (from, to) in edits {
+        let edited = text.replacen(from, to, 1);
+        assert_ne!(edited, text, "the edit of `{from}` lands");
+        text = edited;
+    }
+    match CostRevisions::from_yaml(&text) {
         Err(LedgerError::Plan(message)) => message,
-        Err(other) => panic!("`{to}` refused as another error: {other}"),
-        Ok(_) => panic!("`{to}` loads"),
+        Err(other) => panic!("{edits:?} refused as another error: {other}"),
+        Ok(_) => panic!("{edits:?} loads"),
     }
 }
 
@@ -381,7 +875,9 @@ fn assert_names(message: &str, key: &str) {
 
 #[test]
 fn the_test_table_loads() {
-    SubscriptionCosts::from_yaml(SUBSCRIPTION_COSTS).expect("the test table parses");
+    let revisions = CostRevisions::from_yaml(SUBSCRIPTION_COSTS).expect("the test table parses");
+    let dates: Vec<&str> = revisions.iter().map(|r| r.effective.as_str()).collect();
+    assert_eq!(dates, ["2026-01-01", "2026-02-01"]);
 }
 
 #[test]
@@ -389,10 +885,14 @@ fn an_unknown_key_or_a_missing_one_is_refused_by_name() {
     assert_names(
         &refused(
             "effective: 2026-01-01\n",
-            "effective: 2026-01-01\ntiers: {}\n",
+            "effective: 2026-01-01\n    tiers: {}\n",
         ),
         "unknown field `tiers`",
     );
+    let second_key = CostRevisions::from_yaml(&format!("{SUBSCRIPTION_COSTS}source: x\n"))
+        .unwrap_err()
+        .to_string();
+    assert_names(&second_key, "unknown field `source`");
     assert_names(
         &refused("{five_hour: 5, seven_day: 50}", "{five_hour: 5}"),
         "missing field `seven_day`",
@@ -431,7 +931,7 @@ fn a_capacity_at_or_below_zero_or_not_finite_is_refused_and_a_null_one_loads() {
     }
     let text = SUBSCRIPTION_COSTS.replacen("{five_hour: 25,", "{five_hour: null,", 1);
     assert_ne!(text, SUBSCRIPTION_COSTS);
-    SubscriptionCosts::from_yaml(&text).expect("a null capacity loads");
+    CostRevisions::from_yaml(&text).expect("a null capacity loads");
 }
 
 #[test]
@@ -538,15 +1038,15 @@ fn a_multiplier_below_zero_or_not_finite_is_refused() {
     }
     let text = SUBSCRIPTION_COSTS.replacen("output: 10}", "output: 0}", 1);
     assert_ne!(text, SUBSCRIPTION_COSTS);
-    SubscriptionCosts::from_yaml(&text).expect("a multiplier of zero loads");
+    CostRevisions::from_yaml(&text).expect("a multiplier of zero loads");
 }
 
 /// A map that kept the last of two rows would load a model the file does not say.
 #[test]
 fn a_repeated_model_weight_key_is_refused_by_name() {
     let message = refused(
-        "  claude-opus-5-5: 2\n",
-        "  claude-opus-5-5: 2\n  claude-opus-5-5: 3\n",
+        "      claude-opus-5-5: 2\n",
+        "      claude-opus-5-5: 2\n      claude-opus-5-5: 3\n",
     );
     assert_names(&message, "duplicate");
     assert_names(&message, "claude-opus-5-5");
@@ -556,23 +1056,23 @@ fn a_repeated_model_weight_key_is_refused_by_name() {
 #[test]
 fn a_tagged_repeat_of_a_model_weight_key_is_refused_as_a_repeat() {
     let message = refused(
-        "  claude-opus-5-5: 2\n",
-        "  claude-opus-5-5: 2\n  !weight claude-opus-5-5: null\n",
+        "      claude-opus-5-5: 2\n",
+        "      claude-opus-5-5: 2\n      !weight claude-opus-5-5: null\n",
     );
     assert_names(&message, "duplicate");
-    assert_names(&message, "model_weight");
+    assert_names(&message, "revisions[0].model_weight");
     assert_names(&message, "claude-opus-5-5");
 }
 
 #[test]
 fn a_tagged_model_weight_key_is_refused_as_not_an_untagged_string() {
     let message = refused(
-        "  claude-opus-5-5: 2\n",
-        "  claude-opus-5-5: 2\n  !weight claude-opus-4: 1\n",
+        "      claude-opus-5-5: 2\n",
+        "      claude-opus-5-5: 2\n      !weight claude-opus-4: 1\n",
     );
-    assert_names(
-        &message,
-        "model_weight.!weight claude-opus-4: a key is an untagged string",
+    assert_eq!(
+        message,
+        "revisions[0].model_weight.!weight claude-opus-4: a key is an untagged string",
     );
 }
 
@@ -580,7 +1080,7 @@ fn a_tagged_model_weight_key_is_refused_as_not_an_untagged_string() {
 fn a_dated_model_weight_key_is_refused() {
     assert_names(
         &refused("claude-opus-5-5: 2", "claude-opus-5-5-20260401: 2"),
-        "model_weight.claude-opus-5-5-20260401: a dated id, where the file keys undated ids",
+        "revision 2026-01-01: model_weight.claude-opus-5-5-20260401: a dated id, where the file keys undated ids",
     );
 }
 
@@ -660,7 +1160,7 @@ fn an_override_weight_on_a_window_neither_shared_nor_a_model_week_is_refused() {
         1,
     );
     assert_ne!(text, SUBSCRIPTION_COSTS);
-    SubscriptionCosts::from_yaml(&text).expect("a model week's key loads");
+    CostRevisions::from_yaml(&text).expect("a model week's key loads");
 }
 
 #[test]
@@ -679,6 +1179,60 @@ fn an_override_weight_or_multiplier_failing_the_shared_rule_is_refused() {
 }
 
 #[test]
+fn an_empty_or_repeated_tier_order_is_refused() {
+    for order in ["[]", "[fable, fable]"] {
+        assert_eq!(
+            refused(
+                "tier_order: [fable, opus, sonnet, haiku, mystery]",
+                &format!("tier_order: {order}"),
+            ),
+            "revision 2026-01-01: tier_order: a list of distinct tier names",
+            "{order}"
+        );
+    }
+}
+
+#[test]
+fn a_model_tier_outside_the_tier_order_is_refused() {
+    assert_eq!(
+        refused_all(&[
+            (
+                "tier_order: [fable, opus, sonnet, haiku, mystery]",
+                "tier_order: [opus, sonnet, haiku, mystery]"
+            ),
+            ("claude-fable-5-1: fable", "claude-fable-5-1: opus"),
+            ("claude-opus-5-5: opus", "claude-opus-5-5: fable"),
+        ]),
+        "revision 2026-01-01: model_tier.claude-opus-5-5: fable is not in tier_order"
+    );
+}
+
+#[test]
+fn a_dated_model_tier_key_is_refused() {
+    assert_eq!(
+        refused(
+            "claude-mystery-2: mystery",
+            "claude-mystery-2-20260401: mystery"
+        ),
+        "revision 2026-01-01: model_tier.claude-mystery-2-20260401: a dated id, where the file keys undated ids"
+    );
+}
+
+/// The fallback never guesses a tier for a model the file lists.
+#[test]
+fn a_weighted_or_overridden_model_without_a_tier_is_refused() {
+    assert_eq!(
+        refused("      claude-opus-5-5: opus\n", ""),
+        "revision 2026-01-01: model_tier: no tier for claude-opus-5-5"
+    );
+    assert_eq!(
+        refused("      claude-haiku-4-5: haiku\n", ""),
+        "revision 2026-01-01: model_tier: no tier for claude-haiku-4-5",
+        "the override's model"
+    );
+}
+
+#[test]
 fn the_operators_file_wins_and_the_handle_names_it() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("subscription_costs.yaml");
@@ -686,7 +1240,10 @@ fn the_operators_file_wins_and_the_handle_names_it() {
     let loaded = PlanTables::load(Some(&path)).unwrap();
     assert_eq!(loaded.source, "file");
     assert_eq!(loaded.path.as_deref(), Some(path.as_path()));
-    assert_eq!(loaded.costs, test_tables::subscription_costs().costs);
+    assert_eq!(
+        loaded.revisions,
+        test_tables::subscription_costs().revisions
+    );
 }
 
 #[test]
@@ -696,7 +1253,7 @@ fn a_path_with_nothing_at_it_reads_the_shipped_model_and_keeps_the_configured_pa
     let loaded = PlanTables::load(Some(&path)).unwrap();
     assert_eq!(loaded.source, "shipped");
     assert_eq!(loaded.path.as_deref(), Some(path.as_path()));
-    assert_eq!(loaded.costs, SubscriptionCosts::shipped());
+    assert_eq!(loaded.revisions, CostRevisions::shipped());
 }
 
 #[test]
@@ -733,63 +1290,61 @@ fn a_path_that_cannot_be_read_refuses_the_load_rather_than_reading_the_shipped_m
 }
 
 #[test]
-fn the_family_order_ranks_fable_opus_sonnet_haiku_and_the_newer_version_first() {
-    assert!(test_tables::in_family_order(&[
-        "claude-fable-5-1",
-        "claude-fable-5",
-        "claude-opus-5-5",
-        "claude-opus-5",
-        "claude-opus-4-8",
-        "claude-sonnet-5-5",
-        "claude-haiku-4-5",
-    ]));
-    for misordered in [
-        ["claude-fable-5", "claude-fable-5-1"],
-        ["claude-haiku-4-5", "claude-sonnet-5-5"],
-        ["claude-opus-4-8", "claude-opus-5"],
-        ["claude-opus-5", "claude-opus-5-5"],
-        ["claude-sonnet-5-5", "claude-opus-4-8"],
-    ] {
-        assert!(!test_tables::in_family_order(&misordered), "{misordered:?}");
-    }
-}
-
-#[test]
 fn the_shipped_model_parses_and_holds_the_shape() {
-    let costs = SubscriptionCosts::shipped();
+    let revisions = CostRevisions::shipped();
     assert_eq!(PlanTables::shipped().source, "shipped");
-    assert!(!costs.capacity.is_empty());
-    for (tier, row) in &costs.capacity {
-        for (window, capacity) in [(FIVE_HOUR, row.five_hour), (SEVEN_DAY, row.seven_day)] {
+    assert!(revisions.len() >= 1);
+    for costs in revisions.iter() {
+        assert!(!costs.capacity.is_empty());
+        for (tier, row) in &costs.capacity {
+            for (window, capacity) in [(FIVE_HOUR, row.five_hour), (SEVEN_DAY, row.seven_day)] {
+                assert!(
+                    capacity.is_none_or(|c| c.is_finite() && c > 0.0),
+                    "{tier} {window}: {capacity:?}"
+                );
+            }
+        }
+        let anchor = &costs.capacity[&costs.unit.defined_by.tier];
+        assert!(anchor.five_hour.is_some() && anchor.seven_day.is_some());
+        assert!(!costs.model_weight.is_empty());
+        for (model, weight) in &costs.model_weight {
             assert!(
-                capacity.is_none_or(|c| c.is_finite() && c > 0.0),
-                "{tier} {window}: {capacity:?}"
+                weight.is_none_or(|w| w.is_finite() && w > 0.0),
+                "{model}: {weight:?}"
             );
         }
-    }
-    let anchor = &costs.capacity[&costs.unit.defined_by.tier];
-    assert!(anchor.five_hour.is_some() && anchor.seven_day.is_some());
-    assert!(!costs.model_weight.is_empty());
-    for (model, weight) in &costs.model_weight {
-        assert!(
-            weight.is_none_or(|w| w.is_finite() && w > 0.0),
-            "{model}: {weight:?}"
+        assert!(!costs.tier_order.is_empty());
+        for model in costs.model_weight.keys().chain(costs.overrides.keys()) {
+            assert!(costs.model_weight.contains_key(model), "{model}");
+            let tier = costs.tier_of(model);
+            assert!(
+                tier.is_some_and(|tier| costs.tier_order.iter().any(|t| t == tier)),
+                "{model}: {tier:?}"
+            );
+        }
+        let keys: Vec<&str> = costs.model_weight.keys().map(String::as_str).collect();
+        assert_eq!(
+            costs.model_order(&keys),
+            keys,
+            "the weights are in the model order"
         );
     }
-    for model in costs.overrides.keys() {
-        assert!(costs.model_weight.contains_key(model), "{model}");
-    }
-    let keys: Vec<&str> = costs.model_weight.keys().map(String::as_str).collect();
-    assert!(
-        test_tables::in_family_order(&keys),
-        "the weights are in the family order: {keys:?}"
-    );
 }
 
 #[test]
 fn the_model_serializes_back_to_the_files_keys_in_the_files_order() {
-    let costs = test_tables::subscription_costs().costs;
-    let value = serde_json::to_value(&costs).unwrap();
+    let revisions = test_tables::subscription_costs().revisions;
+    let value = serde_json::to_value(&revisions).unwrap();
+    let entries = value["revisions"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    for entry in entries {
+        assert_eq!(
+            entry.as_object().unwrap().keys().next().map(String::as_str),
+            Some("effective"),
+            "each entry leads with its date"
+        );
+    }
+    let value = &entries[0];
     let models: Vec<&str> = value["model_weight"]
         .as_object()
         .unwrap()
@@ -815,9 +1370,12 @@ fn the_model_serializes_back_to_the_files_keys_in_the_files_order() {
         serde_json::json!({"cache_read": 0.2}),
         "an override written with one multiplier answers one"
     );
-    let reread: SubscriptionCosts =
-        SubscriptionCosts::from_yaml(&serde_norway::to_string(&costs).unwrap()).unwrap();
-    assert_eq!(reread, costs);
+    assert_eq!(
+        value["tier_order"],
+        serde_json::json!(["fable", "opus", "sonnet", "haiku", "mystery"])
+    );
+    let reread = CostRevisions::from_yaml(&serde_norway::to_string(&revisions).unwrap()).unwrap();
+    assert_eq!(reread, revisions);
 }
 
 #[test]

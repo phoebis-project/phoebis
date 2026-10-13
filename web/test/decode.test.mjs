@@ -797,17 +797,17 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   const desktop = rows.find((g) => g.key === 'desktop');
   assert.equal(desktop.requests, 5);
   const earlier = rows.find((g) => g.key.startsWith('desktop@'));
-  assert.equal(earlier.label, 'desktop (deleted, created Jan 01, 1970, 00:15)');
+  assert.equal(earlier.label, 'desktop (deleted, created Oct 11, 2026, 12:15)');
   assert.equal(earlier.requests, 1);
   // A nonzero generation proves the wire names, as the held-probe copy below does for its field.
   assert.equal(earlier.keyId, 'desktop');
-  assert.equal(earlier.keyCreatedAt, 940_000);
+  assert.equal(earlier.keyCreatedAt, 1_791_720_940_000);
   assert.equal(desktop.keyId, 'desktop');
   assert.equal(desktop.keyCreatedAt, null, 'the live key carries no creation instant');
   assert.equal(desktop.histograms.ttfbMs.length, 64);
   assert.equal(typeof desktop.percentiles.ttfbMs.p50, 'number');
   assert.equal(desktop.cacheMissReasons.none, 5);
-  assert.equal(desktop.tokens.thinking, 200);
+  assert.equal(desktop.tokens.thinking, 240);
   assert.equal(desktop.wastedProbeReasons.idle_limit, 0);
   assert.equal('savings' in desktop, false, 'the group carries the probe figures and no savings member');
   assert.equal(desktop.errors.upstream_error, 1);
@@ -834,9 +834,11 @@ test('an account-grouped breakdown row carries its shares keyed by window and a 
   const probed = d.decodeAnalyticsGroup({ probe_shares: { five_hour: { cost: 0.25, wasted: null }, seven_day: { cost: 0.05, wasted: 0.0125 } } });
   assert.deepEqual(probed.probeShares, { five_hour: { cost: 0.25, wasted: null }, seven_day: { cost: 0.05, wasted: 0.0125 } }, 'a wasted null reads through');
   const direct = fixture('analytics_breakdown_accounts').rows.map(d.decodeAnalyticsGroup).find((g) => g.key === 'direct');
-  assert.deepEqual([direct.cacheShares, direct.costShares, direct.planOutputTokens, direct.planRequests, direct.probeShares], [null, null, null, null, null], 'an api_key group');
+  assert.deepEqual([direct.cacheShares, direct.costShares, direct.probeShares], [null, null, null], 'an api_key group');
+  assert.deepEqual([direct.planOutputTokens, direct.planRequests], [0, 0], 'an api_key group counts no plan-funded request');
   for (const row of fixture('analytics_breakdown').rows.map(d.decodeAnalyticsGroup)) {
-    assert.deepEqual([row.cacheShares, row.costShares, row.planOutputTokens, row.planRequests, row.probeShares], [null, null, null, null, null], `a key-grouped row: ${row.key}`);
+    assert.deepEqual([row.cacheShares, row.costShares, row.probeShares], [null, null, null], `a key-grouped row: ${row.key}`);
+    assert.ok(typeof row.planRequests === 'number' && typeof row.planOutputTokens === 'number', `the plan-funded counts answer under every grouping: ${row.key}`);
   }
   const point = fixture('analytics_series_accounts').points.map(d.decodeAnalyticsPoint).find((p) => p.groups.some((g) => g.key === 'business'));
   assert.equal(typeof point.groups.find((g) => g.key === 'business').costShares.five_hour, 'number', 'a series point carries the same shares');
@@ -974,7 +976,8 @@ test('the routing log page decodes both row shapes from the fixture', () => {
   assert.equal(d.decodeDecisionSummary({ ...body.rows.find((r) => r.kind === 'refused'), refusal: { code: 'revoked', kind: 'key', reason: 'the key was revoked' } }).refusal.code, 'revoked');
   const exhausted = page.rows.find((r) => r.type === 'decision' && r.kind === 'exhausted');
   assert.deepEqual(exhausted.by, { kind: 'exhaustion', tier: null, value: 'timed' });
-  assert.deepEqual(exhausted.exhaustion, { deadline: new Date(1_600_000).toISOString(), kind: 'timed', obstacle: null, reason: null, window: 'five_hour' });
+  const wireDeadline = body.rows.find((r) => r.type === 'decision' && r.kind === 'exhausted').exhaustion.deadline;
+  assert.deepEqual(exhausted.exhaustion, { deadline: new Date(wireDeadline).toISOString(), kind: 'timed', obstacle: null, reason: null, window: 'five_hour' });
   const declined = d.decodeDecisionSummary({ ...body.rows.find((r) => r.kind === 'exhausted'), exhaustion: { deadline: null, kind: 'credits', obstacle: 'credits', reason: 'declined', window: null } });
   assert.equal(declined.exhaustion.reason, 'declined', "an exhaustion's reason is kept, the Fact a credits exhaustion draws");
   const held = page.rows.find((r) => r.type === 'decision' && r.kind === 'held');
@@ -1081,7 +1084,7 @@ test('request rows fold into analytics groups with the same sums the routes answ
   assert.equal(busy.webSearch, 3 + captured.usage.webSearch);
   assert.equal(busy.webFetch, 1 + captured.usage.webFetch);
   const byKey = inZone('UTC', () => d.foldGroups(page.requests, 'key'));
-  assert.deepEqual(byKey.map((g) => g.label), ['desktop', 'desktop (deleted, created Jan 01, 1970, 00:15)'], 'a reused id is one group per holder, as the breakdown answers it');
+  assert.deepEqual(byKey.map((g) => g.label), ['desktop', 'desktop (deleted, created Oct 11, 2026, 12:15)'], 'a reused id is one group per holder, as the breakdown answers it');
   // No captured breakdown groups on effort, so the fold is where the dimension is proven.
   assert.deepEqual(d.foldGroups(page.requests, 'effort').map((g) => g.key), ['high']);
   assert.deepEqual(d.foldGroups([{ ...captured, shape: { ...captured.shape, effort: null } }], 'effort').map((g) => g.key), ['none'], 'a request that asked for no effort files under none, as the rollups file it');
@@ -1407,12 +1410,12 @@ test('a session fold keeps two holders of one key id apart and labels the earlie
   const groups = inZone('UTC', () => d.foldGroups(rows, 'key'));
   assert.deepEqual(
     groups.map((g) => [g.key, g.label, g.requests]),
-    [[`desktop@${live.keyGeneration}`, 'desktop', 5], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created Jan 01, 1970, 00:15)', 1]],
+    [[`desktop@${live.keyGeneration}`, 'desktop', 5], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created Oct 11, 2026, 12:15)', 1]],
     'the key a group carries is the lifetime the requests route selects by',
   );
   assert.deepEqual(d.foldGroups([{ ...live, keyGeneration: 0, keyId: null }], 'key').map((g) => [g.key, g.label]), [['-@0', 'unattributed']]);
   const points = inZone('UTC', () => d.foldRequests([{ ...earlier, at: '1970-01-01T00:10:00.000Z' }, { ...live, at: '1970-01-01T01:10:00.000Z' }], 3_600_000, '1970-01-01T00:00:00.000Z', '1970-01-01T02:00:00.000Z', 'key'));
-  assert.deepEqual(points.map((p) => p.groups.map((g) => g.label)), [['desktop (deleted, created Jan 01, 1970, 00:15)'], ['desktop']], 'a bucket holding the earlier holder alone still labels it against the whole range');
+  assert.deepEqual(points.map((p) => p.groups.map((g) => g.label)), [['desktop (deleted, created Oct 11, 2026, 12:15)'], ['desktop']], 'a bucket holding the earlier holder alone still labels it against the whole range');
 });
 
 test('a session fold labels an earlier holder at generation 0 deleted, with no creation time', () => {
@@ -1681,11 +1684,11 @@ test('a pricing effective date that is not a date decodes as the string sent wit
 });
 
 test("a key group's label is built from the holder's id and creation instant, in the viewer's zone", () => {
-  const row = fixture('analytics_breakdown').rows.find((r) => r.key === 'desktop@940000');
+  const row = fixture('analytics_breakdown').rows.find((r) => r.key === 'desktop@1791720940000');
   const earlier = inZone('America/Los_Angeles', () => d.decodeAnalyticsGroup(row));
-  assert.equal(earlier.label, 'desktop (deleted, created Dec 31, 1969, 16:15)', "the route's label is UTC and the console prints the viewer's zone");
+  assert.equal(earlier.label, 'desktop (deleted, created Oct 11, 2026, 05:15)', "the route's label is UTC and the console prints the viewer's zone");
   assert.equal(earlier.keyId, 'desktop');
-  assert.equal(earlier.keyCreatedAt, 940_000);
+  assert.equal(earlier.keyCreatedAt, 1_791_720_940_000);
   const unstamped = d.decodeAnalyticsGroup({ ...row, key: 'desktop@0', key_created_at: 0, label: 'desktop (deleted)' });
   assert.equal(unstamped.label, 'desktop (deleted)', 'generation 0 carries no creation time');
   assert.equal(unstamped.keyCreatedAt, 0);
@@ -1791,7 +1794,7 @@ test("an attention item decodes the route's shape, its start an instant and its 
     kind: 'pool_exhausted',
     link: { id: 'main', page: 'pools' },
     pools: ['main'],
-    since: new Date(1_000_000).toISOString(),
+    since: new Date(raw.since).toISOString(),
     subject: { id: 'main', label: 'Main', type: 'pool' },
   });
   const drift = d.decodeAttention({ ...raw, detail: { client_version: '2.1.271', key: null, trigger: 'hash' }, kind: 'client_drift', link: null, pools: [], subject: { id: '2.1.271', label: '2.1.271', type: 'client' } });
@@ -1805,7 +1808,7 @@ test("an attention item of a state writer or a parked record decodes under its o
     kind: 'ledger_record_parked',
     link: { id: 'main', page: 'pools' },
     pools: ['main'],
-    since: new Date(1_000_000).toISOString(),
+    since: new Date(parked.since).toISOString(),
     subject: { id: 'main', label: 'Main', type: 'pool' },
   });
   const writer = d.decodeAttention({ detail: { component: 'routing' }, kind: 'writer_degraded', link: null, pools: [], since: 1_000_000, subject: { id: 'routing', label: 'routing', type: 'router' } });
