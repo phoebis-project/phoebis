@@ -12,7 +12,9 @@ interface AppSettings {
   expertView: boolean;
   /** Bumped by every time-format change, so a component that only formats times has something to depend on. */
   formatVersion: number;
-  /** The cost model's two tier members, which every list of models orders by. The empty pair until the settings answer. */
+  /**
+   * The cost model's two tier members, which every list of models orders by. The empty pair until the settings answer.
+   */
   modelTiers: ModelTiers;
   resolvedTheme: 'dark' | 'light';
   setExpertView: (on: boolean) => void;

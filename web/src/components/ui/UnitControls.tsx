@@ -3,7 +3,10 @@ import { positionOf, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, UNIT_POSITIONS, 
 import { IconInfo } from './icons';
 import { Select } from './primitives';
 
-/** The unit every view prices in. At 900 px and below the bar spans the viewport, so each position reads its short label. */
+/**
+ * The unit every view prices in. At 900 px and below the bar spans the viewport, so each position reads its short
+ * label.
+ */
 export function UnitSwitch({ onChange, short, unit }: { onChange: (u: UnitPosition) => void; short: boolean; unit: UnitPosition }) {
   return (
     // Keyed on the label set: Chromium keeps a select's width when its options' text changes, so a resize across the

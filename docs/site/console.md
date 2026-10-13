@@ -25,7 +25,7 @@ and leaves the mode as you set it. The sidebar's foot carries the "Expert view" 
 `v{version}`. The top bar reads the open view's title (the document title is `{title} - Phoebis Router`), the "Unit"
 switch with its legend's button, "Log out", and the theme switch "Theme" with Light, Dark and System, stored under
 `phoebis.theme` (`system` until you pick one). The time format lives under `phoebis.timeFormat` (`24h` by default). The
-unit, the theme and the time format are browser preferences, which the Settings view's Appearance card also sets, and
+theme, the time format and the unit are browser preferences, which the Settings view's Appearance card also sets, and
 nothing in the shell changes a router setting. On a narrow window a menu button opens the sidebar over the view.
 
 The "Unit" switch sets the unit the Dashboard, Pools, Keys, Requests and Analytics views price a request in, stored
@@ -306,18 +306,19 @@ buckets under [The return rate by idle age](keepalive.md#the-return-rate-by-idle
 
 The view opens on the tiles Keys, Active, Lifetime requests and Lifetime cost, and the card "Lifetime cost by key"
 ("Relative spend across all keys"), a bar per key. Lifetime cost, each bar's figure and the cost line under a key's
-"Usage, 7d" read in the top bar's unit: under Native a key's subscription traffic as its 20x 7-day equivalent beside its
-billed dollars, a side with no traffic left out, and under Window shares a dash, since a key spans its pool's accounts.
-The table's toolbar offers "Search keys", the status filter All statuses, Active, Disabled, Expired or Revoked, the pool
-filter "All pools", and "Create key". The columns are Name, Prefix, Pool, Models, "Usage, 7d", Expiry and Status, and
-each row ends in its menu. Under the name a row notes the capture setting, `bodies captured, {h}h` or `bodies not
-captured`, with "inherited" where the key follows its pool and "keepalive off" for a key opted out of cache warming.
-Models reads `{n} rules`, with "(replace)" where they replace the pool's, or "Pool rules" or
-"No rules". Expiry reads the date or "Never". Status carries the key's state with `used {ago}` and, after a rotation,
-`{n} sessions still on the previous secret`. The menu offers Edit, Rotate (`Rotate {name}`), Revoke (`Revoke {name}`:
-"Requests with this key are rejected immediately. Its history stays in the ledger.") and Delete (`Delete {name}`:
-"Removes the key and detaches its request history from the key name. This cannot be undone."). Before the first key the
-table reads "No keys yet" with "Create key". What a key's settings mean is on [Keys](routing.md#keys).
+"Usage, 7d" read in the top bar's unit: under Native the tile stacks the subscription traffic's 20x 7-day equivalent
+over the billed traffic's dollars, and a bar's figure and a cost line read a key's equivalent beside its billed dollars,
+a side with no traffic left out, and under Window shares a dash, since a key spans its pool's accounts. The table's
+toolbar offers "Search keys", the status filter All statuses, Active, Disabled, Expired or Revoked, the pool filter "All
+pools", and "Create key". The columns are Name, Prefix, Pool, Models, "Usage, 7d", Expiry and Status, and each row ends
+in its menu. Under the name a row notes the capture setting, `bodies captured, {h}h` or `bodies not captured`, with
+"inherited" where the key follows its pool and "keepalive off" for a key opted out of cache warming.
+Models reads `{n} rules`, with "(replace)" where they replace the pool's, or "Pool rules" or "No rules".
+Expiry reads the date or "Never". Status carries the key's state with `used {ago}` and, after a rotation, `{n} sessions
+still on the previous secret`. The menu offers Edit, Rotate (`Rotate {name}`), Revoke (`Revoke {name}`: "Requests with
+this key are rejected immediately. Its history stays in the ledger.") and Delete (`Delete {name}`: "Removes the key and
+detaches its request history from the key name. This cannot be undone."). Before the first key the table reads "No keys
+yet" with "Create key". What a key's settings mean is on [Keys](routing.md#keys).
 
 "Create key" and Rotate end on the dialog "Key created" or "Key rotated", which shows the secret once with a copy
 button under "Copy the secret now. The router stores only a hash, so it cannot be shown again." and "Set it as
@@ -486,7 +487,7 @@ column links to the Requests view on those requests with the page's filters carr
 cannot list exactly stays plain with the reason on hover.
 
 Cost reads in the top bar's unit. Under Native the tiles read Cost, the subscription requests' 20x 7-day equivalent
-beside the billed requests' dollars, a side with no requests left out, and Cost per request and Cost per 1k output
+over the billed requests' dollars, a side with no requests left out, and Cost per request and Cost per 1k output
 tokens the same two ways. Cost by the chosen group stacks the equivalent per bucket with "Billed by {group}" beside it
 in dollars, the Cost split draws a ring per side by token kind, the subscription requests' with its 7-day equivalent in
 the center and the billed requests' in dollars, and the table reads Requests, Cost, 20x 5-hour, the model week's 20x
@@ -573,7 +574,7 @@ released badge and an Agents count of 0. A session without a recipe reads "no re
 The "Cost reference" link opens the dialog "Cost reference" under "What a million tokens costs: in dollars at list
 price, and as a share of a subscription window." on three tabs, Tiers and peak band, Plan rates and API prices. The
 Sessions view's head and the pool dialog's Warm sessions hint open it on Plan rates, the pool dialog's Write cost hint
-on API prices, and the subtitle of the Dashboard's 5-hour ring and the note of the Burn section's Plan per hour chart
+on API prices, and the subtitle of the Dashboard's 5-hour ring and the notes of the Burn section's Plan per hour cards
 on Tiers and peak band. It opens on the entries in force now. Its footer carries a "Revision" select over both files'
 revision dates, newest first, a date not yet in force marked `(next)`, and choosing a date redraws every tab at the
 entry each file had in force on that date, or at a file's first entry when the date comes before it. A single date
@@ -602,10 +603,10 @@ cache write 1h and output, with a fast-mode row under each model that serves fas
 by prompt length, under the caption "USD per million tokens at list price" and its note "An API-key account pays these.
 A subscription account pays them in overage and for fast-mode answers." Both tables show one row per model tier, its
 newest model, in the cost model's `tier_order` with `model_tier` naming each model's tier and a model of no tier last,
-and fold the older models under one row at the table's foot that names their count, `{n} older models`, and expands to
-them in the same order. The fold is shared by both tables and starts closed at each opening. The price rows, the weights
-and how a probe is priced are on [Pricing](statistics.md#pricing), which lists the shipped revision in force, and the
-dialog shows an earlier entry under the Revision select.
+and fold the older models under one row at the table's foot that names their count, "1 older model" or `{n} older
+models`, and expands to them in the same order. The fold is shared by both tables and starts closed at each opening. The
+price rows, the weights and how a probe is priced are on [Pricing](statistics.md#pricing), which lists the shipped
+revision in force, and the dialog shows an earlier entry under the Revision select.
 
 ## Settings
 

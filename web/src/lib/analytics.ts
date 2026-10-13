@@ -190,7 +190,9 @@ export async function readBurn(
 
 /** An earlier holder of a key id groups under `<id>@<generation>`, which the breakdown labels by its creation. */
 const EARLIER_HOLDER = /^(.+)@(\d+)$/;
-/** A burn group's label: the breakdown's for an earlier key holder, `unattributed` for what the router never attributed. */
+/**
+ * A burn group's label: the breakdown's for an earlier key holder, `unattributed` for what the router never attributed.
+ */
 function burnLabelOf(groupBy: BurnGroup, key: string): string {
   if (key === '-') return 'unattributed';
   const holder = groupBy === 'key' ? EARLIER_HOLDER.exec(key) : null;
@@ -255,7 +257,9 @@ export const planRowsRequired = (g: AnalyticsGroup): boolean => g.planRequests =
 export const addReadWrite = (a: { read: number; write: number }, b: { read: number; write: number }) => ({ read: a.read + b.read, write: a.write + b.write });
 /** A group that ran probes carries both shared windows on its probe shares unless one could not be priced on it. */
 const probesRequired = (g: AnalyticsGroup): boolean => g.probes.ok + g.probes.held + g.probes.skipped + g.probes.failed > 0;
-/** The named account's whole: the position's totals with its shares summed over the groups the route answered them on. */
+/**
+ * The named account's whole: the position's totals with its shares summed over the groups the route answered them on.
+ */
 export const oneAccountGroupOf = (totals: AnalyticsGroup, groups: AnalyticsGroup[]): AnalyticsGroup => ({
   ...totals,
   cacheShares: oneAccountShares(groups, (g) => g.cacheShares, addReadWrite, planRowsRequired),
@@ -357,6 +361,22 @@ export interface CostFigure {
   text: string;
   word?: string;
 }
+/**
+ * A sum's native figures on `window`, each with its funding's word: the plan rows' 20x equivalent, the tilde before it
+ * where an estimate priced it, then the billed rows' dollars. A side null for want of rows is left out, and a sum with
+ * no row on either side reads both, so it shows its zero in each unit rather than nothing. `marked` says whether the
+ * equivalent carries the tilde, so the figure's element takes the estimate's title.
+ */
+export function nativeFiguresOf(window: string, sides: { billed: number | null; equivalent: number | null }, estimated: boolean): { figures: CostFigure[]; marked: boolean } {
+  const none = sides.billed === null && sides.equivalent === null;
+  const equivalent = none ? 0 : sides.equivalent;
+  const billed = none ? 0 : sides.billed;
+  const marked = estimated && !none && equivalent !== null;
+  return {
+    figures: [...(equivalent === null ? [] : [{ text: equivalentOrDash(window, equivalent, marked), word: 'subscription' }]), ...(billed === null ? [] : [{ text: fmtUsd(billed), word: 'billed' }])],
+    marked,
+  };
+}
 /** The Cost section's head under a position, as `costHeadOf` reads it. */
 export interface CostHead {
   /** Whether a figure of the head carries the estimated mark, so its element takes the estimate's title. */
@@ -376,10 +396,8 @@ export interface CostHead {
 export function costHeadOf(unit: UnitPosition, totals: AnalyticsGroup): CostHead {
   if (unit === 'share') return { estimated: false, meta: 'shares per account', subset: null, tile: null };
   if (unit === 'native') {
-    const { billed, equivalent } = sidesOf(totals, 'seven_day');
-    const estimated = totals.estimated && equivalent !== null;
-    const figures: CostFigure[] = [...(equivalent === null ? [] : [{ text: equivalentOrDash('seven_day', equivalent, estimated), word: 'subscription' }]), ...(billed === null ? [] : [{ text: fmtUsd(billed), word: 'billed' }])];
-    return { estimated, meta: `${figures.map((f) => f.text).join(' and ')} in range`, subset: NATIVE_SUBSET, tile: { figures, label: 'Cost', note: NATIVE_SUBSET } };
+    const { figures, marked } = nativeFiguresOf('seven_day', sidesOf(totals, 'seven_day'), totals.estimated);
+    return { estimated: marked, meta: `${figures.map((f) => f.text).join(' and ')} in range`, subset: NATIVE_SUBSET, tile: { figures, label: 'Cost', note: NATIVE_SUBSET } };
   }
   const dollars = dollarsOf(unit);
   const figure = fmtUsd(totals.costUsd);

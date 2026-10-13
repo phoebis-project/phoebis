@@ -527,7 +527,7 @@ function PoolCost({ pool, accountById }: { accountById: Map<string, Account>; po
   if (unit === 'share') {
     if (member === null) return dash(SHARE_NOTE);
     if (read.error !== null) return dash(`Could not load the share: ${read.error}`);
-    if (read.loading || read.stale || read.data === null) return dash();
+    if (read.loading || read.stale || read.data === null) return dash('Loading the share');
     const group = read.data.find((g) => g.key === pool.id);
     const seven = group?.costShares?.seven_day;
     if (group === undefined || typeof seven !== 'number') return dash(`No share of ${accountById.get(member)?.label ?? member}'s 7-day window priced in the last 24 hours`);
@@ -542,9 +542,9 @@ function PoolCost({ pool, accountById }: { accountById: Map<string, Account>; po
   if (unit !== 'native') return <dd className="num">{fmtUsd(dollarsUnder(unit, day))}</dd>;
   const sides = nativeSidesOf(day);
   if (sides.equivalent === null && sides.billed === null) return dash('No request in the last 24 hours');
-  const reading = [...(sides.equivalent === null ? [] : [`${fmtEquivalent('seven_day', day.equivalent.sevenDay)}, ${fmtEquivalent('five_hour', day.equivalent.fiveHour)}`]), ...(sides.billed === null ? [] : [`${sides.billed} billed`])];
+  const reading = [...(sides.equivalent === null ? [] : [`${fmtEquivalent('seven_day', day.equivalent.sevenDay)}, ${fmtEquivalent('five_hour', day.equivalent.fiveHour)}`]), ...(sides.billed === null ? [] : [`${fmtUsd(sides.billed)} billed`])];
   return (
-    <dd className="num" title={withEstimate(reading.join(', '), sides.marked)}>
+    <dd className="num" title={withEstimate(reading.join(', '), sides.equivalent !== null && day.estimated)}>
       {sumTileOf(unit, day).value}
     </dd>
   );

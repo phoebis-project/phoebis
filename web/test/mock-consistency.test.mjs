@@ -972,32 +972,46 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(estimated > 0, "the story's Sonnet 4.6 rows price an estimate");
   });
 
-  test(`every story request's dollars are the cells of the wire's price entry in force at its instant, and none on a model the entry lacks, at ${at}`, async () => {
+  test(`every story request's dollars are the cells of the wire's price entry in force at its instant, none on a model the entry lacks, and an hour before the entry in force reads the earlier entry's, at ${at}`, async () => {
     const s = await story;
     const revisions = s.settings.apiPrices.revisions ?? [];
     assert.ok(revisions.length > 1, 'the wire lists the price revisions');
+    // A dated id prices at its undated row, the ledger's lookup. Null for a model the entry lacks.
+    const dollarsAt = (entry, model, u, fast) => {
+      const row = entry?.models.find((m) => m.model === model) ?? entry?.models.find((m) => m.model === s.lib.undatedModel(model));
+      if (row === undefined) return null;
+      const prompt = u.input + u.cacheRead + u.cacheWrite5m + u.cacheWrite1h;
+      const cells = fast && row.fast ? row.fast : row.longContext && prompt > row.longContext.over ? row.longContext : row;
+      return (u.input * cells.inputPerM + u.cacheRead * cells.cacheReadPerM + u.cacheWrite5m * cells.cacheWrite5mPerM + u.cacheWrite1h * cells.cacheWrite1hPerM + u.output * cells.outputPerM) / 1_000_000;
+    };
     let priced = 0;
     let unlisted = 0;
     for (const r of s.requests) {
       const entry = s.lib.revisionAt(revisions, r.at);
-      // A dated id prices at its undated row, the ledger's lookup.
-      const row = entry?.models.find((m) => m.model === r.model) ?? entry?.models.find((m) => m.model === s.lib.undatedModel(r.model));
-      if (row === undefined) {
+      const want = dollarsAt(entry, r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast');
+      if (want === null) {
         assert.equal(r.costUsd, 0, `${r.id} on ${r.model}, which the entry of ${entry?.effective} lacks, reads ${r.costUsd}`);
         unlisted += 1;
         continue;
       }
-      const u = r.usage;
-      const fast = r.attempts[r.attempts.length - 1]?.response.speed === 'fast';
-      const prompt = u.input + u.cacheRead + u.cacheWrite5m + u.cacheWrite1h;
-      const cells = fast && row.fast ? row.fast : row.longContext && prompt > row.longContext.over ? row.longContext : row;
-      const want = (u.input * cells.inputPerM + u.cacheRead * cells.cacheReadPerM + u.cacheWrite5m * cells.cacheWrite5mPerM + u.cacheWrite1h * cells.cacheWrite1hPerM + u.output * cells.outputPerM) / 1_000_000;
       // A row's dollars are rounded to the hundredth of a cent.
       assert.ok(Math.abs(r.costUsd - want) <= 0.00005 + 1e-12, `${r.id} on ${r.model} at ${r.at} reads ${r.costUsd} against the entry of ${entry?.effective}'s ${want}`);
       priced += 1;
     }
     assert.ok(priced > 0 && unlisted > 0, `the story prices ${priced} rows and leaves ${unlisted} unlisted`);
-    assert.ok(new Set(s.requests.map((r) => s.lib.revisionAt(revisions, r.at)?.effective)).size > 0);
+    // The request rows all run after the latest entry's date, so the month's synthesized hours before it carry the
+    // earlier entry, each pricing its tokens as one answer at the hour, as the mock writes it.
+    const latest = s.lib.revisionAt(revisions, s.now)?.effective;
+    let earlier = 0;
+    for (const r of s.rollups) {
+      const entry = s.lib.revisionAt(revisions, r.hour);
+      if (r.kind !== 'inference' || entry?.effective === latest) continue;
+      const t = r.tokens;
+      const want = dollarsAt(entry, r.model, { cacheRead: t.cacheRead, cacheWrite1h: t.cacheWrite1h, cacheWrite5m: t.cacheWrite5m, input: t.uncachedInput, output: t.output }, r.speed === 'fast') ?? 0;
+      assert.ok(Math.abs(r.costUsd - want) <= 1e-9 * Math.max(1, want), `the hour ${r.hour} on ${r.model} reads ${r.costUsd} against the entry of ${entry?.effective}'s ${want}`);
+      earlier += 1;
+    }
+    assert.ok(earlier > 0, `no hour of the story prices before the entry of ${latest}`);
   });
 
   test(`the breakdown by model's 20x equivalents are the sums of the account rows' under the same filters, at ${at}`, async () => {

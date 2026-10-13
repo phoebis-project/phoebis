@@ -7,14 +7,14 @@ import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
-import { PairValue, Tile } from '@/components/ui/Tile';
+import { figuresValue, Tile } from '@/components/ui/Tile';
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { KEYS_CODEC, type KeysAddress } from '@/lib/address';
-import { SHARE_NOTE, type DollarPosition } from '@/lib/analytics';
+import { nativeFiguresOf, SHARE_NOTE, type DollarPosition } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { clock } from '@/lib/clock';
-import { ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtDate, fmtEquivalent, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
+import { ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
 import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, sortKeys, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
 import { useAsync, useCommittedText, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { scrollToElement } from '@/lib/scroll';
@@ -50,14 +50,10 @@ export interface FundedSum {
 /** A dollar position's dollars of a sum: every row's, the billed rows', or the plan rows' at the API price list. */
 export const dollarsUnder = (unit: DollarPosition, s: FundedSum): number => (unit === 'all' ? s.cost : unit === 'usd' ? s.billedUsd : s.cost - s.billedUsd);
 /**
- * A native sum's two sides on the 7-day window, each null where it has no rows, so a sum of one funding shows one
- * figure and no "0%" side. The equivalent leads with the tilde where an estimate priced it.
+ * A sum's two sides on the 7-day window, each null where it has no rows, so a sum of one funding shows one figure and
+ * no "0%" side.
  */
-export function nativeSidesOf(s: FundedSum): { billed: string | null; equivalent: string | null; marked: boolean } {
-  const plan = s.equivalent.sevenDay > 0;
-  const marked = plan && s.estimated;
-  return { billed: s.billedUsd > 0 ? fmtUsd(s.billedUsd) : null, equivalent: plan ? `${marked ? '~' : ''}${fmtEquivalent('seven_day', s.equivalent.sevenDay)}` : null, marked };
-}
+export const nativeSidesOf = (s: FundedSum): { billed: number | null; equivalent: number | null } => ({ billed: s.billedUsd > 0 ? s.billedUsd : null, equivalent: s.equivalent.sevenDay > 0 ? s.equivalent.sevenDay : null });
 /**
  * A tile over a sum under a position. Native stacks the two sides with their words, and an empty sum reads its zero in
  * each unit rather than nothing. The shares are one account's, and these tiles sum every account, so they read a dash.
@@ -65,19 +61,8 @@ export function nativeSidesOf(s: FundedSum): { billed: string | null; equivalent
 export function sumTileOf(unit: UnitPosition, s: FundedSum): { title?: string; value: ReactNode } {
   if (unit === 'share') return { title: SHARE_NOTE, value: '-' };
   if (unit !== 'native') return { value: fmtUsd(dollarsUnder(unit, s)) };
-  const sides = nativeSidesOf(s);
-  const figure = (text: string) => <span className="cost-figure">{text}</span>;
-  const subscription = figure(sides.equivalent ?? fmtEquivalent('seven_day', 0));
-  const billed = figure(sides.billed ?? fmtUsd(0));
-  const value =
-    sides.equivalent === null && sides.billed !== null ? (
-      <PairValue first={billed} firstLabel="billed" />
-    ) : sides.billed === null && sides.equivalent !== null ? (
-      <PairValue first={subscription} firstLabel="subscription" />
-    ) : (
-      <PairValue first={subscription} firstLabel="subscription" second={billed} secondLabel="billed" />
-    );
-  return { title: sides.marked ? ESTIMATED_TITLE : undefined, value };
+  const { figures, marked } = nativeFiguresOf('seven_day', nativeSidesOf(s), s.estimated);
+  return { title: marked ? ESTIMATED_TITLE : undefined, value: figuresValue(figures) };
 }
 /**
  * A key's figure as a label or a line reads it: native's two sides on one line, a side with no rows left out and a
@@ -88,8 +73,9 @@ function keyFigureOf(unit: UnitPosition, s: FundedSum, empty: string): { text: s
   if (unit === 'share') return { text: '-', title: SHARE_NOTE };
   if (unit !== 'native') return { text: fmtUsd(dollarsUnder(unit, s)) };
   const sides = nativeSidesOf(s);
-  const parts = [sides.equivalent, sides.billed === null ? null : `${sides.billed} billed`].filter((p): p is string => p !== null);
-  return parts.length === 0 ? { text: '-', title: empty } : { text: parts.join(', '), title: sides.marked ? ESTIMATED_TITLE : undefined };
+  if (sides.equivalent === null && sides.billed === null) return { text: '-', title: empty };
+  const { figures, marked } = nativeFiguresOf('seven_day', sides, s.estimated);
+  return { text: figures.map((f) => (f.word === 'billed' ? `${f.text} billed` : f.text)).join(', '), title: marked ? ESTIMATED_TITLE : undefined };
 }
 
 /** A key row's 7-day figure under its tokens. */

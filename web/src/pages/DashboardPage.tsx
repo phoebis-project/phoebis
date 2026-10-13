@@ -11,9 +11,9 @@ import { AttentionLine } from '@/components/ui/AttentionLine';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Badge, Button, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
-import { PairValue } from '@/components/ui/Tile';
-import { SHARE_NOTE } from '@/lib/analytics';
-import { ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, shortModel, tokensTotal } from '@/lib/format';
+import { figuresValue } from '@/components/ui/Tile';
+import { equivalentOrDash, nativeFiguresOf, SHARE_NOTE } from '@/lib/analytics';
+import { ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
 import { costUnitOf, glanceCellOf, revisionsTitle } from '@/lib/requests';
@@ -49,9 +49,9 @@ interface CostTile {
 }
 /**
  * The day's cost tile under a position. Native stacks the plan rows' 20x 5-hour equivalent, the window a day's figure
- * leads with, over the billed rows' dollars, a side with no rows left out, and an empty day reads its zero in each unit.
- * The dollar positions read their dollars. The shares are one account's, and the tile sums every account, so it reads
- * a dash, its note saying why and its spark kept so the tile never waits on a placeholder.
+ * leads with, over the billed rows' dollars, a side with no rows left out, and an empty day reads its zero in each
+ * unit. The dollar positions read their dollars. The shares are one account's, and the tile sums every account, so it
+ * reads a dash, its note saying why and its spark kept so the tile never waits on a placeholder.
  */
 function costTileOf(unit: UnitPosition, o: Overview): CostTile {
   if (unit === 'all') return { note: `${fmtUsd(o.cost24h / 24)} per hour`, spark: o.hourly.map((h) => h.cost), value: fmtUsd(o.cost24h) };
@@ -60,23 +60,14 @@ function costTileOf(unit: UnitPosition, o: Overview): CostTile {
   if (unit === 'share') return { note: 'shares do not add across accounts', spark: o.hourly.map((h) => h.cost), title: SHARE_NOTE, value: '-' };
   const plan = o.equivalent24h.fiveHour > 0 || o.equivalent24h.sevenDay > 0;
   const billed = o.billed24h > 0;
-  const marked = plan && o.estimated24h;
-  const subscription = <span className="cost-figure">{`${marked ? '~' : ''}${fmtEquivalent('five_hour', o.equivalent24h.fiveHour)}`}</span>;
-  const dollars = <span className="cost-figure">{fmtUsd(o.billed24h)}</span>;
+  const { figures, marked } = nativeFiguresOf('five_hour', { billed: billed ? o.billed24h : null, equivalent: plan ? o.equivalent24h.fiveHour : null }, o.estimated24h);
   return {
-    note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${marked ? '~' : ''}${fmtEquivalent('five_hour', o.equivalent24h.fiveHour / 24)} per hour`,
+    note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${equivalentOrDash('five_hour', o.equivalent24h.fiveHour / 24, marked)} per hour`,
     // In percent: the spark's scale floors at one, a dollar an hour on the dollar positions, and a floor of a whole
     // window an hour would flatten the day.
     spark: plan || !billed ? o.hourly.map((h) => h.equivalent.fiveHour * 100) : o.hourly.map((h) => h.billed),
     title: marked ? ESTIMATED_TITLE : undefined,
-    value:
-      plan && !billed ? (
-        <PairValue first={subscription} firstLabel="subscription" />
-      ) : billed && !plan ? (
-        <PairValue first={dollars} firstLabel="billed" />
-      ) : (
-        <PairValue first={subscription} firstLabel="subscription" second={dollars} secondLabel="billed" />
-      ),
+    value: figuresValue(figures),
   };
 }
 

@@ -82,7 +82,9 @@ export const equivalentShort = (windowKey: string, share: number): string => `${
  * joins it to "Account tier".
  */
 export const ESTIMATED_TITLE = "Estimated at the model tier's latest weighted model";
-/** A figure's title with the estimate after it as a sentence of its own, or the title alone for a figure not estimated. */
+/**
+ * A figure's title with the estimate after it as a sentence of its own, or the title alone for a figure not estimated.
+ */
 export const withEstimate = (title: string, estimated: boolean): string => (!estimated ? title : title === '' ? `${ESTIMATED_TITLE}.` : `${title}. ${ESTIMATED_TITLE}.`);
 export const fmtMs = (ms: number | null) => (ms === null ? '-' : ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
 export const fmtCredits = (credits: number) => usd.format(credits / 100);

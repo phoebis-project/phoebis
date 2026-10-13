@@ -2634,10 +2634,10 @@ async function burnCards(theme) {
  * The 5-hour plan card's muted legend entries against their neighbors. The estimated entry draws its swatch hollow: a
  * transparent box with a border in its color, taller than the 2 px line swatch, the type its neighbor's. The model
  * unlisted entry reads against the entry before it, a planned line's, on type and swatch size, and, where an account
- * whose tier the cost model does not size draws a tier unknown entry beside it, that muted entry on type, swatch size and
- * color too. In the mock's story every model has a model tier the cost model weighs, `secondary`'s Sonnet 4.6 pricing
- * at its tier's latest weight as an estimate, so the estimated entry must draw there and the model unlisted entry must
- * not. The router's seed bills no subscription traffic, so there the pass records what it reads.
+ * whose tier the cost model does not size draws a tier unknown entry beside it, that muted entry on type, swatch size
+ * and color too. In the mock's story every model has a model tier the cost model weighs, `secondary`'s Sonnet 4.6
+ * pricing at its tier's latest weight as an estimate, so the estimated entry must draw there and the model unlisted
+ * entry must not. The router's seed bills no subscription traffic, so there the pass records what it reads.
  */
 async function planLegend(theme) {
   try {
@@ -3276,7 +3276,7 @@ async function stickyStrip(theme) {
 /**
  * The Settings page's Unit row at 1280 and 400 px, the one way to the legend on a phone, where the top bar gives its
  * button up: the legend's button sits on the select's line to its right, its popover opens inside the viewport's width
- * with no point of it covered and its lines in the legend's 12 px type, and Escape closes it.
+ * with its two top corners and its middle uncovered and its lines in the legend's 12 px type, and Escape closes it.
  */
 async function settingsUnitLegend(theme) {
   const LEGEND = 'What the units mean';
@@ -3337,9 +3337,9 @@ async function settingsUnitLegend(theme) {
 }
 
 /**
- * The top bar on every view at 1280 and 400 px: nothing scrolls it sideways and its last control ends inside its padding,
- * the page title reads whole on one line, and Log out is a text button at 1280 px and its icon alone at 400 px, named
- * by its label and its title for the reader who cannot see the glyph.
+ * The top bar on every view at 1280 and 400 px: nothing scrolls it sideways and its last control ends inside its
+ * padding, the page title reads whole on one line, and Log out is a text button at 1280 px and its icon alone at
+ * 400 px, named by its label and its title for the reader who cannot see the glyph.
  */
 async function topBarFits(theme, path) {
   try {
@@ -4753,7 +4753,8 @@ async function decisionCard(theme) {
     for (const b of got.badges.filter((x) => x.pill !== null && x.pill.scroll > x.pill.client + 1)) say(`${where}: the station badge "${b.text}" runs ${b.pill.scroll}px of text out of its ${b.pill.client}px pill`);
   }
   if (counts.length === 2 && counts[0] !== counts[1]) say(`the open card draws ${counts[0]} stations at 1280 by 800 and ${counts[1]} at 1440 by 900`);
-  // The seed's first card is a placement, whose candidates hang from its pick, or else from the station that decided it.
+  // The seed's first card is a placement, whose candidates hang from its pick, or else from the station that decided
+  // it.
   if (!mock) {
     await stripContrast(theme, 'the first card');
     const host = async (card) => {

@@ -4048,13 +4048,6 @@
   width: 160px;
 }
 
-/* Burn's reason takes the rest of the select's line, two lines of text at 1280 and 1440, and drops under the select
-   once less than 360 px is left there. */
-.analytics-groupby__reason {
-  flex: 1 1 360px;
-  font-size: 12.5px;
-}
-
 .analytics-section {
   display: flex;
   flex-direction: column;

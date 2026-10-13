@@ -55,7 +55,7 @@ test('a pass-through hook that names its kinds admits them, so a stored stream r
   assert.deepEqual(same(want, { body: 7 }, '', 0, passthrough), ['.body: number where an object, null or a string is expected']);
 });
 
-test('a window-keyed map takes any window, a request row\'s share map a null entry, and an object entry is held to the first entry of the fixture', () => {
+test('a window-keyed map takes any window, a request row\'s share and equivalent maps a null entry, and an object entry is held to the first entry of the fixture', () => {
   const want = shapeOf({ cacheShares: { five_hour: { read: 1, write: 2 } }, costShares: { five_hour: 1 }, windows: {} });
   const got = { cacheShares: { five_hour: { read: 1, write: 2 }, seven_day_fable: { read: 3, write: 4 } }, costShares: { five_hour: 1, seven_day_fable: 2 }, windows: { five_hour: { lead: 0.1 } } };
   assert.deepEqual(same(want, got), []);
@@ -68,4 +68,9 @@ test('a window-keyed map takes any window, a request row\'s share map a null ent
   // The dashboard's recent rows are request rows too.
   assert.deepEqual(same(shapeOf({ recent: [{ costShares: { five_hour: 1 } }] }), { recent: [{ costShares: { five_hour: 1, seven_day: null } }] }), []);
   assert.deepEqual(same(want, { ...got, costShares: { five_hour: 1, seven_day: null } }), ['.costShares.seven_day: object against number']);
+  // A request row's 20x equivalents keep an unpriced window as null the same way, in each of the three row homes.
+  assert.deepEqual(same(shapeOf({ requests: [{ costEquivalent: { five_hour: 1 } }] }), { requests: [{ costEquivalent: { five_hour: 1, seven_day: null } }] }), []);
+  assert.deepEqual(same(shapeOf({ request: { costEquivalent: { five_hour: 1 } } }), { request: { costEquivalent: { seven_day: null } } }), []);
+  assert.deepEqual(same(shapeOf({ recent: [{ costEquivalent: { five_hour: 1 } }] }), { recent: [{ costEquivalent: { five_hour: 1, seven_day: null } }] }), []);
+  assert.deepEqual(same(shapeOf({ costEquivalent: { five_hour: 1 } }), { costEquivalent: { five_hour: 1, seven_day: null } }), ['.costEquivalent.seven_day: object against number']);
 });

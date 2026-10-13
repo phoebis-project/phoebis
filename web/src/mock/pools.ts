@@ -100,7 +100,6 @@ const UNTIL_DRAWN: Pick<PoolSeed, 'billed24h' | 'cost24h' | 'equivalent24h' | 'e
   traffic24h: [],
 };
 
-
 const POOL_ROWS: PoolSeed[] = [
   {
     ...POOL_SAMPLE,
@@ -301,8 +300,8 @@ export const KEYS: ApiKey[] = [
     notes: 'Travel laptop. Bodies captured while debugging the pre-commit hook.',
     bodyCaptureHours: 6,
     keepaliveOptOut: false,
-    // Plan-funded, so its dollars bill nothing. Its equivalents before the month the rollups hold are not drawn, so they
-    // read the rollups' sums.
+    // Plan-funded, so its dollars bill nothing. Its equivalents before the month the rollups hold are not drawn, so
+    // they read the rollups' sums.
     lifetime: { billedUsd: 0, cost: 38.6, equivalent: { fiveHour: 0, sevenDay: 0 }, estimated: false, requests: 1_012 },
   },
   {

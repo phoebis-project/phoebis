@@ -434,10 +434,11 @@ function atHour(r: HourlyRollup, price: (window: string, usage: Usage, at: numbe
 }
 
 /** A subscription row's shares through the cost model, the model tier's fallback weight standing in for a model with
- *  none, each null for a tier or a model the model does not price. */
+ *  none, each null for an account tier or a model the cost model does not price. */
 const sharesOf = (r: HourlyRollup, tier: string) => atHour(r, (window, usage, at) => shareOrFallback(TABLES, window, tier, r.model, usage, at)?.share ?? null);
 
-/** A row's 20x window equivalents, the shares under the anchor tier, each null for a model the model does not price. */
+/** A row's 20x window equivalents, the shares under the anchor tier, each null for a model the cost model does not
+ *  price. */
 const equivalentsOf = (r: HourlyRollup) => atHour(r, (window, usage, at) => equivalentOf(TABLES, window, r.model, usage, at)?.equivalent ?? null);
 
 /** A bucket's sums, each window's shares and equivalents kept per row so one unpriced row nulls the window, as the

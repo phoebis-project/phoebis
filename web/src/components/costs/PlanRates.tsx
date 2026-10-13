@@ -74,12 +74,14 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
   const groups = tierGroups(models, costs);
   const shown = groups.map((g) => g.models[0]);
   const older = groups.flatMap((g) => g.models.slice(1));
-  // The scale's ends are the models weighed on the 5-hour window themselves: a model weighed on the week alone has no
-  // 5-hour weight there, and an estimate listed ahead of its donor would name itself the lightest.
+  // The lightest is a model weighed on the 5-hour window itself: a model weighed on the week alone has no 5-hour weight
+  // there, and an estimate listed ahead of its donor would name itself the lightest. The heaviest reads every model,
+  // since an estimate takes its donor's base weight, which can sit above the donor's own 5-hour weight, and a bar
+  // scaled to less would run past its track.
   const fiveHourWeighted = models.filter((model) => weightOrFallback(costs, model, 'five_hour')?.estimated === false);
   const fiveHourWeight = (model: string) => weightOf(costs, model, 'five_hour') ?? 0;
   const lightest = fiveHourWeighted.reduce<string | null>((low, model) => (low === null || fiveHourWeight(model) < fiveHourWeight(low) ? model : low), null);
-  const heaviest = Math.max(0, ...fiveHourWeighted.map(fiveHourWeight));
+  const heaviest = Math.max(0, ...models.map(fiveHourWeight));
   const tierName = planLabel(tier);
   const cols = 2 + WINDOWS.length * TOKEN_TYPES.length;
 

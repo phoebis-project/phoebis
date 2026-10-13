@@ -28,7 +28,7 @@ const numberMap = (v: unknown): Record<string, number> => Object.fromEntries(Obj
  *  through `numOrNull`, so an unpriced window decodes null rather than zero. */
 const nullableNumberMap = (v: unknown): Record<string, number | null> => Object.fromEntries(Object.entries(rec(v)).map(([k, x]) => [k, numOrNull(x)]));
 /** A map the route keys by window id, each entry read by `entry`, or null where the route answered null (an api_key
- *  group, a grouping other than account). */
+ *  group, or a group that holds more than one account's rows). */
 const shareMap = <T>(v: unknown, entry: (e: Rec) => T): Record<string, T> | null => (v === null || v === undefined ? null : Object.fromEntries(Object.entries(rec(v)).map(([k, e]) => [k, entry(rec(e))])));
 /** A map the route keys by window id under every grouping, each entry read by `entry`. An answer from before the
  *  member reads empty, as a group with no plan row does. */

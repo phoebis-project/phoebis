@@ -40,12 +40,12 @@ and at 375 by 800 and 390 by 844 with no sideways scroll on the page and each ca
 a row of its own there, so its column goes unread), the remaining cards, the error state, the lines under the quota
 rings, the recent requests' model cells and their table's fit, the recent requests' columns (Key the fill), the cost-cap
 rows, the wasted-probe rows, the burn cards (an odd last card spanning its row), the plan legend's estimated entry (a
-hollow swatch) and model unlisted entry, the placement and budget tables
-(Cache by model's width recorded under native, every column inside its wrap at 1280 by 800, and in the mock pass a cost
-cell's billed line drawn), the Analytics tables' columns, each read on the tab that draws it (the Traffic breakdown's
-group column the fill, Key on the misses-by-reason breakdown under its wrapped headers, Rung on the placements table,
-Pool and Account on the member budgets, whose Spent column is as wide as its meter's 140 px floor), the request table's
-fit (asserted in the router pass and recorded in the mock pass, whose story runs past the card at 1280 by 800), its
+hollow swatch) and model unlisted entry, the placement and budget tables, the Analytics tables' columns, each read on
+the tab that draws it (the Traffic breakdown's group column the fill, Key on the misses-by-reason breakdown under its
+wrapped headers, Cache by model's width recorded under native with every column inside its wrap at 1280 by 800 and in
+the mock pass a cost cell's billed line drawn, Rung on the placements table, Pool and Account on the member budgets,
+whose Spent column is as wide as its meter's 140 px floor), the request table's fit (asserted in the router pass and
+recorded in the mock pass, whose story runs past the card at 1280 by 800), its
 columns (Client the fill, the Status, Attempts and links cells wrapping, the width past the card
 recorded in the mock pass), its text at 1920 by 1080 in the mock pass (no client class or agent type
 cut, each read on its own span), the request pages' widths, walked on a load of their own once every view's shot is

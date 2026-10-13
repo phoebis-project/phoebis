@@ -24,8 +24,14 @@ export const UNIT_LEGEND: Record<UnitPosition, string> = {
   share: "A subscription account's requests as shares of its own 5-hour, 7-day and model-week windows. Reads where one account is named, since shares of different accounts' windows do not add.",
   usd: 'The overage, fast-mode and API key requests alone, the dollars the account holder is charged.',
 };
-/** The legend's closing paragraph. It names the account tiers the equivalent compares across apart from the model tier an estimate reads. */
+/**
+ * The legend's closing paragraph. It names the account tiers the equivalent compares across apart from the model tier
+ * an estimate reads.
+ */
 export const UNIT_LEGEND_NOTE =
   "A 20x window equivalent is the share of a Max 20x account's window the same tokens would spend, the cost model's unit over the Max 20x capacity, so figures of different account tiers compare and add. The 5-hour column carries the peak band's weight, the 7-day column the week's factor, and a model week its own capacity factor. A figure marked ~ is estimated: its model has no measured weight and reads the latest weighed model of its model tier.";
-/** The stored value as a position: the browser hands back whatever string it holds, so a value the console does not know reads native. */
+/**
+ * The stored value as a position: the browser hands back whatever string it holds, so a value the console does not know
+ * reads native.
+ */
 export const positionOf = (value: string | null | undefined): UnitPosition => UNIT_POSITIONS.find((p) => p === value) ?? 'native';

@@ -366,14 +366,14 @@ export interface Pool {
   affinityTtlSeconds: number;
   /** Whether the client's server-side auto mode checks travel; off drops them. */
   autoModeServer: boolean;
+  /** The day's dollars of the requests no subscription window paid. */
+  billed24h: number;
   /** Hours of captured request and response bodies for keys with no override; 0 is off. */
   bodyCaptureHours: number;
   /** The time constant of each pin's burn average, which a shedding round sizes its target from. */
   burnWindowSeconds: number;
   /** The pool's switch for the cache-diagnosis beta and `diagnostics.previous_message_id`; off by default. */
   cacheDiagnostics: boolean;
-  /** The day's dollars of the requests no subscription window paid. */
-  billed24h: number;
   /** Always answered; `enabled` off is how a pool that rewrites no breakpoint reads. */
   cacheTtl: PoolCacheTtl;
   cost24h: number;
@@ -694,7 +694,9 @@ export interface RequestLog {
   sessionId: string | null;
   shape: RequestShape;
   status: number | null;
-  /** The serving attempt's account tier, null for an API-key account, a request no attempt served and an unknown tier. */
+  /**
+   * The serving attempt's account tier, null for an API-key account, a request no attempt served and an unknown tier.
+   */
   tier: string | null;
   transport: Transport;
   ttfbMs: number | null;
@@ -1206,7 +1208,9 @@ export interface AnalyticsGroup {
   cacheShares: Record<string, { read: number; write: number }> | null;
   /** The cache read and write costs are null on a group folded from request rows, which carry one total. */
   cost: Omit<CostSplit, 'cacheRead' | 'cacheWrite'> & { cacheRead: number | null; cacheWrite: number | null };
-  /** The plan rows' 20x window equivalent by window key (`five_hour`, `seven_day`, a model week), under every grouping. */
+  /**
+   * The plan rows' 20x window equivalent by window key (`five_hour`, `seven_day`, a model week), under every grouping.
+   */
   costEquivalent: Record<string, number>;
   /**
    * Keyed by the ledger's window ids. Null for an api_key group, under a grouping other than account unless the
@@ -1315,8 +1319,8 @@ export interface AccountRollup {
 }
 
 /**
- * The dimensions the burn route groups on: the breakdown's, and `session`, which reads the twenty sessions with the most
- * tokens and which no other route groups on.
+ * The dimensions the burn route groups on: the breakdown's, and `session`, which reads the twenty sessions with the
+ * most tokens and which no other route groups on.
  */
 export type BurnGroup = Exclude<AnalyticsGroupBy, 'all'> | 'session';
 

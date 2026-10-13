@@ -64,13 +64,11 @@ export const modelTierOf = (costs: ModelTiers, model: string): string | null => 
   return costs.tierOrder.includes(named) ? named : null;
 };
 
-const SHARED_WINDOWS = ['five_hour', 'seven_day'];
-
-/** The model tier's latest weighed model: the first by version descending, then id, among the models of the tier the
- *  file weighs on both shared windows. */
+/** The model tier's latest weighed model: the first by version descending, then id, among the models of the tier with a
+ *  base weight, since the fallback reads the donor's base weight and an override names its own model alone. */
 export const latestWeighted = (costs: SubscriptionCosts, tier: string): string | null =>
   Object.keys(costs.modelWeight)
-    .filter((model) => modelTierOf(costs, model) === tier && SHARED_WINDOWS.every((window) => ownWeightOf(costs, model, window) !== null))
+    .filter((model) => modelTierOf(costs, model) === tier && costs.modelWeight[model] !== null)
     .sort(newestFirst)[0] ?? null;
 
 /** The weight a model prices at on `window`, and whether it stands in: the model's own (an override counts), else the
@@ -153,8 +151,8 @@ export const bandFactor = (costs: SubscriptionCosts, window: string, at: number)
   return inside === null ? null : factorOf(costs, window, inside);
 };
 
-/** Per million tokens of each type at `weight`, the share of the tier's window out of band, null for an unpriced
- *  window or tier. The model's own multipliers apply whichever model's weight stands in. */
+/** Per million tokens of each type at `weight`, the share of the account tier's window out of band, null for an
+ *  unpriced window or account tier. The model's own multipliers apply whichever model's weight stands in. */
 const ratesAt = (costs: SubscriptionCosts, window: string, tier: string, model: string, weight: number | null): Record<TokenType, number> | null => {
   const w = pricedWindow(costs, window);
   const capacity = w === null ? null : tierCapacity(costs, tier, w.priced);

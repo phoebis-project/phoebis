@@ -273,7 +273,8 @@ test("the models list tier by tier in the cost model's order, the newest version
   assert.deepEqual(costs.tierOrder, ['fable', 'opus', 'sonnet', 'haiku', 'mystery'], 'the test tables order five model tiers');
   assert.deepEqual(d.tierOrder(shuffled, costs), ['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5-5', 'claude-sonnet-5-20250101', 'claude-haiku-4-5', 'claude-mystery-2', 'claude-unknown-2', 'claude-unknown-1']);
   assert.deepEqual(shuffled.slice(0, 2), ['claude-haiku-4-5', 'claude-sonnet-5-5'], 'the input is left as it was');
-  // Each tier's newest model leads its group, and each id of no tier is a group of its own, so none folds under another.
+  // Each tier's newest model leads its group, and each id of no tier is a group of its own, so none folds under
+  // another.
   assert.deepEqual(d.tierGroups(shuffled, costs), [
     { models: ['claude-fable-5-1'], tier: 'fable' },
     { models: ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8'], tier: 'opus' },
@@ -404,7 +405,6 @@ test("a model's tier is its model_tier entry, then its undated id's, then the ti
   assert.equal(d.modelTierOf(costs, 'claude-nova-1'), null, 'a tier the order does not list');
   assert.equal(d.modelTierOf({ ...costs, modelTier: { ...costs.modelTier, 'claude-nova-1': 'opus' } }, 'claude-nova-1'), 'opus', 'the entry wins over the id');
   assert.equal(d.modelTierOf({ modelTier: {}, tierOrder: [] }, OPUS), null, 'a cost model with no tiers names none');
-  assert.notEqual(d.modelTierOf, d.tierOf, "the engine's account tier keeps its own name");
 });
 
 test("a model tier's latest weighed model is its weighted model of the newest version, and a tier with none has none", () => {
@@ -416,6 +416,16 @@ test("a model tier's latest weighed model is its weighted model of the newest ve
   const newer = { ...costs, modelTier: { ...costs.modelTier, 'claude-opus-6': 'opus' }, modelWeight: { ...costs.modelWeight, 'claude-opus-6': 3 } };
   assert.equal(d.latestWeighted(newer, 'opus'), 'claude-opus-6', 'a newer weighted model takes over');
   assert.equal(d.latestWeighted(costs, 'nova'), null, 'a tier the order does not list');
+  // The fallback reads the donor's base weight, so a newer model weighed by its overrides alone stands in for no one.
+  const overridden = {
+    ...costs,
+    modelTier: { ...costs.modelTier, 'claude-opus-6': 'opus' },
+    modelWeight: { ...costs.modelWeight, 'claude-opus-6': null },
+    overrides: { ...costs.overrides, 'claude-opus-6': { weightByWindow: { five_hour: 3, seven_day: 3 } } },
+  };
+  const donor = d.latestWeighted(costs, 'opus');
+  assert.equal(d.latestWeighted(overridden, 'opus'), donor, 'a model with a null base weight is no donor, its overrides notwithstanding');
+  assert.deepEqual(d.weightOrFallback(overridden, 'claude-opus-4-8', 'five_hour'), { estimated: true, weight: costs.modelWeight[donor] }, "an unweighted model still reads the weighed donor's base weight");
 });
 
 test("a model the cost model weighs reads its own weight, and an unweighted model of a weighted tier its tier's latest base weight, marked estimated", () => {

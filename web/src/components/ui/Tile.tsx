@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { CostFigure } from '@/lib/analytics';
 import { Skeleton } from './primitives';
 
 /**
@@ -46,4 +47,18 @@ export function PairValue({ first, firstLabel, second, secondLabel = '' }: { fir
       )}
     </span>
   );
+}
+
+/**
+ * A tile's figures: two stacked as a pair, each with its funding's word, and a side alone on its one line with its
+ * word, so the tile still says which funding it reads. A figure that carries no word, a dollar position's, reads alone
+ * in the tile's own type, and no figure reads a dash.
+ */
+export function figuresValue(figures: CostFigure[]): ReactNode {
+  const figure = (f: CostFigure) => <span className="cost-figure">{f.text}</span>;
+  if (figures.length === 2) return <PairValue first={figure(figures[0])} firstLabel={figures[0].word ?? ''} second={figure(figures[1])} secondLabel={figures[1].word ?? ''} />;
+  const [only] = figures;
+  if (only === undefined) return '-';
+  if (only.word === undefined) return only.text;
+  return <PairValue first={figure(only)} firstLabel={only.word} />;
 }

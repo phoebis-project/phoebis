@@ -2953,8 +2953,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await chooseUnit(m, 'native');
     localStorage.removeItem('phoebis.unit');
     // The share is the route's, priced row by row at the account tier each row recorded, so the card reads it as
-    // answered: a wired figure the pool's equivalent times no tier's capacity ratio reaches, and an answer with no share
-    // (the account's tier unrecorded) reads a dash that says why.
+    // answered: a wired figure the pool's equivalent times no tier's capacity ratio reaches, and an answer with no
+    // share (the account's tier unrecorded) reads a dash that says why.
     const wiredRead = async (shares) => {
       let wired = null;
       api.getAnalyticsBreakdown = async (q) => {
@@ -2990,9 +2990,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const plain = [tileRead(weighted), ...listed.map((p) => costRead(weighted, p.name))];
     weighted.unmount();
     delete api.listPools;
+    // A card that drew no line would hold no tilde either, so each card with plan rows must draw its subscription line.
+    const planned = listed.filter((p) => p.equivalent24h.sevenDay > 0).map((p) => plain[1 + listed.indexOf(p)]);
     results.push({
-      name: '/pools under native a day whose plan rows are all weighted reads no tilde and no estimate title on the Cost, 24h tile and the cards',
-      ok: plain[0].lines.length === 2 && !plain.some((r) => r.lines.some(([figure]) => figure.startsWith('~')) || (r.title ?? '').includes(ESTIMATED_TITLE)),
+      name: '/pools under native a day whose plan rows are all weighted reads no tilde and no estimate title on the Cost, 24h tile and on the subscription line of every card with plan rows',
+      ok:
+        plain[0].lines.length === 2 &&
+        planned.length > 0 &&
+        planned.every((r) => r.lines.some(([, word]) => word === 'subscription')) &&
+        !plain.some((r) => r.lines.some(([figure]) => figure.startsWith('~')) || (r.title ?? '').includes(ESTIMATED_TITLE)),
       missing: plain.map((r) => JSON.stringify(r)),
     });
   }
@@ -12110,7 +12116,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       });
     }
     {
-      // The Wasted probes blurb closes on the unit its tiles read in, dollars at list prices under each dollar position.
+      // The Wasted probes blurb closes on the unit its tiles read in, dollars at list prices under each dollar
+      // position.
       localStorage.removeItem('phoebis.unit');
       const page = await mount('/analytics#cache-warming');
       const endings = [];
@@ -12160,8 +12167,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     }
     {
       // Under native, a fresh browser's position, the Cost section reads one answer in two units: the plan rows' 20x
-      // 7-day equivalent and the billed rows' dollars. The story's day holds Sonnet 4.6 rows, which the cost model
-      // does not weigh, so the subscription figures carry the mark. The ratios divide the totals of the page's own read,
+      // 7-day equivalent and the billed rows' dollars. The story's day holds Sonnet 4.6 rows, which the cost model does
+      // not weigh, so the subscription figures carry the mark. The ratios divide the totals of the page's own read,
       // summed as the page sums them, and the patterns take the mark where the story may or may not set it.
       localStorage.removeItem('phoebis.unit');
       const asked = countCalls('getAnalyticsBreakdown');
@@ -12338,8 +12345,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     }
     {
       // Under native the Cache and Cache warming sections read one answer in two units, as the Cost section does: the
-      // plan rows' 20x 7-day equivalent and the billed rows' dollars. Every figure is derived from the page's own reads,
-      // summed as the page sums them, and the mark leads a figure of a group the story's Sonnet 4.6 rows estimate.
+      // plan rows' 20x 7-day equivalent and the billed rows' dollars. Every figure is derived from the page's own
+      // reads, summed as the page sums them, and the mark leads a figure of a group the story's Sonnet 4.6 rows
+      // estimate.
       localStorage.removeItem('phoebis.unit');
       const asked = countCalls('getAnalyticsBreakdown');
       const native = await mount('/analytics#cache', { now: CLOCK_ORIGIN });
@@ -12453,8 +12461,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
           wasted.subtitle.endsWith("says the parked ceilings do. In the unit each probe's funding pays in."),
         missing: [JSON.stringify(wasted), JSON.stringify({ billed: billed.wastedProbeUsd, probe })],
       });
-      // A pool's cell pairs the plan probes' equivalent of the whole by-pool read with the billed probes' dollars of the
-      // billed one, read off the probe counts, so a pool with no probe reads its zero in each unit.
+      // A pool's cell pairs the plan probes' equivalent of the whole by-pool read with the billed probes' dollars of
+      // the billed one, read off the probe counts, so a pool with no probe reads its zero in each unit.
       const pools = (await answerOf((q) => q.groupBy === 'pool' && q.funding === undefined)) ?? [];
       const billedPools = await answerOf((q) => q.groupBy === 'pool' && q.funding === 'billed' && q.includeProbes === true);
       const poolCellOf = (g) => {
@@ -12487,8 +12495,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     }
     {
       // A read that does not count probes drops a group left with probe rows alone, which the route does and the mock
-      // does not, so the wrapper drops it here: grouped by kind with Include probes off, the probe kind is such a group,
-      // and the tile keeps its figures only while the Cache warming reads count probes.
+      // does not, so the wrapper drops it here: grouped by kind with Include probes off, the probe kind is such a
+      // group, and the tile keeps its figures only while the Cache warming reads count probes.
       const probeCount = (g) => g.probes.ok + g.probes.held + g.probes.skipped + g.probes.failed;
       const breakdownOf = api.getAnalyticsBreakdown;
       api.getAnalyticsBreakdown = async (q) => {
@@ -12801,8 +12809,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       });
       delete api.getAnalyticsBreakdown;
     }
-    // The setting outlives a mount and the shared page keeps its last choice, so the shared page goes back to native and
-    // the checks after this block read a fresh browser's position.
+    // The setting outlives a mount and the shared page keeps its last choice, so the shared page goes back to native
+    // and the checks after this block read a fresh browser's position.
     await chooseUnit(m, 'native');
     localStorage.removeItem('phoebis.unit');
   }
@@ -12880,8 +12888,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: estimated.map((e) => `${e.length} entries ${swatch(e[0])} ${e[0]?.getAttribute('title') ?? ''}`),
     });
     {
-      // A line whose range held an estimated bucket marks its legend figure with the tilde and names the estimate in its
-      // title, and a line with none carries neither: read per account off the mock's own answer.
+      // A line whose range held an estimated bucket marks its legend figure with the tilde and names the estimate in
+      // its title, and a line with none carries neither: read per account off the mock's own answer.
       const burned = await api.getAnalyticsBurn({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() }, 'account');
       const marked = new Set(burned.points.filter((p) => p.estimated).map((p) => p.group));
       const lines = PLAN_CARDS.flatMap((t) => legendItems(t).filter((li) => subscribed.includes(labelOf(li))).map((li) => ({ account: labelOf(li), t, title: li.getAttribute('title') ?? '', value: valueOf(li) })));
@@ -12958,31 +12966,31 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
   {
     // With one account named the route answers that account's shares under every grouping, so under Window shares the
-    // Burn reads the page's grouping and the named account, and the plan cards draw a line per model and per request
-    // class of the account under the named account's subtitle. The account is the story's subscription account that
-    // burned its 5-hour window, read off the mock.
+    // Burn reads the page's grouping and the named account, the user agent groups beside them under that grouping, and
+    // the plan cards draw a line per model and per request class of the account under the named account's subtitle.
+    // The account is the story's subscription account that burned its 5-hour window, read off the mock.
     const day = { from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() };
     const named = (await api.getAnalyticsBurn(day, 'account')).points.find((p) => p.unit === 'window_share' && (p.fiveHourShare ?? 0) > 0)?.group;
     const reads = [];
-    for (const by of ['model', 'request_class']) {
+    for (const { agents, by } of [{ by: 'model' }, { by: 'request_class' }, { agents: ['claude-cli/2.1.*', 'phoebis-batch/*'], by: 'user_agent' }]) {
       localStorage.removeItem('phoebis.unit');
       const spy = countCalls('getAnalyticsBurn');
-      const page = await mount(`/analytics?accounts=${named}&by=${by}&unit=share#burn`);
+      const page = await mount(`/analytics?accounts=${named}&by=${by}${agents ? `&groups=${encodeURIComponent(agents.join('\n'))}` : ''}&unit=share#burn`);
       const sent = spy.calls.at(-1) ?? [];
       spy.restore();
       const plan = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === '5-hour per hour');
       const lines = [...(plan?.querySelectorAll('.legend li') ?? [])].map(labelOf).filter((l) => !MUTED.includes(l));
       const groups = new Set((await api.getAnalyticsBurn(day, by, { accountIds: [named] })).points.filter((p) => p.fiveHourShare !== null).map((p) => p.group));
-      reads.push({ by, groups: [...groups], lines, noted: plan?.textContent?.includes(GROUPED_SHARE_NOTE) ?? true, sent: [sent[1], sent[2]?.accountIds], subtitle: plan?.querySelector('.card__subtitle')?.textContent ?? '' });
+      reads.push({ agents: agents ?? null, by, groups: [...groups], lines, noted: plan?.textContent?.includes(GROUPED_SHARE_NOTE) ?? true, sent: [sent[1], sent[2]?.accountIds, sent[2]?.userAgentGroups ?? null], subtitle: plan?.querySelector('.card__subtitle')?.textContent ?? '' });
       page.unmount();
     }
     localStorage.removeItem('phoebis.unit');
     const [byModel, byClass] = reads;
     results.push({
-      name: "/analytics with one account named under Window shares the Burn reads that account under the page's grouping and the plan cards draw a line per model and per request class under the named account's subtitle",
+      name: "/analytics with one account named under Window shares the Burn reads that account under the page's grouping with the user agent groups that grouping names, and the plan cards draw a line per model and per request class under the named account's subtitle",
       ok:
         named !== undefined &&
-        reads.every((r) => JSON.stringify(r.sent) === JSON.stringify([r.by, [named]]) && !r.noted && r.subtitle.startsWith("The share of the named account's own 5-hour window")) &&
+        reads.every((r) => JSON.stringify(r.sent) === JSON.stringify([r.by, [named], r.agents]) && !r.noted && r.subtitle.startsWith("The share of the named account's own 5-hour window")) &&
         byModel.lines.length === Math.min(byModel.groups.length, 7) && byModel.lines.every((l) => byModel.groups.includes(l)) &&
         JSON.stringify(byClass.lines) === JSON.stringify(['conversation', 'overhead']),
       missing: [`named ${named}`, ...reads.map((r) => JSON.stringify(r))],
@@ -14701,8 +14709,8 @@ m.unmount();
   }
   {
     // The unit is a view setting, so a change reads the funded series and breakdowns alone, Cache by model's cost cells
-    // reading the side's rows by model: the series, the breakdowns, the speed series, the placements and a session's fold
-    // read once, at the load, and stay.
+    // reading the side's rows by model: the series, the breakdowns, the speed series, the placements and a session's
+    // fold read once, at the load, and stay.
     const name = "/analytics a unit change on Cache from the top bar's switch reads the funded series and breakdowns alone, Cache by model's among them, and nothing in a session view";
     const READS = ['analyticsPlacements', 'getAnalyticsBreakdown', 'getAnalyticsSeries', 'listRequests'];
     const across = async (address) => {
@@ -16191,8 +16199,8 @@ m.unmount();
   results.push({ name: "/ the 5-hour ring's subtitle opens the cost reference on Tiers and peak band", ok: ringSubtitle === 'Subscription accounts, 5-hour window, weighed by tier Cost reference' && fromDash === 'Tiers and peak band', missing: [ringSubtitle, fromDash] });
 
   // The 5-hour plan card shades the band's own hours over the instants it spans, one area per run of bandRuns, on the
-  // 7-day range's six-hour buckets and on a custom range's daily ones. jsdom lays nothing out, so the chart reads a browser's
-  // size here.
+  // 7-day range's six-hour buckets and on a custom range's daily ones. jsdom lays nothing out, so the chart reads a
+  // browser's size here.
   const measure = window.HTMLElement.prototype.getBoundingClientRect;
   window.HTMLElement.prototype.getBoundingClientRect = function () {
     return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
@@ -16564,8 +16572,9 @@ m.unmount();
         drawnCard.factors === 2,
       missing: [JSON.stringify(drawnCard)],
     });
-    // A null weight listed ahead of its model tier's lightest model reads that model's weight as an estimate, which sets
-    // no end of the weight column's scale: every multiple's title names the lightest model weighed on its own.
+    // A null weight listed ahead of the lightest model, its model tier's latest weighed one, reads its weight as an
+    // estimate, which never sets the light end of the weight column's scale: every multiple's title names the lightest
+    // model weighed on its own.
     {
       const lead = 'claude-haiku-4';
       const ahead = { ...tested, modelWeight: { [lead]: null, ...tested.modelWeight } };

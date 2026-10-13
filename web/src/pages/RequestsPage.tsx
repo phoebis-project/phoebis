@@ -465,7 +465,8 @@ export function RequestsPage() {
                         className={[r.id === requestId ? 'is-selected' : '', fresh.has(r.id) ? 'is-new' : ''].filter(Boolean).join(' ')}
                         onClick={() => navigate({ pathname: `/requests/${r.id}`, search: location.search })}
                         tabIndex={0}
-                        // A key pressed on a link in the row is the link's own, so Enter on Routing opens the log alone.
+                        // A key pressed on a link in the row is the link's own, so Enter on Routing opens the log
+                        // alone.
                         onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && navigate({ pathname: `/requests/${r.id}`, search: location.search })}
                       >
                         {shown.has('time') && (

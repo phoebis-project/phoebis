@@ -27,13 +27,15 @@ export const OPAQUE = (path) => path.endsWith('.detail');
 const MAP_PATHS = ['.errors', '.cacheMissReasons', '.movesPerHour', '.moves', '.corrections', '.costShares', '.costEquivalent', '.cacheShares', '.cacheEquivalent', '.probeShares', '.probeEquivalent', '.windows'];
 const MAP = (path, want) => MAP_PATHS.some((suffix) => path.endsWith(suffix)) && typeof want === 'object' && want !== null && !Array.isArray(want);
 /**
- * The entry kinds a map admits beside its first entry's own, by the path the map sits at: a request row's share map
- * (`.requests[n].costShares`, a request detail's `.request.costShares`, the dashboard's recent rows'
- * `.recent[n].costShares`) carries null for an applicable window the cost model could not price, while a group's map
- * drops such a window, so a null there is a finding.
+ * The entry kinds a map admits beside its first entry's own, by the path the map sits at: a request row's share and
+ * equivalent maps (`.requests[n].costShares`, a request detail's `.request.costShares`, the dashboard's recent rows'
+ * `.recent[n].costShares`, and `costEquivalent` at the same three) carry null for an applicable window the cost model
+ * could not price, while a group's map drops such a window, so a null there is a finding.
  */
 const MAP_ENTRY_KINDS = [
+  [/(^\.request|\.requests\[\d+\])\.costEquivalent$/, ['null', 'number']],
   [/(^\.request|\.requests\[\d+\])\.costShares$/, ['null', 'number']],
+  [/^\.recent\[\d+\]\.costEquivalent$/, ['null', 'number']],
   [/^\.recent\[\d+\]\.costShares$/, ['null', 'number']],
 ];
 
