@@ -9068,8 +9068,37 @@ m.unmount();
     });
   }
   {
-    // A link capped at now ends its span at the clock it was made on, so the page reads it at the chosen interval while
-    // it stays open, and a row that finishes late still lands. A span a minute short of the load reads so too.
+    // A span ends by the instant the page takes its address, not its mount: an hour after the page opened, the drawer's
+    // "this minute" on a request half an hour old lands on a minute that has ended, which reads Off and polls nothing.
+    const old = requests.find((r) => r.kind !== 'probe' && Date.parse(r.at) > CLOCK_ORIGIN - 40 * 60_000 && Date.parse(r.at) < CLOCK_ORIGIN - 20 * 60_000);
+    const page = await mount('/requests', { now: CLOCK_ORIGIN - HOUR });
+    await chooseInterval(page, '5 s');
+    // The open interval menu holds the poll while the clock moves the hour.
+    intervalPart(page)?.click();
+    await page.settle(100);
+    tick(HOUR);
+    await page.settle();
+    await closeBoxes(page);
+    await page.navigate(`/requests/${old?.id ?? ''}`);
+    const minute = [...page.container.querySelectorAll('.drawer__widen a')].find((a) => a.textContent?.trim() === 'this minute');
+    minute?.click();
+    await page.settle(700);
+    const spy = countCalls('listRequests');
+    tick(5_000);
+    await page.settle();
+    spy.restore();
+    const read = { disabled: intervalPart(page)?.disabled ?? null, drawer: page.container.querySelector('.drawer') !== null, reads: spy.calls.length, search: page.location().search, title: partTitle(page), word: intervalWord(page) };
+    results.push({
+      name: '/requests a widening to a minute that ended before the page took it reads Off and polls nothing at the tick',
+      ok: old !== undefined && minute !== undefined && !read.drawer && read.search.includes('from=') && read.disabled === true && read.word === 'Off' && read.title === 'A custom range that has ended has nothing new to read' && read.reads === 0,
+      missing: [old?.id ?? 'no request half an hour old', minute ? 'this minute' : 'no this minute link', JSON.stringify(read)],
+    });
+    page.unmount();
+  }
+  {
+    // A link capped at now ends its span at the clock it was made on, so the page reads it at the chosen interval, each
+    // poll up to the span's own end, so a row that finishes late inside it lands. A span a minute short of the load
+    // reads so too.
     const page = await mount(`/requests?from=${isoAt(CLOCK_ORIGIN - HOUR)}&to=${isoAt(CLOCK_ORIGIN)}`, { now: CLOCK_ORIGIN });
     const enabled = intervalPart(page)?.disabled === false;
     await chooseInterval(page, '5 s');
@@ -9084,15 +9113,15 @@ m.unmount();
     const short = intervalPart(graced)?.disabled === false;
     graced.unmount();
     results.push({
-      name: '/requests a custom span that ends at the clock reads at the chosen interval',
-      ok: enabled && word === '5 s' && sent.length > 0 && sent[0] === isoAt(CLOCK_ORIGIN + 5_000) && short,
+      name: '/requests a custom span that ends at the clock reads at the chosen interval up to its own end',
+      ok: enabled && word === '5 s' && sent.length > 0 && sent.every((to) => to === isoAt(CLOCK_ORIGIN)) && short,
       missing: [`enabled ${enabled}`, String(word), JSON.stringify(sent), `a span 30 s short enabled ${short}`],
     });
   }
 }
 
 // A dimension fed by a list that did not load offers nothing to pick, so its Add filter row is disabled and says why on
-// its title, and a click on it leaves the list where it is; the rows beside it stay as they are.
+// its title, and a click on it leaves the list where it is. The rows beside it stay as they are.
 {
   const sentence = 'The key list did not load: the registry is unavailable';
   failNextCall('listKeys', '/admin/keys', 'the registry is unavailable');
@@ -9553,7 +9582,7 @@ m.unmount();
     page.unmount();
   }
   {
-    // A session with more than a page of ten in the day, beside a search every request id holds, so Next reads on; and
+    // A session with more than a page of ten in the day, beside a search every request id holds, so Next reads on. Then
     // one request beside a part of its own id. Each subject reaches the route as its own parameter on every read.
     const day = (await api.listRequests({ from: isoAt(CLOCK_ORIGIN - 24 * HOUR), limit: 500, to: isoAt(CLOCK_ORIGIN) })).requests;
     const perSession = new Map();
@@ -9609,8 +9638,14 @@ m.unmount();
     });
   }
   {
-    // The count reads the page's rows at the bar's right edge: a cursor left, the rows alone, or none.
+    // The count reads the page's rows at the bar's right edge once the list has answered: a cursor left, the rows
+    // alone, or none. Before the first answer it reads nothing.
+    const held = deferNextCall('listRequests');
     const more = await mount('/requests', { now: CLOCK_ORIGIN });
+    const waiting = countText(more);
+    held.release();
+    await more.settle();
+    held.restore();
     const several = countText(more);
     more.unmount();
     const none = await mount('/requests?search=no-such-request', { now: CLOCK_ORIGIN });
@@ -9621,9 +9656,9 @@ m.unmount();
     const alone = countText(single);
     single.unmount();
     results.push({
-      name: '/requests the count reads No rows, n shown and more available',
-      ok: several === '25 shown, more available' && empty === 'No rows' && alone === '1 shown',
-      missing: [several, empty, alone],
+      name: '/requests the count reads nothing until the first read answers, then No rows, n shown or more available',
+      ok: waiting === '' && several === '25 shown, more available' && empty === 'No rows' && alone === '1 shown',
+      missing: [JSON.stringify(waiting), several, empty, alone],
     });
   }
 }

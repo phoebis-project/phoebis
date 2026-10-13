@@ -241,6 +241,24 @@ test('an ended span polls nothing', () => {
   assert.deepEqual(f.polls(), []);
 });
 
+test('a custom span has ended once its end lies a minute or more before the page took its address, however long the page has been open', () => {
+  const HOUR = 3_600_000;
+  const taken = Date.UTC(2026, 8, 16, 14, 30);
+  const end = taken - 20 * 60_000;
+  assert.equal(d.spanEnded(true, end, taken - HOUR), false, 'a span taken an hour before its end has not ended');
+  assert.equal(d.spanEnded(true, end, taken), true, 'the same span taken twenty minutes past its end, on a page mounted an hour earlier, has');
+  assert.equal(d.spanEnded(true, taken - 30_000, taken), false, 'a link capped at the click lands inside the minute of grace');
+  assert.equal(d.spanEnded(true, taken - 61_000, taken), true);
+  assert.equal(d.spanEnded(false, end, taken), false, 'a preset never ends');
+});
+
+test('a poll and an older page on a custom span read to the span\'s own end, and a preset reads up to the instant given', () => {
+  const end = Date.UTC(2026, 8, 16, 13, 0);
+  const polled = Date.UTC(2026, 8, 16, 14, 30, 5);
+  assert.equal(d.readEnd(true, end, polled), end);
+  assert.equal(d.readEnd(false, end, polled), polled);
+});
+
 test('turning auto reload off clears the fresh tint, since no poll follows to take it away', async () => {
   const clock = frozen();
   const f = follow();

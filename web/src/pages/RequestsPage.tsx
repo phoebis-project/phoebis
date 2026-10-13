@@ -22,7 +22,7 @@ import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION } from '@/lib/dimensions';
 import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
-import { effectiveInterval, FOLLOW_OVERRUN } from '@/lib/follow';
+import { effectiveInterval, FOLLOW_OVERRUN, readEnd, spanEnded } from '@/lib/follow';
 import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, NO_SHARE_TITLE } from '@/lib/requests';
@@ -53,7 +53,6 @@ const HIDDEN_BY_DEFAULT: readonly ColumnId[] = ['kind', 'pool', 'transport'];
 const COMPACT: readonly ColumnId[] = ['time', 'model', 'status', 'attempts'];
 
 const PAGE_SIZES = [10, 25, 50, 100];
-const MINUTE = 60_000;
 /** The codes the router and Anthropic answer; any other code a page or the address holds is offered by its number. */
 const STATUS_CODES: readonly (readonly [number, string])[] = [
   [200, 'OK'],
@@ -217,9 +216,10 @@ export function RequestsPage() {
   // Off on the logs until the reader picks an interval, and page state, so a link or a reload opens the log off.
   const [intervalMs, setIntervalMs] = useState(0);
   const [barOpen, setBarOpen] = useState(false);
-  // A link capped at now ends its span at the clock it was made on, so the page's mount time, read once, tells it from
-  // a span that has ended: a minute of grace keeps a link made just before the page opened reading on.
-  const [mountedAt] = useState(() => clock.now());
+  // A link capped at now ends its span at the clock it was made on, so the instant the page took the address, read once
+  // per address, tells it from a span that has ended.
+  const [addressed, setAddressed] = useState(() => ({ at: clock.now(), for: address }));
+  if (addressed.for !== address) setAddressed({ at: clock.now(), for: address });
   const update = (patch: Partial<Filters>) => {
     const next = { ...filters, ...patch };
     replace({ ...next, rows: String(next.rows) });
@@ -228,12 +228,12 @@ export function RequestsPage() {
   // A custom range names its own window, which Refresh reads again rather than moving it to now.
   const custom = filters.range.preset === 'custom';
   const span = useMemo(() => addressWindow(filters.range, RANGE_PRESETS, '24h', loadedAt), [filters.range, loadedAt]);
-  const ended = custom && span.to < mountedAt - MINUTE;
+  const ended = spanEnded(custom, span.to, addressed.at);
   const polledMs = effectiveInterval(intervalMs, ended);
   const query = useMemo<RequestQuery>(
     // Probes are off the log unless they are what the filter asks for.
-    () => ({ accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, request: filters.request || undefined, requestClasses: filters.requestClasses, search: filters.search, session: filters.session || undefined, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: iso(pagedTo ?? span.to), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
-    [filters, cursor, span, pagedTo],
+    () => ({ accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, request: filters.request || undefined, requestClasses: filters.requestClasses, search: filters.search, session: filters.session || undefined, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: iso(readEnd(custom, span.to, pagedTo ?? span.to)), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
+    [filters, cursor, custom, span, pagedTo],
   );
   const requests = useAsync(() => api.listRequests(query), [query]);
   // The open drawer reads one of the rows, and an open menu or popover under the bar stands over the list, so the poll
@@ -247,7 +247,7 @@ export function RequestsPage() {
     list: requests.data && listed(requests.data),
     paging,
     paused: Boolean(requestId) || barOpen,
-    read: (c, to) => api.listRequests({ ...query, cursor: c, to: iso(to) }).then(listed),
+    read: (c, to) => api.listRequests({ ...query, cursor: c, to: iso(readEnd(custom, span.to, to)) }).then(listed),
     setPaging,
     stale: requests.stale,
   });
@@ -291,7 +291,7 @@ export function RequestsPage() {
     <div className={`requests ${requestId ? 'has-drawer' : ''}`}>
       <FilterBar
         address={address}
-        count={rows.length === 0 ? 'No rows' : `${fmtInt(rows.length)} shown${nextCursor ? ', more available' : ''}`}
+        count={rows.length > 0 ? `${fmtInt(rows.length)} shown${nextCursor ? ', more available' : ''}` : requests.data === null ? '' : 'No rows'}
         dimensions={REQUESTS_DIMENSIONS}
         disabled={disabled}
         filters={filters}

@@ -199,3 +199,18 @@ test('a running request widens to its account from its start', () => {
   assert.deepEqual([account({ ...early, durationMs: null }).from, account({ ...early, durationMs: null }).to], ['2026-09-16T12:45:00.000Z', '2026-09-16T13:15:00.000Z']);
   assert.equal(account({ ...early, durationMs: 120_000 }).to, '2026-09-16T13:17:00.000Z', 'a finished request widens to the quarter hour after its finish');
 });
+
+test("a request newer than the page's clock sample keeps its own instant inside each widening, this minute's from before its to", () => {
+  // The page samples its clock every 15 s, so a row the list read after the sample arrived later than it, here in the
+  // next clock minute.
+  const fresh = { ...ROW, at: '2026-09-16T14:20:05.000Z' };
+  const sample = at('2026-09-16T14:19:55Z');
+  const widened = d.requestsWiden(fresh, sample, '25').map((w) => target(w.href));
+  const arrived = Date.parse(fresh.at);
+  assert.equal(widened.length, 3);
+  for (const read of widened) {
+    assert.ok(Date.parse(read.from) < Date.parse(read.to), `${read.from} before ${read.to}`);
+    assert.ok(Date.parse(read.from) <= arrived && arrived <= Date.parse(read.to), `${read.from} to ${read.to} holds the request`);
+  }
+  assert.deepEqual([widened[0].from, widened[0].to], ['2026-09-16T14:20:00.000Z', '2026-09-16T14:20:09.000Z'], "this minute runs to the request's end");
+});

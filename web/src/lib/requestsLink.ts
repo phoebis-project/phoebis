@@ -133,16 +133,20 @@ export interface Widening {
  * with the page size kept: this minute over `clockMinute`, this session over `aroundSubject` with the session, this
  * account over `aroundRequest` with the account. The windows are the Routing log's own, so one widening reads one span
  * on either view. A request without a session or an account omits that link, and one still running reads as a moment.
+ * The windows end at most at `now` and never before the request ends.
  */
 export function requestsWiden(request: Pick<RequestLog, 'accountId' | 'at' | 'durationMs' | 'id' | 'sessionId'>, now: number, rows: string): Widening[] {
   const at = Date.parse(request.at);
   const finished = request.durationMs === null ? null : at + request.durationMs;
+  // A row the list read after the page's clock sample is newer than it, and a window capped there would leave the
+  // request out, or put this minute's end before its start.
+  const cap = Math.max(now, finished ?? at);
   const defaults = { ...REQUESTS_CODEC.fromParams(new URLSearchParams()), rows };
   const over = (link: LogWindow): RangeValue => ('range' in link ? { from: '', preset: link.range, to: '' } : { from: iso(link.from), preset: 'custom', to: iso(link.to) });
   const href = (address: RequestsAddress) => `/requests?${REQUESTS_CODEC.toParams(address)}`;
   return [
-    { href: href({ ...defaults, range: over(clockMinute(at, now)) }), label: 'this minute', title: null },
-    ...(request.sessionId === null ? [] : [{ href: href({ ...defaults, range: over(aroundSubject(at, now)), session: request.sessionId }), label: 'this session' as const, title: request.sessionId }]),
-    ...(request.accountId === null ? [] : [{ href: href({ ...defaults, accounts: [request.accountId], range: over(aroundRequest(at, finished, now)) }), label: 'this account' as const, title: request.accountId }]),
+    { href: href({ ...defaults, range: over(clockMinute(at, cap)) }), label: 'this minute', title: null },
+    ...(request.sessionId === null ? [] : [{ href: href({ ...defaults, range: over(aroundSubject(at, cap)), session: request.sessionId }), label: 'this session' as const, title: request.sessionId }]),
+    ...(request.accountId === null ? [] : [{ href: href({ ...defaults, accounts: [request.accountId], range: over(aroundRequest(at, finished, cap)) }), label: 'this account' as const, title: request.accountId }]),
   ];
 }

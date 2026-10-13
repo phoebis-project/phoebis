@@ -361,15 +361,16 @@ it up to now. An empty table reads "No requests match" with "Widen the date rang
 filters", which clears the filters, the search and the range. What each figure means is on [Statistics](statistics.md).
 
 Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
-and the choice stays with the open page, out of its address. At each interval it reads the list with the range ending
-now, takes every row that arrived since the read before, up to eight pages, and lands a new row at the top in the accent
-tint until the next read. Past eight pages a line reads "More rows arrived than auto reload could fetch. Reload to read
-them.", and Next reads on from the last row the poll fetched. A filter change keeps the interval. The poll waits while
-the tab is hidden, while the drawer is open, on an older page until you go back to the first, and while a menu or
-popover under the bar is open, with the interval kept and the cause named in the dropdown's title. When the wait ends a
-full interval or more after its last answer, it reads at once. A custom range that ended before the page opened has
-nothing new to read, so the dropdown reads Off and stays disabled, while a link whose range ends at the moment it was
-made reads on.
+and the choice stays with the open page, out of its address. At each interval it reads the list again, a preset's range
+ending now and a custom range keeping its own end, takes every row that arrived since the read before, up to eight
+pages, and lands a new row at the top in the accent tint until the next read. Past eight pages a line reads "More rows
+arrived than auto reload could fetch. Reload to read them.", and Next reads on from the last row the poll fetched. A
+filter change keeps the interval. The poll waits while the tab is hidden, while the drawer is open, on an older page
+until you go back to the first, and while a menu or popover under the bar is open, with the interval kept and the cause
+named in the dropdown's title. When the wait ends a full interval or more after its last answer, it reads at once. A
+custom range whose end lay more than a minute in the past when the page took it has nothing new to read, so the
+dropdown reads Off and stays disabled, while a link whose range ends at the moment it was made reads on, each read
+refreshing the rows inside it.
 
 Selecting a row opens the "Request details" drawer, with the request's id and time, a "Routing log" link that opens the
 [routing log](#routing-log) on the request a quarter hour either side, and these sections:

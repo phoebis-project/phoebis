@@ -14,6 +14,19 @@ export const FOLLOW_OVERRUN = 'More rows arrived than auto reload could fetch. R
  * and disabled), else the chosen interval.
  */
 export const effectiveInterval = (intervalMs: number, ended: boolean): number => (ended ? 0 : intervalMs);
+/** The grace a custom span's end keeps against the instant the page took its address. */
+const ENDED_GRACE_MS = 60_000;
+/**
+ * Whether a custom span had ended when the page took its address, its end a minute or more before that instant. A link
+ * capped at the click lands inside the minute and reads on, and a span widened or typed with an end in the past has
+ * ended however long the page has been open.
+ */
+export const spanEnded = (custom: boolean, end: number, addressedAt: number): boolean => custom && end < addressedAt - ENDED_GRACE_MS;
+/**
+ * The end a read takes: a custom span holds its own end, so a poll or an older page reads only the rows inside the span
+ * the Custom pill prints, and a preset reads up to the instant given (the poll's clock, or the end a cursor came from).
+ */
+export const readEnd = (custom: boolean, end: number, at: number): number => (custom ? end : at);
 /** What the split button's title names while auto reload waits. The hidden tab is the control's own reading. */
 export const PAUSE_CAUSE = {
   dialog: 'paused while a dialog is open',
