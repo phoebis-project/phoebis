@@ -1826,23 +1826,28 @@ function NativeSplit({ totals }: { totals: AnalyticsGroup }) {
 
 const MAX_STACKED_GROUPS = 7;
 
-type Stack = { data: Record<string, number>[]; estimated: Map<number, Set<string>>; keys: string[]; labels: Map<string, string> };
+type Stack = { data: Record<string, number | null>[]; estimated: Map<number, Set<string>>; keys: string[]; labels: Map<string, string> };
 /**
  * The groups stacked by one figure per bucket: the seven with the largest total in range and the rest as Other, and
- * per bucket the stacks an estimated group's figure fed. `drawn` keeps only the groups whose figure is above zero
- * somewhere in range, for a side that holds some of the page's groups.
+ * per bucket the stacks an estimated group's figure fed. A null figure is one the route priced nothing on: it leaves
+ * its stack's bucket a gap, a dash in the tooltip, since a partial sum would read as the whole. `drawn` keeps only the
+ * groups whose figure is above zero somewhere in range or unpriced somewhere, for a side that holds some of the page's
+ * groups, so a group priced nothing throughout stays listed with its gaps.
  */
-function stackOf(points: AnalyticsPoint[], value: (g: AnalyticsGroup) => number, drawn = false): Stack {
+function stackOf(points: AnalyticsPoint[], value: (g: AnalyticsGroup) => number | null, drawn = false): Stack {
   const totals = new Map<string, number>();
+  const unpriced = new Set<string>();
   const labels = new Map<string, string>();
   for (const p of points) {
     for (const g of p.groups) {
-      totals.set(g.key, (totals.get(g.key) ?? 0) + value(g));
+      const v = value(g);
+      totals.set(g.key, (totals.get(g.key) ?? 0) + (v ?? 0));
+      if (v === null) unpriced.add(g.key);
       labels.set(g.key, g.label);
     }
   }
   const ranked = [...totals.entries()]
-    .filter(([, total]) => !drawn || total > 0)
+    .filter(([k, total]) => !drawn || total > 0 || unpriced.has(k))
     .sort((a, b) => b[1] - a[1])
     .map(([k]) => k);
   const top = ranked.slice(0, MAX_STACKED_GROUPS);
@@ -1850,21 +1855,24 @@ function stackOf(points: AnalyticsPoint[], value: (g: AnalyticsGroup) => number,
   const estimated = new Map<number, Set<string>>();
   const data = points.map((p) => {
     const at = Date.parse(p.at);
-    const row: Record<string, number> = { at };
+    const row: Record<string, number | null> = { at };
     const marked = new Set<string>();
     for (const k of keys) row[k] = 0;
     for (const g of p.groups) {
       const k = top.includes(g.key) ? g.key : 'Other';
       if (!(k in row)) continue;
-      row[k] += value(g);
-      if (g.estimated && value(g) > 0) marked.add(k);
+      const v = value(g);
+      const sum = row[k];
+      row[k] = v === null || sum === null ? null : sum + v;
+      if (g.estimated && v !== null && v > 0) marked.add(k);
     }
     estimated.set(at, marked);
     return row;
   });
   return { data, estimated, keys, labels };
 }
-const sevenDayEquivalentOf = (g: AnalyticsGroup) => (own(g.costEquivalent, 'seven_day') ? g.costEquivalent.seven_day : 0);
+/** A plan bucket the route priced nothing on reads null, and one without chargeable plan usage zero. */
+const sevenDayEquivalentOf = (g: AnalyticsGroup) => (own(g.costEquivalent, 'seven_day') ? g.costEquivalent.seven_day : planRowsRequired(g) ? null : 0);
 
 /**
  * `shared` is whether the route answers the shares on the page's groups: under the account grouping, or with one
@@ -1886,14 +1894,14 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, shared,
       <AreaChart data={s.data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
         <CartesianGrid vertical={false} stroke={ink.grid} />
         <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-        <YAxis {...usdAxis(s.data.map((row) => s.keys.reduce((n, k) => n + row[k], 0)))} tickLine={false} axisLine={false} />
-        <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number> & { at: number }>((p) => s.keys.map((k) => ({ color: color(k), label: s.labels.get(k) ?? k, value: fmtUsd(p[k] ?? 0) })))} />
+        <YAxis {...usdAxis(s.data.map((row) => s.keys.reduce((n, k) => n + (row[k] ?? 0), 0)))} tickLine={false} axisLine={false} />
+        <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => s.keys.map((k) => ({ color: color(k), label: s.labels.get(k) ?? k, value: fmtUsd(p[k] ?? 0) })))} />
         {areas(s)}
       </AreaChart>
     </ChartCard>
   );
   if (unit === 'native') {
-    const marked = (k: string) => data.some((row) => stack.estimated.get(row.at)?.has(k) ?? false);
+    const marked = (k: string) => data.some((row) => stack.estimated.get(Number(row.at))?.has(k) ?? false);
     const billedDrawn = billed !== null && billed.keys.length > 0;
     // A range with no plan row leaves the equivalent card out while the billed card draws, as the tiles leave out a
     // side with no rows. With neither side the card stays, so an empty range still reads as one.
@@ -1906,9 +1914,12 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, shared,
               <CartesianGrid vertical={false} stroke={ink.grid} />
               <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
               <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={60} />
+              {/* Recharts drops null entries by default, and a bucket whose every group the route priced nothing on
+                  would lose its tooltip and its dashes. */}
               <Tooltip
                 cursor={{ stroke: ink.axis }}
-                content={timeTip<Record<string, number> & { at: number }>((p) => keys.map((k) => ({ color: color(k), label: label(k), value: equivalentOrDash('seven_day', p[k] ?? 0, stack.estimated.get(p.at)?.has(k) ?? false) })))}
+                filterNull={false}
+                content={timeTip<Record<string, number | null> & { at: number }>((p) => keys.map((k) => ({ color: color(k), label: label(k), value: equivalentOrDash('seven_day', p[k], stack.estimated.get(p.at)?.has(k) ?? false) })))}
               />
               {areas(stack)}
             </AreaChart>

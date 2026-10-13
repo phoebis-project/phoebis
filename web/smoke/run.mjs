@@ -12479,6 +12479,46 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       });
     }
     {
+      // Under native the Cost by chart keeps a plan bucket the route priced nothing on as a gap with a dash beside the
+      // same group's priced bucket, and keeps listing a group priced nothing throughout, where a zero would read as
+      // traffic that cost nothing. A wired series of two buckets off a priced plan group of the mock's answer.
+      localStorage.removeItem('phoebis.unit');
+      const seriesOf = api.getAnalyticsSeries;
+      const unpricedKey = 'unpriced-key';
+      let template;
+      api.getAnalyticsSeries = async (q) => {
+        const points = await seriesOf.call(api, q);
+        if (q.groupBy !== 'key' || q.funding !== undefined) return points;
+        const planned = (g) => g.planRequests > 0 && g.planOutputTokens > 0 && g.costEquivalent.seven_day !== undefined;
+        const withPlan = points.filter((p) => p.groups.some(planned));
+        if (withPlan.length < 2) return points;
+        template = withPlan[0].groups.find(planned);
+        const unpriced = (key) => ({ ...template, cacheEquivalent: {}, costEquivalent: {}, equivalentSplit: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 }, key, label: key });
+        return [
+          { at: withPlan[0].at, groups: [template, unpriced(unpricedKey)] },
+          { at: withPlan[1].at, groups: [unpriced(template.key), unpriced(unpricedKey)] },
+        ];
+      };
+      const chartPage = await mount('/analytics#cost', { now: CLOCK_ORIGIN });
+      const chartCard = [...chartPage.container.querySelectorAll('#cost .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost by key');
+      const legend = [...(chartCard?.querySelectorAll('.legend li') ?? [])].map((li) => li.textContent?.trim() ?? '');
+      const tips = [];
+      for (let x = 40; x <= 580; x += 30) {
+        chartCard?.querySelector('.recharts-wrapper')?.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: 60 }));
+        await chartPage.settle(150);
+        for (const row of chartCard?.querySelectorAll('.chart-tip .chart-tip__row') ?? []) tips.push([row.querySelector('.chart-tip__label')?.textContent?.trim() ?? '', row.querySelector('.chart-tip__value')?.textContent?.trim() ?? '']);
+      }
+      chartPage.unmount();
+      delete api.getAnalyticsSeries;
+      const valuesOf = (label) => [...new Set(tips.filter(([l]) => l === label).map(([, v]) => v))];
+      const priced = valuesOf(template?.label);
+      results.push({
+        name: "/analytics under native the Cost by chart reads a plan bucket the route priced nothing on as a dash beside the group's priced one, and lists a group priced nothing throughout with a dash",
+        ok: template !== undefined && legend.includes(unpricedKey) && priced.includes('-') && priced.some((v) => /^~?\d[\d.]*% of 20x 7-day$/.test(v)) && JSON.stringify(valuesOf(unpricedKey)) === JSON.stringify(['-']),
+        missing: [`template ${template?.label}`, `legend ${JSON.stringify(legend)}`, `${template?.label} ${JSON.stringify(priced)}`, `${unpricedKey} ${JSON.stringify(valuesOf(unpricedKey))}`],
+      });
+    }
+    {
       // Under native the Cache and Cache warming sections read one answer in two units, as the Cost section does: the
       // plan rows' 20x 7-day equivalent and the billed rows' dollars. Every figure is derived from the page's own
       // reads, summed as the page sums them, and the mark leads a figure of a group the story's Sonnet 4.6 rows
