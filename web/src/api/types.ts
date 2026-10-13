@@ -1250,8 +1250,8 @@ export interface AnalyticsGroup {
   label: string;
   percentiles: Record<keyof LatencyHistograms, { p50: number | null; p90: number | null; p95: number | null; p99: number | null }>;
   /**
-   * The plan-funded requests and output tokens, which the routes answer under every grouping. A fold of request rows
-   * counts them where it sums the shares and reads null where `costShares` is.
+   * The plan-funded requests and output tokens, which the routes and a fold of request rows answer under every
+   * grouping. The output count is the one plan token count a group carries, so `planRowsRequired` reads it.
    */
   planOutputTokens: number | null;
   planRequests: number | null;

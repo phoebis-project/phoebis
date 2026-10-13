@@ -1,3 +1,4 @@
+import { planRowsRequired, probesRequired } from '@/lib/analytics';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { fundingOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
@@ -317,19 +318,6 @@ const own = (map: object, key: string): boolean => Object.prototype.hasOwnProper
 /** The windows every plan row prices on. A model week is not one: a group off such a model carries none. */
 const SHARED_WINDOWS = ['five_hour', 'seven_day'];
 /**
- * Whether a group's plan rows oblige its equivalents to carry both shared windows, so that one it lacks is a window
- * the ledger could not price a plan row on. The ledger prices nothing on a row with no token, so a group whose plan
- * rows wrote no output token is let off, and a group that carries no plan count has plan rows where it carries a
- * window at all, as `sidesOf` reads it.
- */
-const carriesShared = (g: AnalyticsGroup): boolean => (g.planRequests === null ? Object.keys(g.costEquivalent).length > 0 : g.planRequests > 0 && g.planOutputTokens !== 0);
-/**
- * Whether a group's probes oblige its probe equivalents to carry both shared windows: answered probes alone, since a
- * held or skipped probe never ran, on a group with plan rows, since a group of billed traffic alone (an API-key
- * account's, or one in overage) runs billed probes, which carry no plan window to lack.
- */
-const probesCarryShared = (g: AnalyticsGroup): boolean => g.probes.ok > 0 && carriesShared(g);
-/**
  * Whether a request row must carry both shared windows: a plan row with a plan equivalent at all, as the route answers
  * one for a plan request alone, and with a token, since the ledger prices nothing on a row with no token. The row has
  * its token counts, so it reads the ledger's own rule where a group reads its plan output tokens.
@@ -377,9 +365,9 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
     for (const k of ['failed', 'held', 'migrated', 'ok', 'skipped'] as const) out.probes[k] += g.probes[k];
     for (const reason of WASTED_PROBE_REASONS) out.wastedProbeReasons[reason] += g.wastedProbeReasons[reason];
   }
-  latchShared(out.costEquivalent, groups, carriesShared, (g) => g.costEquivalent);
-  latchShared(out.cacheEquivalent, groups, carriesShared, (g) => g.cacheEquivalent);
-  latchShared(out.probeEquivalent, groups, probesCarryShared, (g) => g.probeEquivalent);
+  latchShared(out.costEquivalent, groups, planRowsRequired, (g) => g.costEquivalent);
+  latchShared(out.cacheEquivalent, groups, planRowsRequired, (g) => g.cacheEquivalent);
+  latchShared(out.probeEquivalent, groups, probesRequired, (g) => g.probeEquivalent);
   for (const m of METRICS) {
     out.histograms[m] = mergeHistograms(groups.map((g) => g.histograms[m]));
     out.percentiles[m] = quartet(out.histograms[m]);

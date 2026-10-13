@@ -252,11 +252,22 @@ export function oneAccountShares<T>(groups: AnalyticsGroup[], read: (g: Analytic
   return out;
 }
 
-/** A plan group carries both shared windows unless one could not be priced on it. */
-export const planRowsRequired = (g: AnalyticsGroup): boolean => g.planRequests === null || g.planRequests > 0;
+/**
+ * Whether a group carries chargeable plan usage, so it must carry both shared windows on its shares and equivalents and
+ * one it lacks is a window the ledger could not price a plan row on. The one rule the sums of `fold.ts` and the named
+ * account's whole read. The ledger prices nothing on a row with no token, and of a group's plan tokens the routes
+ * answer the output count alone, so a group whose plan rows wrote no output token is let off. A group that carries no
+ * plan count has plan rows where it carries an equivalent window at all, as `sidesOf` reads it.
+ */
+export const planRowsRequired = (g: AnalyticsGroup): boolean => (g.planRequests === null ? Object.keys(g.costEquivalent).length > 0 : g.planRequests > 0 && g.planOutputTokens !== 0);
 export const addReadWrite = (a: { read: number; write: number }, b: { read: number; write: number }) => ({ read: a.read + b.read, write: a.write + b.write });
-/** A group that ran probes carries both shared windows on its probe shares unless one could not be priced on it. */
-const probesRequired = (g: AnalyticsGroup): boolean => g.probes.ok + g.probes.held + g.probes.skipped + g.probes.failed > 0;
+/**
+ * Whether a group's probes oblige it to carry both shared probe windows: answered probes alone, since a held or skipped
+ * probe never ran, on a group with chargeable plan usage, since the routes answer no count of the plan-funded probes
+ * apart from the billed ones and a group of billed traffic alone (an API-key account's, or one in overage) runs billed
+ * probes, which carry no plan window to lack.
+ */
+export const probesRequired = (g: AnalyticsGroup): boolean => g.probes.ok > 0 && planRowsRequired(g);
 /**
  * The named account's whole: the position's totals with its shares summed over the groups the route answered them on.
  */

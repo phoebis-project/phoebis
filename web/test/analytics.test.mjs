@@ -635,6 +635,20 @@ test("the named account's whole leaves out a probe window that a group with prob
   assert.deepEqual(idle.probeShares, { five_hour: { cost: 0.25, wasted: 0.125 }, seven_day: { cost: 0.125, wasted: 0 } }, 'a group without probes adds none and lacks none');
 });
 
+test("a group with nothing to charge a plan window forces no gap on the named account's whole: failures with no token, probes that never ran, billed probes", () => {
+  const base = accountGroup();
+  const none = Object.fromEntries(Object.keys(base.tokens).map((k) => [k, 0]));
+  const priced = accountGroup({ costShares: { five_hour: 0.25, seven_day: 0.125 } });
+  const failed = accountGroup({ costEquivalent: {}, costShares: {}, planOutputTokens: 0, tokens: none });
+  assert.ok(failed.planRequests > 0, 'the failures still count as plan requests');
+  assert.deepEqual(d.oneAccountShares([priced, failed], (x) => x.costShares, (a, b) => a + b, d.planRowsRequired), priced.costShares, 'plan requests that wrote no token carry no window to lack');
+  const shares = { five_hour: { cost: 0.25, wasted: 0.125 }, seven_day: { cost: 0.125, wasted: 0 } };
+  const answered = accountGroup({ probeShares: shares, probes: { ...base.probes, ok: 2 } });
+  const neverRan = accountGroup({ probeShares: {}, probes: { ...base.probes, failed: 0, held: 1, ok: 0, skipped: 2 } });
+  const billed = accountGroup({ costEquivalent: {}, planOutputTokens: 0, planRequests: 0, probeShares: {}, probes: { ...base.probes, ok: 3 } });
+  for (const [what, other] of [['probes that never ran', neverRan], ['probes of billed traffic alone', billed]]) assert.deepEqual(d.oneAccountGroupOf(base, [answered, other]).probeShares, shares, what);
+});
+
 test('the model week is labeled by the key the share map carries, so a second model week reads under its own name', () => {
   assert.equal(d.weekLabelOf('seven_day_fable'), '7-day Fable');
   assert.equal(d.weekLabelOf('seven_day_opus'), 'seven_day_opus', 'a week the console has no label for reads under its key');
