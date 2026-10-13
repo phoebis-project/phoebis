@@ -1410,6 +1410,26 @@ test('a sum of groups adds the 20x equivalents per window, the billed side and t
   assert.deepEqual([d.sumGroups([folded]).planRequests, d.sumGroups([folded]).planOutputTokens], [null, null], 'and null when every group reads null');
 });
 
+test('a sum of groups leaves out a shared window a group with plan rows lacks, so no partial sum reads as the whole', () => {
+  // The ledger leaves a window out of a group's equivalents when it cannot price one of the group's plan rows there.
+  const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  const [first, second] = fixture('analytics_breakdown').rows;
+  const priced = d.decodeAnalyticsGroup(first);
+  const lacking = { ...second, cache_equivalent: { five_hour: second.cache_equivalent.five_hour }, cost_equivalent: { five_hour: second.cost_equivalent.five_hour } };
+  const unpriced = d.decodeAnalyticsGroup(lacking);
+  assert.ok(priced.planRequests > 0 && unpriced.planRequests > 0 && unpriced.planOutputTokens > 0, 'both captured groups hold plan rows with tokens');
+  const summed = d.sumGroups([priced, unpriced]);
+  assert.deepEqual([own(summed.costEquivalent, 'seven_day'), own(summed.cacheEquivalent, 'seven_day')], [false, false], 'the 7-day window one plan group lacks stays out of the sum');
+  assert.equal(summed.costEquivalent.five_hour, priced.costEquivalent.five_hour + unpriced.costEquivalent.five_hour, 'a window both carry still sums');
+  assert.equal(d.sidesOf(summed, 'seven_day').equivalent, null, 'and the plan side reads it unpriced');
+  // A group with no plan row carries no window, nor does one whose plan rows wrote no token, which the ledger prices
+  // nothing on, so the sum keeps the other group's windows whole.
+  for (const [what, over] of [['no plan row', { plan_output_tokens: 0, plan_requests: 0 }], ['plan rows with no token', { plan_output_tokens: 0 }]]) {
+    const without = d.decodeAnalyticsGroup({ ...second, cache_equivalent: {}, cost_equivalent: {}, ...over });
+    assert.deepEqual([d.sumGroups([priced, without]).costEquivalent, d.sumGroups([priced, without]).cacheEquivalent], [priced.costEquivalent, priced.cacheEquivalent], what);
+  }
+});
+
 test('a recipe evicted at the byte cap or lapsed past its entry keeps that cause, and the wasted probes their labels', () => {
   const [wire] = fixture('keepalive_recipes').recipes;
   for (const cause of ['evicted', 'expired', 'expired_at_restart']) {

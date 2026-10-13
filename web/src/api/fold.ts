@@ -308,10 +308,21 @@ function addByWindow<T>(into: Record<string, T>, from: Record<string, T>, add: (
 }
 const own = (map: object, key: string): boolean => Object.prototype.hasOwnProperty.call(map, key);
 
+/** The windows every plan row prices on. A model week is not one: a group off such a model carries none. */
+const SHARED_WINDOWS = ['five_hour', 'seven_day'];
+/**
+ * Whether a group's plan rows oblige its equivalents to carry both shared windows, so that one it lacks is a window
+ * the ledger could not price a plan row on. The ledger prices nothing on a row with no token, so a group whose plan
+ * rows wrote no output token is let off, and a fold of request rows, which counts no plan request, has plan rows
+ * where it carries a window at all, as `sidesOf` reads it.
+ */
+const carriesShared = (g: AnalyticsGroup): boolean => (g.planRequests === null ? Object.keys(g.costEquivalent).length > 0 : g.planRequests > 0 && g.planOutputTokens !== 0);
+
 /**
  * Several groups of one point summed into one, for the charts and tiles that draw totals. A figure one group
- * cannot supply leaves the sum unknown, so a total never passes a partial sum off as the whole. The plan counts are
- * the exception: a fold outside the account grouping counts none, and the groups that carry them still total.
+ * cannot supply leaves the sum unknown, so a total never passes a partial sum off as the whole: a shared window a
+ * group with plan rows lacks leaves the equivalents, as it leaves the one account's shares. The plan counts are the
+ * exception: a fold outside the account grouping counts none, and the groups that carry them still total.
  */
 export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
   const out = empty('all');
@@ -334,6 +345,12 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
     out.keptWarm = out.keptWarm && g.keptWarm ? { requests: out.keptWarm.requests + g.keptWarm.requests, tokens: out.keptWarm.tokens + g.keptWarm.tokens } : null;
     for (const k of ['failed', 'held', 'migrated', 'ok', 'skipped'] as const) out.probes[k] += g.probes[k];
     for (const reason of WASTED_PROBE_REASONS) out.wastedProbeReasons[reason] += g.wastedProbeReasons[reason];
+  }
+  for (const g of groups.filter(carriesShared)) {
+    for (const window of SHARED_WINDOWS) {
+      if (!own(g.costEquivalent, window)) delete out.costEquivalent[window];
+      if (!own(g.cacheEquivalent, window)) delete out.cacheEquivalent[window];
+    }
   }
   for (const m of METRICS) {
     out.histograms[m] = mergeHistograms(groups.map((g) => g.histograms[m]));

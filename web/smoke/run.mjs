@@ -12398,6 +12398,26 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
           unpricedPlan.rings.length === 0 && !unpricedPlan.skeleton && unpricedPlan.splitText === '-',
         missing: [JSON.stringify(unpricedBoth), JSON.stringify(unpricedPlan)],
       });
+      // Beside a priced plan group, one the route priced nothing on the window would leave the priced group's figure
+      // standing as the whole, so the pair reads the dash too.
+      const pricedPlan = (g) => g.planRequests > 0 && g.planOutputTokens > 0 && g.costEquivalent.seven_day !== undefined;
+      api.getAnalyticsBreakdown = async (q) => {
+        const plan = (await breakdownOf.call(api, q)).filter(pricedPlan);
+        return plan.length < 2 ? plan : [plan[0], { ...plan[1], cacheEquivalent: {}, costEquivalent: {}, equivalentSplit: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 } }];
+      };
+      const pairPage = await mount('/analytics#cost', { now: CLOCK_ORIGIN });
+      const pairMeta = pairPage.container.querySelector('#cost .analytics-section__meta')?.textContent ?? '';
+      const pairTile = [...(pairPage.container.querySelector('#cost .stat')?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => [textOf(l), l.querySelector('.stat__pair-word')?.textContent?.trim() ?? '']);
+      const pairSplit = [...pairPage.container.querySelectorAll('#cost .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost split');
+      const pairRings = [...(pairSplit?.querySelectorAll('svg.donut .donut__label') ?? [])].map((x) => x.textContent ?? '');
+      pairPage.unmount();
+      delete api.getAnalyticsBreakdown;
+      const pricedKeys = keyQuery ? (await breakdownOf.call(api, keyQuery)).filter(pricedPlan).length : 0;
+      results.push({
+        name: "/analytics under native a priced plan group beside one the route priced nothing on the 7-day window sums to a dash on the Cost tile and the meta, and the Cost split draws no subscription ring",
+        ok: pricedKeys >= 2 && JSON.stringify(pairTile[0]) === JSON.stringify(['-', 'subscription']) && /^- (and \$[\d,.]+ )?in range$/.test(pairMeta) && !pairRings.includes('subscription'),
+        missing: [`${pricedKeys} priced plan keys`, JSON.stringify(pairTile), pairMeta, JSON.stringify(pairRings)],
+      });
     }
     {
       // Under native the Cache and Cache warming sections read one answer in two units, as the Cost section does: the
