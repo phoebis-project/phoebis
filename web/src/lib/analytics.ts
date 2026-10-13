@@ -347,8 +347,8 @@ export function nativeCellOf(windowKey: string, equivalent: number | null | unde
  * The two sides of a sum over both fundings: the plan rows' 20x equivalent on a window and the billed rows' dollars,
  * in `nativeCellOf`'s vocabulary: undefined leaves out a side with no rows, and a null equivalent reads a dash for plan
  * rows the route priced nothing on the window, since the ledger leaves a window out when it cannot price a plan row
- * there. The route counts the plan requests, and a fold of request rows that counted none tells the sides apart by
- * their figures. A sum with no row on either side reads both, so an empty range reads its zero in each unit rather
+ * there. The route and the session fold count the plan requests, and a group that carries no count tells the sides
+ * apart by their figures. A sum with no row on either side reads both, so an empty range reads its zero in each unit rather
  * than nothing.
  */
 export function sidesOf(g: Pick<AnalyticsGroup, 'billedUsd' | 'costEquivalent' | 'planRequests' | 'requests'>, window: string): { billed: number | undefined; equivalent: number | null | undefined } {

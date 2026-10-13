@@ -72,6 +72,8 @@ const emptyFolded = (key: string, label = key): AnalyticsGroup => ({
   equivalentSplit: null,
   fromRequests: true,
   keptWarm: null,
+  planOutputTokens: 0,
+  planRequests: 0,
 });
 
 /**
@@ -171,11 +173,10 @@ const tokensOf = (r: RequestLog) => r.usage.input + r.usage.cacheRead + r.usage.
  * The plan-funded rows' shares summed per window into the group, as the route sums them under the account grouping:
  * a window no row's model applies to is no key, a window a row carries as null (the cost model could not price it) is
  * null whatever the other rows priced, and the rest sum. A row whose account the route could not price (`{}`, or
- * no map at all) nulls the map and both counts, as the route answers such an account, since the fold holds no window
- * rule of its own to say which windows that row's model applies to. No plan-funded row is no shares. A plan-funded
- * row with no token (a failed attempt the route priced nothing for) joins the counts and not the shares, as the
- * ledger's sums skip it: its empty map would otherwise read as an account the route could not price and dash the
- * priced rows' total.
+ * no map at all) nulls the map, as the route answers such an account, since the fold holds no window rule of its own
+ * to say which windows that row's model applies to. No plan-funded row is no shares. A plan-funded row with no token
+ * (a failed attempt the route priced nothing for) adds nothing to the shares, as the ledger's sums skip it: its empty
+ * map would otherwise read as an account the route could not price and dash the priced rows' total.
  */
 function foldShares(g: AnalyticsGroup, rows: RequestLog[]) {
   const plan = rows.filter((r) => fundingOfRow(r) === 'plan');
@@ -189,8 +190,6 @@ function foldShares(g: AnalyticsGroup, rows: RequestLog[]) {
     }
   }
   g.costShares = shares;
-  g.planRequests = plan.length;
-  g.planOutputTokens = plan.reduce((n, r) => n + r.usage.output, 0);
 }
 
 /**
@@ -244,9 +243,15 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     g.tokens.webFetch += r.usage.webFetch;
     g.tokens.webSearch += r.usage.webSearch;
     g.costUsd += r.costUsd;
-    // The billed side is the funding filter's complement of the plan, and a window the cost model could not price
-    // adds nothing to the equivalent, as the route's sum skips it.
-    if (!onSide(r, 'plan')) g.billedUsd += r.costUsd;
+    // The billed side is the funding filter's complement of the plan. The route counts the plan rows under every
+    // grouping, so the fold does too, and a group whose plan rows priced no window then reads it unpriced rather than
+    // as a group with no plan row. A shared window the cost model could not price on a row leaves the group below.
+    if (onSide(r, 'plan')) {
+      g.planRequests = (g.planRequests ?? 0) + 1;
+      g.planOutputTokens = (g.planOutputTokens ?? 0) + r.usage.output;
+    } else {
+      g.billedUsd += r.costUsd;
+    }
     for (const [window, equivalent] of Object.entries(r.costEquivalent ?? {})) if (equivalent !== null) g.costEquivalent[window] = (g.costEquivalent[window] ?? 0) + equivalent;
     if (r.estimated) g.estimated = true;
     // The ledger classifies by tokens: a read is a hit, a write without a read is a miss, neither is uncached.
@@ -263,6 +268,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     const pick = (read: (r: RequestLog) => number | null) => list.map(read).filter((v): v is number => v !== null);
     g.histograms = { durationMs: histogramOf(pick((r) => r.durationMs)), outputTps: histogramOf(pick(outputTps)), ttfbMs: histogramOf(pick((r) => r.ttfbMs)), ttftMs: histogramOf(pick((r) => r.ttftMs)) };
     for (const m of METRICS) g.percentiles[m] = quartet(g.histograms[m]);
+    latchShared(g.costEquivalent, list, rowCarriesShared, (r) => r.costEquivalent);
     // Shares of one account's windows add, and a group of any other dimension spans accounts, whose windows do not.
     if (by === 'account') foldShares(g, list);
   }
@@ -313,8 +319,8 @@ const SHARED_WINDOWS = ['five_hour', 'seven_day'];
 /**
  * Whether a group's plan rows oblige its equivalents to carry both shared windows, so that one it lacks is a window
  * the ledger could not price a plan row on. The ledger prices nothing on a row with no token, so a group whose plan
- * rows wrote no output token is let off, and a fold of request rows, which counts no plan request, has plan rows
- * where it carries a window at all, as `sidesOf` reads it.
+ * rows wrote no output token is let off, and a group that carries no plan count has plan rows where it carries a
+ * window at all, as `sidesOf` reads it.
  */
 const carriesShared = (g: AnalyticsGroup): boolean => (g.planRequests === null ? Object.keys(g.costEquivalent).length > 0 : g.planRequests > 0 && g.planOutputTokens !== 0);
 /**
@@ -323,13 +329,31 @@ const carriesShared = (g: AnalyticsGroup): boolean => (g.planRequests === null ?
  * account's, or one in overage) runs billed probes, which carry no plan window to lack.
  */
 const probesCarryShared = (g: AnalyticsGroup): boolean => g.probes.ok > 0 && carriesShared(g);
+/**
+ * Whether a request row must carry both shared windows: a plan row with a plan equivalent at all, as the route answers
+ * one for a plan request alone, and with a token, since the ledger prices nothing on a row with no token. The row has
+ * its token counts, so it reads the ledger's own rule where a group reads its plan output tokens.
+ */
+const rowCarriesShared = (r: RequestLog): boolean => onSide(r, 'plan') && r.costEquivalent !== null && tokensOf(r) > 0;
+/**
+ * The one rule a sum of request rows and a sum of groups read a shared window by: a part `obliged` to carry it that
+ * lacks it, or carries it null, leaves it out of `sum`, as the ledger leaves a window out once it cannot price a plan
+ * row there, so no partial sum reads as the whole.
+ */
+function latchShared<P>(sum: Record<string, unknown>, parts: P[], obliged: (part: P) => boolean, windowsOf: (part: P) => Record<string, unknown> | null) {
+  for (const part of parts) {
+    if (!obliged(part)) continue;
+    const windows = windowsOf(part);
+    for (const window of SHARED_WINDOWS) if (windows === null || !own(windows, window) || windows[window] === null) delete sum[window];
+  }
+}
 
 /**
  * Several groups of one point summed into one, for the charts and tiles that draw totals. A figure one group
  * cannot supply leaves the sum unknown, so a total never passes a partial sum off as the whole: a shared window a
  * group with plan rows lacks leaves the equivalents, and one a group with plan probes lacks the probe equivalents, as
- * each leaves the one account's shares. The plan counts are the exception: a fold outside the account grouping counts
- * none, and the groups that carry them still total.
+ * each leaves the one account's shares. The plan counts are the exception: a group that carries none is skipped, and
+ * the groups that carry them still total.
  */
 export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
   const out = empty('all');
@@ -353,13 +377,9 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
     for (const k of ['failed', 'held', 'migrated', 'ok', 'skipped'] as const) out.probes[k] += g.probes[k];
     for (const reason of WASTED_PROBE_REASONS) out.wastedProbeReasons[reason] += g.wastedProbeReasons[reason];
   }
-  for (const g of groups.filter(carriesShared)) {
-    for (const window of SHARED_WINDOWS) {
-      if (!own(g.costEquivalent, window)) delete out.costEquivalent[window];
-      if (!own(g.cacheEquivalent, window)) delete out.cacheEquivalent[window];
-    }
-  }
-  for (const g of groups.filter(probesCarryShared)) for (const window of SHARED_WINDOWS) if (!own(g.probeEquivalent, window)) delete out.probeEquivalent[window];
+  latchShared(out.costEquivalent, groups, carriesShared, (g) => g.costEquivalent);
+  latchShared(out.cacheEquivalent, groups, carriesShared, (g) => g.cacheEquivalent);
+  latchShared(out.probeEquivalent, groups, probesCarryShared, (g) => g.probeEquivalent);
   for (const m of METRICS) {
     out.histograms[m] = mergeHistograms(groups.map((g) => g.histograms[m]));
     out.percentiles[m] = quartet(out.histograms[m]);

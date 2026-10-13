@@ -12422,12 +12422,22 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       warmPage.unmount();
       delete api.getAnalyticsBreakdown;
       const pricedKeys = keyQuery ? (await breakdownOf.call(api, keyQuery)).filter(pricedPlan).length : 0;
+      // A session view folds request rows instead: a priced plan row of the session beside one on a model of no known
+      // tier, which prices neither shared window, reads the dash too, the fold counting both as plan rows.
+      const sessionRow = requests.find((r) => r.sessionId !== null && r.kind !== 'probe' && costUnitOf(r, 'native').kind === 'equivalent' && r.costEquivalent?.seven_day != null && r.usage.output > 0);
+      api.listRequests = async () => ({ nextCursor: null, requests: sessionRow === undefined ? [] : [sessionRow, { ...sessionRow, costEquivalent: { five_hour: null, seven_day: null }, estimated: false, id: `${sessionRow.id}-unpriced` }] });
+      const sessionPage = await mount(`/analytics?session=${encodeURIComponent(sessionRow?.sessionId ?? '')}#cost`, { now: CLOCK_ORIGIN });
+      const sessionMeta = sessionPage.container.querySelector('#cost .analytics-section__meta')?.textContent ?? '';
+      const sessionTile = [...(sessionPage.container.querySelector('#cost .stat')?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => [textOf(l), l.querySelector('.stat__pair-word')?.textContent?.trim() ?? '']);
+      sessionPage.unmount();
+      delete api.listRequests;
       results.push({
-        name: "/analytics under native a priced plan group beside one the route priced nothing on the 7-day window sums to a dash on the Cost tile, the meta and the Probe cost tile, and the Cost split draws no subscription ring",
+        name: "/analytics under native a priced plan group beside one the route priced nothing on the 7-day window sums to a dash on the Cost tile, the meta and the Probe cost tile, and the Cost split draws no subscription ring, in a session view's fold too",
         ok:
           pricedKeys >= 2 && JSON.stringify(pairTile[0]) === JSON.stringify(['-', 'subscription']) && /^- (and \$[\d,.]+ )?in range$/.test(pairMeta) && !pairRings.includes('subscription') &&
-          pairProbed.length === 2 && pairProbed.every((ok) => ok > 0) && JSON.stringify(pairProbe[0]) === JSON.stringify(['-', 'subscription']),
-        missing: [`${pricedKeys} priced plan keys`, JSON.stringify(pairTile), pairMeta, JSON.stringify(pairRings), `answered probes ${JSON.stringify(pairProbed)}`, JSON.stringify(pairProbe)],
+          pairProbed.length === 2 && pairProbed.every((ok) => ok > 0) && JSON.stringify(pairProbe[0]) === JSON.stringify(['-', 'subscription']) &&
+          sessionRow !== undefined && JSON.stringify(sessionTile[0]) === JSON.stringify(['-', 'subscription']) && /^- (and \$[\d,.]+ )?in range$/.test(sessionMeta),
+        missing: [`${pricedKeys} priced plan keys`, JSON.stringify(pairTile), pairMeta, JSON.stringify(pairRings), `answered probes ${JSON.stringify(pairProbed)}`, JSON.stringify(pairProbe), `session ${sessionRow?.sessionId}`, JSON.stringify(sessionTile), sessionMeta],
       });
     }
     {
@@ -15706,6 +15716,41 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       name: '/analytics a session view reads its warming tiles and cache costs as unavailable',
       ok: tiles.length === 2 && tiles.every((v) => v === '-') && costLegend.length === 2 && costLegend.every((v) => v === '-'),
       missing: [...tiles, ...costLegend],
+    });
+  }
+  {
+    // The fold counts a session's plan rows as the route counts a group's, so under native the per-request tiles divide
+    // the plan rows' 20x 7-day equivalent and the billed rows' dollars by their own requests and output tokens, read
+    // here off the request rows the view folds, as the request route answers them.
+    localStorage.removeItem('phoebis.unit');
+    const spy = countCalls('listRequests');
+    const view = await mount(`/analytics${m.location().search}#cost`, { now: CLOCK_ORIGIN });
+    spy.restore();
+    const byId = new Map();
+    for (const [q] of spy.calls) if (q?.search === sessionId) for (const r of (await api.listRequests(q)).requests) byId.set(r.id, r);
+    const rows = [...byId.values()];
+    const plan = rows.filter((r) => costUnitOf(r, 'native').kind !== 'dollars');
+    const billed = rows.filter((r) => costUnitOf(r, 'native').kind === 'dollars');
+    const sum = (list, read) => list.reduce((n, r) => n + read(r), 0);
+    const mark = rows.some((r) => r.estimated) ? '~' : '';
+    const per = (equivalent, planCount, usd, billedCount, scale) => [
+      ...(plan.length ? [[planCount > 0 ? `${mark}${fmtEquivalent('seven_day', (equivalent / planCount) * scale)}` : '-', 'subscription']] : []),
+      ...(billed.length ? [[billedCount > 0 ? fmtUsd((usd / billedCount) * scale) : '-', 'billed']] : []),
+    ];
+    const sevenDay = sum(plan, (r) => r.costEquivalent?.seven_day ?? 0);
+    const usd = sum(billed, (r) => r.costUsd);
+    const want = [per(sevenDay, plan.length, usd, billed.length, 1), per(sevenDay, sum(plan, (r) => r.usage.output), usd, sum(billed, (r) => r.usage.output), 1000)];
+    const figureOf = (line) => {
+      const figure = line.cloneNode(true);
+      figure.querySelector('.stat__pair-word')?.remove();
+      return figure.textContent?.trim() ?? '';
+    };
+    const got = [...view.container.querySelectorAll('#cost .stat')].slice(1, 3).map((t) => [...t.querySelectorAll('.stat__pair-line')].map((l) => [figureOf(l), l.querySelector('.stat__pair-word')?.textContent?.trim() ?? '']));
+    view.unmount();
+    results.push({
+      name: "/analytics a session view under native divides its per-request tiles by the session's plan and billed requests, as the request route answers its rows",
+      ok: plan.length > 0 && JSON.stringify(got) === JSON.stringify(want),
+      missing: [`${plan.length} plan rows, ${billed.length} billed`, `got ${JSON.stringify(got)}`, `want ${JSON.stringify(want)}`],
     });
   }
   await tab(m, 'Traffic');

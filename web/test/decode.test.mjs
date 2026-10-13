@@ -1237,12 +1237,14 @@ test("a session fold under the account grouping sums the rows' shares, leaves a 
   assert.deepEqual(unpriced.costShares, { five_hour: 0.5, seven_day: 0.25, seven_day_fable: null }, 'with null where one row could not be priced on it, whatever the other rows priced');
   const [unknown] = d.foldGroups([fable('f', fableShares), row('u', { costShares: {} })], 'account');
   assert.equal(unknown.costShares, null, "a row whose account the route could not price nulls the group's map, as the route answers such an account");
-  assert.deepEqual([unknown.planRequests, unknown.planOutputTokens, unknown.cacheShares, unknown.probeShares], [null, null, null, null], 'with the counts and the other maps');
+  assert.deepEqual([unknown.cacheShares, unknown.probeShares], [null, null], 'with the other maps');
+  assert.deepEqual([unknown.planRequests, unknown.planOutputTokens], [2, 2 * plan.usage.output], 'while the plan rows count, as the route counts them beside a map it cannot price');
   assert.equal(unknown.requests, 2, 'the rows still count as requests');
   const [byModel] = d.foldGroups([fable('f', fableShares)], 'model');
-  assert.deepEqual([byModel.costShares, byModel.planRequests, byModel.planOutputTokens], [null, null, null], "another grouping mixes accounts, whose windows' shares do not add");
+  assert.equal(byModel.costShares, null, "another grouping mixes accounts, whose windows' shares do not add");
+  assert.deepEqual([byModel.planRequests, byModel.planOutputTokens], [1, plan.usage.output], 'and counts its plan rows, as the route counts them under every grouping');
   const [keyed] = d.foldGroups([row('k', { attempts: [{ ...attempt, accountKind: 'api_key' }], costShares: null })], 'account');
-  assert.deepEqual([keyed.costShares, keyed.planRequests, keyed.planOutputTokens], [null, null, null], "an API key account's rows pay no window");
+  assert.deepEqual([keyed.costShares, keyed.planRequests, keyed.planOutputTokens], [null, 0, 0], "an API key account's rows pay no window and count no plan request");
   const [overage] = d.foldGroups([fable('f', fableShares), row('o', { attempts: [{ ...attempt, overageInUse: true }], costShares: null })], 'account');
   assert.deepEqual([overage.costShares, overage.planRequests, overage.requests], [fableShares, 1, 2], 'an overage row adds to no share and to no plan count');
 });
@@ -1405,9 +1407,13 @@ test('a sum of groups adds the 20x equivalents per window, the billed side and t
   assert.equal(mixed.equivalentSplit, null, 'a fold carries one total, so the split by kind is unknown');
   close(mixed.billedUsd, a.billedUsd + b.billedUsd + folded.billedUsd, 'billedUsd with the fold');
   for (const w of keys(a.costEquivalent, b.costEquivalent, folded.costEquivalent)) close(mixed.costEquivalent[w], (a.costEquivalent[w] ?? 0) + (b.costEquivalent[w] ?? 0) + (folded.costEquivalent[w] ?? 0), `costEquivalent.${w} with the fold`);
-  assert.equal(folded.planRequests, null, 'a fold under no account grouping counts no plan request');
-  assert.deepEqual([mixed.planRequests, mixed.planOutputTokens], [routeOnly.planRequests, routeOnly.planOutputTokens], 'a null count is skipped while another group carries one');
-  assert.deepEqual([d.sumGroups([folded]).planRequests, d.sumGroups([folded]).planOutputTokens], [null, null], 'and null when every group reads null');
+  const planRows = rows.filter((r) => d.costUnitOf(r, 'native').kind !== 'dollars');
+  assert.deepEqual([folded.planRequests, folded.planOutputTokens], [planRows.length, planRows.reduce((n, r) => n + r.usage.output, 0)], 'a fold counts its plan rows under every grouping, as the route counts them');
+  assert.deepEqual([mixed.planRequests, mixed.planOutputTokens], [routeOnly.planRequests + folded.planRequests, routeOnly.planOutputTokens + folded.planOutputTokens], 'and the counts sum');
+  // A group the route answered no count for is skipped while another carries one.
+  const uncounted = d.decodeAnalyticsGroup({ ...first, plan_output_tokens: null, plan_requests: null });
+  assert.deepEqual([d.sumGroups([a, uncounted]).planRequests, d.sumGroups([a, uncounted]).planOutputTokens], [a.planRequests, a.planOutputTokens], 'a null count is skipped while another group carries one');
+  assert.deepEqual([d.sumGroups([uncounted]).planRequests, d.sumGroups([uncounted]).planOutputTokens], [null, null], 'and null when every group reads null');
 });
 
 test('a sum of groups leaves out a shared window a group with plan rows lacks, so no partial sum reads as the whole', () => {
@@ -1428,6 +1434,24 @@ test('a sum of groups leaves out a shared window a group with plan rows lacks, s
     const without = d.decodeAnalyticsGroup({ ...second, cache_equivalent: {}, cost_equivalent: {}, ...over });
     assert.deepEqual([d.sumGroups([priced, without]).costEquivalent, d.sumGroups([priced, without]).cacheEquivalent], [priced.costEquivalent, priced.cacheEquivalent], what);
   }
+});
+
+test('a session fold leaves out a shared window one of its plan rows lacks and, counting its plan rows, reads the window unpriced', () => {
+  const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  const plan = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
+  const attempt = plan.attempts[plan.attempts.length - 1];
+  const [folded] = d.foldGroups([plan, { ...plan, costEquivalent: { ...plan.costEquivalent, seven_day: null }, id: 'r-lacking' }], 'key');
+  assert.equal(own(folded.costEquivalent, 'seven_day'), false, 'the window one plan row could not be priced on leaves the group');
+  assert.equal(folded.costEquivalent.five_hour, 2 * plan.costEquivalent.five_hour, 'a window both rows carry still sums');
+  assert.deepEqual([folded.planRequests, d.sidesOf(folded, 'seven_day').equivalent], [2, null], 'and the group reads it unpriced');
+  // A model of no known tier prices neither shared window: the group still counts its plan rows, so it reads the
+  // window unpriced rather than as a group with no plan row.
+  const [unknown] = d.foldGroups([plan, { ...plan, costEquivalent: { five_hour: null, seven_day: null }, id: 'r-unknown' }], 'key');
+  assert.deepEqual([unknown.costEquivalent, d.sidesOf(unknown, 'seven_day').equivalent, d.costHeadOf('native', unknown).meta], [{}, null, '- in range']);
+  // A billed row carries no plan window to lack, and a plan row with no token prices nothing, so neither leaves the fold.
+  const billed = { ...plan, attempts: [{ ...attempt, accountKind: 'api_key' }], costEquivalent: null, id: 'r-billed' };
+  const tokenless = { ...plan, costEquivalent: { five_hour: null, seven_day: null }, id: 'r-tokenless', usage: { ...plan.usage, cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 } };
+  for (const [what, row] of [['a billed row', billed], ['a plan row with no token', tokenless]]) assert.deepEqual(d.foldGroups([plan, row], 'key')[0].costEquivalent, plan.costEquivalent, what);
 });
 
 test('a recipe evicted at the byte cap or lapsed past its entry keeps that cause, and the wasted probes their labels', () => {
