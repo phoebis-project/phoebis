@@ -39,22 +39,23 @@ bound, at 1280 by 800 and in a window that sets two cards on the card grid's flo
 and at 375 by 800 and 390 by 844 with no sideways scroll on the page and each card inside the window (the reset label on
 a row of its own there, so its column goes unread), the remaining cards, the error state, the lines under the quota
 rings, the recent requests' model cells and their table's fit, the recent requests' columns (Key the fill), the cost-cap
-rows, the wasted-probe rows, the burn cards, the plan legend's model unlisted entry, the placement and budget tables,
-the Analytics tables' columns, each read on the tab that draws it (the Traffic breakdown's group column the fill, Key on
-the misses-by-reason breakdown under its wrapped headers, Rung on the placements table, Pool and Account on the member
-budgets, whose Spent column is as wide as its meter's 140 px floor), the request table's fit (asserted in the router
-pass and recorded in the mock pass, whose story runs past the card at 1280 by 800), its columns (Client
-the fill, the Status, Attempts and links cells wrapping, the width past the card recorded in the mock pass), its
-text at 1920 by 1080 in the mock pass (no client class or agent type cut, each read on its own span),
-the request pages' widths, walked on a load of their own once every view's shot is taken, the speed
-filter, and the cache miss reason, effort and request class filters (each against Turn origin), the Cost split's rings
-under native (each center figure inside its ring, two side by side in the mock pass), the native Cost by table (its
-width recorded, every column inside its wrap at 1280 by 800), the traffic cards (each Analytics
-check opens the tab it reads and returns to Traffic), the tab strip docked under the filter bar at the end of the
-Latency tab, the Unit select and the legend's button in the top bar (inside the bar, clear of Log out and the theme
-switch, inside the viewport at 1280 and 400 px with nothing scrolling the bar sideways, every short label whole and no
-legend button at 400 px, the long labels whole at 1280 px, and the legend's popover over the filter bar uncovered at
-1280 px), the top bar on every view at 1280 and 400 px (nothing scrolling it sideways, its last control inside its
+rows, the wasted-probe rows, the burn cards, the plan legend's model unlisted entry, the placement and budget tables
+(Cache by model's width recorded under native, every column inside its wrap at 1280 by 800, and in the mock pass a cost
+cell's billed line drawn), the Analytics tables' columns, each read on the tab that draws it (the Traffic breakdown's
+group column the fill, Key on the misses-by-reason breakdown under its wrapped headers, Rung on the placements table,
+Pool and Account on the member budgets, whose Spent column is as wide as its meter's 140 px floor), the request table's
+fit (asserted in the router pass and recorded in the mock pass, whose story runs past the card at 1280 by 800), its
+columns (Client the fill, the Status, Attempts and links cells wrapping, the width past the card
+recorded in the mock pass), its text at 1920 by 1080 in the mock pass (no client class or agent type
+cut, each read on its own span), the request pages' widths, walked on a load of their own once every view's shot is
+taken, the speed filter, and the cache miss reason, effort and request class filters (each against
+Turn origin), the Cost split's rings under native (each center figure inside its ring, two side by side in the mock
+pass), the native Cost by table (its width recorded, every column inside its wrap at 1280 by 800), the traffic cards
+(each Analytics check opens the tab it reads and returns to Traffic), the tab strip docked under the filter bar at the
+end of the Latency tab, the Unit select and the legend's button in the top bar (inside the bar, clear of Log out and the
+theme switch, inside the viewport at 1280 and 400 px with nothing scrolling the bar sideways, every short label whole
+and no legend button at 400 px, the long labels whole at 1280 px, and the legend's popover over the filter bar uncovered
+at 1280 px), the top bar on every view at 1280 and 400 px (nothing scrolling it sideways, its last control inside its
 padding, the title whole on one line, and Log out a text button at 1280 px and its icon alone at 400 px), the fast lane,
 the request drawer, which opens once the request list's shot is taken (its chips in the status badge's type, and the
 Estimated cost row's 20x equivalent chips and muted equivalent on one line each inside the cell at 1280 by 800 and 1440

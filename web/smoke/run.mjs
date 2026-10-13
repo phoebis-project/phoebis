@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, ESTIMATED_TITLE, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, CACHE_MODEL_SHARE_NOTE, CACHE_SHARE_NOTE, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareLabel, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -124,12 +124,14 @@ const columnsMarked = (name, table, fill) => {
 };
 /**
  * Every fill cell of `table` carries its own text as its title, the whole value the column's ellipsis cuts, for the
- * hover.
+ * hover. With `estimated` the table marks an estimate on its label, so at least one cell's title reads the estimate's
+ * sentence after its text and no other title is allowed.
  */
-const fillTitles = (name, table) => {
+const fillTitles = (name, table, estimated = false) => {
   const cells = [...(table?.querySelectorAll('tbody td.col-fill') ?? [])];
-  const off = cells.filter((td) => (td.getAttribute('title') ?? '') !== (td.textContent?.trim() ?? '')).map((td) => `${JSON.stringify(td.textContent?.trim())}: ${td.getAttribute('title') ?? 'no title'}`);
-  results.push({ name, ok: cells.length > 0 && off.length === 0, missing: [`${cells.length} fill cells`, ...off.slice(0, 5)] });
+  const marked = (td) => estimated && (td.getAttribute('title') ?? '') === `${td.textContent?.trim() ?? ''}. ${ESTIMATED_TITLE}.`;
+  const off = cells.filter((td) => (td.getAttribute('title') ?? '') !== (td.textContent?.trim() ?? '') && !marked(td)).map((td) => `${JSON.stringify(td.textContent?.trim())}: ${td.getAttribute('title') ?? 'no title'}`);
+  results.push({ name, ok: cells.length > 0 && off.length === 0 && (!estimated || cells.some(marked)), missing: [`${cells.length} fill cells, ${cells.filter(marked).length} marked`, ...off.slice(0, 5)] });
 };
 /** A rail entry by its group's id, never its text, so a refused entry's annotation cannot hide it. */
 const rail = (dlg, id) => dlg?.querySelector(`.dialog-rail__group[data-group="${id}"]`);
@@ -11339,15 +11341,16 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const BREAKDOWNS = [
     ['Traffic', 'Traffic by key', ['Key']],
     ['Cache', 'Misses by reason by key', ['Key']],
-    ['Cache', 'Cache by model', ['Model']],
+    // Under native the story's Sonnet 4.6 model prices through its model tier, so its label carries the estimate.
+    ['Cache', 'Cache by model', ['Model'], true],
   ];
   let read = 0;
-  for (const [label, title, fill] of BREAKDOWNS) {
+  for (const [label, title, fill, estimated] of BREAKDOWNS) {
     await tab(m, label);
     const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.querySelector('table');
     if (table) read += 1;
     columnsMarked(`/analytics every breakdown table marks its group column fill and its figures fit: ${title}`, table, fill);
-    fillTitles(`/analytics every group cell of a breakdown table carries its own text as its title: ${title}`, table);
+    fillTitles(`/analytics every group cell of a breakdown table carries its own text as its title${estimated ? ', an estimated one with the estimate after it' : ''}: ${title}`, table, estimated);
   }
   results.push({ name: '/analytics every breakdown table marks its group column fill and its figures fit: three tables read', ok: read === BREAKDOWNS.length, missing: [`${read} of ${BREAKDOWNS.length} tables`] });
 }
@@ -11556,20 +11559,33 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await groupPage(shares, 'account');
     await tab(shares, 'Cache');
     const cacheUnit = shellUnit(shares)?.value;
-    const cacheCard = cardIn('Write cost vs read cost');
-    const cacheNoted = cacheCard?.textContent?.includes(SHARE_NOTE) ?? false;
+    const cacheNote = cardIn('Write cost vs read cost')?.querySelector('p.muted')?.textContent?.trim() ?? '';
+    // A table's cost cells from column `from` on, per row label, and its subtitle.
+    const costCells = (t, from) => [...(tableIn(t)?.querySelectorAll('tbody tr') ?? [])].map((tr) => [tr.children[0]?.textContent?.trim() ?? '', [...tr.querySelectorAll('td.num')].slice(from).map((td) => td.textContent?.trim() ?? '')]);
+    const subtitleIn = (t) => tableIn(t)?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
+    const modelNoted = { cells: costCells('Cache by model', 5), subtitle: subtitleIn('Cache by model') };
     await tab(shares, 'Cache warming');
     const warmingUnit = shellUnit(shares)?.value;
     const probeTile = () => {
       const t = [...shares.container.querySelectorAll('#cache-warming .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
       return [t?.querySelector('.stat__value')?.textContent?.trim(), t?.querySelector('.stat__note')?.textContent?.trim()];
     };
+    const wastedRead = () => ({
+      ending: cardIn('Wasted probes')?.querySelector('.card__subtitle')?.textContent?.trim().endsWith("says the parked ceilings do. In the one account's window shares.") ?? false,
+      tiles: [...(cardIn('Wasted probes')?.querySelectorAll('.stat') ?? [])].slice(1).map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']),
+    });
     const probeNoted = probeTile();
-    const wasted = cardIn('Wasted probes')?.textContent?.includes('says the parked ceilings do. In dollars at list prices.') ?? false;
+    const wastedNoted = wastedRead();
+    const poolNoted = costCells('Cache warming by pool', 6);
     results.push({
-      name: '/analytics under Window shares with no account named the cache cost card and the Probe cost tile read the note on the Cache and Cache warming tabs',
-      ok: cacheUnit === 'share' && warmingUnit === 'share' && cacheNoted && JSON.stringify(probeNoted) === JSON.stringify(['-', SHARE_NOTE]) && wasted,
-      missing: [`unit on Cache ${cacheUnit}`, `unit on Cache warming ${warmingUnit}`, `cache note ${cacheNoted}`, `probe tile ${JSON.stringify(probeNoted)}`, `wasted blurb ${wasted}`],
+      name: "/analytics under Window shares with no account named the cache cost card reads its own note, Cache by model dashes under the filter's note, and the Probe cost tile, the Wasted probes card and the by-pool table dashes, the blurb ending in the one account's window shares",
+      ok:
+        cacheUnit === 'share' && warmingUnit === 'share' && cacheNote === CACHE_SHARE_NOTE &&
+        modelNoted.cells.length > 0 && modelNoted.cells.every(([, cells]) => JSON.stringify(cells) === '["-","-"]') && modelNoted.subtitle === CACHE_MODEL_SHARE_NOTE &&
+        JSON.stringify(probeNoted) === JSON.stringify(['-', SHARE_NOTE]) &&
+        wastedNoted.ending && JSON.stringify(wastedNoted.tiles) === JSON.stringify([['Wasted cost', '-', SHARE_NOTE], ['Share of probe cost', '-', '']]) &&
+        poolNoted.length > 0 && poolNoted.every(([, cells]) => JSON.stringify(cells) === '["-"]'),
+      missing: [`unit on Cache ${cacheUnit}`, `unit on Cache warming ${warmingUnit}`, `cache note ${cacheNote}`, `model ${JSON.stringify(modelNoted)}`, `probe tile ${JSON.stringify(probeNoted)}`, `wasted ${JSON.stringify(wastedNoted)}`, `pools ${JSON.stringify(poolNoted)}`],
     });
     // One account named, nightly, whose plan rows price every window: the cache card's legend reads its two 7-day
     // shares, the Probe cost tile its 7-day probe share over the other windows and the probe count, and the Cost
@@ -11577,12 +11593,47 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const accountFilter = [...shares.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Account'));
     accountFilter?.querySelector('.mselect__trigger')?.click();
     await shares.settle(150);
+    const namedReads = countCalls('getAnalyticsBreakdown');
     [...(accountFilter?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'nightly')?.click();
     await shares.settle(900);
     const probeNamed = probeTile();
+    const wastedNamed = wastedRead();
+    const poolNamed = costCells('Cache warming by pool', 6);
     await tab(shares, 'Cache');
     const namedCard = cardIn('Write cost vs read cost');
     const namedLegend = legendIn('Write cost vs read cost');
+    // The table orders its models by cache reads, so its rows and the route's compare in label order.
+    const byLabel = (rows) => [...rows].sort((a, b) => a[0].localeCompare(b[0]));
+    const modelNamed = { account: byLabel(costCells('Cache by model', 5)), subtitle: subtitleIn('Cache by model') };
+    await groupPage(shares, 'model');
+    modelNamed.model = byLabel(costCells('Cache by model', 5));
+    await groupPage(shares, 'account');
+    namedReads.restore();
+    // The route's own answers for the reads the page made with nightly named, each the last of its shape.
+    const namedAnswer = async (match) => {
+      const q = namedReads.calls.map(([x]) => x).filter((x) => x?.keyIds !== undefined && x.funding === undefined && match(x)).pop();
+      return q === undefined ? [] : await api.getAnalyticsBreakdown(q);
+    };
+    const nightlyProbes = (await namedAnswer((q) => q.groupBy === 'account' && q.includeProbes === true)).find((g) => g.key === 'nightly')?.probeShares ?? null;
+    const shareOrDashOf = (shares, read) => (shares?.seven_day === undefined || read(shares.seven_day) === null ? '-' : shareLabel('seven_day', read(shares.seven_day)));
+    const modelShares = (groups) => byLabel(groups.map((g) => [g.label, [shareOrDashOf(g.cacheShares, (x) => x.read), shareOrDashOf(g.cacheShares, (x) => x.write)]]));
+    const byModelNamed = await namedAnswer((q) => q.groupBy === 'model' && q.accountIds?.length === 1);
+    const probeWeekOf = (shares) => Object.keys(shares ?? {}).find((k) => k !== 'five_hour' && k !== 'seven_day');
+    const wastedOthers = ['five_hour', probeWeekOf(nightlyProbes)].flatMap((k) => (k === undefined || nightlyProbes?.[k]?.wasted === undefined || nightlyProbes[k].wasted === null ? [] : [shareLabel(k, nightlyProbes[k].wasted)]));
+    const wastedWant = nightlyProbes?.seven_day === undefined ? null : [
+      ['Wasted cost', shareOrDashOf(nightlyProbes, (x) => x.wasted), wastedOthers.join(', ')],
+      ['Share of probe cost', fmtPct(nightlyProbes.seven_day.wasted / nightlyProbes.seven_day.cost, 1), `of ${shareLabel('seven_day', nightlyProbes.seven_day.cost)} on probes`],
+    ];
+    const poolWant = (await namedAnswer((q) => q.groupBy === 'pool')).map((g) => [g.label, [shareOrDashOf(g.probeShares, (x) => x.cost)]]);
+    results.push({
+      name: "/analytics under Window shares with one account named Cache by model reads each model's 7-day read and write shares as the route answers them under the account and the model grouping, and the Wasted probes card and the by-pool table the account's probe shares",
+      ok:
+        byModelNamed.length > 0 && modelShares(byModelNamed).some(([, cells]) => cells[0] !== '-') && modelNamed.subtitle === "Totals for the selected range and filters, one account's 7-day window shares" &&
+        JSON.stringify(modelNamed.account) === JSON.stringify(modelShares(byModelNamed)) && JSON.stringify(modelNamed.model) === JSON.stringify(modelShares(byModelNamed)) &&
+        wastedWant !== null && wastedNamed.ending && JSON.stringify(wastedNamed.tiles) === JSON.stringify(wastedWant) &&
+        poolWant.some(([, cells]) => cells[0] !== '-') && JSON.stringify(poolNamed) === JSON.stringify(poolWant),
+      missing: [`model ${JSON.stringify(modelNamed)}`, `want ${JSON.stringify(modelShares(byModelNamed))}`, `wasted ${JSON.stringify(wastedNamed)} against ${JSON.stringify(wastedWant)}`, `pools ${JSON.stringify(poolNamed)} against ${JSON.stringify(poolWant)}`],
+    });
     await tab(shares, 'Cost');
     const namedTiles = [...shares.container.querySelectorAll('#cost .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
     const sevenDay = (v) => /^\d[\d.]*% of 7-day$/.test(v ?? '');
@@ -11778,6 +11829,285 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       });
     }
     {
+      // Under native the Cache and Cache warming sections read one answer in two units, as the Cost section does: the
+      // plan rows' 20x 7-day equivalent and the billed rows' dollars. Every figure is derived from the page's own reads,
+      // summed as the page sums them, and the mark leads a figure of a group the story's Sonnet 4.6 rows estimate.
+      localStorage.removeItem('phoebis.unit');
+      const asked = countCalls('getAnalyticsBreakdown');
+      const native = await mount('/analytics#cache', { now: CLOCK_ORIGIN });
+      // The last of the page's reads that matches, read again from the mock as the page read it.
+      const answerOf = async (match) => {
+        const q = asked.calls.map(([x]) => x).filter((x) => x?.keyIds !== undefined && match(x)).pop();
+        return q === undefined ? null : await api.getAnalyticsBreakdown(q);
+      };
+      const cardOf = (t) => [...native.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+      const legendOf = (t) => [...(cardOf(t)?.querySelectorAll('.legend li') ?? [])].map((li) => ({ label: [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''), title: li.getAttribute('title'), value: li.querySelector('.legend__value')?.textContent?.trim() ?? '' }));
+      const subtitleOf = (t) => cardOf(t)?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
+      const ticksOf = (t) => [...(cardOf(t)?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((x) => x.textContent?.trim() ?? '');
+      const mark = (estimated) => (estimated ? '~' : '');
+      const titleOf = (full, estimated) => (estimated ? `${full}. ${ESTIMATED_TITLE}.` : full);
+      // A figure cell reads its figure, the line under it and the full reading on its title, as the Cost table's do.
+      const cellOf = (td) => {
+        const figure = td.cloneNode(true);
+        figure.querySelector('.sub')?.remove();
+        return { main: figure.textContent?.trim() ?? '', sub: td.querySelector('.sub')?.textContent?.trim() ?? '', title: td.querySelector('[title]')?.getAttribute('title') ?? '' };
+      };
+      const rowsOf = (t) =>
+        [...(cardOf(t)?.querySelectorAll('tbody tr') ?? [])].map((tr) => ({ cells: [...tr.querySelectorAll('td.num')].map(cellOf), label: tr.children[0]?.textContent?.trim() ?? '', title: tr.children[0]?.getAttribute('title') ?? '' }));
+      // The plan side and the billed side of a group, both where it has neither, as an empty range reads its zero in
+      // each unit.
+      const sidesIn = (plan, billed) => (plan || billed ? { billed, plan } : { billed: true, plan: true });
+      const cacheLegendOf = (totals) =>
+        ['write', 'read'].map((side) => ({ label: side === 'write' ? 'Write cost' : 'Read cost', title: totals.estimated ? ESTIMATED_TITLE : null, value: `${mark(totals.estimated)}${fmtEquivalent('seven_day', totals.cacheEquivalent.seven_day[side])}` }));
+      const cacheSubtitleOf = (totals) => `20x 7-day equivalent per bucket spent writing the cache and reading it back by the subscription requests, the billed requests ${fmtUsd(totals.billed.cacheWrite)} writing and ${fmtUsd(totals.billed.cacheRead)} reading`;
+      const byKeyTotals = sumGroups((await answerOf((q) => q.groupBy === 'key' && q.funding === undefined && !q.includeProbes)) ?? []);
+      const byKey = { legend: legendOf('Write cost vs read cost'), subtitle: subtitleOf('Write cost vs read cost'), ticks: ticksOf('Write cost vs read cost') };
+      // Each model's cost cells: the 20x 7-day equivalent in the short form with the billed dollars on a line under it,
+      // a side with no rows left out, the full reading on the cell's title and the estimate after it.
+      const cacheCellOf = (g, side) => {
+        const sides = sidesIn(g.planRequests > 0, g.requests > g.planRequests);
+        const equivalent = g.cacheEquivalent.seven_day;
+        const dollars = g.billed[side === 'read' ? 'cacheRead' : 'cacheWrite'];
+        const shown = [
+          ...(sides.plan ? [equivalent === undefined ? { full: null, short: '-' } : { full: fmtEquivalent('seven_day', equivalent[side]), short: `${mark(g.estimated)}${equivalentShort('seven_day', equivalent[side])}` }] : []),
+          ...(sides.billed ? [{ full: `${fmtUsd(dollars)} billed`, short: fmtUsd(dollars) }] : []),
+        ];
+        const marked = sides.plan && equivalent !== undefined && g.estimated;
+        return { main: shown[0].short, sub: shown[1]?.full ?? '', title: titleOf(shown.flatMap((s) => (s.full === null ? [] : [s.full])).join(', '), marked) };
+      };
+      const models = (await answerOf((q) => q.groupBy === 'model' && q.funding === undefined && !q.includeProbes)) ?? [];
+      const cacheRows = rowsOf('Cache by model');
+      const cacheHeads = [...(cardOf('Cache by model')?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+      const cacheWrong = cacheRows.flatMap((r) => {
+        const g = models.find((x) => x.label === r.label);
+        if (g === undefined) return [`${r.label}: no group`];
+        const want = [cacheCellOf(g, 'read'), cacheCellOf(g, 'write')];
+        const labelTitle = titleOf(r.label, g.estimated && g.planRequests > 0 && g.cacheEquivalent.seven_day !== undefined);
+        return JSON.stringify([r.cells.slice(5), r.title]) === JSON.stringify([want, labelTitle]) ? [] : [`${r.label}: ${JSON.stringify([r.cells.slice(5), r.title])} against ${JSON.stringify([want, labelTitle])}`];
+      });
+      const cacheSubtitle = subtitleOf('Cache by model');
+      await groupPage(native, 'model');
+      const byModelTotals = sumGroups((await answerOf((q) => q.groupBy === 'model' && q.funding === undefined && !q.includeProbes)) ?? []);
+      const byModel = { legend: legendOf('Write cost vs read cost'), subtitle: subtitleOf('Write cost vs read cost') };
+      await groupPage(native, 'key');
+      results.push({
+        name: "/analytics under native the cache cost card draws the plan rows' 20x 7-day write and read equivalents on a percent axis, marked where an estimate priced them, and names the billed dollars in its subtitle, under the key and the model grouping",
+        ok:
+          byKeyTotals.estimated === true && byKeyTotals.billed.cacheWrite > 0 &&
+          JSON.stringify(byKey.legend) === JSON.stringify(cacheLegendOf(byKeyTotals)) && byKey.subtitle === cacheSubtitleOf(byKeyTotals) && byKey.ticks.length > 1 && byKey.ticks.every((t) => /^\d[\d.]*%$/.test(t)) &&
+          JSON.stringify(byModel.legend) === JSON.stringify(cacheLegendOf(byModelTotals)) && byModel.subtitle === cacheSubtitleOf(byModelTotals),
+        missing: [JSON.stringify(byKey), JSON.stringify(cacheLegendOf(byKeyTotals)), JSON.stringify(byModel)],
+      });
+      results.push({
+        name: "/analytics under native Cache by model reads each model's 20x 7-day read and write equivalents in the short form with its billed dollars on a line under each, the full reading on the cell's title and an estimated model's label carrying the estimate",
+        ok:
+          JSON.stringify(cacheHeads) === JSON.stringify(['Model', 'Reads', 'Writes 5m', 'Writes 1h', 'Hit ratio', 'Cached share', 'Read cost', 'Write cost']) &&
+          cacheSubtitle === 'Totals for the selected range and filters, the subscription requests in 20x 7-day equivalents and the billed requests in dollars' &&
+          cacheRows.length > 0 && cacheWrong.length === 0 &&
+          cacheRows.some((r) => r.cells[5]?.sub.endsWith(' billed') && /^~?\d[\d.]*% 20x 7d$/.test(r.cells[5].main)) &&
+          cacheRows.some((r) => r.cells[5]?.main.startsWith('~') && r.title.endsWith(`${ESTIMATED_TITLE}.`)),
+        missing: [cacheHeads.join(','), cacheSubtitle, ...cacheWrong.slice(0, 4)],
+      });
+
+      await tab(native, 'Cache warming');
+      const probeCount = (g) => g.probes.ok + g.probes.held + g.probes.skipped + g.probes.failed;
+      const whole = sumGroups((await answerOf((q) => q.groupBy === 'key' && q.funding === undefined && q.includeProbes === true)) ?? []);
+      const billedAnswer = await answerOf((q) => q.groupBy === 'key' && q.funding === 'billed' && q.includeProbes === true);
+      const billed = sumGroups(billedAnswer ?? []);
+      const tileOf = (root, label) => {
+        const t = [...(root?.querySelectorAll('.stat') ?? [])].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === label);
+        const lines = [...(t?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => {
+          const figure = l.cloneNode(true);
+          figure.querySelector('.stat__pair-word')?.remove();
+          return [figure.textContent?.trim() ?? '', l.querySelector('.stat__pair-word')?.textContent?.trim() ?? ''];
+        });
+        return { lines, note: t?.querySelector('.stat__note')?.textContent?.trim() ?? '', title: t?.getAttribute('title') ?? null, value: t?.querySelector('.stat__value')?.textContent?.trim() ?? '' };
+      };
+      const probe = whole.probeEquivalent.seven_day;
+      const pairOf = (equivalent, dollars) => [[`${mark(whole.estimated)}${fmtEquivalent('seven_day', equivalent)}`, 'subscription'], [fmtUsd(dollars), 'billed']];
+      const probeTile = tileOf(native.container.querySelector('#cache-warming > .tiles-row'), 'Probe cost');
+      results.push({
+        name: "/analytics under native the Probe cost tile stacks the plan probes' 20x 7-day equivalent of the whole read over the billed probes' dollars of the billed read the Cache warming tab adds",
+        ok:
+          billedAnswer !== null && probe !== undefined && probeCount(whole) > probeCount(billed) && probeCount(billed) > 0 &&
+          JSON.stringify(probeTile.lines) === JSON.stringify(pairOf(probe.cost, billed.probeCostUsd)) && probeTile.note === `${fmtInt(probeCount(whole))} probes, ${NATIVE_SUBSET}` && probeTile.title === (whole.estimated ? ESTIMATED_TITLE : null),
+        missing: [JSON.stringify(probeTile), JSON.stringify({ billed: billed.probeCostUsd, probe, probes: [probeCount(whole), probeCount(billed)] })],
+      });
+      const wastedCard = cardOf('Wasted probes');
+      const wasted = { count: tileOf(wastedCard, 'Wasted probes'), cost: tileOf(wastedCard, 'Wasted cost'), share: tileOf(wastedCard, 'Share of probe cost'), subtitle: wastedCard?.querySelector('.card__subtitle')?.textContent?.trim() ?? '' };
+      results.push({
+        name: "/analytics under native the Wasted probes card stacks the wasted plan probes' 20x 7-day equivalent over the wasted billed probes' dollars, the share of probe cost the plan side's, and its blurb ends in the unit each probe's funding pays in",
+        ok:
+          probe !== undefined && whole.wastedProbes > 0 &&
+          wasted.count.value === fmtInt(whole.wastedProbes) && wasted.count.note === `of ${fmtInt(probeCount(whole))} probes` &&
+          JSON.stringify(wasted.cost.lines) === JSON.stringify(pairOf(probe.wasted, billed.wastedProbeUsd)) && wasted.cost.note === NATIVE_SUBSET && wasted.cost.title === (whole.estimated ? ESTIMATED_TITLE : null) &&
+          wasted.share.value === fmtPct(probe.wasted / probe.cost, 1) && wasted.share.note === `of ${mark(whole.estimated)}${fmtEquivalent('seven_day', probe.cost)} and ${fmtUsd(billed.probeCostUsd)} on probes` &&
+          wasted.subtitle.endsWith("says the parked ceilings do. In the unit each probe's funding pays in."),
+        missing: [JSON.stringify(wasted), JSON.stringify({ billed: billed.wastedProbeUsd, probe })],
+      });
+      // A pool's cell pairs the plan probes' equivalent of the whole by-pool read with the billed probes' dollars of the
+      // billed one, read off the probe counts, so a pool with no probe reads its zero in each unit.
+      const pools = (await answerOf((q) => q.groupBy === 'pool' && q.funding === undefined)) ?? [];
+      const billedPools = await answerOf((q) => q.groupBy === 'pool' && q.funding === 'billed' && q.includeProbes === true);
+      const poolCellOf = (g) => {
+        const b = (billedPools ?? []).find((x) => x.key === g.key);
+        const billedProbes = b === undefined ? 0 : probeCount(b);
+        const planProbes = probeCount(g) - billedProbes;
+        const sides = sidesIn(planProbes > 0, billedProbes > 0);
+        // A window the plan probes priced nothing on reads a dash, and a pool with no probe its zero, unmarked.
+        const equivalent = g.probeEquivalent.seven_day?.cost ?? (planProbes > 0 ? null : 0);
+        const marked = g.estimated && planProbes > 0 && equivalent !== null;
+        const shown = [
+          ...(sides.plan ? [equivalent === null ? { full: null, short: '-' } : { full: fmtEquivalent('seven_day', equivalent), short: `${mark(marked)}${equivalentShort('seven_day', equivalent)}` }] : []),
+          ...(sides.billed ? [{ full: `${fmtUsd(b?.probeCostUsd ?? 0)} billed`, short: fmtUsd(b?.probeCostUsd ?? 0) }] : []),
+        ];
+        return { main: shown[0].short, sub: shown[1]?.full ?? '', title: titleOf(shown.flatMap((s) => (s.full === null ? [] : [s.full])).join(', '), marked) };
+      };
+      const poolRows = rowsOf('Cache warming by pool');
+      const poolWrong = poolRows.flatMap((r) => {
+        const g = pools.find((x) => x.label === r.label);
+        const want = g === undefined ? null : poolCellOf(g);
+        return JSON.stringify(r.cells.at(-1)) === JSON.stringify(want) ? [] : [`${r.label}: ${JSON.stringify(r.cells.at(-1))} against ${JSON.stringify(want)}`];
+      });
+      results.push({
+        name: "/analytics under native the by-pool table's Probe cost cell reads the pool's plan probes in the short 20x 7-day form with its billed probes' dollars on a line under it",
+        ok: billedPools !== null && poolRows.length > 0 && poolWrong.length === 0 && poolRows.some((r) => /^~?\d[\d.]*% 20x 7d$/.test(r.cells.at(-1)?.main ?? '') && (r.cells.at(-1)?.sub ?? '').endsWith(' billed')),
+        missing: [`${poolRows.length} rows`, ...poolWrong.slice(0, 4)],
+      });
+      asked.restore();
+      native.unmount();
+    }
+    {
+      // A read that does not count probes drops a group left with probe rows alone, which the route does and the mock
+      // does not, so the wrapper drops it here: grouped by kind with Include probes off, the probe kind is such a group,
+      // and the tile keeps its figures only while the Cache warming reads count probes.
+      const probeCount = (g) => g.probes.ok + g.probes.held + g.probes.skipped + g.probes.failed;
+      const breakdownOf = api.getAnalyticsBreakdown;
+      api.getAnalyticsBreakdown = async (q) => {
+        const groups = await breakdownOf.call(api, q);
+        return q.includeProbes ? groups : groups.filter((g) => g.requests > 0 || probeCount(g) === 0);
+      };
+      localStorage.removeItem('phoebis.unit');
+      const asked = countCalls('getAnalyticsBreakdown');
+      const kinds = await mount('/analytics?by=kind#cache-warming', { now: CLOCK_ORIGIN });
+      asked.restore();
+      const q = asked.calls.map(([x]) => x).find((x) => x?.groupBy === 'kind' && x.funding === undefined && x.keyIds !== undefined);
+      const answer = async (over) => (q === undefined ? [] : await api.getAnalyticsBreakdown({ ...q, ...over }));
+      const counted = await answer({ includeProbes: true });
+      const plan = counted.find((g) => g.key === 'probe');
+      const billed = (await answer({ funding: 'billed', includeProbes: true })).find((g) => g.key === 'probe');
+      const dropped = !(await answer({ includeProbes: false })).some((g) => g.key === 'probe');
+      const t = [...kinds.container.querySelectorAll('#cache-warming > .tiles-row .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
+      const lines = [...(t?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => {
+        const figure = l.cloneNode(true);
+        figure.querySelector('.stat__pair-word')?.remove();
+        return [figure.textContent?.trim() ?? '', l.querySelector('.stat__pair-word')?.textContent?.trim() ?? ''];
+      });
+      const want = plan?.probeEquivalent.seven_day === undefined || billed === undefined ? null : [[`${counted.some((g) => g.estimated) ? '~' : ''}${fmtEquivalent('seven_day', plan.probeEquivalent.seven_day.cost)}`, 'subscription'], [fmtUsd(billed.probeCostUsd), 'billed']];
+      kinds.unmount();
+      delete api.getAnalyticsBreakdown;
+      results.push({
+        name: "/analytics under native grouped by kind with Include probes off the Probe cost tile reads the probe kind's plan equivalent and billed dollars, a group a read that does not count probes drops",
+        ok: q?.includeProbes === false && dropped && want !== null && JSON.stringify(lines) === JSON.stringify(want),
+        missing: [`query ${JSON.stringify(q)}`, `dropped ${dropped}`, JSON.stringify(lines), JSON.stringify(want)],
+      });
+    }
+    {
+      // The same day with every row weighted, so nothing the two sections draw is an estimate.
+      const breakdownOf = api.getAnalyticsBreakdown;
+      const seriesOf = api.getAnalyticsSeries;
+      api.getAnalyticsBreakdown = async (q) => (await breakdownOf.call(api, q)).map((g) => ({ ...g, estimated: false }));
+      api.getAnalyticsSeries = async (q) => (await seriesOf.call(api, q)).map((p) => ({ ...p, groups: p.groups.map((g) => ({ ...g, estimated: false })) }));
+      localStorage.removeItem('phoebis.unit');
+      const weighted = await mount('/analytics#cache', { now: CLOCK_ORIGIN });
+      const shownOn = (id) => [...weighted.container.querySelectorAll(`#${id} .legend__value, #${id} td.num, #${id} .stat__value, #${id} .stat__note`)].map((el) => el.textContent?.trim() ?? '');
+      const titledOn = (id) => [...weighted.container.querySelectorAll(`#${id} [title]`)].map((el) => el.getAttribute('title') ?? '').filter((t) => t.includes(ESTIMATED_TITLE));
+      const shown = shownOn('cache');
+      const titled = titledOn('cache');
+      await tab(weighted, 'Cache warming');
+      shown.push(...shownOn('cache-warming'));
+      titled.push(...titledOn('cache-warming'));
+      const pairs = weighted.container.querySelectorAll('#cache-warming .stat__pair').length;
+      weighted.unmount();
+      delete api.getAnalyticsBreakdown;
+      delete api.getAnalyticsSeries;
+      results.push({
+        name: '/analytics under native a day whose rows are all weighted reads no tilde and no estimate title on the Cache and Cache warming sections',
+        ok: pairs >= 2 && shown.length > 20 && !shown.some((v) => v.includes('~')) && titled.length === 0,
+        missing: [`${pairs} pairs`, `${shown.length} figures`, JSON.stringify(shown.filter((v) => v.includes('~')).slice(0, 5)), JSON.stringify(titled.slice(0, 5))],
+      });
+    }
+    {
+      // A dollar side reads its own rows in the cost cells while the token columns keep every row, and the two sides
+      // partition the rows by who paid, so their figures add up to All in dollars' within a cent.
+      localStorage.removeItem('phoebis.unit');
+      const asked = countCalls('getAnalyticsBreakdown');
+      const page = await mount('/analytics?unit=all#cache', { now: CLOCK_ORIGIN });
+      const usdOf = (v) => Number(String(v).replace(/[$,]/g, ''));
+      const tableOf = (t) => [...page.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+      const rowsOf = (t) => Object.fromEntries([...(tableOf(t)?.querySelectorAll('tbody tr') ?? [])].map((tr) => [tr.children[0]?.textContent?.trim() ?? '', [...tr.querySelectorAll('td.num')].map((td) => td.textContent?.trim() ?? '')]));
+      const wastedCost = () => [...page.container.querySelectorAll('.card .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Wasted cost')?.querySelector('.stat__value')?.textContent?.trim() ?? '';
+      const under = {};
+      for (const unit of ['all', 'usd', 'equivalent']) {
+        await chooseUnit(page, unit);
+        const models = rowsOf('Cache by model');
+        await tab(page, 'Cache warming');
+        under[unit] = { models, pools: rowsOf('Cache warming by pool'), wasted: wastedCost() };
+        await tab(page, 'Cache');
+      }
+      asked.restore();
+      page.unmount();
+      const q = asked.calls.map(([x]) => x).find((x) => x?.groupBy === 'model' && x.funding === undefined && x.keyIds !== undefined);
+      const sideOf = async (funding) => (q === undefined ? [] : await api.getAnalyticsBreakdown({ ...q, funding }));
+      const billedModels = await sideOf('billed');
+      const planModels = await sideOf('plan');
+      // Each side's cells against that side's own read, a model the side has no row of at zero.
+      const sideWrong = (unit, groups) =>
+        Object.entries(under[unit].models).flatMap(([model, cells]) => {
+          const g = groups.find((x) => x.label === model);
+          const want = [fmtUsd(g?.cost.cacheRead ?? 0), fmtUsd(g?.cost.cacheWrite ?? 0)];
+          return JSON.stringify(cells.slice(5)) === JSON.stringify(want) ? [] : [`${unit} ${model}: ${cells.slice(5).join(' ')} against ${want.join(' ')}`];
+        });
+      const adds = (all, usd, equivalent) => Math.abs(usdOf(usd) + usdOf(equivalent) - usdOf(all)) < 0.015;
+      const sums = [
+        ...Object.entries(under.all.models).flatMap(([model, cells]) => [5, 6].map((i) => [`${model} ${i}`, cells[i], under.usd.models[model]?.[i], under.equivalent.models[model]?.[i]])),
+        ...Object.entries(under.all.pools).map(([pool, cells]) => [pool, cells.at(-1), under.usd.pools[pool]?.at(-1), under.equivalent.pools[pool]?.at(-1)]),
+        ['wasted', under.all.wasted, under.usd.wasted, under.equivalent.wasted],
+      ];
+      const tokensKept = ['usd', 'equivalent'].every((unit) => Object.entries(under.all.models).every(([model, cells]) => JSON.stringify(under[unit].models[model]?.slice(0, 5)) === JSON.stringify(cells.slice(0, 5))));
+      const wrong = [...sideWrong('usd', billedModels), ...sideWrong('equivalent', planModels)];
+      results.push({
+        name: "/analytics under Billed dollars and Dollar equivalent Cache by model's cost cells, the Wasted cost tile and the by-pool Probe cost cells read their side's dollars while the token columns keep every row, and the two sides add up to All in dollars within a cent",
+        ok: Object.keys(under.all.models).length > 0 && Object.keys(under.all.pools).length > 0 && wrong.length === 0 && tokensKept && sums.every(([, all, usd, equivalent]) => adds(all, usd, equivalent)) && usdOf(under.usd.wasted) > 0 && usdOf(under.equivalent.wasted) > 0,
+        missing: [...wrong.slice(0, 4), `tokens kept ${tokensKept}`, ...sums.filter(([, all, usd, equivalent]) => !adds(all, usd, equivalent)).map((s) => s.join(' ')).slice(0, 4)],
+      });
+    }
+    {
+      // A row's share is the route's, priced row by row at each row's own account tier, so the console reads it as
+      // answered: a wired figure the row's equivalent times no tier's capacity ratio reaches (3.7), and a row answered
+      // null that would otherwise price one.
+      const breakdownOf = api.getAnalyticsBreakdown;
+      let wired = null;
+      api.getAnalyticsBreakdown = async (q) => {
+        const groups = await breakdownOf.call(api, q);
+        const priced = groups.filter((g) => g.cacheShares !== null && g.cacheEquivalent.seven_day !== undefined);
+        if (q.groupBy !== 'model' || q.accountIds?.length !== 1 || priced.length < 2) return groups;
+        const [one, two] = priced;
+        wired = { model: one.label, nulled: two.label, read: one.cacheEquivalent.seven_day.read * 3.7, write: one.cacheEquivalent.seven_day.write * 3.7 };
+        return groups.map((g) => (g === one ? { ...g, cacheShares: { seven_day: { read: wired.read, write: wired.write } } } : g === two ? { ...g, cacheShares: null } : g));
+      };
+      localStorage.removeItem('phoebis.unit');
+      const page = await mount('/analytics?unit=share&accounts=nightly#cache', { now: CLOCK_ORIGIN });
+      const rows = Object.fromEntries([...([...page.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cache by model')?.querySelectorAll('tbody tr') ?? [])].map((tr) => [tr.children[0]?.textContent?.trim() ?? '', [...tr.querySelectorAll('td.num')].slice(5).map((td) => td.textContent?.trim() ?? '')]));
+      page.unmount();
+      delete api.getAnalyticsBreakdown;
+      results.push({
+        name: "/analytics under Window shares with one account named Cache by model reads a model's 7-day shares as the route priced them and a dash for a model it answered none for",
+        ok: wired !== null && JSON.stringify(rows[wired.model]) === JSON.stringify([shareLabel('seven_day', wired.read), shareLabel('seven_day', wired.write)]) && JSON.stringify(rows[wired.nulled]) === JSON.stringify(['-', '-']),
+        missing: [JSON.stringify(wired), JSON.stringify(rows)],
+      });
+    }
+    {
       // One priced bucket between two gaps: the line leaves its null buckets unconnected, so the bucket draws as a dot.
       const now = Date.now();
       const query = { from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() };
@@ -11951,7 +12281,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         page.unmount();
         return read;
       };
-      const whole = await tileUnder('');
+      const whole = await tileUnder('all');
       const billed = await tileUnder('usd');
       const plan = await tileUnder('equivalent');
       const usd = (read) => Number(/^\$([\d,.]+)/.exec(read[0])?.[1].replace(/,/g, '') ?? NaN);
@@ -12573,7 +12903,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     let weekGroups = [];
     api.getAnalyticsBreakdown = async (query) => {
       const groups = await getAnalyticsBreakdown(query);
-      weekGroups = groups;
+      if (query.funding === undefined) weekGroups = groups;
       return groups;
     };
     range('7d')?.click();
@@ -12813,7 +13143,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       accounts: '{"rollups":1}',
       burn: '{"budgets":1,"burn":1,"settings":1}',
       cache: '{"model":1,"placements":1}',
-      'cache-warming': '{"pool":1}',
+      // Native's by-pool table pairs the whole read with the billed one.
+      'cache-warming': '{"pool":2}',
       traffic: '{"budgets":0,"burn":0,"effort":1,"model":0,"placements":0,"pool":0,"rewrites":1,"rollups":0}',
     };
     results.push({ name: '/analytics a section whose tab is not chosen makes none of its own reads', ok: Object.entries(wanted).every(([id, delta]) => steps[id] === delta), missing: [`shell settings ${shell}`, ...Object.entries(steps).map(([id, delta]) => `${id} ${delta}`)] });
@@ -13691,9 +14022,10 @@ m.unmount();
     }
   }
   {
-    // The unit is a view setting, so a change reads the funded series and breakdown alone: the series, the breakdowns,
-    // the speed series, the placements and a session's fold read once, at the load, and stay.
-    const name = "/analytics a unit change on Cache from the top bar's switch reads the funded series and breakdown alone, and nothing in a session view";
+    // The unit is a view setting, so a change reads the funded series and breakdowns alone, Cache by model's cost cells
+    // reading the side's rows by model: the series, the breakdowns, the speed series, the placements and a session's fold
+    // read once, at the load, and stay.
+    const name = "/analytics a unit change on Cache from the top bar's switch reads the funded series and breakdowns alone, Cache by model's among them, and nothing in a session view";
     const READS = ['analyticsPlacements', 'getAnalyticsBreakdown', 'getAnalyticsSeries', 'listRequests'];
     const across = async (address) => {
       localStorage.removeItem('phoebis.unit');
@@ -13713,7 +14045,7 @@ m.unmount();
       const session = await across(`/analytics?session=${encodeURIComponent(first.sessionId)}#cache`);
       results.push({
         name,
-        ok: JSON.stringify(unscoped) === JSON.stringify({ calls: ['getAnalyticsBreakdown key billed', 'getAnalyticsSeries key billed'], set: 'usd', unit: null }) && JSON.stringify(session) === JSON.stringify({ calls: [], set: 'usd', unit: null }),
+        ok: JSON.stringify(unscoped) === JSON.stringify({ calls: ['getAnalyticsBreakdown key billed', 'getAnalyticsBreakdown model billed', 'getAnalyticsSeries key billed'], set: 'usd', unit: null }) && JSON.stringify(session) === JSON.stringify({ calls: [], set: 'usd', unit: null }),
         missing: [JSON.stringify(unscoped), JSON.stringify(session)],
       });
     }

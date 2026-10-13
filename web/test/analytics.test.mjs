@@ -752,3 +752,13 @@ test('a native table cell reads the short 20x form with the billed dollars under
   assert.deepEqual(d.nativeCellOf('seven_day', null, true, null), { main: '-', sub: '-', title: '' }, 'a side priced nothing reads a dash');
   assert.deepEqual(d.nativeCellOf('five_hour', undefined, false), { main: '-', sub: '', title: '' }, 'a cell with no row on either side');
 });
+
+test("the cache card's note under the shares names the Accounts filter and the account grouping, and Cache by model's the filter alone", () => {
+  // The card reads one account's shares under the account grouping, and the route answers Cache by model's under any
+  // grouping once one account is named, so each note names what its own surface needs.
+  assert.notEqual(d.CACHE_SHARE_NOTE, d.SHARE_NOTE, "the card's note is its own sentence");
+  assert.ok(d.CACHE_SHARE_NOTE.includes('Accounts filter') && d.CACHE_SHARE_NOTE.includes('account grouping'), d.CACHE_SHARE_NOTE);
+  assert.notEqual(d.CACHE_MODEL_SHARE_NOTE, d.CACHE_SHARE_NOTE);
+  assert.ok(d.CACHE_MODEL_SHARE_NOTE.includes('Accounts filter') && !d.CACHE_MODEL_SHARE_NOTE.includes('grouping'), d.CACHE_MODEL_SHARE_NOTE);
+  assert.ok(d.CACHE_SHARE_NOTE.startsWith(d.CACHE_MODEL_SHARE_NOTE.slice(0, -1)), 'the two notes read one sentence, the card adding the grouping');
+});

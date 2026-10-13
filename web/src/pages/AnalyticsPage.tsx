@@ -19,12 +19,12 @@ import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, ANALYTICS_RANGES, type AnalyticsAddress } from '@/lib/address';
-import { CONVERSATION_CLASSES, MAX_BURN_LINES, NATIVE_SUBSET, SHARE_NOTE, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, isolatedSlots, moveLabel, nativeCellOf, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
+import { CACHE_MODEL_SHARE_NOTE, CACHE_SHARE_NOTE, CONVERSATION_CLASSES, MAX_BURN_LINES, NATIVE_SUBSET, SHARE_NOTE, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, isolatedSlots, moveLabel, nativeCellOf, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
 import { bandRuns } from '@/lib/costs';
-import { ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, pct, shareLabel, shortId, toLocalInput, upperFirst, usdTickDigits, withEstimate } from '@/lib/format';
+import { ESTIMATED_TITLE, equivalentShort, fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, pct, shareLabel, shortId, toLocalInput, upperFirst, usdTickDigits, withEstimate } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useCommittedText, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { linkedKeyIds, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
@@ -61,8 +61,10 @@ const SESSION_PAGE_SIZE = 500;
 const SESSION_PAGE_LIMIT = 20;
 const SESSION_SOURCE_NOTE = 'From the request log, since rollups carry no session. Cache warming figures are unavailable per session';
 const SESSION_COST_NOTE = 'Cost split is not available for a session view.';
-// The rings' figures read bare, so the subtitle names the window the subscription ring's percents are of.
-const NATIVE_SPLIT_NOTE = 'By token kind, the subscription requests in 20x 7-day equivalents and the billed requests in dollars';
+/** Native's requests where a surface reads the 7-day window alone, each side in the unit its funding pays in. */
+const NATIVE_7D_SUBSET = 'the subscription requests in 20x 7-day equivalents and the billed requests in dollars';
+// The rings' centers read bare, so the subtitle names the window the subscription ring's percents are of.
+const NATIVE_SPLIT_NOTE = `By token kind, ${NATIVE_7D_SUBSET}`;
 const UNAVAILABLE_NOTE = 'not in the request log';
 const WARMING_UNAVAILABLE = 'Cache warming figures are not available for a session view.';
 /** The breakdown route's bounds on a pattern list; the field holds no more than the route accepts. */
@@ -127,14 +129,7 @@ function figuresValue(figures: CostFigure[]): ReactNode {
   const [only] = figures;
   if (only === undefined) return '-';
   if (only.word === undefined) return only.text;
-  return (
-    <span className="stat__pair">
-      <span className="stat__pair-line">
-        {figure(only)}
-        <span className="stat__pair-word">{only.word}</span>
-      </span>
-    </span>
-  );
+  return <PairValue first={figure(only)} firstLabel={only.word} />;
 }
 
 type NativeRatio = { estimated: boolean; figures: CostFigure[]; note: string };
@@ -153,7 +148,14 @@ function nativeRatiosOf(totals: AnalyticsGroup): { perRequest: NativeRatio; perT
     return {
       estimated,
       figures: [...(sides.equivalent === null ? [] : [{ text: equivalentOrDash('seven_day', equivalent, estimated), word: 'subscription' }]), ...(sides.billed === null ? [] : [{ text: usdOrDash(per(sides.billed, billedCount)), word: 'billed' }])],
-      note: count === null || billedCount === null ? `${note(whole)} ${word}` : `${note(count)} subscription ${word}, ${note(billedCount)} billed`,
+      note:
+        count === null || billedCount === null
+          ? `${note(whole)} ${word}`
+          : sides.billed === null
+            ? `${note(count)} subscription ${word}`
+            : sides.equivalent === null
+              ? `${note(billedCount)} billed ${word}`
+              : `${note(count)} subscription ${word}, ${note(billedCount)} billed`,
     };
   };
   return { perRequest: ratio(totals.planRequests, totals.requests, 1, 'requests', fmtInt), perThousand: ratio(totals.planOutputTokens, totals.tokens.output, 1000, 'output tokens', fmtCompact) };
@@ -456,6 +458,20 @@ export function AnalyticsPage() {
     () => ((funded && fundedTab) || warming ? api.getAnalyticsBreakdown({ ...query, funding: funded ? funding : undefined, includeProbes: query.includeProbes || warming }) : Promise.resolve<AnalyticsGroup[] | null>(null)),
     [query, funding, funded, fundedTab, warming, generation],
   );
+  // Native pairs the whole read's plan probes with the billed probes' dollars, which no member of the whole carries, so
+  // the Cache warming tab reads the billed rows once more, counting probes as the whole read does.
+  const nativeWarming = warming && unit === 'native';
+  const billedBreakdown = useAsync(() => (nativeWarming ? api.getAnalyticsBreakdown({ ...query, funding: 'billed', includeProbes: true }) : Promise.resolve<AnalyticsGroup[] | null>(null)), [query, nativeWarming, generation]);
+  // A dollar side narrows Cache by model's two cost cells alone, its token columns reading every row, so the side's rows
+  // by model come from a read of their own beside the page's.
+  const byModelFunded = useAsync(() => (tab === 'cache' && funded ? api.getAnalyticsBreakdown({ ...query, funding, groupBy: 'model' }) : Promise.resolve<AnalyticsGroup[] | null>(null)), [query, funding, funded, tab, generation]);
+  // The by-pool table's Probe cost cell reads a dollar side's probes, and under native the billed probes beside the
+  // whole read's equivalent. Probes count, so a pool left with probe rows alone on that side keeps its figure.
+  const poolFunding = nativeWarming ? 'billed' : warming && funded ? funding : undefined;
+  const fundedByPool = useAsync(
+    () => (poolFunding !== undefined ? api.getAnalyticsBreakdown({ ...query, funding: poolFunding, groupBy: 'pool', includeProbes: true }) : Promise.resolve<AnalyticsGroup[] | null>(null)),
+    [query, poolFunding, generation],
+  );
   const placements = useAsync(
     () => (tab === 'cache' && sessionId === null ? api.analyticsPlacements({ from: fromIso, keyIds: filters.keyId, poolIds: filters.poolId, to: toIso }) : Promise.resolve<PlacementRow[] | null>(sessionId === null ? null : [])),
     [fromIso, toIso, filters.keyId, filters.poolId, sessionId, tab, generation],
@@ -556,10 +572,26 @@ export function AnalyticsPage() {
   const speedError = sessionId === null ? bySpeed.error : null;
   // The funded reads stand or fall on their own: while one is out or stale the cost surfaces read loading, and its
   // failure draws in place of their figures, so no figure of one position stands under another's subtitle.
-  const costLoading = funded ? costSeries.data === null || costSeries.stale || costBreakdown.data === null || costBreakdown.stale : warming ? costBreakdown.data === null || costBreakdown.stale : loading;
-  const costError = funded ? (costSeries.error ?? costBreakdown.error) : warming ? costBreakdown.error : null;
+  const costLoading = funded
+    ? costSeries.data === null || costSeries.stale || costBreakdown.data === null || costBreakdown.stale
+    : warming
+      ? costBreakdown.data === null || costBreakdown.stale || (nativeWarming && (billedBreakdown.data === null || billedBreakdown.stale))
+      : loading;
+  const costError = funded ? (costSeries.error ?? costBreakdown.error) : warming ? (costBreakdown.error ?? billedBreakdown.error) : null;
+  const billedTotals = useMemo(() => (nativeWarming && !billedBreakdown.stale && billedBreakdown.data !== null ? sumGroups(billedBreakdown.data) : null), [nativeWarming, billedBreakdown.stale, billedBreakdown.data]);
   const shareTiles = shareTilesOf(groupBy, oneAccount, oneGroup, costLoading);
-  const probeTile = probeTileOf(unit, oneAccount, oneGroup, costTotals, costLoading, sessionId !== null);
+  const probeTile = probeTileOf(unit, oneAccount, oneGroup, costTotals, billedTotals, costLoading, sessionId !== null);
+  const fundedModels = useMemo(() => new Map((byModelFunded.stale ? [] : (byModelFunded.data ?? [])).map((g) => [g.key, g])), [byModelFunded.stale, byModelFunded.data]);
+  const fundedPools = useMemo(() => new Map((fundedByPool.stale ? [] : (fundedByPool.data ?? [])).map((g) => [g.key, g])), [fundedByPool.stale, fundedByPool.data]);
+  // Native draws the cache card's bars in the plan rows' equivalent with the billed dollars in its subtitle, and a range
+  // with no plan row draws the billed rows' dollars, its one side.
+  const cacheSides = sidesOf(costTotals, 'seven_day');
+  const cacheEquivalent = unit === 'native' && cacheSides.equivalent !== null;
+  const cacheDollars = unit === 'native' ? 'billed' : 'cost';
+  const cacheSplit = unit === 'native' ? knownSplit(costTotals.billed) : costSplit;
+  // Absent on a fold and wherever no plan row priced, so the legend reads a dash there.
+  const cacheSevenDay = costTotals.cacheEquivalent.seven_day as { read: number; write: number } | undefined;
+  const cacheMarked = costTotals.estimated && cacheSevenDay !== undefined;
   // Usage credits alone fund a fast answer, on a subscription account as on an API key.
   const fastSpend = speedPoints.reduce((n, p) => n + (p.groups.find((g) => g.key === 'fast')?.costUsd ?? 0), 0);
   const groupLabel = GROUP_LABEL[groupBy];
@@ -840,20 +872,31 @@ export function AnalyticsPage() {
 
             <ChartCard
               title="Write cost vs read cost"
-              subtitle={unit === 'share' ? "Shares of the account's 7-day window per bucket, writing the cache and reading it back" : `USD per bucket spent writing the cache and reading it back, ${UNIT_SPLIT[dollars]}`}
+              subtitle={
+                unit === 'share'
+                  ? "Shares of the account's 7-day window per bucket, writing the cache and reading it back"
+                  : cacheEquivalent
+                    ? `20x 7-day equivalent per bucket spent writing the cache and reading it back by the subscription requests${cacheSides.billed === null ? '' : `, the billed requests ${usdOrDash(costTotals.billed.cacheWrite)} writing and ${usdOrDash(costTotals.billed.cacheRead)} reading`}`
+                    : `USD per bucket spent writing the cache and reading it back, ${UNIT_SPLIT[unit === 'native' ? 'usd' : dollars]}`
+              }
               loading={costLoading}
               error={costError}
-              empty={unit === 'share' && oneAccount === null ? SHARE_NOTE : undefined}
+              empty={unit === 'share' && oneAccount === null ? CACHE_SHARE_NOTE : undefined}
               legend={
                 unit === 'share'
                   ? [
                       { color: ink.series[3], label: 'Write share', value: cacheShareOf(oneGroup, 'write') },
                       { color: ink.series[2], label: 'Read share', value: cacheShareOf(oneGroup, 'read') },
                     ]
-                  : [
-                      { color: ink.series[3], label: 'Write cost', value: usdOrDash(costTotals.cost.cacheWrite) },
-                      { color: ink.series[2], label: 'Read cost', value: usdOrDash(costTotals.cost.cacheRead) },
-                    ]
+                  : cacheEquivalent
+                    ? [
+                        { color: ink.series[3], label: 'Write cost', title: cacheMarked ? ESTIMATED_TITLE : undefined, value: equivalentOrDash('seven_day', cacheSevenDay?.write, costTotals.estimated) },
+                        { color: ink.series[2], label: 'Read cost', title: cacheMarked ? ESTIMATED_TITLE : undefined, value: equivalentOrDash('seven_day', cacheSevenDay?.read, costTotals.estimated) },
+                      ]
+                    : [
+                        { color: ink.series[3], label: 'Write cost', value: usdOrDash(costTotals[cacheDollars].cacheWrite) },
+                        { color: ink.series[2], label: 'Read cost', value: usdOrDash(costTotals[cacheDollars].cacheRead) },
+                      ]
               }
             >
               {unit === 'share' ? (
@@ -875,20 +918,35 @@ export function AnalyticsPage() {
                   <Bar dataKey="write.sevenDay" fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />
                   <Bar dataKey="read.sevenDay" fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />
                 </BarChart>
+              ) : cacheEquivalent ? (
+                <BarChart data={costBuckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={4} barGap={2}>
+                  <CartesianGrid vertical={false} stroke={ink.grid} />
+                  <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                  <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={60} />
+                  <Tooltip
+                    cursor={{ fill: ink.grid, opacity: 0.6 }}
+                    content={timeTip<Bucket>((p) => [
+                      { color: ink.series[3], label: 'write cost', value: equivalentOrDash('seven_day', p.cacheEquivalent.seven_day?.write, p.estimated) },
+                      { color: ink.series[2], label: 'read cost', value: equivalentOrDash('seven_day', p.cacheEquivalent.seven_day?.read, p.estimated) },
+                    ])}
+                  />
+                  <Bar dataKey="cacheEquivalent.seven_day.write" fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />
+                  <Bar dataKey="cacheEquivalent.seven_day.read" fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />
+                </BarChart>
               ) : (
                 <BarChart data={costBuckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={4} barGap={2}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
                   <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-                  <YAxis {...usdAxis(costBuckets.flatMap((b) => [b.cost.cacheWrite ?? 0, b.cost.cacheRead ?? 0]))} tickLine={false} axisLine={false} />
+                  <YAxis {...usdAxis(costBuckets.flatMap((b) => [b[cacheDollars].cacheWrite ?? 0, b[cacheDollars].cacheRead ?? 0]))} tickLine={false} axisLine={false} />
                   <Tooltip
                     cursor={{ fill: ink.grid, opacity: 0.6 }}
                     content={timeTip<Bucket>((p) => [
-                      { color: ink.series[3], label: 'write cost', value: costSplit === null ? '-' : usdOrDash(p.cost.cacheWrite) },
-                      { color: ink.series[2], label: 'read cost', value: costSplit === null ? '-' : usdOrDash(p.cost.cacheRead) },
+                      { color: ink.series[3], label: 'write cost', value: cacheSplit === null ? '-' : usdOrDash(p[cacheDollars].cacheWrite) },
+                      { color: ink.series[2], label: 'read cost', value: cacheSplit === null ? '-' : usdOrDash(p[cacheDollars].cacheRead) },
                     ])}
                   />
-                  {costSplit !== null && <Bar dataKey="cost.cacheWrite" fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
-                  {costSplit !== null && <Bar dataKey="cost.cacheRead" fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+                  {cacheSplit !== null && <Bar dataKey={`${cacheDollars}.cacheWrite`} fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+                  {cacheSplit !== null && <Bar dataKey={`${cacheDollars}.cacheRead`} fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
                 </BarChart>
               )}
             </ChartCard>
@@ -898,7 +956,16 @@ export function AnalyticsPage() {
             </Card>
           </div>
           <MissReasonsByGroup groupBy={groupBy} groups={groups} groupLabel={groupLabel} link={linkInput} loading={loading} />
-          {sessionId === null && <CacheByModel groups={byModel.stale ? [] : (byModel.data ?? [])} error={byModel.error} loading={byModel.data === null || byModel.stale} />}
+          {sessionId === null && (
+            <CacheByModel
+              groups={byModel.stale ? [] : (byModel.data ?? [])}
+              funded={fundedModels}
+              error={byModel.error ?? byModelFunded.error}
+              loading={byModel.data === null || byModel.stale || (funded && (byModelFunded.data === null || byModelFunded.stale))}
+              namedAccount={filters.accountId.length === 1 ? filters.accountId[0] : null}
+              unit={unit}
+            />
+          )}
           {/* The route reads no session, so a session view has no placements of its own to show. */}
           {sessionId === null && (
             <PlacementTable
@@ -1018,7 +1085,7 @@ export function AnalyticsPage() {
       {tab === 'cache-warming' && (
         <Section id="cache-warming" shown={shown} title="Cache warming" meta={sessionId === null ? 'Probe rows are always counted here, whatever the toggle above says' : SESSION_SOURCE_NOTE}>
           <div className="tiles-row">
-            <Tile label="Probe cost" value={probeTile.value} note={probeTile.note} error={costError} />
+            <Tile label="Probe cost" value={probeTile.value} note={probeTile.note} title={probeTile.title} error={costError} />
             <Tile label="Kept warm" value={loading ? null : keptWarm === null ? '-' : fmtInt(keptWarm.requests)} note={keptWarm === null ? UNAVAILABLE_NOTE : `${fmtCompact(keptWarm.tokens)} tokens read warm`} />
           </div>
           <div className="grid-2">
@@ -1035,8 +1102,16 @@ export function AnalyticsPage() {
               </BarChart>
             </ChartCard>
 
-            <Card title="Wasted probes" subtitle={WASTED_PROBE_BLURB}>
-              {loading ? <Skeleton height={190} /> : probesUnmeasured ? <p className="muted">{WARMING_UNAVAILABLE}</p> : <WastedProbes group={totals} probes={probesOf(totals)} />}
+            <Card title="Wasted probes" subtitle={`${WASTED_PROBE_BLURB} ${WASTED_PROBE_UNIT[unit]}`}>
+              {costError !== null ? (
+                <ErrorState title="Could not load wasted probes" body={costError} />
+              ) : costLoading ? (
+                <Skeleton height={190} />
+              ) : probesUnmeasured ? (
+                <p className="muted">{WARMING_UNAVAILABLE}</p>
+              ) : (
+                <WastedProbes group={costTotals} probes={probesOf(costTotals)} unit={unit} billed={billedTotals} account={oneAccount === null ? null : { group: oneGroup }} />
+              )}
             </Card>
 
             <ChartCard title="Kept-warm requests" subtitle="Requests whose cache read followed a probe" loading={loading} legend={[{ color: ink.series[0], label: 'Kept-warm requests', value: keptWarm === null ? '-' : fmtInt(keptWarm.requests) }]}>
@@ -1059,7 +1134,13 @@ export function AnalyticsPage() {
               </BarChart>
             </ChartCard>
           </div>
-          <KeepaliveByPool groups={poolGroups} error={sessionId === null ? byPool.error : null} loading={sessionId === null ? byPool.data === null || byPool.stale : loading} />
+          <KeepaliveByPool
+            groups={poolGroups}
+            funded={fundedPools}
+            error={sessionId === null ? (byPool.error ?? fundedByPool.error) : null}
+            loading={sessionId === null ? byPool.data === null || byPool.stale || (poolFunding !== undefined && (fundedByPool.data === null || fundedByPool.stale)) : loading}
+            unit={unit}
+          />
         </Section>
       )}
 
@@ -1164,13 +1245,33 @@ function shareTilesOf(groupBy: GroupBy, oneAccount: string | null, group: Analyt
 }
 
 /**
+ * A probe figure's two sides under native: the plan probes' 20x 7-day equivalent off the whole read and the billed
+ * probes' dollars off the billed read, told apart by their probe counts. `undefined` leaves out a side with no probe,
+ * null reads a dash where the plan probes priced nothing on the window, and a group with no probe on either side reads
+ * its zero in each unit, as an empty range does, with no mark, since no figure of it is an estimate.
+ */
+function probeSidesOf(whole: AnalyticsGroup, billed: AnalyticsGroup | null | undefined, read: 'cost' | 'wasted'): { billed: number | undefined; equivalent: number | null | undefined; estimated: boolean } {
+  const billedProbes = billed ? probesOf(billed) : 0;
+  const planProbes = probesOf(whole) - billedProbes;
+  const priced = own(whole.probeEquivalent, 'seven_day') ? whole.probeEquivalent.seven_day[read] : null;
+  const dollars = billed ? (read === 'cost' ? billed.probeCostUsd : billed.wastedProbeUsd) : 0;
+  if (planProbes <= 0 && billedProbes <= 0) return { billed: dollars, equivalent: priced ?? 0, estimated: false };
+  return { billed: billedProbes > 0 ? dollars : undefined, equivalent: planProbes > 0 ? priced : undefined, estimated: whole.estimated && planProbes > 0 && priced !== null };
+}
+const probeFiguresOf = (sides: ReturnType<typeof probeSidesOf>): CostFigure[] => [
+  ...(sides.equivalent === undefined ? [] : [{ text: equivalentOrDash('seven_day', sides.equivalent, sides.estimated), word: 'subscription' }]),
+  ...(sides.billed === undefined ? [] : [{ text: fmtUsd(sides.billed), word: 'billed' }]),
+];
+
+/**
  * The Probe cost tile per position: under "Window shares" the named account's probe share of its 7-day window with
  * the other windows and the probe count in the note, a dash with the count where none is priced, and the note alone
- * with none or several accounts named. Under a dollar position the position's probe dollars. A session view folds
- * request rows, which measure no probe count, so `session` reads the count unmeasured on both paths even where the
- * fold holds no group at all (the named account's rows all billed, or a position that keeps no row).
+ * with none or several accounts named. Under native the plan probes' 20x 7-day equivalent of the whole read stacked
+ * over the billed probes' dollars of `billed`, and under a dollar position the position's probe dollars. A session view
+ * folds request rows, which measure no probe count, so `session` reads the count unmeasured on every path even where
+ * the fold holds no group at all (the named account's rows all billed, or a position that keeps no row).
  */
-function probeTileOf(unit: UnitPosition, oneAccount: string | null, group: AnalyticsGroup | null, totals: AnalyticsGroup, loading: boolean, session: boolean): { note: string; value: string | null } {
+function probeTileOf(unit: UnitPosition, oneAccount: string | null, group: AnalyticsGroup | null, totals: AnalyticsGroup, billed: AnalyticsGroup | null, loading: boolean, session: boolean): { note: string; title?: string; value: ReactNode | null } {
   if (unit === 'share') {
     if (oneAccount === null) return { note: SHARE_NOTE, value: loading ? null : '-' };
     const probes = session || group?.fromRequests ? UNAVAILABLE_NOTE : `${fmtInt(group === null ? 0 : probesOf(group))} probes`;
@@ -1181,7 +1282,12 @@ function probeTileOf(unit: UnitPosition, oneAccount: string | null, group: Analy
     return { note: [...others, probes].join(', '), value: loading ? null : (sevenDay ?? '-') };
   }
   const unmeasured = session || totals.fromRequests === true;
-  return { note: unmeasured ? UNAVAILABLE_NOTE : `${fmtInt(probesOf(totals))} probes, ${UNIT_SPLIT[dollarsOf(unit)]}`, value: loading ? null : unmeasured ? '-' : fmtUsd(totals.probeCostUsd) };
+  if (unmeasured) return { note: UNAVAILABLE_NOTE, value: loading ? null : '-' };
+  if (unit === 'native') {
+    const sides = probeSidesOf(totals, billed, 'cost');
+    return { note: `${fmtInt(probesOf(totals))} probes, ${NATIVE_SUBSET}`, title: sides.estimated ? ESTIMATED_TITLE : undefined, value: loading ? null : figuresValue(probeFiguresOf(sides)) };
+  }
+  return { note: `${fmtInt(probesOf(totals))} probes, ${UNIT_SPLIT[dollarsOf(unit)]}`, value: loading ? null : fmtUsd(totals.probeCostUsd) };
 }
 
 /** The named account's cache share of its 7-day window on one side, read off its group, a dash where none is priced. */
@@ -1414,19 +1520,68 @@ function ReasonBars({ link, totals }: { link: ReasonLink; totals: AnalyticsGroup
 }
 
 const WASTED_PROBE_BLURB =
-  "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used. A high parked-limit or horizon share says the parked ceilings do. In dollars at list prices.";
+  "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used. A high parked-limit or horizon share says the parked ceilings do.";
+/** The Wasted probes blurb's closing sentence, the unit its cost tiles read in under each position. */
+const WASTED_PROBE_UNIT: Record<UnitPosition, string> = {
+  all: 'In dollars at list prices.',
+  equivalent: 'In dollars at list prices.',
+  native: "In the unit each probe's funding pays in.",
+  share: "In the one account's window shares.",
+  usd: 'In dollars at list prices.',
+};
 
-function WastedProbes({ group, probes }: { group: AnalyticsGroup; probes: number }) {
+type ProbeTile = { note?: string; title?: string; value: ReactNode };
+/**
+ * The Wasted cost and Share of probe cost tiles per position. Native stacks the wasted plan probes' 20x 7-day
+ * equivalent over the wasted billed probes' dollars and reads the share off the plan side, the billed side's where no
+ * plan probe ran. Under "Window shares" the named account's probe shares read, as the Probe cost tile reads them, and
+ * with none named a dash under the grouping's note. A dollar position reads its own rows' dollars.
+ */
+function wastedTilesOf(unit: UnitPosition, group: AnalyticsGroup, billed: AnalyticsGroup | null, account: { group: AnalyticsGroup | null } | null): { cost: ProbeTile; share: ProbeTile } {
+  if (unit === 'native') {
+    const wasted = probeSidesOf(group, billed, 'wasted');
+    const cost = probeSidesOf(group, billed, 'cost');
+    const ratio = (w: number | null | undefined, c: number | null | undefined) => (w === null || w === undefined || c === null || c === undefined ? null : c ? w / c : 0);
+    const share = cost.equivalent === undefined ? ratio(wasted.billed, cost.billed) : ratio(wasted.equivalent, cost.equivalent);
+    const of = probeFiguresOf(cost).map((f) => f.text);
+    return {
+      cost: { note: NATIVE_SUBSET, title: wasted.estimated ? ESTIMATED_TITLE : undefined, value: figuresValue(probeFiguresOf(wasted)) },
+      share: { note: `of ${of.join(' and ')} on probes`, value: share === null ? '-' : fmtPct(share, 1) },
+    };
+  }
+  if (unit === 'share') {
+    if (account === null) return { cost: { note: SHARE_NOTE, value: '-' }, share: { value: '-' } };
+    const shares = account.group?.probeShares ?? null;
+    const named = (key: string | undefined) => (shares === null || key === undefined || !own(shares, key) || shares[key].wasted === null ? null : shareLabel(key, shares[key].wasted));
+    const sevenDay = shares !== null && own(shares, 'seven_day') ? shares.seven_day : null;
+    const others = [named('five_hour'), named(shares === null ? undefined : weekKeyOf(shares))].filter((s): s is string => s !== null);
+    return {
+      cost: { note: others.length ? others.join(', ') : undefined, value: named('seven_day') ?? '-' },
+      share: sevenDay === null || sevenDay.wasted === null ? { value: '-' } : { note: `of ${shareLabel('seven_day', sevenDay.cost)} on probes`, value: fmtPct(sevenDay.cost ? sevenDay.wasted / sevenDay.cost : 0, 1) },
+    };
+  }
+  return {
+    cost: { note: unit === 'all' ? 'at list prices' : `at list prices, ${UNIT_SPLIT[unit]}`, value: fmtUsd(group.wastedProbeUsd) },
+    share: { note: `of ${fmtUsd(group.probeCostUsd)} on probes`, value: fmtPct(group.probeCostUsd ? group.wastedProbeUsd / group.probeCostUsd : 0, 1) },
+  };
+}
+
+/**
+ * `group` is the position's rows (the whole under native and the shares), `billed` native's billed read, and `account`
+ * the one account the shares read, null with none named.
+ */
+function WastedProbes({ account, billed, group, probes, unit }: { account: { group: AnalyticsGroup | null } | null; billed: AnalyticsGroup | null; group: AnalyticsGroup; probes: number; unit: UnitPosition }) {
   const ink = useChartInk();
   const rows = WASTED_PROBE_REASONS.map((reason) => ({ count: group.wastedProbeReasons[reason], reason })).sort((a, b) => b.count - a.count);
   const max = Math.max(1, ...rows.map((r) => r.count));
   if (group.wastedProbes === 0) return <p className="muted">No wasted probes in range.</p>;
+  const tiles = wastedTilesOf(unit, group, billed, account);
   return (
     <>
       <div className="tiles-row tiles-row--panel">
         <Tile label="Wasted probes" value={fmtInt(group.wastedProbes)} note={`of ${fmtInt(probes)} probes`} />
-        <Tile label="Wasted cost" value={fmtUsd(group.wastedProbeUsd)} note="at list prices" />
-        <Tile label="Share of probe cost" value={fmtPct(group.probeCostUsd ? group.wastedProbeUsd / group.probeCostUsd : 0, 1)} note={`of ${fmtUsd(group.probeCostUsd)} on probes`} />
+        <Tile label="Wasted cost" value={tiles.cost.value} note={tiles.cost.note} title={tiles.cost.title} />
+        <Tile label="Share of probe cost" value={tiles.share.value} note={tiles.share.note} />
       </div>
       <ul className="hbars hbars--reasons">
         {rows.map((r) => (
@@ -1538,26 +1693,74 @@ function Histogram({ h, format, p99 }: { format: (v: number) => string; h: numbe
   );
 }
 
-function CacheByModel({ groups, error, loading }: { error: string | null; groups: AnalyticsGroup[]; loading: boolean }) {
+/**
+ * Cache by model under a position: the token columns read every row, and the Read cost and Write cost cells read the
+ * position's side. Native pairs each model's plan rows' 20x 7-day equivalent with its billed rows' dollars in each
+ * cell, a dollar side reads its own read by model (`funded`, by key), and the shares read each model's 7-day share as
+ * the route answers it while `namedAccount`, the Accounts filter's one entry, is set under any grouping.
+ */
+function CacheByModel({ error, funded, groups, loading, namedAccount, unit }: { error: string | null; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; namedAccount: string | null; unit: UnitPosition }) {
   const rows = useMemo(() => [...groups].sort((a, b) => b.tokens.cacheRead - a.tokens.cacheRead), [groups]);
+  const subtitle =
+    unit === 'native'
+      ? `Totals for the selected range and filters, ${NATIVE_7D_SUBSET}`
+      : unit === 'share'
+        ? namedAccount === null
+          ? CACHE_MODEL_SHARE_NOTE
+          : "Totals for the selected range and filters, one account's 7-day window shares"
+        : `Totals for the selected range and filters, ${UNIT_SUBSET[unit]}`;
+  const costsOf = (g: AnalyticsGroup): { cells: ReactNode[]; estimated: boolean } => {
+    if (unit === 'native') {
+      const sides = sidesOf(g, 'seven_day');
+      // Absent where no plan row priced, which reads a dash on the plan side.
+      const priced = g.cacheEquivalent.seven_day as { read: number; write: number } | undefined;
+      const cell = (side: 'read' | 'write', billed: number | null) => nativeCell(nativeCellOf('seven_day', sides.equivalent === null ? undefined : (priced?.[side] ?? null), g.estimated, sides.billed === null ? undefined : billed));
+      return { cells: [cell('read', g.billed.cacheRead), cell('write', g.billed.cacheWrite)], estimated: g.estimated && sides.equivalent !== null && priced !== undefined };
+    }
+    if (unit === 'share') return { cells: namedAccount === null ? ['-', '-'] : [cacheShareOf(g, 'read'), cacheShareOf(g, 'write')], estimated: false };
+    // A model the side has no row of spent nothing on that side.
+    const side = unit === 'all' ? g : (funded.get(g.key) ?? null);
+    return { cells: side === null ? [fmtUsd(0), fmtUsd(0)] : [usdOrDash(side.cost.cacheRead), usdOrDash(side.cost.cacheWrite)], estimated: false };
+  };
   return (
     <BreakdownTable
       title="Cache by model"
+      subtitle={subtitle}
       error={error}
       loading={loading}
       groupLabel="Model"
       columns={['Reads', 'Writes 5m', 'Writes 1h', 'Hit ratio', 'Cached share', 'Read cost', 'Write cost']}
-      rows={rows.map((g) => ({
-        key: g.key,
-        label: g.label,
-        cells: [fmtCompact(g.tokens.cacheRead), fmtCompact(g.tokens.cacheWrite5m), fmtCompact(g.tokens.cacheWrite1h), fmtPct(hitRatioOf(g) ?? 0), fmtPct(cachedShareOf(g) ?? 0), usdOrDash(g.cost.cacheRead), usdOrDash(g.cost.cacheWrite)],
-      }))}
+      rows={rows.map((g) => {
+        const costs = costsOf(g);
+        return {
+          key: g.key,
+          label: g.label,
+          title: withEstimate(g.label, costs.estimated),
+          cells: [fmtCompact(g.tokens.cacheRead), fmtCompact(g.tokens.cacheWrite5m), fmtCompact(g.tokens.cacheWrite1h), fmtPct(hitRatioOf(g) ?? 0), fmtPct(cachedShareOf(g) ?? 0), ...costs.cells],
+        };
+      })}
     />
   );
 }
 
-function KeepaliveByPool({ groups, error, loading }: { error: string | null; groups: AnalyticsGroup[]; loading: boolean }) {
+/**
+ * The Probe cost cell follows the position as the Probe cost tile does: native pairs the pool's plan probes' 20x 7-day
+ * equivalent with its billed probes' dollars (`funded`, the billed read by pool), a dollar side reads its own read by
+ * pool, and the shares read the pool's probe share where the route answers one. The other columns read every row.
+ */
+function KeepaliveByPool({ error, funded, groups, loading, unit }: { error: string | null; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; unit: UnitPosition }) {
   const rows = useMemo(() => [...groups].sort((a, b) => (b.keptWarm?.tokens ?? 0) - (a.keptWarm?.tokens ?? 0)), [groups]);
+  const probeCost = (g: AnalyticsGroup): ReactNode => {
+    if (unit === 'native') {
+      const sides = probeSidesOf(g, funded.get(g.key), 'cost');
+      return nativeCell(nativeCellOf('seven_day', sides.equivalent, sides.estimated, sides.billed));
+    }
+    if (unit === 'share') {
+      const shares = g.probeShares;
+      return shares === null || !own(shares, 'seven_day') ? '-' : shareLabel('seven_day', shares.seven_day.cost);
+    }
+    return fmtUsd(unit === 'all' ? g.probeCostUsd : (funded.get(g.key)?.probeCostUsd ?? 0));
+  };
   return (
     <BreakdownTable
       title="Cache warming by pool"
@@ -1576,7 +1779,7 @@ function KeepaliveByPool({ groups, error, loading }: { error: string | null; gro
           g.fromRequests ? '-' : fmtInt(g.probes.failed),
           g.keptWarm === null ? '-' : fmtInt(g.keptWarm.requests),
           g.keptWarm === null ? '-' : fmtCompact(g.keptWarm.tokens),
-          g.fromRequests ? '-' : fmtUsd(g.probeCostUsd),
+          g.fromRequests ? '-' : probeCost(g),
         ],
       }))}
     />
@@ -1584,16 +1787,17 @@ function KeepaliveByPool({ groups, error, loading }: { error: string | null; gro
 }
 
 /**
- * One ring of the cost by token kind. `format` prints the center's total and each kind's figure in the ring's unit,
- * `label` names the ring at its center, and `title` is the ring's hover text, such as the estimate's sentence.
+ * One ring of the cost by token kind. `format` prints each kind's figure in the ring's unit and the center's total
+ * unless `center` prints it shorter, `label` names the ring at its center, and `title` is the ring's hover text, such as
+ * the estimate's sentence.
  */
-function CostDonut({ cost, format = fmtUsd, label = 'cost', title }: { cost: CostSplit; format?: (v: number) => string; label?: string; title?: string }) {
+function CostDonut({ center, cost, format = fmtUsd, label = 'cost', title }: { center?: (v: number) => string; cost: CostSplit; format?: (v: number) => string; label?: string; title?: string }) {
   const ink = useChartInk();
   const [hover, setHover] = useState<string | null>(null);
   const total = COST_PARTS.reduce((s, p) => s + cost[p.key], 0);
   return (
     <div className="split-row" title={title}>
-      <Donut slices={COST_PARTS.map((p) => ({ id: p.key, label: p.label, value: cost[p.key], color: ink.series[p.slot] }))} total={total} centerLabel={label} centerValue={format(total)} onHover={setHover} />
+      <Donut slices={COST_PARTS.map((p) => ({ id: p.key, label: p.label, value: cost[p.key], color: ink.series[p.slot] }))} total={total} centerLabel={label} centerValue={(center ?? format)(total)} onHover={setHover} />
       <ul className="remaining__list">
         {COST_PARTS.map((p) => (
           <li key={p.key} className={hover && hover !== p.key ? 'is-dim' : ''}>
@@ -1611,8 +1815,9 @@ function CostDonut({ cost, format = fmtUsd, label = 'cost', title }: { cost: Cos
 
 /**
  * Native's cost split: the plan rows' 20x 7-day equivalent by token kind beside the billed dollars by token kind, a
- * side with no rows left out. The subscription ring reads bare percents, since the card's subtitle names the window,
- * so a marked figure fits inside the ring.
+ * side with no rows left out. The subscription ring's center reads a bare percent, since the card's subtitle names the
+ * window, so a marked figure fits inside the ring, and its list names the window, since each row also reads the kind's
+ * proportion of the ring as a bare percent.
  */
 function NativeSplit({ totals }: { totals: AnalyticsGroup }) {
   const sides = sidesOf(totals, 'seven_day');
@@ -1620,7 +1825,7 @@ function NativeSplit({ totals }: { totals: AnalyticsGroup }) {
   const billed = sides.billed === null ? null : knownSplit(totals.billed);
   const mark = totals.estimated ? '~' : '';
   const rings = [
-    ...(subscription === null ? [] : [<CostDonut key="subscription" cost={subscription} format={(v) => `${mark}${fmtShare(v)}`} label="subscription" title={totals.estimated ? ESTIMATED_TITLE : undefined} />]),
+    ...(subscription === null ? [] : [<CostDonut key="subscription" cost={subscription} center={(v) => `${mark}${fmtShare(v)}`} format={(v) => `${mark}${equivalentShort('seven_day', v)}`} label="subscription" title={totals.estimated ? ESTIMATED_TITLE : undefined} />]),
     ...(billed === null ? [] : [<CostDonut key="billed" cost={billed} label="billed" />]),
   ];
   if (rings.length === 0) return <Skeleton height={148} />;
@@ -1693,21 +1898,27 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, unit }:
   );
   if (unit === 'native') {
     const marked = (k: string) => data.some((row) => stack.estimated.get(row.at)?.has(k) ?? false);
+    const billedDrawn = billed !== null && billed.keys.length > 0;
+    // A range with no plan row leaves the equivalent card out while the billed card draws, as the tiles leave out a side
+    // with no rows. With neither side the card stays, so an empty range still reads as one.
+    const planDrawn = loading || error !== null || keys.length > 0 || !billedDrawn;
     return (
       <>
-        <ChartCard title={title} subtitle="20x 7-day equivalent per bucket, stacked, the subscription requests" loading={loading} error={error} legend={keys.map((k) => ({ color: color(k), label: label(k), title: marked(k) ? ESTIMATED_TITLE : undefined }))}>
-          <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-            <CartesianGrid vertical={false} stroke={ink.grid} />
-            <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-            <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={60} />
-            <Tooltip
-              cursor={{ stroke: ink.axis }}
-              content={timeTip<Record<string, number> & { at: number }>((p) => keys.map((k) => ({ color: color(k), label: label(k), value: equivalentOrDash('seven_day', p[k] ?? 0, stack.estimated.get(p.at)?.has(k) ?? false) })))}
-            />
-            {areas(stack)}
-          </AreaChart>
-        </ChartCard>
-        {billed !== null && billed.keys.length > 0 && dollarCard(billed, `Billed by ${GROUP_LABEL[groupBy].toLowerCase()}`, 'USD per bucket, stacked, the billed requests')}
+        {planDrawn && (
+          <ChartCard title={title} subtitle="20x 7-day equivalent per bucket, stacked, the subscription requests" loading={loading} error={error} legend={keys.map((k) => ({ color: color(k), label: label(k), title: marked(k) ? ESTIMATED_TITLE : undefined }))}>
+            <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+              <CartesianGrid vertical={false} stroke={ink.grid} />
+              <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+              <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={60} />
+              <Tooltip
+                cursor={{ stroke: ink.axis }}
+                content={timeTip<Record<string, number> & { at: number }>((p) => keys.map((k) => ({ color: color(k), label: label(k), value: equivalentOrDash('seven_day', p[k] ?? 0, stack.estimated.get(p.at)?.has(k) ?? false) })))}
+              />
+              {areas(stack)}
+            </AreaChart>
+          </ChartCard>
+        )}
+        {billedDrawn && dollarCard(billed, `Billed by ${GROUP_LABEL[groupBy].toLowerCase()}`, 'USD per bucket, stacked, the billed requests')}
       </>
     );
   }

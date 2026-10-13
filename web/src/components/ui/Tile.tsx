@@ -27,18 +27,23 @@ export function Tile({ error, label, note, title, tone, value }: { error?: strin
   );
 }
 
-/** Two figures stacked in a tile's value, each followed by its word, for a site that sums rows of both fundings. */
-export function PairValue({ first, firstLabel, second, secondLabel }: { first: ReactNode; firstLabel: string; second: ReactNode; secondLabel: string }) {
+/**
+ * Two figures stacked in a tile's value, each followed by its word, for a site that sums rows of both fundings. A site
+ * with one side's rows draws that line alone, so its word still says which funding the figure is.
+ */
+export function PairValue({ first, firstLabel, second, secondLabel = '' }: { first: ReactNode; firstLabel: string; second?: ReactNode; secondLabel?: string }) {
   return (
     <span className="stat__pair">
       <span className="stat__pair-line">
         {first}
         <span className="stat__pair-word">{firstLabel}</span>
       </span>
-      <span className="stat__pair-line">
-        {second}
-        <span className="stat__pair-word">{secondLabel}</span>
-      </span>
+      {second !== undefined && (
+        <span className="stat__pair-line">
+          {second}
+          <span className="stat__pair-word">{secondLabel}</span>
+        </span>
+      )}
     </span>
   );
 }

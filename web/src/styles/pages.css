@@ -4190,10 +4190,13 @@
   grid-column: 1 / -1;
 }
 
+/* Each ring's list takes the height its figures need, the subscription ring's naming the window, so the two columns
+   keep their own heights and the rings stay on one line. */
 .split-pair {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 20px;
+  align-items: start;
 }
 
 .split-pair .split-row {

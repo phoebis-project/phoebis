@@ -2671,12 +2671,14 @@ async function planLegend(theme) {
 /**
  * The two analytics tables: Placements by rung against Cache by model, the table card before it in the Cache
  * section, on the title and head types and the card width, and where both cards draw figures, their type too, and a
- * placements row is as tall as a cache row; Member budgets against Placements by rung on the title and head types
- * alone, since the two cards sit in different sections' grids, and Member budgets in the Burn section. Every budget
- * row draws its bar, one row per budgeted period; in the mock's story the member past its budget carries the
- * at-budget badge, and the subscription member's spend leads with the muted word metered in the figure's own type.
- * The router's seed places nothing and budgets no member, so there the tables draw their empty rows. Each section
- * shows on its own tab, so the Cache tables are read there and Member budgets on Burn.
+ * placements row is as tall as a cache row of one line. Member budgets is read against Placements by rung on the title
+ * and head types alone, since the two cards sit in different sections' grids, and Member budgets in the Burn section.
+ * Under a fresh browser's native position Cache by model's cost cells carry the billed dollars on a line under the
+ * 20x figure, so its width is recorded at 1280 by 800 and every column sits inside its wrap, and in the mock's story a
+ * row draws that second line. Every budget row draws its bar, one row per budgeted period, and in the mock's story the
+ * member past its budget carries the at-budget badge, and the subscription member's spend leads with the muted word
+ * metered in the figure's own type. The router's seed places nothing and budgets no member, so there the tables draw
+ * their empty rows. Each section shows on its own tab, so the Cache tables are read there and Member budgets on Burn.
  */
 async function analyticsTables(theme) {
   const say = (what) => failures.push(`${theme} /analytics: ${what}`);
@@ -2693,14 +2695,20 @@ async function analyticsTables(theme) {
       const box = (title) => {
         const el = card(title);
         if (!el) return null;
-        const row = el.querySelector('tbody tr');
+        // A cell's second line makes its row taller by design, so the row compared is the first of one line.
+        const rows = [...el.querySelectorAll('tbody tr')];
+        const row = rows.find((tr) => tr.querySelector('.sub') === null);
+        const twoLines = rows.find((tr) => tr.querySelector('.sub') !== null);
+        const wrap = el.querySelector('.table-wrap');
         return {
           figure: type(el.querySelector('tbody td.num')),
+          fit: wrap ? { group: Math.round(el.querySelector('thead th')?.getBoundingClientRect().width ?? 0), needs: wrap.scrollWidth, wrap: wrap.clientWidth } : null,
           head: type(el.querySelector('thead th')),
           row: row ? Math.round(row.getBoundingClientRect().height) : null,
           rows: el.querySelectorAll('tbody td.num').length > 0,
           section: el.closest('.analytics-section')?.id ?? null,
           title: type(el.querySelector('.card__title')),
+          twoLines: twoLines ? Math.round(twoLines.getBoundingClientRect().height) : null,
           width: Math.round(el.getBoundingClientRect().width),
         };
       };
@@ -2729,13 +2737,17 @@ async function analyticsTables(theme) {
     const read = { ...(await tables()), cache: onCache.cache, placements: onCache.placements };
     measurements.push(`${theme} /analytics placement and budget tables ${JSON.stringify(read)}`);
     const drawn = (a, b, keys) => (a?.rows && b?.rows ? keys : []);
-    failures.push(...compare(read.placements, read.cache, ['title', 'head', 'width', ...drawn(read.placements, read.cache, ['figure', 'row'])], `${theme} /analytics: "Placements by rung" against "Cache by model"`));
+    failures.push(...compare(read.placements, read.cache, ['title', 'head', 'width', ...drawn(read.placements, read.cache, ['figure', ...(read.cache?.row === null ? [] : ['row'])])], `${theme} /analytics: "Placements by rung" against "Cache by model"`));
+    const fit = read.cache?.fit ?? null;
+    measurements.push(`${theme} /analytics cache by model ${fit === null ? 'not drawn' : `${fit.needs} of ${fit.wrap}px, Model ${fit.group}px, rows ${read.cache.row}px and ${read.cache.twoLines}px`}`);
+    if (fit !== null && fit.needs > fit.wrap) say(`Cache by model needs ${fit.needs}px of its wrap's ${fit.wrap}px`);
     failures.push(...compare(read.budgets, read.placements, ['title', 'head'], `${theme} /analytics: "Member budgets" against "Placements by rung"`));
     if (read.placements?.section !== 'cache') say(`the placements card sits in ${read.placements?.section}, not the Cache section`);
     if (read.budgets?.section !== 'burn') say(`the member budgets card sits in ${read.budgets?.section}, not the Burn section`);
     for (const bar of read.bars.filter((b) => b === null || !/^[0-9]{3,}x4$/.test(b))) say(`a member budget row draws its bar as ${bar}`);
     if (mock) {
       if (!read.placements?.rows) say('the story places requests by rung, yet the placements card draws no figure');
+      if (read.cache?.twoLines === null) say("the story's models hold plan and billed rows, yet no Cache by model cost cell draws its billed line");
       if (read.bars.length !== 4) say(`the story budgets four periods across three members, yet the card lists ${read.bars.length}`);
       if (JSON.stringify(read.atBudget.map((r) => r.account)) !== JSON.stringify(['research'])) say(`the at-budget mark sits on ${JSON.stringify(read.atBudget.map((r) => r.account))}, not on research alone`);
       if (JSON.stringify(read.metered.map((r) => [r.account, r.text])) !== JSON.stringify([['primary', 'metered $12.50']])) say(`the metered word sits on ${JSON.stringify(read.metered.map((r) => [r.account, r.text]))}, not on primary alone`);

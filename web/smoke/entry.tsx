@@ -20,7 +20,7 @@ export { call };
 // The fold the Cost section sums its groups by, so a check reads the totals the page draws from one derivation.
 export { sumGroups } from '@/api/fold';
 export { AttentionRows } from '@/components/AttentionRows';
-export { NATIVE_SUBSET } from '@/lib/analytics';
+export { CACHE_MODEL_SHARE_NOTE, CACHE_SHARE_NOTE, NATIVE_SUBSET } from '@/lib/analytics';
 export { ATTENTION_REFRESH_MS } from '@/lib/attention';
 export { default as React } from 'react';
 export { AttemptCount, AttemptTrail } from '@/components/ui/AttemptTrail';
@@ -36,7 +36,7 @@ export { anchorTier, bandFactor, bandRuns, familyOrder, fullWindowsAWeek, inBand
 // The strip's model and its buttons' names, so a card check spells the stations a record draws and the names a reader
 // hears from the derivation the strip reads.
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';
-export { earlierHolderLabel, ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, shortModel } from '@/lib/format';
+export { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, shareLabel, shortModel } from '@/lib/format';
 export { SHED_AHEAD_OF_PACE_DEFAULT } from '@/lib/presets';
 // The pace mark's offset and the end it runs to, so the check and the meter place it by one arithmetic.
 export { endOf, remainingTimeShare } from '@/lib/quota';

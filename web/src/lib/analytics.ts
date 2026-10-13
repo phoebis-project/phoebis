@@ -168,6 +168,13 @@ export function sizedAccounts(accounts: Account[], costs: SubscriptionCosts, win
 }
 
 export const SHARE_NOTE = "Shares read under the account grouping alone, since shares of different accounts' windows do not add.";
+/** The cache card's empty note under Window shares: the card needs one account named as well as the grouping. */
+export const CACHE_SHARE_NOTE = "Shares of one account's windows alone: name one account in the Accounts filter under the account grouping.";
+/**
+ * Cache by model's note under Window shares with no account named: the route answers one named account's shares by
+ * model under any grouping, so the filter alone is needed.
+ */
+export const CACHE_MODEL_SHARE_NOTE = "Shares of one account's windows alone: name one account in the Accounts filter.";
 /**
  * The one account whose shares the tiles read: the account filter's one entry under the account grouping, and null
  * for none or several, where the tiles read "per account below".
