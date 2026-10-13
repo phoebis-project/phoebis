@@ -3239,6 +3239,8 @@ const ROW_BOUND = {
 };
 /** The views whose bar draws no range: the bar is first on the page and the view's head or tiles follow it. */
 const CARD_VIEWS = ['/accounts', '/keys', '/pools', '/quota', '/sessions'];
+/** The views `barRow` also reads at 950 by 800, where their slots outrun the content column beside the sidebar. */
+const NARROW_VIEWS = ['/analytics', '/requests'];
 /** A span from 23:00 the day before the pass's clock to 01:00 on its day, the Custom pill's widest words. */
 const MIDNIGHT = (origin) => {
   const day = new Date(origin).toISOString().slice(0, 10);
@@ -3254,7 +3256,8 @@ const MIDNIGHT = (origin) => {
  * ranged view, with a span across midnight, and the row against the first card's head. On a card view the element
  * after the bar and the tiles stand under the bar's bottom. The row's `width`, its slots' widths and the gaps between
  * them, holds under the view's ROW_BOUND at rest. On Analytics the Group by select reads the Add filter button's height
- * and top. Records to `measurements`.
+ * and top. On the NARROW_VIEWS at 950 by 800 the bar and its row run no wider than their boxes and the right edge, and
+ * the count where the view draws one, end inside the window. Records to `measurements`.
  */
 async function barRow(theme, view) {
   const say = (what) => failures.push(`${theme} ${view} bar: ${what}`);
@@ -3338,6 +3341,30 @@ async function barRow(theme, view) {
         measurements.push(`${theme} ${view} bar row at ${width} by ${height} ${label} ${JSON.stringify(got)}`);
         check(`${width} by ${height} ${label}`, got, chipped);
         if (label === 'at rest' && ROW_BOUND[view] !== undefined && got !== null && got.width >= ROW_BOUND[view]) say(`${width} by ${height} at rest: the row's slots take ${got.width} px, not under ${ROW_BOUND[view]}`);
+      }
+    }
+    // At 950 px the sidebar leaves the content column narrower than a ranged view's slots, so the row wraps its trailing
+    // slots in place of running the bar past the window.
+    if (NARROW_VIEWS.includes(view)) {
+      await page.setViewportSize({ height: 800, width: 950 });
+      await page.goto(`${base}${view}`);
+      await booted();
+      await advance(LOAD_MS);
+      await page.waitForSelector('.filter-bar', { timeout: 15_000 }).catch(() => {});
+      const narrow = await page.evaluate(() => {
+        const bar = document.querySelector('.filter-bar');
+        const row = bar?.querySelector(':scope > .filter-bar__row');
+        if (!bar || !row) return null;
+        const right = (el) => (el ? Math.round(el.getBoundingClientRect().right) : null);
+        return { bar: { client: bar.clientWidth, scroll: bar.scrollWidth }, count: right(row.querySelector('.filter-bar__count')), edge: right(row.querySelector('.filter-bar__edge')), row: { client: row.clientWidth, scroll: row.scrollWidth }, window: window.innerWidth };
+      });
+      measurements.push(`${theme} ${view} bar row at 950 by 800 ${JSON.stringify(narrow)}`);
+      if (narrow === null) say('950 by 800: no bar to measure');
+      else {
+        if (narrow.bar.scroll > narrow.bar.client) say(`950 by 800: the bar runs ${narrow.bar.scroll} px in ${narrow.bar.client}`);
+        if (narrow.row.scroll > narrow.row.client) say(`950 by 800: the row runs ${narrow.row.scroll} px in ${narrow.row.client}`);
+        if (narrow.edge === null || narrow.edge > narrow.window) say(`950 by 800: the right edge ends at ${narrow.edge ?? 'none'} px, past the ${narrow.window} px window`);
+        if (view === '/requests' && (narrow.count === null || narrow.count > narrow.window)) say(`950 by 800: the count ends at ${narrow.count ?? 'none'} px, past the ${narrow.window} px window`);
       }
     }
   } finally {

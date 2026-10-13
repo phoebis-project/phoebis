@@ -2674,7 +2674,8 @@
   padding: 5px 12px 5px 0;
 }
 
-/* The list views' bar: a 32 px row that never wraps, the search the one slot that yields, and the chip line under it. */
+/* The list views' bar: a 32 px row, the search the one slot that yields, and the chip line under it. A row narrower
+   than its slots wraps the trailing ones to a second line rather than run past the page. */
 .filter-bar {
   display: flex;
   flex-direction: column;
@@ -2683,10 +2684,10 @@
 
 .filter-bar__row {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  height: 32px;
+  min-height: 32px;
 }
 
 .filter-bar__row > * {
@@ -2712,14 +2713,6 @@
 
 .filter-bar__count--critical {
   color: var(--critical-ink);
-}
-
-/* A phone's window is narrower than a row's controls, so there the row wraps rather than scroll the page sideways. */
-@media (max-width: 720px) {
-  .filter-bar__row {
-    flex-wrap: wrap;
-    height: auto;
-  }
 }
 
 .filter-bar--sticky {

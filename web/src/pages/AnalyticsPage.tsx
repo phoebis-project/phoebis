@@ -160,8 +160,8 @@ const optionsOf = (rows: AnalyticsGroup[] | null): Option[] =>
 
 export function AnalyticsPage() {
   const [now, setNow] = useState(() => clock.now());
-  // Try again and Refresh bump it with the end, so every read keyed on the window runs again even while the clock
-  // stands still.
+  // Try again and Refresh bump it with the end, and a custom span's reload tick bumps it alone, so every read keyed on
+  // the window runs again even while the clock or the span stands still.
   const [generation, setGeneration] = useState(0);
   // Every filter lives in the address, so a link or a reload lands on the same view.
   const { address, filters: a, update: rawUpdate } = useQueryFilters(ANALYTICS_CODEC);
@@ -343,16 +343,19 @@ export function AnalyticsPage() {
   );
 
   const rangeBucketMs = bucketSizeFor(span.toMs - span.fromMs);
-  // At the auto reload interval: a passed bucket boundary moves the end, so a page left open shows the hour it is in.
-  // Off, the end holds where it was read. The check waits, as the reads do, while a menu under the bar or a dialog is
-  // open or the tab is hidden.
+  // At the auto reload interval: a passed bucket boundary moves the end, so a page left open shows the hour it is in. A
+  // custom span holds its end, so each tick reads its window again, where a request that finished late lands. Off, the
+  // end holds where it was read. The check waits, as the reads do, while a menu under the bar or a dialog is open or
+  // the tab is hidden.
   useEffect(() => {
     if (polledMs === 0 || paused) return;
     const id = clock.setInterval(() => {
-      if (!document.hidden && Math.floor(clock.now() / rangeBucketMs) !== Math.floor(now / rangeBucketMs)) setNow(clock.now());
+      if (document.hidden) return;
+      if (Math.floor(clock.now() / rangeBucketMs) !== Math.floor(now / rangeBucketMs)) setNow(clock.now());
+      if (custom) setGeneration((g) => g + 1);
     }, polledMs);
     return () => clock.clearInterval(id);
-  }, [now, paused, polledMs, rangeBucketMs]);
+  }, [custom, now, paused, polledMs, rangeBucketMs]);
   // A read that failed or that still answers the filters before the change draws nothing, so no figure stands
   // under a filter it was not read for.
   const failure = series.error ?? breakdown.error ?? log.error;

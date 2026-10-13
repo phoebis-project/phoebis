@@ -11965,6 +11965,9 @@ m.unmount();
   const failing = failCalls({ getAnalyticsSeries: '/admin/analytics/series' }, 'ledger locked');
   const ended = await mount('/analytics', { now: at14 + 20 * 60_000 });
   await customRange(ended);
+  // The span ends at the click that applied it, so it reads on at the interval. Auto reload goes off, as on a span that
+  // has ended, so the reads below are Try again's alone.
+  await chooseInterval(ended, 'Off');
   tick(10 * 60_000);
   failing.recover();
   [...ended.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Try again')?.click();
@@ -12002,10 +12005,10 @@ m.unmount();
   const later = rate();
   tick(31 * 60_000);
   await burnPage.settle();
-  // Past 15:00 the page's instant moves, the custom window and its answer stay.
+  // Past 15:00 auto reload has read the custom window again, and a read past the hour saw all of its bucket.
   const pastBoundary = rate();
   delete api.getAnalyticsBurn;
-  results.push({ name: wiringCheck, ok: JSON.stringify([atEnd, later, pastBoundary]) === JSON.stringify(['$0.90', '$0.60', '$0.60']), missing: [`at the end ${atEnd}`, `ten minutes on ${later}`, `past 15:00 ${pastBoundary}`] });
+  results.push({ name: wiringCheck, ok: JSON.stringify([atEnd, later, pastBoundary]) === JSON.stringify(['$0.90', '$0.60', '$0.30']), missing: [`at the end ${atEnd}`, `ten minutes on ${later}`, `past 15:00 ${pastBoundary}`] });
   burnPage.unmount();
 }
 
@@ -13828,6 +13831,41 @@ m.unmount();
         resumed.series.length === 2 &&
         resumed.series.every((to) => Date.parse(to) >= hour),
       missing: [JSON.stringify(start), `${polled} registry reads in 5 s`, JSON.stringify(off), JSON.stringify(held), JSON.stringify(refreshed), JSON.stringify(endedPart), `${endedReads} registry reads on the ended span`, JSON.stringify(pausedPart), JSON.stringify(paused), JSON.stringify(resumed)],
+    });
+  }
+  {
+    // A span capped at the clock reads on at the interval over the window it names, so a request that finished late
+    // lands in its figures. Ten seconds from the pinned clock pass no bucket boundary, so the end alone moves no read.
+    const name = '/analytics a custom range capped at the clock reads its window again at every tick, and a request that finished late lands on the next';
+    const FROM = isoAt(CLOCK_ORIGIN - 2 * 3_600_000);
+    const TO = isoAt(CLOCK_ORIGIN);
+    const total = (page) => Number(/^([\d,]+) requests/.exec(page.container.querySelector('#traffic .analytics-section__meta')?.textContent ?? '')?.[1].replace(/,/g, '') ?? -1);
+    const windows = (spy) => [...new Set(spy.calls.map(([q]) => `${q?.from} ${q?.to}`))];
+    const page = await mount(`/analytics?from=${FROM}&to=${TO}`, { now: CLOCK_ORIGIN });
+    await chooseInterval(page, '5 s');
+    const chosen = { disabled: intervalPart(page)?.disabled ?? null, word: intervalWord(page) };
+    const before = total(page);
+    const series = countCalls('getAnalyticsSeries');
+    const breakdown = countCalls('getAnalyticsBreakdown');
+    tick(5_000);
+    await page.settle();
+    const first = { breakdown: windows(breakdown), series: windows(series) };
+    series.restore();
+    breakdown.restore();
+    // The ledger writes a request when it finishes, so an hour inside the span gains one after the page read it.
+    const hour = rollups.find((r) => r.kind !== 'probe' && r.requests.ok > 0 && Date.parse(r.hour) >= Date.parse(FROM) && Date.parse(r.hour) <= Date.parse(TO));
+    const late = hour === undefined ? null : { ...hour };
+    if (late !== null) rollups.push(late);
+    tick(5_000);
+    await page.settle();
+    const after = total(page);
+    if (late !== null) rollups.splice(rollups.indexOf(late), 1);
+    page.unmount();
+    const span = `${FROM} ${TO}`;
+    results.push({
+      name,
+      ok: JSON.stringify(chosen) === JSON.stringify({ disabled: false, word: '5 s' }) && JSON.stringify(first) === JSON.stringify({ breakdown: [span], series: [span] }) && late !== null && before > 0 && after > before,
+      missing: [JSON.stringify(chosen), JSON.stringify(first), `the late hour ${late?.hour ?? 'none'}`, `${before} requests before the late hour, ${after} after`],
     });
   }
   {
