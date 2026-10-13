@@ -1397,6 +1397,20 @@ async fn the_request_log_filters_paginates_and_shows_one_row_per_request_with_it
     )
     .await;
     assert_eq!(ids(paired), ["r004"], "session stands beside text");
+    let narrowed = json(
+        get(
+            &parts.app,
+            "/admin/requests?session=s-pair&text=r00&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        ids(narrowed),
+        ["r003", "r004"],
+        "session narrows a text that matches more rows"
+    );
     assert_eq!(
         rows[0]["user_agent"].as_str(),
         Some("claude-cli/2.1.300 (external, cli)"),
