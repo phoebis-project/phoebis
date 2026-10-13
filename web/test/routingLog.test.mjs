@@ -403,7 +403,7 @@ test('a Follow poll stops at eight pages and names the cursor that reaches the r
   assert.equal(polled.overrun, '200');
   const gap = await route.read(polled.overrun);
   assert.equal(d.identityOf(gap.rows[0]), d.identityOf(route.rows[200]), 'the overrun cursor reads the first row the poll left');
-  assert.equal(d.FOLLOW_OVERRUN, 'More rows arrived than Follow could fetch. Reload to read them.');
+  assert.equal(d.FOLLOW_OVERRUN, 'More rows arrived than auto reload could fetch. Reload to read them.');
 });
 
 test('model ids order fable, opus, sonnet, haiku, newest version first', () => {

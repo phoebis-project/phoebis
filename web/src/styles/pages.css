@@ -2776,6 +2776,52 @@
   margin-left: auto;
 }
 
+/* The list views' bar: a 32 px row that never wraps, the search the one slot that yields, and the chip line under it. */
+.filter-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.filter-bar__row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  align-items: center;
+  height: 32px;
+}
+
+.filter-bar__row > * {
+  flex: none;
+}
+
+.filter-bar__row .search {
+  flex: 1 1 auto;
+  min-width: 160px;
+}
+
+.filter-bar__edge {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-left: auto;
+}
+
+.filter-bar__count {
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.filter-bar--sticky {
+  position: sticky;
+  top: 52px;
+  z-index: 5;
+  padding: 8px 0;
+  background: color-mix(in srgb, var(--page) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--hairline);
+}
+
 .cols-popover {
   position: absolute;
   top: calc(100% + 4px);

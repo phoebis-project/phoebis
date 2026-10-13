@@ -356,9 +356,10 @@ table reads "No requests match" with "Widen the date range or clear a filter." W
 
 Follow, off by default, reads the list every 5 seconds with the range ending now, takes every row that arrived since
 the read before, up to eight pages, and lands a new row at the top in the accent tint until the next read. Past eight
-pages a line reads "More rows arrived than Follow could fetch. Reload to read them.", and Next reads on from the last
-row Follow fetched. A filter change keeps Follow on, paging to an older page turns it off, and the open drawer pauses
-it.
+pages a line reads "More rows arrived than auto reload could fetch. Reload to read them.", and Next reads on from the
+last row the poll fetched. A filter change keeps the switch on. The poll waits while the tab is hidden, while the drawer
+is open, and on an older page until you go back to the first, with the switch left on. When the wait ends 5 seconds or
+more after its last answer, it reads at once.
 
 Selecting a row opens the "Request details" drawer, with the request's id and time, a "Routing log" link that opens the
 [routing log](#routing-log) on the request a quarter hour either side, and these sections:
@@ -581,9 +582,9 @@ Refresh. Every filter lives in the page's address (a preset range by its name as
 and `to`, two UTC instants, the lists as comma lists), so a filtered view is a link and Back returns to the view before
 it. A request filter opens a line above the table that counts the request's decisions and events and offers three
 widenings, "this session" (an hour either side), "this account" (a quarter hour either side) and "this minute", and any
-other narrowing draws the same line with what the rows are narrowed to. Follow behaves as on the Requests view, up to
-eight pages a read and the line "More rows arrived than Follow could fetch. Reload to read them." past them. An empty
-range reads "No decisions or events in this range." with "Widen the range or clear a filter."
+other narrowing draws the same line with what the rows are narrowed to. The switch's poll behaves as on the Requests
+view, up to eight pages a read and the line "More rows arrived than auto reload could fetch. Reload to read them." past
+them. An empty range reads "No decisions or events in this range." with "Widen the range or clear a filter."
 
 A row reads Time (a decision's request beneath it as a link to the request's drawer), Kind (a decision in a filled
 badge with `attempt 2/3` beneath a failover attempt, an event in an outlined one), Session (the first eight characters

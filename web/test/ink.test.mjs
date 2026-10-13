@@ -18,6 +18,8 @@ const INK3_ALLOWED = new Set([
   '.mselect__clear',
   '.pct-label',
   '.quota-meta__sep',
+  ".refresh-control[data-state='paused'] .refresh-control__part",
+  '.refresh-control__part:disabled',
   '.search > svg',
   '.select > svg',
   '.srow__chevron',

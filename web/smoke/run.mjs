@@ -8700,9 +8700,9 @@ m.unmount();
   classes.unmount();
 }
 
-// Follow reads the list again every 5 seconds over the page's filters with the range ending at the poll, and lands
-// what arrived at the top in the accent tint. The open drawer pauses it, an older page stops it, and the address never
-// holds it.
+// Auto reload reads the list again every 5 seconds over the page's filters with the range ending at the poll, and
+// lands what arrived at the top in the accent tint. The open drawer and an older page pause it with the switch left on,
+// and the address never holds it.
 {
   const HOUR = 3_600_000;
   const followSwitch = (page) => page.container.querySelector('.filters__cols button[role="switch"][aria-label="Follow"]');
@@ -8736,7 +8736,8 @@ m.unmount();
     const drawer = { calls: paused.calls.length, id: idOf(requestRows(page)[0]), open: page.container.querySelector('.drawer') !== null };
     page.container.querySelector('button[aria-label="Close details"]')?.click();
     await page.settle();
-    // The poll arms again at the close, so its next read ends a full period later and finds nothing new to tint.
+    // The close comes a full period after the last answer, so the poll reads at once as it arms again, and the next
+    // tick's read ends a full period after the close and finds nothing new to tint.
     const resumed = countCalls('listRequests');
     tick(5_000);
     await page.settle();
@@ -8744,16 +8745,21 @@ m.unmount();
     const after = { calls: resumed.calls.length, id: idOf(requestRows(page)[0]), tinted: page.container.querySelectorAll('.requests__table tbody tr.is-new').length, to: resumed.calls[0]?.[0]?.to };
     nextPage(page)?.click();
     await page.settle();
-    const stopped = { checked: followSwitch(page)?.getAttribute('aria-checked') ?? null, rows: requestRows(page).length };
+    // The older page pauses the poll and leaves the switch on, so the next tick reads nothing.
+    const older = countCalls('listRequests');
+    tick(5_000);
+    await page.settle();
+    older.restore();
+    const paged = { calls: older.calls.length, checked: followSwitch(page)?.getAttribute('aria-checked') ?? null, rows: requestRows(page).length };
     results.push({
-      name: '/requests Follow merges a new row under the fresh tint, keeps it under the drawer and stops on Next',
+      name: '/requests auto reload merges a new row under the fresh tint, keeps it under the drawer and pauses on Next',
       ok:
         before !== newest.id &&
         landed.calls === 2 && landed.cursor === undefined && typeof landed.second === 'string' && landed.to === isoAt(t + 3_000) && landed.id === newest.id && landed.isNew &&
         drawer.open && drawer.calls === 0 && drawer.id === newest.id &&
         after.calls === 1 && after.to === isoAt(t + 13_000) && after.id === newest.id && after.tinted === 0 &&
-        stopped.checked === 'false' && stopped.rows > 0,
-      missing: [`first before ${before}, newest ${newest.id}`, JSON.stringify(landed), JSON.stringify(drawer), JSON.stringify(after), JSON.stringify(stopped)],
+        paged.calls === 0 && paged.checked === 'true' && paged.rows > 0,
+      missing: [`first before ${before}, newest ${newest.id}`, JSON.stringify(landed), JSON.stringify(drawer), JSON.stringify(after), JSON.stringify(paged)],
     });
     page.unmount();
   }
@@ -8860,7 +8866,7 @@ m.unmount();
     results.push({
       name: '/requests Next past a Follow overrun reads the rows the poll left up to its end',
       ok:
-        arrived > 90 && sent.length === 8 && sent.every((q) => q.to === end && q.limit === 10) && line === 'More rows arrived than Follow could fetch. Reload to read them.' &&
+        arrived > 90 && sent.length === 8 && sent.every((q) => q.to === end && q.limit === 10) && line === 'More rows arrived than auto reload could fetch. Reload to read them.' &&
         drawn.length === 80 + listed.length && JSON.stringify(drawn.slice(0, 80)) === JSON.stringify(all.slice(0, 80)) &&
         overrun !== null && read.length === 1 && read[0].cursor === overrun && read[0].to === end && JSON.stringify(after) === JSON.stringify(all.slice(80, 90)),
       missing: [`${arrived} arrived over ${listed.length} listed`, `${sent.length} reads, line ${line}`, `${drawn.length} drawn`, `overrun ${overrun}`, JSON.stringify(read.map((q) => [q.cursor, q.to])), `next ${after.slice(0, 2).join(' | ')}`, `gap ${all.slice(80, 82).join(' | ')}`],
@@ -9309,7 +9315,15 @@ m.unmount();
     });
     [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'Next page')?.click();
     await page.settle();
-    results.push({ name: '/routing-log paging to an older page turns Follow off', ok: toggle()?.getAttribute('aria-checked') === 'false' && label() === 'Follow' && trs(page).length > 0, missing: [String(toggle()?.getAttribute('aria-checked')), label()] });
+    const older = countCalls('listRoutingLog');
+    tick(5_000);
+    await page.settle();
+    older.restore();
+    results.push({
+      name: '/routing-log paging to an older page pauses auto reload and keeps the switch on',
+      ok: older.calls.length === 0 && toggle()?.getAttribute('aria-checked') === 'true' && label() === 'polling every 5 s, the range ends now' && trs(page).length > 0,
+      missing: [`${older.calls.length} reads on the older page`, String(toggle()?.getAttribute('aria-checked')), label()],
+    });
     page.unmount();
   }
   const followToggle = (page) => page.container.querySelector('.routing-log__follow button[role="switch"]');
@@ -9462,7 +9476,7 @@ m.unmount();
     results.push({
       name: '/routing-log Follow past its eight pages says more rows arrived and Next reads the rows it left',
       ok:
-        polls.calls.length === 8 && line === 'More rows arrived than Follow could fetch. Reload to read them.' && all.length > 200 + listed + 25 &&
+        polls.calls.length === 8 && line === 'More rows arrived than auto reload could fetch. Reload to read them.' && all.length > 200 + listed + 25 &&
         JSON.stringify(drawn.slice(0, 200)) === JSON.stringify(all.slice(0, 200).map(rowKey)) && drawn.length === 200 + listed &&
         JSON.stringify(next) === JSON.stringify(all.slice(200, 225).map(rowKey)),
       missing: [`${polls.calls.length} reads, line ${line}`, `${drawn.length} drawn`, `next ${next.slice(0, 2).join(' | ')}`, `gap ${all.slice(200, 202).map(rowKey).join(' | ')}`],

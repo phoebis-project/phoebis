@@ -934,6 +934,59 @@ textarea.input {
   white-space: nowrap;
 }
 
+/* The split Refresh button: one bordered box, the body and the interval part parted by a hairline. The part reserves
+   its widest word's width, so the count beside it never moves. */
+.refresh-control {
+  display: inline-flex;
+  height: 32px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+
+.refresh-control:hover {
+  border-color: var(--hairline-strong);
+}
+
+.refresh-control__body,
+.refresh-control__part {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 0 9px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  background: none;
+  border: 0;
+}
+
+.refresh-control__part {
+  border-left: 1px solid var(--hairline);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.refresh-control__word {
+  display: grid;
+}
+
+.refresh-control__word > span {
+  grid-area: 1 / 1;
+}
+
+.refresh-control__sizer {
+  visibility: hidden;
+}
+
+.refresh-control[data-state='on'] .refresh-control__part {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+.refresh-control[data-state='paused'] .refresh-control__part,
+.refresh-control__part:disabled {
+  color: var(--ink-3);
+}
+
 /* Pattern editor: one bordered row per rule, the inherited rows after them in the muted ink */
 .pattern-editor {
   display: flex;

@@ -133,10 +133,45 @@ test('a refresh in flight when the pause starts is dropped', async () => {
   assert.deepEqual([p.last().data, p.last().error, p.last().fetchedAt], [held.data, held.error, held.fetchedAt], 'an answer that lands after the pause began changes nothing');
   assert.deepEqual([held.data, held.fetchedAt], [1, at(0)]);
   p.render({ refreshMs: 30_000 });
-  act(() => clock.tick(30_000));
-  assert.equal(load.calls, 3, 'the period armed as the pause ends reads again');
+  assert.equal(load.calls, 3, 'the pause ends a full period after the last answer, so it reads at once');
   await settled();
-  assert.deepEqual([p.last().data, p.last().fetchedAt], [3, at(60_000)]);
+  assert.deepEqual([p.last().data, p.last().fetchedAt], [3, at(30_000)]);
+  act(() => clock.tick(30_000));
+  assert.equal(load.calls, 4, 'the period armed as the pause ends reads again');
+  await settled();
+  assert.deepEqual([p.last().data, p.last().fetchedAt], [4, at(60_000)]);
+});
+
+test('refreshMs 0 reads nothing', async () => {
+  const clock = frozen();
+  const load = counting();
+  const p = await probe(load, { refreshMs: 0 });
+  act(() => clock.tick(60_000));
+  visibility();
+  p.render({ paused: true, refreshMs: 0 });
+  p.render({ refreshMs: 0 });
+  assert.equal(load.calls, 1, 'the mount reads once and nothing after');
+});
+
+test("a pause's end reads at once when the last answer is a full period old, else at the next tick", async () => {
+  const clock = frozen();
+  const load = counting();
+  const p = await probe(load);
+  p.render({ paused: true, refreshMs: 30_000 });
+  act(() => clock.tick(10_000));
+  p.render({ refreshMs: 30_000 });
+  assert.equal(load.calls, 1, 'the pause ends 10 seconds after the last answer, inside the period, so nothing reads at once');
+  act(() => clock.tick(29_000));
+  assert.equal(load.calls, 1);
+  act(() => clock.tick(1_000));
+  assert.equal(load.calls, 2, 'the period armed as the pause ended reads at its first tick');
+  await settled();
+  p.render({ paused: true, refreshMs: 30_000 });
+  act(() => clock.tick(30_000));
+  p.render({ refreshMs: 30_000 });
+  assert.equal(load.calls, 3, 'the pause ends a full period after the last answer, so it reads at once');
+  await settled();
+  assert.deepEqual([p.last().data, p.last().fetchedAt], [3, at(70_000)]);
 });
 
 test('a read that succeeds after a failing streak reports its routes recovered once', async () => {

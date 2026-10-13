@@ -181,9 +181,9 @@ function keyOptions(keys: ApiKey[] | null, selected: string[]): Option[] {
   return [...keys.map((k) => ({ label: k.name, value: k.id })), ...earlier];
 }
 
-/** The route's order, which a Follow merge keeps: newest first, and the higher id first at one instant. */
+/** The route's order, which a poll's merge keeps: newest first, and the higher id first at one instant. */
 const newestFirst = (a: RequestLog, b: RequestLog) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
-/** The route answers its rows as `requests`, and Follow reads a list's as `rows`. */
+/** The route answers its rows as `requests`, and the poll reads a list's as `rows`. */
 const listed = (page: RequestPage) => ({ nextCursor: page.nextCursor, rows: page.requests });
 
 export function RequestsPage() {
@@ -203,7 +203,7 @@ export function RequestsPage() {
   // filter, Reset, a link) drops them in the render that brings it, with no reset of their own to render apart and read
   // the old filters once more without the cursor. The stale entry is replaced in that same render, so changing a
   // filter back does not return to the page left behind under it.
-  // `to` holds the range's end a walk from Follow's overrun reads under, the end its cursor came from.
+  // `to` holds the range's end a walk from the poll's overrun reads under, the end its cursor came from.
   const [paging, setPaging] = useState<Paging>({ for: address, stack: [] });
   if (paging.for !== address) setPaging({ for: address, stack: [] });
   const cursor = paging.for === address ? paging.cursor : undefined;
@@ -229,19 +229,20 @@ export function RequestsPage() {
   );
   const requests = useAsync(() => api.listRequests(query), [query]);
   // The open drawer reads one of the rows, so the poll waits for it to close.
-  const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed, toggleFollow } = useFollow<RequestLog>({
+  const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed } = useFollow<RequestLog>({
     address,
     compare: newestFirst,
     error: requests.error,
     identity: (r) => r.id,
+    intervalMs: follow ? 5_000 : 0,
     list: requests.data && listed(requests.data),
-    on: follow && cursor === undefined && !requestId,
     paging,
+    paused: Boolean(requestId),
     read: (c, to) => api.listRequests({ ...query, cursor: c, to: iso(to) }).then(listed),
-    setFollow,
     setPaging,
     stale: requests.stale,
   });
+  const toggleFollow = () => setFollow((v) => !v);
 
   const resetPaging = () => setPaging({ for: address, stack: [] });
   const refresh = () => {

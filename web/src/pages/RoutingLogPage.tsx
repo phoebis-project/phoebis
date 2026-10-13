@@ -55,7 +55,7 @@ export function RoutingLogPage() {
 
   // The cursor and the pages before it belong to the address they were read under, so a filter change drops them in
   // the render that brings it, and one list request follows.
-  // `to` holds the range's end a walk from Follow's overrun reads under, the end its cursor came from.
+  // `to` holds the range's end a walk from the poll's overrun reads under, the end its cursor came from.
   const [paging, setPaging] = useState<Paging>({ for: address, stack: [] });
   if (paging.for !== address) setPaging({ for: address, stack: [] });
   const cursor = paging.for === address ? paging.cursor : undefined;
@@ -89,19 +89,20 @@ export function RoutingLogPage() {
   );
   const log = useAsync(() => api.listRoutingLog(query), [query]);
 
-  const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed, toggleFollow } = useFollow<RoutingLogRow>({
+  const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed } = useFollow<RoutingLogRow>({
     address,
     compare: compareRows,
     error: log.error,
     identity: identityOf,
+    intervalMs: follow ? 5_000 : 0,
     list: log.data,
-    on: follow && cursor === undefined,
     paging,
+    paused: false,
     read: (c, to) => api.listRoutingLog({ ...query, cursor: c, to: iso(to) }),
-    setFollow,
     setPaging,
     stale: log.stale,
   });
+  const toggleFollow = () => setFollow((v) => !v);
 
   // A preset is read again from now, and a custom span as it stands.
   const refresh = () => {
