@@ -9796,42 +9796,51 @@ fn two_conversations_alternating_on_one_pin_each_refresh_it() {
 }
 
 #[test]
-fn a_selection_over_a_long_conversation_allocates_fewer_times_than_the_conversation_has_boundaries()
-{
+fn a_selection_over_a_long_conversation_allocates_as_often_over_twice_its_boundaries() {
     let s = snapshot(Pool {
         members: vec![("a", 0)],
         ..Pool::default()
     });
-    let mut st = pinned_state(&s, 1_000);
-    // Only the last boundary names an entry on the pin, so the warmth walk reads the map at every boundary first.
-    seed_affinity(
-        &st,
-        vec![affinity_row(
-            &s,
-            "claude-sonnet-5",
-            "m149",
-            AffinityChain::Message,
-            "a",
-            1_000,
-            300_000,
-            900,
-            "s1",
-        )],
-    );
-    let boundaries: Vec<String> = (0..150).map(|i| format!("m{i}")).collect();
-    let mut req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
-    req.boundaries = boundaries.clone().into();
-    let mut rng = rng();
-    let ((result, _), allocations) = allocations_of(|| select(&mut st, &s, &req, &mut rng));
-    let SelectResult::Selected(sel) = result else {
-        panic!("the pin renews")
+    let allocations_over = |count: usize| {
+        let mut st = pinned_state(&s, 1_000);
+        // Only the last boundary names an entry on the pin, so the warmth walk reads the map at every boundary first.
+        seed_affinity(
+            &st,
+            vec![affinity_row(
+                &s,
+                "claude-sonnet-5",
+                &format!("m{}", count - 1),
+                AffinityChain::Message,
+                "a",
+                1_000,
+                300_000,
+                900,
+                "s1",
+            )],
+        );
+        let mut req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
+        req.boundaries = (0..count)
+            .map(|i| format!("m{i}"))
+            .collect::<Vec<_>>()
+            .into();
+        let mut rng = rng();
+        let ((result, _), allocations) = allocations_of(|| select(&mut st, &s, &req, &mut rng));
+        let SelectResult::Selected(sel) = result else {
+            panic!("the pin renews")
+        };
+        assert!(
+            sel.trace.renewed,
+            "the walk found the continuation over {count} boundaries"
+        );
+        allocations
     };
-    assert!(sel.trace.renewed, "the walk found the continuation");
-    assert!(
-        allocations < boundaries.len(),
-        "{allocations} allocations for {} boundaries",
-        boundaries.len()
+    let (short, long) = (allocations_over(150), allocations_over(300));
+    assert_eq!(
+        short, long,
+        "{short} allocations over 150 boundaries and {long} over 300: the walk allocates per boundary"
     );
+    // The selection's own fixed cost, a fifth over what it reads today.
+    assert!(short < 180, "{short} allocations for one renewal");
 }
 
 #[test]
@@ -17439,6 +17448,25 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
     const HEAVY: [&str; 2] = ["3d1f7a90", "c27b4e15"];
     const LIGHT: &str = "7e9a0c42";
     const DAY: i64 = 24 * HOUR;
+    // Cache-read tokens a second: the subagent's, each Fable session's and the main turn's.
+    const SUBAGENT_READS: f64 = 40_000.0;
+    const FABLE_READS: f64 = 20_000.0;
+    const MAIN_READS: f64 = 14_000.0;
+    const AVERAGE_SECONDS: u64 = 1_800;
+    // The router's charges on cedar's 5-hour window, by minute after T: they take the 0.04 reading to 0.87 at
+    // T + 201 min and 0.96 at T + 272 min.
+    const CHARGES: [(i64, f64); 10] = [
+        (30, 0.16),
+        (60, 0.16),
+        (75, 0.10),
+        (80, 0.10),
+        (90, 0.05),
+        (95, 0.05),
+        (150, 0.11),
+        (200, 0.10),
+        (240, 0.05),
+        (270, 0.04),
+    ];
     let s = {
         let mut load = load_of(
             Pool {
@@ -17446,7 +17474,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
                 members: vec![("alder", 0), ("birch", 0), ("cedar", 0)],
                 shedding: Shedding {
                     shed_share: 0.5,
-                    burn_window_seconds: 1_800,
+                    burn_window_seconds: AVERAGE_SECONDS,
                     source_dwell_seconds: 900,
                     migrate_when_spent: true,
                     warm_sessions: WarmSessions::WhenNeeded,
@@ -17491,6 +17519,8 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
         model: model.into(),
     };
     let subagent_key = key(SESSION, SUBAGENT, OPUS);
+    let subagent_folded = T + 70 * MINUTE;
+    let cedar_reset = T + 5 * HOUR;
     // The rows as the replay needs them, loaded before the subagent's turn at T + 70 min. Each average carries its last
     // fold within the replay, as the routing task's folds would leave it: the subagent's at that turn, after which it
     // idles, the two Fable sessions' at their end, T + 220 min, and the main turn's a minute before its turn. The Fable
@@ -17503,9 +17533,9 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
             SUBAGENT,
             OPUS,
             "cedar",
-            40_000.0,
+            SUBAGENT_READS,
             813_365,
-            T + 70 * MINUTE,
+            subagent_folded,
             T + 69 * MINUTE,
         ),
         replay_pin(
@@ -17513,7 +17543,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
             "main",
             FABLE,
             "cedar",
-            20_000.0,
+            FABLE_READS,
             750_000,
             T + 220 * MINUTE,
             T + 84 * MINUTE,
@@ -17523,7 +17553,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
             "main",
             FABLE,
             "cedar",
-            20_000.0,
+            FABLE_READS,
             700_000,
             T + 220 * MINUTE,
             T + 84 * MINUTE,
@@ -17552,7 +17582,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
             "main",
             FABLE,
             "alder",
-            14_000.0,
+            MAIN_READS,
             870_174,
             T + 271 * MINUTE,
             T + 271 * MINUTE,
@@ -17569,7 +17599,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
     st.record_sample(
         "cedar",
         with_fable(weekly(0.04, 0.3, 4, T), 0.73, Some(T + WEEK_MS * 4 / 10))
-            .with(FIVE_HOUR, reading(0.04, T + 5 * HOUR)),
+            .with(FIVE_HOUR, reading(0.04, cedar_reset)),
     );
     st.record_sample(
         "birch",
@@ -17581,9 +17611,42 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
         with_fable(weekly(0.70, 0.5, 6, T), 0.97, Some(alder_fable_reset))
             .with(FIVE_HOUR, reading(0.70, T + 4 * HOUR)),
     );
-    let charge = |st: &mut RoutingState, minute: i64, share: f64| {
-        st.charge("cedar", T + minute * MINUTE, &[(FIVE_HOUR, share)]);
+    // Books the charges of the minutes `from` to `to`, `to` excluded, as their usage lands.
+    let charge = |st: &mut RoutingState, from: i64, to: i64| {
+        for (minute, share) in CHARGES
+            .iter()
+            .filter(|(minute, _)| (from..to).contains(minute))
+        {
+            st.charge("cedar", T + minute * MINUTE, &[(FIVE_HOUR, *share)]);
+        }
     };
+    let used_by = |minute: i64| {
+        0.04 + CHARGES
+            .iter()
+            .filter(|(at, _)| *at < minute)
+            .map(|(_, share)| share)
+            .sum::<f64>()
+    };
+    // A burn's 5-hour share a second through the replay's pricer, and that share decayed from its last fold.
+    let pricer = replay_pricer();
+    let five_hour_rate = |model: &str, reads: f64| {
+        pricer
+            .rate(
+                FIVE_HOUR,
+                TIER,
+                model,
+                &PinBurn {
+                    cache_read: reads,
+                    ..PinBurn::default()
+                },
+                T,
+            )
+            .expect("the replay's pricer prices every model on TIER")
+    };
+    let decayed = |rate: f64, folded: i64, now: i64| {
+        rate * (-((now - folded) as f64) / (AVERAGE_SECONDS * 1_000) as f64).exp()
+    };
+    let seconds_to_reset = |now: i64| (cedar_reset - now) as f64 / 1_000.0;
     let cedar_five_hour = |st: &RoutingState, now: i64| five_hour(st, "cedar", now);
     let holds_allowance = |record: &DecisionRecord| {
         assert_eq!(
@@ -17595,8 +17658,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
 
     // T + 70 min: 0.36 used, the subagent's 0.072 an hour and the Fable pins' 0.036 each over the 230 minutes to the
     // reset add 0.552, and 0.912 stays under the ceiling. The weeks at their five-hour horizon read 0.42 and 0.85.
-    charge(&mut st, 30, 0.16);
-    charge(&mut st, 60, 0.16);
+    charge(&mut st, 0, 70);
     let at_70 = decide(
         &mut st,
         &s,
@@ -17607,10 +17669,14 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
     holds_allowance(&at_70.record);
     let shed = line(&at_70.record, "move:shed");
     assert_eq!(shed.verdict, "no");
+    let ceiling = number(fact(shed, "ceiling"));
     let projection = number(fact(shed, "projection_five_hour"));
+    let expected = used_by(70)
+        + (five_hour_rate(OPUS, SUBAGENT_READS) + 2.0 * five_hour_rate(FABLE, FABLE_READS))
+            * seconds_to_reset(T + 70 * MINUTE);
     assert!(
-        close(projection, 0.912) && projection < 0.95,
-        "{projection}"
+        close(projection, expected) && projection < ceiling,
+        "{projection} against {expected}"
     );
     assert!(
         shed.facts.iter().all(|f| f.key != "trigger"),
@@ -17623,8 +17689,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
     // heavy Fable pin's turn runs the round. The subagent, idle and cold, leads the order, birch fits it to every
     // horizon while alder's runway falls short of alder's reset, and its 0.0437 covers the excess: it is the one mark,
     // and the requesting pin renews in place.
-    charge(&mut st, 75, 0.10);
-    charge(&mut st, 80, 0.10);
+    charge(&mut st, 70, 85);
     let at_85 = decide(
         &mut st,
         &s,
@@ -17641,8 +17706,25 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
     assert_eq!(fact(shed, "round"), &FactValue::Text("ran".into()));
     assert_eq!(fact(shed, "trigger"), &FactValue::Text("five_hour".into()));
     let projection = number(fact(shed, "projection_five_hour"));
-    assert!((projection - 0.9745).abs() < 1e-3, "{projection}");
-    assert!(number(fact(shed, "excess")) > 0.0);
+    let expected = used_by(85)
+        + (decayed(
+            five_hour_rate(OPUS, SUBAGENT_READS),
+            subagent_folded,
+            T + 85 * MINUTE,
+        ) + 2.0 * five_hour_rate(FABLE, FABLE_READS))
+            * seconds_to_reset(T + 85 * MINUTE);
+    assert!(
+        close(projection, expected) && projection > ceiling,
+        "{projection} against {expected}"
+    );
+    let excess = number(fact(shed, "excess"));
+    assert!(
+        close(
+            excess,
+            (expected - ceiling) / seconds_to_reset(T + 85 * MINUTE) * 3_600.0
+        ),
+        "{excess}: the overrun at the reset spread over the hours to it"
+    );
     assert_eq!(
         fact(shed, "marks"),
         &FactValue::List(vec![format!("k/{SESSION}/{SUBAGENT}/{OPUS}")])
@@ -17688,8 +17770,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
     // 0.3235: 0.9835 still reads over the ceiling, so the mark stands past the dwell and the subagent moves. The round
     // past the dwell marks nothing, the standing mark covering its excess, and birch's runway is the longer of the two
     // that fit.
-    charge(&mut st, 90, 0.05);
-    charge(&mut st, 95, 0.05);
+    charge(&mut st, 85, 101);
     let returned = T + 85 * MINUTE + 963_000;
     let back = decide(
         &mut st,
@@ -17723,8 +17804,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
     st.charge("birch", returned + 30_000, &shares);
 
     // T + 201 min, the first anchor: 0.87 used.
-    charge(&mut st, 150, 0.11);
-    charge(&mut st, 200, 0.10);
+    charge(&mut st, 101, 201);
     assert!(close(cedar_five_hour(&st, T + 201 * MINUTE), 0.87));
     // T + 220 min: the two Fable sessions end.
     for session in HEAVY {
@@ -17743,8 +17823,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
         ),
     );
     // T + 272 min, the second anchor: 0.96 used.
-    charge(&mut st, 240, 0.05);
-    charge(&mut st, 270, 0.04);
+    charge(&mut st, 201, 272);
     assert!(close(cedar_five_hour(&st, T + 272 * MINUTE), 0.96));
 
     // T + 272 min + 53 s: the main turn leaves alder under the spent rule. Cedar's 0.96 plus the rewrite's 0.087
@@ -17840,7 +17919,14 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
         number(fact(reserve, "reserved_five_hour")),
         813_365.0 / 10_000_000.0
     ));
-    assert!((number(fact(reserve, "burn_five_hour")) - 0.0256).abs() < 1e-4);
+    assert!(close(
+        number(fact(reserve, "burn_five_hour")),
+        decayed(
+            five_hour_rate(OPUS, SUBAGENT_READS),
+            subagent_folded,
+            returned
+        ) * 3_600.0
+    ));
     assert_eq!(
         fact(reserve, "expires_at"),
         &FactValue::Int(returned + IN_FLIGHT_RECLAIM_MS)
@@ -17903,4 +17989,85 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
         0.0
     ));
     assert_eq!(line(&fresh.record, "reserve").verdict, "booked");
+}
+
+#[test]
+fn a_placement_or_a_move_that_books_nothing_records_reserve_none_with_the_account_alone() {
+    // A count, a probe and a fast request book nothing whatever the destination prices, and a destination with no
+    // tier prices nothing to book: each walk still ends at the reserve station, naming the account it landed on.
+    let priced = tiered(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let untiered = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let placements = [
+        (
+            "count",
+            &priced,
+            SelectRequest {
+                count: true,
+                ..placing(&priced, "r-1", "s1", T)
+            },
+        ),
+        (
+            "probe",
+            &priced,
+            SelectRequest {
+                probe: true,
+                ..placing(&priced, "r-1", "s1", T)
+            },
+        ),
+        ("fast", &priced, fast_request(&priced, "r-1", "s1", T)),
+        ("untiered", &untiered, placing(&untiered, "r-1", "s1", T)),
+    ];
+    let none_on = |case: &str, st: &RoutingState, d: &Decided, account: &str| {
+        let reserve = d.record.walk.last().expect("a walk");
+        assert_eq!(
+            (reserve.step, reserve.verdict),
+            ("reserve", "none"),
+            "{case}"
+        );
+        assert_eq!(
+            reserve
+                .facts
+                .iter()
+                .map(|f| (f.key, f.value.clone(), f.account_id.as_deref(), f.unit))
+                .collect::<Vec<_>>(),
+            [(
+                "account_id",
+                FactValue::Text(account.into()),
+                Some(account),
+                None
+            )],
+            "{case}: the account alone"
+        );
+        assert_eq!(d.record.outcome.reservation, None, "{case}");
+        assert!(st.reservation("r-1").is_none(), "{case}: nothing booked");
+    };
+    for (case, s, req) in placements {
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.set_share(ratio_pricer());
+        st.record_sample("a", sample(0.5, 0.1, T));
+        credits_on(&mut st, "a", T);
+        let d = decide(&mut st, s, &req, &mut rng());
+        assert_eq!(landed(d.result.clone()).0, "a", "{case}");
+        none_on(case, &st, &d, "a");
+    }
+    // A spent move onto a sibling with no tier: the gate reads both siblings least bad and the order takes b.
+    let s = snapshot_with_terms(b_outranks_c_pool(vec![]), tier_terms(&["a"]));
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let d = spent_move_from_a(
+        &s,
+        &mut st,
+        sample(0.1, 0.1, T + 500),
+        sample(0.1, 0.1, T + 500),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    none_on("move", &st, &d, "b");
 }

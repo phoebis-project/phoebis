@@ -1971,7 +1971,7 @@ pub fn seconds_ms(seconds: u64) -> i64 {
         .unwrap_or(i64::MAX)
 }
 
-const FIVE_HOUR_MS: i64 = 5 * 3_600_000;
+pub(crate) const FIVE_HOUR_MS: i64 = 5 * 3_600_000;
 
 /// Milliseconds as the seconds a share-per-second burn multiplies.
 fn seconds(ms: i64) -> f64 {

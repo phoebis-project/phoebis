@@ -3535,15 +3535,42 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         .unwrap();
     let b = picked(&second);
     assert_ne!(a, b);
-    let (moved, _) = next_decision(&mut events).await;
+    let (moved, record) = next_decision(&mut events).await;
     assert_eq!(
         (moved.kind, moved.rule),
         ("placed", Some("cooldown")),
         "a hard failover's reason is the decision's rule"
     );
-    assert!(
-        matches!(next_event(&mut events).await, RouterEvent::PinMigrated { from_account, to_account, reason, .. } if from_account == a && to_account == b && reason == "cooldown")
-    );
+    let landing = record
+        .candidates
+        .iter()
+        .find(|candidate| candidate.account_id == b)
+        .expect("the landing's row");
+    match next_event(&mut events).await {
+        RouterEvent::PinMigrated {
+            from_account,
+            to_account,
+            reason,
+            fit,
+            runway_ms,
+            binding,
+            ..
+        } => {
+            assert_eq!(
+                (from_account.as_str(), to_account.as_str(), reason.as_str()),
+                (a.as_str(), b.as_str(), "cooldown")
+            );
+            // The fail-over lands by a fresh placement, so its fit is the no-fit partition's read: an API key
+            // member whose buckets have room fits, with no runway to bound and no window binding.
+            assert_eq!(
+                (fit, runway_ms, binding.clone()),
+                (landing.fit, landing.runway_ms, landing.binding.clone()),
+                "the event carries the landing's row"
+            );
+            assert_eq!((fit, runway_ms, binding), (Some("fits"), None, None));
+        }
+        other => panic!("{other:?}"),
+    }
     // Overage moves once per edge.
     let evidence = |in_use: bool, at: i64| phoebis_routing::OverageEvidence {
         in_use,
@@ -8724,4 +8751,105 @@ async fn a_pin_migrated_event_carries_the_destinations_fit_runway_and_binding() 
         (of("verdict"), of("runway_ms"), of("binding")),
         "the event names the destination's row of the move's fit table"
     );
+}
+
+#[tokio::test]
+async fn a_predicted_wall_with_no_reset_holds_back_the_samples_of_its_own_window_and_not_of_a_later_one(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let reset = 2 * HOUR;
+    let now = Arc::new(AtomicI64::new(reset + 1_000));
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            share: a_tenth_per_million_written(),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.5, Some(reset)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    // Past the stored reset the window opens with the router's own charges, so the wall the charge reaches names no
+    // reset yet.
+    let announced = reset + 2_000;
+    handle
+        .report(Report::Usage {
+            account_id: "a".into(),
+            at: announced,
+            canonical_model: "claude-sonnet-5".into(),
+            incarnation: 1,
+            usage: PinUsage {
+                input: 10_000_000,
+                ..PinUsage::default()
+            },
+            fast: false,
+            request_id: "r-1".into(),
+            attempt: 1,
+        })
+        .await;
+    assert!(matches!(
+        next_spent(&mut events).await,
+        RouterEvent::WindowSpent {
+            reset: None,
+            source: WindowSource::Predicted,
+            ..
+        }
+    ));
+    // The head that confirms the wall names that window's reset, within five hours of the announcement.
+    handle
+        .report(head_reading(
+            reset + 3_000,
+            1.0,
+            Some(announced + 4 * HOUR),
+            "r-2",
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let quiet = drained(&mut events).await;
+    assert!(
+        !quiet
+            .iter()
+            .any(|event| matches!(event, RouterEvent::WindowSpent { .. })),
+        "the open window's wall is announced once: {quiet:?}"
+    );
+    // A window whose reset falls past the open window's length is a later one, and its wall is announced.
+    handle
+        .report(head_reading(
+            reset + 4_000,
+            0.5,
+            Some(announced + 7 * HOUR),
+            "r-3",
+        ))
+        .await;
+    // Read back before the next, which would otherwise replace it unread.
+    handle.samples().await.unwrap();
+    handle
+        .report(head_reading(
+            reset + 5_000,
+            1.0,
+            Some(announced + 7 * HOUR),
+            "r-4",
+        ))
+        .await;
+    match next_spent(&mut events).await {
+        RouterEvent::WindowSpent {
+            reset: spent_reset,
+            source,
+            source_request_id,
+            ..
+        } => assert_eq!(
+            (spent_reset, source, source_request_id.as_deref()),
+            (Some(announced + 7 * HOUR), WindowSource::Head, Some("r-4"))
+        ),
+        other => panic!("{other:?}"),
+    }
 }

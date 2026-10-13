@@ -26,12 +26,13 @@ use crate::record::{
 };
 use crate::select::{
     decide, release_reasons, Decided, MigrateReason, Refusal, SelectRequest, SelectResult,
+    FIVE_HOUR_MS,
 };
 use crate::state::{
     burn_average_ms, burn_folded, default_burn_average_ms, is_plan_window, mark_holds,
     shed_dwell_ms, AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight, MemberSpend,
     OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer, StateWrite,
-    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::{resolve, term, window_for, KeyRefusal, Presented, RegistrySnapshot};
 
@@ -1428,9 +1429,9 @@ struct Task {
     revision: u64,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
     /// The reset each account and window's predicted wall was announced for, `None` for a 5-hour window open past its
-    /// reset: a charge or a booking announces a wall once per reset, and the sample that confirms it names the same
-    /// reset and announces nothing.
-    spent_announced: HashMap<(String, String), Option<i64>>,
+    /// reset, beside the instant of the announcement: a charge or a booking announces a wall once per reset cycle, and
+    /// the sample that confirms it names that cycle's reset and announces nothing.
+    spent_announced: HashMap<(String, String), (Option<i64>, i64)>,
     state: RoutingState,
     store: Arc<Store>,
     /// The rotation each slot's last touch was stamped under, beside its timestamp: a touch under a different
@@ -2153,13 +2154,24 @@ fn destination_fit(
         })
 }
 
-/// Whether two readings' resets name one reset, within `RESET_SLACK_MS` as `announce_reset` compares them. A window
-/// open past its reset names none until the next reading does, so two such readings are one cycle.
-fn same_reset(a: Option<i64>, b: Option<i64>) -> bool {
-    match (a, b) {
-        (Some(a), Some(b)) => a.abs_diff(b) <= RESET_SLACK_MS.unsigned_abs(),
-        (None, None) => true,
-        _ => false,
+/// Whether a reading at `now` naming `reset` is in the cycle of a wall `announced` as `(reset, at)` on `window`. Two
+/// named resets are one within `RESET_SLACK_MS`, as `announce_reset` compares them. A wall announced with none was in a
+/// window open past its stored reset, which opened by `at` and runs the window's length at most, so a reset inside
+/// that length after `at` names it, and a second reading with none inside it is the same open window.
+fn same_cycle(announced: (Option<i64>, i64), reset: Option<i64>, now: i64, window: &str) -> bool {
+    let (announced_reset, at) = announced;
+    let open_until = at.saturating_add(if window == FIVE_HOUR {
+        FIVE_HOUR_MS
+    } else {
+        WEEK_MS
+    });
+    match (announced_reset, reset) {
+        (Some(announced), Some(reset)) => {
+            announced.abs_diff(reset) <= RESET_SLACK_MS.unsigned_abs()
+        }
+        (None, Some(reset)) => at <= reset && reset <= open_until,
+        (None, None) => now <= open_until,
+        (Some(_), None) => false,
     }
 }
 
@@ -3766,7 +3778,7 @@ impl Task {
         let announced = self
             .spent_announced
             .get(&(account_id.to_string(), window.to_string()))
-            .is_some_and(|announced| same_reset(*announced, reading.reset));
+            .is_some_and(|announced| same_cycle(*announced, reading.reset, now, window));
         if stored.is_none_or(|stored| stored.utilization < 1.0)
             && reading.utilization >= 1.0
             && !announced
@@ -3804,11 +3816,11 @@ impl Task {
         if self
             .spent_announced
             .get(&key)
-            .is_some_and(|announced| same_reset(*announced, reading.reset))
+            .is_some_and(|announced| same_cycle(*announced, reading.reset, at, window))
         {
             return;
         }
-        self.spent_announced.insert(key, reading.reset);
+        self.spent_announced.insert(key, (reading.reset, at));
         self.emit(RouterEvent::WindowSpent {
             account_id: account_id.to_string(),
             window: window.to_string(),
