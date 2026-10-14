@@ -4858,6 +4858,9 @@ async function popoverBounds(theme, what, stationOf, { striped = false, table = 
         card: { left: c.left, right: c.right, width: c.width },
         // The candidate table's first even row that is not tinted for the chosen member.
         evenRow: fill(card.querySelector('.decision-card__candidates tbody tr:nth-child(even):not(.is-chosen) td')),
+        // A figure broken over two lines reads as two values, so a numeric cell keeps its line while the words wrap,
+        // save in the Fit table, which wraps its figures to keep inside the popover.
+        figuresWrapping: [...popover.querySelectorAll('.strip-popover__table:not(.strip-popover__table--wraps) td.right')].filter((td) => getComputedStyle(td).whiteSpace !== 'nowrap' || lines(td) > 1).map((td) => td.textContent),
         heads: [...popover.querySelectorAll('thead th')].map((th) => ({ lines: lines(th), text: th.textContent })),
         inner: window.innerWidth,
         maxWidth: popover.style.maxWidth,
@@ -4883,6 +4886,7 @@ async function popoverBounds(theme, what, stationOf, { striped = false, table = 
     if (got.popover.left < got.shown.left + 8 - 0.5 || got.popover.right > got.shown.right - 8 + 0.5) say(`${where} spans ${got.popover.left} to ${got.popover.right}px, outside the card's part on screen, ${got.shown.left} to ${got.shown.right}px, less 8 px either side`);
     if (got.popover.left < 8 - 0.5 || got.popover.right > got.inner - 8 + 0.5) say(`${where} spans ${got.popover.left} to ${got.popover.right}px, outside the ${got.inner}px window less 8 px either side`);
     for (const h of got.heads.filter((x) => x.lines > 2)) say(`${where}: the "${h.text}" head runs to ${h.lines} lines`);
+    if (got.figuresWrapping.length > 0) say(`${where}: its figures may wrap or run to two lines: ${JSON.stringify(got.figuresWrapping)}`);
     if (got.popover.scroll > got.popover.client || got.wraps.some((w) => w.scroll > w.client)) say(`${where} scrolls sideways (${JSON.stringify({ popover: got.popover, wraps: got.wraps })})`);
     if (table && (got.renderer !== 'strip-popover--table' || got.heads.length === 0)) say(`${where} draws no table to read (${got.renderer}, ${got.heads.length} heads)`);
     if (striped && (got.rows.length < 2 || got.evenRow === null || got.rows[1] !== got.evenRow || got.rows[0] === got.rows[1])) say(`${where}: its rows read ${JSON.stringify(got.rows)}, not the candidate table's even-row ${got.evenRow} on the second row alone`);

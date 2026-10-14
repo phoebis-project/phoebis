@@ -2528,8 +2528,8 @@
   margin-top: 8px;
 }
 
-/* Rows of one 18 px line in 4 px of padding under a head of two lines, so the bound below is the head and eight
-   rows: 4 + 36 + 4 and its rule, then 4 + 18 + 4 and a rule a row. */
+/* Rows of 18 px lines in 4 px of padding under a head of two lines: the bound holds the head and eight rows of one line
+   (4 + 36 + 4 and its rule, then 4 + 18 + 4 and a rule a row), fewer where a row's words wrap, and scrolls the rest. */
 .strip-popover__table {
   max-height: calc(45px + 8 * 27px);
   overflow-y: auto;
@@ -2551,6 +2551,16 @@
 }
 
 .strip-popover .table td {
+  white-space: normal;
+}
+
+/* A figure broken over two lines reads as two values, so a numeric cell keeps its one line, save in the Fit table,
+   whose nine columns need every cell free to wrap to keep inside the 641 px. */
+.strip-popover .table td.right {
+  white-space: nowrap;
+}
+
+.strip-popover__table--wraps .table td.right {
   white-space: normal;
 }
 

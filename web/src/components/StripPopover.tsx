@@ -82,7 +82,7 @@ function Groups({ groups }: { groups: PlanGroup[] }) {
 
 function Table({ table }: { table: PlanTable }) {
   return (
-    <div className="table-wrap strip-popover__table">
+    <div className={`table-wrap strip-popover__table${table.wraps ? ' strip-popover__table--wraps' : ''}`}>
       <table className="table">
         <thead>
           <tr>

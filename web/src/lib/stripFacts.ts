@@ -16,7 +16,8 @@ export interface PlanColumn { key: string; label: string; numeric: boolean; titl
  * One row per account in the facts' order and one cell per column, null where the account lacks the fact. A cell
  * with a `tone` draws its text as a badge in it.
  */
-export interface PlanTable { columns: PlanColumn[]; loose: PlanRow[]; rows: { account: Chip; cells: Record<string, { text: string; title?: string; tone?: VerdictTone } | null> }[] }
+/** `wraps` lets a figure break over two lines, which only the Fit table's nine columns need to keep inside the popover. */
+export interface PlanTable { columns: PlanColumn[]; loose: PlanRow[]; rows: { account: Chip; cells: Record<string, { text: string; title?: string; tone?: VerdictTone } | null> }[]; wraps: boolean }
 export interface WindowRow { age: string; left: string; reset: string; source: string; used: string; window: string }
 export type PopoverBlock =
   | { kind: 'candidate'; chips: Chip[]; windows: WindowRow[] }
@@ -182,7 +183,7 @@ function tableOf(step: WalkStep, record: DecisionRecord, at: number, now: number
   }
   // A cell the account lacks stays blank.
   const table = [...rows.values()].map((r) => ({ account: r.account, cells: Object.fromEntries(columns.map((c) => [c.key, r.cells[c.key] ?? null])) }));
-  return { block: { kind: 'table', table: { columns, loose, rows: table } }, renderer: 'table', unplaced };
+  return { block: { kind: 'table', table: { columns, loose, rows: table, wraps: step.step === 'fit' } }, renderer: 'table', unplaced };
 }
 
 /**
@@ -325,7 +326,7 @@ function remainingOf(model: StripModel, record: DecisionRecord, now: number): Pl
         },
       };
     });
-  return { columns, loose: [], rows };
+  return { columns, loose: [], rows, wraps: false };
 }
 
 function leafPlan(leaf: Leaf, model: StripModel, record: DecisionRecord, now: number): PopoverPlan {

@@ -319,6 +319,11 @@ test('the Fit table reads unbounded on a row with a projection and no runway, an
   assert.deepEqual(runways(every), [['primary', 'unbounded'], ['nightly', 'unbounded'], ['overflow', '']]);
 });
 
+test('the Fit table alone lets its figures wrap, which its nine columns need to keep inside the popover', async () => {
+  const shed = await recordOf('req_868264bc-611/1');
+  assert.deepEqual(['fit', 'pick'].map((id) => stationPlan(shed, id).block.table.wraps), [true, false]);
+});
+
 test("the Fit station's table reads a row per candidate the gate read with its columns window by window, and the Reserve station lists the booking", async () => {
   const shed = await recordOf('req_868264bc-611/1');
   const { table } = stationPlan(shed, 'fit').block;
