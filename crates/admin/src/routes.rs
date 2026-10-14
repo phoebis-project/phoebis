@@ -1822,26 +1822,29 @@ pub(crate) struct AccountContext {
     pub lifetime: BTreeMap<String, phoebis_ledger::Totals>,
     pub members: Vec<PoolMember>,
     pub overages: BTreeMap<String, OverageEvidence>,
-    /// The router's projections per account under the settings of the first of its pools by id, absent for an account
-    /// in no pool.
+    /// The router's projections per account under its pool's settings, absent for an account in no pool.
     pub projections: BTreeMap<String, AccountProjection>,
     pub quota: Vec<phoebis_ledger::QuotaSampleRecord>,
     pub week: BTreeMap<String, phoebis_ledger::Totals>,
 }
 
-/// One `projections` ask per pool with members, in pool id order, each account keeping the first pool's answer, since
-/// every figure reads a pool's settings and an account the pools share has to read one of them.
+/// One `projections` ask per pool with members, each account keeping its own pool's answer: the registry holds an
+/// account in one pool, and every figure reads that pool's settings.
 async fn projections_by_account(
     state: &AdminState,
     members: &[PoolMember],
 ) -> BTreeMap<String, AccountProjection> {
-    let pools: std::collections::BTreeSet<&str> =
-        members.iter().map(|m| m.pool_id.as_str()).collect();
+    let pool_of: BTreeMap<&str, &str> = members
+        .iter()
+        .map(|m| (m.account_id.as_str(), m.pool_id.as_str()))
+        .collect();
+    let pools: std::collections::BTreeSet<&str> = pool_of.values().copied().collect();
     let mut out = BTreeMap::new();
     for pool_id in pools {
         for projection in state.router.projections(pool_id).await.unwrap_or_default() {
-            out.entry(projection.account_id.clone())
-                .or_insert(projection);
+            if pool_of.get(projection.account_id.as_str()) == Some(&pool_id) {
+                out.insert(projection.account_id.clone(), projection);
+            }
         }
     }
     out
