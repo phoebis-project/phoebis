@@ -6171,7 +6171,8 @@ fn a_tail_match_bypasses_no_fit_and_the_wind_down() {
         "no_fit",
         "least_bad",
     );
-    // Ending inside the next five hours, which `no_fit` passes over ahead of the wind-down.
+    // Ten minutes from its end, inside a thirty-minute wind-down, which `no_fit` passes over ahead of the wind-down
+    // partition.
     scenario(
         Pool {
             members: vec![("a", 1), ("b", 0)],
@@ -6186,7 +6187,7 @@ fn a_tail_match_bypasses_no_fit_and_the_wind_down() {
         "no_fit",
         "ending",
     );
-    // Winding down past the next five hours, which the wind-down alone passes over.
+    // Six hours from its end, inside a ten-hour wind-down, which `no_fit` passes over as well.
     scenario(
         Pool {
             members: vec![("a", 1), ("b", 0)],
@@ -6198,8 +6199,8 @@ fn a_tail_match_bypasses_no_fit_and_the_wind_down() {
         },
         vec![ends(1_000 + 6 * HOUR)],
         &|_| {},
-        "winding_down",
-        "fits",
+        "no_fit",
+        "ending",
     );
 }
 
@@ -8024,7 +8025,7 @@ fn an_account_without_runway_is_passed_over_under_pace_while_a_fitting_one_serve
 }
 
 #[test]
-fn an_account_ending_inside_the_next_five_hours_takes_no_placement_while_another_serves() {
+fn an_account_inside_its_wind_down_takes_no_placement_while_another_serves() {
     let ending = |account: &str, at: i64| SubscriptionTerm {
         account_id: account.into(),
         since: Some(0),
@@ -8035,9 +8036,13 @@ fn an_account_ending_inside_the_next_five_hours_takes_no_placement_while_another
     };
     let pool = || Pool {
         members: vec![("a", 0), ("b", 1)],
+        failover: Failover {
+            wind_down_minutes: 180,
+            ..Failover::default()
+        },
         ..Pool::default()
     };
-    // a outranks b and ends two hours out, before its thirty minutes of wind-down begin.
+    // a outranks b and ends two hours out, inside its three hours of wind-down.
     let s = snapshot_with_terms(pool(), vec![ending("a", 1_000 + 2 * HOUR)]);
     let mut st = RoutingState::from_load(RoutingLoad::default());
     let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
@@ -8054,16 +8059,13 @@ fn an_account_ending_inside_the_next_five_hours_takes_no_placement_while_another
     assert_eq!(fact(partitions, "no_fit"), &FactValue::Int(1));
     assert_eq!(fact(partitions, "winding_down"), &FactValue::Int(0));
 
-    // Every account ending: `no_fit` falls through, and the wind-down still passes over the one in its last thirty
-    // minutes, so the pool places on the one that ends last.
-    let s = snapshot_with_terms(
-        pool(),
-        vec![
-            ending("a", 1_000 + 10 * MINUTE),
-            ending("b", 1_000 + 2 * HOUR),
-        ],
-    );
+    // a inside its wind-down and b, with no end, past its ceiling: nothing fits, so `no_fit` falls through, and the
+    // wind-down passes over a, so the pool places on b.
+    let mut terms = tier_terms(&["b"]);
+    terms.push(ending("a", 1_000 + 10 * MINUTE));
+    let s = snapshot_with_terms(pool(), terms);
     let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample("b", sample(0.96, 0.0, 1_000));
     let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
     let d = decide(&mut st, &s, &req, &mut rng());
     assert_eq!(picked(&d.result), "b");
@@ -8075,7 +8077,7 @@ fn an_account_ending_inside_the_next_five_hours_takes_no_placement_while_another
     assert_eq!(fact(partitions, "winding_down"), &FactValue::Int(1));
     let a = candidate(&d.record, "a");
     assert_eq!((a.partition, a.fit), (Some("winding_down"), Some("ending")));
-    assert_eq!(candidate(&d.record, "b").fit, Some("ending"));
+    assert_eq!(candidate(&d.record, "b").fit, Some("least_bad"));
 }
 
 #[test]
@@ -8520,7 +8522,7 @@ fn a_cancelled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_su
             affinity: 86_400,
             ..Pool::default()
         },
-        // The end lies past the next five hours, so the end exclusion leaves a fresh session on a until then.
+        // With no wind-down the end exclusion leaves a fresh session on a until its end.
         vec![SubscriptionTerm {
             account_id: "a".into(),
             since: Some(0),
@@ -16241,6 +16243,17 @@ fn gate_pool() -> Pool {
     }
 }
 
+/// `gate_pool` with `wind_down_minutes` before an end.
+fn wind_down_gate_pool(wind_down_minutes: u32) -> Pool {
+    Pool {
+        failover: Failover {
+            wind_down_minutes,
+            ..Failover::default()
+        },
+        ..gate_pool()
+    }
+}
+
 #[test]
 fn a_move_takes_a_destination_the_pin_fits_to_the_horizon_before_any_other() {
     let s = tiered(gate_pool());
@@ -16523,7 +16536,8 @@ fn a_candidate_without_a_read_keeps_its_place_in_the_ties() {
 }
 
 #[test]
-fn a_candidate_ending_inside_the_next_five_hours_is_no_destination_for_a_move() {
+fn a_candidate_inside_its_wind_down_is_no_destination_for_a_move() {
+    // Each account in `ids` ends two hours out, inside its three hours of wind-down.
     let ending = |ids: &[&str]| {
         let mut terms = tier_terms(&["a", "b", "c"]);
         for term in &mut terms {
@@ -16532,7 +16546,7 @@ fn a_candidate_ending_inside_the_next_five_hours_is_no_destination_for_a_move() 
                 term.ends_at = Some(T + 2 * HOUR);
             }
         }
-        snapshot_with_terms(gate_pool(), terms)
+        snapshot_with_terms(wind_down_gate_pool(180), terms)
     };
     let spent_a = || {
         let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
@@ -16577,6 +16591,104 @@ fn a_candidate_ending_inside_the_next_five_hours_is_no_destination_for_a_move() 
         landed(d.result.clone()),
         ("a".into(), None),
         "with every sibling ending the spent pin renews where it is"
+    );
+    let spent = line(&d.record, "move:spent");
+    assert_eq!(spent.verdict, "no");
+    assert_eq!(fact(spent, "no_destination"), &FactValue::Bool(true));
+    assert_eq!(
+        fact(spent, "ending"),
+        &FactValue::List(vec!["b".into(), "c".into()])
+    );
+    let fit = line(&d.record, "fit");
+    assert_eq!(fit.verdict, "none");
+    for id in ["b", "c"] {
+        assert_eq!(
+            fact_of(fit, "verdict", id),
+            &FactValue::Text("ending".into())
+        );
+    }
+}
+
+/// The decision on `s1`'s pin on a spent `a` at `now`, with `b` and `c` at 0.3 and `c` ending at `end` under
+/// `wind_down_minutes`. By its figures `c` fits, its runway running far past its reset three hours out.
+fn spent_beside_an_end(wind_down_minutes: u32, end: i64, now: i64) -> Decided {
+    let mut terms = tier_terms(&["a", "b", "c"]);
+    terms[2].cancelled = true;
+    terms[2].ends_at = Some(end);
+    let s = snapshot_with_terms(wind_down_gate_pool(wind_down_minutes), terms);
+    let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
+    gated_siblings(&mut st, 0.3, 0.3);
+    decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+        &mut rng(),
+    )
+}
+
+#[test]
+fn the_fit_gate_reads_ending_inside_the_wind_down_and_fits_past_it() {
+    let end = T + 120 * MINUTE;
+    let d = spent_beside_an_end(30, end, T);
+    assert_eq!(
+        fact_of(line(&d.record, "fit"), "verdict", "c"),
+        &FactValue::Text("fits".into()),
+        "two hours out lies past a thirty-minute wind-down, so c reads its figures"
+    );
+    let d = spent_beside_an_end(180, end, T);
+    let fit = line(&d.record, "fit");
+    assert_eq!(
+        (fact_of(fit, "verdict", "c"), fact_of(fit, "end", "c")),
+        (&FactValue::Text("ending".into()), &FactValue::Int(end)),
+        "inside a three-hour wind-down c reads ending, and the table states its end"
+    );
+    let d = spent_beside_an_end(120, end, T);
+    assert_eq!(
+        fact_of(line(&d.record, "fit"), "verdict", "c"),
+        &FactValue::Text("ending".into()),
+        "an end exactly the wind-down away is inside it"
+    );
+}
+
+#[test]
+fn wind_down_minutes_zero_leaves_no_rule_before_the_end() {
+    let end = T + MINUTE;
+    let d = spent_beside_an_end(0, end, T);
+    assert_eq!(
+        fact_of(line(&d.record, "fit"), "verdict", "c"),
+        &FactValue::Text("fits".into()),
+        "a minute before its end c reads its figures"
+    );
+    let d = spent_beside_an_end(0, end, end);
+    let c = candidate(&d.record, "c");
+    assert_eq!(
+        (c.obstacle.as_ref().map(|o| o.name), c.fit),
+        (Some("subscription_ended"), None),
+        "at its end c is the obstacle, and no fit is read"
+    );
+}
+
+#[test]
+fn a_destination_inside_the_wind_down_is_out_of_every_order_and_the_spent_rule_does_not_fire() {
+    // b and c end six hours out, after their 5-hour resets and inside a ten-hour wind-down. By their figures both fit.
+    let mut terms = tier_terms(&["a", "b", "c"]);
+    for term in &mut terms[1..] {
+        term.cancelled = true;
+        term.ends_at = Some(T + 6 * HOUR);
+    }
+    let s = snapshot_with_terms(wind_down_gate_pool(600), terms);
+    let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
+    gated_siblings(&mut st, 0.3, 0.3);
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("a".into(), None),
+        "with every sibling inside its wind-down the spent pin renews where it is"
     );
     let spent = line(&d.record, "move:spent");
     assert_eq!(spent.verdict, "no");
@@ -16803,7 +16915,7 @@ fn a_failed_over_landing_falls_through_the_ladder_before_every_candidate() {
         Some(&FactValue::Text("least_bad".into()))
     );
 
-    // Both siblings end inside the next five hours: every candidate serves.
+    // Both siblings end two hours out, inside their three hours of wind-down: every candidate serves.
     let mut terms = tier_terms(&["a", "b", "c"]);
     for term in &mut terms {
         if term.account_id != "a" {
@@ -16811,7 +16923,7 @@ fn a_failed_over_landing_falls_through_the_ladder_before_every_candidate() {
             term.ends_at = Some(T + 2 * HOUR);
         }
     }
-    let ending = snapshot_with_terms(gate_pool(), terms);
+    let ending = snapshot_with_terms(wind_down_gate_pool(180), terms);
     let mut st = state(0.3, 0.3);
     let d = decide(
         &mut st,
@@ -16839,6 +16951,41 @@ fn a_failed_over_landing_falls_through_the_ladder_before_every_candidate() {
         &FactValue::Text("fell_through".into())
     );
     assert_eq!(ladder_of(&d.record), None);
+}
+
+#[test]
+fn a_failed_over_landing_whose_candidates_all_end_lands_on_the_fourth_rung() {
+    // b and c end six hours out, after their 5-hour resets and inside a ten-hour wind-down. By their figures both read
+    // rewrite_only: 0.3 and the rewrite of 0.02 leave 0.63, which the row's burn of 0.0001 a second reaches in 6 300 s,
+    // short of the three hours to the reset.
+    let mut terms = tier_terms(&["a", "b", "c"]);
+    for term in &mut terms[1..] {
+        term.cancelled = true;
+        term.ends_at = Some(T + 6 * HOUR);
+    }
+    let s = snapshot_with_terms(wind_down_gate_pool(600), terms);
+    let mut st = priced(vec![gated_pin("w", "a", 1_000.0)]);
+    gated_siblings(&mut st, 0.3, 0.3);
+    let d = decide(
+        &mut st,
+        &s,
+        &failing_over(&s, "a", "cooldown", gated_pin("s1", "a", 1_000.0), None, T),
+        &mut rng(),
+    );
+    let (to, _) = landed(d.result.clone());
+    assert!(
+        ["b", "c"].contains(&to.as_str()),
+        "the landing still serves: {to}"
+    );
+    assert_eq!(
+        (candidate(&d.record, "b").fit, candidate(&d.record, "c").fit),
+        (Some("ending"), Some("ending"))
+    );
+    assert_eq!(
+        fact(line(&d.record, "partitions"), "no_fit"),
+        &FactValue::Text("fell_through".into())
+    );
+    assert_eq!(ladder_of(&d.record), Some(&FactValue::Text("every".into())));
 }
 
 #[test]
@@ -17523,12 +17670,12 @@ fn a_spent_pins_wait_runs_to_the_end_of_a_cooldown_that_outlasts_the_reset() {
 
 #[test]
 fn a_moved_row_reads_the_fired_rules_fit_step_when_an_earlier_rule_read_the_gate_too() {
-    // b ends inside the horizon and c holds no reading: the spent rule's keep admits b alone, which the gate reads
+    // b is inside its wind-down and c holds no reading: the spent rule's keep admits b alone, which the gate reads
     // ending, and the overage rule's keep admits both, where c reads least bad and takes the move.
     let mut terms = tier_terms(&["a", "b"]);
     terms[1].cancelled = true;
     terms[1].ends_at = Some(T + 2 * HOUR);
-    let s = snapshot_with_terms(gate_pool(), terms);
+    let s = snapshot_with_terms(wind_down_gate_pool(180), terms);
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
     st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
     st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));

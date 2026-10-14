@@ -1711,7 +1711,7 @@ fn run(
     // The fit is a preference, not a refusal: with no account fitting the request goes where the strategy picks
     // rather than answering exhausted while capacity remains. A move's destinations are the set its rule's gate
     // ordered, read with the moving pin already, so they stay as the gate left them with the gate's reads. A fresh
-    // placement reads every candidate with the fresh prior, and one ending inside the next five hours never fits. It
+    // placement reads every candidate with the fresh prior, and one inside the wind-down never fits. It
     // keeps the read of each candidate that fits, so a fall-through to the whole set carries no runway to break a tie.
     // A failed-over request falls through the gate's orders before the whole set, so a session that has to land
     // somewhere lands where its burn runs longest. The rung that kept the set is the `ladder` fact.
@@ -2492,11 +2492,13 @@ pub(crate) fn fit_of(
         reserved: BTreeMap::new(),
         end: None,
     };
-    // An end inside the next five hours is inside every horizon, so the candidate is in no order.
-    if let Some(end) =
-        account_end(snapshot, candidate, now).filter(|end| *end < now.saturating_add(FIVE_HOUR_MS))
+    // An account inside the wind-down is no destination: the operator's `wind_down_minutes` is the one rule before
+    // the end, and the same test keeps a fresh session off the account and drains its cold pins.
+    if snapshot
+        .term(candidate)
+        .is_some_and(|term| term::winding_down(term, now, pool.failover.wind_down_minutes))
     {
-        read.end = Some(end);
+        read.end = account_end(snapshot, candidate, now);
         read.verdict = "ending";
         return read;
     }
