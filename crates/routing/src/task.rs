@@ -2217,7 +2217,8 @@ fn destination_fit(
 /// Whether a reading at `now` naming `reset` is in the cycle of a wall `announced` as `(reset, at)` on `window`. Two
 /// named resets are one within `RESET_SLACK_MS`, as `announce_reset` compares them. A wall announced with none was in a
 /// window open past its stored reset, which opened by `at` and runs the window's length at most, so a reset inside
-/// that length after `at` names it, and a second reading with none inside it is the same open window.
+/// that length after `at` names it, and a second reading with none inside it is the same open window. The reset's
+/// bound takes the same slack, since the request that opened the window can reach the upstream after `at`.
 fn same_cycle(announced: (Option<i64>, i64), reset: Option<i64>, now: i64, window: &str) -> bool {
     let (announced_reset, at) = announced;
     let open_until = at.saturating_add(if window == FIVE_HOUR {
@@ -2229,7 +2230,7 @@ fn same_cycle(announced: (Option<i64>, i64), reset: Option<i64>, now: i64, windo
         (Some(announced), Some(reset)) => {
             announced.abs_diff(reset) <= RESET_SLACK_MS.unsigned_abs()
         }
-        (None, Some(reset)) => at <= reset && reset <= open_until,
+        (None, Some(reset)) => at <= reset && reset <= open_until.saturating_add(RESET_SLACK_MS),
         (None, None) => now <= open_until,
         (Some(_), None) => false,
     }

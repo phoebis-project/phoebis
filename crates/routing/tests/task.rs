@@ -8863,6 +8863,75 @@ async fn a_pin_migrated_event_carries_the_destinations_fit_runway_and_binding() 
 }
 
 #[tokio::test]
+async fn a_predicted_wall_with_no_reset_holds_back_a_sample_whose_reset_lands_within_a_minute_past_its_length(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let reset = 2 * HOUR;
+    let now = Arc::new(AtomicI64::new(reset + 1_000));
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            share: a_tenth_per_million_written(),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.5, Some(reset)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    let announced = reset + 2_000;
+    handle
+        .report(Report::Usage {
+            account_id: "a".into(),
+            at: announced,
+            canonical_model: "claude-sonnet-5".into(),
+            incarnation: 1,
+            usage: PinUsage {
+                input: 10_000_000,
+                ..PinUsage::default()
+            },
+            fast: false,
+            request_id: "r-1".into(),
+            attempt: 1,
+        })
+        .await;
+    assert!(matches!(
+        next_spent(&mut events).await,
+        RouterEvent::WindowSpent {
+            reset: None,
+            source: WindowSource::Predicted,
+            ..
+        }
+    ));
+    // The request that opened the window reached the upstream after the announcement, so the reset lands half a
+    // minute past five hours from it, inside the slack two named resets are compared within.
+    handle
+        .report(head_reading(
+            reset + 3_000,
+            1.0,
+            Some(announced + 5 * HOUR + 30_000),
+            "r-2",
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let quiet = drained(&mut events).await;
+    assert!(
+        !quiet
+            .iter()
+            .any(|event| matches!(event, RouterEvent::WindowSpent { .. })),
+        "the open window's wall is announced once: {quiet:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_predicted_wall_with_no_reset_holds_back_the_samples_of_its_own_window_and_not_of_a_later_one(
 ) {
     use phoebis_routing::RouterEvent;
