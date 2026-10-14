@@ -406,9 +406,15 @@ const CLEARED_WORD: Record<string, string> = { admin: 'by hand', expired: 'deadl
 const CREDITS_WORD: Record<string, string> = { org_spend_cap_reached: 'spend cap reached' };
 const PERIOD_WORD: Record<string, string> = { day: 'daily budget', month: 'monthly budget' };
 const REGISTRY_VERB: Record<string, string> = { updated: 'edited' };
-/** The pool fields a registry edit reads as a share rather than a bare number, a row written before the rename among them. */
+/**
+ * The pool fields a registry edit reads as a share rather than a bare number, a row written before the rename among
+ * them.
+ */
 const SHARE_FIELDS = new Set(['pace_floor', 'select_below_utilization', 'shed_ahead_of_pace', 'shed_cap', 'shed_share', 'window_ceiling']);
-/** A row written before the rename keeps the old field names: a renamed field reads its new word, a removed one says so. */
+/**
+ * A row written before the rename keeps the old field names: a renamed field reads its new word, a removed one says
+ * so.
+ */
 const FIELD_LABEL: Record<string, string> = {
   burn_window_seconds: 'burn average seconds (then burn_window_seconds)',
   pace_floor: 'pace floor (removed)',

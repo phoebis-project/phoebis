@@ -14,9 +14,9 @@ export interface PlanGroup { label: string | null; rows: PlanRow[] }
 export interface PlanColumn { key: string; label: string; numeric: boolean; title?: string }
 /**
  * One row per account in the facts' order and one cell per column, null where the account lacks the fact. A cell
- * with a `tone` draws its text as a badge in it.
+ * with a `tone` draws its text as a badge in it. `wraps` lets a figure break over two lines, which only the Fit
+ * table's nine columns need to keep inside the popover.
  */
-/** `wraps` lets a figure break over two lines, which only the Fit table's nine columns need to keep inside the popover. */
 export interface PlanTable { columns: PlanColumn[]; loose: PlanRow[]; rows: { account: Chip; cells: Record<string, { text: string; title?: string; tone?: VerdictTone } | null> }[]; wraps: boolean }
 export interface WindowRow { age: string; left: string; reset: string; source: string; used: string; window: string }
 export type PopoverBlock =
@@ -174,8 +174,8 @@ function tableOf(step: WalkStep, record: DecisionRecord, at: number, now: number
     account.cells[f.key] = cells === null ? { text: valueText(f.key, f.value, f.unit, at), ...toned } : { text: cells.pace, ...(cells.paceTitle === null ? {} : { title: cells.paceTitle }) };
   }
   if (step.step === 'fit') {
-    // The engine writes no runway for an unbounded one, so a row with a projection and no runway reads unbounded, as the
-    // card's Runway does, and only a row the gate projected nothing for lacks the fact.
+    // The engine writes no runway for an unbounded one, so a row with a projection and no runway reads unbounded, as
+    // the card's Runway does, and only a row the gate projected nothing for lacks the fact.
     const unbounded = [...rows.values()].filter((r) => Object.keys(r.cells).some((key) => key.startsWith('projection_')) && r.cells.runway_ms === undefined);
     if (unbounded.length > 0 && !columns.some((c) => c.key === 'runway_ms')) columns.push({ key: 'runway_ms', label: keyWord('runway_ms'), numeric: true });
     for (const r of unbounded) r.cells.runway_ms = { text: 'unbounded' };

@@ -125,8 +125,8 @@ export interface ShedPreview {
   /**
    * Why the rounds mark nothing though a pin there is priced, read over every member over the ceiling in the walk's
    * order: the priced pins burn nothing, so the target is zero (`burnless`), each priced pin is warm under `never`
-   * (`warm`), or each pin a round could mark is its member's last (`last`). Null where a round marks a session, where
-   * no pin is priced and where no sibling has runway.
+   * (`warm`), or each pin a round could mark is its member's last (`last`). Null where the switch is off, where no
+   * member is over the ceiling, where a round marks a session, where no pin is priced and where no sibling has runway.
    */
   quiet: 'burnless' | 'last' | 'warm' | null;
   sessions: number;

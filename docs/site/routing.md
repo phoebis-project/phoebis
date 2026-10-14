@@ -424,15 +424,16 @@ for a model with a week of its own, the shared plan windows otherwise (any of th
 that reading stands (until its reset, or until the next reading for one that names none). With `migrate_when_spent` on
 (the default), the pin moves on this request to a sibling that holds allowance in those windows, without waiting for the
 upstream's 429. The siblings that hold allowance pass the destination gate's three orders, so the session lands on one
-it fits when one exists, else on the one its rewrite fits with the longest runway, else on the least bad. When the spent
-window resets within `retry_in_place_seconds`, the request waits in place for the reset instead of moving cold, once per
-account, and the decision reads held for the reset. The wait runs to the later of the reset and the end of any cooldown
-the 429 set, so the request does not select again on a cooling account, and it holds only when that later instant falls
-within the bound. The router has to know the sibling's allowance: an API-key account has no plan window to spend, and
-any other sibling needs a reading of each of those windows, from a head, the poll or the windows kept across restarts,
-carried forward as the windows passage says. A sibling with none stays out of the choice. Under `prefer_plan` a sibling
-in overage does not receive a spent pin, since the overage move would hand the session straight back. With the toggle
-off, or no sibling holding allowance, the session stays.
+it fits when one exists, else on the one its rewrite fits with the longest runway, else on the least bad. When every
+spent window of the account names a reset within `retry_in_place_seconds`, the request waits in place for the reset
+instead of moving cold, once per account, and the decision reads held for the reset. The wait runs to the later of the
+reset and the end of any cooldown the 429 set, so the request does not select again on a cooling account, and it holds
+only when that later instant falls within the bound and the request's own deadline. The router has to know the sibling's
+allowance: an API-key account has no plan window to spend, and any other sibling needs a reading of each of those
+windows, from a head, the poll or the windows kept across restarts, carried forward as the windows passage says. A
+sibling with none stays out of the choice. Under `prefer_plan` a sibling in overage does not receive a spent pin, since
+the overage move would hand the session straight back. With the toggle off, or no sibling holding allowance, the session
+stays.
 
 **Overage** Under `prefer_plan`, a pin on a subscription account in overage returns to plan quota: warm or cold, it
 moves to a subscription sibling that is not in overage, never to an API-key account. The sibling has to hold allowance

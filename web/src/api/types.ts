@@ -1176,8 +1176,8 @@ export interface RecordOutcome {
   inOverage: boolean;
   kind: DecisionKind;
   /**
-   * The shed mark this decision cleared, null when it cleared none. `projection` is the reading that healed it, filled on
-   * `healed` alone and null on `released` and `moved`.
+   * The shed mark this decision cleared, null when it cleared none. `projection` is the reading that healed it,
+   * filled on `healed` alone and null on `released` and `moved`.
    */
   markCleared: { markedAt: string; markedOn: string; markedWindow: string; projection: number | null; reason: string } | null;
   /** In the routing task's emit order: two for a replaced expired pin, `pin_expired` then `pin_created`. */

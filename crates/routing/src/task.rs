@@ -1262,7 +1262,7 @@ impl RouterHandle {
     }
     /// Each pin's fast usage by key, the copy `BurnRates::price_pin` sums beside the row under `BurnUnit::Usd`.
     /// A pin without fast usage has no entry. The fast-mode tests probe the copy through it and no production path
-    /// reads it, so it is compiled under the `debug-hooks` feature alone.
+    /// reads it, so it is compiled under `test` and the `debug-hooks` feature alone.
     #[cfg(any(test, feature = "debug-hooks"))]
     pub async fn fast_burns(&self) -> Result<HashMap<PinKey, PinBurn>, RouterGone> {
         self.ask(|reply| Command::FastBurns { reply }).await

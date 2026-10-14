@@ -2495,11 +2495,11 @@ fn longest<'a, 'r>(
 
 /// The three orders over the siblings `keep` admits: the candidates the pin fits to the horizon on every window its
 /// model draws, else those where the rewrite alone fits at the longest runway, every tie kept, else the rest. A tie
-/// inside an order is the strategy's to break: the fit has read every window the model draws, so no second reading of a week
-/// orders the candidates again. A candidate at its in-flight cap leaves the first two orders, so a move does not pick
-/// a full account while a free fitting one exists, and reaches the last, where the cap filter reads it as today. The
-/// shed rule (`one`) takes the first order alone, reduced to the longest runway. Every read lands on the member's row
-/// of the record too.
+/// inside an order is the strategy's to break: the fit has read every window the model draws, so no second reading of
+/// a week orders the candidates again. A candidate at its in-flight cap leaves the first two orders, so a move does
+/// not pick a full account while a free fitting one exists, and reaches the last, where the cap filter reads it as
+/// today. The shed rule (`one`) takes the first order alone, reduced to the longest runway. Every read lands on the
+/// member's row of the record too.
 #[allow(clippy::too_many_arguments)]
 fn gate<'a>(
     state: &RoutingState,
@@ -3367,8 +3367,8 @@ fn shed_round(
         reads.insert(p.key(), read);
     }
     let (outcome, reason) = if marks.is_empty() {
-        // The deepest skip class any pin reached, in the walk's order, and `unpriced` where no pin was walked because
-        // no priced burn was there to remove.
+        // The deepest skip class any eligible pin reached, in the order `no_runway`, `unpriced`, `last_pin`,
+        // `standing`, and `unpriced` where no pin was walked because no priced burn was there to remove.
         let skips: Vec<&'static str> = reads.values().filter_map(|read| read.skip).collect();
         let reason = ["no_runway", "unpriced", "last_pin", "standing"]
             .into_iter()
@@ -3625,8 +3625,8 @@ fn renew(
     state.put_pin(renewed.clone());
     state.mark_renewed(&current.key());
     writes.push(StateWrite::UpsertPin(renewed));
-    // A bound or a count request, and a portable one whose move found every destination at its cap, renew without
-    // the shed rule's read.
+    // A bound or a count request, a portable one whose move found every destination at its cap, and one on a pool
+    // with load shedding off, renew without the shed rule's read.
     if rec.trigger_windows.is_empty() {
         rec.trigger_windows = trigger_windows(state, snapshot, pool, &current.account_id);
     }

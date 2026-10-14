@@ -1104,7 +1104,7 @@ impl RoutingState {
     }
 
     /// Every pin with fast usage, by key. The fast-mode tests probe the copy through it and no production path reads
-    /// it, so it is compiled under the `debug-hooks` feature alone.
+    /// it, so it is compiled under `test` and the `debug-hooks` feature alone.
     #[cfg(any(test, feature = "debug-hooks"))]
     pub fn fast_burns(&self) -> HashMap<PinKey, PinBurn> {
         self.pins
