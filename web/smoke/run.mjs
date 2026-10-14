@@ -5333,8 +5333,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 {
   // A round counts the triggering pool's pins alone: with primary moved from all into work and laptop moved into work,
   // work's two primary pins (the busy laptop sessions) are its slice, so its preview reads them alone, whatever
-  // desktop, still all's key, holds there. The mock's cost model has no weight for their Sonnet 4.6, so the round marks
-  // nothing, where desktop's priced pins on primary would give it a mark.
+  // desktop, still all's key, holds there. Their Sonnet 4.6 burns at its model tier's latest weight, so the round marks
+  // one of them, and no pin stays unpriced.
   const pools = await api.listPools();
   const story = (id) => pools.find((p) => p.id === id);
   const written = (p, members) => ({ ...p, members: members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
@@ -5369,8 +5369,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(120);
   const line = group(dlg, 'Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
   results.push({
-    name: "/pools the shedding preview counts the pool's own pins alone on an account that left another pool",
-    ok: line === '1 member projects over the ceiling: primary. A round there would mark no session: none is priced.',
+    name: "/pools the shedding preview counts the pool's own pins alone on an account that left another pool, marking one of laptop's two Sonnet 4.6 pins priced at their model tier's weight",
+    // The marked pin's share of the excess decays with the moving clock, so the figure is read by shape.
+    ok: /^1 member projects over the ceiling: primary\. A round there would mark 1 session \(0 warm\), \d+\.\d %\/h of the excess, to move to a sibling with runway\.$/.test(line),
     missing: [line],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
