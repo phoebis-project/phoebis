@@ -3000,7 +3000,7 @@ fn an_explicitly_chosen_strategy_orders_the_api_key_group_itself() {
 }
 
 #[test]
-fn a_rounds_fitting_destinations_order_by_the_longest_runway_and_then_by_the_strategy_whatever_the_weeks_read(
+fn a_rounds_fitting_destinations_order_by_the_strategy_and_then_by_the_longest_runway_whatever_the_weeks_read(
 ) {
     // b's week below runs far ahead of its pace and c's behind.
     let s = tiered(Pool {
@@ -3008,7 +3008,7 @@ fn a_rounds_fitting_destinations_order_by_the_longest_runway_and_then_by_the_str
         ..Pool::default()
     });
     // `a` at 0.94 with its pins burning 0.05 of the window an hour projects to 0.99, so its round runs and marks s1.
-    let run = |b: UtilizationSample, c: UtilizationSample| {
+    let run = |s: &RegistrySnapshot, b: UtilizationSample, c: UtilizationSample| {
         let mut st = rounding(vec![
             burning("s1", "a", 4.0, false, T),
             burning("s0", "a", 1.0, false, T),
@@ -3016,12 +3016,16 @@ fn a_rounds_fitting_destinations_order_by_the_longest_runway_and_then_by_the_str
         st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500));
         st.record_sample("b", b);
         st.record_sample("c", c);
-        decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng())
+        decide(&mut st, s, &auxiliary(s, "s1", T), &mut rng())
     };
     // b and c read alike on both windows, so their runways tie. b's week at 0.5 with a tenth gone runs 0.4 ahead of
     // its pace, c's with six tenths gone runs behind it: the order keeps both and the strategy picks b, the higher
     // priority.
-    let d = run(weekly(0.3, 0.5, 9, T - 500), weekly(0.3, 0.5, 4, T - 500));
+    let d = run(
+        &s,
+        weekly(0.3, 0.5, 9, T - 500),
+        weekly(0.3, 0.5, 4, T - 500),
+    );
     assert_eq!(
         landed(d.result.clone()),
         ("b".into(), Some(MigrateReason::Shed)),
@@ -3038,18 +3042,44 @@ fn a_rounds_fitting_destinations_order_by_the_longest_runway_and_then_by_the_str
         "the week's reading is no fact of the table: {:?}",
         fit.facts
     );
-    // c has the longer runway, 0.3 against b's 0.5 on the 5-hour window, and the week running ahead of its pace: the
-    // runway decides.
-    let d = run(weekly(0.5, 0.5, 4, T - 500), weekly(0.3, 0.5, 9, T - 500));
+    // c has the longer runway, 0.3 against b's 0.5 on the 5-hour window, and the week running ahead of its pace. Both
+    // fit, so the strategy ranks them first and b's priority outranks c's runway.
+    let d = run(
+        &s,
+        weekly(0.5, 0.5, 4, T - 500),
+        weekly(0.3, 0.5, 9, T - 500),
+    );
     assert_eq!(
         landed(d.result.clone()),
-        ("c".into(), Some(MigrateReason::Shed)),
-        "the longest runway wins"
+        ("b".into(), Some(MigrateReason::Shed)),
+        "the strategy's pick among the fitting siblings, b by its priority"
     );
     assert_eq!(
         fact(line(&d.record, "move:shed"), "destinations"),
-        &FactValue::List(vec!["c".into()])
+        &FactValue::List(vec!["b".into(), "c".into()])
     );
+    // With b and c at one priority the strategy ties them, and the longer runway breaks the tie.
+    let one_tier = tiered(Pool {
+        members: vec![("a", 0), ("b", 1), ("c", 1)],
+        ..Pool::default()
+    });
+    let d = run(
+        &one_tier,
+        weekly(0.5, 0.5, 4, T - 500),
+        weekly(0.3, 0.5, 9, T - 500),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("c".into(), Some(MigrateReason::Shed)),
+        "the longer runway breaks the strategy's tie"
+    );
+    let pick = line(&d.record, "pick");
+    assert_eq!(
+        fact(pick, "ties"),
+        &FactValue::List(vec!["b".into(), "c".into()])
+    );
+    assert_eq!(fact(pick, "by_runway"), &FactValue::List(vec!["c".into()]));
+    assert_eq!(fact(pick, "drawn"), &FactValue::Bool(false));
 }
 
 #[test]
@@ -3100,6 +3130,13 @@ fn a_rounds_plan_under_round_robin_names_the_cohorts_turn_the_move_then_takes() 
             .and_then(|p| p.planned.as_deref()),
         Some("c"),
         "the plan reads the cursor's turn without passing it on"
+    );
+    assert!(
+        line(&d.record, "pick")
+            .facts
+            .iter()
+            .all(|f| f.key != "by_runway"),
+        "the cursor picks the turn, so the runway names no tie"
     );
 }
 
@@ -5244,18 +5281,19 @@ fn a_rounds_time_is_kept_for_its_own_pools_dwell_and_no_longer() {
 }
 
 #[test]
-fn the_shed_move_takes_the_fitting_siblings_with_the_longest_runway_and_the_cap_narrow() {
+fn the_shed_move_takes_the_fitting_siblings_whatever_their_runway_and_drops_one_at_its_cap() {
     let s = tiered(Pool {
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         ..Pool::default()
     });
     let cap = s.pool("p").unwrap().failover.in_flight_cap;
-    // c narrows out on one reading at a time, or on none: the order's answer and the fit table read each the same
-    // way.
-    for (narrow, destinations) in [
-        ("runway", vec!["b"]),
-        ("cap", vec!["b"]),
-        ("none", vec!["b", "c"]),
+    // c reads a shorter runway, sits at its cap, or neither. A shorter runway that still fits keeps c among the
+    // destinations, which the strategy ranks, and only the cap drops it: the order's answer and the fit table read
+    // each the same way.
+    for (c_reads, destinations) in [
+        ("shorter_runway", vec!["b", "c"]),
+        ("at_cap", vec!["b"]),
+        ("alike", vec!["b", "c"]),
     ] {
         let mut st = rounding(vec![
             burning("s1", "a", 4.0, false, T),
@@ -5263,9 +5301,13 @@ fn the_shed_move_takes_the_fitting_siblings_with_the_longest_runway_and_the_cap_
         ]);
         st.record_sample("a", sample(0.9, 0.3, T - 500));
         st.record_sample("b", sample(0.1, 0.1, T - 500));
-        let c_five_hour = if narrow == "runway" { 0.2 } else { 0.1 };
+        let c_five_hour = if c_reads == "shorter_runway" {
+            0.2
+        } else {
+            0.1
+        };
         st.record_sample("c", sample(c_five_hour, 0.1, T - 500));
-        let _held: Vec<_> = if narrow == "cap" {
+        let _held: Vec<_> = if c_reads == "at_cap" {
             (0..cap)
                 .map(|_| st.in_flight().dispatched("c", T))
                 .collect()
@@ -5276,21 +5318,21 @@ fn the_shed_move_takes_the_fitting_siblings_with_the_longest_runway_and_the_cap_
         assert_eq!(
             landed(d.result.clone()),
             ("b".into(), Some(MigrateReason::Shed)),
-            "c narrowed by {narrow}"
+            "c read {c_reads}"
         );
         assert_eq!(
             fact(line(&d.record, "move:shed"), "destinations"),
             &FactValue::List(destinations.iter().map(|id| id.to_string()).collect()),
-            "c narrowed by {narrow}"
+            "c read {c_reads}"
         );
         let fit = line(&d.record, "fit");
-        assert_eq!(fit.verdict, "fits", "c narrowed by {narrow}");
-        // The table reads every sibling the keep admitted, so the one the order dropped still shows as fitting.
+        assert_eq!(fit.verdict, "fits", "c read {c_reads}");
+        // The table reads every sibling the keep admitted, so the one the cap dropped still shows as fitting.
         for id in ["b", "c"] {
             assert_eq!(
                 fact_of(fit, "verdict", id),
                 &FactValue::Text("fits".into()),
-                "{id} with c narrowed by {narrow}"
+                "{id} with c read {c_reads}"
             );
         }
     }
@@ -11384,7 +11426,7 @@ fn a_return_to_plan_move_prefers_a_fitting_sibling() {
     assert_eq!(
         landed(d.result.clone()),
         ("c".into(), Some(MigrateReason::ReturnToPlan)),
-        "the fitting sibling takes the cold pin off the key over the one the rewrite fills, which outranks it"
+        "the cold pin leaves the key for the strategy's pick among the fitting siblings, over b, which outranks it"
     );
     assert_eq!(line(&d.record, "fit").verdict, "fits");
 }
@@ -16323,6 +16365,136 @@ fn with_nothing_fitting_the_move_lands_least_bad_where_the_strategy_picks() {
 }
 
 #[test]
+fn under_priority_two_fitting_candidates_in_one_tier_take_the_longer_runway_without_a_draw() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1), ("c", 1)],
+        ..gate_pool()
+    });
+    let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
+    // b: 0.6 of the window left over the pin's burn is 60 000 s, c: 0.4 left is 40 000 s, both past the 10 800 s to
+    // the reset.
+    gated_siblings(&mut st, 0.3, 0.5);
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    let fit = line(&d.record, "fit");
+    assert_eq!(fact_of(fit, "runway_ms", "b"), &FactValue::Int(60_000_000));
+    assert_eq!(fact_of(fit, "runway_ms", "c"), &FactValue::Int(40_000_000));
+    let pick = line(&d.record, "pick");
+    assert_eq!(
+        fact(pick, "ties"),
+        &FactValue::List(vec!["b".into(), "c".into()]),
+        "the tier is the strategy's tie"
+    );
+    assert_eq!(
+        fact(pick, "by_runway"),
+        &FactValue::List(vec!["b".into()]),
+        "the longer runway breaks the tie"
+    );
+    assert_eq!(
+        fact(pick, "drawn"),
+        &FactValue::Bool(false),
+        "one candidate is left after the runway, so nothing is drawn"
+    );
+}
+
+#[test]
+fn under_pace_an_exact_score_tie_is_broken_by_the_runway() {
+    let s = tiered(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 1), ("c", 1)],
+        ..gate_pool()
+    });
+    let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
+    // b and c read one week, 0.1 with one reset, and no pin burns on either, so their scores tie exactly. c's 5-hour
+    // window at 0.3 leaves the pin 60 000 s and b's at 0.5 leaves it 40 000 s.
+    gated_siblings(&mut st, 0.5, 0.3);
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("c".into(), Some(MigrateReason::Spent))
+    );
+    let pick = line(&d.record, "pick");
+    assert_eq!(
+        fact_of(pick, "score", "b"),
+        fact_of(pick, "score", "c"),
+        "one week read alike scores alike"
+    );
+    assert_eq!(
+        fact(pick, "ties"),
+        &FactValue::List(vec!["b".into(), "c".into()])
+    );
+    assert_eq!(
+        fact(pick, "by_runway"),
+        &FactValue::List(vec!["c".into()]),
+        "the longer runway breaks the exact tie"
+    );
+    assert_eq!(fact(pick, "drawn"), &FactValue::Bool(false));
+}
+
+#[test]
+fn a_candidate_without_a_read_keeps_its_place_in_the_ties() {
+    let s = tiered(Pool {
+        members: vec![("b", 0), ("c", 0)],
+        ..gate_pool()
+    });
+    let cap = s.pool("p").unwrap().failover.in_flight_cap;
+    // A warm pin burning on b gives a fresh session's prior a burn, so b and c read different runways.
+    let mut st = priced(vec![gated_pin("w", "b", 100.0)]);
+    st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("c", refreshing(0.5, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    let _held: Vec<_> = ["b", "c"]
+        .into_iter()
+        .flat_map(|id| (0..cap).map(move |_| id))
+        .map(|id| st.in_flight().dispatched(id, T - 1_000))
+        .collect();
+    // With every account at its cap the request is held, and the hold's choice is made with no read in hand.
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("fresh"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert!(
+        matches!(d.result, SelectResult::Held { .. }),
+        "every account at its cap holds the request: {:?}",
+        d.result
+    );
+    assert_ne!(
+        candidate(&d.record, "b").runway_ms,
+        candidate(&d.record, "c").runway_ms,
+        "the two runways differ, so a tiebreak would have narrowed the tier"
+    );
+    let pick = line(&d.record, "pick");
+    assert_eq!(
+        fact(pick, "ties"),
+        &FactValue::List(vec!["b".into(), "c".into()])
+    );
+    assert!(
+        pick.facts.iter().all(|f| f.key != "by_runway"),
+        "no read narrows the ties: {:?}",
+        pick.facts
+    );
+    assert_eq!(
+        fact(pick, "drawn"),
+        &FactValue::Bool(true),
+        "the tier is drawn as it would be with no runway at all"
+    );
+}
+
+#[test]
 fn a_candidate_ending_inside_the_next_five_hours_is_no_destination_for_a_move() {
     let ending = |ids: &[&str]| {
         let mut terms = tier_terms(&["a", "b", "c"]);
@@ -16818,7 +16990,7 @@ fn a_request_holds_for_a_reset_once_per_source_and_moves_when_the_reset_moved_du
 }
 
 #[test]
-fn the_shed_rule_takes_the_one_fitting_destination_with_the_longest_runway_or_none() {
+fn the_shed_rule_takes_the_fitting_destination_the_strategy_ranks_first_or_none() {
     let s = tiered(gate_pool());
     let round = |b: f64, c: f64| {
         // Two cold pins on a, so the round marks s1, the heavier, whose burn reads the siblings' runways.
@@ -16839,13 +17011,13 @@ fn the_shed_rule_takes_the_one_fitting_destination_with_the_longest_runway_or_no
     assert_eq!(
         landed(d.result.clone()),
         ("b".into(), Some(MigrateReason::Shed)),
-        "of two fitting siblings the longer runway takes the marked pin"
+        "of two fitting siblings the strategy's pick, b by its priority, takes the marked pin"
     );
     let fit = line(&d.record, "fit");
     assert_eq!(fit.verdict, "fits");
     assert_eq!(
         fact(line(&d.record, "move:shed"), "destinations"),
-        &FactValue::List(vec!["b".into()])
+        &FactValue::List(vec!["b".into(), "c".into()])
     );
     for id in ["b", "c"] {
         assert_eq!(fact_of(fit, "verdict", id), &FactValue::Text("fits".into()));
@@ -16874,6 +17046,62 @@ fn the_shed_rule_takes_the_one_fitting_destination_with_the_longest_runway_or_no
         "an unmarked pin takes no gate of its own: {:?}",
         steps(&d.record)
     );
+}
+
+#[test]
+fn under_round_robin_the_cursor_picks_and_the_runway_never_speaks() {
+    let s = tiered(Pool {
+        strategy: Strategy::RoundRobin,
+        members: vec![("a", 0), ("b", 1), ("c", 1)],
+        ..gate_pool()
+    });
+    // Three cold pins on a, so the round marks the two heavy ones and leaves the light one.
+    let heavy = |session: &str| PinRow {
+        last_input_tokens: 500_000,
+        ..burning(session, "a", 100.0, false, T)
+    };
+    let mut st = priced(vec![
+        heavy("s1"),
+        heavy("s2"),
+        burning("s0", "a", 10.0, false, T),
+    ]);
+    st.record_sample("a", sample(0.9, 0.3, T - 500));
+    // b at 0.1 keeps the longer runway even once the first move books its rewrite and burn there, and c at 0.75
+    // still fits the 10 800 s to the reset, so both moves find both siblings fitting.
+    st.record_sample("b", refreshing(0.1, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("c", refreshing(0.75, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    let first = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(
+        landed(first.result.clone()),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "the cursor's first turn"
+    );
+    assert!(marked(&st, "s2"), "the round marked the second heavy pin");
+    let second = decide(&mut st, &s, &auxiliary(&s, "s2", T + 1_000), &mut rng());
+    assert_eq!(
+        landed(second.result.clone()),
+        ("c".into(), Some(MigrateReason::Shed)),
+        "the cursor's next turn, though b still reads the longer runway"
+    );
+    let fit = line(&second.record, "fit");
+    let runway = |id: &str| match fact_of(fit, "runway_ms", id) {
+        FactValue::Int(ms) => *ms,
+        other => panic!("a bounded runway on {id}: {other:?}"),
+    };
+    assert!(runway("b") > runway("c"), "{:?}", fit.facts);
+    for d in [&first, &second] {
+        assert_eq!(
+            fact(line(&d.record, "move:shed"), "destinations"),
+            &FactValue::List(vec!["b".into(), "c".into()])
+        );
+        let pick = line(&d.record, "pick");
+        assert!(
+            pick.facts.iter().all(|f| f.key != "by_runway"),
+            "the runway never narrows the cohort: {:?}",
+            pick.facts
+        );
+        assert_eq!(fact(pick, "drawn"), &FactValue::Bool(false));
+    }
 }
 
 #[test]

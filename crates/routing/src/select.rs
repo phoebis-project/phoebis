@@ -1369,6 +1369,9 @@ fn run(
     // The row a move takes off its source, whose burn and last prompt the new row carries.
     let mut moving: Option<PinRow> = None;
     let mut selection_set: Vec<&Candidate> = eligible.clone();
+    // The fit reads whose runway breaks the strategy's tie: a move's from its rule's gate, a fresh placement's from the
+    // `no_fit` partition.
+    let mut reads: Vec<(String, FitRead)> = Vec::new();
     if let Some(mut current) = pin.take() {
         let mut moved_off = false;
         let ended = snapshot
@@ -1431,7 +1434,7 @@ fn run(
             // A hold is for a fresh placement: with every destination at its cap the move is not made, the pin
             // renews in place at step 5 while its account stays eligible (a cooled one is released there and the
             // request placed afresh), and the next request judges the move again.
-            if let MoveVerdict::Move(reason, set) = moved {
+            if let MoveVerdict::Move(reason, set, move_reads) = moved {
                 let cap = pool.failover.in_flight_cap;
                 let loads: Vec<u32> = set
                     .iter()
@@ -1462,6 +1465,7 @@ fn run(
                     rec.destinations = set.iter().map(|c| c.account_id.clone()).collect();
                     migrated = Some(reason);
                     selection_set = set;
+                    reads = move_reads;
                     moving = Some(current.clone());
                     moved_off = true;
                 }
@@ -1589,8 +1593,9 @@ fn run(
     partitions.push(at_cap);
     // The fit is a preference, not a refusal: with no account fitting the request goes where the strategy picks
     // rather than answering exhausted while capacity remains. A move's destinations are the set its rule's gate
-    // ordered, read with the moving pin already, so they stay as the gate left them. A fresh placement reads every
-    // candidate with the fresh prior, and one ending inside the next five hours never fits.
+    // ordered, read with the moving pin already, so they stay as the gate left them with the gate's reads. A fresh
+    // placement reads every candidate with the fresh prior, and one ending inside the next five hours never fits. It
+    // keeps the read of each candidate that fits, so a fall-through to the whole set carries no runway to break a tie.
     let fitting: Vec<&Candidate> = if moving.is_some() {
         selection_set.clone()
     } else {
@@ -1611,10 +1616,11 @@ fn run(
             if let Some(member) = rec.candidate_mut(&c.account_id) {
                 member.runway_ms = read.runway_ms;
                 member.fit = Some(read.verdict);
-                member.binding = read.binding;
+                member.binding = read.binding.clone();
             }
             if read.verdict == "fits" {
                 fitting.push(c);
+                reads.push((c.account_id.clone(), read));
             }
         }
         fitting
@@ -1668,12 +1674,16 @@ fn run(
     let (chosen, tier, placement) = if let Some((candidate, placement)) = placed {
         (candidate, None, Some(placement))
     } else {
+        // The runway breaks the strategy's tie for a move alone: a fresh session, held at the cap or not, keeps the
+        // strategy's own draw among its ties, which spreads new sessions over them.
+        let tie_reads: &[(String, FitRead)] = if moving.is_some() { &reads } else { &[] };
         let Some((strategy_choice, tier)) = choose(
             state,
             snapshot,
             pool,
             window,
             &selection_set,
+            tie_reads,
             &spent_model,
             request.now,
             request.fallback_ms,
@@ -2450,19 +2460,23 @@ fn allowance_known(
         }
 }
 
-/// What step 4's rules answered: the pin stays, moves to one of a set under a reason, or waits in place until its
-/// spent window has reset and its account's cooldown has ended. The reset, the window and the wait are the spent
-/// line's facts, written where the rule reads them.
+/// What step 4's rules answered: the pin stays, moves to one of a set under a reason with the fit reads the strategy's
+/// tie is broken by, or waits in place until its spent window has reset and its account's cooldown has ended. The
+/// reset, the window and the wait are the spent line's facts, written where the rule reads them.
 enum MoveVerdict<'a> {
     Stay,
-    Move(MigrateReason, Vec<&'a Candidate>),
+    Move(MigrateReason, Vec<&'a Candidate>, Vec<(String, FitRead)>),
     Wait { until: i64 },
 }
 
-/// What a rule's gate answered: the destination set of the first non-empty order, the `fit` step over every candidate
-/// read, and the candidates the end exclusion dropped.
+/// What a rule's gate answered: the destination set of the first non-empty order, the fit reads whose runway breaks
+/// the strategy's tie, the `fit` step over every candidate read, and the candidates the end exclusion dropped. The
+/// reads are the gate's when the set is the `fits` order and empty otherwise, so a `rewrite_only` or `least_bad` set
+/// is drawn as the strategy alone says. `rank` finds a candidate's read by its account id, so the set the cap filter
+/// narrows still reads its runway.
 struct Gate<'a> {
     set: Vec<&'a Candidate>,
+    reads: Vec<(String, FitRead)>,
     step: WalkStep,
     ending: Vec<String>,
 }
@@ -2495,12 +2509,13 @@ fn longest<'a, 'r>(
 }
 
 /// The three orders over the siblings `keep` admits: the candidates the pin fits to the horizon on every window its
-/// model draws, else those where the rewrite alone fits at the longest runway, every tie kept, else the rest. A tie
-/// inside an order is the strategy's to break: the fit has read every window the model draws, so no second reading of
-/// a week orders the candidates again. A candidate at its in-flight cap leaves the first two orders, so a move does
-/// not pick a full account while a free fitting one exists, and reaches the last, where the cap filter reads it as
-/// today. The shed rule (`one`) takes the first order alone, reduced to the longest runway. Every read lands on the
-/// member's row of the record too.
+/// model draws, else those where the rewrite alone fits at the longest runway, every tie kept, else the rest. The
+/// `fits` order goes to the strategy whole: the strategy ranks it, and the longest runway on the binding window
+/// breaks the strategy's tie. A tie inside the other two orders is the strategy's alone to break: the fit has read
+/// every window the model draws, so no second reading of a week orders the candidates again. A candidate at its
+/// in-flight cap leaves the first two orders, so a move does not pick a full account while a free fitting one exists,
+/// and reaches the last, where the cap filter reads it as today. The shed rule (`fits_only`) takes the first order
+/// alone and answers none when nothing fits. Every read lands on the member's row of the record too.
 #[allow(clippy::too_many_arguments)]
 fn gate<'a>(
     state: &RoutingState,
@@ -2511,7 +2526,7 @@ fn gate<'a>(
     eligible: &[&'a Candidate],
     window: &str,
     keep: &dyn Fn(&Candidate) -> bool,
-    one: bool,
+    fits_only: bool,
     rec: &mut Recorder,
 ) -> Gate<'a> {
     let now = request.now;
@@ -2570,9 +2585,8 @@ fn gate<'a>(
         candidates.into_iter().map(|(c, _)| c).collect()
     };
     let (set, verdict) = if !fits.is_empty() {
-        let fits = if one { longest(fits) } else { fits };
         (chosen(fits), "fits")
-    } else if one {
+    } else if fits_only {
         (Vec::new(), "none")
     } else if !rewrite_only.is_empty() {
         (chosen(longest(rewrite_only)), "rewrite_only")
@@ -2586,9 +2600,11 @@ fn gate<'a>(
         .filter(|(_, read)| read.verdict == "ending")
         .map(|(account_id, _)| account_id.clone())
         .collect();
+    let step = fit_step(&reads, verdict);
     Gate {
         set,
-        step: fit_step(&reads, verdict),
+        reads: if verdict == "fits" { reads } else { Vec::new() },
+        step,
         ending,
     }
 }
@@ -2702,8 +2718,8 @@ fn move_of<'a>(
         );
         let facts = vec![Fact::bool("holds_allowance", false)];
         if !gate.set.is_empty() {
-            let set = fired(rec, 0, facts, gate);
-            return MoveVerdict::Move(MigrateReason::Spent, set);
+            let (set, reads) = fired(rec, 0, facts, gate);
+            return MoveVerdict::Move(MigrateReason::Spent, set, reads);
         }
         no_destination(rec, 0, facts, gate);
     }
@@ -2753,8 +2769,8 @@ fn move_of<'a>(
                     rec,
                 );
                 if !gate.set.is_empty() {
-                    let set = fired(rec, 1, facts, gate);
-                    return MoveVerdict::Move(MigrateReason::Overage, set);
+                    let (set, reads) = fired(rec, 1, facts, gate);
+                    return MoveVerdict::Move(MigrateReason::Overage, set, reads);
                 }
                 no_destination(rec, 1, facts, gate);
             }
@@ -2817,8 +2833,8 @@ fn move_of<'a>(
                 rec,
             );
             if !gate.set.is_empty() {
-                let set = fired(rec, 2, facts, gate);
-                return MoveVerdict::Move(MigrateReason::ReturnToPlan, set);
+                let (set, reads) = fired(rec, 2, facts, gate);
+                return MoveVerdict::Move(MigrateReason::ReturnToPlan, set, reads);
             }
             no_destination(rec, 2, facts, gate);
         }
@@ -2850,8 +2866,8 @@ fn move_of<'a>(
         );
         let facts = vec![Fact::bool("cold", true), Fact::bool("winding_down", true)];
         if !gate.set.is_empty() {
-            let set = fired(rec, 3, facts, gate);
-            return MoveVerdict::Move(MigrateReason::Drain, set);
+            let (set, reads) = fired(rec, 3, facts, gate);
+            return MoveVerdict::Move(MigrateReason::Drain, set, reads);
         }
         no_destination(rec, 3, facts, gate);
     }
@@ -2985,19 +3001,22 @@ fn move_of<'a>(
         no_destination(rec, 4, facts, gate);
         return MoveVerdict::Stay;
     }
-    let set = fired(rec, 4, facts, gate);
-    MoveVerdict::Move(MigrateReason::Shed, set)
+    let (set, reads) = fired(rec, 4, facts, gate);
+    MoveVerdict::Move(MigrateReason::Shed, set, reads)
 }
 
 /// A rule that moves the pin: its line with the destinations, the rules after it `not_run`, then the fit table the
-/// destinations were taken from. Answers the destinations.
+/// destinations were taken from. Answers the destinations, which the strategy ranks, with the gate's reads, whose
+/// runway breaks the strategy's tie.
 fn fired<'a>(
     rec: &mut Recorder,
     rule: usize,
     mut facts: Vec<Fact>,
     gate: Gate<'a>,
-) -> Vec<&'a Candidate> {
-    let Gate { set, step, .. } = gate;
+) -> (Vec<&'a Candidate>, Vec<(String, FitRead)>) {
+    let Gate {
+        set, reads, step, ..
+    } = gate;
     facts.push(Fact::list(
         "destinations",
         set.iter().map(|c| c.account_id.clone()).collect(),
@@ -3007,7 +3026,7 @@ fn fired<'a>(
         rec.step(later, "not_run", Vec::new());
     }
     rec.walk.push(step);
-    set
+    (set, reads)
 }
 
 /// A rule whose reason held but which found no sibling to move the pin to, with the candidates the end exclusion
@@ -3172,11 +3191,11 @@ fn pin_request(request: &SelectRequest, pin: &PinRow, current: bool) -> SelectRe
 }
 
 /// The shed rule's destination for `pin` among the eligible siblings, as its own move would read it: the no-return
-/// keep, the allowance filter and the cap as `gate` applies them, the order `fits` alone reduced to the longest runway,
-/// and the strategy's pick among the tied as `rank` reads it, so the plan names the account the pin's own move lands
-/// on when nothing changes before its next request, save a runway tie under Pace or Priority, where the plan names the
-/// first tied candidate and the move draws one of them at random. `planned` holds the reservations the round planned
-/// for its earlier marks, which the fit counts on their destinations. `None` when nothing fits.
+/// keep, the allowance filter and the cap as `gate` applies them, the order `fits` alone ranked by the strategy with
+/// the longest runway breaking its tie, as `rank` reads them, so the plan names the account the pin's own move lands
+/// on when nothing changes before its next request, save a tie the runway leaves under Pace or Priority, where the
+/// plan names the first tied candidate and the move draws one of them at random. `planned` holds the reservations the
+/// round planned for its earlier marks, which the fit counts on their destinations. `None` when nothing fits.
 #[allow(clippy::too_many_arguments)]
 fn destination_of(
     state: &RoutingState,
@@ -3222,14 +3241,22 @@ fn destination_of(
             )
         })
         .collect();
-    let fits: Vec<&Candidate> = longest(order(&set, &reads, "fits"))
+    let fits: Vec<&Candidate> = order(&set, &reads, "fits")
         .into_iter()
         .map(|(c, _)| c)
         .collect();
-    let chosen = rank(state, snapshot, pool, window, &fits, &[], now, fallback_ms)?
-        .planned
-        .account_id
-        .clone();
+    let ranked = rank(
+        state,
+        snapshot,
+        pool,
+        window,
+        &fits,
+        &reads,
+        &[],
+        now,
+        fallback_ms,
+    )?;
+    let chosen = ranked.planned.account_id.clone();
     reads.into_iter().find(|(id, _)| *id == chosen)
 }
 
@@ -4238,18 +4265,22 @@ fn tier_of(
 
 /// The strategy's reading of a set before the draw: the tier `tier_of` ranks first, its members, their Pace scores
 /// with the burn each subtracts (share per hour) where the strategy reads them, the candidates the strategy draws
-/// among (the best Pace score, the whole tier under Priority, the tier in id order under round robin), and the one a
-/// round plans on: the first of the ties, or under round robin the one at the cursor's turn, read without passing the
-/// turn on. `choose` draws from `ties` and records the pick, so a plan and the move it foresees read one rule.
+/// among (the best Pace score, the whole tier under Priority, the tier in id order under round robin), the ties the
+/// longest runway kept where it narrowed them (empty otherwise, and always under round robin, where the cursor picks),
+/// and the one a round plans on: the first of the ties the runway left, or under round robin the one at the cursor's
+/// turn, read without passing the turn on. `choose` draws from `by_runway`, else from `ties`, and records the pick, so
+/// a plan and the move it foresees read one rule.
 struct Ranked<'a> {
     tier: Tier,
     members: Vec<&'a Candidate>,
     scores: Vec<Score>,
     burns: Vec<f64>,
     ties: Vec<&'a Candidate>,
+    by_runway: Vec<&'a Candidate>,
     planned: &'a Candidate,
 }
 
+/// `reads` holds the fit read of the candidates whose runway breaks the strategy's tie, found by account id.
 #[allow(clippy::too_many_arguments)]
 fn rank<'a>(
     state: &RoutingState,
@@ -4257,6 +4288,7 @@ fn rank<'a>(
     pool: &PoolRow,
     window: &str,
     set: &[&'a Candidate],
+    reads: &[(String, FitRead)],
     spent_model: &[String],
     now: i64,
     fallback_ms: i64,
@@ -4304,21 +4336,56 @@ fn rank<'a>(
             (Vec::new(), Vec::new(), cohort, turn)
         }
     };
-    let planned = ties.get(turn).copied()?;
+    let by_runway = match pool.strategy {
+        Strategy::Pace | Strategy::Priority => runway_ties(&ties, reads),
+        Strategy::RoundRobin => Vec::new(),
+    };
+    let planned = match by_runway.first() {
+        Some(first) => *first,
+        None => ties.get(turn).copied()?,
+    };
     Some(Ranked {
         tier,
         members,
         scores,
         burns,
         ties,
+        by_runway,
         planned,
     })
 }
 
+/// The ties whose runway is the longest among them, an unbounded one longest of all as `longest` reads it. A tie with
+/// no read keeps its place, since nothing says its runway is shorter. Empty when the runway narrows nothing, so the
+/// pick line names `by_runway` only where it broke the tie.
+fn runway_ties<'a>(ties: &[&'a Candidate], reads: &[(String, FitRead)]) -> Vec<&'a Candidate> {
+    let runway = |c: &Candidate| {
+        reads
+            .iter()
+            .find(|(account_id, _)| *account_id == c.account_id)
+            .map(|(_, read)| read.runway_ms.unwrap_or(i64::MAX))
+    };
+    let Some(best) = ties.iter().filter_map(|c| runway(c)).max() else {
+        return Vec::new();
+    };
+    let kept: Vec<&'a Candidate> = ties
+        .iter()
+        .copied()
+        .filter(|c| runway(c).is_none_or(|ms| ms == best))
+        .collect();
+    if kept.len() == ties.len() {
+        Vec::new()
+    } else {
+        kept
+    }
+}
+
 /// `places` is false for a request the cap holds: the choice names the account it waits for and places nothing.
-/// `spent_model` names the candidates step 6 kept on extra usage with a spent window. The pick's
-/// line names the tier, every tier member's score and burn under Pace, the ties and the round-robin turn, and the
-/// tier's members take their rank, the chosen one first.
+/// `reads` holds the fit reads whose runway breaks the strategy's tie, empty where none is to break it.
+/// `spent_model` names the candidates step 6 kept on extra usage with a spent window. The pick's line names the tier,
+/// every tier member's score and burn under Pace, the strategy's ties, the ones the runway kept where it narrowed
+/// them, whether a draw was left to make and the round-robin turn, and the tier's members take their rank, the chosen
+/// one first.
 #[allow(clippy::too_many_arguments)]
 fn choose<'a>(
     state: &mut RoutingState,
@@ -4326,6 +4393,7 @@ fn choose<'a>(
     pool: &PoolRow,
     window: &str,
     set: &[&'a Candidate],
+    reads: &[(String, FitRead)],
     spent_model: &[String],
     now: i64,
     fallback_ms: i64,
@@ -4340,6 +4408,7 @@ fn choose<'a>(
         scores,
         burns,
         ties,
+        by_runway,
         ..
     }) = rank(
         state,
@@ -4347,6 +4416,7 @@ fn choose<'a>(
         pool,
         window,
         set,
+        reads,
         spent_model,
         now,
         fallback_ms,
@@ -4366,6 +4436,19 @@ fn choose<'a>(
             ],
         ),
     ];
+    let drawn_from: &[&Candidate] = if by_runway.is_empty() {
+        &ties
+    } else {
+        &by_runway
+    };
+    let draw_facts = |facts: &mut Vec<Fact>| {
+        let ids = |set: &[&Candidate]| set.iter().map(|c| c.account_id.clone()).collect();
+        facts.push(Fact::list("ties", ids(&ties)));
+        if !by_runway.is_empty() {
+            facts.push(Fact::list("by_runway", ids(&by_runway)));
+        }
+        facts.push(Fact::bool("drawn", drawn_from.len() > 1));
+    };
     let chosen = match pool.strategy {
         Strategy::Pace => {
             for (score, burn) in scores.iter().zip(&burns) {
@@ -4380,20 +4463,12 @@ fn choose<'a>(
                         .about(&score.account_id),
                 );
             }
-            facts.push(Fact::list(
-                "ties",
-                ties.iter().map(|c| c.account_id.clone()).collect(),
-            ));
-            facts.push(Fact::bool("drawn", ties.len() > 1));
-            Some(ties[rng.random_range(0..ties.len())])
+            draw_facts(&mut facts);
+            Some(drawn_from[rng.random_range(0..drawn_from.len())])
         }
         Strategy::Priority => {
-            facts.push(Fact::list(
-                "ties",
-                ties.iter().map(|c| c.account_id.clone()).collect(),
-            ));
-            facts.push(Fact::bool("drawn", ties.len() > 1));
-            Some(ties[rng.random_range(0..ties.len())])
+            draw_facts(&mut facts);
+            Some(drawn_from[rng.random_range(0..drawn_from.len())])
         }
         Strategy::RoundRobin => {
             let cohort: Vec<&str> = ties.iter().map(|c| c.account_id.as_str()).collect();
