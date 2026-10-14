@@ -19719,3 +19719,75 @@ fn the_record_names_the_read_the_factor_the_demand_and_the_cycle() {
     assert_eq!(value["request"]["received_at"], T + 19_000);
     assert_eq!(value["pin"]["slow_down_until"], serde_json::Value::Null);
 }
+
+#[test]
+fn a_second_selection_after_any_hold_folds_no_gap_into_the_pins_cycle() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    // a's window is spent and resets 30 s out, inside the retry bound, so the pin's first paced request waits for it.
+    let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
+    st.record_sample("a", refreshing(1.0, T + 30_000, T + 72 * HOUR, T - 500));
+    st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    let first = main_turn(&s, "s1", T);
+    let SelectResult::Held { hold, .. } = select(&mut st, &s, &first, &mut rng()).0 else {
+        panic!("the reset 30 s out holds the request")
+    };
+    assert_eq!(hold.reason, "reset");
+    // The relay selects again past the reset with the same arrival and the hold it waited through.
+    let again = SelectRequest {
+        seq: 2,
+        now: T + 31_000,
+        holds: vec![HoldFacts {
+            held_ms: 31_000,
+            ..hold
+        }],
+        ..first
+    };
+    let d = decide(&mut st, &s, &again, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    assert_eq!(
+        d.record.pin.as_ref().and_then(|p| p.cycle_ms),
+        None,
+        "the arrival was folded by the first selection, so the second reads no gap of zero"
+    );
+    assert_eq!(
+        st.pin_pace(&pin_key("s1"))
+            .map(|p| (p.dispatched_at, p.cycle_ms)),
+        Some((T, None))
+    );
+}
+
+#[test]
+fn a_fresh_sessions_prior_reads_each_warm_pins_burn_over_its_accounts_speed() {
+    let s = tiered(slowing(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    }));
+    // Two warm pins on b burn 200 and 400 input tokens a second, which the ratio pricer reads as a median of three
+    // hundred-thousandths of the 5-hour window a second, and b runs at half speed.
+    let mut st = priced(vec![
+        gated_pin("w1", "b", 200.0),
+        gated_pin("w2", "b", 400.0),
+    ]);
+    reading(&mut st, "a", 0.1, 3 * HOUR, T);
+    reading(&mut st, "b", 0.3, 3 * HOUR, T);
+    st.write_slow_down("p", "b", &seeded_read(1.0, T), 0.5, T, AVERAGE_MS);
+    let d = decide(&mut st, &s, &placing(&s, "r-1", "s1", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let reserve = d.record.walk.last().expect("a walk");
+    assert_eq!(
+        (reserve.step, reserve.verdict, fact(reserve, "account_id")),
+        ("reserve", "booked", &FactValue::Text("a".into()))
+    );
+    let achieved_median = 300.0 / 10_000_000.0 * 3_600.0;
+    assert!(
+        close(
+            number(fact(reserve, "burn_five_hour")),
+            2.0 * achieved_median
+        ),
+        "a fresh session starts unslowed, so its prior is the warm pins' unslowed rate: {:?}",
+        reserve.facts
+    );
+}

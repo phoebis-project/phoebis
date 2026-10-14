@@ -2466,8 +2466,9 @@ impl RoutingState {
         for (key, _) in &pins {
             self.take_pin(key);
         }
-        // A move and a failover's landing write the key again within the selection that took the row, so a key no pin
-        // holds at the tick belongs to a session that ended.
+        // A move writes the key again within the selection that took the row, so a key no pin holds at the tick
+        // belongs to a session that ended, or to a failover: the task's report handling takes that row and the landing
+        // comes on a later selection, so a tick between the two drops the pace and the landed pin starts a new one.
         let held = &self.pins;
         self.pin_paces.retain(|key, _| held.contains_key(key));
         let slow_downs = self.purge_slow_downs(snapshot, now);

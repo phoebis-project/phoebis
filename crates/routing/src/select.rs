@@ -614,9 +614,9 @@ fn budget_unknown(
 /// The rewrite per plan window (the pin's last context, or `body_tokens` for a fresh session or a pin never renewed
 /// with usage, as one cache write at the lane's TTL on `tier` at the band of `now`) and the burn per plan window (the
 /// pin's own decayed burn over its account's speed, or for a fresh session the decayed burn of the row a failover took
-/// off its source over that source's speed, else the median of the pool's priced warm pins, absent with none, which
-/// reads as zero), on the windows the request's model draws. A window nothing prices is absent from both. The
-/// destination gate's fit and the shedding round read it.
+/// off its source over that source's speed, else the median of the pool's priced warm pins, each over its account's
+/// speed, absent with none, which reads as zero), on the windows the request's model draws. A window nothing prices
+/// is absent from both. The destination gate's fit and the shedding round read it.
 pub(crate) fn pin_figures(
     state: &RoutingState,
     pool: &PoolRow,
@@ -678,12 +678,16 @@ pub(crate) fn pin_figures(
                 })
             }
             // A pin burns the windows its own model draws, so a Sonnet pin adds nothing to a Fable week's prior. The
-            // unpriced ones are left out of the median so one of them does not zero it.
+            // unpriced ones are left out of the median so one of them does not zero it. A fresh session starts
+            // unslowed, so each warm pin counts at its unslowed rate, over its own account's speed.
             Figures::Fresh(warm_pins) => median(
                 warm_pins
                     .iter()
                     .filter(|p| plan_windows(&p.model).any(|w| w == window))
-                    .filter_map(|p| priced(window, p))
+                    .filter_map(|p| {
+                        priced(window, p)
+                            .map(|rate| rate / state.slow_down_speed(pool, &p.account_id))
+                    })
                     .collect(),
             ),
         };
@@ -1203,14 +1207,14 @@ fn run(
                 }
             }
             // A turn of a held class folds its arrival into the pin's cycle under the live row's key, which a move
-            // and a failover's landing write their row under again. The second selection after a slow-down hold
-            // folds nothing, since the first folded its arrival already.
+            // and a failover's landing write their row under again. A request carrying a hold, whatever held it, is
+            // a second selection whose arrival the first folded, and its gap of zero would plant a cycle of zero.
             if found == "live"
                 && slowable(
                     request,
                     snapshot.account(&current.account_id).map(|a| a.kind),
                 )
-                && !request.holds.iter().any(|hold| hold.reason == "slow_down")
+                && request.holds.is_empty()
             {
                 state.fold_pace(&current.key(), request.received_at, burn_average_ms(pool));
             }
@@ -2150,7 +2154,8 @@ fn seconds(ms: i64) -> f64 {
 /// second) over the seconds to the horizon.
 pub(crate) struct Projection {
     pub predicted: f64,
-    /// Share per second, the account's `burn_shares` on the window.
+    /// Share per second: the account's `burn_shares` on the window under `BurnRead::Achieved`, its `demand_shares`
+    /// under `BurnRead::Demand`.
     pub burn: f64,
     pub horizon: i64,
     pub at_horizon: f64,
@@ -2281,10 +2286,10 @@ pub struct SlowDownRead {
 /// The account's slow-down read at `now` on `pool`: `U` the 5-hour prediction, `R` the time to the 5-hour horizon, `B`
 /// the 5-hour demand, the stretch `S = R - (ceiling - U) / B` and the factor `(ceiling - U) / (R x B)` clamped to
 /// [0, 1], which is `1 - S / R`. A demand of nothing below the ceiling reads no stretch and a factor of 1, and a
-/// window at or past the ceiling a stretch of at least `R` and a factor of 0, whatever the demand, as does a horizon
-/// already reached, so no `0 / 0` reaches the entry. `None` for a pool whose slow-down is off, an api_key account
-/// (no 5-hour window), an account with no 5-hour reading, and one whose tier the profile has not named, which
-/// prices no demand.
+/// window at or past the ceiling a stretch of at least `R` and a factor of 0, whatever the demand. A horizon already
+/// reached reads a factor of 0 at or past the ceiling and 1 under it, so no `0 / 0` reaches the entry. `None` for a
+/// pool whose slow-down is off, an api_key account (no 5-hour window), an account with no 5-hour reading, and one
+/// whose tier the profile has not named, which prices no demand.
 pub(crate) fn slow_down_of(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
