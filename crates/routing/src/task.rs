@@ -92,9 +92,9 @@ pub enum RouterEvent {
         at: i64,
     },
     /// A shedding mark left a pin: the heal check found the trigger gone at the pin's request (`healed`, with the
-    /// healing projection), the pin moved off the account the mark was made on (`moved`), or the pin was released or
-    /// expired without a move or asked while its pool's load shedding was off (`released`). `account_id` is the account
-    /// the pin sat on when the mark cleared.
+    /// healing projection), the pin moved off the account the mark was made on (`moved`), or the pin was released,
+    /// expired or lost a rekey's merge without a move, or asked while its pool's load shedding was off (`released`).
+    /// `account_id` is the account the pin sat on when the mark cleared.
     MarkCleared {
         account_id: String,
         key_id: String,
@@ -2174,8 +2174,8 @@ fn cache_map_written(report: &AffinityReport, rows: &[AffinityRow]) -> RouterEve
     }
 }
 
-/// The `mark_cleared` of a pin that left its account without a move, when its mark stood: a release, an expiry or a
-/// fail-over's invalidation. `None` for an unmarked pin.
+/// The `mark_cleared` of a pin that left its account without a move, when its mark stood: a release, an expiry, a
+/// fail-over's invalidation or a rekey's merge the row lost. `None` for an unmarked pin.
 fn released_mark(row: &PinRow, at: i64) -> Option<RouterEvent> {
     if !mark_holds(row) {
         return None;
@@ -3679,7 +3679,12 @@ impl Task {
     }
 
     fn resolve(&mut self, spelling: &str, dated_id: &str, at: i64) {
-        let rekey = self.state.apply_resolution(spelling, dated_id, at);
+        let (rekey, merged_away) = self.state.rekey(spelling, dated_id, at);
+        for row in &merged_away {
+            if let Some(event) = released_mark(row, at) {
+                self.emit(event);
+            }
+        }
         // A late invalidation from a request admitted under the retiring spelling must still land beside the
         // moved pin rather than starting a fresh migration window under a key nothing selects on any more.
         let keys: Vec<PinKey> = self

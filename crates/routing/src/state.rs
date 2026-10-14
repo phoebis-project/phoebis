@@ -2000,13 +2000,25 @@ impl RoutingState {
     /// still keyed on the literal spelling; rows already moved under the previous dated id stay there, since
     /// a new snapshot is a new model.
     pub fn apply_resolution(&mut self, spelling: &str, dated_id: &str, at: i64) -> RekeyWrite {
+        self.rekey(spelling, dated_id, at).0
+    }
+
+    /// `apply_resolution` with the rows that lost a merge, each leaving with its mark, so the caller clears the
+    /// marks that stood on them as a release does.
+    pub(crate) fn rekey(
+        &mut self,
+        spelling: &str,
+        dated_id: &str,
+        at: i64,
+    ) -> (RekeyWrite, Vec<PinRow>) {
+        let mut merged_away = Vec::new();
         if let Some(current) = self.resolutions.get(spelling) {
             // A caller whose own bookkeeping of the last move it saw was lost (its future dropped between
             // this state moving and its own record of the move landing) can resubmit a snapshot older than
             // what already stands; walking pins and cooldowns back to it would be a real regression, so the
             // move is ignored and the mapping is reasserted as it already stands.
             if snapshot_date(dated_id) <= snapshot_date(current) {
-                return RekeyWrite {
+                let write = RekeyWrite {
                     resolution: ResolutionRow {
                         spelling: spelling.to_string(),
                         dated_id: current.clone(),
@@ -2017,6 +2029,7 @@ impl RoutingState {
                     delete_cooldowns: Vec::new(),
                     upsert_cooldowns: Vec::new(),
                 };
+                return (write, merged_away);
             }
         }
         let mut rekey = RekeyWrite {
@@ -2058,13 +2071,17 @@ impl RoutingState {
                 .pins
                 .get(&dated_key)
                 .is_some_and(|existing| existing.last_used_at >= pin.last_used_at);
-            if !keep_existing {
+            if keep_existing {
+                merged_away.push(pin);
+            } else {
                 let moved = PinRow {
                     model: dated_id.to_string(),
                     lane: relaned(&pin.lane, spelling, dated_id),
                     ..pin
                 };
-                self.pins.insert(dated_key.clone(), moved.clone());
+                if let Some(replaced) = self.pins.insert(dated_key.clone(), moved.clone()) {
+                    merged_away.push(replaced);
+                }
                 if renewed {
                     self.renewed.insert(dated_key.clone());
                 } else {
@@ -2102,7 +2119,7 @@ impl RoutingState {
                 rekey.upsert_cooldowns.push(merged);
             }
         }
-        rekey
+        (rekey, merged_away)
     }
 
     /// Every agent's pin of the session, released together: the session leaves every account it was on, not

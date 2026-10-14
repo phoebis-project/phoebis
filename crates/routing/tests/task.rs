@@ -7416,6 +7416,106 @@ async fn a_cooldown_report_naming_a_marked_pin_clears_its_mark_as_released() {
     );
 }
 
+/// Session `s1`'s pin of `model` on `account`, last used `used_at`, its lane composed from `model`.
+fn spelled_pin(store: &Store, model: &str, account: &str, epoch: u64, used_at: i64) -> PinRow {
+    PinRow {
+        model: model.into(),
+        lane: lane_key(model, "standard", "none", "-"),
+        last_used_at: used_at,
+        ..stored_pin(store, "s1", account, epoch, 0.0)
+    }
+}
+
+/// The `released` clears in `events`, as (account, model, marked_on).
+fn released_clears(events: &[phoebis_routing::RouterEvent]) -> Vec<(String, String, String)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            phoebis_routing::RouterEvent::MarkCleared {
+                account_id,
+                model,
+                reason: "released",
+                marked_on,
+                ..
+            } => Some((account_id.clone(), model.clone(), marked_on.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_marked_pin_the_rekey_merges_into_a_newer_dated_row_clears_its_mark_as_released() {
+    const SPELLING: &str = "claude-sonnet-4-5";
+    const DATED: &str = "claude-sonnet-4-5-20250929";
+    let store = shedding_store(&["a", "b"]);
+    store
+        .upsert_pin(&marked(
+            spelled_pin(&store, SPELLING, "a", 1, AT - 5_000),
+            AT - 60_000,
+        ))
+        .unwrap();
+    store
+        .upsert_pin(&spelled_pin(&store, DATED, "b", 2, AT - 1_000))
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle.resolve(SPELLING, DATED, AT).await.unwrap();
+    assert_eq!(
+        handle
+            .pins()
+            .await
+            .unwrap()
+            .iter()
+            .map(|p| (p.model.as_str(), p.account_id.as_str()))
+            .collect::<Vec<_>>(),
+        [(DATED, "b")],
+        "the newer dated row wins the merge"
+    );
+    assert_eq!(
+        released_clears(&drained(&mut events).await),
+        [("a".to_string(), SPELLING.to_string(), "a".to_string())],
+        "the spelled row leaves with its mark, so the mark clears as a release does"
+    );
+}
+
+#[tokio::test]
+async fn a_marked_dated_row_the_rekey_replaces_with_a_newer_spelled_row_clears_its_mark_as_released(
+) {
+    const SPELLING: &str = "claude-sonnet-4-5";
+    const DATED: &str = "claude-sonnet-4-5-20250929";
+    let store = shedding_store(&["a", "b"]);
+    store
+        .upsert_pin(&spelled_pin(&store, SPELLING, "a", 1, AT - 1_000))
+        .unwrap();
+    store
+        .upsert_pin(&marked(
+            spelled_pin(&store, DATED, "b", 2, AT - 5_000),
+            AT - 60_000,
+        ))
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle.resolve(SPELLING, DATED, AT).await.unwrap();
+    assert_eq!(
+        handle
+            .pins()
+            .await
+            .unwrap()
+            .iter()
+            .map(|p| (p.model.as_str(), p.account_id.as_str()))
+            .collect::<Vec<_>>(),
+        [(DATED, "a")],
+        "the newer spelled row wins the merge"
+    );
+    assert_eq!(
+        released_clears(&drained(&mut events).await),
+        [("b".to_string(), DATED.to_string(), "b".to_string())],
+        "the replaced dated row leaves with its mark, so the mark clears as a release does"
+    );
+}
+
 #[tokio::test]
 async fn a_mark_a_round_makes_on_the_requests_own_pin_is_released_with_it_in_the_same_selection() {
     use phoebis_routing::RouterEvent;
