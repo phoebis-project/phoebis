@@ -23,10 +23,10 @@ use crate::record::{
 };
 use crate::state::{
     all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, load_shedding,
-    mark_holds, plan_windows, return_to_plan_dwell_ms, shed_cap, shed_dwell_ms, warm, BurnUnit,
-    CreditsState, MemberSpend, PinRef, PinUsage, Reservation, RoutingState, StateWrite, Tier,
-    WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY,
-    SEVEN_DAY_FABLE, WEEK_MS,
+    mark_holds, plan_windows, return_to_plan_dwell_ms, shed_cap, shed_dwell_ms, slow_down,
+    slow_down_stretch_ms, warm, BurnUnit, CreditsState, MemberSpend, PinPace, PinRef, PinUsage,
+    Reservation, RoutingState, StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR,
+    IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::windows::{window_for, MODEL_WINDOWS};
 use crate::{term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
@@ -81,6 +81,9 @@ pub struct SelectRequest {
     pub portable: bool,
     pub attempted: Vec<String>,
     pub now: i64,
+    /// When the relay received the request, the same on every selection of it: a pin's cycle is read from its
+    /// arrivals, so a second selection after a hold must not read its own instant as a fresh arrival.
+    pub received_at: i64,
     pub fallback_ms: i64,
     pub revision: u64,
     /// A keepalive probe's replay of the recipe, from the relay trace's `Kind::Probe`; its headers and body
@@ -610,9 +613,10 @@ fn budget_unknown(
 
 /// The rewrite per plan window (the pin's last context, or `body_tokens` for a fresh session or a pin never renewed
 /// with usage, as one cache write at the lane's TTL on `tier` at the band of `now`) and the burn per plan window (the
-/// pin's own decayed burn, or for a fresh session the decayed burn of the row a failover took off its source, else the
-/// median of the pool's priced warm pins, absent with none, which reads as zero), on the windows the request's model
-/// draws. A window nothing prices is absent from both. The destination gate's fit and the shedding round read it.
+/// pin's own decayed burn over its account's speed, or for a fresh session the decayed burn of the row a failover took
+/// off its source over that source's speed, else the median of the pool's priced warm pins, absent with none, which
+/// reads as zero), on the windows the request's model draws. A window nothing prices is absent from both. The
+/// destination gate's fit and the shedding round read it.
 pub(crate) fn pin_figures(
     state: &RoutingState,
     pool: &PoolRow,
@@ -658,14 +662,21 @@ pub(crate) fn pin_figures(
         {
             rewrite.insert(window.to_string(), share);
         }
+        // A slowed pin's burn is what its source's holds let through, so a destination reads the demand: the burn over
+        // the source's speed, which the pin runs at there until the destination's own factor says otherwise.
         let rate = match figures {
-            Figures::Pin(pin) => priced(window, pin),
+            Figures::Pin(pin) => {
+                priced(window, pin).map(|rate| rate / state.slow_down_speed(pool, &pin.account_id))
+            }
             // A failover's landing knows the session's own burn, while the destination's cache is cold, so the
             // rewrite above stays the body's.
-            Figures::Fresh(_) if request.failed_over.is_some() => request
-                .failed_over
-                .as_ref()
-                .and_then(|failed_over| priced(window, &failed_over.row)),
+            Figures::Fresh(_) if request.failed_over.is_some() => {
+                request.failed_over.as_ref().and_then(|failed_over| {
+                    priced(window, &failed_over.row).map(|rate| {
+                        rate / state.slow_down_speed(pool, &failed_over.from_account_id)
+                    })
+                })
+            }
             // A pin burns the windows its own model draws, so a Sonnet pin adds nothing to a Fable week's prior. The
             // unpriced ones are left out of the median so one of them does not zero it.
             Figures::Fresh(warm_pins) => median(
@@ -1191,15 +1202,42 @@ fn run(
                     }
                 }
             }
-            rec.pin = Some(pin_facts(found, Some(&current), marked, request.now));
+            // A turn of a held class folds its arrival into the pin's cycle under the live row's key, which a move
+            // and a failover's landing write their row under again. The second selection after a slow-down hold
+            // folds nothing, since the first folded its arrival already.
+            if found == "live"
+                && slowable(
+                    request,
+                    snapshot.account(&current.account_id).map(|a| a.kind),
+                )
+                && !request.holds.iter().any(|hold| hold.reason == "slow_down")
+            {
+                state.fold_pace(&current.key(), request.received_at, burn_average_ms(pool));
+            }
+            rec.pin = Some(pin_facts(
+                found,
+                Some(&current),
+                marked,
+                request.now,
+                state.pin_pace(&current.key()),
+            ));
             if found == "live" {
                 pin = Some(current);
             } else {
                 state.remove_pin(&key);
+                // The session's pace ends with a pin that idled out or left the pool, so the placement that follows
+                // starts with none, rather than reading the idle time as one long gap.
+                state.drop_pace(&current.key());
                 writes.push(StateWrite::DeletePin(key));
             }
         } else {
-            rec.pin = Some(pin_facts("none", None, false, request.now));
+            rec.pin = Some(pin_facts(
+                "none",
+                None,
+                false,
+                request.now,
+                state.pin_pace(&key),
+            ));
         }
     }
 
@@ -1409,6 +1447,13 @@ fn run(
                 rec.step(rule, "not_run", vec![Fact::text("reason", reason)]);
             }
         } else {
+            // The account's pace, read and written once ahead of the rules, so the shed rule and the hold read one
+            // figure. A probe replays a recipe and says nothing of the session's pace, so it reads none.
+            let slowed = if request.probe {
+                None
+            } else {
+                slow_down_read(state, snapshot, pool, &current.account_id, request.now)
+            };
             let cold = !warm_on(&current, verdict, request.now);
             // The lane the pin carries once this request renews it: a request that leaves the pin alone stamps
             // none.
@@ -1418,7 +1463,17 @@ fn run(
                 request.fast
             };
             let moved = move_of(
-                state, snapshot, pool, request, &current, &eligible, window, cold, fast, rec,
+                state,
+                snapshot,
+                pool,
+                request,
+                &current,
+                &eligible,
+                window,
+                cold,
+                fast,
+                slowed.as_ref(),
+                rec,
             );
             // A round marks the state's rows, the request's own among them, so the row the renewal writes back or
             // the move takes off the account is read again with its mark.
@@ -2132,9 +2187,17 @@ pub(crate) fn horizon_of(
         .max(now)
 }
 
-/// The projections of `account_id` on the plan windows it holds a reading of, from one read of its burn: empty for an
-/// api_key account, which has no plan window. An unknown tier prices no burn, so an untiered account projects its
-/// prediction alone.
+/// Which burn a projection reads: the achieved burn, what the upstream sees (the weekly trigger, the reported figures),
+/// or the demand, the achieved burn over the account's realized speed (the fit gate, the slow-down).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BurnRead {
+    Achieved,
+    Demand,
+}
+
+/// The projections of `account_id` on the plan windows it holds a reading of, from one read of its burn as `read`
+/// names it: empty for an api_key account, which has no plan window. An unknown tier prices no burn, so an untiered
+/// account projects its prediction alone.
 fn projections_of(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2142,17 +2205,24 @@ fn projections_of(
     account_id: &str,
     tier: &str,
     now: i64,
+    read: BurnRead,
 ) -> BTreeMap<String, Projection> {
     if snapshot.account(account_id).map(|a| a.kind) == Some(AccountKind::ApiKey) {
         return BTreeMap::new();
     }
-    let burn = state.burn_shares(
-        account_id,
-        &in_pool(snapshot, pool),
-        tier,
-        now,
-        burn_average_ms(pool),
-    );
+    let keep = in_pool(snapshot, pool);
+    let average_ms = burn_average_ms(pool);
+    let burn = match read {
+        BurnRead::Achieved => state.burn_shares(account_id, &keep, tier, now, average_ms),
+        BurnRead::Demand => state.demand_shares(
+            account_id,
+            &keep,
+            tier,
+            now,
+            average_ms,
+            state.slow_down_speed(pool, account_id),
+        ),
+    };
     let mut projections = BTreeMap::new();
     for window in all_plan_windows() {
         let Some(reading) = state.predicted(account_id, window, now) else {
@@ -2173,8 +2243,9 @@ fn projections_of(
     projections
 }
 
-/// The projection of `account_id` on `window` at its horizon: `None` for an account with no reading of the window or
-/// an api_key account.
+/// The projection of `account_id` on `window` at its horizon on the burn `read` names: `None` for an account with no
+/// reading of the window or an api_key account.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn projection_of(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2183,8 +2254,108 @@ pub(crate) fn projection_of(
     tier: &str,
     window: &str,
     now: i64,
+    read: BurnRead,
 ) -> Option<Projection> {
-    projections_of(state, snapshot, pool, account_id, tier, now).remove(window)
+    projections_of(state, snapshot, pool, account_id, tier, now, read).remove(window)
+}
+
+/// One account's slow-down read on the 5-hour window at an instant: the figures the stretch and the factor are read
+/// from, the two of them, and the speed the demand was divided by.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SlowDownRead {
+    /// The prediction on the window.
+    pub utilization: f64,
+    pub horizon: i64,
+    /// The 5-hour reading's reset, `None` where the reading names none.
+    pub reset: Option<i64>,
+    /// Share of the window per second.
+    pub demand: f64,
+    /// The time between the instant the unslowed demand passes the ceiling and the horizon, 0 when it never does.
+    pub stretch_ms: i64,
+    /// The pool's `slow_down_stretch_seconds`.
+    pub threshold_ms: i64,
+    pub factor: f64,
+    pub speed: f64,
+}
+
+/// The account's slow-down read at `now` on `pool`: `U` the 5-hour prediction, `R` the time to the 5-hour horizon, `B`
+/// the 5-hour demand, the stretch `S = R - (ceiling - U) / B` and the factor `(ceiling - U) / (R x B)` clamped to
+/// [0, 1], which is `1 - S / R`. A demand of nothing below the ceiling reads no stretch and a factor of 1, and a
+/// window at or past the ceiling a stretch of at least `R` and a factor of 0, whatever the demand, as does a horizon
+/// already reached, so no `0 / 0` reaches the entry. `None` for a pool whose slow-down is off, an api_key account
+/// (no 5-hour window), an account with no 5-hour reading, and one whose tier the profile has not named, which
+/// prices no demand.
+pub(crate) fn slow_down_of(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    account_id: &str,
+    tier: &str,
+    now: i64,
+) -> Option<SlowDownRead> {
+    if !slow_down(pool)
+        || snapshot.account(account_id).map(|a| a.kind) == Some(AccountKind::ApiKey)
+        || snapshot.tier(account_id).is_none()
+    {
+        return None;
+    }
+    let reading = state.predicted(account_id, FIVE_HOUR, now)?;
+    let utilization = reading.utilization;
+    let horizon = horizon_of(snapshot, account_id, FIVE_HOUR, &reading, now);
+    let speed = state.slow_down_speed(pool, account_id);
+    let demand = state
+        .demand_shares(
+            account_id,
+            &in_pool(snapshot, pool),
+            tier,
+            now,
+            burn_average_ms(pool),
+            speed,
+        )
+        .get(FIVE_HOUR)
+        .copied()
+        .unwrap_or(0.0);
+    let limit = ceiling(pool, FIVE_HOUR);
+    let to_horizon = seconds(horizon - now);
+    let (stretch, factor) = if utilization >= limit {
+        let overrun = if demand > 0.0 {
+            (utilization - limit) / demand
+        } else {
+            0.0
+        };
+        (to_horizon + overrun, 0.0)
+    } else if demand <= 0.0 || to_horizon <= 0.0 {
+        (0.0, 1.0)
+    } else {
+        (
+            (to_horizon - (limit - utilization) / demand).max(0.0),
+            ((limit - utilization) / (to_horizon * demand)).clamp(0.0, 1.0),
+        )
+    };
+    Some(SlowDownRead {
+        utilization,
+        horizon,
+        reset: reading.reset,
+        demand,
+        stretch_ms: (stretch * 1_000.0).round() as i64,
+        threshold_ms: slow_down_stretch_ms(pool),
+        factor,
+        speed,
+    })
+}
+
+/// Whether the slow-down may hold this request on a pin whose account is of `kind`: a main or subagent turn, or one
+/// with no class header (an SDK client), portable, and on an account with a 5-hour window. An auxiliary request, a
+/// compaction, a fast request, a probe and a token count are never held, and their burn counts.
+pub(crate) fn slowable(request: &SelectRequest, kind: Option<AccountKind>) -> bool {
+    let held_class = request
+        .request_class
+        .as_deref()
+        .is_none_or(|class| class == "main" || class == "subagent");
+    held_class
+        && request.portable
+        && !(request.fast || request.probe || request.count)
+        && kind != Some(AccountKind::ApiKey)
 }
 
 /// What the gate read for one candidate: the verdict and the figures the `fit` step and the candidate table state.
@@ -2274,6 +2445,7 @@ pub(crate) fn fit_of(
         candidate,
         tier.unwrap_or_default(),
         now,
+        BurnRead::Demand,
     );
     let planned: Vec<&Reservation> = planned
         .iter()
@@ -2687,9 +2859,17 @@ fn move_of<'a>(
     window: &str,
     cold: bool,
     fast: bool,
+    slowed: Option<&SlowDownRead>,
     rec: &mut Recorder,
 ) -> MoveVerdict<'a> {
     let (now, fallback_ms) = (request.now, request.fallback_ms);
+    // Every shed line below carries the account's pace whichever rule answered. A probe reads no pace, so its line
+    // carries none of it.
+    let pace_facts = if request.probe {
+        Vec::new()
+    } else {
+        slow_down_facts(state, pool, &current.account_id, slowed)
+    };
     let prefer_plan = pool.overage_policy == OveragePolicy::PreferPlan;
     let kind = |id: &str| snapshot.account(id).map(|a| a.kind);
     let dwell_ms = shed_dwell_ms(pool);
@@ -2758,9 +2938,7 @@ fn move_of<'a>(
                     Fact::int("wait_ms", wait_ms).unit("ms"),
                 ],
             );
-            for later in &RULES[1..] {
-                rec.step(later, "not_run", Vec::new());
-            }
+            not_run_after(rec, 0, &pace_facts);
             return MoveVerdict::Wait { until };
         }
         let gate = gate(
@@ -2781,10 +2959,10 @@ fn move_of<'a>(
         );
         let facts = vec![Fact::bool("holds_allowance", false)];
         if !gate.set.is_empty() {
-            let (set, reads) = fired(rec, 0, facts, gate);
+            let (set, reads) = fired(rec, 0, facts, gate, &pace_facts);
             return MoveVerdict::Move(MigrateReason::Spent, set, reads);
         }
-        no_destination(rec, 0, facts, gate);
+        no_destination(rec, 0, facts, gate, &pace_facts);
     }
 
     // A subscription account in overage hands the session back to plan quota, warm or cold, onto a plan-funded
@@ -2832,10 +3010,10 @@ fn move_of<'a>(
                     rec,
                 );
                 if !gate.set.is_empty() {
-                    let (set, reads) = fired(rec, 1, facts, gate);
+                    let (set, reads) = fired(rec, 1, facts, gate, &pace_facts);
                     return MoveVerdict::Move(MigrateReason::Overage, set, reads);
                 }
-                no_destination(rec, 1, facts, gate);
+                no_destination(rec, 1, facts, gate, &pace_facts);
             }
         }
     }
@@ -2896,10 +3074,10 @@ fn move_of<'a>(
                 rec,
             );
             if !gate.set.is_empty() {
-                let (set, reads) = fired(rec, 2, facts, gate);
+                let (set, reads) = fired(rec, 2, facts, gate, &pace_facts);
                 return MoveVerdict::Move(MigrateReason::ReturnToPlan, set, reads);
             }
-            no_destination(rec, 2, facts, gate);
+            no_destination(rec, 2, facts, gate, &pace_facts);
         }
     }
 
@@ -2929,16 +3107,22 @@ fn move_of<'a>(
         );
         let facts = vec![Fact::bool("cold", true), Fact::bool("winding_down", true)];
         if !gate.set.is_empty() {
-            let (set, reads) = fired(rec, 3, facts, gate);
+            let (set, reads) = fired(rec, 3, facts, gate, &pace_facts);
             return MoveVerdict::Move(MigrateReason::Drain, set, reads);
         }
-        no_destination(rec, 3, facts, gate);
+        no_destination(rec, 3, facts, gate, &pace_facts);
     }
 
     // The switch turns the round off and nothing else: the rules above, the fit gate and the reservations ran as they
     // do with it on.
     if !load_shedding(pool) {
-        rec.step(RULES[4], "not_run", vec![Fact::text("round", "off")]);
+        rule_line(
+            rec,
+            4,
+            "not_run",
+            vec![Fact::text("round", "off")],
+            &pace_facts,
+        );
         return MoveVerdict::Stay;
     }
     // The shed rule's one trigger: the projection at its horizon over the ceiling, tested on every plan window the
@@ -2946,7 +3130,7 @@ fn move_of<'a>(
     // projection it read whether or not one fired.
     let source = current.account_id.as_str();
     let tier = snapshot.tier(source).unwrap_or_default();
-    let projections = projections_of(state, snapshot, pool, source, tier, now);
+    let projections = projections_of(state, snapshot, pool, source, tier, now, BurnRead::Achieved);
     let windows = trigger_windows(state, snapshot, pool, source);
     let mut facts = Vec::new();
     for window in &windows {
@@ -2964,7 +3148,7 @@ fn move_of<'a>(
     let trigger = trigger_of(pool, &projections, &windows, now);
     rec.trigger_windows = windows;
     let Some(trigger) = trigger else {
-        rec.step(RULES[4], "no", facts);
+        rule_line(rec, 4, "no", facts, &pace_facts);
         return MoveVerdict::Stay;
     };
     facts.push(Fact::text("trigger", trigger.window));
@@ -3022,7 +3206,7 @@ fn move_of<'a>(
         .is_some()
     {
         facts.push(Fact::bool("cooldown", true));
-        rec.step(RULES[4], "no", facts);
+        rule_line(rec, 4, "no", facts, &pace_facts);
         return MoveVerdict::Stay;
     }
     // A pin moves only when its session asks, so an unmarked pin never moves for utilization and a marked one
@@ -3031,7 +3215,7 @@ fn move_of<'a>(
     let marked = state.shed_marked(&current.key());
     facts.push(Fact::bool("marked", marked));
     if !marked {
-        rec.step(RULES[4], "no", facts);
+        rule_line(rec, 4, "no", facts, &pace_facts);
         return MoveVerdict::Stay;
     }
     if request.fast
@@ -3039,7 +3223,7 @@ fn move_of<'a>(
             == BurnUnit::WindowShare
     {
         facts.push(Fact::bool("window_share_fast", true));
-        rec.step(RULES[4], "no", facts);
+        rule_line(rec, 4, "no", facts, &pace_facts);
         return MoveVerdict::Stay;
     }
     // The shed rule's keep is the no-return test alone: a pin never returns inside the dwell to the account that
@@ -3061,10 +3245,10 @@ fn move_of<'a>(
         rec,
     );
     if gate.set.is_empty() {
-        no_destination(rec, 4, facts, gate);
+        no_destination(rec, 4, facts, gate, &pace_facts);
         return MoveVerdict::Stay;
     }
-    let (set, reads) = fired(rec, 4, facts, gate);
+    let (set, reads) = fired(rec, 4, facts, gate, &pace_facts);
     MoveVerdict::Move(MigrateReason::Shed, set, reads)
 }
 
@@ -3076,6 +3260,7 @@ fn fired<'a>(
     rule: usize,
     mut facts: Vec<Fact>,
     gate: Gate<'a>,
+    pace_facts: &[Fact],
 ) -> (Vec<&'a Candidate>, Vec<(String, FitRead)>) {
     let Gate {
         set, reads, step, ..
@@ -3084,20 +3269,93 @@ fn fired<'a>(
         "destinations",
         set.iter().map(|c| c.account_id.clone()).collect(),
     ));
-    rec.step(RULES[rule], "fired", facts);
-    for later in &RULES[rule + 1..] {
-        rec.step(later, "not_run", Vec::new());
-    }
+    rule_line(rec, rule, "fired", facts, pace_facts);
+    not_run_after(rec, rule, pace_facts);
     rec.walk.push(step);
     (set, reads)
 }
 
+/// A rule's line, the shed rule's with the slow-down facts the decision's read left beside its own, so every pinned
+/// decision shows the account's pace whichever rule answered.
+fn rule_line(
+    rec: &mut Recorder,
+    rule: usize,
+    verdict: &'static str,
+    mut facts: Vec<Fact>,
+    pace_facts: &[Fact],
+) {
+    if RULES[rule] == "move:shed" {
+        facts.extend_from_slice(pace_facts);
+    }
+    rec.step(RULES[rule], verdict, facts);
+}
+
+/// The lines of the rules after `rule`, `not_run` since `rule` answered.
+fn not_run_after(rec: &mut Recorder, rule: usize, pace_facts: &[Fact]) {
+    for later in rule + 1..RULES.len() {
+        rule_line(rec, later, "not_run", Vec::new(), pace_facts);
+    }
+}
+
+/// The shed line's slow-down facts: the read's figures on a pool that slows its pins, with the instant the stretch
+/// went over the threshold while it stays over, `off` alone on a pool that does not, and nothing where the account
+/// has no read.
+fn slow_down_facts(
+    state: &RoutingState,
+    pool: &PoolRow,
+    account_id: &str,
+    read: Option<&SlowDownRead>,
+) -> Vec<Fact> {
+    if !slow_down(pool) {
+        return vec![Fact::text("slow_down", "off")];
+    }
+    let Some(read) = read else {
+        return Vec::new();
+    };
+    let mut facts = vec![
+        Fact::text("slow_down", "on"),
+        Fact::int("stretch_ms", read.stretch_ms).unit("ms"),
+        Fact::int("threshold_ms", read.threshold_ms).unit("ms"),
+        Fact::number("factor", read.factor),
+        Fact::number("speed", read.speed),
+        Fact::number("demand_five_hour", read.demand * 3_600.0).unit("percent_per_hour"),
+    ];
+    if let Some(since) = state
+        .slow_down_state(&pool.id, account_id)
+        .and_then(|entry| entry.over_since)
+    {
+        facts.push(Fact::int("over_since", since).unit("time"));
+    }
+    facts
+}
+
+/// Step 4's read of the pinned account's slow-down and the write of its entry, `None` where the account has no read.
+/// The selection holds no request, so the speed it realizes is 1.
+fn slow_down_read(
+    state: &mut RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    account_id: &str,
+    now: i64,
+) -> Option<SlowDownRead> {
+    let tier = snapshot.tier(account_id).unwrap_or_default();
+    let read = slow_down_of(state, snapshot, pool, account_id, tier, now)?;
+    state.write_slow_down(&pool.id, account_id, &read, 1.0, now, burn_average_ms(pool));
+    Some(read)
+}
+
 /// A rule whose reason held but which found no sibling to move the pin to, with the candidates the end exclusion
 /// dropped. The fit table follows when the gate read any candidate, so the record says why none passed.
-fn no_destination(rec: &mut Recorder, rule: usize, mut facts: Vec<Fact>, gate: Gate<'_>) {
+fn no_destination(
+    rec: &mut Recorder,
+    rule: usize,
+    mut facts: Vec<Fact>,
+    gate: Gate<'_>,
+    pace_facts: &[Fact],
+) {
     facts.push(Fact::bool("no_destination", true));
     facts.push(Fact::list("ending", gate.ending));
-    rec.step(RULES[rule], "no", facts);
+    rule_line(rec, rule, "no", facts, pace_facts);
     if !gate.step.facts.is_empty() {
         rec.walk.push(gate.step);
     }
@@ -3213,7 +3471,17 @@ fn healed(
 ) -> Option<f64> {
     let window = pin.marked_window.as_deref()?;
     let tier = snapshot.tier(&pin.account_id).unwrap_or_default();
-    let projection = projection_of(state, snapshot, pool, &pin.account_id, tier, window, now)?;
+    // The trigger the mark was made on reads the achieved burn, so its heal reads the same.
+    let projection = projection_of(
+        state,
+        snapshot,
+        pool,
+        &pin.account_id,
+        tier,
+        window,
+        now,
+        BurnRead::Achieved,
+    )?;
     (projection.at_horizon < ceiling(pool, window)).then_some(projection.at_horizon)
 }
 
@@ -4221,13 +4489,13 @@ fn remaining(state: &RoutingState, account_id: &str, window: &str, now: i64) -> 
 }
 
 /// Pace's inputs and score for a candidate at `now`: the spare rate, the remaining allowance over the hours to the
-/// earlier of the window's reset and the account's derived end less the burn of the pool's pins on the account on
-/// that window, in share per hour. An account that runs out sooner is spent first, and one whose sessions already
-/// spend its allowance ranks below an idle one. The score reads negative where the account spends faster than its
-/// pace allows. An untiered account prices no burn. An api_key account scores by its worst live bucket alone (a
-/// bucket refills within a minute, so Pace degrades to least utilized on it, and neither the bucket's own reset nor
-/// a burn enters the score). `choose` ranks by this score and the record carries the rest, so the two cannot
-/// disagree.
+/// earlier of the window's reset and the account's derived end less the demand of the pool's pins on the account on
+/// that window (their burn over the account's realized speed), in share per hour. An account that runs out sooner is
+/// spent first, and one whose sessions already spend its allowance ranks below an idle one. The score reads negative
+/// where the account spends faster than its pace allows. An untiered account prices no burn. An api_key account
+/// scores by its worst live bucket alone (a bucket refills within a minute, so Pace degrades to least utilized on it,
+/// and neither the bucket's own reset nor a burn enters the score). `choose` ranks by this score and the record
+/// carries the rest, so the two cannot disagree.
 pub(crate) fn pace_of(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -4261,16 +4529,18 @@ pub(crate) fn pace_of(
     let hours = deadline
         .map(|d| ((d - now) as f64 / 3_600_000.0).max(1.0 / 60.0))
         .unwrap_or(WEEK_HOURS);
+    // A slowed account's calm is its holds' work, so the score reads what its sessions would spend unslowed.
     let burn = snapshot
         .tier(&candidate.account_id)
         .and_then(|tier| {
             state
-                .burn_shares(
+                .demand_shares(
                     &candidate.account_id,
                     &in_pool(snapshot, pool),
                     tier,
                     now,
                     burn_average_ms(pool),
+                    state.slow_down_speed(pool, &candidate.account_id),
                 )
                 .get(window)
                 .copied()
@@ -4737,7 +5007,13 @@ fn exhausted_facts(exhaustion: &Exhaustion, obstacles: Vec<String>) -> Vec<Fact>
 }
 
 /// Step 1's reading of the pin row, `row` `None` when the session holds none under this key and agent.
-fn pin_facts(found: &'static str, row: Option<&PinRow>, marked: bool, now: i64) -> PinFacts {
+fn pin_facts(
+    found: &'static str,
+    row: Option<&PinRow>,
+    marked: bool,
+    now: i64,
+    pace: Option<&PinPace>,
+) -> PinFacts {
     PinFacts {
         found,
         account_id: row.map(|p| p.account_id.clone()),
@@ -4759,6 +5035,10 @@ fn pin_facts(found: &'static str, row: Option<&PinRow>, marked: bool, now: i64) 
         marked_at: row.and_then(|p| p.marked_at),
         marked_on: row.and_then(|p| p.marked_on.clone()),
         marked_window: row.and_then(|p| p.marked_window.clone()),
+        cycle_ms: pace
+            .and_then(|p| p.cycle_ms)
+            .map(|cycle| cycle.round() as i64),
+        slow_down_until: pace.and_then(|p| p.deadline),
     }
 }
 
@@ -4805,6 +5085,7 @@ fn window_facts(
         ahead,
         projection: projection.map(|p| p.at_horizon),
         horizon: projection.map(|p| p.horizon),
+        demand: None,
         reserved,
     }
 }
@@ -4858,6 +5139,7 @@ fn candidate_facts(
             id,
             snapshot.tier(id).unwrap_or_default(),
             now,
+            BurnRead::Achieved,
         );
         if let Some(tier) = snapshot.tier(id) {
             burn = state
@@ -4878,16 +5160,17 @@ fn candidate_facts(
                 let ahead = (name == FIVE_HOUR || name == SEVEN_DAY).then(|| {
                     reading.utilization - elapsed_share(snapshot, id, &reading, name, now)
                 });
-                windows.insert(
-                    name.to_string(),
-                    window_facts(
-                        &reading,
-                        ahead,
-                        projections.get(name),
-                        state.reserved(id, name),
-                        now,
-                    ),
+                let mut facts = window_facts(
+                    &reading,
+                    ahead,
+                    projections.get(name),
+                    state.reserved(id, name),
+                    now,
                 );
+                if name == FIVE_HOUR && kind == Some(AccountKind::Oauth) {
+                    facts.demand = Some(five_hour_demand(state, snapshot, pool, id, &burn, now));
+                }
+                windows.insert(name.to_string(), facts);
             }
         }
     }
@@ -5014,7 +5297,37 @@ fn candidate_facts(
         fit: None,
         binding: None,
         burn,
+        factor: state.slow_down_in_force(pool, id).map(|entry| entry.factor),
     }
+}
+
+/// A subscription member's demand on the 5-hour window, share per hour, from the entry standing at step 2: the achieved
+/// burn the candidate table already read where the speed is 1, else the pins' burn over the speed with the bookings'
+/// undivided.
+fn five_hour_demand(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    account_id: &str,
+    burn: &BTreeMap<String, f64>,
+    now: i64,
+) -> f64 {
+    let speed = state.slow_down_speed(pool, account_id);
+    let demand = match snapshot.tier(account_id) {
+        Some(tier) if speed != 1.0 => state
+            .demand_shares(
+                account_id,
+                &in_pool(snapshot, pool),
+                tier,
+                now,
+                burn_average_ms(pool),
+                speed,
+            )
+            .get(FIVE_HOUR)
+            .map(|share| share * 3_600.0),
+        _ => burn.get(FIVE_HOUR).copied(),
+    };
+    demand.unwrap_or(0.0)
 }
 
 fn request_facts(request: &SelectRequest, pool_id: String) -> RequestFacts {
@@ -5023,6 +5336,7 @@ fn request_facts(request: &SelectRequest, pool_id: String) -> RequestFacts {
         attempt: request.attempt,
         seq: request.seq,
         at: request.now,
+        received_at: request.received_at,
         key_id: request.key_id.clone(),
         key_generation: request.key_generation,
         pool_id,

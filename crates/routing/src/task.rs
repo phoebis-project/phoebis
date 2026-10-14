@@ -25,8 +25,8 @@ use crate::record::{
     RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    decide, pace_of, projection_of, release_reasons, Decided, FailedOver, MigrateReason, Refusal,
-    SelectRequest, SelectResult, FIVE_HOUR_MS,
+    decide, pace_of, projection_of, release_reasons, BurnRead, Decided, FailedOver, MigrateReason,
+    Refusal, SelectRequest, SelectResult, FIVE_HOUR_MS,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
@@ -2310,8 +2310,16 @@ fn projections(
             let tier = snapshot.tier(account_id).unwrap_or_default();
             let windows = all_plan_windows()
                 .filter_map(|window| {
-                    let projection =
-                        projection_of(state, snapshot, pool, account_id, tier, window, now)?;
+                    let projection = projection_of(
+                        state,
+                        snapshot,
+                        pool,
+                        account_id,
+                        tier,
+                        window,
+                        now,
+                        BurnRead::Achieved,
+                    )?;
                     Some((
                         window.to_string(),
                         WindowProjection {
@@ -2417,8 +2425,16 @@ fn standing_runway(
     let mut projected = false;
     let mut bounded: Vec<(&str, i64)> = Vec::new();
     for window in plan_windows(model) {
-        let Some(projection) = projection_of(state, snapshot, pool, account_id, tier, window, now)
-        else {
+        let Some(projection) = projection_of(
+            state,
+            snapshot,
+            pool,
+            account_id,
+            tier,
+            window,
+            now,
+            BurnRead::Achieved,
+        ) else {
             continue;
         };
         projected = true;

@@ -99,6 +99,7 @@ fn request(s: &RegistrySnapshot, model: &str, now: i64) -> SelectRequest {
         portable: true,
         attempted: Vec::new(),
         now,
+        received_at: now,
         fallback_ms: 60_000,
         revision: s.revision,
         probe: false,

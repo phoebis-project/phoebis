@@ -33,19 +33,20 @@ pub use select::{
     cohort_hold, decide, effective_warm, elapsed_share_at, exhaustion_status, lane_key,
     release_reasons, seconds_ms, select, warmth_of, ClientClass, CohortHold, Decided, Exhaustion,
     FailedOver, HoldFacts, MigrateReason, Placement, Refusal,
-    SelectRequest, SelectResult, Selection, SelectionTrace, ShedRoundRecord, Skipped, Warmth,
-    WarmthCause, BUDGET_WINDOW, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MODEL_REJECTED_REASON,
-    REFRESHING_CLASSES,
+    SelectRequest, SelectResult, Selection, SelectionTrace, ShedRoundRecord, Skipped, SlowDownRead,
+    Warmth, WarmthCause, BUDGET_WINDOW, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON,
+    MODEL_REJECTED_REASON, REFRESHING_CLASSES,
 };
 pub use snapshot::{KeyRefusal, Presented, RegistrySnapshot};
 pub use state::{
     budget_deadline, burn_average_ms, burn_decayed, ceiling, cooldown_holds, is_plan_window,
     load_shedding, return_to_plan_dwell_ms, shed_cap, shed_dwell_ms, slow_down, slow_down_hold_ms,
     slow_down_stretch_ms, warm, AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight,
-    KeyPermit, LongContextRates, MemberSpend, OverageEvidence, PinRef, PinUsage, Purged, RateTable,
-    Rates, Reservation, RoutingState, SharePricer, StateWrite, UtilizationSample, WindowReading,
-    WindowSource, BUCKET_LIFE_MS, BUCKET_TTL_MS, DEFAULT_WINDOW_CEILING, FAST_INPUT, FAST_OUTPUT,
-    FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MAX_BUCKETS_PER_ACCOUNT, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    KeyPermit, LongContextRates, MemberSpend, OverageEvidence, PinPace, PinRef, PinUsage, Purged,
+    RateTable, Rates, Reservation, RoutingState, SharePricer, SlowDownState, StateWrite,
+    UtilizationSample, WindowReading, WindowSource, BUCKET_LIFE_MS, BUCKET_TTL_MS,
+    DEFAULT_WINDOW_CEILING, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
+    MAX_BUCKETS_PER_ACCOUNT, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 pub use task::{
     credits_from_usage, sample_from_usage, spawn, AccountProjection, BandWeight, BurnRates,

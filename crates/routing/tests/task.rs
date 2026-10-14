@@ -5,8 +5,8 @@ use std::time::Duration;
 use fake_upstream::{stays_for, wait_for, wait_for_async};
 use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
-    credits_from_usage, lane_key, resolve, sample_from_usage, spawn, AffinityReport, BandWeight,
-    BurnRates, BurnUnit, ClientClass, ConversationLookup, CreditsState, DecisionRecord,
+    credits_from_usage, decide, lane_key, resolve, sample_from_usage, spawn, AffinityReport,
+    BandWeight, BurnRates, BurnUnit, ClientClass, ConversationLookup, CreditsState, DecisionRecord,
     DecisionSummary, Exhaustion, KeyRefusal, LongContextRates, MemberSpend, MoveCause,
     PinRef, PinUsage, PredecessorQuery, Presented, RateTable, Rates, Refusal, RefusalFacts,
     RefusedRequest, ReloadError, Report, ResolveError, RouterConfig, RouterHandle, RoutingState,
@@ -16,8 +16,8 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
-    MemberWrite, ModelRule, PinBurn, PinRow, PoolRow, RoutingLoad, RulesMode, Shedding, StateCause,
-    StorageKey, Store, Strategy, SubscriptionRow, WindowRow,
+    MemberWrite, ModelRule, PinBurn, PinKey, PinRow, PoolRow, RoutingLoad, RulesMode, Shedding,
+    StateCause, StorageKey, Store, Strategy, SubscriptionRow, WindowRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -152,6 +152,7 @@ fn request(
         portable: true,
         attempted: vec![],
         now,
+        received_at: now,
         fallback_ms: 60_000,
         revision: s.revision,
         probe: false,
@@ -1056,6 +1057,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             portable: true,
             attempted: vec![],
             now,
+            received_at: now,
             fallback_ms: 60_000,
             revision: s.revision,
             probe: false,
@@ -1193,6 +1195,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             portable: true,
             attempted: vec![],
             now: 1_000,
+            received_at: 1_000,
             fallback_ms: 60_000,
             revision: s.revision,
             probe: false,
@@ -9217,4 +9220,116 @@ async fn a_predicted_wall_with_no_reset_holds_back_the_samples_of_its_own_window
         ),
         other => panic!("{other:?}"),
     }
+}
+
+/// A main turn of `session` selected against `state` over the task's snapshot: the task's own state is out of the
+/// handle's reach, so a case on the slow-down's memory selects and purges against a state built as the task builds it.
+fn main_turn_on(
+    state: &mut RoutingState,
+    handle: &RouterHandle,
+    session: &str,
+    at: i64,
+) -> phoebis_routing::Decided {
+    use rand::SeedableRng;
+    let req = SelectRequest {
+        request_class: Some("main".into()),
+        ..request(handle, Some(session), at)
+    };
+    decide(
+        state,
+        &handle.snapshot(),
+        &req,
+        &mut rand::rngs::StdRng::seed_from_u64(7),
+    )
+}
+
+#[tokio::test]
+async fn a_quiet_accounts_slow_down_entry_and_a_gone_pins_pace_leave_at_the_purge() {
+    let store = shedding_store(&["a", "b"]);
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.slow_down.slow_down = true;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let snapshot = handle.snapshot();
+    let s1 = stored_pin(&store, "s1", "a", 1, 0.0);
+    let s2 = stored_pin(&store, "s2", "a", 2, 0.0);
+    let mut state = RoutingState::from_load(RoutingLoad {
+        pins: vec![s1.clone(), s2.clone()],
+        ..RoutingLoad::default()
+    });
+    state.record_sample("a", sample_with(AT - 500, FIVE_HOUR, 0.5, Some(AT + HOUR)));
+    main_turn_on(&mut state, &handle, "s1", AT);
+    main_turn_on(&mut state, &handle, "s2", AT);
+    let entry = state
+        .slow_down_state("p", "a")
+        .cloned()
+        .expect("the read wrote a's entry");
+    assert!(state.pin_pace(&s1.key()).is_some() && state.pin_pace(&s2.key()).is_some());
+    assert!(
+        state.purge(&snapshot, AT + 1_000).slow_downs.is_empty(),
+        "the pool's pins still stand on a"
+    );
+    assert!(state.pin_pace(&s1.key()).is_some());
+
+    // A session's release takes its pace at once. The failover's invalidation takes the row alone, since the landing
+    // writes the fresh one under the same key, so the pace waits for the purge.
+    state.release_session("k", "s2");
+    assert!(state.pin_pace(&s2.key()).is_none());
+    state
+        .invalidate_pin(
+            &PinRef {
+                key_id: "k".into(),
+                session_id: "s1".into(),
+                agent_id: "main".into(),
+                model: "claude-sonnet-5".into(),
+                epoch: 1,
+                lane: s1.lane.clone(),
+            },
+            "a",
+        )
+        .expect("the row");
+    assert!(state.pin_pace(&s1.key()).is_some());
+    assert_eq!(state.slow_down_state("p", "a"), Some(&entry));
+
+    let purged = state.purge(&snapshot, AT + 2_000);
+    assert_eq!(
+        purged.slow_downs,
+        vec![(("p".to_string(), "a".to_string()), entry)],
+        "a holds no pin of the pool, so its entry leaves whole"
+    );
+    assert!(state.slow_down_state("p", "a").is_none());
+    assert!(state.pin_pace(&s1.key()).is_none(), "no pin holds the key");
+}
+
+#[tokio::test]
+async fn a_rekeyed_pin_keeps_its_pace_under_the_new_key() {
+    const DATED: &str = "claude-sonnet-5-20260929";
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let pin = stored_pin(&store, "s1", "a", 1, 0.0);
+    let mut state = RoutingState::from_load(RoutingLoad {
+        pins: vec![pin.clone()],
+        ..RoutingLoad::default()
+    });
+    main_turn_on(&mut state, &handle, "s1", AT);
+    main_turn_on(&mut state, &handle, "s1", AT + 10_000);
+    assert_eq!(
+        state.pin_pace(&pin.key()).and_then(|p| p.cycle_ms),
+        Some(10_000.0)
+    );
+    state.apply_resolution("claude-sonnet-5", DATED, AT + 20_000);
+    let dated = PinKey {
+        model: DATED.into(),
+        ..pin.key()
+    };
+    assert!(state.pin(&dated).is_some(), "the rekey moved the pin");
+    assert_eq!(
+        state.pin_pace(&dated).and_then(|p| p.cycle_ms),
+        Some(10_000.0),
+        "the pace moved with it"
+    );
+    assert!(state.pin_pace(&pin.key()).is_none());
 }

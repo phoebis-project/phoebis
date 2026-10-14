@@ -69,6 +69,9 @@ pub struct RequestFacts {
     pub attempt: u32,
     pub seq: u32,
     pub at: i64,
+    /// When the relay received the request, which every selection of it carries unchanged. A refusal carries its
+    /// `at`, since it refuses before any selection.
+    pub received_at: i64,
     pub key_id: String,
     pub key_generation: i64,
     pub pool_id: String,
@@ -176,6 +179,11 @@ pub struct PinFacts {
     pub marked_at: Option<i64>,
     pub marked_on: Option<String>,
     pub marked_window: Option<String>,
+    /// The pin's cycle, the time-weighted average of the gaps between a dispatch and the next arrival, `None` before
+    /// its first gap.
+    pub cycle_ms: Option<i64>,
+    /// The end of the slow-down hold standing on the pin, `None` with none.
+    pub slow_down_until: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -258,6 +266,9 @@ pub struct CandidateFacts {
     /// The burn of the pool's pins on the member: share per hour per plan window, the unit the record states as
     /// `percent_per_hour`. Empty for an api_key member and an untiered one, which price no burn.
     pub burn: BTreeMap<String, f64>,
+    /// The member's slow-down factor from the entry the last pinned selection on it wrote, `None` with no entry or on a
+    /// pool whose slow-down is off.
+    pub factor: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -281,6 +292,9 @@ pub struct WindowFacts {
     /// The projection at the window's horizon and the horizon, filled for a plan window of a subscription member.
     pub projection: Option<f64>,
     pub horizon: Option<i64>,
+    /// The demand on the 5-hour window of a subscription member, share per hour: the pins' burn over the account's
+    /// speed, the bookings' undivided. `None` on every other window.
+    pub demand: Option<f64>,
     /// The live reservations' rewrite on the window, summed: what `predicted` added to the reading.
     pub reserved: f64,
 }
@@ -298,7 +312,8 @@ pub struct PaceFacts {
     /// The window the score read (`seven_day`, or the model's week such as `seven_day_fable`). `None` for an api_key
     /// member, which the worst bucket scores. The caller holds the window, so the console derives nothing.
     pub window: Option<String>,
-    /// The burn of the pins on the account on `window`, share per hour, what the score subtracts.
+    /// The demand of the pins on the account on `window`, their burn over the account's realized speed, share per
+    /// hour: what the score subtracts.
     pub burn: f64,
 }
 
@@ -784,6 +799,7 @@ impl DecisionRecord {
                 attempt: request.attempt,
                 seq: request.seq,
                 at: request.at,
+                received_at: request.at,
                 key_id: request.key_id.clone(),
                 key_generation: request.key_generation,
                 pool_id: key.map(|key| key.pool_id.clone()).unwrap_or_default(),
@@ -947,6 +963,7 @@ mod tests {
                 attempt: 1,
                 seq: 1,
                 at: 2_000,
+                received_at: 1_990,
                 key_id: "k".into(),
                 key_generation: 1,
                 pool_id: "p".into(),
@@ -997,6 +1014,8 @@ mod tests {
                 marked_at: None,
                 marked_on: None,
                 marked_window: None,
+                cycle_ms: None,
+                slow_down_until: None,
             }),
             pin_reason: None,
             settings: Some(Settings {
@@ -1050,6 +1069,7 @@ mod tests {
                         ahead: Some(-0.1),
                         projection: None,
                         horizon: None,
+                        demand: None,
                         reserved: 0.0,
                     },
                 )]),
@@ -1075,6 +1095,7 @@ mod tests {
                 fit: None,
                 binding: None,
                 burn: BTreeMap::new(),
+                factor: None,
             }],
             walk: vec![WalkStep {
                 step: "pin",

@@ -1733,6 +1733,7 @@ impl Relay {
                     portable,
                     attempted: attempted.clone(),
                     now,
+                    received_at: trace.received_at,
                     fallback_ms,
                     revision: snapshot.revision,
                     probe: admitted.trace.kind == Kind::Probe,

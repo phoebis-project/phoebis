@@ -6,21 +6,21 @@ use phoebis_routing::{
     HoldOutcome, LaneFacts, LongContextRates, MemberSpend, MigrateReason,
     MoveCause, OverageEvidence, PinKeyFacts, PinRef, Placement, RateTable, Rates, RefusalFacts,
     RefusedRequest, RegistrySnapshot, RequestFlags, Reservation, RoutingState, SelectRequest,
-    SelectResult, SharePricer, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause,
-    WindowReading, WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
-    IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    SelectResult, SharePricer, SlowDownRead, StateWrite, UtilizationSample, WalkStep, Warmth,
+    WarmthCause, WindowReading, WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON,
+    FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
     CooldownRow, Failover, OveragePolicy, PinBurn, PinKey, PinRow, PoolMember,
     PoolRow, RegistryLoad, ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow,
-    Shedding, StateCause, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
+    Shedding, SlowDown, StateCause, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 const HOUR: i64 = 3_600_000;
@@ -95,6 +95,7 @@ struct Pool {
     kinds: Vec<(&'static str, AccountKind)>,
     shedding: Shedding,
     failover: Failover,
+    slow_down: SlowDown,
 }
 
 impl Default for Pool {
@@ -114,6 +115,7 @@ impl Default for Pool {
             kinds: vec![],
             shedding: Shedding::default(),
             failover: Failover::default(),
+            slow_down: SlowDown::default(),
         }
     }
 }
@@ -209,6 +211,7 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
                 ..pool.shedding
             },
             failover: pool.failover,
+            slow_down: pool.slow_down,
             affinity: Affinity {
                 mode: pool.mode,
                 subagent_placement: pool.subagent_placement,
@@ -402,6 +405,7 @@ fn select_request(
         portable,
         attempted: attempted.iter().map(|a| a.to_string()).collect(),
         now,
+        received_at: now,
         fallback_ms: 60_000,
         revision: s.revision,
         probe: false,
@@ -19072,4 +19076,646 @@ fn a_placement_or_a_move_that_books_nothing_records_reserve_none_with_the_accoun
         ("b".into(), Some(MigrateReason::Spent))
     );
     none_on("move", &st, &d, "b");
+}
+
+/// `pool` with the slow-down on at its shipped stretch and hold.
+fn slowing(pool: Pool) -> Pool {
+    Pool {
+        slow_down: SlowDown {
+            slow_down: true,
+            ..SlowDown::default()
+        },
+        ..pool
+    }
+}
+
+/// A pool over `a` and `b` with the slow-down on and the shedding round off, so a pin renews where it is and the shed
+/// line reads the account's pace alone.
+fn slowed_pool() -> RegistrySnapshot {
+    tiered(slowing(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        load_shedding: false,
+        ..Pool::default()
+    }))
+}
+
+/// `account` at `five_hour` on its 5-hour window with the reset `reset_in` after `at`, its week at 0.1 three days out.
+fn reading(st: &mut RoutingState, account: &str, five_hour: f64, reset_in: i64, at: i64) {
+    st.record_sample(
+        account,
+        refreshing(five_hour, at + reset_in, at + 72 * HOUR, at - 500),
+    );
+}
+
+/// A read with the factor a case names and nothing over the threshold, for a case that seeds an account's speed the
+/// way a slowed selection's write leaves it.
+fn seeded_read(factor: f64, at: i64) -> SlowDownRead {
+    SlowDownRead {
+        utilization: 0.5,
+        horizon: at + HOUR,
+        reset: Some(at + HOUR),
+        demand: 0.0,
+        stretch_ms: 0,
+        threshold_ms: 1_800_000,
+        factor,
+        speed: 1.0,
+    }
+}
+
+/// The pool's burn average, which the speed and the cycle fold over.
+const AVERAGE_MS: i64 = 1_800_000;
+
+/// The keys the slow-down adds to the shed line.
+const SLOW_DOWN_FACTS: [&str; 7] = [
+    "slow_down",
+    "stretch_ms",
+    "threshold_ms",
+    "factor",
+    "speed",
+    "demand_five_hour",
+    "over_since",
+];
+
+fn time_of(value: &FactValue) -> i64 {
+    match value {
+        FactValue::Int(n) => *n,
+        other => panic!("expected an instant, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_stretch_is_the_time_the_unslowed_demand_passes_the_ceiling_before_the_reset() {
+    let s = slowed_pool();
+    // Two pins burn 0.10 and 0.05 of the 5-hour window an hour on a at 0.80 with its reset two hours out: the 0.15 of
+    // room under the ceiling lasts an hour, so the sessions would pass it an hour before the reset.
+    let mut st = rounding(vec![
+        burning("s1", "a", 10.0, true, T),
+        burning("s0", "a", 5.0, true, T),
+    ]);
+    reading(&mut st, "a", 0.80, 2 * HOUR, T);
+    reading(&mut st, "b", 0.1, 2 * HOUR, T);
+    let d = decide(&mut st, &s, &main_turn(&s, "s1", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(
+        (shed.verdict, fact(shed, "round")),
+        ("not_run", &FactValue::Text("off".into())),
+        "the round is off and the line still reads the account's pace"
+    );
+    assert_eq!(fact(shed, "slow_down"), &FactValue::Text("on".into()));
+    let stretch_ms = number(fact(shed, "stretch_ms"));
+    let factor = number(fact(shed, "factor"));
+    let demand = number(fact(shed, "demand_five_hour")) / 3_600.0;
+    let to_reset = (2 * HOUR) as f64;
+    assert!(
+        (stretch_ms - (to_reset - (0.95 - 0.80) / demand * 1_000.0)).abs() <= 1.0,
+        "the stretch is the time to the reset less the time the room lasts at the demand: {stretch_ms}"
+    );
+    assert!(
+        (factor - (1.0 - stretch_ms / to_reset)).abs() < 1e-6,
+        "the factor is one less the stretch over the time to the reset: {factor}"
+    );
+    assert!((stretch_ms / 3_600_000.0 - 1.0).abs() < 1e-3);
+    assert!((factor / 0.5 - 1.0).abs() < 1e-3);
+    assert!(close(number(fact(shed, "speed")), 1.0));
+    assert_eq!(fact(shed, "threshold_ms"), &FactValue::Int(1_800_000));
+    assert_eq!(
+        time_of(fact(shed, "over_since")),
+        T,
+        "an hour's stretch is over the half hour threshold since this read"
+    );
+    // One factor per account: the other session's turn reads the same figure and the entry holds it.
+    let d = decide(&mut st, &s, &main_turn(&s, "s0", T), &mut rng());
+    assert!(close(
+        number(fact(line(&d.record, "move:shed"), "factor")),
+        factor
+    ));
+    let entry = st
+        .slow_down_state("p", "a")
+        .expect("the read wrote a's entry");
+    assert!(close(entry.factor, factor));
+    assert_eq!((entry.slowed_since, entry.over_since), (Some(T), Some(T)));
+}
+
+#[test]
+fn a_window_at_the_ceiling_reads_a_stretch_of_at_least_the_time_to_the_reset_and_a_factor_of_zero()
+{
+    let s = slowed_pool();
+    // a at 0.96 with 27 minutes to its reset: the ceiling is already passed.
+    let mut st = rounding(vec![burning("s1", "a", 7.0, true, T)]);
+    reading(&mut st, "a", 0.96, 27 * MINUTE, T);
+    let d = decide(&mut st, &s, &main_turn(&s, "s1", T), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    let stretch_ms = number(fact(shed, "stretch_ms"));
+    let demand = number(fact(shed, "demand_five_hour")) / 3_600.0;
+    assert!(
+        stretch_ms >= (27 * MINUTE) as f64,
+        "a stretch of at least the time to the reset: {stretch_ms}"
+    );
+    assert!(
+        (stretch_ms - ((27 * MINUTE) as f64 + (0.96 - 0.95) / demand * 1_000.0)).abs() <= 1.0,
+        "the overrun at the demand adds to the time to the reset: {stretch_ms}"
+    );
+    assert_eq!(number(fact(shed, "factor")), 0.0);
+    let entry = st.slow_down_state("p", "a").cloned().expect("an entry");
+    assert_eq!(
+        (entry.factor, entry.factor_min, entry.slowed_since),
+        (0.0, 0.0, Some(T))
+    );
+
+    // Nothing priced at the ceiling still reads the whole time to the reset and a factor of zero.
+    st.set_share(SharePricer::default());
+    let d = decide(&mut st, &s, &main_turn(&s, "s1", T + MINUTE), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(fact(shed, "stretch_ms"), &FactValue::Int(26 * MINUTE));
+    assert_eq!(number(fact(shed, "factor")), 0.0);
+    assert_eq!(number(fact(shed, "demand_five_hour")), 0.0);
+
+    // Under the ceiling with nothing priced the window carries the sessions to its reset: the stretch reads zero, the
+    // factor returns to 1 and the span closes.
+    reading(&mut st, "a", 0.5, 25 * MINUTE, T + 2 * MINUTE);
+    let d = decide(
+        &mut st,
+        &s,
+        &main_turn(&s, "s1", T + 2 * MINUTE),
+        &mut rng(),
+    );
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(fact(shed, "stretch_ms"), &FactValue::Int(0));
+    assert_eq!(number(fact(shed, "factor")), 1.0);
+    assert!(shed.facts.iter().all(|f| f.key != "over_since"));
+    let entry = st.slow_down_state("p", "a").cloned().expect("an entry");
+    assert_eq!(
+        (
+            entry.factor,
+            entry.slowed_since,
+            entry.clear_since,
+            entry.factor_min,
+            entry.held_ms,
+            entry.over_since
+        ),
+        (1.0, None, Some(T + 2 * MINUTE), 1.0, 0, None),
+        "the span closed with its figures reset"
+    );
+}
+
+#[test]
+fn a_pool_with_the_slow_down_off_an_api_key_account_and_an_unread_window_read_no_slow_down() {
+    let none_read = |case: &str, d: &Decided, st: &RoutingState| {
+        let shed = line(&d.record, "move:shed");
+        assert!(
+            shed.facts
+                .iter()
+                .all(|f| !SLOW_DOWN_FACTS[1..].contains(&f.key)),
+            "{case}: {:?}",
+            shed.facts
+        );
+        assert!(st.slow_down_state("p", "a").is_none(), "{case}: no entry");
+    };
+    let pins = || rounding(vec![burning("s1", "a", 10.0, true, T)]);
+    let pool = || Pool {
+        members: vec![("a", 0), ("b", 1)],
+        load_shedding: false,
+        ..Pool::default()
+    };
+
+    // Off: the line says so and nothing else of the slow-down.
+    let s = tiered(pool());
+    let mut st = pins();
+    reading(&mut st, "a", 0.80, 2 * HOUR, T);
+    let d = decide(&mut st, &s, &main_turn(&s, "s1", T), &mut rng());
+    assert_eq!(
+        fact(line(&d.record, "move:shed"), "slow_down"),
+        &FactValue::Text("off".into())
+    );
+    none_read("off", &d, &st);
+
+    // On, with no read: an api_key account has no 5-hour window, an unread window has no figure, and an unnamed tier
+    // prices no demand.
+    let api_key = tiered(slowing(Pool {
+        kinds: vec![("a", AccountKind::ApiKey)],
+        ..pool()
+    }));
+    let unread = tiered(slowing(pool()));
+    let untiered = snapshot(slowing(pool()));
+    for (case, s, read) in [
+        ("api_key", &api_key, true),
+        ("unread", &unread, false),
+        ("untiered", &untiered, true),
+    ] {
+        let mut st = pins();
+        if read {
+            reading(&mut st, "a", 0.80, 2 * HOUR, T);
+        }
+        let d = decide(&mut st, s, &main_turn(s, "s1", T), &mut rng());
+        assert!(
+            line(&d.record, "move:shed")
+                .facts
+                .iter()
+                .all(|f| f.key != "slow_down"),
+            "{case}: the line carries no slow-down fact at all"
+        );
+        none_read(case, &d, &st);
+    }
+
+    // A probe replays a recipe and says nothing of the session's pace, so it reads none where the rest would.
+    let mut st = pins();
+    reading(&mut st, "a", 0.80, 2 * HOUR, T);
+    let probe = SelectRequest {
+        probe: true,
+        ..main_turn(&unread, "s1", T)
+    };
+    let d = decide(&mut st, &unread, &probe, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    assert!(line(&d.record, "move:shed")
+        .facts
+        .iter()
+        .all(|f| f.key != "slow_down"));
+    none_read("probe", &d, &st);
+}
+
+#[test]
+fn the_demand_is_the_achieved_burn_over_the_speed_and_a_booking_counts_undivided() {
+    let s = slowed_pool();
+    let mut st = rounding(vec![burning("s1", "a", 10.0, true, T)]);
+    reading(&mut st, "a", 0.5, 2 * HOUR, T);
+    // a's sessions run at half speed, as a slowed selection's write leaves the entry.
+    st.write_slow_down("p", "a", &seeded_read(1.0, T), 0.5, T, AVERAGE_MS);
+    let d = decide(&mut st, &s, &main_turn(&s, "s1", T), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    let achieved = candidate(&d.record, "a").burn[FIVE_HOUR];
+    assert!(close(number(fact(shed, "speed")), 0.5));
+    assert!(
+        close(number(fact(shed, "demand_five_hour")), 2.0 * achieved),
+        "the demand is the achieved burn over the speed"
+    );
+
+    // A fresh session's booking on a runs unslowed, so its burn counts once.
+    st.book_reservation(
+        "r-9",
+        Reservation {
+            account_id: "a".into(),
+            attempt: 1,
+            pin: None,
+            booked_at: T,
+            rewrite: BTreeMap::new(),
+            burn: BTreeMap::from([(FIVE_HOUR.to_string(), 0.02 / 3_600.0)]),
+            expires_at: T + IN_FLIGHT_RECLAIM_MS,
+        },
+    );
+    let d = decide(&mut st, &s, &main_turn(&s, "s1", T), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert!(close(
+        candidate(&d.record, "a").burn[FIVE_HOUR],
+        achieved + 0.02
+    ));
+    assert!(
+        close(
+            number(fact(shed, "demand_five_hour")),
+            2.0 * achieved + 0.02
+        ),
+        "the pins' burn over the speed and the booking's undivided"
+    );
+}
+
+#[test]
+fn a_slowed_pins_figures_read_its_burn_over_its_sources_speed_at_a_destination() {
+    let s = tiered(slowing(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    }));
+    // s1 burns a ten-thousandth of a's 5-hour window a second and a is spent, so the spent rule moves it to b.
+    let mut st = priced(vec![burning("s1", "a", 1_000.0, true, T)]);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    reading(&mut st, "b", 0.1, 3 * HOUR, T);
+    st.write_slow_down("p", "a", &seeded_read(1.0, T), 0.5, T, AVERAGE_MS);
+    let d = decide(&mut st, &s, &main_turn(&s, "s1", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(
+        (shed.verdict, number(fact(shed, "factor"))),
+        ("not_run", 0.0),
+        "the shed line after the spent rule still reads spent a's pace"
+    );
+    let achieved = candidate(&d.record, "a").burn[FIVE_HOUR];
+    let reserve = d.record.walk.last().expect("a walk");
+    assert_eq!(
+        (reserve.step, reserve.verdict, fact(reserve, "account_id")),
+        ("reserve", "booked", &FactValue::Text("b".into()))
+    );
+    let booked = number(fact(reserve, "burn_five_hour"));
+    assert!(
+        close(booked, 2.0 * achieved),
+        "the move books the pin's burn over a's speed: {booked} against {achieved}"
+    );
+    // Nothing else burns on b, so the runway on the window that binds is the room after the rewrite over that burn.
+    let fit = line(&d.record, "fit");
+    assert_eq!(
+        fact_of(fit, "binding", "b"),
+        &FactValue::Text("five_hour".into())
+    );
+    let room = 0.95
+        - number(fact_of(fit, "projection_five_hour", "b"))
+        - number(fact_of(fit, "rewrite_five_hour", "b"));
+    let runway_ms = number(fact_of(fit, "runway_ms", "b"));
+    assert!(
+        (runway_ms - room / (booked / 3_600.0) * 1_000.0).abs() <= 1.0,
+        "the fit reads the same burn: {runway_ms}"
+    );
+
+    // A failover's landing reads the row it took off a over a's speed as well.
+    let landing = SelectRequest {
+        request_id: "r-2".into(),
+        attempted: vec!["a".into()],
+        failed_over: Some(FailedOver {
+            from_account_id: "a".into(),
+            reason: "cooldown",
+            row: burning("s2", "a", 1_000.0, true, T),
+            cause: None,
+        }),
+        ..request(&s, Some("s2"), "claude-sonnet-5", true, &[], T)
+    };
+    let d = decide(&mut st, &s, &landing, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("b".into(), None));
+    let reserve = d.record.walk.last().expect("a walk");
+    assert_eq!((reserve.step, reserve.verdict), ("reserve", "booked"));
+    assert!(close(number(fact(reserve, "burn_five_hour")), booked));
+}
+
+#[test]
+fn the_fit_gate_and_the_spare_rate_read_the_demand_and_the_weekly_trigger_the_achieved_burn() {
+    let s = tiered(slowing(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        strategy: Strategy::Pace,
+        ..Pool::default()
+    }));
+    // s1 burns 0.04 of a's 5-hour window an hour, which stays far under the ceiling, and s2 sits on b.
+    let mut st = rounding(vec![
+        burning("s1", "a", 4.0, true, T),
+        burning("s2", "b", 1.0, true, T),
+    ]);
+    reading(&mut st, "a", 0.5, 2 * HOUR, T);
+    reading(&mut st, "b", 0.1, 2 * HOUR, T);
+    st.write_slow_down("p", "a", &seeded_read(1.0, T), 0.5, T, AVERAGE_MS);
+    let d = decide(&mut st, &s, &main_turn(&s, "s1", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let a = candidate(&d.record, "a");
+    let pace = a.pace.as_ref().expect("Pace scores every member");
+    assert_eq!(pace.window.as_deref(), Some(SEVEN_DAY));
+    assert!(
+        close(pace.burn, 2.0 * a.burn[SEVEN_DAY]),
+        "the spare rate subtracts the demand: {} against {}",
+        pace.burn,
+        a.burn[SEVEN_DAY]
+    );
+    let shed = line(&d.record, "move:shed");
+    let horizon = time_of(fact(shed, "horizon_seven_day"));
+    assert!(
+        close(
+            number(fact(shed, "projection_seven_day")),
+            a.windows[SEVEN_DAY].utilization
+                + a.burn[SEVEN_DAY] / 3_600.0 * (horizon - T) as f64 / 1_000.0
+        ),
+        "the weekly trigger projects the achieved burn"
+    );
+
+    // b spends its window, so the spent rule judges a for s2, on a's demand.
+    st.record_sample("b", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    let d = decide(&mut st, &s, &main_turn(&s, "s2", T + 1_000), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("a".into(), Some(MigrateReason::Spent))
+    );
+    let a = candidate(&d.record, "a");
+    let five = &a.windows[FIVE_HOUR];
+    let achieved_rise = five.projection.expect("a projects") - five.utilization;
+    let gated_rise =
+        number(fact_of(line(&d.record, "fit"), "projection_five_hour", "a")) - five.utilization;
+    assert!(
+        close(gated_rise, 2.0 * achieved_rise),
+        "the gate projects a's demand, twice what the candidate table's achieved burn projects: {gated_rise} against \
+         {achieved_rise}"
+    );
+}
+
+#[test]
+fn a_pins_cycle_folds_from_its_arrivals_and_an_exempt_class_folds_nothing() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![seeded_pin("s1", "a", T)]);
+    let cycle_on = |st: &mut RoutingState, req: &SelectRequest| {
+        let d = decide(st, &s, req, &mut rng());
+        let pin = d.record.pin.clone().expect("a pin block");
+        assert_eq!(pin.found, "live");
+        (pin.cycle_ms, pin.slow_down_until)
+    };
+    assert_eq!(
+        cycle_on(&mut st, &main_turn(&s, "s1", T)),
+        (None, None),
+        "the first arrival starts the pace with no gap"
+    );
+    assert_eq!(
+        cycle_on(&mut st, &main_turn(&s, "s1", T + 10_000)),
+        (Some(10_000), None),
+        "the first gap is taken whole"
+    );
+    let w = (-30_000.0_f64 / AVERAGE_MS as f64).exp();
+    let (cycle, _) = cycle_on(&mut st, &main_turn(&s, "s1", T + 40_000));
+    let cycle = cycle.expect("a cycle");
+    assert!(
+        (cycle as f64 - (10_000.0 * w + 30_000.0 * (1.0 - w))).abs() <= 1.0,
+        "a later gap weighs in by its length over the burn average: {cycle}"
+    );
+    assert!(10_000 < cycle && cycle < 30_000);
+    let pace = st.pin_pace(&pin_key("s1")).cloned();
+    assert!(pace.is_some());
+
+    // A probe, an auxiliary request and a compaction say nothing of the session's pace, and neither does the second
+    // selection after a slow-down hold, whose arrival the first already folded.
+    let held = SelectRequest {
+        seq: 2,
+        holds: vec![HoldFacts {
+            account_id: "a".into(),
+            cohort: None,
+            held_ms: 4_000,
+            attempt: 1,
+            seq: 1,
+            ran_out: false,
+            reason: "slow_down",
+            until: Some(T + 49_000),
+        }],
+        ..main_turn(&s, "s1", T + 49_000)
+    };
+    let exempt = [
+        (
+            "probe",
+            SelectRequest {
+                probe: true,
+                ..main_turn(&s, "s1", T + 45_000)
+            },
+        ),
+        ("auxiliary", auxiliary(&s, "s1", T + 46_000)),
+        (
+            "compaction",
+            with_facts(
+                request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 47_000),
+                Some("compaction"),
+                false,
+                None,
+                &[],
+            ),
+        ),
+        ("slow_down hold", held),
+    ];
+    for (case, req) in exempt {
+        decide(&mut st, &s, &req, &mut rng());
+        assert_eq!(
+            st.pin_pace(&pin_key("s1")).cloned(),
+            pace,
+            "{case} folds nothing"
+        );
+    }
+
+    // A pin that idled out takes its pace with it: the fresh pin under the key reads no cycle at its next turn, where a
+    // pace that stayed would read the idle hours as one gap.
+    let idle = T + 2 * HOUR;
+    let d = decide(&mut st, &s, &main_turn(&s, "s1", idle), &mut rng());
+    assert_eq!(d.record.pin.as_ref().map(|p| p.found), Some("expired_idle"));
+    assert_eq!(
+        cycle_on(&mut st, &main_turn(&s, "s1", idle + 10_000)),
+        (None, None)
+    );
+}
+
+#[test]
+fn a_shed_move_and_a_failover_landing_keep_the_pins_cycle_under_its_key() {
+    // The slow-down stays off, since the fold reads no switch, and the round marks by burn whatever the warmth.
+    let s = tiered(shedding_pool(Shedding {
+        warm_sessions: WarmSessions::Always,
+        ..Shedding::default()
+    }));
+    let mut st = rounding(vec![
+        burning("s1", "a", 4.0, true, T),
+        burning("s0", "a", 1.0, true, T),
+    ]);
+    reading(&mut st, "a", 0.5, HOUR, T - 30_000);
+    reading(&mut st, "b", 0.1, HOUR, T - 30_000);
+    // Ten seconds between each session's turns on a, under the ceiling.
+    for at in [T - 25_000, T - 15_000] {
+        for (session, offset) in [("s1", 0), ("s0", 5_000)] {
+            let d = decide(
+                &mut st,
+                &s,
+                &main_turn(&s, session, at + offset),
+                &mut rng(),
+            );
+            assert_eq!(landed(d.result), ("a".into(), None));
+        }
+    }
+    // a's projection crosses the ceiling: s1's next turn runs a's round, which marks it, and the turn moves it to b.
+    over_a_fitting_b(&mut st, T - 5_500);
+    let d = decide(&mut st, &s, &main_turn(&s, "s1", T - 5_000), &mut rng());
+    assert_eq!(
+        landed(d.result),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "a's round marks s1 and it moves"
+    );
+    let d = decide(&mut st, &s, &main_turn(&s, "s1", T + 5_000), &mut rng());
+    let pin = d.record.pin.as_ref().expect("a pin block");
+    assert_eq!(
+        (pin.found, pin.account_id.as_deref(), pin.cycle_ms),
+        ("live", Some("b"), Some(10_000)),
+        "the moved pin reads the cycle it kept under its key"
+    );
+
+    // s0 fails over off a: the invalidation takes its row, the landing writes the fresh one under the same key.
+    let current = pinned(&st, "s0");
+    let row = st
+        .invalidate_pin(
+            &PinRef {
+                key_id: "k".into(),
+                session_id: "s0".into(),
+                agent_id: "main".into(),
+                model: "claude-sonnet-5".into(),
+                epoch: current.epoch,
+                lane: current.lane.clone(),
+            },
+            "a",
+        )
+        .expect("the row");
+    let landing = SelectRequest {
+        attempted: vec!["a".into()],
+        failed_over: Some(FailedOver {
+            from_account_id: "a".into(),
+            reason: "cooldown",
+            row,
+            cause: None,
+        }),
+        ..main_turn(&s, "s0", T + 6_000)
+    };
+    assert_eq!(
+        landed(decide(&mut st, &s, &landing, &mut rng()).result),
+        ("b".into(), None)
+    );
+    let d = decide(&mut st, &s, &main_turn(&s, "s0", T + 16_000), &mut rng());
+    let pin = d.record.pin.as_ref().expect("a pin block");
+    assert_eq!((pin.found, pin.account_id.as_deref()), ("live", Some("b")));
+    assert!(
+        pin.cycle_ms.is_some(),
+        "the landed pin reads the cycle its session built on a"
+    );
+}
+
+#[test]
+fn the_record_names_the_read_the_factor_the_demand_and_the_cycle() {
+    let s = slowed_pool();
+    let mut st = rounding(vec![
+        burning("s1", "a", 10.0, true, T),
+        burning("s0", "a", 5.0, true, T),
+    ]);
+    reading(&mut st, "a", 0.80, 2 * HOUR, T);
+    reading(&mut st, "b", 0.1, 2 * HOUR, T);
+    decide(&mut st, &s, &main_turn(&s, "s1", T), &mut rng());
+    decide(&mut st, &s, &main_turn(&s, "s1", T + 10_000), &mut rng());
+    // a's sessions run under a factor of a half and below full speed from here.
+    st.write_slow_down("p", "a", &seeded_read(0.5, T), 0.5, T + 20_000, AVERAGE_MS);
+    let entry = st.slow_down_state("p", "a").cloned().expect("an entry");
+    assert!(entry.speed < 1.0);
+    let req = SelectRequest {
+        received_at: T + 19_000,
+        ..main_turn(&s, "s1", T + 20_000)
+    };
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(d.record.request.received_at, T + 19_000);
+    let a = candidate(&d.record, "a");
+    assert_eq!(a.factor, Some(entry.factor));
+    assert!(
+        close(
+            a.windows[FIVE_HOUR].demand.expect("a's 5-hour demand"),
+            a.burn[FIVE_HOUR] / entry.speed
+        ),
+        "the 5-hour window's demand is the achieved burn over the speed"
+    );
+    assert_eq!(a.windows[SEVEN_DAY].demand, None);
+    let b = candidate(&d.record, "b");
+    assert_eq!(b.factor, None, "no entry stands on b");
+    assert_eq!(b.windows[FIVE_HOUR].demand, Some(0.0));
+    let pin = d.record.pin.as_ref().expect("a pin block");
+    let w = (-9_000.0_f64 / AVERAGE_MS as f64).exp();
+    assert_eq!(
+        (pin.cycle_ms, pin.slow_down_until),
+        (
+            Some((10_000.0 * w + 9_000.0 * (1.0 - w)).round() as i64),
+            None
+        ),
+        "the cycle folds the arrival, not the selection's instant"
+    );
+    let value = serde_json::to_value(&d.record).expect("the record serializes");
+    assert_eq!(value["request"]["received_at"], T + 19_000);
+    assert_eq!(value["pin"]["slow_down_until"], serde_json::Value::Null);
 }

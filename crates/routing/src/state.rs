@@ -15,7 +15,7 @@ use tokio::time::Instant;
 
 use crate::affinity::{AffinityMap, PurgedEntry};
 use crate::listing::{row_for, snapshot_date, tier_segment};
-use crate::select::{affinity_ttl_ms, seconds_ms};
+use crate::select::{affinity_ttl_ms, seconds_ms, SlowDownRead};
 use crate::task::BurnRates;
 use crate::windows::{window_for, MODEL_WINDOWS};
 use crate::RegistrySnapshot;
@@ -282,7 +282,7 @@ pub enum StateWrite {
     UpsertWindow(WindowRow),
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Purged {
     /// The removed entries' keys, for the store's delete.
     pub affinity: Vec<(String, String)>,
@@ -291,6 +291,8 @@ pub struct Purged {
     pub cooldowns: Vec<(String, String)>,
     /// Each dropped pin with the one fact that dropped it: `deleted`, `expired`, or `unserved`.
     pub pins: Vec<(PinKey, &'static str)>,
+    /// The slow-down entries dropped, by pool id and account id, whole: an open span ends with its entry.
+    pub slow_downs: Vec<((String, String), SlowDownState)>,
 }
 
 /// A member's spend in one budgeted period, as the ledger last answered it; memory only. The period it was summed
@@ -639,6 +641,41 @@ pub struct Reservation {
     pub expires_at: i64,
 }
 
+/// An account's slow-down on one pool's pins, as the last pinned selection on the account read it, and the span the
+/// factor has read under 1 for.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SlowDownState {
+    /// The burn the window can still carry to its reset over the demand, clamped to [0, 1].
+    pub factor: f64,
+    /// The realized speed, a time-weighted average over the pool's burn average, which the demand divides the pins'
+    /// burn by: the burn average lags a change of pace by the same constant.
+    pub speed: f64,
+    pub read_at: i64,
+    /// When the stretch first read over the threshold, cleared once it reads at or under it.
+    pub over_since: Option<i64>,
+    /// When the factor first read under 1 since it last read 1.
+    pub slowed_since: Option<i64>,
+    /// When the factor last returned to 1.
+    pub clear_since: Option<i64>,
+    /// The lowest factor read since `slowed_since`, 1 outside a span.
+    pub factor_min: f64,
+    /// The holds answered since `slowed_since`, summed, 0 outside a span.
+    pub held_ms: i64,
+}
+
+/// A pin's pace: the cycle a slow-down hold is sized from and the hold standing on it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PinPace {
+    /// The last dispatch of a request of a held class.
+    pub dispatched_at: i64,
+    /// The time-weighted average of the gaps between a dispatch and the next arrival, `None` before the first gap.
+    pub cycle_ms: Option<f64>,
+    /// The end of the slow-down hold standing on the pin.
+    pub deadline: Option<i64>,
+    /// The request the deadline was set for.
+    pub request_id: Option<String>,
+}
+
 /// The `window_ceiling` a pool is created with.
 pub const DEFAULT_WINDOW_CEILING: f64 = 0.95;
 
@@ -940,6 +977,10 @@ pub struct RoutingState {
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
     pins: HashMap<PinKey, PinRow>,
+    /// Each pin's pace by its key, which outlives `take_pin`: a move and a failover's landing write their fresh row
+    /// under the same key, and the session's pace does not change with its account. Memory only, so the first request
+    /// of a pin after a restart reads none.
+    pin_paces: HashMap<PinKey, PinPace>,
     /// The ledger's tables, which this crate cannot name, handed in by the task; unit tables until then, so a
     /// burn read through them is a token count.
     rates: BurnRates,
@@ -961,6 +1002,10 @@ pub struct RoutingState {
     /// When the latest shedding round ran on each account, by the id of the pool that ran it and the account id: the
     /// stamp the dwell between rounds reads. The marks live on the pin rows.
     shed_rounds: HashMap<(String, String), i64>,
+    /// Each account's slow-down by the id of the pool whose pins it reads and the account id, as the last pinned
+    /// selection on the account wrote it. Memory only, as the reservations are: a restart starts every account
+    /// unslowed.
+    slow_downs: HashMap<(String, String), SlowDownState>,
 }
 
 impl RoutingState {
@@ -1036,6 +1081,7 @@ impl RoutingState {
                 })
                 .collect(),
             pins: load.pins.into_iter().map(|p| (p.key(), p)).collect(),
+            pin_paces: HashMap::new(),
             rates: BurnRates::default(),
             renewed: HashSet::new(),
             reservations: HashMap::new(),
@@ -1048,6 +1094,7 @@ impl RoutingState {
             samples,
             share: SharePricer::default(),
             shed_rounds,
+            slow_downs: HashMap::new(),
         }
     }
 
@@ -1792,6 +1839,125 @@ impl RoutingState {
         on.into_iter().map(|(_, reservation)| reservation).collect()
     }
 
+    /// The account's slow-down entry on the pool as written, whatever the pool's switch reads now.
+    pub fn slow_down_state(&self, pool_id: &str, account_id: &str) -> Option<&SlowDownState> {
+        self.slow_downs
+            .get(&(pool_id.to_string(), account_id.to_string()))
+    }
+
+    /// The read's write, once per pinned selection on the account: the factor from the read, the speed folded toward
+    /// `realized` (`speed x w + realized x (1 - w)` with `w = exp(-(now - read_at) / average_ms)`, the first write
+    /// taking `realized` whole), `over_since` stamped while the read's stretch is over its threshold and cleared at or
+    /// under it, and the span the factor reads under 1 for opened, tracked and closed. Answers the entry as written.
+    pub fn write_slow_down(
+        &mut self,
+        pool_id: &str,
+        account_id: &str,
+        read: &SlowDownRead,
+        realized: f64,
+        now: i64,
+        average_ms: i64,
+    ) -> &SlowDownState {
+        let over = read.stretch_ms > read.threshold_ms;
+        let slowed = read.factor < 1.0;
+        let entry = self
+            .slow_downs
+            .entry((pool_id.to_string(), account_id.to_string()))
+            .and_modify(|entry| {
+                let w = (-((now - entry.read_at).max(0) as f64) / average_ms.max(1) as f64).exp();
+                entry.speed = entry.speed * w + realized * (1.0 - w);
+                entry.factor = read.factor;
+                entry.read_at = now;
+                entry.over_since = over.then(|| entry.over_since.unwrap_or(now));
+                match (slowed, entry.slowed_since) {
+                    (true, Some(_)) => entry.factor_min = entry.factor_min.min(read.factor),
+                    (true, None) => {
+                        entry.slowed_since = Some(now);
+                        entry.factor_min = read.factor;
+                        entry.held_ms = 0;
+                    }
+                    // The span closes, so the next one counts its own minimum and holds from nothing.
+                    (false, Some(_)) => {
+                        entry.slowed_since = None;
+                        entry.clear_since = Some(now);
+                        entry.factor_min = 1.0;
+                        entry.held_ms = 0;
+                    }
+                    (false, None) => {}
+                }
+            })
+            .or_insert_with(|| SlowDownState {
+                factor: read.factor,
+                speed: realized,
+                read_at: now,
+                over_since: over.then_some(now),
+                slowed_since: slowed.then_some(now),
+                clear_since: None,
+                factor_min: read.factor.min(1.0),
+                held_ms: 0,
+            });
+        entry
+    }
+
+    /// The account's entry while `pool` slows its pins: a pool whose slow-down is off reads no entry at once, whatever
+    /// lingers until the purge tick drops it.
+    pub(crate) fn slow_down_in_force(
+        &self,
+        pool: &PoolRow,
+        account_id: &str,
+    ) -> Option<&SlowDownState> {
+        slow_down(pool)
+            .then(|| self.slow_down_state(&pool.id, account_id))
+            .flatten()
+    }
+
+    /// The speed the demand divides the account's pins' burn by on `pool`: the entry's realized speed, 1 with none.
+    pub(crate) fn slow_down_speed(&self, pool: &PoolRow, account_id: &str) -> f64 {
+        self.slow_down_in_force(pool, account_id)
+            .map_or(1.0, |entry| entry.speed)
+    }
+
+    /// The pace under `key` as the pin row spells it, with no resolution applied.
+    pub fn pin_pace(&self, key: &PinKey) -> Option<&PinPace> {
+        self.pin_paces.get(key)
+    }
+
+    /// Folds an arrival into the pin's cycle: the gap since the last dispatch weighs in by `w = exp(-gap /
+    /// average_ms)`, so a long think moves the average more than a quick tool call, the first gap is taken whole, and
+    /// the arrival becomes the last dispatch. An arrival before the last dispatch, as a request queued behind a later
+    /// one, folds nothing. The pin's first arrival starts its pace with no gap.
+    pub fn fold_pace(&mut self, key: &PinKey, received_at: i64, average_ms: i64) {
+        let Some(pace) = self.pin_paces.get_mut(key) else {
+            self.pin_paces.insert(
+                key.clone(),
+                PinPace {
+                    dispatched_at: received_at,
+                    cycle_ms: None,
+                    deadline: None,
+                    request_id: None,
+                },
+            );
+            return;
+        };
+        if received_at < pace.dispatched_at {
+            return;
+        }
+        let gap = (received_at - pace.dispatched_at) as f64;
+        pace.cycle_ms = Some(match pace.cycle_ms {
+            None => gap,
+            Some(cycle) => {
+                let w = (-gap / average_ms.max(1) as f64).exp();
+                cycle * w + gap * (1.0 - w)
+            }
+        });
+        pace.dispatched_at = received_at;
+    }
+
+    /// Ends the pace under `key` with its pin's session: a fresh placement under the key starts with none.
+    pub(crate) fn drop_pace(&mut self, key: &PinKey) {
+        self.pin_paces.remove(key);
+    }
+
     /// Set by the task at spawn from its config, and by a test that prices a round through its own tables.
     pub fn set_rates(&mut self, rates: BurnRates) {
         self.rates = rates;
@@ -1906,6 +2072,33 @@ impl RoutingState {
         now: i64,
         average_ms: i64,
     ) -> BTreeMap<String, f64> {
+        self.shares(account_id, keep, tier, now, average_ms, 1.0)
+    }
+
+    /// The twin of `burn_shares` that the slow-down's readers take: the kept pins' sum on every window over `speed`,
+    /// the account's realized speed, and the live reservations' `burn` undivided, since a booking is a fresh session's
+    /// prior or a moving pin's figure, neither of them slowed on the account yet.
+    pub fn demand_shares(
+        &self,
+        account_id: &str,
+        keep: &dyn Fn(&PinRow) -> bool,
+        tier: &str,
+        now: i64,
+        average_ms: i64,
+        speed: f64,
+    ) -> BTreeMap<String, f64> {
+        self.shares(account_id, keep, tier, now, average_ms, speed)
+    }
+
+    fn shares(
+        &self,
+        account_id: &str,
+        keep: &dyn Fn(&PinRow) -> bool,
+        tier: &str,
+        now: i64,
+        average_ms: i64,
+        speed: f64,
+    ) -> BTreeMap<String, f64> {
         // A pin a live booking on this account names counts through the booking's burn alone, so a moved pin counts
         // once while its move is in flight. The booking is matched on the account and the pin row, never on the key
         // across accounts: a booking a request still in flight on the source holds there must not hide the live
@@ -1933,6 +2126,9 @@ impl RoutingState {
                         burn_decayed(rate, pin.burn_at, now, average_ms);
                 }
             }
+        }
+        for share in shares.values_mut() {
+            *share /= speed;
         }
         for reservation in self
             .reservations
@@ -2099,6 +2295,8 @@ impl RoutingState {
             // its fast usage moves with it.
             let renewed = self.renewed.contains(&spelled);
             self.take_pin(&spelled);
+            // The pace follows the row the merge keeps, so the session's cycle reads on under the dated id.
+            let pace = self.pin_paces.remove(&spelled);
             rekey.delete_pins.push(spelled);
             let dated_key = PinKey {
                 model: dated_id.to_string(),
@@ -2111,6 +2309,9 @@ impl RoutingState {
             if keep_existing {
                 merged_away.push(pin);
             } else {
+                if let Some(pace) = pace {
+                    self.pin_paces.insert(dated_key.clone(), pace);
+                }
                 let moved = PinRow {
                     model: dated_id.to_string(),
                     lane: relaned(&pin.lane, spelling, dated_id),
@@ -2178,6 +2379,10 @@ impl RoutingState {
         for key in &gone {
             self.take_pin(key);
         }
+        // The session ended, so its paces leave with it, one whose pin a failover took and no landing wrote back among
+        // them.
+        self.pin_paces
+            .retain(|key, _| !(key.key_id == key_id && key.session_id == session_id));
         gone
     }
 
@@ -2261,6 +2466,11 @@ impl RoutingState {
         for (key, _) in &pins {
             self.take_pin(key);
         }
+        // A move and a failover's landing write the key again within the selection that took the row, so a key no pin
+        // holds at the tick belongs to a session that ended.
+        let held = &self.pins;
+        self.pin_paces.retain(|key, _| held.contains_key(key));
+        let slow_downs = self.purge_slow_downs(snapshot, now);
         // None of these needs a deletion written: the overage rows cascade with the account and the next holder's
         // first reading replaces one left under another incarnation, the window and credits rows cascade too and
         // the purge tick drops one of another incarnation, and charges and round-robin cursors are held in memory
@@ -2317,7 +2527,39 @@ impl RoutingState {
             affinity_entries,
             cooldowns,
             pins,
+            slow_downs,
         }
+    }
+
+    /// The slow-down entries a quiet account or a switched-off pool leaves, removed and answered in key order: an
+    /// entry whose account holds no pin of the pool, one no selection wrote for `IN_FLIGHT_RECLAIM_MS`, the backstop
+    /// the reservations use, and every entry of a pool whose slow-down is off or that left the registry, so a quiet
+    /// account reads unslowed again without a selection.
+    fn purge_slow_downs(
+        &mut self,
+        snapshot: &RegistrySnapshot,
+        now: i64,
+    ) -> Vec<((String, String), SlowDownState)> {
+        let pins = &self.pins;
+        let mut gone: Vec<(String, String)> = self
+            .slow_downs
+            .iter()
+            .filter(|((pool_id, account_id), entry)| {
+                let pool = snapshot.pool(pool_id).filter(|pool| slow_down(pool));
+                let pinned = pins.values().any(|pin| {
+                    pin.account_id == *account_id
+                        && snapshot
+                            .key(&pin.key_id)
+                            .is_some_and(|key| key.pool_id == *pool_id)
+                });
+                pool.is_none() || !pinned || now - entry.read_at >= IN_FLIGHT_RECLAIM_MS
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        gone.sort();
+        gone.into_iter()
+            .filter_map(|key| self.slow_downs.remove(&key).map(|entry| (key, entry)))
+            .collect()
     }
 }
 

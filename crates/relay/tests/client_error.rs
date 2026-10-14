@@ -84,6 +84,7 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             portable: true,
             attempted: Vec::new(),
             now: h.clock.load(std::sync::atomic::Ordering::SeqCst),
+            received_at: h.clock.load(std::sync::atomic::Ordering::SeqCst),
             fallback_ms: 60_000,
             revision: snapshot.revision,
             probe: false,

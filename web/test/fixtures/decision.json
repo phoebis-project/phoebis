@@ -9,6 +9,7 @@
       "attempt": 1,
       "seq": 1,
       "at": 1791721000000,
+      "received_at": 1791721000000,
       "key_id": "desktop",
       "key_generation": 1791721000000,
       "pool_id": "main",
@@ -59,7 +60,9 @@
       "released": [],
       "marked_at": null,
       "marked_on": null,
-      "marked_window": null
+      "marked_window": null,
+      "cycle_ms": null,
+      "slow_down_until": null
     },
     "pin_reason": null,
     "settings": {
@@ -117,6 +120,7 @@
             "ahead": null,
             "projection": null,
             "horizon": null,
+            "demand": null,
             "reserved": 0.0
           },
           "fast_output": {
@@ -128,6 +132,7 @@
             "ahead": null,
             "projection": null,
             "horizon": null,
+            "demand": null,
             "reserved": 0.0
           }
         },
@@ -201,7 +206,8 @@
         "runway_ms": null,
         "fit": "fits",
         "binding": null,
-        "burn": {}
+        "burn": {},
+        "factor": null
       },
       {
         "account_id": "direct",
@@ -267,7 +273,8 @@
         "runway_ms": null,
         "fit": "fits",
         "binding": null,
-        "burn": {}
+        "burn": {},
+        "factor": null
       }
     ],
     "walk": [

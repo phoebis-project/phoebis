@@ -8196,6 +8196,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "attempt": 1,
         "seq": 1,
         "at": 1791721000000,
+        "received_at": 1791721000000,
         "key_id": "desktop",
         "key_generation": 1791721000000,
         "pool_id": "main",
@@ -8246,7 +8247,9 @@ export const FIXTURES: Record<string, Fixture> = {
         "released": [],
         "marked_at": null,
         "marked_on": null,
-        "marked_window": null
+        "marked_window": null,
+        "cycle_ms": null,
+        "slow_down_until": null
       },
       "pin_reason": null,
       "settings": {
@@ -8304,6 +8307,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ahead": null,
               "projection": null,
               "horizon": null,
+              "demand": null,
               "reserved": 0
             },
             "fast_output": {
@@ -8315,6 +8319,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ahead": null,
               "projection": null,
               "horizon": null,
+              "demand": null,
               "reserved": 0
             }
           },
@@ -8388,7 +8393,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "runway_ms": null,
           "fit": "fits",
           "binding": null,
-          "burn": {}
+          "burn": {},
+          "factor": null
         },
         {
           "account_id": "direct",
@@ -8454,7 +8460,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "runway_ms": null,
           "fit": "fits",
           "binding": null,
-          "burn": {}
+          "burn": {},
+          "factor": null
         }
       ],
       "walk": [
