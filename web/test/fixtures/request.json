@@ -125,7 +125,13 @@
                 "direct"
               ],
               "cohort": "direct",
-              "held_ms": 1250
+              "held_ms": 1250,
+              "waits": [
+                {
+                  "reason": "cap",
+                  "held_ms": 1250
+                }
+              ]
             }
           },
           "response": {
@@ -201,7 +207,13 @@
           "direct"
         ],
         "cohort": "direct",
-        "held_ms": 1250
+        "held_ms": 1250,
+        "waits": [
+          {
+            "reason": "cap",
+            "held_ms": 1250
+          }
+        ]
       },
       "diagnostics_source": "router"
     },

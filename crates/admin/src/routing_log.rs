@@ -235,6 +235,16 @@ pub(crate) struct SummaryHold {
     pub reason: String,
     /// The instant a `reset` hold waits for, null under `cap`.
     pub until: Option<i64>,
+    /// The account's factor the hold was read under. Set under `slow_down`, null otherwise.
+    pub factor: Option<f64>,
+    /// The speed the account's holds realize together. Set under `slow_down`, null otherwise.
+    pub speed: Option<f64>,
+    /// The account's stretch at the read. Set under `slow_down`, null otherwise.
+    pub stretch_ms: Option<i64>,
+    /// The pool's `slow_down_stretch_seconds`. Set under `slow_down`, null otherwise.
+    pub threshold_ms: Option<i64>,
+    /// The pin's cycle the hold was sized from. Set under `slow_down`, null otherwise.
+    pub cycle_ms: Option<i64>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]

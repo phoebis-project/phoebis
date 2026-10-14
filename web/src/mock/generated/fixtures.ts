@@ -8068,7 +8068,13 @@ export const FIXTURES: Record<string, Fixture> = {
                     "direct"
                   ],
                   "cohort": "direct",
-                  "held_ms": 1250
+                  "held_ms": 1250,
+                  "waits": [
+                    {
+                      "reason": "cap",
+                      "held_ms": 1250
+                    }
+                  ]
                 }
               },
               "response": {
@@ -8144,7 +8150,13 @@ export const FIXTURES: Record<string, Fixture> = {
               "direct"
             ],
             "cohort": "direct",
-            "held_ms": 1250
+            "held_ms": 1250,
+            "waits": [
+              {
+                "reason": "cap",
+                "held_ms": 1250
+              }
+            ]
           },
           "diagnostics_source": "router"
         }
@@ -10406,7 +10418,13 @@ export const FIXTURES: Record<string, Fixture> = {
                   "direct"
                 ],
                 "cohort": "direct",
-                "held_ms": 1250
+                "held_ms": 1250,
+                "waits": [
+                  {
+                    "reason": "cap",
+                    "held_ms": 1250
+                  }
+                ]
               }
             },
             "response": {
@@ -10482,7 +10500,13 @@ export const FIXTURES: Record<string, Fixture> = {
             "direct"
           ],
           "cohort": "direct",
-          "held_ms": 1250
+          "held_ms": 1250,
+          "waits": [
+            {
+              "reason": "cap",
+              "held_ms": 1250
+            }
+          ]
         },
         "diagnostics_source": "router"
       },
@@ -11359,7 +11383,13 @@ export const FIXTURES: Record<string, Fixture> = {
                     "direct"
                   ],
                   "cohort": "direct",
-                  "held_ms": 1250
+                  "held_ms": 1250,
+                  "waits": [
+                    {
+                      "reason": "cap",
+                      "held_ms": 1250
+                    }
+                  ]
                 }
               },
               "response": {
@@ -11435,7 +11465,13 @@ export const FIXTURES: Record<string, Fixture> = {
               "direct"
             ],
             "cohort": "direct",
-            "held_ms": 1250
+            "held_ms": 1250,
+            "waits": [
+              {
+                "reason": "cap",
+                "held_ms": 1250
+              }
+            ]
           },
           "diagnostics_source": "router"
         }
@@ -11894,7 +11930,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "cohort": null,
             "bound_ms": 60000,
             "reason": "cap",
-            "until": null
+            "until": null,
+            "factor": null,
+            "speed": null,
+            "stretch_ms": null,
+            "threshold_ms": null,
+            "cycle_ms": null
           },
           "exhaustion": null,
           "refusal": null,
@@ -12064,7 +12105,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "cohort": null,
             "bound_ms": 60000,
             "reason": "cap",
-            "until": null
+            "until": null,
+            "factor": null,
+            "speed": null,
+            "stretch_ms": null,
+            "threshold_ms": null,
+            "cycle_ms": null
           },
           "exhaustion": null,
           "refusal": null,
@@ -12122,7 +12168,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "cohort": null,
             "bound_ms": 60000,
             "reason": "cap",
-            "until": null
+            "until": null,
+            "factor": null,
+            "speed": null,
+            "stretch_ms": null,
+            "threshold_ms": null,
+            "cycle_ms": null
           },
           "exhaustion": null,
           "refusal": null,

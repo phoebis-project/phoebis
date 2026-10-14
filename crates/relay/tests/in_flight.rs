@@ -3,6 +3,7 @@
 
 mod common;
 
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
@@ -13,8 +14,11 @@ use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
-use phoebis_routing::{DecisionRecord, DecisionSummary, FactValue, RouterEvent};
-use phoebis_store::Failover;
+use phoebis_routing::{
+    DecisionRecord, DecisionSummary, FactValue, HoldOutcome, Report, RouterConfig, RouterEvent,
+    SharePricer, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR,
+};
+use phoebis_store::{Failover, SlowDown, SubscriptionRow};
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
@@ -1712,5 +1716,212 @@ async fn a_retry_in_place_keeps_the_one_key_permit() {
     );
     drain(resp).await;
     assert_eq!(h.router.in_flight().key("desktop"), 0);
+    up.shutdown().await;
+}
+
+/// The rate-limit tier the slowed harness puts its account on, which its pricer keys on.
+const SLOWED_TIER: &str = "default_claude_max_20x";
+
+/// Every pin on `SLOWED_TIER` burns a tenth of the 5-hour window an hour whatever its usage, and nothing is charged, so
+/// the window reads what the test reports.
+fn tenth_an_hour() -> SharePricer {
+    SharePricer::new(|_, _, _, _, _| None).with_rate(|window, tier, _, _, _| {
+        (window == FIVE_HOUR && tier == SLOWED_TIER).then_some(0.1 / 3_600.0)
+    })
+}
+
+/// `a` priced by `tenth_an_hour`, with `s1`'s cycle built by two turns ten seconds apart, then `a`'s 5-hour window at
+/// 0.9 an hour from its reset and the pool's slow-down turned on with a two-second cap and the shedding round off: the
+/// room under the ceiling lasts half the time to the reset, so `s1`'s next turn, at the clock this leaves, reads a
+/// factor of about a half and waits the cap.
+async fn slowed_harness(up: &FakeUpstream) -> Harness {
+    let h = harness_with_router_config(
+        up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        RouterConfig {
+            share: tenth_an_hour(),
+            ..RouterConfig::default()
+        },
+    )
+    .await;
+    h.store
+        .set_profile(
+            "a",
+            "{}",
+            &SubscriptionRow {
+                tier: Some(SLOWED_TIER.into()),
+                ..SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    for at in [NOW, NOW + 10_000] {
+        h.clock.store(at, Ordering::SeqCst);
+        let resp = h
+            .app
+            .clone()
+            .oneshot(request_for(KEY, MODEL, "s1"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        drain(resp).await;
+    }
+    let mut pool = h.store.pool("main").unwrap().unwrap();
+    pool.slow_down = SlowDown {
+        slow_down: true,
+        slow_down_hold_seconds: 2,
+        ..SlowDown::default()
+    };
+    pool.shedding.load_shedding = false;
+    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    h.router.reload().await.unwrap();
+    h.router
+        .report(Report::Sample {
+            account_id: "a".into(),
+            sample: UtilizationSample::default().with(
+                FIVE_HOUR,
+                WindowReading {
+                    utilization: 0.9,
+                    reset: Some(NOW + 10_000 + 3_600_000),
+                    observed_at: NOW + 10_000,
+                    source: WindowSource::Poll,
+                },
+            ),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    h.clock.store(NOW + 20_000, Ordering::SeqCst);
+    h
+}
+
+/// The next held decision's hold, as its record names it.
+async fn next_hold(events: &mut broadcast::Receiver<RouterEvent>) -> HoldOutcome {
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the hold's decision arrives")
+            .expect("not lagged");
+        if let RouterEvent::Decision {
+            summary, record, ..
+        } = event
+        {
+            if summary.kind == "held" {
+                return record.outcome.hold.clone().expect("a held outcome");
+            }
+        }
+    }
+}
+
+/// The waits a request's outcome names, each with its reason, as the completion writes them.
+fn waits_of(resp: &axum::http::Response<Body>) -> Vec<(String, u64)> {
+    let held = outcome(resp)
+        .held
+        .expect("the outcome names the holds it waited through");
+    let value = serde_json::to_value(&held).unwrap();
+    value["waits"]
+        .as_array()
+        .expect("the held JSON lists its waits")
+        .iter()
+        .map(|wait| {
+            (
+                wait["reason"].as_str().unwrap().to_string(),
+                wait["held_ms"].as_u64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_slowed_pins_request_waits_before_the_head_and_the_completion_names_the_wait() {
+    let up = FakeUpstream::start(messages(json_200())).await;
+    let h = slowed_harness(&up).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let app = h.app.clone();
+    let waiting =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
+    let hold = next_hold(&mut events).await;
+    assert_eq!(
+        (hold.account_id.as_str(), hold.reason, hold.until),
+        ("a", "slow_down", Some(NOW + 22_000)),
+        "the pin waits the two-second cap from its arrival"
+    );
+    // The runtime's time runs on while the harness's clock stands short of the deadline: nothing is dialed.
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    assert_eq!(posts(&up), 2, "nothing is dialed while the hold runs");
+    assert!(!waiting.is_finished());
+    h.clock.store(NOW + 22_000, Ordering::SeqCst);
+    tokio::time::resume();
+    let resp = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .expect("the request goes on at its deadline")
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(posts(&up), 3, "one post once the hold ends");
+    let held = outcome(&resp).held.expect("the outcome names the hold");
+    assert_eq!(held.waited_on, ["a"]);
+    let waits = waits_of(&resp);
+    assert_eq!(
+        waits
+            .iter()
+            .map(|(reason, _)| reason.as_str())
+            .collect::<Vec<_>>(),
+        ["slow_down"]
+    );
+    assert!(
+        waits[0].1 >= 1_500 && waits[0].1 == held.held_ms,
+        "the wait lasted until the deadline: {waits:?}"
+    );
+    drain(resp).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_second_request_of_the_same_pin_joins_the_standing_deadline() {
+    let up = FakeUpstream::start(messages(json_200())).await;
+    let h = slowed_harness(&up).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let mut waiting = Vec::new();
+    let mut untils = Vec::new();
+    for _ in 0..2 {
+        let app = h.app.clone();
+        waiting.push(tokio::spawn(async move {
+            app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap()
+        }));
+        let hold = next_hold(&mut events).await;
+        untils.push((hold.reason, hold.until));
+    }
+    assert_eq!(
+        untils,
+        [
+            ("slow_down", Some(NOW + 22_000)),
+            ("slow_down", Some(NOW + 22_000))
+        ],
+        "the second request of the pin waits to the first one's deadline"
+    );
+    tokio::time::sleep(Duration::from_millis(1_000)).await;
+    assert_eq!(posts(&up), 2, "neither is dialed before the deadline");
+    h.clock.store(NOW + 22_000, Ordering::SeqCst);
+    tokio::time::resume();
+    for request in waiting {
+        let resp = tokio::time::timeout(Duration::from_secs(5), request)
+            .await
+            .expect("both go on at the one deadline")
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            waits_of(&resp)
+                .iter()
+                .map(|(reason, _)| reason.as_str())
+                .collect::<Vec<_>>(),
+            ["slow_down"],
+            "each waited once"
+        );
+        drain(resp).await;
+    }
+    assert_eq!(posts(&up), 4);
     up.shutdown().await;
 }

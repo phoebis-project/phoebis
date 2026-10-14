@@ -449,7 +449,12 @@
           "cohort": null,
           "bound_ms": 60000,
           "reason": "cap",
-          "until": null
+          "until": null,
+          "factor": null,
+          "speed": null,
+          "stretch_ms": null,
+          "threshold_ms": null,
+          "cycle_ms": null
         },
         "exhaustion": null,
         "refusal": null,
@@ -619,7 +624,12 @@
           "cohort": null,
           "bound_ms": 60000,
           "reason": "cap",
-          "until": null
+          "until": null,
+          "factor": null,
+          "speed": null,
+          "stretch_ms": null,
+          "threshold_ms": null,
+          "cycle_ms": null
         },
         "exhaustion": null,
         "refusal": null,
@@ -677,7 +687,12 @@
           "cohort": null,
           "bound_ms": 60000,
           "reason": "cap",
-          "until": null
+          "until": null,
+          "factor": null,
+          "speed": null,
+          "stretch_ms": null,
+          "threshold_ms": null,
+          "cycle_ms": null
         },
         "exhaustion": null,
         "refusal": null,

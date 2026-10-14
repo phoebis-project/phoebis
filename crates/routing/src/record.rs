@@ -549,12 +549,25 @@ pub struct PinEventFacts {
 pub struct HoldOutcome {
     pub account_id: String,
     pub cohort: Option<String>,
+    /// The longest the hold may last: the pool's `slow_down_hold_seconds` under `slow_down`, its
+    /// `retry_in_place_seconds` under `cap` and `reset`.
     pub bound_ms: i64,
-    /// `cap` for a hold on a slot, `reset` for a spent window about to reset.
+    /// `cap` for a hold on a slot, `reset` for a spent window about to reset, `slow_down` for a slowed pin's wait
+    /// before its head.
     pub reason: &'static str,
-    /// The instant the request waits for under `reset`: the later of the spent window's reset and the end of the
-    /// account's cooldown. `None` under `cap`.
+    /// The instant the request waits for: under `reset` the later of the spent window's reset and the end of the
+    /// account's cooldown, under `slow_down` the pin's deadline. `None` under `cap`.
     pub until: Option<i64>,
+    /// The account's factor the hold was read under. `Some` under `slow_down`, `None` otherwise.
+    pub factor: Option<f64>,
+    /// The speed the account's holds realize together. `Some` under `slow_down`, `None` otherwise.
+    pub speed: Option<f64>,
+    /// The account's stretch at the read. `Some` under `slow_down`, `None` otherwise.
+    pub stretch_ms: Option<i64>,
+    /// The pool's `slow_down_stretch_seconds`. `Some` under `slow_down`, `None` otherwise.
+    pub threshold_ms: Option<i64>,
+    /// The pin's cycle the hold was sized from. `Some` under `slow_down`, `None` otherwise.
+    pub cycle_ms: Option<i64>,
 }
 
 /// The booking a move or a placement made on its destination, as the `reserve` step states it.

@@ -597,6 +597,16 @@ pub fn burn_decayed(burn: f64, burn_at: Option<i64>, now: i64, window_ms: i64) -
     }
 }
 
+/// The realized speed a write folds in, read as 1 (no slowing known) when it is not finite or not positive, since the
+/// demand divides by it.
+fn full_speed_unless_positive(realized: f64) -> f64 {
+    if realized.is_finite() && realized > 0.0 {
+        realized
+    } else {
+        1.0
+    }
+}
+
 /// The fold a renewal with usage applies at `now`: the average decayed to `now`, plus `tokens` spread over the
 /// window, so the average is tokens per second.
 pub(crate) fn burn_folded(
@@ -659,14 +669,16 @@ pub struct SlowDownState {
     pub clear_since: Option<i64>,
     /// The lowest factor read since `slowed_since`, 1 outside a span.
     pub factor_min: f64,
-    /// The holds answered since `slowed_since`, summed, 0 outside a span.
+    /// The new holds answered since `slowed_since`, each from its arrival to its deadline, summed, 0 outside a span. A
+    /// request rejoining a standing deadline adds nothing, since its wait is the hold already counted.
     pub held_ms: i64,
 }
 
 /// A pin's pace: the cycle a slow-down hold is sized from and the hold standing on it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PinPace {
-    /// The last dispatch of a request of a held class.
+    /// The last dispatch of a request of a held class: its arrival, or the end of the hold it waited through, so a
+    /// wait never counts as the pin's own gap.
     pub dispatched_at: i64,
     /// The time-weighted average of the gaps between a dispatch and the next arrival, `None` before the first gap.
     pub cycle_ms: Option<f64>,
@@ -1858,6 +1870,11 @@ impl RoutingState {
         now: i64,
         average_ms: i64,
     ) -> &SlowDownState {
+        debug_assert!(
+            realized.is_finite() && realized > 0.0,
+            "a realized speed is positive and finite: {realized}"
+        );
+        let realized = full_speed_unless_positive(realized);
         let over = read.stretch_ms > read.threshold_ms;
         let slowed = read.factor < 1.0;
         let entry = self
@@ -1899,6 +1916,19 @@ impl RoutingState {
         entry
     }
 
+    /// Adds a slow-down hold's length to the entry's `held_ms`, the span's held time. Nothing while no span is open:
+    /// the time belongs to a span that stands, and a request rejoining a standing deadline is not passed here, so two
+    /// requests of one pin waiting to one instant count once.
+    pub fn add_slow_down_held(&mut self, pool_id: &str, account_id: &str, held_ms: i64) {
+        if let Some(entry) = self
+            .slow_downs
+            .get_mut(&(pool_id.to_string(), account_id.to_string()))
+            .filter(|entry| entry.slowed_since.is_some())
+        {
+            entry.held_ms = entry.held_ms.saturating_add(held_ms);
+        }
+    }
+
     /// The account's entry while `pool` slows its pins: a pool whose slow-down is off reads no entry at once, whatever
     /// lingers until the purge tick drops it.
     pub(crate) fn slow_down_in_force(
@@ -1926,8 +1956,9 @@ impl RoutingState {
     /// average_ms)`, so a long think moves the average more than a quick tool call, the first gap is taken whole, and
     /// the arrival becomes the last dispatch. An arrival at or before the last dispatch folds nothing: a re-selection
     /// of the same request (after a failover or a refused hold) carries the arrival already folded, whose gap of zero
-    /// would plant a cycle of zero, and a request queued behind a later one has no gap to give. The pin's first
-    /// arrival starts its pace with no gap.
+    /// would plant a cycle of zero, a request queued behind a later one has no gap to give, and an arrival before a
+    /// standing deadline, which a hold made the last dispatch, rejoins the deadline. The pin's first arrival starts its
+    /// pace with no gap.
     pub fn fold_pace(&mut self, key: &PinKey, received_at: i64, average_ms: i64) {
         let Some(pace) = self.pin_paces.get_mut(key) else {
             self.pin_paces.insert(
@@ -1958,6 +1989,24 @@ impl RoutingState {
     /// Ends the pace under `key` with its pin's session: a fresh placement under the key starts with none.
     pub(crate) fn drop_pace(&mut self, key: &PinKey) {
         self.pin_paces.remove(key);
+    }
+
+    /// A hold answered for a request of the pin under `key` dispatches the request at its end, so the wait never lands
+    /// in the pin's next gap. A later dispatch already standing stays. Nothing for a key with no pace.
+    pub(crate) fn pace_held_until(&mut self, key: &PinKey, until: i64) {
+        if let Some(pace) = self.pin_paces.get_mut(key) {
+            pace.dispatched_at = pace.dispatched_at.max(until);
+        }
+    }
+
+    /// The slow-down hold's deadline stands on the pin under `key` for `request_id`, which the pin's next requests
+    /// rejoin until it passes, and the request is dispatched there. Nothing for a key with no pace.
+    pub(crate) fn stand_slow_down_deadline(&mut self, key: &PinKey, until: i64, request_id: &str) {
+        if let Some(pace) = self.pin_paces.get_mut(key) {
+            pace.deadline = Some(until);
+            pace.request_id = Some(request_id.to_string());
+        }
+        self.pace_held_until(key, until);
     }
 
     /// Set by the task at spawn from its config, and by a test that prices a round through its own tables.
@@ -3879,5 +3928,39 @@ mod tests {
             "a Fable pin burns its own week beside the shared windows"
         );
         assert_eq!(windows_of("claude-sonnet-5"), [FIVE_HOUR, SEVEN_DAY]);
+    }
+
+    #[test]
+    fn a_realized_speed_that_is_not_finite_or_not_positive_reads_as_full_speed() {
+        for realized in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -0.25] {
+            assert_eq!(full_speed_unless_positive(realized), 1.0, "{realized}");
+        }
+        assert_eq!(full_speed_unless_positive(0.25), 0.25);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "a realized speed is positive and finite")]
+    fn the_engine_never_writes_a_realized_speed_that_is_not_positive() {
+        let read = SlowDownRead {
+            utilization: 0.5,
+            horizon: 3_600_000,
+            reset: None,
+            demand: 0.0,
+            stretch_ms: 0,
+            threshold_ms: 1_800_000,
+            factor: 1.0,
+            speed: 1.0,
+            plan: Vec::new(),
+            realized: 1.0,
+        };
+        RoutingState::from_load(RoutingLoad::default()).write_slow_down(
+            "p",
+            "a",
+            &read,
+            f64::NAN,
+            0,
+            1_800_000,
+        );
     }
 }

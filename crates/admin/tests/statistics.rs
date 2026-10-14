@@ -1108,7 +1108,12 @@ async fn a_request_answers_its_hold_with_its_wait_and_held_filters_the_list() {
     };
     assert_eq!(
         row(&all, "r-held")["held"],
-        serde_json::json!({ "waited_on": ["business"], "cohort": null, "held_ms": 1_250 }),
+        serde_json::json!({
+            "waited_on": ["business"],
+            "cohort": null,
+            "held_ms": 1_250,
+            "waits": [{ "reason": "cap", "held_ms": 1_250 }]
+        }),
         "the row answers the holds it waited through with the wait"
     );
     assert_eq!(row(&all, "r-plain")["held"], serde_json::Value::Null);
