@@ -3554,10 +3554,6 @@ fn renew(
         verdict == Warmth::Refresh,
         verdict != Warmth::Untouched && chained,
     );
-    // A bound or a count request renews without the move rules, so the shed rule has not read the windows for it.
-    if rec.trigger_windows.is_empty() {
-        rec.trigger_windows = trigger_windows(state, snapshot, pool, &current.account_id);
-    }
     rec.renewal = Some(Renewal {
         cold: !warm_on(current, verdict, now),
         cause: cause.as_str(),
@@ -3583,6 +3579,11 @@ fn renew(
     state.put_pin(renewed.clone());
     state.mark_renewed(&current.key());
     writes.push(StateWrite::UpsertPin(renewed));
+    // A bound or a count request, and a portable one whose move found every destination at its cap, renew without
+    // the shed rule's read.
+    if rec.trigger_windows.is_empty() {
+        rec.trigger_windows = trigger_windows(state, snapshot, pool, &current.account_id);
+    }
     Selection {
         account: selected_row(snapshot, &current.account_id),
         upstream_model: candidates
