@@ -139,7 +139,7 @@ const EVENTS = [
   ['overage ended', event('overage_ended', { since: at - (24 + 4) * HOUR }), '7d reset', ['lasted 1 d 4 h']],
   ['model rejected', event('model_rejected', { attempt: 1, request_id: 'req_011', source_request_id: 'req_1', wire_model: 'claude-haiku-4-5' }), '404', []],
   ['model permitted', event('model_permitted', { attempt: 2, rejected_by: ['primary'], request_id: 'req_012', source_request_id: 'req_1', wire_model: 'claude-haiku-4-5' }), 'after 404', ['attempt 2 of 2']],
-  ['registry changed, one field', event('registry_changed', { diff: { shed_ahead_of_pace: { from: null, to: 0.9 } }, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', ['field shed ahead of pace', 'to 90%']],
+  ['registry changed, one field', event('registry_changed', { diff: { shed_ahead_of_pace: { from: null, to: 0.9 } }, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', ['field shed ahead of pace (removed)', 'to 90%']],
   ['registry changed, several fields', event('registry_changed', { diff: { in_flight_cap: { from: 16, to: 8 }, pace_floor: { from: 0, to: 0.1 }, strategy: { from: 'pace', to: 'priority' } }, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', ['fields 3']],
   ['registry changed, the whole pool row', event('registry_changed', { diff: WHOLE_POOL_ROW, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', []],
   ['registry changed, a key revoked', event('registry_changed', { diff: {}, kind: 'key_revoked', target: 'ci' }, { accountId: null, actor: 'admin', keyId: 'ci' }), 'key revoked', []],
@@ -760,7 +760,7 @@ const DETAIL_EVENTS = {
   refresh_failed: [{ cause: 'invalid_grant', error: 'refresh rejected with status 400 (invalid_grant)' }, ['Error']],
   refresh_succeeded: [{ access_expires_at: ms(20, 52), refresh_expires_at: ms(20, 52) + 58 * 24 * HOUR, until: ms(20, 52) }, ['Access token', 'Refresh token']],
   refresh_uncertain: [{ cause: 'refresh_response_lost', error: 'refresh response lost: connection reset' }, ['Error']],
-  registry_changed: [{ diff: { shed_ahead_of_pace: { from: null, to: 0.9 } }, kind: 'pool_updated', target: 'all' }, ['Change', 'shed ahead of pace', 'Actor', 'Reading it']],
+  registry_changed: [{ diff: { shed_ahead_of_pace: { from: null, to: 0.9 } }, kind: 'pool_updated', target: 'all' }, ['Change', 'shed ahead of pace (removed)', 'Actor', 'Reading it']],
   reservation_expired: [{ age_ms: 42_000, attempt: 1, cause: 'transport_error', shares: { five_hour: 0.104, seven_day: 0.012 } }, ['Request', 'Attempt', 'Cause', 'Reserved', 'Held for', 'Effect']],
   router_started: [{ affinity_entries_loaded: 34, down_since: ms(6, 11, 58), holds_lost: true, pins_loaded: 10, shedding_marks_loaded: 0, shedding_rounds_stale: 0, version: '0.1.0', windows_loaded: 5 }, ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests']],
   shedding_round: [
@@ -923,9 +923,30 @@ test('the event detail draws the pairs its event carries: the effect, the meanin
   for (const reason of ['attempt_missing', 'capture_budget', 'chunk_dropped', 'chunk_skipped', 'expired', 'in_flight_cap', 'poison']) assert.ok(pairs('ledger_gap', { reason }).Meaning?.[0], reason);
   const edit = pairs('registry_changed', { diff: { pace_floor: { from: 0.05, to: 0.1 }, shed_ahead_of_pace: { from: null, to: 0.9 } }, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', at: iso(ms(9, 5, 12)), poolId: 'all' });
   // A null old value reads one word in the field's own row and in the reading.
-  assert.deepEqual(edit['shed ahead of pace'], ['from none', 'to 90%']);
-  assert.deepEqual(edit['Reading it'], ['decisions before 09:05 carry pace floor 5%', 'decisions before 09:05 carry shed ahead of pace none']);
+  assert.deepEqual(edit['shed ahead of pace (removed)'], ['from none', 'to 90%']);
+  assert.deepEqual(edit['Reading it'], ['decisions before 09:05 carry pace floor (removed) 5%', 'decisions before 09:05 carry shed ahead of pace (removed) none']);
   assert.deepEqual(pairs('poll_backoff_ended', { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) })['Backed off'], ['from 07:50', 'to 08:15']);
+});
+
+test('a registry change reads the renamed pool settings by their new word, marks the removed ones and reads each fraction as a percent', () => {
+  const pool = { accountId: null, actor: 'admin', at: iso(ms(9, 5, 12)), poolId: 'all' };
+  const change = (diff) => event('registry_changed', { diff, kind: 'pool_updated', target: 'all' }, pool);
+  const pairs = (diff) => Object.fromEntries(d.detailPairs(change(diff), NOW, []).map((p) => [p.label, texts(p.chips)]));
+  assert.deepEqual(read(change({ window_ceiling: { from: 0.95, to: 0.9 } })), { by: 'pool edited', facts: ['field window ceiling', 'to 90%'] });
+  assert.deepEqual(read(change({ shed_cap: { from: 0.5, to: 0.2 } })), { by: 'pool edited', facts: ['field shed cap', 'to 20%'] });
+  assert.deepEqual(read(change({ shed_share: { from: 0.5, to: 0.25 } })), { by: 'pool edited', facts: ['field shed cap (then shed_share)', 'to 25%'] });
+  assert.deepEqual(read(change({ pace_floor: { from: 0.05, to: 0.1 } })), { by: 'pool edited', facts: ['field pace floor (removed)', 'to 10%'] });
+  const renamed = pairs({ burn_window_seconds: { from: 1_800, to: 900 }, shed_share: { from: 0.5, to: 0.25 }, source_dwell_seconds: { from: 900, to: 600 } });
+  assert.deepEqual(renamed['burn average seconds (then burn_window_seconds)'], ['from 1800', 'to 900']);
+  assert.deepEqual(renamed['shed cap (then shed_share)'], ['from 50%', 'to 25%']);
+  assert.deepEqual(renamed['shed dwell seconds (then source_dwell_seconds)'], ['from 900', 'to 600']);
+  const removed = pairs({ pace_floor: { from: 0.05, to: 0.1 }, select_below_utilization: { from: null, to: 0.8 }, shed_ahead_of_pace: { from: 0.9, to: 0.85 } });
+  assert.deepEqual(removed['pace floor (removed)'], ['from 5%', 'to 10%']);
+  assert.deepEqual(removed['select below utilization (removed)'], ['from none', 'to 80%']);
+  assert.deepEqual(removed['shed ahead of pace (removed)'], ['from 90%', 'to 85%']);
+  const current = pairs({ shed_cap: { from: 0.5, to: 0.2 }, window_ceiling: { from: 0.95, to: 0.9 } });
+  assert.deepEqual([current['shed cap'], current['window ceiling']], [['from 50%', 'to 20%'], ['from 95%', 'to 90%']]);
+  assert.deepEqual(current['Reading it'], ['decisions before 09:05 carry shed cap 50%', 'decisions before 09:05 carry window ceiling 95%']);
 });
 
 test("a model rejection reads its until off the page's cooldown row and has no pair without one", () => {

@@ -406,8 +406,18 @@ const CLEARED_WORD: Record<string, string> = { admin: 'by hand', expired: 'deadl
 const CREDITS_WORD: Record<string, string> = { org_spend_cap_reached: 'spend cap reached' };
 const PERIOD_WORD: Record<string, string> = { day: 'daily budget', month: 'monthly budget' };
 const REGISTRY_VERB: Record<string, string> = { updated: 'edited' };
-/** The pool fields a registry edit reads as a share rather than a bare number. */
-const SHARE_FIELDS = new Set(['pace_floor', 'select_below_utilization', 'shed_ahead_of_pace', 'shed_share']);
+/** The pool fields a registry edit reads as a share rather than a bare number, a row written before the rename among them. */
+const SHARE_FIELDS = new Set(['pace_floor', 'select_below_utilization', 'shed_ahead_of_pace', 'shed_cap', 'shed_share', 'window_ceiling']);
+/** A row written before the rename keeps the old field names: a renamed field reads its new word, a removed one says so. */
+const FIELD_LABEL: Record<string, string> = {
+  burn_window_seconds: 'burn average seconds (then burn_window_seconds)',
+  pace_floor: 'pace floor (removed)',
+  select_below_utilization: 'select below utilization (removed)',
+  shed_ahead_of_pace: 'shed ahead of pace (removed)',
+  shed_share: 'shed cap (then shed_share)',
+  source_dwell_seconds: 'shed dwell seconds (then source_dwell_seconds)',
+};
+const fieldLabel = (field: string) => FIELD_LABEL[field] ?? words(field);
 
 const registryBy = (kind: string) => {
   const at = kind.indexOf('_');
@@ -613,7 +623,7 @@ function eventFacts(e: RoutingEvent, now: number, page: readonly RoutingLogRow[]
       if (diff.length === 0 || !diff.every(([, change]) => isChange(change))) return [];
       if (diff.length > 1) return [pair('fields', diff.length, 'count', now)];
       const [field, change] = diff[0];
-      return [pair('field', words(field), 'text', now), pair('to', fieldValue(field, rec(change).to), 'text', now)];
+      return [pair('field', fieldLabel(field), 'text', now), pair('to', fieldValue(field, rec(change).to), 'text', now)];
     }
     case 'router_started':
       return count('pins', d.pins_loaded);
@@ -1655,7 +1665,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       const diff = Object.entries(rec(d.diff));
       const primitive = (v: unknown) => v === null || ['boolean', 'number', 'string'].includes(typeof v);
       if (diff.every(([, change]) => isChange(change) && primitive(rec(change).from) && primitive(rec(change).to))) {
-        for (const [field, change] of diff) add(words(field), plain(fieldValue(field, rec(change).from), 'from'), plain(fieldValue(field, rec(change).to), 'to'));
+        for (const [field, change] of diff) add(fieldLabel(field), plain(fieldValue(field, rec(change).from), 'from'), plain(fieldValue(field, rec(change).to), 'to'));
       } else {
         add('Fields', plain(fmtInt(diff.length)));
       }
@@ -1663,7 +1673,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       // A record holds the settings it was decided under, so one written before the edit reads each field's old value.
       if (diff.every(([, change]) => isChange(change))) {
         const before = formatFact(atOf(row), 'time', now);
-        add('Reading it', ...diff.filter(([, change]) => ['boolean', 'number', 'string'].includes(typeof rec(change).from) || rec(change).from === null).map(([field, change]) => plain(`decisions before ${before} carry ${words(field)} ${fieldValue(field, rec(change).from)}`)));
+        add('Reading it', ...diff.filter(([, change]) => ['boolean', 'number', 'string'].includes(typeof rec(change).from) || rec(change).from === null).map(([field, change]) => plain(`decisions before ${before} carry ${fieldLabel(field)} ${fieldValue(field, rec(change).from)}`)));
       }
       break;
     }
