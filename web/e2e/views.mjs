@@ -3192,7 +3192,7 @@ const BAR_CHIPS = {
   '/analytics': '?accounts=primary&keys=laptop&models=claude-opus-5&pools=jobs&probes=1',
   '/keys': '?pools=all,jobs&status=active',
   '/requests': '?accounts=primary&keys=laptop&models=claude-opus-5&pools=jobs&statuses=200',
-  '/routing-log': '?accounts=primary&keys=laptop&kinds=moved,held,shedding_round,wind_down_started&models=claude-opus-5&pools=jobs',
+  '/routing-log': '?accounts=primary&keys=laptop&kinds=moved,held,shedding_round,mark_cleared,wind_down_started&models=claude-opus-5&pools=jobs',
 };
 /** A view whose row draws no search holds its slots under this width at rest, far from a second line. */
 const ROW_BOUND = {
@@ -3341,7 +3341,7 @@ async function barRow(theme, view) {
 }
 
 /**
- * The Kinds list through Add filter on the routing log at 1280 by 800, Select all, the eight presets and the 35 kinds:
+ * The Kinds list through Add filter on the routing log at 1280 by 800, Select all, the eight presets and the 37 kinds:
  * its popover keeps 8 px inside the window above and below, where the list scrolls. Records the box.
  */
 async function kindsPopoverInside(theme) {
@@ -3360,7 +3360,7 @@ async function kindsPopoverInside(theme) {
   measurements.push(`${theme} /routing-log kinds popover inside ${JSON.stringify(read)}`);
   if (read === null) say('did not open');
   else {
-    if (read.rows !== 44) say(`lists ${read.rows} rows, not Select all, the eight presets and the 35 kinds`);
+    if (read.rows !== 46) say(`lists ${read.rows} rows, not Select all, the eight presets and the 37 kinds`);
     if (read.top < 8 || read.bottom > read.view - 8) say(`spans ${read.top} to ${read.bottom} px, outside the ${read.view} px window less 8 px above and below`);
   }
   await page.keyboard.press('Escape');
@@ -4905,8 +4905,12 @@ async function decisionCard(theme) {
   }, shed);
   measurements.push(`${theme} /routing-log shed move badges ${JSON.stringify(tones)}`);
   if (tones.row === null || tones.move === null || tones.row !== tones.move) say(`the moved row's badge paints ${tones.row} and the shed move's Move station badge ${tones.move}, not one color`);
-  // Fifteen stations share the shed move's strip, the tightest spacing the story draws. The last window is shorter than
-  // the shed station's popover, so the popover's own bound and scroll are read there.
+  // Seventeen stations share the shed move's strip, the tightest spacing the story draws: the line's eight to Renew and
+  // the track's nine from Move to Reserve. The last window is shorter than the shed station's popover, so the popover's
+  // own bound and scroll are read there.
+  const stations = await page.evaluate(() => Number(document.querySelector('.routing-log__panel .decision-strip__surface')?.dataset.stations));
+  measurements.push(`${theme} /routing-log shed move stations ${stations}`);
+  if (stations !== 17) say(`the shed move's strip draws ${stations} stations, not the seventeen of its walk and its placeholder`);
   for (const { height, short, width } of [
     { height: 800, short: false, width: 1280 },
     { height: 900, short: false, width: 1440 },
@@ -4933,10 +4937,11 @@ async function decisionCard(theme) {
   await stripPointer(theme, "the shed move's card at the strip's 640 px floor", true);
   await slot('');
   await popoverBounds(theme, "the shed move's Move station", async (card) => card.locator('.strip-station[data-station="move"]'));
-  // The cool reading draws the story's widest table, ten columns, whose heads wrap to fit the box. It holds a row per
-  // destination, primary and overflow, so its second row stripes. The pick ranks primary alone, since nightly, which
-  // scores above it, sits at its cap.
-  await popoverBounds(theme, "the shed move's Cool reading", async (card) => card.locator('.strip-station[data-station="cool"]'), { striped: true, table: true, viewports: [POPOVER_VIEWPORTS[0], POPOVER_VIEWPORTS[2]] });
+  // The Fit table draws the story's widest table, nine columns: the projection, the rewrite and the reserved share on
+  // the 5-hour and the 7-day window, then the runway, the window that binds and the verdict, whose heads wrap to fit the
+  // box. It holds a row per candidate the gate read, primary, nightly and overflow, so its second row stripes. The pick
+  // ranks primary alone, the one destination the shed rule kept.
+  await popoverBounds(theme, "the shed move's Fit table", async (card) => card.locator('.strip-station[data-station="fit"]'), { striped: true, table: true, viewports: [POPOVER_VIEWPORTS[0], POPOVER_VIEWPORTS[2]] });
   await popoverBounds(theme, "the shed move's Pick station", async (card) => card.locator('.strip-station[data-station="pick"]'), { table: true, viewports: [POPOVER_VIEWPORTS[0]] });
   // The fresh placement at 14:09:41 opens on its request's page too, so the hour the page shows cannot hide it.
   const fresh = 'req_ef099b34-453';
@@ -4954,6 +4959,27 @@ async function decisionCard(theme) {
   await popoverBounds(theme, "the fresh placement's Pick station", async (card) => card.locator('.strip-station[data-station="pick"]'));
   await stationKeys(theme, "the fresh placement's Pick station", page.locator('.routing-log__panel .decision-card').last().locator('.strip-station[data-station="pick"]'));
   await escapeReachesFilter(theme, "the fresh placement's Pick station", page.locator('.routing-log__panel .decision-card').last().locator('.strip-station[data-station="pick"]'));
+  // The story's cards for the gate and the reservation, each on its request's page a quarter hour either side of its
+  // decision, which the mock dates back from its load: their strips' words and pointers at 1280 by 800.
+  for (const { ago, id, seq, what } of [
+    { ago: (79 * 60 + 39) * 1_000, id: 'req_9d4c1a73-e58', seq: 2, what: 'spent move held for the reset' },
+    { ago: (3 * 3_600 + 28 * 60 + 10) * 1_000, id: 'req_5b2e8d47-c19', seq: 1, what: 'least-bad move' },
+    { ago: (17 * 60 + 30) * 1_000, id: 'req_6e1f3b98-a24', seq: 1, what: 'round that marked nothing' },
+    { ago: 45 * 60_000, id: 'req_2c7d9f15-b63', seq: 1, what: 'spare-rate placement' },
+    { ago: (48 * 60 + 45) * 1_000, id: 'req_7a3f0c26-d81', seq: 1, what: 'booked placement' },
+  ]) {
+    const at = (await page.evaluate(() => Date.now())) - ago;
+    await page.goto(`${base}/routing-log?request=${id}&from=${new Date(at - quarter).toISOString()}&to=${new Date(at + quarter).toISOString()}`);
+    await booted();
+    await advance(LOAD_MS);
+    const row = page.locator(`.routing-log__table tbody tr[data-row="${id}/${seq}"]`);
+    if ((await row.count()) === 0 || !(await openDecision(row))) {
+      say(`the ${what} ${id}/${seq} opened to no card on its request's page`);
+      continue;
+    }
+    await stripWords(theme, `the ${what}'s card`);
+    await stripPointer(theme, `the ${what}'s card`);
+  }
 }
 
 /** The findings of comparing `mine` against `neighbour` on `keys`, each worded for the failure list. */

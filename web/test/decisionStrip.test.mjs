@@ -16,6 +16,7 @@ try {
 }
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/routing/walk_steps.json', import.meta.url), 'utf8'));
+const legacyFixture = JSON.parse(readFileSync(new URL('./fixtures/routing/walk_steps_v1.json', import.meta.url), 'utf8'));
 const api = new d.MockApi();
 
 async function recordOf(id) {
@@ -43,7 +44,8 @@ const step = (name, verdict, facts = []) => ({ facts, step: name, verdict });
 const fact = (key, value, unit = null, accountId = null) => ({ accountId, key, unit, value });
 const RULES = ['move:spent', 'move:overage', 'move:return_to_plan', 'move:drain', 'move:shed'];
 const RUNGS_NONE = () => ['rung:content', 'rung:with_main', 'rung:static'].map((r) => step(r, 'none'));
-const PARTITIONS = ['Spent', 'At cap', 'Above ceiling', 'Winding down', 'Floor'];
+const PARTITIONS = ['Spent', 'At cap', 'No fit', 'Winding down'];
+const LEGACY_PARTITIONS = ['Spent', 'At cap', 'Above ceiling', 'Winding down', 'Floor'];
 const FRESH_LINE = (pin, eligible) => [`Pin: ${pin} (taken)`, `Eligible: ${eligible} (taken)`, ...PARTITIONS.map((w) => `${w} (taken)`)];
 const FIVE_RULES = (verdict, state) => ['spent', 'overage', 'return to plan', 'drain', 'shed'].map((w) => `${w}: ${verdict} (${state})`);
 const THREE_TERMINI = (taken) => ['chosen', 'held', 'refused'].map((k) => (k === taken[0] ? `${d.TERMINUS_WORD[k]}: ${taken[1]} (taken)` : `${d.TERMINUS_WORD[k]}: - (idle)`));
@@ -89,46 +91,52 @@ function highestAt(path, x) {
   return best;
 }
 
-test('every step the router records has a station, a renderer and a stub word, and every station a step', () => {
+test('every step the router records has a station, a renderer and a stub word, and every station a step, in both record versions', () => {
   const renderers = ['candidate', 'chips', 'hold', 'list', 'outcome', 'rung', 'sentence', 'table'];
   const stubs = ['fires', 'match', 'released'];
-  for (const { step: id, verdicts } of fixture.steps) {
-    assert.ok(Object.hasOwn(d.STATION_KINDS, id), `${id} has a station kind`);
-    assert.ok(Object.hasOwn(d.STEP_NAME, id), `${id} has a step name`);
-    const kind = d.STATION_KINDS[id];
+  // A version 2 record draws through the table, a version 1 record through the legacy table its frozen fixture holds.
+  for (const [table, steps, version] of [[d.STATION_KINDS, fixture, 'version 2'], [d.LEGACY_STATION_KINDS, legacyFixture, 'version 1']]) {
+    for (const { step: id, verdicts } of steps.steps) {
+      assert.ok(Object.hasOwn(table, id), `${version}: ${id} has a station kind`);
+      assert.ok(Object.hasOwn(d.STEP_NAME, id), `${version}: ${id} has a step name`);
+      const kind = table[id];
+      assert.ok(renderers.includes(kind.renderer), `${version}: ${id} renders as ${kind.renderer}`);
+      assert.ok(kind.stub === null || stubs.includes(kind.stub), `${version}: ${id} has the stub ${kind.stub}`);
+      assert.ok(kind.group === null || Object.hasOwn(d.GROUP_WORD, kind.group), `${version}: ${id} sits in the group ${kind.group}`);
+      for (const verdict of verdicts) assert.ok(d.TONED_VERDICTS.has(verdict), `${version}: ${id} ${verdict} has a tone`);
+    }
+    const recorded = new Set(steps.steps.map((s) => s.step));
+    for (const id of Object.keys(table)) assert.ok(recorded.has(id), `${version}: ${id} is a step the router records`);
+    for (const value of steps.partition_values) {
+      assert.ok(Object.hasOwn(d.PARTITION_WORD, value) && typeof d.PARTITION_WORD[value] === 'string' && d.PARTITION_WORD[value] !== '', `${version}: ${value} has a word`);
+      assert.ok(d.TONED_VERDICTS.has(value), `${version}: ${value} has a tone`);
+    }
+  }
+  for (const { step: id } of fixture.steps) {
     const name = d.STEP_NAME[id];
     const rest = name.replace(/^[^:]*: /, '');
     assert.ok([name, rest, rest.toLowerCase()].includes(d.stationWord(id)), `${id} reads ${d.stationWord(id)} against ${name}`);
-    assert.ok(renderers.includes(kind.renderer), `${id} renders as ${kind.renderer}`);
-    assert.ok(kind.stub === null || stubs.includes(kind.stub), `${id} has the stub ${kind.stub}`);
-    assert.ok(kind.group === null || Object.hasOwn(d.GROUP_WORD, kind.group), `${id} sits in the group ${kind.group}`);
-    for (const verdict of verdicts) assert.ok(d.TONED_VERDICTS.has(verdict), `${id} ${verdict} has a tone`);
   }
-  const recorded = new Set(fixture.steps.map((s) => s.step));
-  for (const id of Object.keys(d.STATION_KINDS)) assert.ok(recorded.has(id), `${id} is a step the router records`);
-  for (const value of fixture.partition_values) {
-    assert.ok(Object.hasOwn(d.PARTITION_WORD, value) && typeof d.PARTITION_WORD[value] === 'string' && d.PARTITION_WORD[value] !== '', `${value} has a word`);
-    assert.ok(d.TONED_VERDICTS.has(value), `${value} has a tone`);
-  }
+  assert.deepEqual([d.PARTITION_FACTS.map((f) => d.PARTITION_STATION_WORD[f]), d.LEGACY_PARTITION_FACTS.map((f) => d.PARTITION_STATION_WORD[f])], [PARTITIONS, LEGACY_PARTITIONS]);
   // Under a bracket the group's prefix leaves and the rest reads lowercased, while the one Partitions station stands alone.
-  assert.deepEqual(['rung:content', 'rung:with_main', 'move:spent', 'move:return_to_plan', 'partitions', 'selection'].map(d.stationWord), ['content', 'with main', 'spent', 'return to plan', 'Partitions', 'Rest of the walk']);
+  assert.deepEqual(['rung:content', 'rung:with_main', 'move:spent', 'move:return_to_plan', 'partitions', 'selection', 'fit', 'reserve', 'cool'].map(d.stationWord), ['content', 'with main', 'spent', 'return to plan', 'Partitions', 'Rest of the walk', 'Fit', 'Reserve', 'Cool reading']);
 });
 
 test("the story's records give their stations, states, host and termini", async () => {
   const fresh = modelOf(await recordOf('req_ef099b34-453/1'));
-  assert.deepEqual(read(fresh), [...FRESH_LINE('none', 'match'), 'content: none (taken)', 'with main: none (taken)', 'static: none (taken)', 'Pick: chosen (taken)']);
+  assert.deepEqual(read(fresh), [...FRESH_LINE('none', 'match'), 'content: none (taken)', 'with main: none (taken)', 'static: none (taken)', 'Pick: chosen (taken)', 'Reserve: booked (taken)']);
   assert.deepEqual([fresh.shape, fresh.decisive, fresh.host, fresh.branch], ['fresh', 'pick', 'pick', null]);
   assert.deepEqual(terminiOf(fresh), THREE_TERMINI(['chosen', 'placed']));
   assert.deepEqual(stationOf(fresh, 'pick').second, ['Pace P0']);
-  assert.deepEqual(fresh.stations.filter((s) => s.id.startsWith('partitions:')).map((s) => [s.head, s.badge, s.tone]), [['Spent', 'off', 'neutral'], ['At cap', '0 out', 'good'], ['Above ceiling', 'off', 'neutral'], ['Winding down', '0 out', 'good'], ['Floor', '0 out', 'good']]);
-  assert.deepEqual(fresh.brackets.map((b) => [b.word, b.level, b.stations.length]), [['Partitions', 'line', 5], ['Rungs', 'line', 3]]);
+  assert.deepEqual(fresh.stations.filter((s) => s.id.startsWith('partitions:')).map((s) => [s.head, s.badge, s.tone]), [['Spent', 'off', 'neutral'], ['At cap', '0 out', 'good'], ['No fit', 'fell through', 'warning'], ['Winding down', '0 out', 'good']]);
+  assert.deepEqual(fresh.brackets.map((b) => [b.word, b.level, b.stations.length]), [['Partitions', 'line', 4], ['Rungs', 'line', 3]]);
   assert.deepEqual(fresh.stations.filter((s) => s.stub !== null).map((s) => `${s.id} ${s.stub}`), ['rung:content match', 'rung:with_main match', 'rung:static match']);
   assert.deepEqual(stationOf(fresh, 'rung:content').head, 'Rung: content');
   assert.equal(fresh.stations.filter((s) => s.decisive).length, 1);
 
   for (const id of ['req_f8085653-422/1', 'req_1eaa9bc1-a18/1']) {
     const renewal = modelOf(await recordOf(id));
-    assert.deepEqual(read(renewal), ['Pin: match (taken)', 'Eligible: match (taken)', ...FIVE_RULES('no', 'taken'), 'Renew: renewed (taken)'], id);
+    assert.deepEqual(read(renewal), ['Pin: match (taken)', 'Eligible: match (taken)', ...FIVE_RULES('no', 'taken'), 'Renew: renewed (taken)', 'Reserve: none (taken)'], id);
     assert.deepEqual([renewal.shape, renewal.decisive, renewal.host, renewal.branch], ['pinned', 'renew', 'renew', null], id);
     assert.deepEqual(renewal.brackets.map((b) => [b.word, b.level, b.stations]), [['Moves', 'line', RULES]], id);
     assert.deepEqual(renewal.stations.filter((s) => s.stub !== null).map((s) => s.stub), ['fires', 'fires', 'fires', 'fires', 'fires', 'released'], id);
@@ -136,14 +144,14 @@ test("the story's records give their stations, states, host and termini", async 
   }
 
   const spentMove = modelOf(await recordOf('req_da52d141-a5a/1'));
-  assert.deepEqual(read(spentMove), ['Pin: match (taken)', 'Eligible: match (taken)', 'spent: fired (taken)', ...FIVE_RULES('not run', 'idle').slice(1), '^Move: moved (taken)', '^Cool reading: preferred (taken)', '^Cap filter: passed (taken)', '^Partitions: match (taken)', '^content: none (taken)', '^with main: none (taken)', '^static: match (taken)', 'Renew: not run (idle)']);
+  assert.deepEqual(read(spentMove), ['Pin: match (taken)', 'Eligible: match (taken)', 'spent: fired (taken)', ...FIVE_RULES('not run', 'idle').slice(1), '^Move: moved (taken)', '^Fit: rewrite only (taken)', '^Cap filter: passed (taken)', '^Partitions: match (taken)', '^content: none (taken)', '^with main: none (taken)', '^static: match (taken)', 'Renew: not run (idle)', '^Reserve: booked (taken)']);
   assert.deepEqual([spentMove.shape, spentMove.decisive, spentMove.host, spentMove.branch], ['pinned', 'rung:static', 'rung:static', { from: 'move:spent', kind: 'move' }]);
   assert.deepEqual([stationOf(spentMove, 'move').head, stationOf(spentMove, 'move').second, stationOf(spentMove, 'move').tone, stationOf(spentMove, 'move').step], ['Move', ['spent rule'], 'warning', 'move:spent']);
   assert.deepEqual(spentMove.brackets.map((b) => [b.word, b.level, b.stations.length]), [['Moves', 'line', 5], ['Rungs', 'track', 3]]);
   assert.deepEqual(terminiOf(spentMove), PINNED_TERMINI('moved'));
 
   const shedMove = modelOf(await recordOf('req_868264bc-611/1'));
-  assert.deepEqual(read(shedMove), ['Pin: match (taken)', 'Eligible: match (taken)', ...FIVE_RULES('no', 'taken').slice(0, 4), 'shed: fired (taken)', '^Move: moved (taken)', '^Cool reading: preferred (taken)', '^Cap filter: passed (taken)', '^Partitions: match (taken)', '^content: none (taken)', '^with main: none (taken)', '^static: none (taken)', '^Pick: chosen (taken)', 'Renew: not run (idle)']);
+  assert.deepEqual(read(shedMove), ['Pin: match (taken)', 'Eligible: match (taken)', ...FIVE_RULES('no', 'taken').slice(0, 4), 'shed: fired (taken)', '^Move: moved (taken)', '^Fit: fits (taken)', '^Cap filter: passed (taken)', '^Partitions: match (taken)', '^content: none (taken)', '^with main: none (taken)', '^static: none (taken)', '^Pick: chosen (taken)', 'Renew: not run (idle)', '^Reserve: booked (taken)']);
   assert.deepEqual([shedMove.decisive, shedMove.host, shedMove.branch], ['pick', 'pick', { from: 'move:shed', kind: 'move' }]);
   assert.deepEqual(stationOf(shedMove, 'move').second, ['shed rule']);
   // The fired rule left the line by the track, so its stub became the track, and the idle Renew keeps its own.
@@ -151,22 +159,23 @@ test("the story's records give their stations, states, host and termini", async 
   assert.deepEqual(terminiOf(shedMove), PINNED_TERMINI('moved'));
 
   const staticPlaced = modelOf(await recordOf('req_b2bed817-a58/1'));
-  assert.deepEqual(read(staticPlaced), [...FRESH_LINE('none', 'match'), 'content: none (taken)', 'with main: none (taken)', 'static: match (taken)', 'Pick: not run (idle)']);
+  assert.deepEqual(read(staticPlaced), [...FRESH_LINE('none', 'match'), 'content: none (taken)', 'with main: none (taken)', 'static: match (taken)', 'Pick: not run (idle)', 'Reserve: booked (taken)']);
   assert.deepEqual([staticPlaced.decisive, staticPlaced.host, staticPlaced.branch], ['rung:static', 'pick', { from: 'rung:static', kind: 'rung' }]);
   assert.deepEqual([stationOf(staticPlaced, 'pick').index, stationOf(staticPlaced, 'pick').verdict, stationOf(staticPlaced, 'rung:static').stub], [null, null, null]);
   assert.deepEqual(terminiOf(staticPlaced), THREE_TERMINI(['chosen', 'placed']));
 
-  for (const [id, floor] of [['req_e8b7eb13-060/2', '0 out'], ['req_52f62e67-839/1', 'off']]) {
+  // A placement that booked nothing reaches Reserve past the idle Pick, so its Reserve stands idle too.
+  for (const [id, noFit, reserve] of [['req_e8b7eb13-060/2', '2 out', 'Reserve: booked (taken)'], ['req_52f62e67-839/1', '0 out', 'Reserve: none (idle)']]) {
     const withMain = modelOf(await recordOf(id));
-    assert.deepEqual(read(withMain), [...FRESH_LINE('none', 'match'), 'content: none (taken)', 'with main: match (taken)', 'static: not run (idle)', 'Pick: not run (idle)'], id);
+    assert.deepEqual(read(withMain), [...FRESH_LINE('none', 'match'), 'content: none (taken)', 'with main: match (taken)', 'static: not run (idle)', 'Pick: not run (idle)', reserve], id);
     assert.deepEqual([withMain.decisive, withMain.host, withMain.branch], ['rung:with_main', 'pick', { from: 'rung:with_main', kind: 'rung' }], id);
-    assert.deepEqual([stationOf(withMain, 'rung:static').verdict, stationOf(withMain, 'rung:static').tone, stationOf(withMain, 'partitions:floor').badge], ['not_run', 'neutral', floor], id);
+    assert.deepEqual([stationOf(withMain, 'rung:static').verdict, stationOf(withMain, 'rung:static').tone, stationOf(withMain, 'partitions:no_fit').badge], ['not_run', 'neutral', noFit], id);
     assert.deepEqual(terminiOf(withMain), THREE_TERMINI(['chosen', 'placed']), id);
   }
 
   for (const [id, place] of [['req_69e30548-32e/1', 'cohort'], ['req_e8b7eb13-060/1', 'strategy pick']]) {
     const hold = modelOf(await recordOf(id));
-    assert.deepEqual(read(hold), [...FRESH_LINE('none', 'match'), 'content: none (taken)', 'with main: none (taken)', 'static: none (taken)', 'Pick: chosen (taken)', 'Hold: held (taken)'], id);
+    assert.deepEqual(read(hold), [...FRESH_LINE('none', 'match'), 'content: none (taken)', 'with main: none (taken)', 'static: none (taken)', 'Pick: chosen (taken)', 'Hold: held (taken)', 'Reserve: none (taken)'], id);
     assert.deepEqual([hold.decisive, hold.host], ['hold', 'pick'], id);
     assert.deepEqual([stationOf(hold, 'hold').second, stationOf(hold, 'hold').tone, stationOf(hold, 'pick').second], [[place, 'bound 1 min'], 'warning', ['Pace P0']], id);
     assert.deepEqual([stationOf(hold, 'partitions:at_cap').badge, stationOf(hold, 'partitions:at_cap').tone, stationOf(hold, 'partitions:at_cap').verdict], ['held', 'warning', 'held'], id);
@@ -175,7 +184,7 @@ test("the story's records give their stations, states, host and termini", async 
 
   for (const [id, strategy, kind] of [['req_51d0e2b8-7a0/1', 'round robin', 'timed'], ['req_77634945-72b/2', 'Pace', 'untimed']]) {
     const exhausted = modelOf(await recordOf(id));
-    assert.deepEqual(read(exhausted), [...FRESH_LINE('none', 'none'), 'content: none (taken)', 'with main: none (taken)', 'static: none (taken)', 'Pick: none (taken)', 'Exhausted: exhausted (taken)'], id);
+    assert.deepEqual(read(exhausted), [...FRESH_LINE('none', 'none'), 'content: none (taken)', 'with main: none (taken)', 'static: none (taken)', 'Pick: none (taken)', 'Exhausted: exhausted (taken)', 'Reserve: none (taken)'], id);
     assert.deepEqual([exhausted.decisive, exhausted.host, stationOf(exhausted, 'eligible').tone, stationOf(exhausted, 'exhausted').tone], ['exhausted', 'pick', 'critical', 'critical'], id);
     assert.deepEqual([stationOf(exhausted, 'pick').second, stationOf(exhausted, 'exhausted').second], [[strategy], [kind]], id);
     assert.deepEqual(terminiOf(exhausted), THREE_TERMINI(['refused', 'exhausted']), id);
@@ -196,17 +205,17 @@ test("the story's records give their stations, states, host and termini", async 
   assert.equal(refusalLayout.labels.admission.above, true, 'the curve drops from Admission, so its label sits above the line');
 
   const probe = modelOf(await recordOf('req_c41d0311-200/1'));
-  assert.deepEqual(read(probe), ['Pin: match (taken)', 'Eligible: match (taken)', 'Probe: passed (taken)', 'spent: fired (taken)', ...FIVE_RULES('not run', 'idle').slice(1), '^Move: moved (taken)', '^Cool reading: preferred (taken)', '^Cap filter: passed (taken)', '^Partitions: match (taken)', '^content: none (taken)', '^with main: none (taken)', '^static: none (taken)', '^Pick: chosen (taken)', 'Renew: not run (idle)']);
+  assert.deepEqual(read(probe), ['Pin: match (taken)', 'Eligible: match (taken)', 'Probe: passed (taken)', 'spent: fired (taken)', ...FIVE_RULES('not run', 'idle').slice(1), '^Move: moved (taken)', '^Fit: rewrite only (taken)', '^Cap filter: passed (taken)', '^Partitions: match (taken)', '^content: none (taken)', '^with main: none (taken)', '^static: none (taken)', '^Pick: chosen (taken)', 'Renew: not run (idle)', '^Reserve: none (taken)']);
   assert.deepEqual([probe.shape, probe.decisive, probe.host, probe.branch], ['pinned', 'pick', 'pick', { from: 'move:spent', kind: 'move' }]);
   assert.deepEqual(terminiOf(probe), PINNED_TERMINI('moved'));
 
   const failover = modelOf(await recordOf('req_1d9c3e55-0b2/2'));
-  assert.deepEqual(read(failover), [...FRESH_LINE('match', 'match'), 'content: none (taken)', 'with main: none (taken)', 'static: match (taken)', 'Pick: not run (idle)']);
+  assert.deepEqual(read(failover), [...FRESH_LINE('match', 'match'), 'content: none (taken)', 'with main: none (taken)', 'static: match (taken)', 'Pick: not run (idle)', 'Reserve: booked (taken)']);
   assert.deepEqual([failover.shape, failover.decisive, failover.host, failover.branch], ['fresh', 'rung:static', 'pick', { from: 'rung:static', kind: 'rung' }]);
   assert.deepEqual(terminiOf(failover), THREE_TERMINI(['chosen', 'placed']));
 
   const overage = modelOf(await recordOf('req_4b0e9d17-c31/2'));
-  assert.deepEqual(read(overage), [...FRESH_LINE('match', 'match'), 'content: none (taken)', 'with main: none (taken)', 'static: none (taken)', 'Pick: chosen (taken)']);
+  assert.deepEqual(read(overage), [...FRESH_LINE('match', 'match'), 'content: none (taken)', 'with main: none (taken)', 'static: none (taken)', 'Pick: chosen (taken)', 'Reserve: none (taken)']);
   assert.deepEqual([overage.shape, overage.decisive, overage.host, overage.branch, stationOf(overage, 'pick').second], ['fresh', 'pick', 'pick', null, ['Pace P0']]);
   assert.deepEqual(terminiOf(overage), THREE_TERMINI(['chosen', 'placed']));
   assert.deepEqual(overage.leaves.map((l) => [l.accountId, l.chosen, l.tone]), [['primary', false, 'warning'], ['secondary', false, 'warning'], ['nightly', true, 'accent'], ['overflow', false, 'warning']]);
@@ -214,7 +223,129 @@ test("the story's records give their stations, states, host and termini", async 
   assert.deepEqual(fresh.leaves.map((l) => [l.accountId, l.badge, l.chosen, l.tone]), [['primary', 'chosen', true, 'accent'], ['secondary', 'out', false, 'warning'], ['nightly', 'eligible', false, 'neutral'], ['overflow', 'out', false, 'warning']]);
   assert.deepEqual([d.stationName(stationOf(fresh, 'pick')), d.stationName(stationOf(shedMove, 'move:shed')), d.stationName(stationOf(staticPlaced, 'pick'))], ['Pick, chosen, Pace P0', 'Shed, fired', 'Pick, not run']);
   assert.deepEqual(fresh.termini.map(d.terminusName), ['Chosen, placed', 'Held for a slot, not reached', 'Refused, not reached']);
-  assert.deepEqual(fresh.leaves.slice(0, 2).map(d.leafName), ['primary, chosen', `secondary, out, ${fresh.leaves[1].chip.value}`]);
+  // The chosen member read rewrite only, which its leaf names as the candidate table's verdict cell does.
+  assert.deepEqual(fresh.leaves.slice(0, 2).map(d.leafName), ['primary, chosen, rewrite only', `secondary, out, ${fresh.leaves[1].chip.value}`]);
+});
+
+test('a move draws Fit after Move and Reserve after its pick or its static rung, and a fresh line draws the four partition stations', async () => {
+  const trackOf = (m) => m.stations.filter((s) => s.level === 'track').map((s) => s.id);
+  // The shed rule and the least-bad move pick among their destinations, so Reserve stands after Pick on the track.
+  for (const [id, fit, tone] of [['req_868264bc-611/1', 'fits', 'good'], ['req_5b2e8d47-c19/1', 'least bad', 'warning']]) {
+    const m = modelOf(await recordOf(id));
+    assert.deepEqual(trackOf(m), ['move', 'fit', 'cap_filter', 'partitions', 'rung:content', 'rung:with_main', 'rung:static', 'pick', 'reserve'], id);
+    assert.deepEqual([stationOf(m, 'fit').badge, stationOf(m, 'fit').tone, stationOf(m, 'fit').renderer, stationOf(m, 'fit').head], [fit, tone, 'table', 'Fit'], id);
+    assert.deepEqual([stationOf(m, 'reserve').badge, stationOf(m, 'reserve').tone, stationOf(m, 'reserve').state, stationOf(m, 'reserve').renderer, stationOf(m, 'reserve').head], ['booked', 'good', 'taken', 'list', 'Reserve'], id);
+    // Reserve books what the pick decided, so it never decides the walk.
+    assert.deepEqual([m.decisive, m.host], ['pick', 'pick'], id);
+    const layout = d.layoutStrip(m, 958);
+    assert.deepEqual(layout.paths.filter((p) => p.kind === 'track').map((p) => p.state), ['taken'], `${id}: the taken track runs on through Reserve`);
+    assert.equal(layout.stations.reserve.y, layout.yu, id);
+  }
+  // The spent move's static rung placed the request with no pick, so Reserve stands after the rung.
+  const spent = modelOf(await recordOf('req_da52d141-a5a/1'));
+  assert.deepEqual(trackOf(spent), ['move', 'fit', 'cap_filter', 'partitions', 'rung:content', 'rung:with_main', 'rung:static', 'reserve']);
+  assert.deepEqual([stationOf(spent, 'fit').badge, stationOf(spent, 'fit').tone, spent.decisive, spent.host], ['rewrite only', 'warning', 'rung:static', 'rung:static']);
+  assert.deepEqual(d.layoutStrip(spent, 958).paths.filter((p) => p.kind === 'track').map((p) => p.state), ['taken']);
+  // A fresh line draws the engine's four partitions, then Reserve after Pick before the termini.
+  const fresh = modelOf(await recordOf('req_ef099b34-453/1'));
+  assert.deepEqual(fresh.stations.filter((s) => s.id.startsWith('partitions:')).map((s) => [s.word, s.badge]), [['Spent', 'off'], ['At cap', '0 out'], ['No fit', 'fell through'], ['Winding down', '0 out']]);
+  assert.deepEqual(fresh.stations.slice(-2).map((s) => [s.id, s.badge, s.state]), [['pick', 'chosen', 'taken'], ['reserve', 'booked', 'taken']]);
+  const layout = d.layoutStrip(fresh, 958);
+  const taken = layout.paths.find((p) => p.kind === 'curve' && p.state === 'taken');
+  assert.ok(taken.d.startsWith(`M${layout.stations.reserve.x} ${layout.y0} `), 'the taken curve leaves for Chosen from Reserve');
+});
+
+test('a spent move held for the reset ends in the fourth terminus drawn at the Held position while a fresh line keeps three', async () => {
+  const held = modelOf(await recordOf('req_9d4c1a73-e58/2'));
+  assert.deepEqual(read(held), ['Pin: match (taken)', 'Eligible: match (taken)', 'spent: held (taken)', ...FIVE_RULES('not run', 'idle').slice(1), 'Renew: not run (idle)', 'Reserve: none (idle)']);
+  assert.deepEqual([held.shape, held.decisive, held.branch], ['pinned', 'move:spent', null]);
+  assert.deepEqual(terminiOf(held), ['Chosen: - (idle)', 'Held for the reset: held (taken)', 'Refused: - (idle, not drawn)']);
+  assert.deepEqual(held.termini.map(d.terminusName), ['Chosen, not reached', 'Held for the reset, held', 'Refused, not reached']);
+  const layout = d.layoutStrip(held, 958);
+  assert.deepEqual(Object.keys(layout.termini), ['chosen', 'held_reset']);
+  assert.deepEqual(layout.termini.held_reset, { x: layout.termini.chosen.x, y: layout.termini.chosen.y + 36 });
+  const taken = layout.paths.find((p) => p.kind === 'curve' && p.state === 'taken');
+  assert.deepEqual(pointsOf(taken.d).at(-1), [layout.termini.held_reset.x, layout.termini.held_reset.y + d.TERMINUS_RADIUS], 'the taken path rises into Held for the reset from below');
+  // A hold for a slot and a placement keep the three termini, the fourth drawn nowhere.
+  for (const id of ['req_ef099b34-453/1', 'req_69e30548-32e/1']) {
+    const m = modelOf(await recordOf(id));
+    assert.deepEqual(m.termini.map((t) => t.kind), ['chosen', 'held', 'refused'], id);
+  }
+});
+
+test('a version 1 record draws through the legacy maps with its Cool reading and its five partitions', async () => {
+  const base = await recordOf('req_da52d141-a5a/1');
+  const partitions = step('partitions', 'match', [fact('spent', 'off'), fact('at_cap', 0, 'count'), fact('above_ceiling', 0, 'count'), fact('winding_down', 0, 'count'), fact('floor', 0, 'count')]);
+  const cool = step('cool', 'preferred', [fact('cool', true, null, 'primary')]);
+  // The record as the engine wrote it before the projection: the cool reading where the fit station stands, five
+  // partitions and no reservation.
+  const walk = base.walk.filter((s) => s.step !== 'reserve').map((s) => (s.step === 'fit' ? cool : s.step === 'partitions' ? partitions : s));
+  const moved = modelOf({ ...base, version: 1, walk });
+  assert.deepEqual(read(moved).slice(7), ['^Move: moved (taken)', '^Cool reading: preferred (taken)', '^Cap filter: passed (taken)', '^Partitions: match (taken)', '^content: none (taken)', '^with main: none (taken)', '^static: match (taken)', 'Renew: not run (idle)']);
+  assert.deepEqual([stationOf(moved, 'cool').known, stationOf(moved, 'cool').renderer, stationOf(moved, 'cool').head], [true, 'table', 'Cool reading']);
+  const freshBase = await recordOf('req_ef099b34-453/1');
+  const freshWalk = freshBase.walk.filter((s) => s.step !== 'reserve').map((s) => (s.step === 'partitions' ? partitions : s));
+  const fresh = modelOf({ ...freshBase, version: 1, walk: freshWalk });
+  assert.deepEqual(read(fresh), ['Pin: none (taken)', 'Eligible: match (taken)', ...LEGACY_PARTITIONS.map((w) => `${w} (taken)`), 'content: none (taken)', 'with main: none (taken)', 'static: none (taken)', 'Pick: chosen (taken)']);
+  assert.deepEqual(fresh.brackets.map((b) => [b.word, b.stations.length]), [['Partitions', 5], ['Rungs', 3]]);
+  // The partition station's popover lists the five facts in the legacy order.
+  const plan = d.anchorPlan({ id: 'partitions:floor', kind: 'station' }, fresh, { ...freshBase, version: 1, walk: freshWalk }, undefined, NOW);
+  assert.deepEqual(readRows(plan).map(([label]) => label), ['spent', 'at cap', 'above ceiling', 'winding down', 'floor']);
+});
+
+test('with load shedding off the shed station reads not run and its Round group round off, and a shed that read a trigger groups it with the round', async () => {
+  const base = await recordOf('req_f8085653-422/1');
+  const groupsOf = (record) => stationPlan(record, 'move:shed').block.groups.map((g) => [g.label, g.rows.map((r) => r.chips.map(chipText).join(' / '))]);
+  const off = { ...base, walk: base.walk.map((s) => (s.step === 'move:shed' ? step('move:shed', 'not_run', [fact('round', 'off')]) : s)) };
+  const m = modelOf(off);
+  assert.deepEqual([stationOf(m, 'move:shed').badge, stationOf(m, 'move:shed').tone, stationOf(m, 'move:shed').state], ['not run', 'neutral', 'idle']);
+  assert.deepEqual(groupsOf(off), [['Round', ['round off']]]);
+  const at = Date.parse(base.request.at);
+  const read = step('move:shed', 'no', [fact('projection_five_hour', 0.81, 'percent'), fact('horizon_five_hour', at + 2 * 3_600_000, 'time'), fact('ceiling', 0.75, 'percent'), fact('trigger', 'five_hour', 'text'), fact('excess', 0.03, 'percent_per_hour'), fact('round', 'within_dwell'), fact('marked', false)]);
+  const within = { ...base, walk: base.walk.map((s) => (s.step === 'move:shed' ? read : s)) };
+  assert.deepEqual(groupsOf(within), [
+    ['Windows', ['projection 5h 81%', `horizon 5h ${d.formatFact(at + 2 * 3_600_000, 'time', at)}`, 'ceiling 75%']],
+    ['Round', ['trigger 5h', 'excess 3.00 %/h', 'round within dwell', 'marked no']],
+  ]);
+});
+
+test("the Fit station's table reads a row per candidate the gate read with its columns window by window, and the Reserve station lists the booking", async () => {
+  const shed = await recordOf('req_868264bc-611/1');
+  const { table } = stationPlan(shed, 'fit').block;
+  assert.deepEqual(table.columns.map((c) => c.label), ['projection 5h', 'projection 7d', 'rewrite 5h', 'rewrite 7d', 'reserved 5h', 'reserved 7d', 'runway', 'binding', 'verdict']);
+  assert.deepEqual(table.rows.map((r) => r.account.value), ['primary', 'nightly', 'overflow']);
+  const cells = (id) => table.columns.map((c) => table.rows.find((r) => r.account.value === id).cells[c.key]?.text ?? '');
+  assert.deepEqual(cells('primary'), ['54%', '42%', '0.264%', '0.031%', '0%', '0%', '2 h 35 min', '5h', 'fits']);
+  assert.deepEqual(cells('nightly').slice(6), ['none', '5h', 'least bad']);
+  // An API key has no plan window to project, so its row is its verdict alone.
+  assert.deepEqual(cells('overflow'), ['', '', '', '', '', '', '', '', 'fits']);
+  assert.deepEqual(table.rows.map((r) => r.cells.verdict.tone), ['good', 'warning', 'good']);
+  assert.deepEqual(readRows(stationPlan(shed, 'reserve')), [
+    ['on', ['on primary']],
+    ['reserved 5h', ['reserved 5h 0.264%']],
+    ['reserved 7d', ['reserved 7d 0.031%']],
+    ['burn 5h', ['burn 5h 1.42 %/h']],
+    ['burn 7d', ['burn 7d 0.16 %/h']],
+    ['expires at', [`expires at ${d.formatFact(Date.parse(shed.outcome.reservation.expiresAt), 'time', Date.parse(shed.request.at))}`]],
+    ['attempt', ['attempt 1']],
+  ]);
+  // A walk that booked nothing reads its sentence: a renewal's names the pin renewed in place.
+  const renewal = await recordOf('req_f8085653-422/1');
+  assert.deepEqual([stationPlan(renewal, 'reserve').renderer, stationPlan(renewal, 'reserve').block.text], ['sentence', 'Nothing was booked: the pin renewed in place.']);
+  const hold = await recordOf('req_69e30548-32e/1');
+  assert.deepEqual([stationPlan(hold, 'reserve').renderer, stationPlan(hold, 'reserve').block.text], ['sentence', 'Nothing was booked.']);
+});
+
+test("a move's Partitions station names the gate's order for its no-fit row, never a count that reads as every candidate fitting", async () => {
+  // The gate kept a move's destinations whole, so the partition's no-fit count is 0 whatever order it took.
+  for (const [id, order] of [['req_da52d141-a5a/1', 'rewrite only'], ['req_868264bc-611/1', 'fits'], ['req_5b2e8d47-c19/1', 'least bad']]) {
+    const record = await recordOf(id);
+    assert.equal(record.walk.find((s) => s.step === 'partitions').facts.find((f) => f.key === 'no_fit').value, 0, id);
+    assert.deepEqual(readRows(stationPlan(record, 'partitions')).find(([label]) => label === 'no fit'), ['no fit', [`no fit by the gate's ${order} order`]], id);
+  }
+  // A fresh line's No fit station reads its count, since no gate ran before it.
+  const fresh = await recordOf('req_2c7d9f15-b63/1');
+  assert.deepEqual(readRows(stationPlan(fresh, 'partitions:no_fit')).find(([label]) => label === 'no fit'), ['no fit', ['no fit 1']]);
 });
 
 test('a record of twelve candidates gives eight leaves and "and 4 more", the chosen among them', async () => {
@@ -271,7 +402,7 @@ const contentMove = async () => {
 
 test('a move whose continuation the content rung decides hangs the fan from that rung', async () => {
   const m = await contentMove();
-  assert.deepEqual(read(m), ['Pin: match (taken)', 'Eligible: match (taken)', 'spent: fired (taken)', ...FIVE_RULES('not run', 'idle').slice(1), '^Move: moved (taken)', '^Cool reading: preferred (taken)', '^Cap filter: passed (taken)', '^Partitions: match (taken)', '^content: match (taken)', '^with main: not run (idle)', '^static: not run (idle)', 'Renew: not run (idle)']);
+  assert.deepEqual(read(m), ['Pin: match (taken)', 'Eligible: match (taken)', 'spent: fired (taken)', ...FIVE_RULES('not run', 'idle').slice(1), '^Move: moved (taken)', '^Fit: rewrite only (taken)', '^Cap filter: passed (taken)', '^Partitions: match (taken)', '^content: match (taken)', '^with main: not run (idle)', '^static: not run (idle)', 'Renew: not run (idle)', '^Reserve: booked (taken)']);
   assert.deepEqual([m.shape, m.decisive, m.host, m.branch], ['pinned', 'rung:content', 'rung:content', { from: 'move:spent', kind: 'move' }]);
   assert.deepEqual(terminiOf(m), PINNED_TERMINI('moved'));
 });
@@ -331,7 +462,7 @@ test('a record with no slot step expects the slot its outcome names after its la
   for (const s of m.stations.slice(2)) assert.ok(highestAt(curves[2].d, layout.stations[s.id].x) > layout.y0 + d.RADIUS, `the taken path to Refused passes under the idle ${s.id}`);
   assert.ok(curves[2].d.startsWith(`M${layout.stations.eligible.x} ${layout.y0 + d.RADIUS} `), 'the taken path drops from the decisive Eligible toward Refused');
   assert.equal(layout.labels.eligible.above, true);
-  assert.deepEqual(layout.paths.filter((p) => p.kind === 'edge').map((p) => p.state), ['taken', ...Array(9).fill('idle')]);
+  assert.deepEqual(layout.paths.filter((p) => p.kind === 'edge').map((p) => p.state), ['taken', ...Array(8).fill('idle')]);
 });
 
 test('a live pin that turned ineligible is decided by its recorded pick, never by a renewal', async () => {
@@ -380,8 +511,8 @@ test('a move whose continuation ends in a hold runs its track into the held term
 
 test('the session-pin cap exemption is decided by its hold after the pick', async () => {
   const base = await recordOf('req_ef099b34-453/1');
-  const m = modelOf(built(base, [...base.walk, step('hold', 'placed', [fact('place', 'session_pin'), fact('account_id', 'primary', null, 'primary')])], 'placed'));
-  assert.deepEqual(read(m).slice(-2), ['Pick: chosen (taken)', 'Hold: placed (taken)']);
+  const m = modelOf(built(base, [...base.walk.slice(0, -1), step('hold', 'placed', [fact('place', 'session_pin'), fact('account_id', 'primary', null, 'primary')]), base.walk.at(-1)], 'placed'));
+  assert.deepEqual(read(m).slice(-3), ['Pick: chosen (taken)', 'Hold: placed (taken)', 'Reserve: booked (taken)']);
   assert.deepEqual([m.decisive, m.host, stationOf(m, 'hold').second, stationOf(m, 'hold').tone], ['hold', 'pick', ['session pin'], 'good']);
   assert.deepEqual(terminiOf(m), THREE_TERMINI(['chosen', 'placed']));
 });
@@ -421,7 +552,8 @@ test("the layout spaces by weight and keeps the surface's height", async () => {
   assert.ok(shedModel.stations.filter((s) => s.level === 'line').every((s) => shed.stations[s.id].y === 176));
   assert.ok(Math.abs(shed.stations.move.x - shed.stations['move:shed'].x - 0.55 * shed.unit) < 1e-9, 'the path rises 0.55 units to the Move station');
   assert.ok(Math.abs(shed.stations.pick.x - shed.stations['rung:static'].x - 1.35 * shed.unit) < 1e-9, 'the pick sits 1.35 units past the rungs');
-  assert.ok(Math.abs(shed.termini.chosen.x - shed.stations.pick.x - shed.unit) < 1e-9, 'the continuation ends one unit past its last station');
+  assert.ok(Math.abs(shed.stations.reserve.x - shed.stations.pick.x - 1.2 * shed.unit) < 1e-9, 'Reserve sits 1.2 units past the pick');
+  assert.ok(Math.abs(shed.termini.chosen.x - shed.stations.reserve.x - shed.unit) < 1e-9, 'the continuation ends one unit past its last station');
   assert.ok(shed.stations.renew.x > shed.stations['move:shed'].x && shed.stations.renew.x < shed.stations.pick.x, 'Renew stands between the fired rule and the host');
   assert.deepEqual(Object.keys(shed.termini), ['chosen']);
   assert.deepEqual(shed.paths.filter((p) => p.kind === 'track').map((p) => p.state), ['taken']);
@@ -432,13 +564,15 @@ test("the layout spaces by weight and keeps the surface's height", async () => {
   const staticLayout = d.layoutStrip(modelOf(await recordOf('req_b2bed817-a58/1')), 958);
   assert.deepEqual([staticLayout.y0, staticLayout.yu], [128, 56]);
   assert.deepEqual(staticLayout.paths.filter((p) => p.kind === 'track').map((p) => p.state), ['taken']);
-  assert.deepEqual(staticLayout.paths.filter((p) => p.kind === 'curve').map((p) => p.state), ['idle', 'idle', 'idle']);
-  assert.deepEqual(staticLayout.paths.filter((p) => p.kind === 'edge').map((p) => p.state), [...Array(9).fill('taken'), 'idle']);
+  // The rung's track comes down into the Reserve it booked, which runs on into Chosen.
+  assert.ok(staticLayout.paths.find((p) => p.kind === 'track').d.endsWith(`${staticLayout.stations.reserve.x} 128`), "the rung's track comes down into Reserve");
+  assert.deepEqual(staticLayout.paths.filter((p) => p.kind === 'curve').map((p) => p.state), ['taken', 'idle', 'idle']);
+  assert.deepEqual(staticLayout.paths.filter((p) => p.kind === 'edge').map((p) => p.state), [...Array(8).fill('taken'), 'idle', 'idle']);
 
   const freshRecord = await recordOf('req_ef099b34-453/1');
   const unpartitioned = modelOf({ ...freshRecord, walk: freshRecord.walk.filter((s) => s.step !== 'partitions') });
-  assert.deepEqual(unpartitioned.stations.filter((s) => s.id.startsWith('partitions:')).map((s) => s.state), Array(5).fill('inferred'));
-  assert.deepEqual(d.layoutStrip(unpartitioned, 958).paths.filter((p) => p.kind === 'edge').map((p) => p.state), ['taken', ...Array(5).fill('inferred'), ...Array(4).fill('taken')]);
+  assert.deepEqual(unpartitioned.stations.filter((s) => s.id.startsWith('partitions:')).map((s) => s.state), Array(4).fill('inferred'));
+  assert.deepEqual(d.layoutStrip(unpartitioned, 958).paths.filter((p) => p.kind === 'edge').map((p) => p.state), ['taken', ...Array(4).fill('inferred'), ...Array(5).fill('taken')]);
 
   const base = await recordOf('req_f8085653-422/1');
   const walk = [step('pin', 'match'), step('eligible', 'match'), step('move:spent', 'fired'), ...RULES.slice(1).map((r) => step(r, 'not_run')), step('cap_filter', 'dropped'), step('renew', 'renewed')];
@@ -518,9 +652,9 @@ test("a station's label is no wider than the way to its nearest neighbor on its 
   }
   // Two partitions of one group stand a unit apart, both reading "fell through" when neither preference keeps a member.
   const freshRecord = await recordOf('req_ef099b34-453/1');
-  const fell = (s) => (s.step === 'partitions' ? { ...s, facts: s.facts.map((f) => (f.key === 'above_ceiling' || f.key === 'winding_down' ? { ...f, value: 'fell_through' } : f)) } : s);
+  const fell = (s) => (s.step === 'partitions' ? { ...s, facts: s.facts.map((f) => (f.key === 'no_fit' || f.key === 'winding_down' ? { ...f, value: 'fell_through' } : f)) } : s);
   const m = modelOf({ ...freshRecord, walk: freshRecord.walk.map(fell) });
-  const pair = ['partitions:above_ceiling', 'partitions:winding_down'];
+  const pair = ['partitions:no_fit', 'partitions:winding_down'];
   assert.deepEqual(pair.map((id) => stationOf(m, id).badge), ['fell through', 'fell through']);
   const fresh = d.layoutStrip(m, 958);
   for (const id of pair) {
@@ -562,6 +696,7 @@ const STORY = [
   'req_e8b7eb13-060/1',
   'req_e8b7eb13-060/2',
   'req_77634945-72b/2',
+  ...['9d4c1a73-e58/1', '9d4c1a73-e58/2', '5b2e8d47-c19/1', '6e1f3b98-a24/1', '2c7d9f15-b63/1', '7a3f0c26-d81/1', '4e8b1d36-f72/1'].map((id) => `req_${id}`),
 ];
 const chipText = (c) => (c.label ? `${c.label} ${c.value}` : c.value);
 const rowsOf = (plan) => (plan.block.kind === 'groups' ? plan.block.groups.flatMap((g) => g.rows) : plan.block.kind === 'table' ? plan.block.table.loose : []);
@@ -592,6 +727,7 @@ const INVENTORY = [
   ['a rule a fired rule cut short', (x) => x.cut === true, 'chips'],
   ['Rest of the walk', (x) => x.station?.step === 'selection', 'sentence'],
   ['a placeholder', (x) => x.station !== undefined && x.step === null, 'sentence'],
+  ['Held for the reset', (x) => x.terminus?.kind === 'held_reset', 'outcome'],
   ['an idle terminus', (x) => x.terminus?.state === 'idle', 'sentence'],
   ['a recorded step that did not run, with no facts', (x) => x.step?.verdict === 'not_run' && x.step.facts.length === 0, 'sentence'],
   ['a taken terminus', (x) => x.terminus?.state === 'taken', 'outcome'],
@@ -599,11 +735,13 @@ const INVENTORY = [
   ['a leaf', (x) => x.leaf !== undefined, 'candidate'],
   ['a partition station', (x) => x.station?.step === 'partitions', 'list'],
   ['Admission, Bound, Exhausted, Probe, Renew', (x) => ['admission', 'bound', 'exhausted', 'probe', 'renew'].includes(x.station?.step), 'list'],
-  ['Cap filter, Cool reading, Eligible', (x) => ['cap_filter', 'cool', 'eligible'].includes(x.station?.step), 'table'],
+  ['Cap filter, Eligible, Fit', (x) => ['cap_filter', 'eligible', 'fit'].includes(x.station?.step), 'table'],
   ['Hold', (x) => x.station?.step === 'hold', 'hold'],
   ['Move', (x) => x.station?.id === 'move', 'list'],
   ['Pick', (x) => x.station?.step === 'pick', 'table'],
   ['Pin', (x) => x.station?.step === 'pin', 'list'],
+  ['Reserve, nothing booked', (x) => x.station?.step === 'reserve' && x.step?.verdict === 'none', 'sentence'],
+  ['Reserve', (x) => x.station?.step === 'reserve', 'list'],
   ['a rung', (x) => x.station?.step.startsWith('rung:') === true, 'rung'],
   ['Shed', (x) => x.station?.step === 'move:shed', 'list'],
   ['the other four rules', (x) => x.station?.step.startsWith('move:') === true, 'list'],
@@ -625,7 +763,9 @@ test("every popover of the story's records takes the inventory's renderer and pl
       seen.add(row[0]);
       assert.equal(plan.renderer, row[2], `${where} is ${row[0]}`);
       assert.equal(plan.head.word, x.word, `${where} heads with its word`);
-      assert.ok(plan.unplaced.every((u) => u.key === 'hash' && plan.renderer === 'rung' && u.reason !== ''), `${where} sets aside only a rung's hash: ${JSON.stringify(plan.unplaced)}`);
+      // A rung draws its hash from the entry, and a Reserve that booked nothing reads its sentence in place of the account.
+      const aside = (u) => (u.key === 'hash' && plan.renderer === 'rung') || (u.key === 'account_id' && plan.renderer === 'sentence' && x.station?.step === 'reserve');
+      assert.ok(plan.unplaced.every((u) => aside(u) && u.reason !== ''), `${where} sets aside only a rung's hash or an unbooked account: ${JSON.stringify(plan.unplaced)}`);
       const set = new Set(plan.unplaced.map((u) => u.key));
       for (const f of x.step?.facts ?? []) {
         if (set.has(f.key)) continue;
@@ -671,9 +811,9 @@ test("the pin's three groups and the shed's three groups hold their keys", async
   assert.deepEqual(groupsOf(stationPlan(renewal, 'pin')), [['Lookup', ['found', 'on', 'epoch']], ['Age', ['idle', 'refresh age']], ['Warmth', ['warmth', 'cause', 'marked']]]);
 
   const SHED = [
-    ['Windows', ['ahead_five_hour', 'elapsed_five_hour', 'deadline_five_hour', 'ahead_seven_day', 'elapsed_seven_day', 'deadline_seven_day', 'cooldown', 'window_share_fast']],
-    ['Round', ['margin', 'threshold', 'round', 'marked', 'marks']],
-    ['Destinations', ['destinations', 'no_destination']],
+    ['Windows', ['projection_five_hour', 'horizon_five_hour', 'projection_seven_day', 'horizon_seven_day', 'projection_seven_day_fable', 'horizon_seven_day_fable', 'ceiling', 'cooldown', 'window_share_fast']],
+    ['Round', ['trigger', 'excess', 'target', 'round', 'marked', 'marks', 'skipped']],
+    ['Destinations', ['destinations', 'no_destination', 'ending']],
   ];
   const expected = (record) => {
     const keys = record.walk.find((s) => s.step === 'move:shed').facts.map((f) => f.key);
@@ -693,6 +833,10 @@ test("the pin's three groups and the shed's three groups hold their keys", async
   assert.equal(marks.chips.length, round.outcome.shedMarks.length);
   // The Sessions page reads no session key, so a mark links the view and its title names the session.
   assert.deepEqual(marks.chips.map((c) => [c.label, c.href, c.title.split('/')[1]]), round.outcome.shedMarks.map((mk) => ['mark', '/sessions', mk.sessionId]));
+  // A pin the round passed over reads one chip, its session and the reason.
+  const skipped = (await recordOf('req_6e1f3b98-a24/1'));
+  const rows = stationPlan(skipped, 'move:shed').block.groups.find((g) => g.label === 'Round').rows.find((r) => r.label === 'skipped');
+  assert.deepEqual(rows.chips.map((c) => [c.value, c.href]), [['bcc805b6: no runway', '/sessions'], ['d7167642: no runway', '/sessions']]);
 });
 
 test("the rung's entry rows read the matched entry and never the deeper refused one", async () => {
@@ -811,10 +955,10 @@ test('the and-N-more leaf is a table of the remaining candidates', async () => {
   const plan = d.anchorPlan({ index: 8, kind: 'leaf' }, m, record, undefined, NOW);
   assert.deepEqual([plan.renderer, plan.head.word, plan.head.badge], ['table', 'and 4 more', null]);
   const { table } = plan.block;
-  assert.deepEqual(table.columns.map((c) => c.label), ['Tier', '5h', '7d', 'Fable', 'In flight', d.paceHeader(record), 'Prefix', 'Verdict']);
+  assert.deepEqual(table.columns.map((c) => c.label), ['Tier', '5h', '7d', 'Fable', 'Projection', 'Runway', 'In flight', d.paceHeader(record), 'Prefix', 'Verdict']);
   assert.deepEqual(table.rows.map((r) => r.account.value), ['member-8', 'member-9', 'member-10', 'member-11']);
   for (const r of table.rows) {
     const cells = d.candidateCells(record.candidates.find((c) => c.accountId === r.account.value), record, NOW);
-    assert.deepEqual([r.cells.tier.text, r.cells.in_flight.text, r.cells.pace.text], [cells.tier, cells.inFlight, cells.pace]);
+    assert.deepEqual([r.cells.tier.text, r.cells.in_flight.text, r.cells.pace.text, r.cells.projection?.text, r.cells.runway?.text], [cells.tier, cells.inFlight, cells.pace, cells.projection[0], cells.runway]);
   }
 });

@@ -102,7 +102,7 @@ function Table({ table }: { table: PlanTable }) {
                 const cell = r.cells[c.key];
                 return (
                   <Cell key={c.key} numeric={c.numeric} title={cell?.title}>
-                    {cell?.text ?? ''}
+                    {cell?.tone === undefined ? (cell?.text ?? '') : <Badge tone={cell.tone}>{cell.text}</Badge>}
                   </Cell>
                 );
               })}

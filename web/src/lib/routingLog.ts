@@ -1,15 +1,15 @@
 import { iso, PIN_RELEASE_REASON_VALUES } from '@/api/decode';
-import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
+import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { ROUTING_LOG_CODEC, type RangeValue } from './address';
 import { moveLabel, own } from './analytics';
 import type { ChipText } from './filterBar';
-import { fmtCompact, fmtInt, fmtPct, fmtTime, fmtUsd, instant, shortModel } from './format';
+import { fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, shortModel } from './format';
 import { planLabel, POLL_OUTCOME_LABEL } from './quota';
 
 // The routing log's words. The routes answer structured values and no English, so a label change touches this module
 // alone and never a route or a fixture.
 
-export type FactLabel = '5h' | '7d' | 'Fable' | 'answer' | 'attempt' | 'capture' | 'cause' | 'client' | 'depth' | 'epoch' | 'field' | 'fields' | 'gap' | 'held' | 'idle' | 'in flight' | 'key' | 'lasted' | 'models' | 'next' | 'over' | 'pick' | 'pins' | 'prefix' | 'rank' | 'resets' | 'retry' | 'spent' | 'state' | 'to' | 'turn' | 'until' | 'was';
+export type FactLabel = '5h' | '7d' | 'Fable' | 'answer' | 'attempt' | 'capture' | 'cause' | 'client' | 'depth' | 'epoch' | 'field' | 'fields' | 'fit' | 'gap' | 'held' | 'idle' | 'in flight' | 'key' | 'lasted' | 'models' | 'next' | 'over' | 'pick' | 'pins' | 'prefix' | 'rank' | 'resets' | 'retry' | 'runway' | 'spent' | 'state' | 'to' | 'turn' | 'until' | 'was';
 
 const LABELS = {
   answer: 'answer',
@@ -21,6 +21,7 @@ const LABELS = {
   epoch: 'epoch',
   field: 'field',
   fields: 'fields',
+  fit: 'fit',
   five_hour: '5h',
   gap: 'gap',
   held: 'held',
@@ -37,6 +38,7 @@ const LABELS = {
   rank: 'rank',
   resets: 'resets',
   retry: 'retry',
+  runway: 'runway',
   seven_day: '7d',
   seven_day_fable: 'Fable',
   spent: 'spent',
@@ -133,6 +135,7 @@ export const EVENT_KIND_LABEL: Record<string, string> = {
   cooldown_set: 'cooldown set',
   fast_credits_changed: 'fast credits changed',
   ledger_gap: 'ledger gap',
+  mark_cleared: 'mark cleared',
   model_permitted: 'model permitted',
   model_rejected: 'model rejected',
   overage_ended: 'overage ended',
@@ -147,6 +150,7 @@ export const EVENT_KIND_LABEL: Record<string, string> = {
   refresh_succeeded: 'refresh succeeded',
   refresh_uncertain: 'refresh uncertain',
   registry_changed: 'registry changed',
+  reservation_expired: 'reservation expired',
   router_started: 'router started',
   shedding_round: 'shedding round',
   warm_prefix_expired: 'warm prefix expired',
@@ -163,8 +167,8 @@ export interface KindPreset {
 
 /** The eight groups of related kinds, in the order a reader follows a request. Every kind belongs to exactly one, and a preset is exactly its members. */
 export const KIND_PRESETS: readonly KindPreset[] = [
-  { label: 'placements and pins', members: ['placed', 'renewed', 'pin_created', 'pin_migrated', 'pin_released', 'pin_expired'] },
-  { label: 'moves and holds', members: ['moved', 'held', 'shedding_round', 'wind_down_started'] },
+  { label: 'placements and pins', members: ['placed', 'renewed', 'pin_created', 'pin_migrated', 'pin_released', 'pin_expired', 'reservation_expired'] },
+  { label: 'moves and holds', members: ['moved', 'held', 'shedding_round', 'mark_cleared', 'wind_down_started'] },
   { label: 'exhaustion and refusals', members: ['exhausted', 'refused', 'window_spent', 'budget_reached'] },
   { label: 'account state and windows', members: ['account_state_changed', 'window_reset', 'overage_started', 'overage_ended', 'budget_period_ended', 'fast_credits_changed', 'refresh_failed', 'refresh_succeeded', 'refresh_uncertain'] },
   { label: 'cooldowns and backoff', members: ['cooldown_set', 'cooldown_cleared', 'poll_backoff_started', 'poll_backoff_ended'] },
@@ -173,7 +177,7 @@ export const KIND_PRESETS: readonly KindPreset[] = [
   { label: 'router life cycle', members: ['router_started', 'ledger_gap'] },
 ];
 
-/** Every kind the Kinds list offers: the six decision kinds, `probe`, and the 28 event kinds. */
+/** Every kind the Kinds list offers: the six decision kinds, `probe`, and the 30 event kinds. */
 export const ALL_KINDS: readonly string[] = [...Object.keys(DECISION_KIND_LABEL), 'probe', ...Object.keys(EVENT_KIND_LABEL)];
 
 /** A kind's word: "probe decisions" for the pseudo-kind, else its label. */
@@ -222,6 +226,7 @@ export const STEP_NAME: Record<string, string> = {
   cool: 'Cool reading',
   eligible: 'Eligible',
   exhausted: 'Exhausted',
+  fit: 'Fit',
   hold: 'Hold',
   'move:drain': 'Drain',
   'move:overage': 'Overage',
@@ -233,16 +238,17 @@ export const STEP_NAME: Record<string, string> = {
   pin: 'Pin',
   probe: 'Probe',
   renew: 'Renew',
+  reserve: 'Reserve',
   'rung:content': 'Rung: content',
   'rung:static': 'Rung: static',
   'rung:with_main': 'Rung: with main',
   selection: 'Rest of the walk',
 };
 
-const GOOD = new Set(['bound', 'chosen', 'match', 'passed', 'placed', 'renewed']);
-const WARNING = new Set(['blocked', 'dropped', 'fell_through', 'fired', 'held', 'moved', 'preferred', 'released']);
+const GOOD = new Set(['booked', 'bound', 'chosen', 'fits', 'match', 'passed', 'placed', 'renewed']);
+const WARNING = new Set(['blocked', 'dropped', 'fell_through', 'fired', 'held', 'least_bad', 'moved', 'preferred', 'released', 'rewrite_only']);
 const CRITICAL = new Set(['answered', 'exhausted', 'refused']);
-const NEUTRAL = new Set(['found', 'no', 'none', 'not_run', 'off']);
+const NEUTRAL = new Set(['found', 'no', 'no_runway', 'none', 'not_run', 'off']);
 
 /**
  * Every word the scheme names a tone for, the neutral ones included, so a fixture test can tell a toned word from an
@@ -329,7 +335,7 @@ const KEY_REFUSAL_WORD: Record<string, string> = {
 };
 
 /** How the strategy ranks, the hover of a Pace chip on a routing log row. */
-export const PACE_HINT = "Pace: the account with the most of its window left per hour until the window resets or the subscription ends wins. A request reads the model's own window when the model has one, else the 7-day window, and a window the account has not read counts as untouched.";
+export const PACE_HINT = "Pace: the account with the most of its window left per hour until the window resets or the subscription ends, less the burn of the sessions already on it, wins. A request reads the model's own window when the model has one, else the 7-day window, and a window the account has not read counts as untouched.";
 
 /** The strategy's word with the tier's priority when the tier is known: `Pace P0`, `round robin`. */
 export function strategyWord(strategy: string, tier: number[] | null): string {
@@ -805,19 +811,40 @@ export const WALK_KEY: Record<string, string> = {
   ahead_five_hour: '5h ahead',
   ahead_seven_day: '7d ahead',
   at_cap: 'at cap',
+  binding: 'binding',
   bound_ms: 'bound',
+  burn_five_hour: 'burn 5h',
+  burn_seven_day: 'burn 7d',
+  burn_seven_day_fable: 'burn Fable',
   deadline_five_hour: "5h to its subscription's end at",
   deadline_seven_day: "7d to its subscription's end at",
   dwell_age_ms: 'dwell age',
   elapsed_five_hour: '5h elapsed',
   elapsed_seven_day: '7d elapsed',
+  excess: 'excess',
+  expires_at: 'expires at',
   grace_ms: 'grace',
+  horizon_five_hour: 'horizon 5h',
+  horizon_seven_day: 'horizon 7d',
+  horizon_seven_day_fable: 'horizon Fable',
   idle_ms: 'idle',
   last_shed_age_ms: 'last round',
   migrate_when_spent: 'move when spent',
   prefix_tokens: 'prefix',
+  projection_five_hour: 'projection 5h',
+  projection_seven_day: 'projection 7d',
+  projection_seven_day_fable: 'projection Fable',
   refresh_age_ms: 'refresh age',
+  reserved_five_hour: 'reserved 5h',
+  reserved_seven_day: 'reserved 7d',
+  reserved_seven_day_fable: 'reserved Fable',
   reset_in_grace: 'reset in',
+  rewrite_five_hour: 'rewrite 5h',
+  rewrite_seven_day: 'rewrite 7d',
+  rewrite_seven_day_fable: 'rewrite Fable',
+  runway_ms: 'runway',
+  trigger: 'trigger',
+  wait_ms: 'wait',
   worst_bucket: 'worst bucket',
 };
 export const keyWord = (key: string) => wordOf(WALK_KEY, key);
@@ -840,6 +867,8 @@ function textWord(key: string, value: string): string {
       return wordOf(STRATEGY_WORD, value);
     case 'warmth':
       return wordOf(WARMTH_WORD, value);
+    case 'binding':
+    case 'trigger':
     case 'window':
       return wordOf(WINDOW_WORD, value);
     default:
@@ -847,9 +876,14 @@ function textWord(key: string, value: string): string {
   }
 }
 
+/** A rewrite or a booking is a small share of its window, so it reads to three figures where a whole percent would read 0%. */
+const SHARE_KEY = /^(reserved|rewrite)_/;
+
 export const valueText = (key: string, value: unknown, unit: string | null, now: number): string => {
   if (value === null || value === undefined) return 'none';
   if (typeof value === 'boolean') return value ? 'yes' : 'no';
+  if (typeof value === 'number' && key === 'runway_ms' && value === 0) return 'none';
+  if (typeof value === 'number' && unit === 'percent' && SHARE_KEY.test(key)) return fmtShare(value);
   if (typeof value === 'number') return formatFact(value, unitOf(unit), now);
   if (typeof value === 'string') return unit === 'time' ? formatFact(value, 'time', now) : textWord(key, value);
   return String(value);
@@ -893,6 +927,14 @@ export function markChip(text: string): Chip {
   return { ...(session ? { href: entityHref('session', session) } : {}), label: 'mark', mono: true, title: text, value: agent ? `${session.slice(0, 8)}/${agent}` : session.slice(0, 8) };
 }
 
+/**
+ * A pin a round passed over: its session and why, `session: reason`. The engine writes it as the pin's key,
+ * `key/session/agent/model`, then the reason.
+ */
+function skipChip(session: string, reason: string, title: string, label?: string): Chip {
+  return { ...(session ? { href: entityHref('session', session) } : {}), ...(label === undefined ? {} : { label }), title, value: `${session.slice(0, 8)}: ${words(reason)}` };
+}
+
 /** A drift refusal's client version: the summary's `client` fact carries it, the record's reason the trigger alone. */
 function clientVersionOf(row: DecisionSummary | undefined): string | null {
   const value = row?.fact.find((f) => f.key === 'client')?.value;
@@ -920,6 +962,16 @@ export function factChips(f: WalkFact, record: DecisionRecord, now: number): Chi
       break;
     case 'marks':
       if (Array.isArray(v)) return v.map((m) => markChip(String(m)));
+      break;
+    case 'skipped':
+      if (Array.isArray(v)) {
+        return v.map((x) => {
+          const text = String(x);
+          const at = text.lastIndexOf(': ');
+          const [, session = ''] = (at < 0 ? text : text.slice(0, at)).split('/');
+          return skipChip(session, at < 0 ? '' : text.slice(at + 2), text, 'skipped');
+        });
+      }
       break;
     case 'obstacles':
       if (Array.isArray(v)) return v.map((o) => obstacleChip(String(o), record));
@@ -1019,6 +1071,18 @@ export function verdictSentence(record: DecisionRecord, row: DecisionSummary): C
 
 const ttlWord = (ttlMs: number) => (ttlMs >= HOUR ? '1h' : '5 min');
 
+/** A share of each plan window in the console's order, `5h 10.4%`, then any other window under its key. */
+function shareChips(shares: Record<string, unknown>): Chip[] {
+  const keys = [...WINDOWS.filter((w) => own(shares, w)), ...Object.keys(shares).filter((w) => !WINDOWS.includes(w))];
+  return keys.flatMap((w) => {
+    const v = num(shares[w]);
+    return v === null ? [] : [plain(fmtShare(v), wordOf(WINDOW_WORD, w))];
+  });
+}
+
+/** `for the reset at 18:20`, or the reset alone where the hold carried no instant. */
+const resetWords = (hold: NonNullable<RecordOutcome['hold']>, now: number) => (hold.until === null ? 'for the reset' : `for the reset at ${formatFact(hold.until, 'time', now)}`);
+
 /** The tier, the rule or the rung, the pin's warmth and the cache verdict once the attempt has usage. */
 export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip[] {
   const o = record.outcome;
@@ -1036,6 +1100,10 @@ export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip
     // A move or a hold's placement can land by a rung too, so its depth is keyed by the rung, never by the rule.
     if (rung !== null) chips.push({ ...(rung.rung === 'with_main' ? plain(RUNG_WORD.with_main) : plain(`depth ${rung.depth}`, RUNG_WORD[rung.rung])), title: placed });
   }
+  if (o.kind === 'held' && o.hold?.reason === 'reset') chips.push(plain(`held ${resetWords(o.hold, Date.parse(record.request.at))}`));
+  // The chip names the first plan window the booking holds a share of, the 5-hour one wherever it does.
+  const booked = o.reservation === null ? undefined : WINDOWS.find((w) => num(o.reservation?.rewrite[w]) !== null);
+  if ((o.kind === 'moved' || o.kind === 'placed') && o.reservation !== null && booked !== undefined) chips.push(plain(`reserved ${fmtShare(o.reservation.rewrite[booked])} of ${WINDOW_WORD[booked]}`));
   if (record.pin?.found === 'live' && record.pin.warmth) chips.push(plain(wordOf(WARMTH_WORD, record.pin.warmth), 'pin'));
   const c = o.completion;
   const promise = rung !== null && c !== null && c.promisedTokens !== null ? PROMISE_HINT[rung.rung] : undefined;
@@ -1114,11 +1182,22 @@ function obstacleWords(c: RecordCandidate, now: number): string {
   }
 }
 
-function verdictChipOf(c: RecordCandidate, now: number): Chip | null {
-  if (c.obstacle !== null) return c.obstacle.name === 'operator' ? operatorWords(c) : { title: hintOf(c.obstacle.name), value: obstacleWords(c, now) };
-  if (c.partition !== null) return { title: hintOf(c.partition), value: wordOf(PARTITION_WORD, c.partition) };
+/** The chip of a destination the gate read and found short: rewrite only and least bad warn, an ending account is neutral. */
+const FIT_CHIP: Record<string, { tone: VerdictTone; word: string }> = { ending: { tone: 'neutral', word: 'ending' }, least_bad: { tone: 'warning', word: 'least bad' }, rewrite_only: { tone: 'warning', word: 'rewrite only' } };
+
+/** The verdict cell's one chip, and the tone it carries where it names the destination's fit. */
+function verdictChipOf(c: RecordCandidate, now: number): { chip: Chip | null; tone: VerdictTone | null } {
+  const untoned = (chip: Chip | null) => ({ chip, tone: null });
+  if (c.obstacle !== null) return untoned(c.obstacle.name === 'operator' ? operatorWords(c) : { title: hintOf(c.obstacle.name), value: obstacleWords(c, now) });
+  if (c.partition !== null) return untoned({ title: hintOf(c.partition), value: wordOf(PARTITION_WORD, c.partition) });
+  // The cap held the request on its member whatever that member's fit, so the cap explains the hold.
+  if (c.verdict === 'held_on' && c.inFlight >= c.inFlightCap) return untoned(plain('at its cap'));
+  if (c.fit !== null && own(FIT_CHIP, c.fit)) return { chip: plain(FIT_CHIP[c.fit].word), tone: FIT_CHIP[c.fit].tone };
+  return untoned(placementChipOf(c));
+}
+
+function placementChipOf(c: RecordCandidate): Chip | null {
   if (c.verdict === 'destination') return plain('not placed');
-  if (c.verdict === 'held_on' && c.inFlight >= c.inFlightCap) return plain('at its cap');
   if (c.verdict === 'source') {
     const spent = WINDOWS.find((w) => own(c.windows, w) && c.windows[w].utilization >= 1);
     return spent === undefined ? null : plain(`${WINDOW_WORD[spent]} spent`);
@@ -1132,11 +1211,14 @@ const PACE_WINDOW_PHRASE: Record<string, string> = { seven_day: 'the 7-day windo
 
 /**
  * The Pace column's header: the window the first subscription candidate's score read. It reads "Pace" when that
- * candidate names no window or the record holds no subscription candidate.
+ * candidate names no window or the record holds no subscription candidate. A version 1 record read no burn, so its
+ * score was the share left per hour.
  */
 export function paceHeader(record: DecisionRecord): string {
-  const id = record.candidates.find((c) => c.kind === 'oauth')?.pace?.window ?? null;
-  return id === null ? 'Pace' : `Pace, ${wordOf(PACE_WINDOW_WORD, id)} left per hour`;
+  const pace = record.candidates.find((c) => c.kind === 'oauth')?.pace;
+  const id = pace?.window ?? null;
+  if (id === null) return 'Pace';
+  return (pace?.burn ?? null) === null ? `Pace, ${wordOf(PACE_WINDOW_WORD, id)} left per hour` : `Spare rate, ${wordOf(PACE_WINDOW_WORD, id)} per hour`;
 }
 
 /** A Pace cell's hover: the share left, the hours it is spread over and the rate, or an API key's share alone. */
@@ -1151,15 +1233,40 @@ function paceTitle(c: RecordCandidate, now: number): string | null {
   const over = p.hours === null ? '' : ` over ${p.hours < 1 ? `${Math.round(p.hours * 60)} min` : `${Math.round(p.hours)} h`}`;
   // The deadline is the earlier of the two, so one equal to the reset is the reset whatever the end reads.
   const deadline = p.deadline === null ? ' with no reset read' : ` to ${p.reset !== null && msOf(p.reset) === msOf(p.deadline) ? 'its reset' : "its subscription's end"} at ${formatFact(p.deadline, 'time', now)}`;
-  return `${fmtPct(p.remaining)} of ${share} left${over}${deadline}: ${formatFact(p.score, 'percent_per_hour', now)}. Inside its tier, the highest above the pace floor wins.`;
+  const score = formatFact(p.score, 'percent_per_hour', now);
+  // A version 1 record read no burn, and its score was the share left an hour above the pace floor.
+  const burn = p.burn ?? null;
+  if (burn === null) return `${fmtPct(p.remaining)} of ${share} left${over}${deadline}: ${score}. Inside its tier, the highest above the pace floor wins.`;
+  return `${fmtPct(p.remaining)} of ${share} left${over}${deadline}, less ${formatFact(burn, 'percent_per_hour', now)} of burn: ${score}. Inside its tier, the highest spare rate wins.`;
 }
 
 /**
- * One member's row of the candidate table: the account and its plan, the tier, the three windows (or a key's one
- * merged reading), the slots, the Pace score with its hover, the prefix entry and the verdict with the one chip that
- * decided it.
+ * The projection at each window's horizon the candidate reports, one line a window: the horizon as a time when it is
+ * the reset, else as the span to it from the request (one 5-hour length, or the account's end). A candidate the gate
+ * did not read reads a dash.
  */
-export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: number): { account: Chip; inFlight: string; pace: string; paceTitle: string | null; plan: string; prefix: { hash: PrefixEntry | null; until: string | null }; tier: string; verdict: { badge: string; chip: Chip | null }; windows: string[][] } {
+function projectionLines(c: RecordCandidate, record: DecisionRecord, now: number): string[] {
+  if (c.fit === null) return ['-'];
+  const at = Date.parse(record.request.at);
+  const lines = WINDOWS.flatMap((name) => {
+    const w = own(c.windows, name) ? c.windows[name] : undefined;
+    if (w === undefined || w.projection === null) return [];
+    const horizon = w.horizon === null ? null : Date.parse(w.horizon);
+    const when = horizon === null ? '' : w.reset !== null && Date.parse(w.reset) === horizon ? ` at ${formatFact(horizon, 'time', now)}` : ` in ${span(horizon - at)}`;
+    return [`${WINDOW_WORD[name]} ${fmtPct(w.projection)}${when}`];
+  });
+  return lines.length > 0 ? lines : ['-'];
+}
+
+/** The time a pin could stay before its window that binds reaches the ceiling, unbounded where nothing binds. */
+const runwayWord = (c: RecordCandidate) => (c.fit === null ? '-' : c.runwayMs === null ? 'unbounded' : c.runwayMs === 0 ? 'none' : span(c.runwayMs));
+
+/**
+ * One member's row of the candidate table: the account and its plan, the tier, the three windows (or a key's one
+ * merged reading), the projection and the runway the gate read, the slots, the Pace score with its hover, the prefix
+ * entry and the verdict with the one chip that decided it. A chip that names the destination's fit carries its tone.
+ */
+export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: number): { account: Chip; inFlight: string; pace: string; paceTitle: string | null; plan: string; prefix: { hash: PrefixEntry | null; until: string | null }; projection: string[]; runway: string; tier: string; verdict: { badge: string; chip: Chip | null; tone: VerdictTone | null }; windows: string[][] } {
   const atCap = c.verdict === 'out' && (c.partition === 'at_cap' || c.obstacle?.name === 'at_cap');
   const badge = c.verdict === 'ranked' && c.rank !== null ? `ranked ${ordinal(c.rank)}` : atCap ? 'at cap' : wordOf(VERDICT_BADGE, c.verdict);
   const windows =
@@ -1178,13 +1285,18 @@ export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: 
     paceTitle: paceTitle(c, now),
     plan: planWord(c),
     prefix: { hash: entry, until: entry === null ? null : warmUntil(entry, now) },
+    projection: projectionLines(c, record, now),
+    runway: runwayWord(c),
     tier: `${tierWord(c.tier, c.kind, 'plan')} P${c.tier[1]}`,
-    verdict: { badge, chip: verdictChipOf(c, now) },
+    verdict: { badge, ...verdictChipOf(c, now) },
     windows,
   };
 }
 
-/** A setting the card draws a row of: every member of the record's settings but a version 1 record's `legacy`. */
+/**
+ * A setting the card can draw a row of: every member of the record's settings but a version 1 record's `legacy`. The
+ * rows leave out the pool's edit instant, which the fold's head reads.
+ */
 type SettingKey = Exclude<keyof RecordSettings, 'legacy'>;
 
 /** The settings of the card in its order, Strategy to Retry in place. */
@@ -1197,11 +1309,13 @@ export const SETTINGS_ROWS: { key: SettingKey; label: string }[] = [
   { key: 'sessionPlacement', label: 'Sessions placed by' },
   { key: 'minSharedPrefixTokens', label: 'Minimum shared prefix' },
   { key: 'subagentPlacement', label: 'Subagents placed by' },
+  { key: 'windowCeiling', label: 'Window ceiling' },
+  { key: 'loadShedding', label: 'Load shedding' },
   { key: 'migrateWhenSpent', label: 'Move when spent' },
   { key: 'overageMoveGraceMinutes', label: 'Overage grace' },
   { key: 'windDownMinutes', label: 'Wind-down' },
-  { key: 'shedCap', label: 'Shed share' },
-  { key: 'burnAverageSeconds', label: 'Burn window' },
+  { key: 'shedCap', label: 'Shed cap' },
+  { key: 'burnAverageSeconds', label: 'Burn average' },
   { key: 'shedDwellSeconds', label: 'Shed dwell' },
   { key: 'warmSessions', label: 'Warm sessions' },
   { key: 'inFlightCap', label: 'In-flight cap' },
@@ -1210,7 +1324,9 @@ export const SETTINGS_ROWS: { key: SettingKey; label: string }[] = [
 
 const SECONDS: readonly SettingKey[] = ['affinityTtlSeconds', 'burnAverageSeconds', 'retryInPlaceSeconds', 'shedDwellSeconds'];
 const MINUTES: readonly SettingKey[] = ['overageMoveGraceMinutes', 'windDownMinutes'];
-const SHARES: readonly SettingKey[] = ['shedCap'];
+const SHARES: readonly SettingKey[] = ['shedCap', 'windowCeiling'];
+/** The two settings a version 1 record carried no value for, since the pool had neither when it was written. */
+const UNRECORDED: readonly SettingKey[] = ['loadShedding', 'windowCeiling'];
 
 /** One setting's value as the grid draws it: a span, a share, `on` or `off`, or the setting's word. */
 export function settingValue(key: SettingKey, settings: RecordSettings): string {
@@ -1242,6 +1358,10 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
   if (o.pinWritten !== null && o.accountId !== null) {
     rows.push({ chips: [accountChip(o.accountId, `${o.pinWritten.action} on`), plain(fmtInt(o.pinWritten.epoch), 'epoch'), ...(o.pinWritten.refreshStamped ? [plain(fmtTime(record.request.at), 'refresh')] : [])], label: 'Pin written' });
   }
+  if (o.reservation !== null) {
+    const r = o.reservation;
+    rows.push({ chips: [accountChip(r.accountId, 'on'), ...shareChips(r.rewrite), plain(formatFact(r.expiresAt, 'time', now), 'expires')], label: 'Reservation' });
+  }
   if (c !== null) {
     const entries = c.cacheMapWritten ?? [];
     if (entries.length === 0) rows.push({ chips: [plain(c.completedAt === null ? 'pending' : 'none')], label: 'Cache-map entries' });
@@ -1266,7 +1386,10 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
   const last = record.request.holds[record.request.holds.length - 1];
   const ranOut = last?.ranOut === true;
   const ranOutChip = ranOut ? [plain('ran out')] : [];
-  if (o.hold !== null) {
+  if (o.hold !== null && o.hold.reason === 'reset') {
+    // The pin waits on its own account for the window to reset rather than for a slot.
+    rows.push({ chips: [accountChip(o.hold.accountId, 'on'), plain(resetWords(o.hold, now)), plain(span(o.hold.boundMs), 'bound'), ...ranOutChip], label: 'Hold' });
+  } else if (o.hold !== null) {
     const place = str(record.walk.find((s) => s.step === 'hold')?.facts.find((f) => f.key === 'place')?.value) ?? (o.hold.cohort !== null ? 'cohort' : 'strategy_pick');
     rows.push({ chips: [accountChip(o.hold.accountId, 'on'), plain(wordOf(PLACE_WORD, place)), plain(span(o.hold.boundMs), 'bound'), ...ranOutChip], label: 'Hold', title: HOLD_HINT });
   } else if (o.cohortHold !== null) {
@@ -1339,12 +1462,14 @@ const GAP_MEANING: Record<string, string> = {
   in_flight_cap: 'the requests in flight reached their cap and the oldest entry was evicted',
   poison: "a record failed alone after its batch's retries",
 };
-const SOURCE_WORD: Record<string, string> = { head: 'the response head', poll: 'the poll' };
+const SOURCE_WORD: Record<string, string> = { head: 'the response head', poll: 'the poll', predicted: 'the prediction' };
 /**
- * A shedding round's rate drawn per hour: the engine reads a pin's burn per second, as a share of the 5-hour window or,
- * for a round funded in dollars, as dollars.
+ * A shedding round's rate: a share of the window that fired per hour, on every account, whichever table the round's
+ * order read.
  */
-const hourlyRate = (perSecond: number, unit: string | null) => (unit === 'usd' ? `${fmtUsd(perSecond * 3_600)}/h` : `${(perSecond * 3_600 * 100).toFixed(1)} %/h`);
+const hourlyShare = (perHour: number) => `${(perHour * 100).toFixed(1)} %/h`;
+/** A move's destination fit as the gate worded it. */
+const FIT_WORD: Record<string, string> = { fits: 'fits', least_bad: 'least bad', rewrite_only: 'rewrite only' };
 
 /** An event's detail as pairs: When, Account and Pool first, then the kind's own. `rows` are the rows the page holds,
  *  which a model rejection reads its cooldown's until off. */
@@ -1491,6 +1616,13 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('To', row.accountId === null ? null : accountChip(row.accountId), epoch === null ? null : plain(fmtInt(epoch), 'epoch'));
       add('Reason', plain(moveLabel(reason)));
       add('Moved by', plain(RULE_MOVES.has(reason) ? `${words(reason)} rule` : FAILOVER_MOVES.has(reason) ? 'failover' : words(reason || 'move')));
+      // A move the gate read carries its verdict, and a runway no window bounds is written as none at all.
+      const fit = str(d.fit);
+      if (fit !== null) {
+        const runway = num(d.runway_ms);
+        add('Destination fit', plain(wordOf(FIT_WORD, fit)));
+        add('Runway', plain(runway === null ? 'unbounded' : runway === 0 ? 'none' : span(runway)));
+      }
       pin();
       break;
     }
@@ -1551,16 +1683,24 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       break;
     case 'shedding_round': {
       const w = window === null ? 'window' : wordOf(WINDOW_WORD, window);
-      const burn = num(d.burn_sum);
-      const target = num(d.target);
-      const share = num(d.shed_share);
+      const at = atOf(row);
+      const projection = num(d.projection);
+      const horizon = num(d.horizon);
+      const ceiling = num(d.ceiling);
+      const rate = (v: unknown, label?: string) => {
+        const n = num(v);
+        return n === null ? null : plain(hourlyShare(n), label);
+      };
       const dwell = num(d.dwell_seconds);
-      const unit = str(d.unit);
+      const average = num(d.burn_average_seconds);
       add('Started by', request, session, agent === null ? null : plain(agent, 'agent'));
-      add('Reading', pct(d.utilization, w), pct(d.threshold, 'threshold'));
+      // A weekly window's horizon is one 5-hour length ahead, which reads as the span, and the reset reads as its time.
+      const when = horizon === null ? '' : horizon - at === 5 * HOUR ? ` in ${span(horizon - at)}` : ` at ${formatFact(horizon, 'time', now)}`;
+      add('Trigger', projection === null || ceiling === null ? null : plain(`${w} projection ${fmtPct(projection)}${when} over the ceiling ${fmtPct(ceiling)}`));
+      add('Excess', rate(d.excess));
+      add('Cap', pct(d.shed_cap), rate(d.target, 'target'), rate(d.removed, 'removed'));
       add('Unit', text(d.unit));
-      add('Burn window', num(d.burn_window_seconds) === null ? null : plain(span((num(d.burn_window_seconds) ?? 0) * 1_000)));
-      add('Share', share === null ? null : plain(fmtPct(share), 'share'), burn === null ? null : plain(hourlyRate(burn, unit), 'burn'), target === null ? null : plain(hourlyRate(target, unit), 'to shed'));
+      add('Burn average', average === null ? null : plain(span(average * 1_000)));
       add('Warm sessions', text(d.warm_sessions));
       const pins = list(d.pins).map(rec);
       if (pins.length > 0) {
@@ -1568,19 +1708,58 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
           chips: [],
           label: 'Pins',
           table: {
-            head: ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', 'Mark'],
+            head: ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', 'Rewrite', 'Destination', 'Mark'],
             rows: pins.map((p) => {
               const id = str(p.session_id) ?? '';
               const b = num(p.burn);
               const last = num(p.last_input_tokens);
-              return [sessionChip(id), plain(str(p.agent_id) ?? '-'), plain(p.cold === true ? 'cold' : 'warm'), plain(b === null ? '-' : hourlyRate(b, unit)), plain(last === null ? '-' : fmtCompact(last)), plain(p.marked === true ? 'marked' : (str(p.note) ?? '-'))];
+              const rewrite = num(p.rewrite);
+              const planned = str(p.planned);
+              const skip = str(p.skip);
+              return [
+                sessionChip(id),
+                plain(str(p.agent_id) ?? '-'),
+                plain(p.cold === true ? 'cold' : 'warm'),
+                plain(b === null ? '-' : hourlyShare(b)),
+                plain(last === null ? '-' : fmtCompact(last)),
+                plain(rewrite === null ? '-' : fmtShare(rewrite)),
+                planned === null ? plain('-') : accountChip(planned),
+                plain(p.marked === true ? 'marked' : skip !== null ? words(skip) : (str(p.note) ?? '-')),
+              ];
             }),
           },
         });
       }
-      add('Marks kept until', time(d.dwell_until));
+      add('Skipped', ...pins.flatMap((p) => (str(p.skip) === null ? [] : [skipChip(str(p.session_id) ?? '', str(p.skip) ?? '', str(p.session_id) ?? '')])));
+      add('Planned destinations', ...[...new Set(pins.flatMap((p) => (str(p.planned) === null ? [] : [str(p.planned) ?? ''])))].map((id) => accountChip(id)));
+      const outcome = str(d.outcome);
+      const reason = str(d.reason);
+      add('Outcome', outcome === null ? null : plain(outcome === 'nothing_to_mark' ? `nothing to mark${reason === null ? '' : `: ${words(reason)}`}` : words(outcome)));
+      add('Next round after', time(d.dwell_until));
       add('Dwell', dwell === null ? null : plain(span(dwell * 1_000)));
       if (typeof d.persisted === 'boolean') add('Survive a restart', plain(d.persisted ? 'persisted' : 'not persisted'));
+      break;
+    }
+    case 'mark_cleared': {
+      const reason = str(d.reason) ?? '';
+      const marked = num(d.marked_at);
+      const projection = num(d.projection);
+      const markedWindow = str(d.marked_window);
+      pin();
+      // A mark heals when the account's projection reads under the ceiling again on the window that fired.
+      add('Reason', plain(reason === 'healed' && projection !== null ? `healed: the ${markedWindow === null ? 'window' : wordOf(WINDOW_WORD, markedWindow)} projection read ${fmtPct(projection)} under the ceiling` : words(reason)));
+      add('Marked', time(marked), str(d.marked_on) === null ? null : accountChip(str(d.marked_on) ?? '', 'on'));
+      add('Standing for', marked === null ? null : plain(span(atOf(row) - marked)));
+      break;
+    }
+    case 'reservation_expired': {
+      const age = num(d.age_ms);
+      add('Request', request);
+      add('Attempt', count(d.attempt));
+      add('Cause', text(d.cause));
+      add('Reserved', ...shareChips(rec(d.shares)));
+      add('Held for', age === null ? null : plain(span(age)));
+      add('Effect', plain("the booked share left the account's prediction"));
       break;
     }
     case 'warm_prefix_expired': {
@@ -1616,7 +1795,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Reading', pct(d.utilization));
       add('Read from', text(d.source, SOURCE_WORD));
       add('Resets', time(d.reset));
-      add('Effect', plain('a pinned session moves by the spent rule at its next request'));
+      add('Effect', plain('a pinned session moves by the spent rule at its next request or waits in place for a reset within the retry bound'));
       add('Request', request);
       break;
   }
@@ -1670,14 +1849,27 @@ export function pinRows(record: DecisionRecord, now: number): CardRow[] {
   if (p.warmth !== null) rows.push({ chips: [plain(wordOf(WARMTH_WORD, p.warmth))], label: 'Warmth' });
   if (p.warmthCause !== null) rows.push({ chips: [plain(wordOf(WARMTH_CAUSE_WORD, p.warmthCause))], label: 'Cause' });
   if (p.marked || p.shed !== null) {
-    rows.push({ chips: [...(p.marked ? [plain('marked by a round')] : []), ...(p.shed !== null ? [accountChip(p.shed.from, 'shed from'), plain(formatFact(p.shed.at, 'time', now), 'at')] : [])], label: 'Shed mark' });
+    // A version 1 record carried the mark alone, with no account, instant or window.
+    const trigger = p.markedWindow === null ? [] : [plain(`by the ${wordOf(WINDOW_WORD, p.markedWindow)} trigger`)];
+    const marked = p.markedOn !== null && p.markedAt !== null ? [accountChip(p.markedOn, 'marked on'), plain(formatFact(p.markedAt, 'time', now), 'at'), ...trigger] : [plain('marked by a round')];
+    rows.push({ chips: [...(p.marked ? marked : []), ...(p.shed !== null ? [accountChip(p.shed.from, 'shed from'), plain(formatFact(p.shed.at, 'time', now), 'at')] : [])], label: 'Shed mark' });
   }
   return [...rows, ...released];
 }
 
-/** The Settings in force grid. */
+/**
+ * The Settings in force grid. A
+ * version 1 record reads the switch and the ceiling as not recorded and its three removed settings after the list.
+ */
 export function settingsRows(record: DecisionRecord): CardRow[] | null {
   const s = record.settings;
   if (s === null) return null;
-  return SETTINGS_ROWS.map((r) => ({ chips: [plain(settingValue(r.key, s))], label: r.label }));
+  const rows = SETTINGS_ROWS.map((r) => ({ chips: [plain(UNRECORDED.includes(r.key) && s[r.key] === null ? 'not recorded' : settingValue(r.key, s))], label: r.label }));
+  const share = (v: number | null) => (v === null ? 'off' : fmtPct(v));
+  const legacy = s.legacy === null ? [] : [
+    { chips: [plain(share(s.legacy.shedAheadOfPace))], label: 'Shed above (then)' },
+    { chips: [plain(share(s.legacy.selectBelowUtilization))], label: 'Select below (then)' },
+    { chips: [plain(fmtPct(s.legacy.paceFloor))], label: 'Pace floor (then)' },
+  ];
+  return [...rows, ...legacy];
 }

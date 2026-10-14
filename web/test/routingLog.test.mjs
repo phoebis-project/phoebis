@@ -79,6 +79,8 @@ const DECISIONS = [
   ['moved, none cool', decision({ by: by('rule', 'overage'), fact: [fact('pick', 'none cool', 'text')], kind: 'moved' }), 'overage rule', ['pick none cool']],
   ['moved back to plan quota', decision({ by: by('rule', 'return_to_plan'), fact: [fact('pick', 'only candidate', 'text')], kind: 'moved' }), 'return to plan rule', ['pick only candidate']],
   ['moved off a winding-down account', decision({ by: by('rule', 'drain'), fact: [fact('prefix', 18_400, 'tokens'), fact('depth', 1, 'count')], kind: 'moved' }), 'drain rule', ['prefix 18.4K', 'depth 1']],
+  ['moved, the runway the gate read on the destination', decision({ by: by('rule', 'spent'), fact: [fact('runway', 7_800_000, 'ms'), fact('prefix', 31_200, 'tokens')], fromAccountId: 'secondary', kind: 'moved', rule: 'spent' }), 'spent rule', ['runway 2 h 10 min', 'prefix 31.2K']],
+  ['moved, no destination fit', decision({ by: by('rule', 'shed'), fact: [fact('runway', 'none', 'text'), fact('fit', 'least bad', 'text')], fromAccountId: 'secondary', kind: 'moved', rule: 'shed' }), 'shed rule', ['runway none', 'fit least bad']],
   ["held at its cohort's account", decision({ by: by('hold', 'cohort'), fact: [fact('in_flight', '16/16', 'text')], kind: 'held' }), 'cohort', ['in flight 16/16']],
   ["held on the session's pin", decision({ by: by('hold', 'session_pin'), fact: [fact('in_flight', '1/1', 'text')], kind: 'held' }), 'session pin', ['in flight 1/1']],
   ["held on the strategy's pick", decision({ by: by('hold', 'strategy_pick'), fact: [fact('in_flight', '16/16', 'text')], kind: 'held', tier: [0, 0, 0] }), 'Pace P0', ['in flight 16/16']],
@@ -238,12 +240,12 @@ test('a fact key the console has no label for is dropped rather than drawn under
   assert.deepEqual(read(decision({ fact: [fact('mystery', 1, 'count'), fact('depth', 2, 'count')] })).facts, ['depth 2']);
 });
 
-const TABLE_LABELS = ['5h', '7d', 'Fable', 'answer', 'attempt', 'capture', 'cause', 'client', 'depth', 'epoch', 'field', 'fields', 'gap', 'held', 'idle', 'in flight', 'key', 'lasted', 'models', 'next', 'over', 'pick', 'pins', 'prefix', 'rank', 'resets', 'retry', 'spent', 'state', 'to', 'turn', 'until', 'was'];
+const TABLE_LABELS = ['5h', '7d', 'Fable', 'answer', 'attempt', 'capture', 'cause', 'client', 'depth', 'epoch', 'field', 'fields', 'fit', 'gap', 'held', 'idle', 'in flight', 'key', 'lasted', 'models', 'next', 'over', 'pick', 'pins', 'prefix', 'rank', 'resets', 'retry', 'runway', 'spent', 'state', 'to', 'turn', 'until', 'was'];
 
 test('every label of the table is used at least once and no fact key lacks a label', () => {
-  assert.equal(TABLE_LABELS.length, 33);
+  assert.equal(TABLE_LABELS.length, 35);
   assert.deepEqual([...new Set(Object.values(d.FACT_LABEL))].sort(), [...TABLE_LABELS].sort());
-  assert.equal(Object.keys(d.FACT_LABEL).length, 33);
+  assert.equal(Object.keys(d.FACT_LABEL).length, 35);
   const emitted = [...DECISIONS, ...EVENTS].flatMap(([, row, , , page]) => d.factsOf(row, NOW, page).map((p) => p.label));
   assert.deepEqual([...new Set(emitted)].sort(), [...TABLE_LABELS].sort());
   for (const label of emitted) assert.ok(Object.values(d.FACT_LABEL).includes(label), label);
@@ -251,13 +253,15 @@ test('every label of the table is used at least once and no fact key lacks a lab
 
 test('every event kind has its words and its tone', () => {
   const kinds = [
-    'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'model_permitted', 'model_rejected',
+    'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
     'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
-    'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset', 'window_spent',
+    'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset', 'window_spent',
   ];
   assert.deepEqual(Object.keys(d.EVENT_KIND_LABEL).sort(), kinds);
   assert.equal(d.EVENT_KIND_LABEL.pin_migrated, 'pin moved');
   assert.equal(d.EVENT_KIND_LABEL.shedding_round, 'shedding round');
+  // A cleared mark and a booking the request's end let go report no trouble, so both read neutral.
+  assert.deepEqual([d.EVENT_KIND_LABEL.mark_cleared, d.EVENT_KIND_LABEL.reservation_expired], ['mark cleared', 'reservation expired']);
   const tones = Object.fromEntries(kinds.map((k) => [k, d.eventTone(k)]).filter(([, t]) => t !== 'neutral'));
   assert.deepEqual(tones, { account_state_changed: 'serious', budget_reached: 'serious', cooldown_set: 'warning', ledger_gap: 'serious', model_rejected: 'warning', window_spent: 'warning' });
   assert.equal(d.eventTone('a_kind_added_later'), 'neutral');
@@ -271,15 +275,16 @@ test('every decision kind has its words and its tone', () => {
 
 test('the step and verdict words', () => {
   const steps = {
-    pin: 'Pin', probe: 'Probe', eligible: 'Eligible', bound: 'Bound', 'move:spent': 'Spent', 'move:overage': 'Overage', 'move:return_to_plan': 'Return to plan', 'move:drain': 'Drain', 'move:shed': 'Shed', cool: 'Cool reading',
-    cap_filter: 'Cap filter', renew: 'Renew', 'rung:content': 'Rung: content', 'rung:with_main': 'Rung: with main', 'rung:static': 'Rung: static', partitions: 'Partitions', pick: 'Pick', hold: 'Hold', exhausted: 'Exhausted', admission: 'Admission',
+    pin: 'Pin', probe: 'Probe', eligible: 'Eligible', bound: 'Bound', 'move:spent': 'Spent', 'move:overage': 'Overage', 'move:return_to_plan': 'Return to plan', 'move:drain': 'Drain', 'move:shed': 'Shed', fit: 'Fit', cool: 'Cool reading',
+    cap_filter: 'Cap filter', renew: 'Renew', 'rung:content': 'Rung: content', 'rung:with_main': 'Rung: with main', 'rung:static': 'Rung: static', partitions: 'Partitions', pick: 'Pick', reserve: 'Reserve', hold: 'Hold', exhausted: 'Exhausted', admission: 'Admission',
   };
-  assert.equal(Object.keys(steps).length, 20);
+  assert.equal(Object.keys(steps).length, 22);
   for (const [step, name] of Object.entries(steps)) assert.equal(d.STEP_NAME[step], name, step);
   assert.equal(d.STEP_NAME.selection, 'Rest of the walk');
   const tones = {
-    answered: 'critical', blocked: 'warning', bound: 'good', chosen: 'good', dropped: 'warning', exhausted: 'critical', fell_through: 'warning', fired: 'warning', found: 'neutral', held: 'warning', match: 'good',
-    moved: 'warning', no: 'neutral', none: 'neutral', not_run: 'neutral', off: 'neutral', passed: 'good', placed: 'good', preferred: 'warning', refused: 'critical', released: 'warning', renewed: 'good',
+    answered: 'critical', blocked: 'warning', booked: 'good', bound: 'good', chosen: 'good', dropped: 'warning', exhausted: 'critical', fell_through: 'warning', fired: 'warning', fits: 'good', found: 'neutral', held: 'warning',
+    least_bad: 'warning', match: 'good', moved: 'warning', no: 'neutral', no_runway: 'neutral', none: 'neutral', not_run: 'neutral', off: 'neutral', passed: 'good', placed: 'good', preferred: 'warning', refused: 'critical',
+    released: 'warning', renewed: 'good', rewrite_only: 'warning',
   };
   for (const [verdict, tone] of Object.entries(tones)) assert.equal(d.verdictTone(verdict), tone, verdict);
   assert.deepEqual([...d.TONED_VERDICTS].sort(), Object.keys(tones).sort());
@@ -453,15 +458,17 @@ const candidate = (o) => ({
 });
 const completion = (o) => ({ cacheMapWritten: null, cacheReadTokens: null, completedAt: null, freed: false, heldMs: null, hit: null, inputTokens: null, promisedTokens: null, status: null, ...o });
 const SETTINGS = {
-  affinityMode: 'when_cached', affinityTtlSeconds: 600, burnWindowSeconds: 600, inFlightCap: 16, migrateBand: 0.05, migrateWhenSpent: true, minSharedPrefixTokens: 20_000,
-  overageMoveGraceMinutes: 30, overagePolicy: 'prefer_plan', paceFloor: 0.05, poolUpdatedAt: iso(ms(9, 5, 12)), preferSubscription: true, retryInPlaceSeconds: 60, selectBelowUtilization: null,
-  sessionPlacement: 'by_warm_prefix', shedAheadOfPace: 0.9, shedShare: 0.5, sourceDwellSeconds: 900, strategy: 'pace', subagentPlacement: 'by_cohort', warmSessions: 'when_needed', windDownMinutes: 30,
+  affinityMode: 'when_cached', affinityTtlSeconds: 600, burnAverageSeconds: 1_800, inFlightCap: 16, legacy: null, loadShedding: true, migrateWhenSpent: true, minSharedPrefixTokens: 20_000,
+  overageMoveGraceMinutes: 30, overagePolicy: 'prefer_plan', poolUpdatedAt: iso(ms(9, 5, 12)), preferSubscription: true, retryInPlaceSeconds: 60, sessionPlacement: 'by_warm_prefix', shedCap: 0.5,
+  shedDwellSeconds: 900, strategy: 'pace', subagentPlacement: 'by_cohort', warmSessions: 'when_needed', windDownMinutes: 30, windowCeiling: 0.95,
 };
+/** The settings a version 1 record read: the three renamed under their new members, no switch, no ceiling, and the three removed. */
+const LEGACY_SETTINGS = { ...SETTINGS, legacy: { paceFloor: 0.05, selectBelowUtilization: null, shedAheadOfPace: 0.9 }, loadShedding: null, windowCeiling: null };
 const record = (o = {}) => ({
   candidates: [],
   outcome: {
-    accountId: 'primary', cohortHold: null, completion: null, exhaustion: null, fromAccountId: null, hold: null, inOverage: false, kind: 'placed', pinEvents: [], pinWritten: null, refusal: null, rule: null,
-    rung: null, shedMarks: null, strategy: 'pace', tier: null, upstreamModel: 'claude-sonnet-5-5', ...o.outcome,
+    accountId: 'primary', cohortHold: null, completion: null, exhaustion: null, fromAccountId: null, hold: null, inOverage: false, kind: 'placed', markCleared: null, pinEvents: [], pinWritten: null, refusal: null,
+    reservation: null, rule: null, rung: null, shedMarks: null, strategy: 'pace', tier: null, upstreamModel: 'claude-sonnet-5-5', ...o.outcome,
   },
   pin: null,
   pinReason: 'pinning_off',
@@ -475,7 +482,7 @@ const record = (o = {}) => ({
   requestId: 'req_f8085653-422',
   seq: 1,
   settings: SETTINGS,
-  version: 1,
+  version: 2,
   walk: [],
   ...o,
   ...(o.outcome ? { outcome: { ...record().outcome, ...o.outcome } } : {}),
@@ -567,7 +574,7 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.deepEqual(chosen.windows, [['62%', '16:44', 'head 4 s'], ['41%', 'Sep 19 20:10', 'head 4 s'], ['12%', 'Sep 19 20:10', 'head 4 s']]);
   assert.equal(chosen.inFlight, '3 of 16');
   assert.equal(chosen.pace, '0.76 %/h');
-  assert.deepEqual(chosen.verdict, { badge: 'chosen', chip: null });
+  assert.deepEqual(chosen.verdict, { badge: 'chosen', chip: null, tone: null });
   assert.deepEqual(cell({ windows: { five_hour: window5h(1, ms(15, 42), 'poll', 120_000), seven_day: window5h(0.88, null, 'poll', 120_000) } }).windows, [['100%', '15:42', 'poll 2 min'], ['88%', 'no reset', 'poll 2 min'], ['not reported']]);
   const key = cell({ accountId: 'overflow', kind: 'api_key', pace: { deadline: null, end: null, hours: null, remaining: 0.96, reset: null, score: 0.96 }, planTier: null, priority: 1, tier: [2, 1, 0], windows: { worst_bucket: window5h(0.04, ms(14, 28, 8)) } });
   assert.deepEqual([key.plan, key.tier, key.windows, key.pace], ['API key', 'keys P1', [['worst bucket 4%']], '96% left']);
@@ -601,6 +608,14 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.deepEqual(verdict({ obstacle: { name: 'budget_unknown', reason: null, until: null, window: null }, verdict: 'out' }), ['out', 'budget unknown', 'its spend unknown while the ledger is degraded']);
   assert.deepEqual(verdict({ inFlight: 16, partition: 'at_cap', verdict: 'out' }), ['at cap', 'at its cap', 'at its in-flight cap']);
   assert.deepEqual(verdict({ inFlight: 16, verdict: 'held_on' }), ['held on', 'at its cap', null]);
+  assert.deepEqual(verdict({ fit: 'rewrite_only', inFlight: 16, verdict: 'held_on' }), ['held on', 'at its cap', null], 'the cap explains a hold whatever the member fit');
+  // A destination the gate found short names its fit in the tone the card draws, a fitting one keeps its own chip.
+  assert.deepEqual(['least_bad', 'rewrite_only', 'ending', 'fits'].map((fit) => cell({ fit, verdict: 'destination' }).verdict), [
+    { badge: 'destination', chip: { value: 'least bad' }, tone: 'warning' },
+    { badge: 'destination', chip: { value: 'rewrite only' }, tone: 'warning' },
+    { badge: 'destination', chip: { value: 'ending' }, tone: 'neutral' },
+    { badge: 'destination', chip: { value: 'not placed' }, tone: null },
+  ]);
   assert.deepEqual(verdict({ verdict: 'destination' }), ['destination', 'not placed', null]);
   assert.deepEqual(verdict({ rank: 2, verdict: 'ranked' }), ['ranked 2nd', null, null]);
   assert.deepEqual(verdict({ verdict: 'not_needed' }), ['not needed', null, null]);
@@ -702,13 +717,14 @@ const DETAIL_EVENTS = {
   cooldown_set: [{ reason: 'rate_limit', scope: 'account', source_request_id: 'req_1', until: ms(15, 42), window: 'five_hour' }, ['Scope', 'Reason', 'Window', 'Until', 'Set by']],
   fast_credits_changed: [{ after: { disabled_reason: null, enabled: true, utilization: 0.31 }, before: { disabled_reason: null, enabled: true, utilization: 1 }, blocked_after: null, blocked_before: 'org_spend_cap_reached', observed_at: ms(11, 30) }, ['Before', 'After', 'Cause', 'Effect']],
   ledger_gap: [{ reason: 'chunk_skipped', request_id: 'req_1' }, ['Reason', 'Meaning', 'Effect', 'Request']],
+  mark_cleared: [{ agent_id: 'main', marked_at: ms(13, 0), marked_on: 'primary', marked_window: 'five_hour', projection: 0.91, reason: 'healed' }, ['Key', 'Session', 'Agent', 'Model', 'Reason', 'Marked', 'Standing for']],
   model_permitted: [{ attempt: 2, rejected_by: ['secondary'], request_id: 'req_012', source_request_id: 'req_1', wire_model: 'claude-haiku-4-5' }, ['Rejected by', 'Served at', 'Model sent', 'Model resolved', 'Request']],
   model_rejected: [{ attempt: 1, request_id: 'req_011', source_request_id: 'req_1', wire_model: 'claude-haiku-4-5' }, ['Model sent', 'Model resolved', 'Cooldown scope', 'Attempt', 'Request']],
   overage_ended: [{ since: ms(10, 0) - 24 * HOUR }, ['Since', 'Lasted']],
   overage_started: [{}, ['Effect']],
   pin_created: [{ agent_id: 'main', epoch: 52 }, ['Key', 'Session', 'Agent', 'Model', 'Epoch']],
   pin_expired: [{ agent_id: 'main', reasons: ['cooldown', 'spent'] }, ['Key', 'Session', 'Agent', 'Model', 'Reasons', 'Found by']],
-  pin_migrated: [{ agent_id: 'main', epoch: 53, from_account: 'secondary', reason: 'spent' }, ['From', 'To', 'Reason', 'Moved by', 'Key', 'Session', 'Agent', 'Model']],
+  pin_migrated: [{ agent_id: 'main', binding: 'five_hour', epoch: 53, fit: 'least_bad', from_account: 'secondary', reason: 'spent', runway_ms: 0 }, ['From', 'To', 'Reason', 'Moved by', 'Destination fit', 'Runway', 'Key', 'Session', 'Agent', 'Model']],
   pin_released: [{ agent_id: 'main' }, ['Actor', 'Key', 'Session', 'Agent', 'Model']],
   poll_backoff_ended: [{ attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) }, ['Backed off', 'Attempts', 'Resumed']],
   poll_backoff_started: [{ attempts: 1, endpoint: 'usage', last_clean_poll_at: ms(13, 43), next_attempt_at: ms(13, 53), reason: '429' }, ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect']],
@@ -716,14 +732,16 @@ const DETAIL_EVENTS = {
   refresh_succeeded: [{ access_expires_at: ms(20, 52), refresh_expires_at: ms(20, 52) + 58 * 24 * HOUR, until: ms(20, 52) }, ['Access token', 'Refresh token']],
   refresh_uncertain: [{ cause: 'refresh_response_lost', error: 'refresh response lost: connection reset' }, ['Error']],
   registry_changed: [{ diff: { shed_ahead_of_pace: { from: null, to: 0.9 } }, kind: 'pool_updated', target: 'all' }, ['Change', 'shed ahead of pace', 'Actor', 'Reading it']],
+  reservation_expired: [{ age_ms: 42_000, attempt: 1, cause: 'transport_error', shares: { five_hour: 0.104, seven_day: 0.012 } }, ['Request', 'Attempt', 'Cause', 'Reserved', 'Held for', 'Effect']],
   router_started: [{ affinity_entries_loaded: 34, down_since: ms(6, 11, 58), holds_lost: true, pins_loaded: 10, shedding_marks_loaded: 0, shedding_rounds_stale: 0, version: '0.1.0', windows_loaded: 5 }, ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests']],
   shedding_round: [
     {
-      ahead: 0.91, burn_sum: 0.299 / 3_600, burn_window_seconds: 600, dwell_seconds: 900, dwell_until: ms(11, 15), elapsed_share: 0.06, margin: 0.01, marks: [{ agent_id: 'c21e', key_id: 'desktop', model: 'claude-sonnet-5', session_id: 's1' }], persisted: true,
-      pins: [{ agent_id: 'c21e', burn: 0.07 / 3_600, cold: true, key_id: 'desktop', last_input_tokens: 48_100, marked: true, model: 'claude-sonnet-5', note: null, per_rewrite: 0.07 / 3_600 / 48_100, session_id: 's1' }],
-      shed_share: 0.5, target: 0.1495 / 3_600, threshold: 0.9, unit: 'window_share', utilization: 0.97, warm_sessions: 'when_needed', window: 'five_hour',
+      burn_average_seconds: 1_800, burn_sum: 0.12, ceiling: 0.95, dwell_seconds: 900, dwell_until: ms(14, 15), excess: 0.06, horizon: ms(16, 0), marks: [{ agent_id: 'c21e', key_id: 'desktop', model: 'claude-sonnet-5', session_id: 's1' }],
+      outcome: 'marked 1', persisted: true,
+      pins: [{ agent_id: 'c21e', burn: 0.07, cold: true, key_id: 'desktop', last_input_tokens: 48_100, marked: true, model: 'claude-sonnet-5', note: null, per_rewrite: 0.004, planned: 'secondary', rewrite: 0.005, runway_ms: null, session_id: 's1', skip: null }],
+      projection: 0.99, reason: null, removed: 0.07, shed_cap: 0.2, target: 0.024, unit: 'window_share', utilization: 0.71, warm_sessions: 'when_needed', window: 'five_hour',
     },
-    ['Started by', 'Reading', 'Unit', 'Burn window', 'Share', 'Warm sessions', 'Pins', 'Marks kept until', 'Dwell', 'Survive a restart'],
+    ['Started by', 'Trigger', 'Excess', 'Cap', 'Unit', 'Burn average', 'Warm sessions', 'Pins', 'Planned destinations', 'Outcome', 'Next round after', 'Dwell', 'Survive a restart'],
   ],
   warm_prefix_expired: [{ cause: 'ttl', deepest: { depth: 1, prefix_tokens: 18_400, tier: 'message', ttl_ms: 300_000, written_at: ms(14, 19, 52) }, entries: 1, root: 's0' }, ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed']],
   wind_down_started: [{ end_source: 'cancelled', ends_at: ms(15, 0), wind_down_minutes: 30 }, ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from']],
@@ -745,24 +763,58 @@ test('every event kind has its detail pairs starting with When, Account and Pool
   const without = d.detailPairs(event('router_started', { pins_loaded: 10 }, { accountId: null }), NOW, []);
   assert.deepEqual(without.slice(0, 2).map((p) => p.label), ['When', 'Pins loaded']);
   const round = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, []).find((p) => p.label === 'Pins');
-  assert.deepEqual(round.table.head, ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', 'Mark']);
-  assert.deepEqual(round.table.rows.map((r) => r.map(chipText)), [['s1', 'c21e', 'cold', '7.0 %/h', '48.1K', 'marked']]);
+  assert.deepEqual(round.table.head, ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', 'Rewrite', 'Destination', 'Mark']);
+  assert.deepEqual(round.table.rows.map((r) => r.map(chipText)), [['s1', 'c21e', 'cold', '7.0 %/h', '48.1K', '0.5%', 'secondary', 'marked']]);
   const restart = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, []).find((p) => p.label === 'Survive a restart');
   assert.deepEqual(texts(restart.chips), ['persisted']);
 });
 
-test("a shedding round's rates are the engine's per second, drawn per hour in the round's unit", () => {
+test("a shedding round's rates read share per hour of the window that fired: the cap with its target and the burn removed, and each pin's burn", () => {
   const fixture = d.decodeRoutingLogPage(JSON.parse(readFileSync(new URL('./fixtures/routing_log.json', import.meta.url), 'utf8')).body);
   const round = fixture.rows.find((r) => r.type === 'event' && r.kind === 'shedding_round');
   const drawn = (row) => {
     const pairs = d.detailPairs(row, NOW, []);
-    return { pins: pairs.find((p) => p.label === 'Pins').table.rows.map((r) => chipText(r[3])), share: texts(pairs.find((p) => p.label === 'Share').chips) };
+    return { cap: texts(pairs.find((p) => p.label === 'Cap').chips), pins: pairs.find((p) => p.label === 'Pins').table.rows.map((r) => chipText(r[3])), share: pairs.some((p) => p.label === 'Share'), unit: texts(pairs.find((p) => p.label === 'Unit').chips) };
   };
-  // The router's row: a burn sum of 0.12 and a pin of 0.07 a second, in shares of the 5-hour window.
-  assert.deepEqual([round.detail.unit, round.detail.burn_sum, round.detail.pins[0].burn], ['window_share', 0.12, 0.07]);
-  assert.deepEqual(drawn(round), { pins: ['25200.0 %/h'], share: ['share 50%', 'burn 43200.0 %/h', 'to shed 21600.0 %/h'] });
-  const dollars = { ...round, detail: { ...round.detail, burn_sum: 0.0005, pins: [{ ...round.detail.pins[0], burn: 0.0002 }], target: 0.00025, unit: 'usd' } };
-  assert.deepEqual(drawn(dollars), { pins: ['$0.72/h'], share: ['share 50%', 'burn $1.80/h', 'to shed $0.90/h'] });
+  // The router's row: a cap of 0.2, a target of 0.024 an hour, and a pin of 0.07 an hour that is the whole burn removed.
+  assert.deepEqual([round.detail.unit, round.detail.shed_cap, round.detail.target, round.detail.removed, round.detail.pins[0].burn], ['window_share', 0.2, 0.024, 0.07, 0.07]);
+  assert.deepEqual(drawn(round), { cap: ['20%', 'target 2.4 %/h', 'removed 7.0 %/h'], pins: ['7.0 %/h'], share: false, unit: ['window share'] });
+  // A round whose order read the dollar table names it, and its rates still read window share per hour.
+  const dollars = { ...round, detail: { ...round.detail, unit: 'usd' } };
+  assert.deepEqual(drawn(dollars), { cap: ['20%', 'target 2.4 %/h', 'removed 7.0 %/h'], pins: ['7.0 %/h'], share: false, unit: ['usd'] });
+});
+
+test('the pin moved, shedding round, cleared mark and expired reservation details read their pairs', () => {
+  const pairs = (kind, detail, o) => Object.fromEntries(d.detailPairs(event(kind, detail, { requestId: 'req_1', sessionId: 's1-0000-4000', ...o }), NOW, []).map((p) => [p.label, p.table ? p.table : texts(p.chips)]));
+  const moved = (more) => pairs('pin_migrated', { agent_id: 'main', epoch: 53, from_account: 'secondary', reason: 'shed', ...more });
+  assert.deepEqual([moved({ binding: 'five_hour', fit: 'fits', runway_ms: 7_800_000 })['Destination fit'], moved({ binding: 'five_hour', fit: 'fits', runway_ms: 7_800_000 }).Runway], [['fits'], ['2 h 10 min']]);
+  assert.deepEqual([moved({ binding: 'five_hour', fit: 'least_bad', runway_ms: 0 })['Destination fit'], moved({ binding: 'five_hour', fit: 'least_bad', runway_ms: 0 }).Runway], [['least bad'], ['none']]);
+  assert.deepEqual([moved({ binding: null, fit: 'rewrite_only', runway_ms: null })['Destination fit'], moved({ binding: null, fit: 'rewrite_only', runway_ms: null }).Runway], [['rewrite only'], ['unbounded']]);
+  assert.deepEqual(Object.keys(moved({})), ['When', 'Account', 'From', 'To', 'Reason', 'Moved by', 'Session', 'Agent'], 'a move the ledger wrote before the gate reads neither pair');
+
+  const pin = (o) => ({ agent_id: 'c21e', burn: 0.07, cold: false, key_id: 'desktop', last_input_tokens: 48_100, marked: false, model: 'claude-sonnet-5', note: null, per_rewrite: 0.004, planned: null, rewrite: null, runway_ms: null, session_id: 'bcc805b6-0588', skip: null, ...o });
+  const round = (more) => pairs('shedding_round', { burn_average_seconds: 1_800, burn_sum: 0.146, ceiling: 0.95, dwell_seconds: 900, dwell_until: ms(14, 15), excess: 0.095, horizon: ms(18, 20), marks: [], outcome: 'nothing_to_mark', persisted: true, projection: 0.99, reason: 'no_runway', removed: 0.073, shed_cap: 0.5, target: 0.075, unit: 'window_share', utilization: 0.9, warm_sessions: 'when_needed', window: 'five_hour', ...more });
+  const skipped = round({ pins: [pin({ skip: 'no_runway' }), pin({ agent_id: 'main', session_id: 'd7167642-751d', skip: 'no_runway' })] });
+  assert.deepEqual([skipped.Trigger, skipped.Excess, skipped.Cap], [['5h projection 99% at 18:20 over the ceiling 95%'], ['9.5 %/h'], ['50%', 'target 7.5 %/h', 'removed 7.3 %/h']]);
+  assert.deepEqual([skipped.Unit, skipped['Burn average'], skipped.Skipped, skipped['Planned destinations'], skipped.Outcome], [['window share'], ['30 min'], ['bcc805b6: no runway', 'd7167642: no runway'], undefined, ['nothing to mark: no runway']]);
+  assert.deepEqual([skipped['Next round after'], skipped.Dwell, skipped['Survive a restart']], [['14:15'], ['15 min'], ['persisted']]);
+  assert.deepEqual(skipped.Pins.head, ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', 'Rewrite', 'Destination', 'Mark']);
+  assert.deepEqual(skipped.Pins.rows.map((r) => r.map(chipText)), [['bcc805b6', 'c21e', 'warm', '7.0 %/h', '48.1K', '-', '-', 'no runway'], ['d7167642', 'main', 'warm', '7.0 %/h', '48.1K', '-', '-', 'no runway']]);
+  // A round on the 7-day window projects one 5-hour length ahead, which reads as the span.
+  const weekly = round({ horizon: ms(14, 0) + 5 * HOUR, outcome: 'marked 2', pins: [pin({ marked: true, planned: 'nightly', rewrite: 0.004 }), pin({ marked: true, planned: 'secondary', rewrite: 0.003, session_id: 'e2f0a1b3-0000' })], projection: 0.96, reason: null, window: 'seven_day' });
+  assert.deepEqual([weekly.Trigger, weekly['Planned destinations'], weekly.Outcome, weekly.Skipped], [['7d projection 96% in 5 h over the ceiling 95%'], ['nightly', 'secondary'], ['marked 2'], undefined]);
+  assert.deepEqual(weekly.Pins.rows.map((r) => r.slice(5).map(chipText)), [['0.4%', 'nightly', 'marked'], ['0.3%', 'secondary', 'marked']]);
+
+  const cleared = (more) => pairs('mark_cleared', { agent_id: 'main', marked_at: ms(13, 0), marked_on: 'primary', marked_window: 'five_hour', projection: null, ...more }, { keyId: 'desktop', model: 'claude-sonnet-5' });
+  const healed = cleared({ projection: 0.91, reason: 'healed' });
+  assert.deepEqual([healed.Reason, healed.Marked, healed['Standing for']], [['healed: the 5h projection read 91% under the ceiling'], ['13:00', 'on primary'], ['1 h']]);
+  assert.deepEqual([cleared({ reason: 'moved' }).Reason, cleared({ reason: 'released' }).Reason], [['moved'], ['released']]);
+
+  const expired = pairs('reservation_expired', { age_ms: 42_000, attempt: 1, cause: 'transport_error', shares: { five_hour: 0.104, seven_day: 0.012 } });
+  assert.deepEqual(['Request', 'Attempt', 'Cause', 'Reserved', 'Held for', 'Effect'].map((label) => expired[label]), [['req_1'], ['1'], ['transport error'], ['5h 10.4%', '7d 1.2%'], ['42 s'], ["the booked share left the account's prediction"]]);
+  for (const cause of ['canceled', 'exhausted', 'refused', 'timeout']) assert.deepEqual(pairs('reservation_expired', { age_ms: 1_000, attempt: 2, cause, shares: {} }).Cause, [cause]);
+
+  assert.deepEqual(pairs('window_spent', { reset: ms(15, 42), source: 'predicted', source_request_id: 'req_1', utilization: 1, window: 'five_hour' })['Read from'], ['the prediction']);
 });
 
 test("the hash chip is eight characters and warm-until reads the entry's TTL", () => {
@@ -812,12 +864,18 @@ test('the verdict line words the kind with its accounts and its pool as entities
   assert.deepEqual(texts(d.verdictChips(pending, decision({ by: strategy('pace', [0, 0, 0]) }))).slice(-1), ['cache pending']);
 });
 
-test('the settings in force read the twenty in the card order', () => {
+test('the settings in force read the nineteen in the card order, and a version 1 record its three removed after them', () => {
   assert.deepEqual(d.SETTINGS_ROWS.map((s) => s.label), [
-    'Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', 'Select below', 'Shed above', 'Move when spent',
-    'Overage grace', 'Wind-down', 'Shed share', 'Burn window', 'Shed dwell', 'Warm sessions', 'In-flight cap', 'Retry in place', 'Pace floor',
+    'Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', 'Window ceiling', 'Load shedding', 'Move when spent',
+    'Overage grace', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Warm sessions', 'In-flight cap', 'Retry in place',
   ]);
-  assert.deepEqual(d.SETTINGS_ROWS.map((s) => d.settingValue(s.key, SETTINGS)), ['Pace', 'subscriptions first', 'prefer plan', '10 min', 'when cached', 'by warm prefix', '20K', 'by cohort', 'off', '90%', 'on', '30 min', '30 min', '50%', '10 min', '15 min', 'when needed', '16', '1 min', '5%']);
+  assert.deepEqual(d.SETTINGS_ROWS.map((s) => d.settingValue(s.key, SETTINGS)), ['Pace', 'subscriptions first', 'prefer plan', '10 min', 'when cached', 'by warm prefix', '20K', 'by cohort', '95%', 'on', 'on', '30 min', '30 min', '50%', '30 min', '15 min', 'when needed', '16', '1 min']);
+  const rows = (settings) => d.settingsRows(record({ settings })).map((r) => [r.label, texts(r.chips)]);
+  assert.deepEqual(rows({ ...SETTINGS, loadShedding: false }).find(([label]) => label === 'Load shedding'), ['Load shedding', ['off']]);
+  const legacy = rows(LEGACY_SETTINGS);
+  assert.deepEqual(legacy.slice(8, 10), [['Window ceiling', ['not recorded']], ['Load shedding', ['not recorded']]]);
+  assert.deepEqual(legacy.slice(-3), [['Shed above (then)', ['90%']], ['Select below (then)', ['off']], ['Pace floor (then)', ['5%']]]);
+  assert.equal(rows(SETTINGS).length, 19);
   assert.equal(Object.keys(d.OBSTACLE_HINT).length, 14);
   assert.equal(d.OBSTACLE_HINT.budget_unknown, 'its spend unknown while the ledger is degraded');
 });
@@ -828,7 +886,7 @@ test('the event detail draws the pairs its event carries: the effect, the meanin
   assert.deepEqual(pairs('account_state_changed', { cause: 'deleted', detail: null, from: 'ready', to: 'deleted' }).Effect, ['the account left the registry and this is its last row']);
   assert.deepEqual(pairs('account_state_changed', { cause: 'operator', detail: null, from: 'funding_required', to: 'ready' }).Effect, ['the account joins the eligible sets']);
   assert.deepEqual(pairs('account_state_changed', { cause: 'paired', detail: null, from: 'unpaired', to: 'ready' }).Effect, ['the account joins the eligible sets']);
-  assert.deepEqual(pairs('window_spent', { reset: ms(15, 42), source: 'head', utilization: 1, window: 'five_hour' }).Effect, ['a pinned session moves by the spent rule at its next request']);
+  assert.deepEqual(pairs('window_spent', { reset: ms(15, 42), source: 'head', utilization: 1, window: 'five_hour' }).Effect, ['a pinned session moves by the spent rule at its next request or waits in place for a reset within the retry bound']);
   const skipped = pairs('ledger_gap', { reason: 'chunk_skipped', request_id: 'req_1' }, { requestId: 'req_1' });
   assert.deepEqual([skipped.Meaning, skipped.Effect], [['an interior chunk of the capture was dropped at the bus'], ['the captured response is stored truncated']]);
   const missing = pairs('ledger_gap', { reason: 'attempt_missing', request_id: 'req_1' }, { requestId: 'req_1' });
@@ -899,45 +957,41 @@ test('the card carries the hover hints of the hold, the promise and the placemen
   assert.equal(verdict.find((c) => c.label === 'cache hit').title, d.PROMISE_HINT.static);
 });
 
-test("the Pace cell's title names the share, the hours, the deadline and the rate, and the header names the window", () => {
+test("the Pace cell's title names the share, the hours, the deadline, the burn and the spare rate, and the header names the window", () => {
   const title = (pace, o = {}) => d.candidateCells(candidate({ pace, ...o }), record(), NOW).paceTitle;
   const reset = Date.UTC(2026, 8, 19, 8, 30);
-  const read = { deadline: iso(reset), end: null, hours: 66, remaining: 0.08, reset: iso(reset), score: 0.08 / 66, window: 'seven_day' };
-  assert.equal(title(read), '8% of the 7-day window left over 66 h to its reset at Sep 19 08:30: 0.12 %/h. Inside its tier, the highest above the pace floor wins.');
+  const read = { burn: 0.004, deadline: iso(reset), end: null, hours: 66, remaining: 0.66, reset: iso(reset), score: 0.006, window: 'seven_day' };
+  const tail = '. Inside its tier, the highest spare rate wins.';
+  assert.equal(title(read), `66% of the 7-day window left over 66 h to its reset at Sep 19 08:30, less 0.40 %/h of burn: 0.60 %/h${tail}`);
   const end = ms(16, 44);
-  assert.equal(
-    title({ deadline: iso(end), end: iso(end), hours: 2.23, remaining: 0.45, reset: iso(reset), score: 0.45 / 2.23, window: 'seven_day_fable' }),
-    "45% of the Fable week left over 2 h to its subscription's end at 16:44: 20.18 %/h. Inside its tier, the highest above the pace floor wins.",
-  );
-  assert.equal(
-    title({ deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168, window: 'seven_day' }),
-    '100% of the 7-day window left over 168 h with no reset read: 0.60 %/h. Inside its tier, the highest above the pace floor wins.',
-  );
-  assert.equal(title({ ...read, window: null }), '8% of its window left over 66 h to its reset at Sep 19 08:30: 0.12 %/h. Inside its tier, the highest above the pace floor wins.');
+  assert.equal(title({ burn: 0.05, deadline: iso(end), end: iso(end), hours: 2.23, remaining: 0.45, reset: iso(reset), score: 0.45 / 2.23 - 0.05, window: 'seven_day_fable' }), `45% of the Fable week left over 2 h to its subscription's end at 16:44, less 5.00 %/h of burn: 15.18 %/h${tail}`);
+  assert.equal(title({ burn: 0, deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168, window: 'seven_day' }), `100% of the 7-day window left over 168 h with no reset read, less 0.00 %/h of burn: 0.60 %/h${tail}`);
+  assert.equal(title({ ...read, window: null }), `66% of its window left over 66 h to its reset at Sep 19 08:30, less 0.40 %/h of burn: 0.60 %/h${tail}`);
   // Under an hour the span reads in minutes, and from an hour on in whole hours.
-  assert.equal(title({ ...read, hours: 0.42, score: 0.08 / 0.42 }), '8% of the 7-day window left over 25 min to its reset at Sep 19 08:30: 19.05 %/h. Inside its tier, the highest above the pace floor wins.');
-  assert.equal(title({ ...read, hours: 1.4, score: 0.08 / 1.4 }), '8% of the 7-day window left over 1 h to its reset at Sep 19 08:30: 5.71 %/h. Inside its tier, the highest above the pace floor wins.');
-  assert.equal(title({ ...read, hours: 0.2, score: 0.08 / 0.2 }), '8% of the 7-day window left over 12 min to its reset at Sep 19 08:30: 40.00 %/h. Inside its tier, the highest above the pace floor wins.');
-  assert.equal(title({ ...read, hours: 3.4, score: 0.08 / 3.4 }), '8% of the 7-day window left over 3 h to its reset at Sep 19 08:30: 2.35 %/h. Inside its tier, the highest above the pace floor wins.');
-  // A pace written without the field reads as the null window.
-  assert.equal(d.candidateCells(candidate({}), record(), NOW).paceTitle, '91% of its window left over 120 h with no reset read: 0.76 %/h. Inside its tier, the highest above the pace floor wins.');
-  const keyPace = { deadline: null, end: null, hours: null, remaining: 0.45, reset: null, score: 0.45, window: null };
+  assert.equal(title({ ...read, hours: 0.42 }), `66% of the 7-day window left over 25 min to its reset at Sep 19 08:30, less 0.40 %/h of burn: 0.60 %/h${tail}`);
+  assert.equal(title({ ...read, hours: 1.4 }), `66% of the 7-day window left over 1 h to its reset at Sep 19 08:30, less 0.40 %/h of burn: 0.60 %/h${tail}`);
+  assert.equal(title({ ...read, hours: 0.2 }), `66% of the 7-day window left over 12 min to its reset at Sep 19 08:30, less 0.40 %/h of burn: 0.60 %/h${tail}`);
+  // A version 1 record read no burn, and its score was the share left an hour above the pace floor.
+  assert.equal(title({ ...read, burn: null, score: 0.01 }), '66% of the 7-day window left over 66 h to its reset at Sep 19 08:30: 1.00 %/h. Inside its tier, the highest above the pace floor wins.');
+  assert.equal(d.candidateCells(candidate({}), record(), NOW).paceTitle, '91% of its window left over 120 h with no reset read: 0.76 %/h. Inside its tier, the highest above the pace floor wins.', 'a pace written without the burn reads as a version 1 one');
+  const keyPace = { burn: null, deadline: null, end: null, hours: null, remaining: 0.45, reset: null, score: 0.45, window: null };
   const key = candidate({ accountId: 'overflow', kind: 'api_key', pace: keyPace, planTier: null, tier: [2, 0, 0], windows: { worst_bucket: window5h(0.55, ms(14, 28, 8)) } });
   assert.equal(d.candidateCells(key, record(), NOW).paceTitle, '45% of its worst live bucket left. Scored by the remaining share alone, with no division by hours.');
   assert.equal(title(null), null);
 
-  const header = (window) => d.paceHeader(record({ candidates: [key, candidate({ pace: { ...read, window } })] }));
-  assert.equal(header('seven_day_fable'), 'Pace, Fable week left per hour', 'the first subscription member names it, past a key');
-  assert.equal(header('seven_day'), 'Pace, 7-day left per hour');
-  assert.equal(header('seven_day_opus'), 'Pace, seven day opus left per hour');
+  const header = (window, pace = read) => d.paceHeader(record({ candidates: [key, candidate({ pace: { ...pace, window } })] }));
+  assert.equal(header('seven_day_fable'), 'Spare rate, Fable week per hour', 'the first subscription member names it, past a key');
+  assert.equal(header('seven_day'), 'Spare rate, 7-day per hour');
+  assert.equal(header('seven_day_opus'), 'Spare rate, seven day opus per hour');
   assert.equal(header(null), 'Pace');
+  assert.equal(header('seven_day', { ...read, burn: null }), 'Pace, 7-day left per hour', 'a version 1 record names the share left per hour');
   assert.equal(d.paceHeader(record({ candidates: [key] })), 'Pace', 'API key members alone name no window');
 });
 
 test("a Pace row's By chip carries the strategy's hint and a rung row's none", () => {
   assert.equal(
     d.PACE_HINT,
-    "Pace: the account with the most of its window left per hour until the window resets or the subscription ends wins. A request reads the model's own window when the model has one, else the 7-day window, and a window the account has not read counts as untouched.",
+    "Pace: the account with the most of its window left per hour until the window resets or the subscription ends, less the burn of the sessions already on it, wins. A request reads the model's own window when the model has one, else the 7-day window, and a window the account has not read counts as untouched.",
   );
   const placed = d.byOf(decision({ by: strategy('pace', [0, 0, 0]), tier: [0, 0, 0] }));
   assert.deepEqual([placed.value, placed.title], ['Pace P0', d.PACE_HINT]);

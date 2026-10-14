@@ -13,9 +13,9 @@ export const STATION_KINDS: Record<string, StationKind> = {
   admission: { group: null, renderer: 'list', stub: null },
   bound: { group: null, renderer: 'list', stub: null },
   cap_filter: { group: null, renderer: 'table', stub: null },
-  cool: { group: null, renderer: 'table', stub: null },
   eligible: { group: null, renderer: 'table', stub: null },
   exhausted: { group: null, renderer: 'list', stub: null },
+  fit: { group: null, renderer: 'table', stub: null },
   hold: { group: null, renderer: 'hold', stub: null },
   'move:drain': { group: 'moves', renderer: 'list', stub: 'fires' },
   'move:overage': { group: 'moves', renderer: 'list', stub: 'fires' },
@@ -27,14 +27,50 @@ export const STATION_KINDS: Record<string, StationKind> = {
   pin: { group: null, grouped: true, renderer: 'list', stub: null },
   probe: { group: null, renderer: 'list', stub: null },
   renew: { group: null, renderer: 'list', stub: 'released' },
+  reserve: { group: null, renderer: 'list', stub: null },
   'rung:content': { group: 'rungs', renderer: 'rung', stub: 'match' },
   'rung:static': { group: 'rungs', renderer: 'rung', stub: 'match' },
   'rung:with_main': { group: 'rungs', renderer: 'rung', stub: 'match' },
   selection: { group: null, renderer: 'sentence', stub: null },
 };
+/**
+ * The stations of a version 1 record, which the engine wrote before the projection: the cool reading where the fit
+ * station stands now, and no reservation.
+ */
+export const LEGACY_STATION_KINDS: Record<string, StationKind> = {
+  admission: STATION_KINDS.admission,
+  bound: STATION_KINDS.bound,
+  cap_filter: STATION_KINDS.cap_filter,
+  cool: { group: null, renderer: 'table', stub: null },
+  eligible: STATION_KINDS.eligible,
+  exhausted: STATION_KINDS.exhausted,
+  hold: STATION_KINDS.hold,
+  'move:drain': STATION_KINDS['move:drain'],
+  'move:overage': STATION_KINDS['move:overage'],
+  'move:return_to_plan': STATION_KINDS['move:return_to_plan'],
+  'move:shed': STATION_KINDS['move:shed'],
+  'move:spent': STATION_KINDS['move:spent'],
+  partitions: STATION_KINDS.partitions,
+  pick: STATION_KINDS.pick,
+  pin: STATION_KINDS.pin,
+  probe: STATION_KINDS.probe,
+  renew: STATION_KINDS.renew,
+  'rung:content': STATION_KINDS['rung:content'],
+  'rung:static': STATION_KINDS['rung:static'],
+  'rung:with_main': STATION_KINDS['rung:with_main'],
+  selection: STATION_KINDS.selection,
+};
 export const GROUP_WORD: Record<StripGroup, string> = { moves: 'Moves', partitions: 'Partitions', rungs: 'Rungs' };
-export const PARTITION_FACTS = ['spent', 'at_cap', 'above_ceiling', 'winding_down', 'floor'] as const; // the engine's order
-export const PARTITION_STATION_WORD: Record<(typeof PARTITION_FACTS)[number], string> = { above_ceiling: 'Above ceiling', at_cap: 'At cap', floor: 'Floor', spent: 'Spent', winding_down: 'Winding down' };
+export const PARTITION_FACTS = ['spent', 'at_cap', 'no_fit', 'winding_down'] as const; // the engine's order
+export const LEGACY_PARTITION_FACTS = ['spent', 'at_cap', 'above_ceiling', 'winding_down', 'floor'] as const; // a version 1 record's
+export const PARTITION_STATION_WORD: Record<(typeof PARTITION_FACTS)[number] | (typeof LEGACY_PARTITION_FACTS)[number], string> = {
+  above_ceiling: 'Above ceiling',
+  at_cap: 'At cap',
+  floor: 'Floor',
+  no_fit: 'No fit',
+  spent: 'Spent',
+  winding_down: 'Winding down',
+};
 /** A partition value's badge word. */
 export const PARTITION_WORD: Record<'fell_through' | 'held' | 'off', string> = { fell_through: 'fell through', held: 'held', off: 'off' };
 
@@ -45,7 +81,9 @@ export const PARTITION_WORD: Record<'fell_through' | 'held' | 'off', string> = {
 export function stationWord(stepId: string): string {
   if (!own(STEP_NAME, stepId)) return stepId;
   const name = STEP_NAME[stepId];
-  const group = own(STATION_KINDS, stepId) ? STATION_KINDS[stepId].group : null;
+  // A step both tables hold sits in one group in each, and the cool reading in none.
+  const kind = own(STATION_KINDS, stepId) ? STATION_KINDS[stepId] : own(LEGACY_STATION_KINDS, stepId) ? LEGACY_STATION_KINDS[stepId] : null;
+  const group = kind?.group ?? null;
   // The engine writes all five rules and all three rungs, so they always stand under their bracket, while the one
   // Partitions station of a continuation or a pinned line stands alone.
   return group === 'moves' || group === 'rungs' ? name.replace(/^[^:]*: /, '').toLowerCase() : name;
@@ -92,8 +130,8 @@ export interface Station {
   known: boolean;
 }
 export interface Leaf { accountId: string | null; badge: string; chip: Chip | null; chosen: boolean; more: number; tone: 'accent' | 'neutral' | 'warning' } // `more` > 0 and `accountId` null on the "and N more" leaf
-export type TerminusKind = 'chosen' | 'held' | 'refused';
-export const TERMINUS_WORD: Record<TerminusKind, string> = { chosen: 'Chosen', held: 'Held for a slot', refused: 'Refused' };
+export type TerminusKind = 'chosen' | 'held' | 'held_reset' | 'refused';
+export const TERMINUS_WORD: Record<TerminusKind, string> = { chosen: 'Chosen', held: 'Held for a slot', held_reset: 'Held for the reset', refused: 'Refused' };
 export interface Terminus { badge: string | null; drawn: boolean; kind: TerminusKind; state: PathState; tone: VerdictTone; word: string }
 export interface Bracket { group: StripGroup; level: 'line' | 'track'; recorded: boolean; stations: string[]; word: string } // word "Rungs" or "Rungs, not recorded"
 export interface Branch { from: string; kind: 'move' | 'rung' }
@@ -103,12 +141,15 @@ export interface StripModel { branch: Branch | null; brackets: Bracket[]; decisi
 const MOVE_RULES = ['move:spent', 'move:overage', 'move:return_to_plan', 'move:drain', 'move:shed'];
 const RUNGS = ['rung:content', 'rung:with_main', 'rung:static'];
 /** The steps a pinned walk records when the engine placed the request afresh after its rules. */
-const SELECTION_STEPS = new Set(['exhausted', 'hold', 'partitions', 'pick', ...RUNGS]);
+const SELECTION_STEPS = new Set(['exhausted', 'fit', 'hold', 'partitions', 'pick', 'reserve', ...RUNGS]);
+/** The engine books after every walk it runs, so Reserve stands last, decides nothing and hosts no candidates. */
+const RESERVE = 'reserve';
 /** Walks that end before any selection: a refusal, a probe answered. */
 const SHORT_ENDS = new Set(['admission', 'probe', 'selection']);
 const SLOT_OF: Record<DecisionKind, string> = { exhausted: 'exhausted', held: 'hold', moved: 'pick', placed: 'pick', refused: 'exhausted', renewed: 'pick' };
 const TERMINUS_OF: Record<DecisionKind, TerminusKind> = { exhausted: 'refused', held: 'held', moved: 'chosen', placed: 'chosen', refused: 'refused', renewed: 'chosen' };
-const TERMINI: TerminusKind[] = ['chosen', 'held', 'refused'];
+/** The terminus an outcome names: a hold for the window's reset is the fourth way out, every other hold a slot's. */
+const terminusOf = (outcome: DecisionRecord['outcome']): TerminusKind => (outcome.kind === 'held' && outcome.hold?.reason === 'reset' ? 'held_reset' : TERMINUS_OF[outcome.kind]);
 const CHOSEN_VERDICTS = new Set(['chosen', 'held_on', 'renewed']);
 const MAX_LEAVES = 8;
 const UNKNOWN_KIND: StationKind = { group: null, renderer: 'chips', stub: null };
@@ -127,12 +168,15 @@ function shapeOf(walk: WalkStep[]): StripShape {
 
 function expectedOf(shape: StripShape, walk: WalkStep[], kind: DecisionKind): string[] {
   if (shape === 'short') return [];
-  if (shape === 'fresh') return ['pin', 'eligible', 'partitions', ...RUNGS, SLOT_OF[kind]];
+  // A placeholder the walk lacks stands before the Reserve the engine wrote last, never after it.
+  const booked = walk.some((s) => s.step === RESERVE) ? [RESERVE] : [];
+  if (shape === 'fresh') return ['pin', 'eligible', 'partitions', ...RUNGS, SLOT_OF[kind], ...booked];
   const lastRule = walk.reduce((at, s, i) => (isRule(s.step) ? i : at), -1);
   const fired = walk.some((s) => isRule(s.step) && s.verdict === 'fired');
-  // A live pin that turned ineligible runs its rules and is then placed afresh, so the engine renews nothing.
-  const selected = !fired && walk.some((s, i) => i > lastRule && SELECTION_STEPS.has(s.step));
-  return ['pin', 'eligible', ...MOVE_RULES, ...(selected ? [] : ['renew'])];
+  // A live pin that turned ineligible runs its rules and is then placed afresh, so the engine renews nothing. Every
+  // walk books after it, a held one too, so Reserve says nothing of a selection.
+  const selected = !fired && walk.some((s, i) => i > lastRule && s.step !== RESERVE && SELECTION_STEPS.has(s.step));
+  return ['pin', 'eligible', ...MOVE_RULES, ...(selected ? [] : ['renew']), ...booked];
 }
 
 interface Entry { index: number | null; step: string }
@@ -209,24 +253,29 @@ const blank = (id: string, step: string, index: number | null, kind: StationKind
   word: step,
 });
 
-function draftsOf(walk: WalkStep[], entries: Entry[], shape: StripShape, now: number): Draft[] {
+/** The station table and the partition facts a record draws through, by the version that wrote it. */
+interface Maps { kinds: Record<string, StationKind>; partitions: readonly (keyof typeof PARTITION_STATION_WORD)[] }
+const MAPS: Maps = { kinds: STATION_KINDS, partitions: PARTITION_FACTS };
+const LEGACY_MAPS: Maps = { kinds: LEGACY_STATION_KINDS, partitions: LEGACY_PARTITION_FACTS };
+
+function draftsOf(walk: WalkStep[], entries: Entry[], shape: StripShape, now: number, maps: Maps): Draft[] {
   const drafts: Draft[] = [];
   const seen = new Set<string>();
   for (const { index, step } of entries) {
     const s = index === null ? null : walk[index];
     if (step === 'partitions' && shape === 'fresh') {
-      for (const key of PARTITION_FACTS) {
-        const station = blank(`partitions:${key}`, step, index, STATION_KINDS.partitions, true);
+      for (const key of maps.partitions) {
+        const station = blank(`partitions:${key}`, step, index, maps.kinds.partitions, true);
         const part = partitionBadge(s, key);
         drafts.push({ placeholder: s === null, station: { ...station, ...part, head: PARTITION_STATION_WORD[key], word: PARTITION_STATION_WORD[key] }, stepVerdict: s?.verdict ?? null });
       }
       continue;
     }
-    const known = own(STATION_KINDS, step);
+    const known = own(maps.kinds, step);
     // A step the walk records twice keeps one id per station.
     const id = seen.has(step) ? `${step}#${index}` : step;
     seen.add(id);
-    const station = blank(id, step, index, known ? STATION_KINDS[step] : UNKNOWN_KIND, known);
+    const station = blank(id, step, index, known ? maps.kinds[step] : UNKNOWN_KIND, known);
     if (known) {
       station.word = stationWord(step);
       station.head = STEP_NAME[step];
@@ -246,14 +295,14 @@ function draftsOf(walk: WalkStep[], entries: Entry[], shape: StripShape, now: nu
  * The fired rule's continuation moves to the track behind the Move station. The rules it cut short and Renew stay on
  * the line, Renew recorded there when the cap filter dropped every destination and the pin renewed in place.
  */
-function branchOf(walk: WalkStep[], drafts: Draft[], shape: StripShape, kind: DecisionKind): Branch | null {
+function branchOf(walk: WalkStep[], drafts: Draft[], shape: StripShape, kind: DecisionKind, kinds: Record<string, StationKind>): Branch | null {
   const firedAt = walk.findIndex((s) => isRule(s.step) && s.verdict === 'fired');
   if (shape === 'pinned' && firedAt >= 0) {
     const fired = walk[firedAt].step;
     const cap = walk.find((s, i) => i > firedAt && s.step === 'cap_filter');
     const raw = kind === 'moved' ? 'moved' : (cap?.verdict ?? walk[firedAt].verdict);
     const move: Station = {
-      ...blank('move', fired, null, STATION_KINDS[fired] ?? UNKNOWN_KIND, own(STATION_KINDS, fired)),
+      ...blank('move', fired, null, kinds[fired] ?? UNKNOWN_KIND, own(kinds, fired)),
       badge: verdictWord(raw),
       group: null,
       head: 'Move',
@@ -288,10 +337,13 @@ function branchOf(walk: WalkStep[], drafts: Draft[], shape: StripShape, kind: De
   return { from: from.station.id, kind: 'rung' };
 }
 
-/** The last recorded step that ran decides the walk, and the slot the shape expects stands in when none did. */
+/**
+ * The last recorded step that ran decides the walk, Reserve aside, and the slot the shape expects stands in when none
+ * did.
+ */
 function decisiveOf(walk: WalkStep[], drafts: Draft[], shape: StripShape, kind: DecisionKind): number {
   let last = -1;
-  for (let i = walk.length - 1; i >= 0 && last < 0; i -= 1) if (walk[i].verdict !== 'not_run') last = i;
+  for (let i = walk.length - 1; i >= 0 && last < 0; i -= 1) if (walk[i].verdict !== 'not_run' && walk[i].step !== RESERVE) last = i;
   if (last >= 0) {
     let at = -1;
     drafts.forEach((d, i) => {
@@ -304,6 +356,7 @@ function decisiveOf(walk: WalkStep[], drafts: Draft[], shape: StripShape, kind: 
 }
 
 function settle(drafts: Draft[], decisive: number): void {
+  const before: Partial<Record<Station['level'], PathState>> = {};
   drafts.forEach((d, i) => {
     const s = d.station;
     const atOrBefore = decisive >= 0 && i <= decisive;
@@ -312,10 +365,14 @@ function settle(drafts: Draft[], decisive: number): void {
       s.badge = atOrBefore ? 'not recorded' : 'not run';
       s.tone = 'neutral';
     } else {
-      s.state = d.stepVerdict !== 'not_run' && atOrBefore ? 'taken' : 'idle';
+      // The walk books after its decision, so a booking was reached, and so was a Reserve that booked nothing straight
+      // after a taken station. One past the walk's idle stations (a hold's cut-short rules) stands idle with them.
+      const booked = s.step === RESERVE && d.stepVerdict !== 'not_run' && (d.stepVerdict === 'booked' || before[s.level] === 'taken');
+      s.state = d.stepVerdict !== 'not_run' && (atOrBefore || booked) ? 'taken' : 'idle';
       if (s.state === 'idle') s.tone = 'neutral';
     }
     s.decisive = i === decisive;
+    before[s.level] = s.state;
   });
 }
 
@@ -340,12 +397,15 @@ function hostOf(record: DecisionRecord, stations: Station[], shape: StripShape, 
   const pick = stations.find((s) => s.step === 'pick' && s.index !== null);
   if (pick !== undefined) return pick.id;
   if (shape === 'fresh') return stations.find((s) => s.id === SLOT_OF[record.outcome.kind])?.id ?? null;
-  if (shape === 'pinned' && record.walk[record.walk.length - 1]?.step === 'renew') return 'renew';
-  const track = stations.filter((s) => s.level === 'track');
+  const walk = record.walk.filter((s) => s.step !== RESERVE);
+  if (shape === 'pinned' && walk[walk.length - 1]?.step === 'renew') return 'renew';
+  const track = stations.filter((s) => s.level === 'track' && s.step !== RESERVE);
   // A rung that matched before the continuation's last leaves the later rungs unrun, so it places the request itself.
   if (branch?.kind === 'move' && track.length > 0) return (track.find((s) => s.decisive) ?? track[track.length - 1]).id;
-  const recorded = stations.filter((s) => s.index !== null);
-  return recorded.length > 0 ? recorded[recorded.length - 1].id : null;
+  // A hold on the pin's own account ends a walk whose later rules did not run, so the step that held hosts it.
+  const recorded = stations.filter((s) => s.index !== null && s.step !== RESERVE);
+  const ran = recorded.filter((s) => s.verdict !== 'not_run');
+  return (ran[ran.length - 1] ?? recorded[recorded.length - 1])?.id ?? null;
 }
 
 function leavesOf(record: DecisionRecord, now: number): Leaf[] {
@@ -362,9 +422,12 @@ function leavesOf(record: DecisionRecord, now: number): Leaf[] {
   return [...shown, { accountId: null, badge: `and ${more} more`, chip: null, chosen: false, more, tone: 'neutral' }];
 }
 
-function terminiOf(kind: DecisionKind, shape: StripShape): Terminus[] {
-  const named = TERMINUS_OF[kind];
-  return TERMINI.map((t) => ({
+function terminiOf(outcome: DecisionRecord['outcome'], shape: StripShape): Terminus[] {
+  const kind = outcome.kind;
+  const named = terminusOf(outcome);
+  // The fourth way out is drawn only where a walk took it, in the place of Held for a slot.
+  const termini: TerminusKind[] = ['chosen', named === 'held_reset' ? 'held_reset' : 'held', 'refused'];
+  return termini.map((t) => ({
     badge: t === named ? DECISION_KIND_LABEL[kind] : null,
     // A pinned walk ends in Chosen, and in the terminus its outcome names when that is another.
     drawn: shape !== 'pinned' || t === 'chosen' || t === named,
@@ -380,8 +443,10 @@ export function stationModel(record: DecisionRecord, now: number): StripModel {
   const walk = record.walk;
   const kind = record.outcome.kind;
   const shape = shapeOf(walk);
-  const drafts = draftsOf(walk, merge(walk, expectedOf(shape, walk, kind)), shape, now);
-  const branch = branchOf(walk, drafts, shape, kind);
+  // A version 1 record was written before the fit gate and the reservation, with the cool reading and five partitions.
+  const maps = record.version < 2 ? LEGACY_MAPS : MAPS;
+  const drafts = draftsOf(walk, merge(walk, expectedOf(shape, walk, kind)), shape, now, maps);
+  const branch = branchOf(walk, drafts, shape, kind, maps.kinds);
   const decisive = decisiveOf(walk, drafts, shape, kind);
   settle(drafts, decisive);
   const stations = drafts.map((d) => d.station);
@@ -394,7 +459,7 @@ export function stationModel(record: DecisionRecord, now: number): StripModel {
     outcome: kind,
     shape,
     stations,
-    termini: terminiOf(kind, shape),
+    termini: terminiOf(record.outcome, shape),
   };
 }
 
@@ -466,7 +531,7 @@ const MOVE_END = 1;
 const STUB_ACROSS = 10;
 const STUB_UP = 16;
 const INTO_TERMINUS = 8;
-const TERMINUS_DROP: Record<TerminusKind, number> = { chosen: 0, held: 36, refused: 72 };
+const TERMINUS_DROP: Record<TerminusKind, number> = { chosen: 0, held: 36, held_reset: 36, refused: 72 };
 const KNEE = 0.42;
 const KNEE_EASE = 18;
 const CORNER = 22;
@@ -547,6 +612,9 @@ const leaving = (from: Station, into: PathState): PathState => (from.state === '
  */
 interface Frame { descent: string | null; into: TerminusKind | null; line: Station[]; points: Record<string, Point>; paths: StripPath[]; unit: number; xEnd: number; y0: number; yu: number }
 
+/** The stations after `from` are taken Reserves alone, which carry the walk on to its way out. */
+const booksOn = (stations: Station[], from: number) => from >= 0 && stations.slice(from + 1).every((s) => s.step === RESERVE && s.state === 'taken');
+
 function edgesAndStubs(line: Station[], points: Record<string, Point>): StripPath[] {
   const paths: StripPath[] = line.slice(1).map((s, i) => ({ d: `M${points[line[i].id].x} ${points[s.id].y} H${points[s.id].x}`, kind: 'edge', state: leaving(line[i], s.state) }));
   for (const s of line) {
@@ -566,7 +634,11 @@ function finish(model: StripModel, width: number, f: Frame, measured: LabelHeigh
   };
   const termini: Partial<Record<TerminusKind, Point>> = {};
   const last = line[line.length - 1];
-  const decisive = model.stations.find((s) => s.id === model.decisive);
+  const decided = model.stations.find((s) => s.id === model.decisive);
+  // A track that comes down into a line station hands the taken path on from there, and the Reserve after the decision,
+  // the walk's last station, carries it on too.
+  const descended = f.descent === null ? undefined : line.find((s) => s.id === f.descent);
+  const decisive = descended ?? (decided !== undefined && last !== undefined && booksOn(line, line.indexOf(decided)) ? last : decided);
   let dropFrom: string | null = null;
   for (const t of model.termini) {
     if (!t.drawn) continue;
@@ -661,11 +733,16 @@ function layoutLine(model: StripModel, width: number, measured: LabelHeights | u
     xEnd += shift;
   }
   const paths = edgesAndStubs(line, points);
+  // A rung that placed the request passes the slot it never ran, and comes down into the Reserve it booked when the
+  // line ends in one, which then runs on into Chosen.
+  const last = line[line.length - 1];
+  const booked = model.branch?.kind === 'rung' && last?.step === RESERVE && last.state === 'taken' ? last : undefined;
   if (model.branch?.kind === 'rung') {
     const from = points[model.branch.from];
-    paths.push({ d: `M${from.x} ${y0} C${from.x} ${yu + BEND} ${from.x} ${yu} ${from.x + CORNER} ${yu} H${xEnd - CORNER} C${xEnd} ${yu} ${xEnd} ${yu + BEND} ${xEnd} ${y0 - INTO_TERMINUS}`, kind: 'track', state: 'taken' });
+    const to = booked === undefined ? { x: xEnd, y: y0 - INTO_TERMINUS } : { x: points[booked.id].x, y: y0 };
+    paths.push({ d: `M${from.x} ${y0} C${from.x} ${yu + BEND} ${from.x} ${yu} ${from.x + CORNER} ${yu} H${to.x - CORNER} C${to.x} ${yu} ${to.x} ${yu + BEND} ${to.x} ${to.y}`, kind: 'track', state: 'taken' });
   }
-  return finish(model, width, { descent: null, into: model.branch?.kind === 'rung' ? 'chosen' : null, line, paths, points, unit, xEnd, y0, yu }, measured);
+  return finish(model, width, { descent: booked?.id ?? null, into: model.branch?.kind === 'rung' && booked === undefined ? 'chosen' : null, line, paths, points, unit, xEnd, y0, yu }, measured);
 }
 
 /**
@@ -720,7 +797,7 @@ function layoutMove(model: StripModel, width: number, fired: string, measured: L
   const named = model.termini.find((t) => t.state === 'taken')?.kind ?? 'chosen';
   const end = renewed !== undefined ? down(points[renewed.id].x, y0) : named === 'chosen' ? down(xEnd, y0 - INTO_TERMINUS) : `H${xLast} ${tail({ x: xLast, y: yu }, { x: xEnd, y: y0 + TERMINUS_DROP[named] })}`;
   const decided = track.findIndex((s) => s.decisive);
-  if (decided >= 0 && decided < track.length - 1) {
+  if (decided >= 0 && !booksOn(track, decided)) {
     // A rung that matched before the track's last leaves the later rungs unrun, so the taken path drops from it as from
     // a line's decisive station, and the track runs on past it idle.
     const from = points[track[decided].id];

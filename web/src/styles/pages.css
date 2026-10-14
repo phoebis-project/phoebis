@@ -2515,9 +2515,11 @@
   overflow-y: auto;
 }
 
+/* The Fit table's nine columns keep inside the popover's 720 px and the 641 px a 700 px window leaves it on 4 px a
+   side, with a cell's words free to wrap. */
 .strip-popover .table th,
 .strip-popover .table td {
-  padding: 4px 8px;
+  padding: 4px;
   line-height: 18px;
 }
 
@@ -2529,7 +2531,7 @@
 }
 
 .strip-popover .table td {
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .strip-popover .chip.is-marked {

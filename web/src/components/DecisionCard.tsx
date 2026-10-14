@@ -15,6 +15,7 @@ import {
   DECISION_KIND_LABEL,
   DECISION_KIND_TONE,
   entityHref,
+  formatFact,
   type LogLink,
   outcomeRows,
   paceHeader,
@@ -97,6 +98,8 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
                   <th>5h</th>
                   <th>7d</th>
                   <th>Fable</th>
+                  <th>Projection</th>
+                  <th>Runway</th>
                   <th>In flight</th>
                   <th>{paceHeader(record)}</th>
                   <th>Prefix</th>
@@ -129,6 +132,14 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
                           </td>
                         ))
                       )}
+                      <td className="num decision-card__window">
+                        {cells.projection.map((line, j) => (
+                          <span key={j} className={line === '-' ? 'muted' : undefined}>
+                            {line}
+                          </span>
+                        ))}
+                      </td>
+                      <td className="num">{cells.runway === '-' ? <span className="muted">-</span> : cells.runway}</td>
                       <td className="num">{cells.inFlight}</td>
                       <PaceCell title={cells.paceTitle} value={cells.pace} />
                       <td className="decision-card__prefix">{cells.prefix.hash ? <EntryChips entry={cells.prefix.hash} now={now} /> : <span className="muted">-</span>}</td>
@@ -136,7 +147,14 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
                         <Badge tone={c.verdict === 'out' ? 'warning' : tinted ? 'accent' : 'neutral'}>{cells.verdict.badge}</Badge>
                         {cells.verdict.chip && (
                           <span className="decision-card__why">
-                            <ChipView chip={cells.verdict.chip} />
+                            {/* A destination's fit carries the verdict's tone, which a badge draws and a chip has no member for. */}
+                            {cells.verdict.tone === null ? (
+                              <ChipView chip={cells.verdict.chip} />
+                            ) : (
+                              <Badge tone={cells.verdict.tone} title={cells.verdict.chip.title}>
+                                {cells.verdict.chip.value}
+                              </Badge>
+                            )}
                           </span>
                         )}
                       </td>
@@ -159,7 +177,15 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
           <KeyValue rows={keyValueRows(pinRows(record, now))} />
         </details>
         <details className="decision-card__fold">
-          <summary>Settings in force</summary>
+          <summary>
+            Settings in force
+            {record.settings !== null && (
+              <>
+                {' '}
+                <span className="decision-card__since muted">since {formatFact(record.settings.poolUpdatedAt, 'time', now)}</span>
+              </>
+            )}
+          </summary>
           {settings === null ? <p className="muted">The key and its pool had left the registry</p> : <KeyValue className="decision-card__settings" rows={keyValueRows(settings)} />}
         </details>
       </div>

@@ -240,9 +240,10 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
               {s.badge !== '' && <Badge tone={s.tone}>{s.badge}</Badge>}
               {s.second.length > 0 && (
                 <span className="strip-station__second">
-                  {s.second.map((part, j) => (
-                    <span key={j}>{part}</span>
-                  ))}
+                  {/* Each part keeps its value whole, but the Move station's one part names the rule that fired, whose
+                      words ("return to plan rule") run wider than a label on a move's tight track, so they wrap a word
+                      at a time. */}
+                  {s.second.flatMap((part, j) => (s.id === 'move' ? part.split(' ') : [part]).map((words, k) => <span key={`${j}/${k}`}>{words}</span>))}
                 </span>
               )}
             </button>

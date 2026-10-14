@@ -9744,7 +9744,7 @@ m.unmount();
   const MINUTE = 60_000;
   const iso = (ms) => new Date(ms).toISOString();
   const clockText = (at) => new Date(at).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit', second: '2-digit' });
-  const LABELS = ['5h', '7d', 'Fable', 'answer', 'attempt', 'capture', 'cause', 'client', 'depth', 'epoch', 'field', 'fields', 'gap', 'held', 'idle', 'in flight', 'key', 'lasted', 'models', 'next', 'over', 'pick', 'pins', 'prefix', 'rank', 'resets', 'retry', 'spent', 'state', 'to', 'turn', 'until', 'was'];
+  const LABELS = ['5h', '7d', 'Fable', 'answer', 'attempt', 'capture', 'cause', 'client', 'depth', 'epoch', 'field', 'fields', 'fit', 'gap', 'held', 'idle', 'in flight', 'key', 'lasted', 'models', 'next', 'over', 'pick', 'pins', 'prefix', 'rank', 'resets', 'retry', 'runway', 'spent', 'state', 'to', 'turn', 'until', 'was'];
   const trs = (page) => [...page.container.querySelectorAll('.routing-log__table tbody tr')].filter((tr) => !tr.querySelector('.skeleton, .empty'));
   const cell = (tr, name) => tr?.querySelector(`td.routing-log__${name}`) ?? null;
   const partTitle = (page) => intervalPart(page)?.getAttribute('title') ?? null;
@@ -9811,7 +9811,7 @@ m.unmount();
       ok:
         box !== null && entries[0] === '+ Select all' && at('Presets') === 1 && JSON.stringify(entries.slice(2, 10)) === JSON.stringify(presets.map((p) => `+ ${p}`)) &&
         at('Decisions') === 10 && JSON.stringify(entries.slice(11, 18)) === JSON.stringify(decisions.map((k) => `+ ${k}`)) && at('Events') === 18 &&
-        events.length === 28 && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
+        events.length === 30 && ['+ Mark cleared', '+ Reservation expired'].every((e) => events.includes(e)) && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
         !entries.some((e) => e.includes('hidden')),
       missing: entries.slice(0, 20),
     });
@@ -9839,7 +9839,7 @@ m.unmount();
       ok:
         rest.address === null && rest.chip === 'no kinds chip' && before === 'true' &&
         one.address === keepalive.join(',') && one.chip === 'kinds: keepalive' && answer.rows.length > 0 && JSON.stringify(one.rows) === JSON.stringify(answer.rows.map(rowKeyOf)) &&
-        back.address === null && back.chip === 'no kinds chip' && back.options === 35 && back.checked === 35,
+        back.address === null && back.chip === 'no kinds chip' && back.options === 37 && back.checked === 37,
       missing: [JSON.stringify(rest), String(before), JSON.stringify(one), `${answer.rows.length} keepalive rows`, JSON.stringify(back)],
     });
   }
@@ -9862,17 +9862,17 @@ m.unmount();
     results.push({
       name: "/routing-log a preset row checks its members and the chip reads the preset's name, a second preset reads both names, and a hand edit reads the kinds' words",
       ok:
-        one.address === 'moved,held,shedding_round,wind_down_started' && one.chip === 'kinds: moves and holds' &&
-        two.address === 'moved,held,shedding_round,wind_down_started,cooldown_set,cooldown_cleared,poll_backoff_started,poll_backoff_ended' && two.chip === 'kinds: moves and holds, cooldowns and backoff' &&
-        edited.address === 'moved,shedding_round,wind_down_started,cooldown_set,cooldown_cleared,poll_backoff_started,poll_backoff_ended' && edited.chip === 'kinds: moved, shedding round, wind-down started +4' &&
-        edited.title === 'moved, shedding round, wind-down started, cooldown set, cooldown cleared, poll backoff started, poll backoff ended' && read === edited.address,
+        one.address === 'moved,held,shedding_round,mark_cleared,wind_down_started' && one.chip === 'kinds: moves and holds' &&
+        two.address === 'moved,held,shedding_round,mark_cleared,wind_down_started,cooldown_set,cooldown_cleared,poll_backoff_started,poll_backoff_ended' && two.chip === 'kinds: moves and holds, cooldowns and backoff' &&
+        edited.address === 'moved,shedding_round,mark_cleared,wind_down_started,cooldown_set,cooldown_cleared,poll_backoff_started,poll_backoff_ended' && edited.chip === 'kinds: moved, shedding round, mark cleared +5' &&
+        edited.title === 'moved, shedding round, mark cleared, wind-down started, cooldown set, cooldown cleared, poll backoff started, poll backoff ended' && read === edited.address,
       missing: [JSON.stringify(one), JSON.stringify(two), JSON.stringify(edited), String(read)],
     });
   }
   {
     // The links the dashboard, the pool cards and the Models view write name their kinds, which read as any set does.
     const chips = [];
-    for (const kinds of ['exhausted', 'model_rejected,model_permitted', 'moved,held,shedding_round,wind_down_started', 'wind_down_started,held,shedding_round,moved']) {
+    for (const kinds of ['exhausted', 'model_rejected,model_permitted', 'moved,held,shedding_round,mark_cleared,wind_down_started', 'wind_down_started,mark_cleared,held,shedding_round,moved']) {
       const page = await mount(`/routing-log?kinds=${kinds}`, { now: CLOCK_ORIGIN });
       chips.push(chipRead(page, 'kinds'));
       page.unmount();
@@ -10623,7 +10623,7 @@ m.unmount();
     const { stations } = stationModel(record, CLOCK_ORIGIN);
     return [...stations.filter((s) => s.level === 'line'), ...stations.filter((s) => s.level === 'track')].map((s) => [s.word, s.badge]);
   };
-  const RENEWAL_STATIONS = [['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'no'], ['Renew', 'renewed']];
+  const RENEWAL_STATIONS = [['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'no'], ['Renew', 'renewed'], ['Reserve', 'none']];
   const kvRows = (dl) => [...(dl?.querySelectorAll('.kv__row') ?? [])].map((r) => ({ dd: r.querySelector('dd'), label: r.querySelector('dt')?.textContent ?? '' }));
   const ddWords = (dd) => {
     const chips = [...(dd?.querySelectorAll('.chip') ?? [])];
@@ -10636,7 +10636,7 @@ m.unmount();
   /** The Pace column's header as the card words it, from the window the first subscription member's score read. */
   const paceWord = (record) => {
     const id = record.candidates.find((c) => c.kind === 'oauth')?.pace?.window ?? null;
-    return id === null ? 'Pace' : `Pace, ${{ seven_day: '7-day', seven_day_fable: 'Fable week' }[id] ?? id.replace(/_/g, ' ')} left per hour`;
+    return id === null ? 'Pace' : `Spare rate, ${{ seven_day: '7-day', seven_day_fable: 'Fable week' }[id] ?? id.replace(/_/g, ' ')} per hour`;
   };
   /** The story's own decision: its row's page, a quarter hour either side of the request, its record and its card. */
   const story = async (id, seq = 1, kinds = '') => {
@@ -10678,7 +10678,9 @@ m.unmount();
     const step = s.id === 'move' ? record.walk[firedAt] : s.index === null ? undefined : record.walk[s.index];
     if (s.id !== 'move' && s.step.startsWith('move:') && step?.verdict === 'not_run' && firedAt >= 0 && s.index > firedAt) return 'chips';
     if (s.step === 'selection' || step === undefined || (step.verdict === 'not_run' && step.facts.length === 0)) return 'sentence';
-    if (['cap_filter', 'cool', 'eligible', 'pick'].includes(s.step)) return 'table';
+    // A Reserve that booked nothing says so in its sentence.
+    if (s.step === 'reserve' && step.verdict === 'none') return 'sentence';
+    if (['cap_filter', 'cool', 'eligible', 'fit', 'pick'].includes(s.step)) return 'table';
     if (s.step === 'hold') return 'hold';
     if (s.step.startsWith('rung:')) return 'rung';
     return s.known ? 'list' : 'chips';
@@ -10740,7 +10742,7 @@ m.unmount();
     const moves = stations.filter((s) => ['spent', 'overage', 'return to plan', 'drain', 'shed'].includes(s.step));
     const bracket = groupOf(card, 'Moves');
     const fires = stubsOf(card, 'fires');
-    const renew = stations.at(-1);
+    const renew = stations.find((s) => s.step === 'Renew');
     const row = rowOf(page, 'req_f8085653-422/1');
     // Each rule's popover lists the facts it read, the pin's reads its idle age under Age, and Renew's its account.
     const rules = [];
@@ -10757,6 +10759,7 @@ m.unmount();
         rules.length === 5 && rules.every((p) => p !== null && p.querySelectorAll('.kv__row').length > 0 && [...p.querySelectorAll('.kv__row')].every((r) => r.querySelector('dd .chip') !== null)) &&
         fires.length === 5 && fires.every((w) => moves.some((s) => parseFloat(w.style.left) > centerOf(s.button) && parseFloat(w.style.left) < centerOf(s.button) + 20)) &&
         !stations.some((s) => s.state === 'is-idle') && renew?.step === 'Renew' && renew.verdict === 'renewed' && renew.state === 'is-taken' && renew.second.length === 0 && renew.button.classList.contains('strip-station--above') &&
+        stations.at(-1)?.step === 'Reserve' && stations.at(-1)?.verdict === 'none' &&
         JSON.stringify(terminiOf(card)) === JSON.stringify([{ badge: 'renewed', kind: 'chosen', taken: true }]) &&
         (popoverRowOf(groupOfPopover(pin, 'Age'), 'idle') ?? []).some((c) => c.startsWith('idle ')) && stations.every((s, i) => s.button.dataset.index === String(i)),
       missing: [sentenceOf(card), verdictChipsOf(card).join(' / '), ...stations.map((s) => `${s.button.dataset.index} ${s.step} ${s.verdict} (${s.state}): ${s.second.join(' / ')}`), `${fires.length} fires stubs`, bracket?.textContent ?? 'no Moves bracket', JSON.stringify(terminiOf(card)), `Pin: ${rowsRead(pin)}`, ...rules.map((p) => rowsRead(p))],
@@ -10781,17 +10784,22 @@ m.unmount();
       await page.settle(50);
       const labels = (f) => kvRows(f?.querySelector('.kv')).map((r) => r.label);
       const settings = kvRows(folds[2]?.querySelector('.kv.decision-card__settings'));
-      const twenty = ['Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', 'Select below', 'Shed above', 'Move when spent', 'Overage grace', 'Wind-down', 'Shed share', 'Burn window', 'Shed dwell', 'Warm sessions', 'In-flight cap', 'Retry in place', 'Pace floor'];
+      const nineteen = ['Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', 'Window ceiling', 'Load shedding', 'Move when spent', 'Overage grace', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Warm sessions', 'In-flight cap', 'Retry in place'];
+      const values = Object.fromEntries(settings.map((r) => [r.label, r.dd?.textContent ?? '']));
+      // The fold's head names when the pool's settings took force, the settings' own instant.
+      const since = folds[2]?.querySelector('summary .decision-card__since')?.textContent ?? null;
+      const edited = `since ${new Date(record.settings.poolUpdatedAt).toISOString().slice(11, 16)}`;
       const request = Object.fromEntries(kvRows(folds[0]?.querySelector('.kv')).map((r) => [r.label, r.dd]));
       results.push({
-        name: '/routing-log the three folds open to Request facts, Pin and warmth and the twenty settings in order',
+        name: "/routing-log the three folds open to Request facts, Pin and warmth and the nineteen settings in order, Load shedding on, under the instant the settings took force",
         ok:
-          JSON.stringify(folds.map((f) => f.querySelector('summary')?.textContent)) === JSON.stringify(['Request facts', 'Pin and warmth', 'Settings in force']) && closed.every((o) => o === false) &&
+          JSON.stringify(folds.map((f) => f.querySelector('summary')?.firstChild?.textContent)) === JSON.stringify(['Request facts', 'Pin and warmth', 'Settings in force']) && closed.every((o) => o === false) &&
+          since === edited && values['Load shedding'] === 'on' && values['Window ceiling'] === fmtPct(record.settings.windowCeiling) && values['Shed cap'] === fmtPct(record.settings.shedCap) &&
           JSON.stringify(labels(folds[0])) === JSON.stringify(['Attempt', 'At', 'Key', 'Pool', 'Agent', 'Class', 'Model resolved', 'Lane', 'Flags']) &&
           request.Key?.querySelector('a')?.getAttribute('href') === `/keys#${record.request.keyId}` && request.Pool?.querySelector('a')?.getAttribute('href') === `/pools#${record.request.poolId}` &&
           JSON.stringify(labels(folds[1])) === JSON.stringify(['Pin on', 'Epoch', 'Created', 'Idle', 'Refresh age', 'Pin lane', 'Warmth', 'Cause']) &&
-          JSON.stringify(settings.map((r) => r.label)) === JSON.stringify(twenty) && settings.every((r) => (r.dd?.textContent ?? '') !== ''),
-        missing: [JSON.stringify(closed), labels(folds[0]).join(','), labels(folds[1]).join(','), settings.map((r) => `${r.label}=${r.dd?.textContent}`).join(',')],
+          JSON.stringify(settings.map((r) => r.label)) === JSON.stringify(nineteen) && settings.every((r) => (r.dd?.textContent ?? '') !== ''),
+        missing: [JSON.stringify(closed), String(since), labels(folds[0]).join(','), labels(folds[1]).join(','), settings.map((r) => `${r.label}=${r.dd?.textContent}`).join(',')],
       });
       scan('renewal, folds open', card);
     }
@@ -10852,9 +10860,9 @@ m.unmount();
     Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: undefined });
     const widen = [...(foot?.querySelectorAll('button.link-btn') ?? [])].map((b) => b.textContent);
     results.push({
-      name: '/routing-log the foot reads Record v1 and Copy as JSON copies the record whole with the full hash',
+      name: '/routing-log the foot reads Record v2 and Copy as JSON copies the record whole with the full hash',
       ok:
-        foot?.querySelector('.decision-card__record')?.textContent === 'Record v1' && foot.querySelector('.muted')?.textContent === 'Widen to' && JSON.stringify(widen) === JSON.stringify(['this minute', 'this session', 'this account']) && copied !== null &&
+        foot?.querySelector('.decision-card__record')?.textContent === 'Record v2' && foot.querySelector('.muted')?.textContent === 'Widen to' && JSON.stringify(widen) === JSON.stringify(['this minute', 'this session', 'this account']) && copied !== null &&
         copied === JSON.stringify(record.raw, null, 2) && copied.includes(`"${chosen.prefix.staticMatch.hash}"`) && chosen.prefix.staticMatch.hash.length === 64,
       missing: [foot?.textContent ?? 'no foot', String(copied).slice(0, 80)],
     });
@@ -10867,24 +10875,25 @@ m.unmount();
     await popoversOpen('spent move', page, card, record);
     const stations = stationsOf(card);
     const steps = stations.map((s) => `${s.step} ${s.verdict}`);
-    const cool = stations.find((s) => s.step === 'Cool reading');
+    const fit = stations.find((s) => s.step === 'Fit');
     // The rules after a fired one never ran, so they stand idle on the line while the move rides the track, and each
     // one's popover names the rules the fired one cut short with its own marked.
     const rules = stations.filter((s) => ['overage', 'return to plan', 'drain', 'shed'].includes(s.step));
     const landed = stations.find((s) => s.step === 'static');
-    const coolReading = await popoverOf(page, cool?.button);
+    const fitTable = await popoverOf(page, fit?.button);
     const rung = await popoverOf(page, landed?.button);
     const cut = await popoverOf(page, rules[0]?.button);
     results.push({
-      name: "/routing-log the spent move's card reads the cool reading, the cap filter and where it landed",
+      name: "/routing-log the spent move's card reads the fit, the cap filter, where it landed and the reservation after the rung",
       ok:
         sentenceOf(card) === `Moved [${record.outcome.fromAccountId}] to [${record.outcome.accountId}]` && verdictChipsOf(card).includes('spent rule') &&
         steps.includes('spent fired') && JSON.stringify(rules.map((s) => s.step)) === JSON.stringify(['overage', 'return to plan', 'drain', 'shed']) && rules.every((s) => s.verdict === 'not run' && s.state === 'is-idle' && !onTrack(s)) &&
         JSON.stringify(chipsOf(cut)) === JSON.stringify(['overage', 'return to plan', 'drain', 'shed']) && cut?.querySelector('.chips > .chip.is-marked')?.textContent === 'overage' &&
-        cool?.verdict === 'preferred' && cellOf(coolReading, record.outcome.accountId, 'cool')?.textContent === 'yes' && steps.includes('Cap filter passed') &&
+        fit?.verdict === 'rewrite only' && cellOf(fitTable, record.outcome.accountId, 'verdict')?.textContent === 'rewrite only' && steps.includes('Cap filter passed') &&
         landed?.verdict === 'match' && (popoverRowOf(rung, 'on') ?? []).includes(`on ${record.outcome.accountId}`) &&
-        steps.indexOf('spent fired') < steps.indexOf('Move moved') && steps.indexOf('Move moved') < steps.indexOf('Cool reading preferred') && onTrack(stations.find((s) => s.id === 'move')) && onTrack(cool),
-      missing: [sentenceOf(card), ...stations.map((s) => `${s.step} ${s.verdict}${onTrack(s) ? ' (track)' : ''}: ${s.second.join(' / ')}`), `cut short: ${chipsOf(cut).join(' / ')}`, `cool ${cellOf(coolReading, record.outcome.accountId, 'cool')?.textContent}`, `static: ${rowsRead(rung)}`],
+        steps.indexOf('spent fired') < steps.indexOf('Move moved') && steps.indexOf('Move moved') < steps.indexOf('Fit rewrite only') && onTrack(stations.find((s) => s.id === 'move')) && onTrack(fit) &&
+        steps.indexOf('static match') < steps.indexOf('Reserve booked') && steps.at(-1) === 'Reserve booked' && onTrack(stations.at(-1)),
+      missing: [sentenceOf(card), ...stations.map((s) => `${s.step} ${s.verdict}${onTrack(s) ? ' (track)' : ''}: ${s.second.join(' / ')}`), `cut short: ${chipsOf(cut).join(' / ')}`, `fit ${cellOf(fitTable, record.outcome.accountId, 'verdict')?.textContent}`, `static: ${rowsRead(rung)}`],
     });
     // The re-made drawer check: the move and the rung that placed it read on one card.
     results.push({
@@ -10900,7 +10909,7 @@ m.unmount();
     scan('shed move', card);
     stripDrawn('shed move', card, [
       ...[['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'fired'], ['Renew', 'not run']],
-      ...[['Move', 'moved'], ['Cool reading', 'preferred'], ['Cap filter', 'passed'], ['Partitions', 'match'], ['content', 'none'], ['with main', 'none'], ['static', 'none'], ['Pick', 'chosen']],
+      ...[['Move', 'moved'], ['Fit', 'fits'], ['Cap filter', 'passed'], ['Partitions', 'match'], ['content', 'none'], ['with main', 'none'], ['static', 'none'], ['Pick', 'chosen'], ['Reserve', 'booked']],
     ]);
     await popoversOpen('shed move', page, card, record);
     const shed = stationsOf(card).find((s) => s.step === 'shed');
@@ -10929,10 +10938,12 @@ m.unmount();
     results.push({
       name: "/routing-log the shed move's card reads the round and its marks",
       ok:
-        record.outcome.rule === 'shed' && shed?.verdict === 'fired' && (popoverRowOf(fired, 'round') ?? []).includes('round within dwell') && (popoverRowOf(fired, 'marked') ?? []).includes('marked yes') && JSON.stringify(ddWords(mark?.dd)) === JSON.stringify(['marked by a round']) &&
-        ran?.verdict === 'no' && (popoverRowOf(roundGroup, 'round') ?? []).includes('round ran') && marks.length === sessions.length && sessions.length === 3 &&
+        record.outcome.rule === 'shed' && shed?.verdict === 'fired' && (popoverRowOf(fired, 'round') ?? []).includes('round within dwell') && (popoverRowOf(fired, 'marked') ?? []).includes('marked yes') &&
+        (popoverRowOf(fired, 'trigger') ?? []).includes('trigger 5h') && /^excess \d+\.\d\d %\/h$/.test((popoverRowOf(fired, 'excess') ?? [])[0] ?? '') &&
+        JSON.stringify(ddWords(mark?.dd)) === JSON.stringify([`marked on ${record.pin.markedOn}`, `at ${new Date(record.pin.markedAt).toISOString().slice(11, 16)}`, 'by the 5h trigger']) &&
+        ran?.verdict === 'no' && (popoverRowOf(roundGroup, 'round') ?? []).includes('round ran') && marks.length === sessions.length && sessions.length === 2 &&
         marks.every((c) => c.querySelector('a')?.getAttribute('href') === '/sessions') && JSON.stringify(marks.map((c) => c.getAttribute('title')?.split('/')[1])) === JSON.stringify(sessions) && marks.every((c) => !/[,;]/.test(c.textContent ?? '')),
-      missing: [shed ? `${shed.step} ${shed.verdict}: ${rowsRead(fired)}` : 'no shed station', JSON.stringify(ddWords(mark?.dd)), ran ? rowsRead(roundGroup) : 'no round station'],
+      missing: [shed ? `${shed.step} ${shed.verdict}: ${rowsRead(fired)}` : 'no shed station', JSON.stringify(ddWords(mark?.dd)), ran ? rowsRead(roundGroup) : 'no round station', `${marks.length} marks of ${sessions.length}`],
     });
     results.push({ name: "/routing-log the open card's verdict badge carries its row's tone class", ok: toneClasses.every((c) => c.split(' ').includes('badge--warning')), missing: toneClasses });
     round.page.unmount();
@@ -11109,13 +11120,13 @@ m.unmount();
       ['Eligible', 'match'],
       ['Spent', 'off'],
       ['At cap', '0 out'],
-      ['Above ceiling', 'off'],
+      ['No fit', 'fell through'],
       ['Winding down', '0 out'],
-      ['Floor', '0 out'],
       ['content', 'none'],
       ['with main', 'none'],
       ['static', 'none'],
       ['Pick', 'chosen'],
+      ['Reserve', 'booked'],
     ]);
     await popoversOpen('fresh placement', page, card, record);
     const stations = stationsOf(card);
@@ -11129,6 +11140,86 @@ m.unmount();
       missing: [...stations.map((s) => `${s.step} ${s.verdict}`), `Lookup: ${rowsRead(lookup)}`, JSON.stringify(leavesOf(card))],
     });
     page.unmount();
+  }
+  {
+    // The story's cards for the gate and the reservation: each draws its stations in order and ends in its way out, the
+    // spent move held for the reset in the fourth one.
+    const FRESH = (noFit) => [['Pin', 'none'], ['Eligible', 'match'], ['Spent', 'off'], ['At cap', '0 out'], ['No fit', noFit], ['Winding down', '0 out'], ['content', 'none'], ['with main', 'none'], ['static', 'none'], ['Pick', 'chosen'], ['Reserve', 'booked']];
+    const cards = [
+      {
+        expected: [['Pin', 'match'], ['Eligible', 'match'], ['spent', 'held'], ['overage', 'not run'], ['return to plan', 'not run'], ['drain', 'not run'], ['shed', 'not run'], ['Renew', 'not run'], ['Reserve', 'none']],
+        id: 'req_9d4c1a73-e58',
+        seq: 2,
+        terminus: ['held_reset', 'Held for the reset', 'held'],
+        // The hold waits for the window's reset, which its chip and its Hold row name.
+        own: (card, record) => {
+          const at = `for the reset at ${new Date(record.outcome.hold.until).toISOString().slice(11, 16)}`;
+          return verdictChipsOf(card).includes(`held ${at}`) && (outcomeOf(card).Hold ?? []).includes(at);
+        },
+        what: 'spent move held for the reset',
+      },
+      {
+        expected: [
+          ...[['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'fired'], ['drain', 'not run'], ['shed', 'not run'], ['Renew', 'not run']],
+          ...[['Move', 'moved'], ['Fit', 'least bad'], ['Cap filter', 'passed'], ['Partitions', 'match'], ['content', 'none'], ['with main', 'none'], ['static', 'none'], ['Pick', 'chosen'], ['Reserve', 'booked']],
+        ],
+        id: 'req_5b2e8d47-c19',
+        seq: 1,
+        terminus: ['chosen', 'Chosen', 'moved'],
+        // No destination fit, so the gate's table reads all three and the row reads the order it took.
+        own: async (card, record, page) => {
+          const table = await popoverOf(page, stationButton(card, 'fit'));
+          const fact = [...(rowOf(page, `${record.requestId}/1`)?.querySelectorAll('.fact__pair') ?? [])].map((p) => p.textContent);
+          return (table?.querySelectorAll('tbody tr').length ?? 0) === 3 && fact.includes('fitleast bad');
+        },
+        what: 'least-bad move',
+      },
+      {
+        expected: [['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'no'], ['Renew', 'renewed'], ['Reserve', 'none']],
+        id: 'req_6e1f3b98-a24',
+        seq: 1,
+        terminus: ['chosen', 'Chosen', 'renewed'],
+        // The round found no destination with runway, so its Round group names each pin it passed over and why.
+        own: async (card, record, page) => {
+          const round = groupOfPopover(await popoverOf(page, stationButton(card, 'move:shed')), 'Round');
+          const skipped = popoverRowOf(round, 'skipped') ?? [];
+          return skipped.length === 2 && skipped.every((c) => /^skipped [0-9a-f]{8}: no runway$/.test(c));
+        },
+        what: 'round that marked nothing',
+      },
+      {
+        expected: FRESH('1 out'),
+        id: 'req_2c7d9f15-b63',
+        seq: 1,
+        terminus: ['chosen', 'Chosen', 'placed'],
+        // A member whose sessions burn more than its window has left an hour reads a spare rate below zero.
+        own: (card) => candidateRows(card).some((tr) => /^-\d+\.\d\d %\/h$/.test(tr.children[tr.children.length - 3]?.textContent ?? '')),
+        what: 'spare-rate placement',
+      },
+      {
+        expected: FRESH('1 out'),
+        id: 'req_7a3f0c26-d81',
+        seq: 1,
+        terminus: ['chosen', 'Chosen', 'placed'],
+        // The booking reads on the verdict line and in the Outcome until the usage replaces it.
+        own: (card) => verdictChipsOf(card).some((c) => /^reserved [\d.]+% of 5h$/.test(c)) && (outcomeOf(card).Reservation ?? []).some((c) => c.startsWith('expires ')),
+        what: 'booked placement',
+      },
+    ];
+    for (const { expected, id, own, seq, terminus, what } of cards) {
+      const { card, page, record } = await story(id, seq);
+      scan(what, card);
+      stripDrawn(what, card, expected);
+      await popoversOpen(what, page, card, record);
+      const taken = [...(card?.querySelectorAll('.decision-strip .strip-terminus.is-taken') ?? [])].map((b) => [b.dataset.terminus, b.querySelector('.strip-terminus__word')?.textContent, b.querySelector('.badge')?.textContent]);
+      const holds = await own(card, record, page);
+      results.push({
+        name: `/routing-log the ${what}'s card reads its stations in order and ends in ${terminus[1]}`,
+        ok: JSON.stringify(pairsOf(card)) === JSON.stringify(expected) && JSON.stringify(taken) === JSON.stringify([terminus]) && holds,
+        missing: [pairsOf(card).map((x) => x.join(' ')).join(' / '), JSON.stringify(taken), `its own reading ${holds}`, verdictChipsOf(card).join(' / '), JSON.stringify(outcomeOf(card))],
+      });
+      page.unmount();
+    }
   }
   {
     // A pinned popover closes on Escape and on a click outside it, and one a hover opened closes on Escape while the
@@ -11349,7 +11440,7 @@ m.unmount();
     // A Pace pick: the header names the window the record read, each member's Pace cell says on hover what its score
     // divided, and the row's By chip how the strategy ranks.
     const { card, page, record } = await story('req_ef099b34-453');
-    const header = [...(card?.querySelectorAll('.decision-card__candidates thead th') ?? [])].find((th) => th.textContent.startsWith('Pace'))?.textContent ?? '';
+    const header = [...(card?.querySelectorAll('.decision-card__candidates thead th') ?? [])].find((th) => th.textContent.startsWith('Spare rate'))?.textContent ?? '';
     // Pace sits third from the end whatever a key's merged windows span.
     const paceTitle = (tr) => tr.children[tr.children.length - 3]?.getAttribute('title') ?? '';
     const titles = candidateRows(card).map((tr) => ({ id: tr.querySelector('td a')?.textContent, title: paceTitle(tr) }));
@@ -11364,7 +11455,7 @@ m.unmount();
         header === paceWord(record) &&
         header !== 'Pace' &&
         oauth.length > 0 &&
-        oauth.every((t) => /^\d+% of (the 7-day window|the Fable week|its window) left over \d+ (min|h) /.test(t.title) && t.title.endsWith('. Inside its tier, the highest above the pace floor wins.')) &&
+        oauth.every((t) => /^\d+% of (the 7-day window|the Fable week|its window) left over \d+ (min|h) .*, less -?\d+\.\d\d %\/h of burn: -?\d+\.\d\d %\/h\. /.test(t.title) && t.title.endsWith('. Inside its tier, the highest spare rate wins.')) &&
         keys.length > 0 && keys.every((t) => /worst live bucket left/.test(t.title)) && hint.startsWith('Pace: the account with the most of its window left'),
       missing: [header, ...titles.map((t) => `${t.id}: ${t.title}`), hint],
     });
@@ -11428,7 +11519,7 @@ m.unmount();
       name: '/routing-log the candidate table reads all three windows on a subscription member and one merged reading on a key',
       ok:
         record.candidates.some((c) => c.kind === 'oauth' && c.pace?.window) &&
-        JSON.stringify(headers) === JSON.stringify(['Account', 'Tier', '5h', '7d', 'Fable', 'In flight', paceWord(record), 'Prefix', 'Verdict']) && fableCells.slice(2, 5).every((c) => c.length === 3) &&
+        JSON.stringify(headers) === JSON.stringify(['Account', 'Tier', '5h', '7d', 'Fable', 'Projection', 'Runway', 'In flight', paceWord(record), 'Prefix', 'Verdict']) && fableCells.slice(2, 5).every((c) => c.length === 3) &&
         /^\d+%$/.test(fableCells[2]?.[0] ?? '') && /^(head|poll|predicted|stored) /.test(fableCells[2]?.[2] ?? '') && keyRow?.children[2]?.getAttribute('colspan') === '3' && /^worst bucket \d+%$/.test(keyRow?.children[2]?.textContent ?? ''),
       missing: [headers.join(','), JSON.stringify(fableCells), keyRow?.textContent ?? 'no key member'],
     });
@@ -11536,6 +11627,7 @@ m.unmount();
       cooldown_set: ['Scope', 'Reason', 'Window', 'Until', 'Set by'],
       fast_credits_changed: ['Before', 'After', 'Cause', 'Effect'],
       ledger_gap: ['Reason', 'Meaning', 'Effect', 'Request'],
+      mark_cleared: ['Key', 'Session', 'Agent', 'Model', 'Reason', 'Marked', 'Standing for'],
       model_permitted: ['Rejected by', 'Served at', 'Model sent', 'Model resolved', 'Request'],
       model_rejected: ['Model sent', 'Model resolved', 'Cooldown scope', 'Attempt', 'Request'],
       overage_ended: ['Since', 'Lasted'],
@@ -11550,17 +11642,18 @@ m.unmount();
       refresh_succeeded: ['Access token', 'Refresh token'],
       refresh_uncertain: ['Error'],
       registry_changed: ['Change', 'Fields', 'Actor'],
+      reservation_expired: ['Request', 'Attempt', 'Cause', 'Reserved', 'Held for', 'Effect'],
       router_started: ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests'],
-      shedding_round: ['Started by', 'Reading', 'Unit', 'Burn window', 'Share', 'Warm sessions', 'Pins', 'Marks kept until', 'Dwell', 'Survive a restart'],
+      shedding_round: ['Started by', 'Trigger', 'Excess', 'Cap', 'Unit', 'Burn average', 'Warm sessions', 'Pins', 'Skipped', 'Outcome', 'Next round after', 'Dwell', 'Survive a restart'],
       warm_prefix_expired: ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed'],
       wind_down_started: ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from'],
       window_reset: ['Window', 'Before the reset', 'Prediction', 'Next reset'],
       window_spent: ['Window', 'Reading', 'Read from', 'Resets', 'Effect', 'Request'],
     };
     const EVENT_KINDS = [
-      'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'model_permitted', 'model_rejected',
+      'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
       'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
-      'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset', 'window_spent',
+      'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset', 'window_spent',
     ];
     const utc = (at) => `${new Date(at).toISOString().slice(0, 19).replace('T', ' ')} UTC`;
     const hhmm = (at) => new Date(at).toISOString().slice(11, 16);
@@ -11570,7 +11663,10 @@ m.unmount();
       account_state_changed: () => ({ Effect: ['the account leaves every eligible set until funded'] }),
       ledger_gap: () => ({ Meaning: ['an interior chunk of the capture was dropped at the bus'] }),
       poll_backoff_ended: (e) => ({ 'Backed off': [`from ${hhmm(e.detail.resumed_at - e.detail.duration_ms)}`, `to ${hhmm(e.detail.resumed_at)}`] }),
-      window_spent: () => ({ Effect: ['a pinned session moves by the spent rule at its next request'] }),
+      mark_cleared: (e) => ({ Marked: [hhmm(e.detail.marked_at), `on ${e.detail.marked_on}`], Reason: [e.detail.reason] }),
+      reservation_expired: (e) => ({ Cause: [e.detail.cause.replace(/_/g, ' ')], Reserved: Object.entries(e.detail.shares).map(([w, v]) => `${{ five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable' }[w]} ${fmtShare(v)}`) }),
+      shedding_round: (e) => ({ Outcome: ['nothing to mark: no runway'], Trigger: [`5h projection ${fmtPct(e.detail.projection)} at ${hhmm(e.detail.horizon)} over the ceiling ${fmtPct(e.detail.ceiling)}`] }),
+      window_spent: () => ({ Effect: ['a pinned session moves by the spent rule at its next request or waits in place for a reset within the retry bound'] }),
     };
     const modelLinks = {};
     for (const kind of EVENT_KINDS) {

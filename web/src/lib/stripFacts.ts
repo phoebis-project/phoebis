@@ -1,9 +1,9 @@
 import type { DecisionRecord, DecisionSummary, PrefixEntry, WalkFact, WalkStep } from '@/api/types';
 import { own } from '@/lib/analytics';
-import { PARTITION_FACTS, type Leaf, type Renderer, type Station, type StripAnchor, type StripModel, type Terminus } from '@/lib/decisionStrip';
+import { LEGACY_PARTITION_FACTS, PARTITION_FACTS, type Leaf, type Renderer, type Station, type StripAnchor, type StripModel, type Terminus } from '@/lib/decisionStrip';
 import { fmtCompact, fmtInt, fmtPct } from '@/lib/format';
 import type { BadgeTone } from '@/lib/quota';
-import { accountChip, ageWord, candidateCells, type Chip, factChips, formatFact, hashTitle, keyWord, outcomeRows, paceHeader, PLACE_WORD, plain, rungEntry, shortHash, STEP_NAME, valueText, walkLines, warmUntil, WINDOW_WORD, words } from '@/lib/routingLog';
+import { accountChip, ageWord, candidateCells, type Chip, factChips, formatFact, hashTitle, keyWord, outcomeRows, paceHeader, PLACE_WORD, plain, rungEntry, shortHash, STEP_NAME, valueText, verdictTone, type VerdictTone, verdictWord, walkLines, warmUntil, WINDOW_WORD, words } from '@/lib/routingLog';
 
 // A popover's plan: the facts of one station, leaf or terminus as plain data in the console's words, which
 // `StripPopover` draws and the unit tests read.
@@ -12,8 +12,11 @@ import { accountChip, ageWord, candidateCells, type Chip, factChips, formatFact,
 export interface PlanRow { chips: Chip[]; entry?: PrefixEntry; label: string; marked?: boolean; title?: string }
 export interface PlanGroup { label: string | null; rows: PlanRow[] }
 export interface PlanColumn { key: string; label: string; numeric: boolean; title?: string }
-/** One row per account in the facts' order and one cell per column, null where the account lacks the fact. */
-export interface PlanTable { columns: PlanColumn[]; loose: PlanRow[]; rows: { account: Chip; cells: Record<string, { text: string; title?: string } | null> }[] }
+/**
+ * One row per account in the facts' order and one cell per column, null where the account lacks the fact. A cell
+ * with a `tone` draws its text as a badge in it.
+ */
+export interface PlanTable { columns: PlanColumn[]; loose: PlanRow[]; rows: { account: Chip; cells: Record<string, { text: string; title?: string; tone?: VerdictTone } | null> }[] }
 export interface WindowRow { age: string; left: string; reset: string; source: string; used: string; window: string }
 export type PopoverBlock =
   | { kind: 'candidate'; chips: Chip[]; windows: WindowRow[] }
@@ -35,6 +38,8 @@ export const SENTENCE = {
   notRun: 'This step did not run.',
   placeholder: 'The record carries no step here.',
   rest: 'The rest of the walk did not run: the moves, the rungs and the partitions.',
+  reserveNone: 'Nothing was booked.',
+  reserveRenewed: 'Nothing was booked: the pin renewed in place.',
 } as const;
 
 interface GroupKeys { keys: readonly string[]; label: string | null }
@@ -44,6 +49,12 @@ const PIN_GROUPS: GroupKeys[] = [
   { keys: ['warmth', 'cause', 'marked'], label: 'Warmth' },
 ];
 const SHED_GROUPS: GroupKeys[] = [
+  { keys: ['projection_five_hour', 'horizon_five_hour', 'projection_seven_day', 'horizon_seven_day', 'projection_seven_day_fable', 'horizon_seven_day_fable', 'ceiling', 'cooldown', 'window_share_fast'], label: 'Windows' },
+  { keys: ['trigger', 'excess', 'target', 'round', 'marked', 'marks', 'skipped'], label: 'Round' },
+  { keys: ['destinations', 'no_destination', 'ending'], label: 'Destinations' },
+];
+/** A version 1 record's shed rule read the lead over pace. */
+const LEGACY_SHED_GROUPS: GroupKeys[] = [
   { keys: ['ahead_five_hour', 'elapsed_five_hour', 'deadline_five_hour', 'ahead_seven_day', 'elapsed_seven_day', 'deadline_seven_day', 'cooldown', 'window_share_fast'], label: 'Windows' },
   { keys: ['margin', 'threshold', 'round', 'marked', 'marks'], label: 'Round' },
   { keys: ['destinations', 'no_destination'], label: 'Destinations' },
@@ -53,6 +64,17 @@ const RENEW_GROUPS: GroupKeys[] = [
   { keys: ['refresh_stamped', 'hashes_stamped'], label: 'Stamps' },
 ];
 const GROUPS_OF: Record<string, GroupKeys[]> = { 'move:shed': SHED_GROUPS, partitions: [{ keys: PARTITION_FACTS, label: null }], pin: PIN_GROUPS, renew: RENEW_GROUPS };
+const LEGACY_GROUPS_OF: Record<string, GroupKeys[]> = { ...GROUPS_OF, 'move:shed': LEGACY_SHED_GROUPS, partitions: [{ keys: LEGACY_PARTITION_FACTS, label: null }] };
+/**
+ * The Fit table's columns: the projection, the rewrite and the reserved share of every window the gate read, window by
+ * window in the console's order, then the runway, the window that binds, the end and the verdict.
+ */
+const FIT_COLUMN_ORDER = ['projection', 'rewrite', 'reserved', 'runway_ms', 'binding', 'end', 'verdict'];
+const fitRank = (key: string) => {
+  const at = FIT_COLUMN_ORDER.findIndex((lead) => key === lead || key.startsWith(`${lead}_`));
+  const window = Object.keys(WINDOW_WORD).findIndex((w) => key.endsWith(`_${w}`));
+  return (at < 0 ? FIT_COLUMN_ORDER.length : at) * 10 + (window < 0 ? 9 : window);
+};
 /** A fact that names the account a step acted on reads as "on" that account, as its chip does. */
 const ROW_LABEL: Record<string, string> = { account_id: 'on' };
 const NUMERIC_UNITS = new Set(['count', 'ms', 'percent', 'percent_per_hour', 'tokens', 'usd']);
@@ -96,12 +118,21 @@ function listOf(s: Station, step: WalkStep, record: DecisionRecord, row: Decisio
   const marked = s.id.startsWith('partitions:') ? s.id.slice('partitions:'.length) : null;
   const refusal = step.step === 'admission' && record.outcome.refusal !== null ? walkLines(record, row).find((l) => l.step === STEP_NAME.admission) : undefined;
   const placed = new Set<WalkFact>();
+  // The "on" row names the account the step acted on, so the facts about that account read without it again.
+  const on = step.facts.find((f) => f.key === 'account_id')?.value;
+  // A move's gate kept its destinations whole, so the no-fit count reads 0 whatever order the gate took, and the row
+  // names that order instead.
+  const gates = step.step === 'partitions' ? record.walk.slice(0, record.walk.indexOf(step)).filter((w) => w.step === 'fit') : [];
+  const gate = gates[gates.length - 1];
   const rowsFor = (f: WalkFact): PlanRow[] => {
     placed.add(f);
     if (refusal !== undefined && f.key === 'reason') return [{ chips: refusal.chips, label: keyWord(f.key) }];
-    return rowsOf(f, record, at, unplaced).map((r) => (f.key === marked ? { ...r, marked: true } : r));
+    if (gate !== undefined && f.key === 'no_fit') return [{ chips: [plain(`by the gate's ${verdictWord(gate.verdict)} order`, keyWord(f.key))], label: keyWord(f.key), ...(f.key === marked ? { marked: true } : {}) }];
+    const fact = f.key !== 'account_id' && f.accountId !== null && f.accountId === on ? { ...f, accountId: null } : f;
+    return rowsOf(fact, record, at, unplaced).map((r) => (f.key === marked ? { ...r, marked: true } : r));
   };
-  const list: PlanGroup[] = (own(GROUPS_OF, step.step) ? GROUPS_OF[step.step] : []).map((g) => ({ label: g.label, rows: g.keys.flatMap((k) => step.facts.filter((f) => f.key === k).flatMap(rowsFor)) }));
+  const groupsOf = record.version < 2 ? LEGACY_GROUPS_OF : GROUPS_OF;
+  const list: PlanGroup[] = (own(groupsOf, step.step) ? groupsOf[step.step] : []).map((g) => ({ label: g.label, rows: g.keys.flatMap((k) => step.facts.filter((f) => f.key === k).flatMap(rowsFor)) }));
   list.push({ label: null, rows: step.facts.filter((f) => !placed.has(f)).flatMap(rowsFor) });
   return groups('list', list, unplaced);
 }
@@ -110,7 +141,8 @@ const numeric = (f: WalkFact) => typeof f.value === 'number' || (f.unit !== null
 
 /**
  * The table renderer: a row per account in the facts' order, a column per key the accounts carry, and the step's loose
- * facts as rows above it. The pick's scores read the candidates table's Pace cells under its Pace header.
+ * facts as rows above it. The pick's scores read the candidates table's Pace cells under its Pace header, and the Fit
+ * table orders its columns window by window and tones its verdicts.
  */
 function tableOf(step: WalkStep, record: DecisionRecord, at: number, now: number): Pick<PopoverPlan, 'block' | 'renderer' | 'unplaced'> {
   const unplaced: PopoverPlan['unplaced'] = [];
@@ -137,8 +169,10 @@ function tableOf(step: WalkStep, record: DecisionRecord, at: number, now: number
     }
     const member = pace ? record.candidates.find((c) => c.accountId === f.accountId) : undefined;
     const cells = member === undefined ? null : candidateCells(member, record, now);
-    account.cells[f.key] = cells === null ? { text: valueText(f.key, f.value, f.unit, at) } : { text: cells.pace, ...(cells.paceTitle === null ? {} : { title: cells.paceTitle }) };
+    const toned = step.step === 'fit' && f.key === 'verdict' && typeof f.value === 'string' ? { tone: verdictTone(f.value, 'fit') } : {};
+    account.cells[f.key] = cells === null ? { text: valueText(f.key, f.value, f.unit, at), ...toned } : { text: cells.pace, ...(cells.paceTitle === null ? {} : { title: cells.paceTitle }) };
   }
+  if (step.step === 'fit') columns.sort((a, b) => fitRank(a.key) - fitRank(b.key));
   // A cell the account lacks stays blank.
   const table = [...rows.values()].map((r) => ({ account: r.account, cells: Object.fromEntries(columns.map((c) => [c.key, r.cells[c.key] ?? null])) }));
   return { block: { kind: 'table', table: { columns, loose, rows: table } }, renderer: 'table', unplaced };
@@ -216,6 +250,11 @@ function stationPlan(s: Station, record: DecisionRecord, row: DecisionSummary | 
   if (s.step === 'selection') return { head, ...sentence(SENTENCE.rest, (step?.facts ?? []).map((f) => ({ key: f.key, reason: 'the rest of the walk reads its sentence' }))) };
   if (step === null) return { head, ...sentence(SENTENCE.placeholder) };
   if (step.verdict === 'not_run' && step.facts.length === 0) return { head, ...sentence(SENTENCE.notRun) };
+  if (step.step === 'reserve' && step.verdict === 'none') {
+    // A booking of nothing has no shares to list, so the sentence says so and leaves its account to the card.
+    const unplaced = step.facts.map((f) => ({ key: f.key, reason: 'a booking of nothing reads its sentence' }));
+    return { head, ...sentence(record.outcome.kind === 'renewed' ? SENTENCE.reserveRenewed : SENTENCE.reserveNone, unplaced) };
+  }
   switch (s.renderer) {
     case 'hold':
       return { head, ...holdOf(step, record, at) };
@@ -242,7 +281,16 @@ function stationPlan(s: Station, record: DecisionRecord, row: DecisionSummary | 
 function remainingOf(model: StripModel, record: DecisionRecord, now: number): PlanTable {
   const shown = new Set(model.leaves.map((l) => l.accountId));
   const windows = Object.entries(WINDOW_WORD).map(([key, label]) => ({ key, label, numeric: true }));
-  const columns: PlanColumn[] = [{ key: 'tier', label: 'Tier', numeric: true }, ...windows, { key: 'in_flight', label: 'In flight', numeric: true }, { key: 'pace', label: paceHeader(record), numeric: true }, { key: 'prefix', label: 'Prefix', numeric: false }, { key: 'verdict', label: 'Verdict', numeric: false }];
+  const columns: PlanColumn[] = [
+    { key: 'tier', label: 'Tier', numeric: true },
+    ...windows,
+    { key: 'projection', label: 'Projection', numeric: true },
+    { key: 'runway', label: 'Runway', numeric: true },
+    { key: 'in_flight', label: 'In flight', numeric: true },
+    { key: 'pace', label: paceHeader(record), numeric: true },
+    { key: 'prefix', label: 'Prefix', numeric: false },
+    { key: 'verdict', label: 'Verdict', numeric: false },
+  ];
   const rows = record.candidates
     .filter((c) => !shown.has(c.accountId))
     .map((c) => {
@@ -261,6 +309,9 @@ function remainingOf(model: StripModel, record: DecisionRecord, now: number): Pl
           in_flight: { text: cells.inFlight },
           pace: { text: cells.pace, ...(cells.paceTitle === null ? {} : { title: cells.paceTitle }) },
           prefix: entry === null ? null : { text: shortHash(entry.hash), title: [hashTitle(entry), cells.prefix.until].filter((t) => t !== null).join('\n') },
+          // A projection reads its first window, the others on hover, as a window cell reads its reset.
+          projection: { text: cells.projection[0], ...(cells.projection.length > 1 ? { title: cells.projection.join('\n') } : {}) },
+          runway: { text: cells.runway },
           tier: { text: cells.tier },
           verdict: { text: chip === null ? cells.verdict.badge : `${cells.verdict.badge} ${chip.value}`, ...(chip?.title === undefined ? {} : { title: chip.title }) },
           ...Object.fromEntries(windows.map((w, i) => [w.key, window(i)])),

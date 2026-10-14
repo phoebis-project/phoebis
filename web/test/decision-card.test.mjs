@@ -11,7 +11,7 @@ globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
 const { act, api, createElement: h, createRoot, DecisionCard, Descriptions, MemoryRouter } = await import('./dist/ui.js');
-const { MockApi, stationModel } = await import('./dist/api.js');
+const { formatFact, MockApi, stationModel } = await import('./dist/api.js');
 
 const roots = [];
 const getDecision = api.getDecision;
@@ -76,7 +76,7 @@ test("the candidates table's header names the window the record read", async () 
   assert.ok(row, 'the mock holds a placement');
   const placed = await mock.getDecision(row.requestId, row.seq);
   const [first] = placed.candidates;
-  const pace = { deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168, window: 'seven_day_fable' };
+  const pace = { burn: 0, deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168, window: 'seven_day' };
   const key = { ...first, accountId: 'overflow', kind: 'api_key', pace: { ...pace, hours: null, score: 1, window: null }, planTier: null, windows: {} };
   // A card of its own per record, so each draws from its first read.
   const header = async (candidates) => {
@@ -87,9 +87,10 @@ test("the candidates table's header names the window the record read", async () 
     roots.push(root);
     act(() => root.render(h(MemoryRouter, null, h(DecisionCard, { now: Date.parse(row.at), onWiden() {}, row }))));
     await settled();
-    return [...container.querySelectorAll('.decision-card__candidates thead th')].map((th) => th.textContent).find((t) => t.startsWith('Pace'));
+    // Pace sits third from the end of the header as of every row.
+    return [...container.querySelectorAll('.decision-card__candidates thead th')].map((th) => th.textContent).at(-3);
   };
-  assert.equal(await header([key, { ...first, kind: 'oauth', pace }]), 'Pace, Fable week left per hour');
+  assert.equal(await header([key, { ...first, kind: 'oauth', pace }]), 'Spare rate, 7-day per hour');
   assert.equal(await header([key]), 'Pace');
 });
 
@@ -100,8 +101,8 @@ test("each Pace cell is described by its hover through the host the card sits un
   assert.ok(row, 'the mock holds a placement');
   const placed = await mock.getDecision(row.requestId, row.seq);
   const [first] = placed.candidates;
-  const pace = { deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168, window: 'seven_day' };
-  const key = { ...first, accountId: 'overflow', kind: 'api_key', pace: { ...pace, hours: null, score: 1, window: null }, planTier: null, windows: {} };
+  const pace = { burn: 0.001, deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168 - 0.001, window: 'seven_day' };
+  const key = { ...first, accountId: 'overflow', kind: 'api_key', pace: { ...pace, burn: null, hours: null, score: 1, window: null }, planTier: null, windows: {} };
   api.getDecision = async () => ({ ...placed, candidates: [{ ...first, accountId: 'primary', kind: 'oauth', pace }, key] });
   const container = document.createElement('div');
   document.body.append(container);
@@ -118,6 +119,8 @@ test("each Pace cell is described by its hover through the host the card sits un
     assert.ok(title, `a Pace cell carries its hover: ${td.textContent}`);
     assert.equal(document.getElementById(td.getAttribute('aria-describedby') ?? '')?.textContent, title, `the cell's description is its hover: ${td.textContent}`);
   }
+  // The spare rate's hover names the share left, the hours, the burn already on the account and the rate.
+  assert.equal(cells[0].getAttribute('title'), '100% of the 7-day window left over 168 h with no reset read, less 0.10 %/h of burn: 0.50 %/h. Inside its tier, the highest spare rate wins.');
 });
 
 test("the card draws the strip in the walk's place", async () => {
@@ -344,4 +347,104 @@ test("every node names its button: a station's circle its station and a way out'
     assert.deepEqual(names('circle[data-station]', 'data-station'), names('.strip-station', 'data-station'), `${requestId}: the station circles name the station buttons, one each`);
     assert.deepEqual(names('circle[data-terminus]', 'data-terminus'), names('.strip-terminus', 'data-terminus'), `${requestId}: the way out circles name the way out buttons, one each`);
   }
+});
+
+/** A card drawn from `record` under `row`, outside every description host. */
+async function cardOf(record, row) {
+  api.getDecision = async () => record;
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  act(() => root.render(h(MemoryRouter, null, h(DecisionCard, { now: Date.parse(row.at), onWiden() {}, row }))));
+  await settled();
+  return container;
+}
+
+/** A story decision's row and record. */
+async function storyRecord(requestId, seq) {
+  const mock = new MockApi();
+  let row;
+  let cursor;
+  do {
+    const page = await mock.listRoutingLog({ cursor, from: new Date(0).toISOString(), limit: 200, to: new Date(Date.now() + 86_400_000).toISOString() });
+    row = page.rows.find((r) => r.type === 'decision' && r.requestId === requestId && r.seq === seq);
+    cursor = page.nextCursor ?? undefined;
+  } while (row === undefined && cursor !== undefined);
+  assert.ok(row, `the mock holds ${requestId}/${seq}`);
+  return { record: await mock.getDecision(requestId, seq), row };
+}
+
+const cellLines = (td) => [...(td?.children ?? [])].map((el) => el.textContent);
+const rowsOf = (container, selector) => [...container.querySelectorAll(`${selector} .kv__row`)].map((r) => [r.querySelector('dt')?.textContent, [...r.querySelectorAll('dd .chip')].map((c) => c.textContent).join(' / ') || r.querySelector('dd')?.textContent]);
+
+test('the candidate table reads the projection a line a window and the runway after Fable', async () => {
+  const { record, row } = await storyRecord('req_ef099b34-453', 1);
+  const at = Date.parse(record.request.at);
+  const now = Date.parse(row.at);
+  const reset = at + 2 * 3_600_000;
+  const window = (projection, horizon, resetAt) => ({ ageMs: 4_000, ahead: null, horizon: new Date(horizon).toISOString(), observedAt: record.request.at, projection, reserved: 0, reset: new Date(resetAt).toISOString(), source: 'head', utilization: projection - 0.1 });
+  const [first] = record.candidates;
+  const read = { ...first, accountId: 'primary', binding: 'five_hour', fit: 'fits', kind: 'oauth', runwayMs: 7_800_000, verdict: 'chosen', windows: { five_hour: window(0.99, reset, reset), seven_day: window(0.41, at + 5 * 3_600_000, at + 80 * 3_600_000), seven_day_fable: window(0.63, at + 5 * 3_600_000, at + 80 * 3_600_000) } };
+  const candidates = [
+    read,
+    { ...read, accountId: 'nightly', fit: 'least_bad', runwayMs: 0, verdict: 'eligible', windows: { five_hour: window(0.99, reset, reset) } },
+    { ...read, accountId: 'secondary', fit: 'fits', runwayMs: null, verdict: 'eligible', windows: { five_hour: window(0.5, reset, reset) } },
+    { ...read, accountId: 'unread', binding: null, fit: null, runwayMs: null, verdict: 'eligible' },
+  ];
+  const container = await cardOf({ ...record, candidates }, row);
+  const heads = [...container.querySelectorAll('.decision-card__candidates thead th')].map((th) => th.textContent);
+  assert.deepEqual(heads.slice(0, 7), ['Account', 'Tier', '5h', '7d', 'Fable', 'Projection', 'Runway']);
+  const rows = [...container.querySelectorAll('.decision-card__candidates tbody tr')];
+  const cells = (tr) => [cellLines(tr.children[5]), tr.children[6].textContent];
+  assert.deepEqual(cells(rows[0]), [[`5h 99% at ${formatFact(reset, 'time', now)}`, '7d 41% in 5 h', 'Fable 63% in 5 h'], '2 h 10 min']);
+  assert.deepEqual(rows.slice(1).map(cells), [[[`5h 99% at ${formatFact(reset, 'time', now)}`], 'none'], [[`5h 50% at ${formatFact(reset, 'time', now)}`], 'unbounded'], [['-'], '-']]);
+});
+
+test("the verdict cell names a destination's fit in its tone, and a fitting one keeps its placement chip", async () => {
+  const { record, row } = await storyRecord('req_ef099b34-453', 1);
+  const [first] = record.candidates;
+  const member = (accountId, fit, verdict = 'eligible') => ({ ...first, accountId, fit, obstacle: null, partition: null, verdict });
+  const container = await cardOf({ ...record, candidates: [member('primary', 'fits', 'chosen'), member('nightly', 'rewrite_only'), member('secondary', 'least_bad', 'destination'), member('ending', 'ending', 'destination')] }, row);
+  const why = (tr) => {
+    const badge = tr.querySelector('.decision-card__why .badge');
+    return badge ? [badge.textContent, [...badge.classList].find((c) => c.startsWith('badge--'))] : null;
+  };
+  assert.deepEqual([...container.querySelectorAll('.decision-card__candidates tbody tr')].map(why), [null, ['rewrite only', 'badge--warning'], ['least bad', 'badge--warning'], ['ending', 'badge--neutral']]);
+});
+
+test('the settings fold lists the nineteen settings in the card order with Load shedding on or off, and a version 1 record its three removed after them', async () => {
+  const { record, row } = await storyRecord('req_ef099b34-453', 1);
+  const fold = async (settings) => {
+    const container = await cardOf({ ...record, settings }, row);
+    return rowsOf(container, '.decision-card__settings');
+  };
+  const labels = ['Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', 'Window ceiling', 'Load shedding', 'Move when spent', 'Overage grace', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Warm sessions', 'In-flight cap', 'Retry in place'];
+  const on = await fold({ ...record.settings, loadShedding: true, windowCeiling: 0.75 });
+  assert.deepEqual(on.map(([label]) => label), labels);
+  assert.deepEqual([on[8], on[9]], [['Window ceiling', '75%'], ['Load shedding', 'on']]);
+  assert.deepEqual((await fold({ ...record.settings, loadShedding: false }))[9], ['Load shedding', 'off']);
+  const legacy = await fold({ ...record.settings, legacy: { paceFloor: 0.05, selectBelowUtilization: 0.6, shedAheadOfPace: null }, loadShedding: null, windowCeiling: null });
+  assert.deepEqual(legacy.map(([label]) => label), [...labels, 'Shed above (then)', 'Select below (then)', 'Pace floor (then)']);
+  assert.deepEqual([legacy[8], legacy[9], ...legacy.slice(-3)], [['Window ceiling', 'not recorded'], ['Load shedding', 'not recorded'], ['Shed above (then)', 'off'], ['Select below (then)', '60%'], ['Pace floor (then)', '5%']]);
+});
+
+test('the verdict line and the Outcome read a hold for the reset and a reservation, and the foot the record version', async () => {
+  const held = await storyRecord('req_9d4c1a73-e58', 2);
+  const until = Date.parse(held.record.outcome.hold.until);
+  const heldCard = await cardOf(held.record, held.row);
+  const time = formatFact(until, 'time', Date.parse(held.row.at));
+  const chips = (container) => [...container.querySelectorAll('.decision-card__verdict > .chips > .chip')].map((c) => c.textContent);
+  assert.ok(chips(heldCard).includes(`held for the reset at ${time}`), chips(heldCard).join(' / '));
+  assert.deepEqual(rowsOf(heldCard, '.decision-card__outcome').find(([label]) => label === 'Hold'), ['Hold', `on${held.record.outcome.hold.accountId} / for the reset at ${time} / bound1 min`]);
+
+  const placed = await storyRecord('req_ef099b34-453', 1);
+  const expires = Date.parse(placed.record.request.at) + 3_600_000;
+  const reservation = { accountId: 'primary', burn: { five_hour: 0.01, seven_day: 0.0012 }, expiresAt: new Date(expires).toISOString(), rewrite: { five_hour: 0.104, seven_day: 0.012 } };
+  const booked = await cardOf({ ...placed.record, outcome: { ...placed.record.outcome, reservation } }, placed.row);
+  assert.ok(chips(booked).includes('reserved 10.4% of 5h'), chips(booked).join(' / '));
+  assert.deepEqual(rowsOf(booked, '.decision-card__outcome').find(([label]) => label === 'Reservation'), ['Reservation', `onprimary / 5h10.4% / 7d1.2% / expires${formatFact(expires, 'time', Date.parse(placed.row.at))}`]);
+  assert.equal(booked.querySelector('.decision-card__record')?.textContent, 'Record v2');
+  const legacy = await cardOf({ ...placed.record, version: 1 }, placed.row);
+  assert.equal(legacy.querySelector('.decision-card__record')?.textContent, 'Record v1');
 });
