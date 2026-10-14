@@ -407,26 +407,22 @@ test('a move whose continuation the content rung decides hangs the fan from that
   assert.deepEqual(terminiOf(m), PINNED_TERMINI('moved'));
 });
 
-test('a move whose continuation the content rung decides ends its taken track there and runs on past it idle', async () => {
+test('a move whose continuation the content rung decides comes down past the idle rungs into its booked Reserve and on into Chosen', async () => {
   const m = await contentMove();
   const layout = d.layoutStrip(m, 958);
-  const { yu } = layout;
+  const { y0, yu } = layout;
   const at = (id) => layout.stations[id];
   const track = layout.paths.filter((p) => p.kind === 'track');
   assert.deepEqual(track.map((p) => p.state), ['taken', 'idle']);
   const [taken, idle] = track.map((p) => p.d);
   assert.equal(highestAt(taken, at('rung:content').x), yu, 'the taken track runs along the track to the decisive rung');
-  for (const id of ['rung:with_main', 'rung:static']) assert.ok(highestAt(taken, at(id).x) > yu + d.RADIUS, `the taken track passes under the idle ${id}`);
-  // The line's idle curve into Chosen runs on the line itself, so past the rung the taken track keeps below it.
-  const [rung, chosen] = [at('rung:content').x, layout.termini.chosen.x];
-  for (let k = 1; k < 16; k += 1) {
-    const x = rung + ((chosen - rung) * k) / 16;
-    assert.ok(highestAt(taken, x) > layout.y0 + d.RADIUS, `the taken track passes under the line at ${x.toFixed(1)} (highest ${highestAt(taken, x)}, the line at ${layout.y0})`);
+  for (const id of ['rung:with_main', 'rung:static']) {
+    const lane = highestAt(taken, at(id).x);
+    assert.ok(lane > yu + d.RADIUS && lane < y0 - d.RADIUS, `the taken track passes under the idle ${id} and above the line (${lane})`);
   }
-  assert.deepEqual(pointsOf(taken).at(-1), [chosen, layout.termini.chosen.y + d.TERMINUS_RADIUS], 'the taken track rises into Chosen from below');
-  assert.ok(idle.startsWith(`M${at('rung:content').x} ${yu} `), 'the idle track starts at the decisive rung');
-  for (const id of ['rung:with_main', 'rung:static']) assert.equal(highestAt(idle, at(id).x), yu, `the idle track runs through ${id}`);
-  assert.ok(idle.endsWith(`${layout.termini.chosen.x} ${layout.y0 - 8}`), 'the idle track comes down into Chosen');
+  assert.equal(highestAt(taken, at('reserve').x), yu, 'the taken track comes back up into the booked Reserve');
+  assert.deepEqual(pointsOf(taken).at(-1), [layout.termini.chosen.x, y0 - 8], 'and runs on from it down into Chosen, as a track ends');
+  assert.equal(idle, `M${at('rung:content').x} ${yu} H${at('reserve').x}`, 'the idle track runs from the decisive rung through the idle rungs to Reserve');
   const fan = layout.paths.find((p) => p.kind === 'fan');
   assert.ok(fan.d.startsWith(`M${at('rung:content').x} ${yu + d.RADIUS} `), 'the fan drops from the decisive rung');
   const tick = layout.paths.find((p) => p.kind === 'tick' && p.state === 'taken');

@@ -797,7 +797,19 @@ function layoutMove(model: StripModel, width: number, fired: string, measured: L
   const named = model.termini.find((t) => t.state === 'taken')?.kind ?? 'chosen';
   const end = renewed !== undefined ? down(points[renewed.id].x, y0) : named === 'chosen' ? down(xEnd, y0 - INTO_TERMINUS) : `H${xLast} ${tail({ x: xLast, y: yu }, { x: xEnd, y: y0 + TERMINUS_DROP[named] })}`;
   const decided = track.findIndex((s) => s.decisive);
-  if (decided >= 0 && !booksOn(track, decided)) {
+  const last = track[track.length - 1];
+  const booked = decided >= 0 && decided < track.length - 1 && last.step === RESERVE && last.state === 'taken' ? last : undefined;
+  if (decided >= 0 && !booksOn(track, decided) && booked !== undefined) {
+    // A rung that matched before the track's last leaves the later rungs unrun, and the Reserve it booked carries the
+    // walk on, so the taken path passes under them between the track and the line, as a line's rung passes the slot it
+    // never ran, and comes back up into the Reserve.
+    const from = points[track[decided].id];
+    const to = points[booked.id];
+    const lane = (yu + y0) / 2;
+    const under = `V${lane - CORNER} C${from.x} ${lane} ${from.x} ${lane} ${from.x + CORNER} ${lane} H${to.x - CORNER} C${to.x} ${lane} ${to.x} ${lane} ${to.x} ${lane - CORNER} V${yu}`;
+    paths.push({ d: `${rise} H${from.x} ${under} ${end}`, kind: 'track', state: 'taken' });
+    paths.push({ d: `M${from.x} ${yu} H${to.x}`, kind: 'track', state: 'idle' });
+  } else if (decided >= 0 && !booksOn(track, decided)) {
     // A rung that matched before the track's last leaves the later rungs unrun, so the taken path drops from it as from
     // a line's decisive station, and the track runs on past it idle.
     const from = points[track[decided].id];
