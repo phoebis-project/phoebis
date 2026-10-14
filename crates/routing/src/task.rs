@@ -2220,8 +2220,9 @@ fn destination_fit(
 /// Whether a reading at `now` naming `reset` is in the cycle of a wall `announced` as `(reset, at)` on `window`. Two
 /// named resets are one within `RESET_SLACK_MS`, as `announce_reset` compares them. A wall announced with none was in a
 /// window open past its stored reset, which opened by `at` and runs the window's length at most, so a reset inside
-/// that length after `at` names it, and a second reading with none inside it is the same open window. The reset's
-/// bound takes the same slack, since the request that opened the window can reach the upstream after `at`.
+/// that length after `at` names it, and a second reading with none inside it is the same open window. Both bounds,
+/// the named reset's and the reading with none, take the same slack, since the request that opened the window can
+/// reach the upstream after `at`.
 fn same_cycle(announced: (Option<i64>, i64), reset: Option<i64>, now: i64, window: &str) -> bool {
     let (announced_reset, at) = announced;
     let open_until = at.saturating_add(if window == FIVE_HOUR {
@@ -2229,12 +2230,13 @@ fn same_cycle(announced: (Option<i64>, i64), reset: Option<i64>, now: i64, windo
     } else {
         WEEK_MS
     });
+    let bound = open_until.saturating_add(RESET_SLACK_MS);
     match (announced_reset, reset) {
         (Some(announced), Some(reset)) => {
             announced.abs_diff(reset) <= RESET_SLACK_MS.unsigned_abs()
         }
-        (None, Some(reset)) => at <= reset && reset <= open_until.saturating_add(RESET_SLACK_MS),
-        (None, None) => now <= open_until,
+        (None, Some(reset)) => at <= reset && reset <= bound,
+        (None, None) => now <= bound,
         (Some(_), None) => false,
     }
 }
@@ -4651,6 +4653,33 @@ mod tests {
 
     fn dropped(handle: &RouterHandle) -> u64 {
         handle.dropped_reports().iter().map(|(_, n)| n).sum()
+    }
+
+    /// Both arms of an open window's bound take the reset's slack: the request that opened the window can reach the
+    /// upstream after `at`, so a second reading with no reset inside the slack past `open_until` is the same window,
+    /// as a reading naming a reset inside it is.
+    #[test]
+    fn a_reading_with_no_reset_inside_the_slack_past_the_open_windows_length_is_the_same_cycle() {
+        let at = 1_000;
+        let open_until = at + FIVE_HOUR_MS;
+        assert!(same_cycle((None, at), None, open_until, FIVE_HOUR));
+        assert!(
+            same_cycle((None, at), None, open_until + RESET_SLACK_MS / 2, FIVE_HOUR),
+            "inside the slack, as the named-reset arm reads it"
+        );
+        assert!(
+            same_cycle(
+                (None, at),
+                Some(open_until + RESET_SLACK_MS / 2),
+                open_until,
+                FIVE_HOUR
+            ),
+            "the named-reset arm's own slack"
+        );
+        assert!(
+            !same_cycle((None, at), None, open_until + RESET_SLACK_MS + 1, FIVE_HOUR),
+            "past the slack a later window"
+        );
     }
 
     /// A reading taken after the shutdown closed the mailbox and before the final drain lands with that drain and
