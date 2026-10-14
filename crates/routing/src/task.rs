@@ -29,11 +29,11 @@ use crate::select::{
     SelectRequest, SelectResult, FIVE_HOUR_MS,
 };
 use crate::state::{
-    burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms, is_plan_window,
-    mark_holds, plan_windows, shed_dwell_ms, AccountTicket, BurnUnit, CreditsState, EvidenceSource,
-    InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer,
-    StateWrite, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
-    SEVEN_DAY_FABLE, WEEK_MS,
+    all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
+    is_plan_window, mark_holds, plan_windows, shed_dwell_ms, AccountTicket, BurnUnit, CreditsState,
+    EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable,
+    RoutingState, SharePricer, StateWrite, UtilizationSample, WindowReading, WindowSource,
+    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::{resolve, term, window_for, Candidate, KeyRefusal, Presented, RegistrySnapshot};
 
@@ -2283,8 +2283,7 @@ fn projections(
                 upstream_model: String::new(),
             };
             let tier = snapshot.tier(account_id).unwrap_or_default();
-            let windows = [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE]
-                .into_iter()
+            let windows = all_plan_windows()
                 .filter_map(|window| {
                     let projection =
                         projection_of(state, snapshot, pool, account_id, tier, window, now)?;

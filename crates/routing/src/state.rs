@@ -17,7 +17,7 @@ use crate::affinity::{AffinityMap, PurgedEntry};
 use crate::listing::{row_for, snapshot_date, tier_segment};
 use crate::select::{affinity_ttl_ms, seconds_ms};
 use crate::task::BurnRates;
-use crate::windows::window_for;
+use crate::windows::{window_for, MODEL_WINDOWS};
 use crate::RegistrySnapshot;
 
 /// How long an api_key bucket read without its reset header stands: the buckets refill within a minute, so a
@@ -148,6 +148,15 @@ pub(crate) fn plan_windows(canonical_model: &str) -> impl Iterator<Item = &'stat
     [FIVE_HOUR, SEVEN_DAY]
         .into_iter()
         .chain((own != SEVEN_DAY).then_some(own))
+}
+
+/// Every plan window an account can hold a reading of, in the trigger's order: both shared windows, then each model
+/// week `MODEL_WINDOWS` names. The projections, the member facts and the route iterate this one list, so a week added
+/// to the table is projected wherever the others are.
+pub(crate) fn all_plan_windows() -> impl Iterator<Item = &'static str> {
+    [FIVE_HOUR, SEVEN_DAY]
+        .into_iter()
+        .chain(MODEL_WINDOWS.iter().map(|(_, window)| *window))
 }
 
 /// The one fast-eligibility rule over a live cooldown row, which the selector's walk (through `blocking_cooldown`)

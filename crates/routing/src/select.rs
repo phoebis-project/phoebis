@@ -21,10 +21,10 @@ use crate::record::{
     TermFacts, WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION, WALK_STEPS,
 };
 use crate::state::{
-    budget_reached, burn_average_ms, burn_decayed, ceiling, load_shedding, mark_holds,
-    plan_windows, shed_cap, shed_dwell_ms, warm, BurnUnit, CreditsState, MemberSpend, PinRef,
-    PinUsage, Reservation, RoutingState, StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT,
-    FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, load_shedding,
+    mark_holds, plan_windows, shed_cap, shed_dwell_ms, warm, BurnUnit, CreditsState, MemberSpend,
+    PinRef, PinUsage, Reservation, RoutingState, StateWrite, Tier, WindowReading, FAST_INPUT,
+    FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::windows::{window_for, MODEL_WINDOWS};
 use crate::{term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
@@ -2080,7 +2080,7 @@ fn projections_of(
         burn_average_ms(pool),
     );
     let mut projections = BTreeMap::new();
-    for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
+    for window in all_plan_windows() {
         let Some(reading) = state.predicted(account_id, window, now) else {
             continue;
         };
@@ -4708,9 +4708,10 @@ fn candidate_facts(
                 .map(|(window, share)| (window, share * 3_600.0))
                 .collect();
         }
-        for name in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
+        for name in all_plan_windows() {
             if let Some(reading) = state.predicted(id, name, now) {
-                let ahead = (name != SEVEN_DAY_FABLE).then(|| {
+                // The shared windows alone carry a lead; a model week's reading names none.
+                let ahead = (name == FIVE_HOUR || name == SEVEN_DAY).then(|| {
                     reading.utilization - elapsed_share(snapshot, id, &reading, name, now)
                 });
                 windows.insert(
@@ -5491,5 +5492,34 @@ mod tests {
     #[should_panic(expected = "the walk step pin/fired is not in WALK_STEPS")]
     fn the_recorder_refuses_a_verdict_the_table_does_not_list_for_its_step() {
         Recorder::default().step("pin", "fired", Vec::new());
+    }
+}
+
+#[cfg(test)]
+mod plan_window_tests {
+    use super::{all_plan_windows, fit_key, plan_windows, MODEL_WINDOWS};
+
+    /// A fact's key is static, so `fit_key` spells the keys per window by hand while the windows come from
+    /// `MODEL_WINDOWS`: a row added to the table fails here until the keys are spelled, rather than leaving its week
+    /// unprojected or unnamed in the record.
+    #[test]
+    fn every_window_a_model_draws_is_projected_and_has_its_fact_keys() {
+        let projected: Vec<&str> = all_plan_windows().collect();
+        for (family, _) in MODEL_WINDOWS {
+            for window in plan_windows(&format!("claude-{family}-1")) {
+                assert!(
+                    projected.contains(&window),
+                    "{window} is drawn and not projected"
+                );
+            }
+        }
+        for window in &projected {
+            for kind in ["burn", "horizon", "projection", "rewrite", "reserved"] {
+                assert!(
+                    fit_key(kind, window).is_some(),
+                    "{kind} has no fact key on {window}"
+                );
+            }
+        }
     }
 }
