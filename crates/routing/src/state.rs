@@ -1924,8 +1924,10 @@ impl RoutingState {
 
     /// Folds an arrival into the pin's cycle: the gap since the last dispatch weighs in by `w = exp(-gap /
     /// average_ms)`, so a long think moves the average more than a quick tool call, the first gap is taken whole, and
-    /// the arrival becomes the last dispatch. An arrival before the last dispatch, as a request queued behind a later
-    /// one, folds nothing. The pin's first arrival starts its pace with no gap.
+    /// the arrival becomes the last dispatch. An arrival at or before the last dispatch folds nothing: a re-selection
+    /// of the same request (after a failover or a refused hold) carries the arrival already folded, whose gap of zero
+    /// would plant a cycle of zero, and a request queued behind a later one has no gap to give. The pin's first
+    /// arrival starts its pace with no gap.
     pub fn fold_pace(&mut self, key: &PinKey, received_at: i64, average_ms: i64) {
         let Some(pace) = self.pin_paces.get_mut(key) else {
             self.pin_paces.insert(
@@ -1939,7 +1941,7 @@ impl RoutingState {
             );
             return;
         };
-        if received_at < pace.dispatched_at {
+        if received_at <= pace.dispatched_at {
             return;
         }
         let gap = (received_at - pace.dispatched_at) as f64;

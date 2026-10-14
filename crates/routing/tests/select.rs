@@ -19752,11 +19752,40 @@ fn a_second_selection_after_any_hold_folds_no_gap_into_the_pins_cycle() {
         None,
         "the arrival was folded by the first selection, so the second reads no gap of zero"
     );
+    assert_eq!(st.pin_pace(&pin_key("s1")).map(|p| p.cycle_ms), Some(None));
+}
+
+#[test]
+fn a_re_selection_at_the_same_arrival_folds_no_gap_into_the_pins_cycle() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
+    reading(&mut st, "a", 0.3, 3 * HOUR, T);
+    reading(&mut st, "b", 0.3, 3 * HOUR, T);
+    let first = main_turn(&s, "s1", T);
     assert_eq!(
-        st.pin_pace(&pin_key("s1"))
-            .map(|p| (p.dispatched_at, p.cycle_ms)),
-        Some((T, None))
+        landed(decide(&mut st, &s, &first, &mut rng()).result),
+        ("a".into(), None)
     );
+    // The relay selects again for the same request with no hold to carry, as after a failover the task had no pin to
+    // invalidate for: a is attempted and still reads live at step 1.
+    let again = SelectRequest {
+        attempt: 2,
+        seq: 2,
+        now: T + 1_000,
+        attempted: vec!["a".into()],
+        ..first
+    };
+    let d = decide(&mut st, &s, &again, &mut rng());
+    let pin = d.record.pin.as_ref().expect("a pin block");
+    assert_eq!(
+        (pin.found, pin.cycle_ms),
+        ("live", None),
+        "the same arrival is no later than the last dispatch, so it folds no gap of zero"
+    );
+    assert_eq!(st.pin_pace(&pin_key("s1")).map(|p| p.cycle_ms), Some(None));
 }
 
 #[test]
@@ -19765,11 +19794,13 @@ fn a_fresh_sessions_prior_reads_each_warm_pins_burn_over_its_accounts_speed() {
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     }));
-    // Two warm pins on b burn 200 and 400 input tokens a second, which the ratio pricer reads as a median of three
-    // hundred-thousandths of the 5-hour window a second, and b runs at half speed.
+    // A warm pin on a burns 60 input tokens a second at full speed, and two on b burn 20 and 40 at half speed, which
+    // the ratio pricer reads as ten-millionths of the 5-hour window a second. Each over its own account's speed reads
+    // 60, 40 and 80, a median of 60, where the achieved rates read 40 and all three over b's speed 80.
     let mut st = priced(vec![
-        gated_pin("w1", "b", 200.0),
-        gated_pin("w2", "b", 400.0),
+        gated_pin("w0", "a", 60.0),
+        gated_pin("w1", "b", 20.0),
+        gated_pin("w2", "b", 40.0),
     ]);
     reading(&mut st, "a", 0.1, 3 * HOUR, T);
     reading(&mut st, "b", 0.3, 3 * HOUR, T);
@@ -19781,11 +19812,10 @@ fn a_fresh_sessions_prior_reads_each_warm_pins_burn_over_its_accounts_speed() {
         (reserve.step, reserve.verdict, fact(reserve, "account_id")),
         ("reserve", "booked", &FactValue::Text("a".into()))
     );
-    let achieved_median = 300.0 / 10_000_000.0 * 3_600.0;
     assert!(
         close(
             number(fact(reserve, "burn_five_hour")),
-            2.0 * achieved_median
+            60.0 / 10_000_000.0 * 3_600.0
         ),
         "a fresh session starts unslowed, so its prior is the warm pins' unslowed rate: {:?}",
         reserve.facts
