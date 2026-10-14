@@ -676,6 +676,26 @@ pub fn load_shedding(pool: &PoolRow) -> bool {
     pool.shedding.load_shedding
 }
 
+/// Whether the pool slows its pins' requests on the 5-hour window.
+pub fn slow_down(pool: &PoolRow) -> bool {
+    pool.slow_down.slow_down
+}
+
+/// The time the slow-down may add to a session before the round takes over, in milliseconds.
+pub fn slow_down_stretch_ms(pool: &PoolRow) -> i64 {
+    seconds_ms(u64::from(pool.slow_down.slow_down_stretch_seconds))
+}
+
+/// The longest one request waits for the slow-down, in milliseconds.
+pub fn slow_down_hold_ms(pool: &PoolRow) -> i64 {
+    seconds_ms(u64::from(pool.slow_down.slow_down_hold_seconds))
+}
+
+/// How long a warm pin stays on an api_key member before the return rule moves it under `always`, in milliseconds.
+pub fn return_to_plan_dwell_ms(pool: &PoolRow) -> i64 {
+    seconds_ms(u64::from(pool.failover.return_to_plan_dwell_seconds))
+}
+
 #[derive(Default)]
 struct InFlightTable {
     next_id: u64,

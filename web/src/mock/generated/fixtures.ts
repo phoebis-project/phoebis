@@ -6643,6 +6643,58 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "route": "PATCH /admin/pools/{id}",
+          "field": "slow_down_stretch_seconds",
+          "value": 60,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "slow_down_stretch_seconds",
+          "value": 59,
+          "status": 400,
+          "error": "slow_down_stretch_seconds is between 60 and 18000"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "slow_down_stretch_seconds",
+          "value": 18000,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "slow_down_stretch_seconds",
+          "value": 18001,
+          "status": 400,
+          "error": "slow_down_stretch_seconds is between 60 and 18000"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "slow_down_hold_seconds",
+          "value": 1,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "slow_down_hold_seconds",
+          "value": 0,
+          "status": 400,
+          "error": "slow_down_hold_seconds is between 1 and 300"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "slow_down_hold_seconds",
+          "value": 300,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "slow_down_hold_seconds",
+          "value": 301,
+          "status": 400,
+          "error": "slow_down_hold_seconds is between 1 and 300"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
           "field": "retry_in_place_seconds",
           "value": 0,
           "status": 200
@@ -6697,6 +6749,25 @@ export const FIXTURES: Record<string, Fixture> = {
           "value": 10081,
           "status": 400,
           "error": "wind_down_minutes is at most 10080 (one week)"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "return_to_plan_dwell_seconds",
+          "value": 0,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "return_to_plan_dwell_seconds",
+          "value": 86400,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "return_to_plan_dwell_seconds",
+          "value": 86401,
+          "status": 400,
+          "error": "return_to_plan_dwell_seconds is between 0 and 86400"
         },
         {
           "route": "PATCH /admin/pools/{id}",
@@ -8154,7 +8225,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         "attempted": [],
         "holds": [],
-        "registry_revision": 50,
+        "registry_revision": 62,
         "body_tokens": 0
       },
       "pin": {
@@ -8192,13 +8263,18 @@ export const FIXTURES: Record<string, Fixture> = {
         "migrate_when_spent": true,
         "overage_move_grace_minutes": 30,
         "wind_down_minutes": 30,
+        "return_to_plan": "always",
+        "return_to_plan_dwell_seconds": 900,
         "shed_cap": 0.2,
         "burn_average_seconds": 1800,
         "shed_dwell_seconds": 900,
         "warm_sessions": "when_needed",
+        "slow_down": false,
+        "slow_down_stretch_seconds": 1800,
+        "slow_down_hold_seconds": 120,
         "in_flight_cap": 16,
         "retry_in_place_seconds": 60,
-        "pool_updated_at": 1791721000047
+        "pool_updated_at": 1791721000059
       },
       "candidates": [
         {
@@ -9264,10 +9340,15 @@ export const FIXTURES: Record<string, Fixture> = {
           "shed_dwell_seconds": 900,
           "migrate_when_spent": true,
           "warm_sessions": "when_needed",
+          "slow_down": false,
+          "slow_down_stretch_seconds": 1800,
+          "slow_down_hold_seconds": 120,
           "retry_in_place_seconds": 60,
           "in_flight_cap": 16,
           "overage_move_grace_minutes": 30,
           "wind_down_minutes": 30,
+          "return_to_plan": "always",
+          "return_to_plan_dwell_seconds": 900,
           "moves_per_hour": {
             "spent": 1
           },
@@ -9363,7 +9444,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "xJtLSLB5",
+              "prefix": "K48OEyys",
               "enabled": true
             }
           ],
@@ -12492,10 +12573,15 @@ export const FIXTURES: Record<string, Fixture> = {
               "load_shedding": true,
               "migrate_when_spent": true,
               "warm_sessions": "when_needed",
+              "slow_down": false,
+              "slow_down_stretch_seconds": 1800,
+              "slow_down_hold_seconds": 120,
               "retry_in_place_seconds": 60,
               "in_flight_cap": 16,
               "overage_move_grace_minutes": 30,
               "wind_down_minutes": 30,
+              "return_to_plan": "always",
+              "return_to_plan_dwell_seconds": 900,
               "cache_ttl": {},
               "cache_diagnostics": false,
               "affinity_mode": "always",

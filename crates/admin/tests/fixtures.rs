@@ -155,10 +155,10 @@ const POOL_ROUTE: &str = "PATCH /admin/pools/{id}";
 
 /// The route's answer to every bound the console holds and to one past it: the keepalive policy's, the pool
 /// engine's with its in-flight cap, and the model rule count's.
-/// The burn average, the shed dwell, the window ceiling and the shed cap are probed at both edges of their bounds. A
-/// probe that sends another field beside the probed one names it under `with`, so a replay sends the same body. An
-/// admitted probe is written back at once from the list read taken before the probes, so each probe meets the seeded
-/// pool, as the captures after these do.
+/// The burn average, the shed dwell, the slow-down's stretch and hold, the window ceiling and the shed cap are probed
+/// at both edges of their bounds. A probe that sends another field beside the probed one names it under `with`, so a
+/// replay sends the same body. An admitted probe is written back at once from the list read taken before the probes,
+/// so each probe meets the seeded pool, as the captures after these do.
 async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
     let pools = json(get(app, "/admin/pools", Some(cookie)).await).await;
     let pool = pools["pools"]
@@ -206,9 +206,12 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
     for (field, values) in [
         ("burn_average_seconds", &[600_u64, 599, 7_200, 7_201][..]),
         ("shed_dwell_seconds", &[300, 299, 7_200, 7_201]),
+        ("slow_down_stretch_seconds", &[60, 59, 18_000, 18_001]),
+        ("slow_down_hold_seconds", &[1, 0, 300, 301]),
         ("retry_in_place_seconds", &[0, 300, 301]),
         ("overage_move_grace_minutes", &[0, 300, 301]),
         ("wind_down_minutes", &[0, 10_080, 10_081]),
+        ("return_to_plan_dwell_seconds", &[0, 86_400, 86_401]),
         ("in_flight_cap", &[1, 0, 4_294_967_295, 4_294_967_296]),
     ] {
         for &value in values {

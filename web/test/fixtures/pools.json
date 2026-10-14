@@ -27,10 +27,15 @@
         "shed_dwell_seconds": 900,
         "migrate_when_spent": true,
         "warm_sessions": "when_needed",
+        "slow_down": false,
+        "slow_down_stretch_seconds": 1800,
+        "slow_down_hold_seconds": 120,
         "retry_in_place_seconds": 60,
         "in_flight_cap": 16,
         "overage_move_grace_minutes": 30,
         "wind_down_minutes": 30,
+        "return_to_plan": "always",
+        "return_to_plan_dwell_seconds": 900,
         "moves_per_hour": {
           "spent": 1.0
         },
@@ -126,7 +131,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "xJtLSLB5",
+            "prefix": "K48OEyys",
             "enabled": true
           }
         ],

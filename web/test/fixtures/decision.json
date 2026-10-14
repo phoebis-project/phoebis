@@ -38,7 +38,7 @@
       },
       "attempted": [],
       "holds": [],
-      "registry_revision": 50,
+      "registry_revision": 62,
       "body_tokens": 0
     },
     "pin": {
@@ -76,13 +76,18 @@
       "migrate_when_spent": true,
       "overage_move_grace_minutes": 30,
       "wind_down_minutes": 30,
+      "return_to_plan": "always",
+      "return_to_plan_dwell_seconds": 900,
       "shed_cap": 0.2,
       "burn_average_seconds": 1800,
       "shed_dwell_seconds": 900,
       "warm_sessions": "when_needed",
+      "slow_down": false,
+      "slow_down_stretch_seconds": 1800,
+      "slow_down_hold_seconds": 120,
       "in_flight_cap": 16,
       "retry_in_place_seconds": 60,
-      "pool_updated_at": 1791721000047
+      "pool_updated_at": 1791721000059
     },
     "candidates": [
       {

@@ -88,6 +88,46 @@ impl ToSql for WarmSessions {
     }
 }
 
+/// When a session on an API-key member returns to a subscription member.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ReturnToPlan {
+    #[default]
+    Always,
+    Never,
+    WhenCold,
+}
+
+impl ReturnToPlan {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReturnToPlan::Always => "always",
+            ReturnToPlan::Never => "never",
+            ReturnToPlan::WhenCold => "when_cold",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<ReturnToPlan> {
+        match value {
+            "always" => Some(ReturnToPlan::Always),
+            "never" => Some(ReturnToPlan::Never),
+            "when_cold" => Some(ReturnToPlan::WhenCold),
+            _ => None,
+        }
+    }
+}
+
+impl FromSql for ReturnToPlan {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        ReturnToPlan::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
+    }
+}
+
+impl ToSql for ReturnToPlan {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
 /// The load-shedding knobs of a pool. `Default` is the balanced preset with the switch on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shedding {
@@ -113,13 +153,33 @@ impl Default for Shedding {
     }
 }
 
-/// The failover, overage-grace and wind-down knobs of a pool; `Default` is the shipped preset.
+/// The slow-down knobs of a pool. `Default` is the switch off at the shipped figures.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SlowDown {
+    pub slow_down: bool,
+    pub slow_down_stretch_seconds: u32,
+    pub slow_down_hold_seconds: u32,
+}
+
+impl Default for SlowDown {
+    fn default() -> Self {
+        SlowDown {
+            slow_down: false,
+            slow_down_stretch_seconds: 1800,
+            slow_down_hold_seconds: 120,
+        }
+    }
+}
+
+/// The failover, overage-grace, wind-down and return-to-plan knobs of a pool. `Default` is the shipped preset.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Failover {
     pub retry_in_place_seconds: u64,
     pub in_flight_cap: u32,
     pub overage_move_grace_minutes: u32,
     pub wind_down_minutes: u32,
+    pub return_to_plan: ReturnToPlan,
+    pub return_to_plan_dwell_seconds: u32,
 }
 
 impl Default for Failover {
@@ -129,6 +189,8 @@ impl Default for Failover {
             in_flight_cap: 16,
             overage_move_grace_minutes: 30,
             wind_down_minutes: 30,
+            return_to_plan: ReturnToPlan::Always,
+            return_to_plan_dwell_seconds: 900,
         }
     }
 }
@@ -405,6 +467,7 @@ pub struct PoolRow {
     pub prefer_subscription: bool,
     pub shedding: Shedding,
     pub failover: Failover,
+    pub slow_down: SlowDown,
     pub cache_ttl_json: String,
     pub cache_diagnostics: bool,
     /// Whether the client's server-side auto mode checks travel; off, the relay drops them so the client
@@ -444,6 +507,7 @@ impl PoolRow {
             prefer_subscription: true,
             shedding: Shedding::default(),
             failover: Failover::default(),
+            slow_down: SlowDown::default(),
             cache_ttl_json: "{}".into(),
             cache_diagnostics: false,
             auto_mode_server: true,
@@ -775,8 +839,8 @@ impl Store {
         let now = self.now_ms();
         let incarnation = crate::accounts::next_incarnation_in(&tx, "pool_tombstones", &row.id)?;
         tx.execute(
-            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, window_ceiling, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, shed_cap, burn_average_seconds, shed_dwell_seconds, load_shedding, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, created_at, updated_at, incarnation) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?29, ?30)",
+            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, window_ceiling, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, shed_cap, burn_average_seconds, shed_dwell_seconds, load_shedding, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, slow_down, slow_down_stretch_seconds, slow_down_hold_seconds, return_to_plan, return_to_plan_dwell_seconds, created_at, updated_at, incarnation) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?34, ?35)",
             params![
                 row.id,
                 row.label,
@@ -806,6 +870,11 @@ impl Store {
                 row.affinity.session_placement,
                 row.affinity.min_shared_prefix_tokens as i64,
                 row.auto_mode_server,
+                row.slow_down.slow_down,
+                row.slow_down.slow_down_stretch_seconds as i64,
+                row.slow_down.slow_down_hold_seconds as i64,
+                row.failover.return_to_plan,
+                row.failover.return_to_plan_dwell_seconds as i64,
                 now,
                 incarnation as i64
             ],
@@ -849,7 +918,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let at = stamp_past(self.now_ms(), expected_updated_at);
         let updated = tx.execute(
-            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, window_ceiling = ?7, model_rules_json = ?8, keepalive_json = ?9, body_capture_hours = ?10, prefer_subscription = ?11, shed_cap = ?12, burn_average_seconds = ?13, shed_dwell_seconds = ?14, load_shedding = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, overage_move_grace_minutes = ?20, wind_down_minutes = ?21, cache_ttl_json = ?22, cache_diagnostics = ?23, affinity_mode = ?24, subagent_placement = ?25, session_placement = ?26, min_shared_prefix_tokens = ?27, auto_mode_server = ?28, updated_at = ?29 WHERE id = ?1 AND updated_at = ?30 AND incarnation = ?31",
+            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, window_ceiling = ?7, model_rules_json = ?8, keepalive_json = ?9, body_capture_hours = ?10, prefer_subscription = ?11, shed_cap = ?12, burn_average_seconds = ?13, shed_dwell_seconds = ?14, load_shedding = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, overage_move_grace_minutes = ?20, wind_down_minutes = ?21, cache_ttl_json = ?22, cache_diagnostics = ?23, affinity_mode = ?24, subagent_placement = ?25, session_placement = ?26, min_shared_prefix_tokens = ?27, auto_mode_server = ?28, slow_down = ?29, slow_down_stretch_seconds = ?30, slow_down_hold_seconds = ?31, return_to_plan = ?32, return_to_plan_dwell_seconds = ?33, updated_at = ?34 WHERE id = ?1 AND updated_at = ?35 AND incarnation = ?36",
             params![
                 row.id,
                 row.label,
@@ -879,6 +948,11 @@ impl Store {
                 row.affinity.session_placement,
                 row.affinity.min_shared_prefix_tokens as i64,
                 row.auto_mode_server,
+                row.slow_down.slow_down,
+                row.slow_down.slow_down_stretch_seconds as i64,
+                row.slow_down.slow_down_hold_seconds as i64,
+                row.failover.return_to_plan,
+                row.failover.return_to_plan_dwell_seconds as i64,
                 at,
                 expected_updated_at,
                 row.incarnation as i64
@@ -1536,7 +1610,7 @@ fn set_pool_members_in(
     Ok(())
 }
 
-const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, window_ceiling, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, shed_cap, burn_average_seconds, shed_dwell_seconds, load_shedding, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, incarnation FROM pools";
+const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, window_ceiling, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, shed_cap, burn_average_seconds, shed_dwell_seconds, load_shedding, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, incarnation, slow_down, slow_down_stretch_seconds, slow_down_hold_seconds, return_to_plan, return_to_plan_dwell_seconds FROM pools";
 const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins, auto_mode_server, updated_at, incarnation FROM api_keys";
 
 fn all_pools(conn: &rusqlite::Connection) -> Result<Vec<PoolRow>, StoreError> {
@@ -1584,6 +1658,13 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
             in_flight_cap: r.get::<_, i64>(20)? as u32,
             overage_move_grace_minutes: r.get::<_, i64>(21)? as u32,
             wind_down_minutes: r.get::<_, i64>(22)? as u32,
+            return_to_plan: r.get(34)?,
+            return_to_plan_dwell_seconds: r.get::<_, i64>(35)? as u32,
+        },
+        slow_down: SlowDown {
+            slow_down: r.get(31)?,
+            slow_down_stretch_seconds: r.get::<_, i64>(32)? as u32,
+            slow_down_hold_seconds: r.get::<_, i64>(33)? as u32,
         },
         cache_ttl_json: r.get(23)?,
         cache_diagnostics: r.get::<_, bool>(24)?,
@@ -1644,10 +1725,15 @@ fn pool_diff(row: &PoolRow) -> String {
         "load_shedding": row.shedding.load_shedding,
         "migrate_when_spent": row.shedding.migrate_when_spent,
         "warm_sessions": row.shedding.warm_sessions.as_str(),
+        "slow_down": row.slow_down.slow_down,
+        "slow_down_stretch_seconds": row.slow_down.slow_down_stretch_seconds,
+        "slow_down_hold_seconds": row.slow_down.slow_down_hold_seconds,
         "retry_in_place_seconds": row.failover.retry_in_place_seconds,
         "in_flight_cap": row.failover.in_flight_cap,
         "overage_move_grace_minutes": row.failover.overage_move_grace_minutes,
         "wind_down_minutes": row.failover.wind_down_minutes,
+        "return_to_plan": row.failover.return_to_plan.as_str(),
+        "return_to_plan_dwell_seconds": row.failover.return_to_plan_dwell_seconds,
         "cache_ttl": serde_json::from_str::<serde_json::Value>(&row.cache_ttl_json).unwrap_or(serde_json::Value::Null),
         "cache_diagnostics": row.cache_diagnostics,
         "affinity_mode": row.affinity.mode.as_str(),

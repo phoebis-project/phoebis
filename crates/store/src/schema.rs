@@ -84,11 +84,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (52, V52),
     (53, V53),
     (54, V54),
+    (55, V55),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 54;
+pub const SCHEMA_VERSION: u32 = 55;
 
 /// The version that bounds an account to one pool; a file below it is read for overlaps before it migrates.
 pub const ONE_POOL_VERSION: u32 = 47;
@@ -791,4 +792,16 @@ INSERT INTO registry_changes (at, actor, kind, target, diff_json)
 UPDATE pools SET burn_average_seconds = MIN(MAX(burn_average_seconds, 600), 7200),
                  shed_cap = MIN(MAX(shed_cap, 0.1), 1.0),
                  shed_dwell_seconds = MIN(MAX(shed_dwell_seconds, 300), 7200);
+"#;
+
+// The return dwell starts at each pool's shed dwell, the value that timed the return before this column, so no pool's
+// return timing moves at the migration. The copy lies inside the new bound and changes no value's meaning, so nothing
+// is logged.
+const V55: &str = r#"
+ALTER TABLE pools ADD COLUMN slow_down INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE pools ADD COLUMN slow_down_stretch_seconds INTEGER NOT NULL DEFAULT 1800;
+ALTER TABLE pools ADD COLUMN slow_down_hold_seconds INTEGER NOT NULL DEFAULT 120;
+ALTER TABLE pools ADD COLUMN return_to_plan TEXT NOT NULL DEFAULT 'always';
+ALTER TABLE pools ADD COLUMN return_to_plan_dwell_seconds INTEGER NOT NULL DEFAULT 900;
+UPDATE pools SET return_to_plan_dwell_seconds = shed_dwell_seconds;
 "#;

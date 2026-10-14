@@ -13,8 +13,8 @@ use phoebis_relay::{CacheTtl, CacheTtlPolicy};
 use phoebis_routing::{MemberSpend, OverageEvidence, RegistrySnapshot};
 use phoebis_store::{
     stamp_token, AccountRow, Affinity, AffinityMode, ApiKeyRow, CooldownRow, Failover, MemberWrite,
-    OveragePolicy, PinRow, PoolMember, PoolRow, SessionPlacement, Shedding, StoreError, Strategy,
-    SubagentPlacement, WarmSessions,
+    OveragePolicy, PinRow, PoolMember, PoolRow, ReturnToPlan, SessionPlacement, Shedding, SlowDown,
+    StoreError, Strategy, SubagentPlacement, WarmSessions,
 };
 use serde_json::{json, Value};
 use utoipa::ToSchema;
@@ -171,6 +171,18 @@ pub(crate) struct PoolInput {
     #[serde(default)]
     #[schema(example = "always")]
     warm_sessions: Option<String>,
+    /// Default `false`. On, a request of a held class waits before it is forwarded for the pin's cycle times the
+    /// account's slow-down, so the five-hour window reaches its reset under the ceiling. Auxiliary requests,
+    /// compactions, the fast lane, probes and token counts are never held.
+    #[serde(default)]
+    slow_down: Option<bool>,
+    /// `60` to `18000`, default `1800`. The time the slow-down may add to a session before a shedding round moves
+    /// sessions off the account.
+    #[serde(default)]
+    slow_down_stretch_seconds: Option<u32>,
+    /// `1` to `300`, default `120`. The longest one request waits for the slow-down.
+    #[serde(default)]
+    slow_down_hold_seconds: Option<u32>,
     /// `0` to `300`, default `60`.
     #[serde(default)]
     retry_in_place_seconds: Option<u64>,
@@ -183,6 +195,15 @@ pub(crate) struct PoolInput {
     /// `0` to `10080`, a week, default `30`.
     #[serde(default)]
     wind_down_minutes: Option<u32>,
+    /// `always`, `when_cold` or `never`, default `always`. When a session on an API-key member returns to a
+    /// subscription member.
+    #[serde(default)]
+    #[schema(example = "always")]
+    return_to_plan: Option<String>,
+    /// `0` to `86400`, default `900`. Under `always`, how long a warm session stays on the API-key member before it
+    /// returns.
+    #[serde(default)]
+    return_to_plan_dwell_seconds: Option<u32>,
     /// `always` or `when_cached`, default `always`.
     #[serde(default)]
     #[schema(example = "always")]
@@ -534,6 +555,47 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         }
         row.failover.wind_down_minutes = minutes;
     }
+    if let Some(on) = input.slow_down {
+        row.slow_down.slow_down = on;
+    }
+    if let Some(seconds) = input.slow_down_stretch_seconds {
+        if !(60..=18_000).contains(&seconds) {
+            return Err(failure(
+                StatusCode::BAD_REQUEST,
+                "slow_down_stretch_seconds is between 60 and 18000",
+            ));
+        }
+        row.slow_down.slow_down_stretch_seconds = seconds;
+    }
+    if let Some(seconds) = input.slow_down_hold_seconds {
+        if !(1..=300).contains(&seconds) {
+            return Err(failure(
+                StatusCode::BAD_REQUEST,
+                "slow_down_hold_seconds is between 1 and 300",
+            ));
+        }
+        row.slow_down.slow_down_hold_seconds = seconds;
+    }
+    if let Some(mode) = &input.return_to_plan {
+        row.failover.return_to_plan = match ReturnToPlan::parse(mode) {
+            Some(mode) => mode,
+            None => {
+                return Err(failure(
+                    StatusCode::BAD_REQUEST,
+                    "return_to_plan must be always, when_cold, or never",
+                ))
+            }
+        };
+    }
+    if let Some(seconds) = input.return_to_plan_dwell_seconds {
+        if seconds > 86_400 {
+            return Err(failure(
+                StatusCode::BAD_REQUEST,
+                "return_to_plan_dwell_seconds is between 0 and 86400",
+            ));
+        }
+        row.failover.return_to_plan_dwell_seconds = seconds;
+    }
     if let Some(mode) = &input.affinity_mode {
         row.affinity.mode = match AffinityMode::parse(mode) {
             Some(mode) => mode,
@@ -612,7 +674,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     request_body(content = PoolInput, content_type = "application/json"),
     responses(
         (status = 201, description = "The pool, the same shape as a row of `GET /admin/pools`.", body = Pool),
-        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `id and label are required`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `strategy must be pace, priority, or round_robin`\n- `affinity_ttl_seconds is 0 or at least 60`\n- `overage_policy must be prefer_plan, allow, or never`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `keepalive is not a policy object: {detail}`: the keepalive policy's own sentence for a bad shape, or for a field the policy does not hold (`keepalive is not a policy object: unknown field ...`)\n- `keepalive.{field} must be between {min} and {max}, not {value}`: an out-of-range field (`keepalive.max_parked_seconds must be between 60 and 604800, not 59`)\n- `cache_ttl is not a policy object: {detail}`: the cache TTL policy's own sentence for a bad shape or an unknown field\n- `{set}[].model must be a model id`: an empty model id, `{set}` naming the rule set's list (`cache_ttl.plan.models` or `cache_ttl.metered.models`)\n- `{set} lists {model} twice`: a model listed twice\n- `cache_diagnostics must be true or false`\n- `auto_mode_server must be true or false`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed`\n- `burn_average_seconds is between 600 and 7200`\n- `shed_cap is between 0.1 and 1.0`\n- `shed_dwell_seconds is between 300 and 7200`\n- `window_ceiling is between 0.5 and 1.0`\n- `warm_sessions must be always, never, or when_needed`\n- `retry_in_place_seconds is 0 to 300`\n- `in_flight_cap is at least 1`\n- `overage_move_grace_minutes is 0 to 300`\n- `wind_down_minutes is at most 10080 (one week)`\n- `affinity_mode must be always or when_cached`\n- `subagent_placement must be by_cohort, by_strategy, or with_main`\n- `session_placement must be by_strategy or by_warm_prefix`\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `id and label are required`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `strategy must be pace, priority, or round_robin`\n- `affinity_ttl_seconds is 0 or at least 60`\n- `overage_policy must be prefer_plan, allow, or never`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `keepalive is not a policy object: {detail}`: the keepalive policy's own sentence for a bad shape, or for a field the policy does not hold (`keepalive is not a policy object: unknown field ...`)\n- `keepalive.{field} must be between {min} and {max}, not {value}`: an out-of-range field (`keepalive.max_parked_seconds must be between 60 and 604800, not 59`)\n- `cache_ttl is not a policy object: {detail}`: the cache TTL policy's own sentence for a bad shape or an unknown field\n- `{set}[].model must be a model id`: an empty model id, `{set}` naming the rule set's list (`cache_ttl.plan.models` or `cache_ttl.metered.models`)\n- `{set} lists {model} twice`: a model listed twice\n- `cache_diagnostics must be true or false`\n- `auto_mode_server must be true or false`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed`\n- `burn_average_seconds is between 600 and 7200`\n- `shed_cap is between 0.1 and 1.0`\n- `shed_dwell_seconds is between 300 and 7200`\n- `window_ceiling is between 0.5 and 1.0`\n- `warm_sessions must be always, never, or when_needed`\n- `retry_in_place_seconds is 0 to 300`\n- `in_flight_cap is at least 1`\n- `overage_move_grace_minutes is 0 to 300`\n- `wind_down_minutes is at most 10080 (one week)`\n- `return_to_plan must be always, when_cold, or never`\n- `return_to_plan_dwell_seconds is between 0 and 86400`\n- `slow_down_hold_seconds is between 1 and 300`\n- `slow_down_stretch_seconds is between 60 and 18000`\n- `affinity_mode must be always or when_cached`\n- `subagent_placement must be by_cohort, by_strategy, or with_main`\n- `session_placement must be by_strategy or by_warm_prefix`\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "`account {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "account {id} not found"})),
         (status = 409, description = "- `a pool with this id exists`\n- `account {id} is a member of pool {pool}`, with nothing written\n- `members name account {id} twice`, with nothing written", body = ErrorBody, example = json!({"error": "a pool with this id exists"})),
         (status = 500, response = StorageFailure),
@@ -650,6 +712,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         prefer_subscription: true,
         shedding: Shedding::default(),
         failover: Failover::default(),
+        slow_down: SlowDown::default(),
         cache_ttl_json: "{}".into(),
         cache_diagnostics: false,
         auto_mode_server: true,
@@ -715,7 +778,7 @@ async fn publish_created(state: &AdminState, row: &PoolRow) -> Response {
     request_body(content = PoolInput, content_type = "application/json"),
     responses(
         (status = 200, description = "The pool, the same shape as a row of `GET /admin/pools`.", body = Pool),
-        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `strategy must be pace, priority, or round_robin`\n- `affinity_ttl_seconds is 0 or at least 60`\n- `overage_policy must be prefer_plan, allow, or never`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `keepalive is not a policy object: {detail}`: the keepalive policy's own sentence for a bad shape, or for a field the policy does not hold (`keepalive is not a policy object: unknown field ...`)\n- `keepalive.{field} must be between {min} and {max}, not {value}`: an out-of-range field (`keepalive.max_parked_seconds must be between 60 and 604800, not 59`)\n- `cache_ttl is not a policy object: {detail}`: the cache TTL policy's own sentence for a bad shape or an unknown field\n- `{set}[].model must be a model id`: an empty model id, `{set}` naming the rule set's list (`cache_ttl.plan.models` or `cache_ttl.metered.models`)\n- `{set} lists {model} twice`: a model listed twice\n- `cache_diagnostics must be true or false`\n- `auto_mode_server must be true or false`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed`\n- `burn_average_seconds is between 600 and 7200`\n- `shed_cap is between 0.1 and 1.0`\n- `shed_dwell_seconds is between 300 and 7200`\n- `window_ceiling is between 0.5 and 1.0`\n- `warm_sessions must be always, never, or when_needed`\n- `retry_in_place_seconds is 0 to 300`\n- `in_flight_cap is at least 1`\n- `overage_move_grace_minutes is 0 to 300`\n- `wind_down_minutes is at most 10080 (one week)`\n- `affinity_mode must be always or when_cached`\n- `subagent_placement must be by_cohort, by_strategy, or with_main`\n- `session_placement must be by_strategy or by_warm_prefix`\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `strategy must be pace, priority, or round_robin`\n- `affinity_ttl_seconds is 0 or at least 60`\n- `overage_policy must be prefer_plan, allow, or never`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `keepalive is not a policy object: {detail}`: the keepalive policy's own sentence for a bad shape, or for a field the policy does not hold (`keepalive is not a policy object: unknown field ...`)\n- `keepalive.{field} must be between {min} and {max}, not {value}`: an out-of-range field (`keepalive.max_parked_seconds must be between 60 and 604800, not 59`)\n- `cache_ttl is not a policy object: {detail}`: the cache TTL policy's own sentence for a bad shape or an unknown field\n- `{set}[].model must be a model id`: an empty model id, `{set}` naming the rule set's list (`cache_ttl.plan.models` or `cache_ttl.metered.models`)\n- `{set} lists {model} twice`: a model listed twice\n- `cache_diagnostics must be true or false`\n- `auto_mode_server must be true or false`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed`\n- `burn_average_seconds is between 600 and 7200`\n- `shed_cap is between 0.1 and 1.0`\n- `shed_dwell_seconds is between 300 and 7200`\n- `window_ceiling is between 0.5 and 1.0`\n- `warm_sessions must be always, never, or when_needed`\n- `retry_in_place_seconds is 0 to 300`\n- `in_flight_cap is at least 1`\n- `overage_move_grace_minutes is 0 to 300`\n- `wind_down_minutes is at most 10080 (one week)`\n- `return_to_plan must be always, when_cold, or never`\n- `return_to_plan_dwell_seconds is between 0 and 86400`\n- `slow_down_hold_seconds is between 1 and 300`\n- `slow_down_stretch_seconds is between 60 and 18000`\n- `affinity_mode must be always or when_cached`\n- `subagent_placement must be by_cohort, by_strategy, or with_main`\n- `session_placement must be by_strategy or by_warm_prefix`\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "- `pool not found`\n- `account {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "pool not found"})),
         // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
         // attribute after it fails to parse.
@@ -928,11 +991,20 @@ pub(crate) struct Pool {
     /// `always`, `never`, or `when_needed`.
     #[schema(example = "always")]
     pub warm_sessions: String,
-    /// The first of the failover fields, with `in_flight_cap`, `overage_move_grace_minutes` and `wind_down_minutes`.
+    /// The first of the slow-down fields, with `slow_down_stretch_seconds` and `slow_down_hold_seconds`.
+    pub slow_down: bool,
+    pub slow_down_stretch_seconds: u32,
+    pub slow_down_hold_seconds: u32,
+    /// The first of the failover fields, with `in_flight_cap`, `overage_move_grace_minutes`, `wind_down_minutes`,
+    /// `return_to_plan` and `return_to_plan_dwell_seconds`.
     pub retry_in_place_seconds: u64,
     pub in_flight_cap: u32,
     pub overage_move_grace_minutes: u32,
     pub wind_down_minutes: u32,
+    /// `always`, `never`, or `when_cold`.
+    #[schema(example = "always")]
+    pub return_to_plan: String,
+    pub return_to_plan_dwell_seconds: u32,
     /// Counts every move by reason over the last hour, scoped to the pool's own accounts, while the console's pool
     /// tile sums the five rule reasons alone (`drain`, `overage`, `return_to_plan`, `shed`, `spent`) and lists
     /// the failover reasons in its title.
@@ -989,7 +1061,7 @@ pub(crate) struct Pool {
 #[serde(deny_unknown_fields)]
 pub(crate) struct PoolWarning {
     /// `affinity_under_cache_ttl`, `cap_under_cohort`, `cap_under_quarter`, `ceiling_low`, `ceiling_without_margin`,
-    /// `shedding_off`, `spent_moves_off`, or `warm_never`.
+    /// `hold_over_window`, `return_at_once`, `shedding_off`, `spent_moves_off`, or `warm_never`.
     #[schema(example = "ceiling_low")]
     pub code: String,
     /// The pool fields the check reads.
@@ -1068,7 +1140,9 @@ fn warnings_of(row: &PoolRow, cohort: usize) -> Vec<PoolWarning> {
                 .into(),
         ));
     }
-    if !row.shedding.load_shedding {
+    // With the slow-down on, a session over the ceiling is slowed toward the reset rather than left to spend its
+    // window, so the sentence holds only while both switches are off.
+    if !row.shedding.load_shedding && !row.slow_down.slow_down {
         warnings.push(warning(
             "shedding_off",
             &["load_shedding"],
@@ -1092,6 +1166,26 @@ fn warnings_of(row: &PoolRow, cohort: usize) -> Vec<PoolWarning> {
             &["warm_sessions"],
             "With warm sessions never a round stops after the cold sessions, so the excess is covered only while cold \
              sessions carry it."
+                .into(),
+        ));
+    }
+    if row.slow_down.slow_down_hold_seconds > 150 {
+        warnings.push(warning(
+            "hold_over_window",
+            &["slow_down_hold_seconds"],
+            "A hold over 150 seconds leaves under 30 seconds of the client's first-byte window for the upstream's \
+             head, so a slowed request can time out at the client and be sent again."
+                .into(),
+        ));
+    }
+    if row.failover.return_to_plan == ReturnToPlan::Always
+        && row.failover.return_to_plan_dwell_seconds == 0
+    {
+        warnings.push(warning(
+            "return_at_once",
+            &["return_to_plan_dwell_seconds"],
+            "A return dwell of zero returns every warm session on its first request at the metered member, so the \
+             member serves one turn per session and the move's rewrite is paid each time."
                 .into(),
         ));
     }
@@ -1413,10 +1507,15 @@ pub(crate) async fn pool_json_from(
         shed_dwell_seconds: row.shedding.shed_dwell_seconds,
         migrate_when_spent: row.shedding.migrate_when_spent,
         warm_sessions: row.shedding.warm_sessions.as_str().to_string(),
+        slow_down: row.slow_down.slow_down,
+        slow_down_stretch_seconds: row.slow_down.slow_down_stretch_seconds,
+        slow_down_hold_seconds: row.slow_down.slow_down_hold_seconds,
         retry_in_place_seconds: row.failover.retry_in_place_seconds,
         in_flight_cap: row.failover.in_flight_cap,
         overage_move_grace_minutes: row.failover.overage_move_grace_minutes,
         wind_down_minutes: row.failover.wind_down_minutes,
+        return_to_plan: row.failover.return_to_plan.as_str().to_string(),
+        return_to_plan_dwell_seconds: row.failover.return_to_plan_dwell_seconds,
         moves_per_hour: moves
             .iter()
             .map(|(reason, count)| (reason.clone(), *count as f64))
@@ -1563,10 +1662,15 @@ mod tests {
         shed_dwell_seconds: u64,
         migrate_when_spent: bool,
         warm_sessions: String,
+        slow_down: bool,
+        slow_down_stretch_seconds: u32,
+        slow_down_hold_seconds: u32,
         retry_in_place_seconds: u64,
         in_flight_cap: u32,
         overage_move_grace_minutes: u32,
         wind_down_minutes: u32,
+        return_to_plan: String,
+        return_to_plan_dwell_seconds: u32,
         moves_per_hour: BTreeMap<String, f64>,
         keepalive: KeepalivePolicyView,
         keepalive_resolved: Option<ResolvedCeilingsView>,

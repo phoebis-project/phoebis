@@ -689,15 +689,14 @@ fn a_registry_whose_only_sealed_rows_are_recipe_bodies_is_judged_by_them() {
     assert!(agents.iter().all(|agent| agent.body.is_none()));
 }
 
-/// The reverse of the registry's newest migration, the pool fields' old names, the three dropped columns back and the
-/// ceiling and the switch gone, as `crates/store/tests` replays it.
-const UNDO_V54: &str = "ALTER TABLE pools DROP COLUMN window_ceiling; ALTER TABLE pools DROP COLUMN load_shedding; \
-     ALTER TABLE pools ADD COLUMN shed_ahead_of_pace REAL; ALTER TABLE pools ADD COLUMN select_below_utilization REAL; \
-     ALTER TABLE pools ADD COLUMN pace_floor REAL NOT NULL DEFAULT 0.05; \
-     ALTER TABLE pools RENAME COLUMN shed_cap TO shed_share; \
-     ALTER TABLE pools RENAME COLUMN burn_average_seconds TO burn_window_seconds; \
-     ALTER TABLE pools RENAME COLUMN shed_dwell_seconds TO source_dwell_seconds; \
-     UPDATE meta SET value = '53' WHERE key = 'schema_version';";
+/// The reverse of the registry's newest migration, the slow-down's three columns and the return-to-plan mode and dwell
+/// gone, as `crates/store/tests` replays it.
+const UNDO_V55: &str = "ALTER TABLE pools DROP COLUMN slow_down; \
+     ALTER TABLE pools DROP COLUMN slow_down_stretch_seconds; \
+     ALTER TABLE pools DROP COLUMN slow_down_hold_seconds; \
+     ALTER TABLE pools DROP COLUMN return_to_plan; \
+     ALTER TABLE pools DROP COLUMN return_to_plan_dwell_seconds; \
+     UPDATE meta SET value = '54' WHERE key = 'schema_version';";
 
 #[test]
 fn a_run_that_stops_short_of_the_discard_leaves_the_registry_at_the_version_it_found() {
@@ -707,7 +706,7 @@ fn a_run_that_stops_short_of_the_discard_leaves_the_registry_at_the_version_it_f
     seed(&registry(dir.path()), &old);
     rusqlite::Connection::open(registry(dir.path()))
         .unwrap()
-        .execute_batch(UNDO_V54)
+        .execute_batch(UNDO_V55)
         .unwrap();
     std::fs::write(key_file(dir.path()), OLD_KEY).unwrap();
     let out = recover_key(&config, &["--yes"], b"");
@@ -715,7 +714,7 @@ fn a_run_that_stops_short_of_the_discard_leaves_the_registry_at_the_version_it_f
     assert_eq!(stdout_lines(&out), [MATCH_LINE], "{}", printed(&out));
     assert_eq!(
         Store::read_schema_version(&registry(dir.path())).unwrap(),
-        Some(53),
+        Some(54),
         "a matching key migrates nothing"
     );
     std::fs::write(key_file(dir.path()), NEW_KEY).unwrap();
@@ -723,7 +722,7 @@ fn a_run_that_stops_short_of_the_discard_leaves_the_registry_at_the_version_it_f
     assert_eq!(out.status.code(), Some(2), "{}", printed(&out));
     assert_eq!(
         Store::read_schema_version(&registry(dir.path())).unwrap(),
-        Some(53),
+        Some(54),
         "a declined run migrates nothing, so the build that wrote the registry still opens it"
     );
     let out = recover_key(&config, &[], b"yes\n");
