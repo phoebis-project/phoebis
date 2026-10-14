@@ -459,7 +459,7 @@ async fn a_held_model_unweighted_condition_lists_on_the_route_after_every_degrad
     })
     .await;
     let body = json(get(&parts.app, "/admin/attention", Some(&cookie)).await).await;
-    // The kind ranks last in the reader's order, which the attention crate's tests pin over every kind, so the
+    // The kind ranks after every degraded kind in the reader's order, which the attention crate's tests pin, so the
     // degraded account seeded beside it is enough to read the item after a degraded kind.
     assert_eq!(
         body["items"]
