@@ -2150,10 +2150,11 @@ let cardTones = {};
 
 /**
  * The Quota cards' chips with their shares read "left" against the columns that hold them: every card's window
- * chip and reset cell fits its column on one line, the window grid stays inside its card, and an expired window's
- * longer reset cell may wrap but never runs past its column. Every live window's meter carries its pace mark inside
- * the meter's horizontal bounds and taller than the track. The router's seed has no subscription account, so only
- * the story's pass has chips to read.
+ * chip and reset cell fits its column on one line, the window grid stays inside its card, an expired window's
+ * longer reset cell may wrap but never runs past its column, and a live label with a projection breaks between its
+ * reset and its projection where the column is too narrow for both, each part on one line inside the cell. Every live
+ * window's meter carries its pace mark inside the meter's horizontal bounds and taller than the track. The router's
+ * seed has no subscription account, so only the story's pass has chips to read.
  */
 async function quotaChips(theme) {
   const say = (what) => failures.push(`${theme} /quota: ${what}`);
@@ -2164,6 +2165,17 @@ async function quotaChips(theme) {
       return Math.round(box.height / line);
     };
     const cell = (el) => ({ client: el.clientWidth, lines: lines(el), scroll: el.scrollWidth, text: el.textContent?.trim() ?? '', title: el.getAttribute('title') ?? '' });
+    // A part is an inline run whose text nodes draw a box each, so its lines are the distinct tops of its boxes and its
+    // width its widest line, and it lies inside its cell's box.
+    const parts = (el) => {
+      const box = el.getBoundingClientRect();
+      return [...el.querySelectorAll('.qwin__part')].map((part) => {
+        const rects = [...part.getClientRects()];
+        const lines = new Map();
+        for (const r of rects) lines.set(Math.round(r.top), (lines.get(Math.round(r.top)) ?? 0) + r.width);
+        return { inside: rects.every((r) => r.left >= box.left - 0.5 && r.right <= box.right + 0.5), lines: lines.size, text: part.textContent ?? '', width: Math.round(Math.max(0, ...lines.values()) * 10) / 10 };
+      });
+    };
     const tone = (el) => (el ? { background: getComputedStyle(el).backgroundColor, color: getComputedStyle(el).color } : null);
     return {
       chips: [...document.querySelectorAll('.qcard__windows .qchip')].map((chip) => ({ ...cell(chip), parts: [...chip.children].map(lines) })),
@@ -2173,11 +2185,11 @@ async function quotaChips(theme) {
         const mark = meter.querySelector('.meter__mark')?.getBoundingClientRect() ?? null;
         return { height: mark ? Math.round(mark.height) : null, inside: mark !== null && mark.left >= track.left - 0.5 && mark.right <= track.right + 0.5, left: mark ? Math.round(mark.left - track.left) : null, taller: mark !== null && mark.height > track.height, title: meter.getAttribute('title') ?? '', track: Math.round(track.height) };
       }),
-      resets: [...document.querySelectorAll('.qcard__windows .qwin__reset')].map(cell),
+      resets: [...document.querySelectorAll('.qcard__windows .qwin__reset')].map((el) => ({ ...cell(el), parts: parts(el) })),
       tones: Object.fromEntries(['good', 'low', 'warn'].map((name) => [name, tone(document.querySelector(`.qcard__windows .qchip--${name}`))])),
     };
   });
-  measurements.push(`${theme} /quota chips ${JSON.stringify({ chips: read.chips.map((c) => [c.text, c.client]), resets: read.resets.map((c) => [c.text, c.client, c.lines]) })}`);
+  measurements.push(`${theme} /quota chips ${JSON.stringify({ chips: read.chips.map((c) => [c.text, c.client]), resets: read.resets.map((c) => [c.text, c.client, c.lines, c.parts.map((p) => p.width)]) })}`);
   measurements.push(`${theme} /quota pace marks ${JSON.stringify(read.marks.map((m) => [m.title, m.left, m.height, m.track]))}`);
   cardTones = read.tones;
   if (mock && read.chips.length === 0) say('the story has subscription windows, yet no card chip is drawn');
@@ -2195,8 +2207,11 @@ async function quotaChips(theme) {
   }
   for (const reset of read.resets) {
     if (reset.scroll > reset.client) say(`the reset cell ${JSON.stringify(reset.text)} needs ${reset.scroll}px of its ${reset.client}px`);
-    if (!reset.text.startsWith('expired ') && reset.lines > 1) say(`the reset cell ${JSON.stringify(reset.text)} wraps`);
+    if (reset.parts.length > 0) {
+      for (const part of reset.parts.filter((p) => p.lines > 1 || !p.inside)) say(`the reset cell ${JSON.stringify(reset.text)} draws its part ${JSON.stringify(part.text)} over ${part.lines} lines or past the cell`);
+    } else if (!reset.text.startsWith('expired ') && reset.lines > 1) say(`the reset cell ${JSON.stringify(reset.text)} wraps`);
   }
+  if (mock && !read.resets.some((r) => r.parts.length === 2)) say('the story projects its live windows, yet no reset cell draws its reset and its projection as two parts');
   for (const card of read.grids) {
     if (card.grid > card.card) say(`${card.name}'s windows run past its card`);
   }
@@ -2302,9 +2317,9 @@ async function quotaCardHeights(theme) {
 }
 
 /** The card grid's floor (`.quota-grid`), the measured figure its comment carries. */
-const QUOTA_FLOOR = 523;
-/** The reset column's bound (`--qwin-reset` on `.qcard__windows`), past the widest live label with its projection. */
-const QUOTA_RESET = 240;
+const QUOTA_FLOOR = 403;
+/** The reset column's bound (`--qwin-reset` on `.qcard__windows`), past the widest single part of a live label. */
+const QUOTA_RESET = 120;
 
 /** Two phone windows under the shell's 900 px breakpoint, where the content is narrower than the card grid's floor. */
 const QUOTA_NARROW = [
@@ -2316,7 +2331,10 @@ const QUOTA_NARROW = [
  * Every Quota card's window grid holds its three columns: each meter, live or absent, at least 120 px wide, the grid
  * needing no more than its own width, no chip, meter or reset label ending past the room inside the card's border and
  * its body's padding, where the card's `overflow: hidden` would cut it, the chip column no wider than the card's
- * widest chip and the reset column no wider than the card's widest reset label within its 240 px bound. A meter held
+ * widest chip and the reset column no wider than the card's widest reset label within its 120 px bound, a label split
+ * between its reset and its projection read by its wider part. A split label's unbroken width runs past the bound,
+ * so its card's column stands at the bound. In the mock pass two cards stand in a row at the pass's 1280 by 800, as
+ * the floor is set for. A meter held
  * at its 120 px minimum while the columns run past the card passes a width reading alone, and a fixed column on a card
  * wide enough passes every reading but its own. The pace mark stands out of flow inside its meter, so the meter's box
  * and the columns read the same with it, and `quotaChips` reads the mark. The check reads in the window the pass set,
@@ -2351,12 +2369,18 @@ async function quotaMeters(theme) {
         const walker = document.createTreeWalker(label, NodeFilter.SHOW_TEXT);
         const range = document.createRange();
         let sum = 0;
+        const lines = new Map();
         for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
           range.selectNodeContents(node);
-          sum += [...range.getClientRects()].reduce((n, r) => n + r.width, 0);
+          for (const r of range.getClientRects()) {
+            sum += r.width;
+            lines.set(Math.round(r.top), (lines.get(Math.round(r.top)) ?? 0) + r.width);
+          }
         }
-        return tenth(sum);
+        // A label split between its reset and its projection needs its wider line, each part whole on its own line.
+        return tenth(label.querySelector('.qwin__part') ? Math.max(0, ...lines.values()) : sum);
       };
+      const split = (el) => kind(el) === 'reset' && el.querySelector('.qwin__part') !== null && el.getClientRects().length > 0 && new Set([...el.querySelectorAll('.qwin__part')].map((p) => Math.round(p.getBoundingClientRect().top))).size > 1;
       const content = (el) => (kind(el) === 'chip' ? chipWidth(el) : kind(el) === 'reset' ? textWidth(el) : null);
       const grid = document.querySelector('.quota-grid');
       const main = grid?.closest('.content');
@@ -2369,7 +2393,7 @@ async function quotaMeters(theme) {
             const room = body.getBoundingClientRect().right - parseFloat(getComputedStyle(body).paddingRight);
             const windows = card.querySelector('.qcard__windows');
             return {
-              cells: [...windows.children].map((el) => ({ content: content(el), kind: kind(el), past: tenth(el.getBoundingClientRect().right - room), text: el.textContent?.trim() ?? '', width: tenth(el.getBoundingClientRect().width) })),
+              cells: [...windows.children].map((el) => ({ content: content(el), kind: kind(el), past: tenth(el.getBoundingClientRect().right - room), split: split(el), text: el.textContent?.trim() ?? '', width: tenth(el.getBoundingClientRect().width) })),
               client: windows.clientWidth,
               name: card.querySelector('.qcard__name')?.textContent?.trim() ?? '',
               scroll: windows.scrollWidth,
@@ -2402,8 +2426,10 @@ async function quotaMeters(theme) {
       const label = Math.max(...resets.map((x) => x.content));
       const resetColumn = Math.max(...resets.map((x) => x.width));
       if (chips.length > 0 && chipColumn > widest + 1) say(`${card.name}'s chip column is ${chipColumn}px wide ${at}, more than 1 px past its widest chip's ${widest}px`);
-      if (where !== 'narrow' && resets.length > 0 && resetColumn > Math.min(label, QUOTA_RESET) + 1) say(`${card.name}'s reset column is ${resetColumn}px wide ${at}, more than 1 px past ${label < QUOTA_RESET ? `its widest label's ${label}px` : `its ${QUOTA_RESET} px bound`}`);
+      const cap = resets.some((x) => x.split) ? QUOTA_RESET : Math.min(label, QUOTA_RESET);
+      if (where !== 'narrow' && resets.length > 0 && resetColumn > cap + 1) say(`${card.name}'s reset column is ${resetColumn}px wide ${at}, more than 1 px past ${cap < QUOTA_RESET ? `its widest label's ${label}px` : `its ${QUOTA_RESET} px bound`}`);
     }
+    if (where === 'pass' && mock && got.view === 1280 && (got.rows === null || got.rows.second >= got.rows.first)) say(`one card stands in a row ${at}, where the card grid's ${QUOTA_FLOOR}px floor leaves room for two`);
     if (where === 'floor') {
       for (const card of got.cards.filter((c) => Math.abs(c.width - QUOTA_FLOOR) > 0.5)) say(`${card.name} stands ${card.width}px wide ${at}, not on the card grid's ${QUOTA_FLOOR}px floor`);
       if (mock && !got.cards.some((c) => c.cells.some((x) => /^Fable\d+% left$/.test(x.text)))) say(`no card holds the story's widest chip ${at}`);

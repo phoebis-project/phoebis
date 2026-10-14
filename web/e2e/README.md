@@ -35,14 +35,16 @@ and closed by Escape), the cooling-down block's columns (Reason the fill), the D
 the dashboard and the Accounts page (each bar's line inside its bar, a compact bar's projection on one line in its
 reset's place and a whole bar's reset and projection each whole on its line), the account lines, the Quota cards' poll
 lines (short of the Refresh pill and inside the card, the backoff line in the serious ink, none wrapping, a failed
-poll's reason cut inside its line and whole in its title), the Quota cards' chips and reset cells (each on one line
-inside its column, the window grid inside its card) and each live window's pace mark (inside its meter and taller than
-the track), the timeline's chips on the Quota windows section (each inside its column, a chip with a share in the
-background and ink of the card chip of the same tone, primary's used fill at the share the page computed, and the lane
-label's ink at 4.5:1 or better over each tone's fill), the Quota cards' one height (the head's and the foot's rules at
-one offset on every card), every Quota card's meters at least 120 px wide, its window cells inside its padding, its chip
-column as wide as its widest chip and its reset column as wide as its widest label within its 240 px bound, at 1280 by
-800 and in a window that sets two cards on the card grid's floor (one card in a row 1 px narrower), and at 375 by 800
+poll's reason cut inside its line and whole in its title), the Quota cards' chips and reset cells (each chip and each
+reset cell without a projection on one line inside its column, a live label with its projection split between its reset
+and its projection with each part on one line inside the cell, the window grid inside its card) and each live window's
+pace mark (inside its meter and taller than the track), the timeline's chips on the Quota windows section (each inside
+its column, a chip with a share in the background and ink of the card chip of the same tone, primary's used fill at the
+share the page computed, and the lane label's ink at 4.5:1 or better over each tone's fill), the Quota cards' one height
+(the head's and the foot's rules at one offset on every card), every Quota card's meters at least 120 px wide, its
+window cells inside its padding, its chip column as wide as its widest chip and its reset column as wide as its widest
+label within its 120 px bound, a split label read by its wider part, at 1280 by 800 with two cards in a row in the mock
+pass and in a window that sets two cards on the card grid's floor (one card in a row 1 px narrower), and at 375 by 800
 and 390 by 844 with no sideways scroll on the page and each card inside the window (the reset label on a row of its own
 there, so its column goes unread), the remaining cards, the error state, the lines under the quota rings, the recent
 requests' model cells and their table's fit, the recent requests' columns (Key the fill), the cost-cap rows, the

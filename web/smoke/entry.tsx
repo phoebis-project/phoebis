@@ -37,7 +37,7 @@ export { anchorTier, bandFactor, bandRuns, fullWindowsAWeek, inBand, nextLocalCh
 // The strip's model and its buttons' names, so a card check spells the stations a record draws and the names a reader
 // hears from the derivation the strip reads.
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';
-export { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, shareLabel, shortModel, spanText, undatedModel } from '@/lib/format';
+export { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, shareLabel, shortModel, spanText, undatedModel } from '@/lib/format';
 // The pace mark's offset and the end it runs to, so the check and the meter place it by one arithmetic.
 export { endOf, remainingTimeShare } from '@/lib/quota';
 // The projection's phrase, its burn and the span it spells, so a check computes the words a window draws from the one
@@ -49,7 +49,7 @@ export { costUnitOf } from '@/lib/requests';
 export { requestsWiden } from '@/lib/requestsLink';
 export { fmtWindows, ringFigures } from '@/lib/rings';
 // The walk's words, so a card check reads a popover's column and its title as the console words them.
-export { ALL_KINDS, keyWord, STEP_NAME } from '@/lib/routingLog';
+export { ALL_KINDS, keyWord, STEP_NAME, words } from '@/lib/routingLog';
 // The legend's words, so the shell's check reads the popover against the one source the console draws it from.
 export { UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE } from '@/lib/unit';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;

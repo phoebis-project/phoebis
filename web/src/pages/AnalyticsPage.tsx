@@ -1931,8 +1931,11 @@ function SpeedCard({ axis, points, error, loading }: { axis: TimeAxis; error: st
 /** The destination fits in the gate's order, so a reason's bar reads from its best landings to its worst. */
 const MOVE_FITS = ['fits', 'rewrite_only', 'least_bad', 'unknown'];
 const fitRank = (fit: string) => (MOVE_FITS.includes(fit) ? MOVE_FITS.indexOf(fit) : MOVE_FITS.length);
-/** A fit's segment in the verdict's tone, `unknown` (a move whose record carries no fit) in the muted series ink. */
-const fitColor = (ink: ChartInk, fit: string): string => (fit === 'fits' ? ink.good : fit === 'rewrite_only' ? ink.warning : fit === 'least_bad' ? ink.serious : ink.muted);
+/**
+ * A fit's segment in a status ink apart from the card's Rewrite tokens series: `fits` good, `rewrite only` warning,
+ * `least bad` critical, and `unknown` (a move whose record carries no fit) the muted series ink.
+ */
+const fitColor = (ink: ChartInk, fit: string): string => (fit === 'fits' ? ink.good : fit === 'rewrite_only' ? ink.warning : fit === 'least_bad' ? ink.critical : ink.muted);
 
 function RewritesCard({ answer, axis, error, loading, unfiltered }: { answer: RewritesAnswer | null; axis: TimeAxis; error: string | null; loading: boolean; unfiltered: boolean }) {
   const ink = useChartInk();

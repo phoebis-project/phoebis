@@ -118,3 +118,32 @@ test('the end a pace reads is the saved end while cancelled, else a trial end st
   assert.equal(d.endOf({ cancelled: false, subscription: term({}) }, now), null, 'the derived end is a prefill, not an end');
   assert.equal(d.endOf({ cancelled: false, subscription: null }, now), null, 'an API-key account');
 });
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+test('the projection reads at the reset where its horizon lies within a minute of the reset, since its two instants come from two sources', () => {
+  const now = Date.UTC(2026, 8, 16, 14, 30);
+  const at = (ms) => new Date(now + ms).toISOString();
+  const window = (horizon, reset) => ({ horizon: at(horizon), projection: 0.81, resetsAt: at(reset) });
+  const reset = 2 * HOUR + 13 * MINUTE;
+  assert.equal(d.projectionWords(window(reset - 500, reset), now), '81% at the reset', 'a horizon 500 ms before its reset');
+  assert.equal(d.projectionWords(window(reset - 500, reset), now, true), '81% at reset', 'the compact form');
+  assert.equal(d.projectionWords(window(reset, reset), now), '81% at the reset', 'a horizon on its reset');
+  assert.equal(d.projectionWords(window(reset - 2 * MINUTE, reset), now), '81% in 2 h 11 min', 'an end two minutes before the reset');
+  assert.equal(d.projectionWords(window(5 * HOUR, 3 * DAY), now), '81% in 5 h', 'a weekly horizon five hours out');
+});
+
+test('a span under a minute reads one minute, and a horizon at or before now reads now', () => {
+  const now = Date.UTC(2026, 8, 16, 14, 30);
+  const at = (ms) => new Date(now + ms).toISOString();
+  assert.equal(d.minuteSpan(20_000), '1 min', 'twenty seconds');
+  assert.equal(d.minuteSpan(29_999), '1 min', 'under half a minute');
+  assert.equal(d.minuteSpan(5 * HOUR - 20_000), '5 h', 'a span seconds short of five hours');
+  assert.equal(d.minuteSpan(4 * HOUR + 59 * MINUTE), '4 h 59 min');
+  const window = (horizon) => ({ horizon: at(horizon), projection: 0.41, resetsAt: at(3 * DAY) });
+  assert.equal(d.projectionWords(window(0), now), '41% now', 'a horizon at now, an end that has come');
+  assert.equal(d.projectionWords(window(-MINUTE), now), '41% now', 'a horizon a minute past');
+  assert.equal(d.projectionWords(window(-MINUTE), now, true), '41% now', 'the compact form');
+});

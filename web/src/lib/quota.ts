@@ -83,10 +83,11 @@ export function paceWords(w: RateLimitWindow, now: number, end: number | null): 
 
 /**
  * A span rounded to the minute in the routing log's spelling: `27 min`, `5 h`, `4 h 59 min`, `3 d 5 h`. A horizon five
- * hours out reads `5 h` though the page reads it seconds after the route computed it.
+ * hours out reads `5 h` though the page reads it seconds after the route computed it, and a span under a minute reads
+ * `1 min`, so `0 min` never stands beside a zero runway's `none`.
  */
 export function minuteSpan(ms: number): string {
-  const minutes = Math.max(0, Math.round(ms / MINUTE));
+  const minutes = ms > 0 ? Math.max(1, Math.round(ms / MINUTE)) : 0;
   const pair = (major: number, majorUnit: string, minor: number, minorUnit: string) => (minor > 0 ? `${major} ${majorUnit} ${minor} ${minorUnit}` : `${major} ${majorUnit}`);
   if (minutes < 60) return `${minutes} min`;
   if (minutes < 24 * 60) return pair(Math.floor(minutes / 60), 'h', minutes % 60, 'min');
@@ -96,12 +97,15 @@ export function minuteSpan(ms: number): string {
 /**
  * The projection at the window's horizon, `104% at the reset` where the horizon is the reset and `44% in 5 h` where it
  * falls earlier (five hours out on a weekly window, or the account's end), with `at reset` in the compact form the
- * window bars draw. Null without a projection.
+ * window bars draw, and `41% now` once the horizon has come. Null without a projection.
  */
 export function projectionWords(w: Pick<RateLimitWindow, 'horizon' | 'projection' | 'resetsAt'>, now: number, compact = false): string | null {
   if (w.projection === null || w.horizon === null) return null;
   const horizon = Date.parse(w.horizon);
-  const atReset = w.resetsAt !== null && Date.parse(w.resetsAt) === horizon;
+  if (horizon <= now) return `${fmtPct(w.projection)} now`;
+  // The route reads the horizon off the router's latest reading and the reset off the ledger's newest sample, whole
+  // seconds on one path and milliseconds on the other, so a horizon within a minute of the reset is the reset.
+  const atReset = w.resetsAt !== null && Math.abs(Date.parse(w.resetsAt) - horizon) < MINUTE;
   return `${fmtPct(w.projection)} ${atReset ? (compact ? 'at reset' : 'at the reset') : `in ${minuteSpan(horizon - now)}`}`;
 }
 

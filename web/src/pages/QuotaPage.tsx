@@ -301,9 +301,10 @@ function WindowChip({ name, window: w, className, now }: { className: string; na
 
 /**
  * One window as three cells of the card grid: the chip, the meter, and the reset label, which carries the projection
- * at the window's horizon after the reset and names the burn behind it on its hover. The grid sizes the chip and the
- * reset to their content and hands the meter the rest, and `qwin__chip` names the chip's cell for the checks that read
- * a row by its cells. Under 900 px the reset label takes a row of its own under the meter.
+ * at the window's horizon after the reset, breaking between the two where its column is too narrow, and names the burn
+ * behind it on its hover. The grid sizes the chip and the reset to their content and hands the meter the rest, and
+ * `qwin__chip` names the chip's cell for the checks that read a row by its cells. Under 900 px the reset label takes a
+ * row of its own under the meter.
  */
 function QuotaWindow({ end, name, window: w, now, soon }: { end: number | null; name: string; now: number; soon: boolean; window: RateLimitWindow | null }) {
   // The last reading describes a window that has since reset, so its share says nothing until the next one.
@@ -323,9 +324,14 @@ function QuotaWindow({ end, name, window: w, now, soon }: { end: number | null; 
         </div>
       )}
       {live ? (
-        <span className={`qwin__reset ${soon ? 'is-soon' : ''}`} title={`${fmtAbsolute(live.resetsAt)}${soon ? ', the first of this account to recover' : ''}${burn ? `, ${burn}` : ''}`}>
-          resets {fmtRelative(live.resetsAt, now)}
-          {projection && `, ${projection}`}
+        <span className={`qwin__reset ${projection ? 'qwin__reset--split' : ''} ${soon ? 'is-soon' : ''}`} title={`${fmtAbsolute(live.resetsAt)}${soon ? ', the first of this account to recover' : ''}${burn ? `, ${burn}` : ''}`}>
+          {projection ? (
+            <>
+              <span className="qwin__part">resets {fmtRelative(live.resetsAt, now)},</span> <span className="qwin__part">{projection}</span>
+            </>
+          ) : (
+            `resets ${fmtRelative(live.resetsAt, now)}`
+          )}
         </span>
       ) : w ? (
         <span className="qwin__reset muted" title={`no reading since the reset, ${fmtAbsolute(w.resetsAt)}`}>

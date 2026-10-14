@@ -1,13 +1,14 @@
 import type { Account, RateLimitWindow } from '@/api/types';
 import { fmtAbsolute, fmtPct, fmtRelative } from '@/lib/format';
-import { meterTone, projectionWords, remainingOf } from '@/lib/quota';
+import { isExpired, meterTone, projectionWords, remainingOf } from '@/lib/quota';
 import { WINDOW_ORDER } from '@/lib/windows';
 import { Meter } from './primitives';
 
 export function WindowBar({ window: w, now, soon = false, showLabel = true, compact = false }: { compact?: boolean; now: number; showLabel?: boolean; soon?: boolean; window: RateLimitWindow }) {
   const remaining = remainingOf(w);
   const reset = compact ? fmtRelative(w.resetsAt, now) : `resets ${fmtRelative(w.resetsAt, now)}`;
-  const projection = projectionWords(w, now, compact);
+  // A window past its reset says nothing until its next reading, as the Quota cell's expired line does.
+  const projection = isExpired(w, now) ? null : projectionWords(w, now, compact);
   return (
     <div className="wbar">
       <div className="wbar__head">

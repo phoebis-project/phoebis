@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, minuteSpan, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, projectionWords, React, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, minuteSpan, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, projectionWords, React, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, words } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -212,9 +212,10 @@ const waitText = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 :
  * A Sessions row's cell under the header that reads `header`, so a check names its column whatever the control hides.
  */
 /**
- * The window bars of one account's card with the phrase each should read: the projection's words at `at`, compact or
- * whole as the bar draws them, from the mock's own windows, null for a window that carries none. A bar names its
- * window by its label (`5h` or `5-hour`, `7d` or `7-day`, `Fable`, else the window's key).
+ * The window bars of one account's card with the reset and the phrase each should read: the reset's relative words, and
+ * the projection's words at `at`, compact or whole as the bar draws them, from the mock's own windows, null for a
+ * window that carries none or whose reset has passed. A bar names its window by its label (`5h` or `5-hour`, `7d` or
+ * `7-day`, `Fable`, else the window's key).
  */
 const barPhrases = (bars, account, at, compact) =>
   bars
@@ -223,14 +224,15 @@ const barPhrases = (bars, account, at, compact) =>
       const label = b.querySelector('.wbar__label')?.textContent ?? '';
       const id = { '5-hour': '5h', '5h': '5h', '7-day': '7d', '7d': '7d' }[label] ?? label;
       const w = label === 'Fable' ? account.fableWindow : (account.windows.find((x) => x.id === id) ?? null);
-      return { compact, label, text: b.querySelector('.wbar__reset')?.textContent ?? '', want: w === null ? null : projectionWords(w, at, compact) };
+      const expired = w !== null && w.resetsAt !== null && Date.parse(w.resetsAt) < at;
+      const reset = w === null ? null : compact ? fmtRelative(w.resetsAt, at) : `resets ${fmtRelative(w.resetsAt, at)}`;
+      return { compact, label, reset, text: b.querySelector('.wbar__reset')?.textContent ?? '', want: w === null || expired ? null : projectionWords(w, at, compact) };
     });
 /**
- * The bars of `barPhrases` that misread their phrase: a compact bar reads it alone in the reset's place, a whole bar
- * after its reset, and a bar whose window carries none reads its reset alone.
+ * The bars of `barPhrases` that misread their line: a compact bar reads its phrase alone in the reset's place, a whole
+ * bar its reset and then its phrase, and a bar whose window carries none reads its reset alone.
  */
-const barsOff = (read) =>
-  read.filter((r) => (r.want === null ? r.text.includes(', ') || r.text.includes('%') : r.compact ? r.text !== r.want : !r.text.endsWith(`, ${r.want}`) || !r.text.startsWith('resets ')));
+const barsOff = (read) => read.filter((r) => r.reset === null || r.text !== (r.want === null ? r.reset : r.compact ? r.want : `${r.reset}, ${r.want}`));
 const sessionCell = (m, tr, header) => {
   const i = [...m.container.querySelectorAll('.sessions-table thead th')].findIndex((th) => th.textContent?.trim() === header);
   return i < 0 ? undefined : tr?.children[i];
@@ -757,6 +759,27 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   page.unmount();
 }
 {
+  // A window whose reset has passed says nothing until its next reading, as the Quota cell's expired line does, so a
+  // served projection on it stays off its bar: legacy's 5-hour window, given one here.
+  const at = Date.now();
+  const { listAccounts } = api;
+  api.listAccounts = async (...args) =>
+    (await listAccounts.apply(api, args)).map((a) => (a.id !== 'legacy' ? a : { ...a, windows: a.windows.map((w) => (w.id === '5h' ? { ...w, burn: 0.02, horizon: new Date(at + 5 * 3_600_000).toISOString(), projection: 0.3 } : w)) }));
+  const page = await mount('/', { now: at });
+  api.listAccounts = listAccounts;
+  const legacy = (await api.listAccounts()).find((a) => a.id === 'legacy');
+  const card = [...page.container.querySelectorAll('a.account-mini')].find((c) => idOf(c) === 'legacy');
+  const bar = [...(card?.querySelectorAll('.wbar') ?? [])].find((b) => b.querySelector('.wbar__label')?.textContent === '5h');
+  const text = bar?.querySelector('.wbar__reset')?.textContent ?? 'no 5h bar on legacy';
+  const reset = legacy?.windows.find((w) => w.id === '5h')?.resetsAt ?? null;
+  results.push({
+    name: '/ a window bar whose reset has passed reads its reset alone, though the window carries a projection',
+    ok: reset !== null && Date.parse(reset) < at && text === fmtRelative(reset, at),
+    missing: [text, String(reset)],
+  });
+  page.unmount();
+}
+{
   // The recent requests' table is a glance, so under native, the shell's default, a subscription row's Cost cell reads
   // its 20x 5-hour equivalent alone in the short form, with every equivalent, the dollar equivalent and the revisions
   // in force on its title and the mark where the row is estimated, while the Requests cell keeps the full reading. An
@@ -997,7 +1020,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
     const card = [...q.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
     const chip = [...(card?.querySelectorAll('.qcard__windows .qwin__chip') ?? [])].find((c) => c.querySelector('.qchip__name')?.textContent === name);
     const reset = chip?.nextElementSibling?.nextElementSibling ?? null;
-    return { text: reset?.textContent ?? '', title: reset?.getAttribute('title') ?? '' };
+    return { parts: [...(reset?.querySelectorAll('.qwin__part') ?? [])].map((p) => p.textContent ?? ''), text: reset?.textContent ?? '', title: reset?.getAttribute('title') ?? '' };
   };
   const windowsOf = (a) => [['5h', a.windows.find((w) => w.id === '5h') ?? null], ['7d', a.windows.find((w) => w.id === '7d') ?? null], ['Fable', a.fableWindow]];
   const live = accounts.flatMap((a) => windowsOf(a).filter(([, w]) => w !== null && !(w.resetsAt !== null && Date.parse(w.resetsAt) < at)).map(([name, w]) => ({ account: a.label, name, w, ...cellOf(a.label, name) })));
@@ -1007,6 +1030,14 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
     name: "/quota every live window with a projection reads it after the reset label, at the reset or in the span to its horizon",
     ok: projected.length > 0 && offPhrase.length === 0,
     missing: offPhrase.map((r) => `${r.account} ${r.name}: ${JSON.stringify(r.text)}, not ending ${JSON.stringify(projectionWords(r.w, at))}`),
+  });
+  // The label breaks between the reset and the projection where its column is too narrow for both, never inside one,
+  // so a projected cell draws the two as parts of their own and the reset alone draws none.
+  const offParts = live.filter((r) => JSON.stringify(r.parts) !== JSON.stringify(projectionWords(r.w, at) === null ? [] : [`${r.text.split(', ')[0]},`, projectionWords(r.w, at)]));
+  results.push({
+    name: '/quota a live label with a projection draws its reset and its projection as two parts that break between them',
+    ok: projected.length > 0 && offParts.length === 0,
+    missing: offParts.map((r) => `${r.account} ${r.name}: ${JSON.stringify(r.parts)}`),
   });
   const wOf = (id, label) => accounts.find((a) => a.id === id)?.windows.find((w) => w.id === label) ?? null;
   const weekly = wOf('primary', '7d');
@@ -1825,6 +1856,13 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     name: "/accounts each row's window bars read the compact projection in the reset's place, primary's 5-hour 81% at reset",
     ok: rows.some((r) => r.want !== null) && barsOff(rows).length === 0 && rowText === '81% at reset',
     missing: [...barsOff(rows).map((r) => JSON.stringify(r)), rowText || 'no 5h bar on primary'],
+  });
+  const opus = primary?.windows.find((w) => w.id === 'seven_day_opus') ?? null;
+  const opusText = detail.find((r) => r.label === 'seven_day_opus')?.text ?? 'no seven_day_opus bar on the detail';
+  results.push({
+    name: "/accounts a window the router does not project, primary's seven_day_opus, reads its reset alone",
+    ok: opus !== null && opus.projection === null && opus.burn === null && opusText === `resets ${fmtRelative(opus.resetsAt, at)}`,
+    missing: [opusText, JSON.stringify(opus)],
   });
   results.push({
     name: "/accounts the detail card's window bars read the whole projection after the reset, primary's 5-hour 81% at the reset",
@@ -14186,7 +14224,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         segments: Object.entries(answer.movesByReasonAndFit[reason] ?? {})
           .filter(([, n]) => n > 0)
           .sort(([a], [b]) => ORDER.indexOf(a) - ORDER.indexOf(b))
-          .map(([fit, n]) => `${fit.replace(/_/g, ' ')} ${fmtInt(n)}`),
+          .map(([fit, n]) => `${words(fit)} ${fmtInt(n)}`),
         total: fmtInt(answer.moves[reason]),
       }));
     const splits = new Set(drawn.map((b) => b.segments.map((t) => t.replace(/ [\d,]+$/, '')).join('+')));

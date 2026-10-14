@@ -5,12 +5,17 @@ import { createRng } from './rng';
 import { ACCOUNT_SAMPLE, QUOTA_SNAPSHOT_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
 
+/** The windows the router projects, the 5-hour, the 7-day and the Fable week, as the route serves them. */
+const PROJECTED: readonly string[] = ['5h', '7d', '7d_fable'];
+
 /**
  * A window as the account routes answer it: `burn` is the share of the window the sessions on the account burn per
  * hour, and the projection runs it to the horizon, the reset on the 5-hour window and the earlier of the reset and five
- * hours out on a weekly one. A null burn is a window the router holds no reading of, which projects nothing.
+ * hours out on a weekly one. A null burn is a window the router holds no reading of, which projects nothing, and any
+ * other window, which the router does not project, carries none either.
  */
-function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoMs = 40_000, burn: number | null = 0): RateLimitWindow {
+function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoMs = 40_000, given: number | null = 0): RateLimitWindow {
+  const burn = PROJECTED.includes(id) ? given : null;
   const horizonInMs = id === '5h' ? resetsInMs : Math.min(5 * HOUR, resetsInMs);
   return {
     burn,

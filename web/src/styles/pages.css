@@ -476,14 +476,14 @@
 
 /* A card always holds a 120 px meter beside the widest chip and reset label the console draws: 2 px of border and
    28 px of body padding, the chip "Fable 100% left" (121 px in DejaVu Sans, against the story's 112 px), two 6 px
-   gaps, the 120 px meter and the reset column's 240 px bound (--qwin-reset on .qcard__windows), so the grid reflows
-   before a meter shrinks under 120 px. Two cards and the 14 px gap take 1060 px, so two sit in a row once the content
+   gaps, the 120 px meter and the reset column's 120 px bound (--qwin-reset on .qcard__windows), so the grid reflows
+   before a meter shrinks under 120 px. Two cards and the 14 px gap take 820 px, so two sit in a row once the content
    area reaches that: the window less the 232 px sidebar (--sidebar-w) and the content's 28 px of padding each side.
    Every row takes the tallest card's height, so a card that holds more than the rest (an expired window's wrapped
    reset, a longer error) moves no delimiter against its neighbors in any row. */
 .quota-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(523px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(403px, 1fr));
   grid-auto-rows: 1fr;
   gap: 14px;
 }
@@ -687,13 +687,15 @@
  * One line per window: chip, meter, reset. The chip and the reset size to their content and the meter takes what is
  * left, at least 120 px, so the meters read at the card widths the two-section layout leaves. The meters' starts
  * differ from card to card, by about 16 px in DejaVu Sans between a card with a Fable share and one without, the trade
- * for their room. The reset column is bounded at 240 px, past the widest live label with the projection after its
- * reset, "resets in 23h 59m, 104% in 4 h 59 min" (234 px in DejaVu Sans, the widest fallback the console meets, against
- * the story's 217 px), so a live label never wraps, and past the first clause of an expired window's line, "expired 2d
- * 0h ago," (113 px), so that longer line wraps inside the column after its first clause rather than widening it.
+ * for their room. A live label with its projection runs past any column the card can spare (234 px in DejaVu Sans,
+ * the widest fallback the console meets, for "resets in 23h 59m, 104% in 4 h 59 min"), so it breaks between its reset
+ * and its projection, each part whole on its line. The reset column is bounded at 120 px, past the widest single part,
+ * "104% in 4 h 59 min" (117.5 px), past "resets in 23h 59m," (112.7 px) and a bare "resets in 23h 59m" (109 px), so a
+ * part never wraps, and past the first clause of an expired window's line, "expired 2d 0h ago," (113 px), so that
+ * longer line wraps inside the column after its first clause rather than widening it.
  */
 .qcard__windows {
-  --qwin-reset: 240px;
+  --qwin-reset: 120px;
 
   display: grid;
   grid-template-columns: max-content minmax(120px, 1fr) fit-content(var(--qwin-reset));
@@ -754,13 +756,22 @@
   white-space: normal;
 }
 
+/* A live label breaks between its reset and its projection, never inside one. */
+.qwin__reset--split {
+  white-space: normal;
+}
+
+.qwin__part {
+  white-space: nowrap;
+}
+
 /* Under 900 px the shell drops its sidebar and keeps 16 px of content padding per side, so a 375 px window leaves the
    card grid 343 px, short of its floor. There a card takes no more than the grid's width and never ends past the
    window. The reset label gives up its column for a row of its own under the meter, which leaves the card's body room
    for the widest chip, the 6 px gap and a meter of 120 px or more. */
 @media (max-width: 900px) {
   .quota-grid {
-    grid-template-columns: repeat(auto-fill, minmax(min(523px, 100%), 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(403px, 100%), 1fr));
   }
 
   .qcard__windows {
