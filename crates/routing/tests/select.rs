@@ -13,8 +13,8 @@ use phoebis_routing::{
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
     CooldownRow, Failover, OveragePolicy, PinBurn, PinKey, PinRow, PoolMember,
-    PoolRow, RegistryLoad, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow, Shedding,
-    StateCause, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
+    PoolRow, RegistryLoad, ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow,
+    Shedding, StateCause, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -11003,13 +11003,23 @@ fn the_overage_move_takes_a_warm_pin_and_a_cold_one_alike_and_names_overage() {
     }
 }
 
-#[test]
-fn a_cold_pin_on_an_api_key_member_returns_to_plan_and_a_warm_one_waits_out_the_dwell() {
-    let s = snapshot(Pool {
+/// A pool whose api_key member `a` returns its pins to `b` under `mode`. The return dwell of 600 s sits under the
+/// shed dwell's default 900 s, so a warm pin that moves at 600 s moved on the return's own field.
+fn returning_pool(mode: ReturnToPlan) -> RegistrySnapshot {
+    snapshot(Pool {
         members: vec![("a", 0), ("b", 1)],
         kinds: vec![("a", AccountKind::ApiKey)],
+        failover: Failover {
+            return_to_plan: mode,
+            return_to_plan_dwell_seconds: 600,
+            ..Failover::default()
+        },
         ..Pool::default()
-    });
+    })
+}
+
+/// A warm pin five minutes on the api_key member `a` and a cold one a minute on it, beside a reading of `b`.
+fn on_the_metered_member() -> RoutingState {
     let mut st = loaded(vec![
         PinRow {
             created_at: T - 5 * MINUTE,
@@ -11020,8 +11030,15 @@ fn a_cold_pin_on_an_api_key_member_returns_to_plan_and_a_warm_one_waits_out_the_
             ..burning("cold", "a", 0.0, false, T)
         },
     ]);
-    // b's own window resets soon; the return names no grace, so nothing about it is read.
+    // b's own window resets soon, and the return names no grace, so nothing reads that reset.
     st.record_sample("b", refreshing(0.3, T + 10 * MINUTE, T + 9 * HOUR, T - 500));
+    st
+}
+
+#[test]
+fn return_to_plan_always_moves_a_cold_pin_at_once_and_a_warm_one_after_the_return_dwell() {
+    let s = returning_pool(ReturnToPlan::Always);
+    let mut st = on_the_metered_member();
     assert_eq!(
         landed(select(&mut st, &s, &main_turn(&s, "warm", T), &mut rng()).0),
         ("a".into(), None),
@@ -11032,12 +11049,141 @@ fn a_cold_pin_on_an_api_key_member_returns_to_plan_and_a_warm_one_waits_out_the_
         ("b".into(), Some(MigrateReason::ReturnToPlan)),
         "a cold pin returns to plan at once"
     );
-    let dwell_done = T - 5 * MINUTE + 900_000;
+    let landing = T - 5 * MINUTE;
+    let short = main_turn(&s, "warm", landing + 599_000);
     assert_eq!(
-        landed(select(&mut st, &s, &main_turn(&s, "warm", dwell_done), &mut rng()).0),
-        ("b".into(), Some(MigrateReason::ReturnToPlan)),
-        "a dwell after it landed on the member the warm pin returns too"
+        landed(select(&mut st, &s, &short, &mut rng()).0),
+        ("a".into(), None),
+        "a second short of the return dwell the warm pin stays"
     );
+    let done = main_turn(&s, "warm", landing + 600_000);
+    assert_eq!(
+        landed(select(&mut st, &s, &done, &mut rng()).0),
+        ("b".into(), Some(MigrateReason::ReturnToPlan)),
+        "the return dwell after it landed on the member the warm pin returns, short of the shed dwell"
+    );
+}
+
+#[test]
+fn return_to_plan_when_cold_moves_a_cold_pin_and_keeps_a_warm_one_past_the_dwell() {
+    let s = returning_pool(ReturnToPlan::WhenCold);
+    let mut st = on_the_metered_member();
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "cold", T), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::ReturnToPlan)),
+        "a cold pin returns to plan at once"
+    );
+    assert_eq!(
+        landed(select(&mut st, &s, &main_turn(&s, "warm", T), &mut rng()).0),
+        ("a".into(), None),
+        "a warm pin stays"
+    );
+    let past = main_turn(&s, "warm", T - 5 * MINUTE + 900_000);
+    assert_eq!(
+        landed(select(&mut st, &s, &past, &mut rng()).0),
+        ("a".into(), None),
+        "a warm pin stays past both dwells, since only a cold request moves it"
+    );
+}
+
+#[test]
+fn return_to_plan_never_keeps_a_pin_cold_or_warm() {
+    let s = returning_pool(ReturnToPlan::Never);
+    let mut st = on_the_metered_member();
+    // The pool's affinity is an hour and a pin expires only past it, so the pins renewed at `T` are still live at
+    // `T + HOUR` and the line there proves the keep rather than an expiry.
+    for now in [T, T + HOUR] {
+        for (session, req) in [
+            ("cold", auxiliary(&s, "cold", now)),
+            ("warm", main_turn(&s, "warm", now)),
+        ] {
+            let d = decide(&mut st, &s, &req, &mut rng());
+            assert_eq!(
+                landed(d.result.clone()),
+                ("a".into(), None),
+                "the {session} pin at {now} stays on the metered member"
+            );
+            let step = line(&d.record, "move:return_to_plan");
+            assert_eq!(
+                (
+                    step.verdict,
+                    step.facts.iter().map(|f| f.key).collect::<Vec<_>>()
+                ),
+                ("no", vec!["mode"]),
+                "the {session} pin at {now} reads its mode and no warmth"
+            );
+            assert_eq!(fact(step, "mode"), &FactValue::Text("never".into()));
+        }
+    }
+}
+
+#[test]
+fn the_return_to_plan_line_names_its_mode_on_every_verdict_and_the_dwell_under_always() {
+    let keys = |step: &WalkStep| step.facts.iter().map(|f| f.key).collect::<Vec<_>>();
+
+    let s = returning_pool(ReturnToPlan::Always);
+    let mut st = on_the_metered_member();
+    let d = decide(&mut st, &s, &main_turn(&s, "warm", T), &mut rng());
+    let warm_line = line(&d.record, "move:return_to_plan");
+    assert_eq!(
+        (warm_line.verdict, keys(warm_line)),
+        ("no", vec!["mode", "cold", "dwell_age_ms", "dwell_ms"]),
+        "under always a warm pin's line names the dwell it read"
+    );
+    assert_eq!(fact(warm_line, "mode"), &FactValue::Text("always".into()));
+    assert_eq!(fact(warm_line, "cold"), &FactValue::Bool(false));
+    assert_eq!(fact(warm_line, "dwell_age_ms"), &FactValue::Int(5 * MINUTE));
+    let dwell = warm_line
+        .facts
+        .iter()
+        .find(|f| f.key == "dwell_ms")
+        .expect("the dwell under always");
+    assert_eq!(
+        (&dwell.value, dwell.unit),
+        (&FactValue::Int(600_000), Some("ms")),
+        "the return dwell, in place of the shed dwell's 900 000"
+    );
+    let d = decide(&mut st, &s, &auxiliary(&s, "cold", T), &mut rng());
+    let cold_line = line(&d.record, "move:return_to_plan");
+    assert_eq!(
+        (cold_line.verdict, keys(cold_line)),
+        (
+            "fired",
+            vec!["mode", "cold", "dwell_age_ms", "dwell_ms", "destinations"]
+        ),
+        "a move names the mode and the dwell beside its destinations"
+    );
+    assert_eq!(fact(cold_line, "mode"), &FactValue::Text("always".into()));
+    assert_eq!(fact(cold_line, "cold"), &FactValue::Bool(true));
+    assert_eq!(
+        fact(cold_line, "destinations"),
+        &FactValue::List(vec!["b".into()])
+    );
+
+    let s = returning_pool(ReturnToPlan::WhenCold);
+    let mut st = on_the_metered_member();
+    let d = decide(&mut st, &s, &main_turn(&s, "warm", T), &mut rng());
+    let warm_line = line(&d.record, "move:return_to_plan");
+    assert_eq!(
+        (warm_line.verdict, keys(warm_line)),
+        ("no", vec!["mode", "cold", "dwell_age_ms"]),
+        "under when_cold the line reads no dwell, since none decides"
+    );
+    assert_eq!(
+        fact(warm_line, "mode"),
+        &FactValue::Text("when_cold".into())
+    );
+
+    let s = returning_pool(ReturnToPlan::Never);
+    let mut st = on_the_metered_member();
+    let d = decide(&mut st, &s, &auxiliary(&s, "cold", T), &mut rng());
+    let cold_line = line(&d.record, "move:return_to_plan");
+    assert_eq!(
+        (cold_line.verdict, keys(cold_line)),
+        ("no", vec!["mode"]),
+        "under never the rule reads neither the warmth nor the age"
+    );
+    assert_eq!(fact(cold_line, "mode"), &FactValue::Text("never".into()));
 }
 
 #[test]
@@ -11047,24 +11193,48 @@ fn a_restart_on_a_warm_pin_is_cold_for_the_return_rule_on_that_request() {
         kinds: vec![("a", AccountKind::ApiKey)],
         ..Pool::default()
     });
-    let mut st = loaded(vec![PinRow {
+    let pin = PinRow {
         created_at: T - MINUTE,
         static_hash: Some("s0".into()),
         tail_hash: Some("m2".into()),
         ..burning("s1", "a", 0.0, true, T)
-    }]);
+    };
+    let mut st = loaded(vec![pin.clone()]);
     assert!(warm(&pinned(&st, "s1"), T), "the stored pin is warm");
-    let restart = with_facts(
-        request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
-        None,
-        false,
-        Some("s0"),
-        &["x1"],
-    );
+    let restart = |s: &RegistrySnapshot| {
+        with_facts(
+            request(s, Some("s1"), "claude-sonnet-5", true, &[], T),
+            None,
+            false,
+            Some("s0"),
+            &["x1"],
+        )
+    };
     assert_eq!(
-        landed(select(&mut st, &s, &restart, &mut rng()).0),
+        landed(select(&mut st, &s, &restart(&s), &mut rng()).0),
         ("b".into(), Some(MigrateReason::ReturnToPlan)),
         "the restart is cold on the request that carries it, not one request later"
+    );
+
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        kinds: vec![("a", AccountKind::ApiKey)],
+        failover: Failover {
+            return_to_plan: ReturnToPlan::WhenCold,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![pin]);
+    let d = decide(&mut st, &s, &restart(&s), &mut rng());
+    assert_eq!(
+        fact(line(&d.record, "move:return_to_plan"), "mode"),
+        &FactValue::Text("when_cold".into())
+    );
+    assert_eq!(
+        landed(d.result),
+        ("b".into(), Some(MigrateReason::ReturnToPlan)),
+        "under when_cold the restart moves the warm pin, since it reads cold on that request"
     );
 }
 
@@ -12778,6 +12948,10 @@ fn a_renewal_records_five_no_move_lines_and_their_facts() {
     assert_eq!(
         fact(line(&d.record, "move:return_to_plan"), "kind"),
         &FactValue::Text("oauth".into())
+    );
+    assert_eq!(
+        fact(line(&d.record, "move:return_to_plan"), "mode"),
+        &FactValue::Text("always".into())
     );
     assert_eq!(
         fact(line(&d.record, "move:drain"), "cold"),

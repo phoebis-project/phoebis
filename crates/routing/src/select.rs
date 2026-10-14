@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityMode, BudgetPeriod, CooldownRow, OveragePolicy,
-    PinBurn, PinKey, PinRow, PoolMember, PoolRow, SessionPlacement, Strategy, SubagentPlacement,
-    WarmSessions,
+    PinBurn, PinKey, PinRow, PoolMember, PoolRow, ReturnToPlan, SessionPlacement, Strategy,
+    SubagentPlacement, WarmSessions,
 };
 use rand::{Rng, RngExt};
 
@@ -22,9 +22,10 @@ use crate::record::{
 };
 use crate::state::{
     all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, load_shedding,
-    mark_holds, plan_windows, shed_cap, shed_dwell_ms, warm, BurnUnit, CreditsState, MemberSpend,
-    PinRef, PinUsage, Reservation, RoutingState, StateWrite, Tier, WindowReading, FAST_INPUT,
-    FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    mark_holds, plan_windows, return_to_plan_dwell_ms, shed_cap, shed_dwell_ms, warm, BurnUnit,
+    CreditsState, MemberSpend, PinRef, PinUsage, Reservation, RoutingState, StateWrite, Tier,
+    WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY,
+    SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::windows::{window_for, MODEL_WINDOWS};
 use crate::{term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
@@ -2760,18 +2761,43 @@ fn move_of<'a>(
         }
     }
 
-    // An api_key member bills every token, so a pin on one returns to plan quota once its cache is cold or once
-    // it has sat a dwell on the member. A move writes a fresh row, so `created_at` is the landing here. The
-    // member names no reset, so no grace applies.
+    // An api_key member bills every token, so a pin on one returns to plan quota as `return_to_plan` says: at
+    // once when cold under `always` or `when_cold`, after the return dwell when warm under `always`, and never
+    // under `never`. A move writes a fresh row, so `created_at` is the landing here. The member names no reset,
+    // so no grace applies.
     let dwell_age_ms = now - current.created_at;
+    let mode = pool.failover.return_to_plan;
     if current_kind != Some(AccountKind::ApiKey) {
-        rec.step(RULES[2], "no", vec![kind_fact(current_kind)]);
+        rec.step(
+            RULES[2],
+            "no",
+            vec![kind_fact(current_kind), Fact::text("mode", mode.as_str())],
+        );
     } else {
-        let facts = vec![
-            Fact::bool("cold", cold),
-            Fact::int("dwell_age_ms", dwell_age_ms).unit("ms"),
-        ];
-        if !(cold || dwell_age_ms >= dwell_ms) {
+        let (facts, returns) = match mode {
+            ReturnToPlan::Never => (vec![Fact::text("mode", mode.as_str())], false),
+            ReturnToPlan::WhenCold => (
+                vec![
+                    Fact::text("mode", mode.as_str()),
+                    Fact::bool("cold", cold),
+                    Fact::int("dwell_age_ms", dwell_age_ms).unit("ms"),
+                ],
+                cold,
+            ),
+            ReturnToPlan::Always => {
+                let dwell_ms = return_to_plan_dwell_ms(pool);
+                (
+                    vec![
+                        Fact::text("mode", mode.as_str()),
+                        Fact::bool("cold", cold),
+                        Fact::int("dwell_age_ms", dwell_age_ms).unit("ms"),
+                        Fact::int("dwell_ms", dwell_ms).unit("ms"),
+                    ],
+                    cold || dwell_age_ms >= dwell_ms,
+                )
+            }
+        };
+        if !returns {
             rec.step(RULES[2], "no", facts);
         } else {
             let gate = gate(
