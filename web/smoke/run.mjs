@@ -15517,6 +15517,45 @@ m.unmount();
     });
   }
   {
+    // The Cache warming tab's billed and by-pool reads and the Cache tab's funded by-model read belong to the span's
+    // window as the page's breakdown does, so a custom span under auto reload reads them again at every tick beside it.
+    const name = "/analytics a custom range under auto reload reads the Cache warming tab's billed and by-pool reads and the Cache tab's funded by-model read again at every tick, beside the page's breakdown";
+    const FROM = isoAt(CLOCK_ORIGIN - 2 * 3_600_000);
+    const TO = isoAt(CLOCK_ORIGIN);
+    // Each read by the query it sends: the page's breakdown on the key grouping with no funding and no probes, the billed
+    // probes on the key grouping, the billed probes by pool, and the dollar side by model.
+    const kindsOf = (spy) => {
+      const counts = { billed: 0, model: 0, pool: 0, whole: 0 };
+      for (const [q] of spy.calls) {
+        if (q?.funding === undefined && q?.groupBy === 'key' && !q?.includeProbes) counts.whole += 1;
+        else if (q?.funding === 'billed' && q?.groupBy === 'pool' && q?.includeProbes === true) counts.pool += 1;
+        else if (q?.funding === 'billed' && q?.groupBy === 'model') counts.model += 1;
+        else if (q?.funding === 'billed' && q?.groupBy === 'key' && q?.includeProbes === true) counts.billed += 1;
+      }
+      return counts;
+    };
+    const ticked = async (path, unit) => {
+      localStorage.removeItem('phoebis.unit');
+      const page = await mount(path, { now: CLOCK_ORIGIN });
+      if (unit) await chooseUnit(page, unit);
+      await chooseInterval(page, '5 s');
+      const spy = countCalls('getAnalyticsBreakdown');
+      tick(5_000);
+      await page.settle();
+      spy.restore();
+      page.unmount();
+      localStorage.removeItem('phoebis.unit');
+      return kindsOf(spy);
+    };
+    const warming = await ticked(`/analytics?from=${FROM}&to=${TO}#cache-warming`);
+    const cache = await ticked(`/analytics?from=${FROM}&to=${TO}#cache`, 'usd');
+    results.push({
+      name,
+      ok: warming.whole > 0 && warming.billed === warming.whole && warming.pool === warming.whole && cache.whole > 0 && cache.model === cache.whole,
+      missing: [`Cache warming under native ${JSON.stringify(warming)}`, `Cache under Billed dollars ${JSON.stringify(cache)}`],
+    });
+  }
+  {
     const name = '/analytics the Partial note reads under the bar as a status line in a partial session view';
     const seed = requests.find((r) => r.sessionId !== null && r.kind !== 'probe' && Date.parse(r.at) > CLOCK_ORIGIN - 23 * 3_600_000 && Date.parse(r.at) <= CLOCK_ORIGIN);
     const listRequests = api.listRequests;

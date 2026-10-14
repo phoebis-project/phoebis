@@ -402,16 +402,17 @@ export function AnalyticsPage() {
   // Native pairs the whole read's plan probes with the billed probes' dollars, which no member of the whole carries, so
   // the Cache warming tab reads the billed rows once more, counting probes as the whole read does.
   const nativeWarming = warming && unit === 'native';
-  const billedBreakdown = useAsync(() => (nativeWarming ? api.getAnalyticsBreakdown({ ...query, funding: 'billed', includeProbes: true }) : Promise.resolve<AnalyticsGroup[] | null>(null)), [query, nativeWarming, generation]);
+  const billedBreakdown = useAsync(() => (nativeWarming ? api.getAnalyticsBreakdown({ ...query, funding: 'billed', includeProbes: true }) : Promise.resolve<AnalyticsGroup[] | null>(null)), [query, nativeWarming, generation], reload);
   // A dollar side narrows Cache by model's two cost cells alone, its token columns reading every row, so the side's
   // rows by model come from a read of their own beside the page's.
-  const byModelFunded = useAsync(() => (tab === 'cache' && funded ? api.getAnalyticsBreakdown({ ...query, funding, groupBy: 'model' }) : Promise.resolve<AnalyticsGroup[] | null>(null)), [query, funding, funded, tab, generation]);
+  const byModelFunded = useAsync(() => (tab === 'cache' && funded ? api.getAnalyticsBreakdown({ ...query, funding, groupBy: 'model' }) : Promise.resolve<AnalyticsGroup[] | null>(null)), [query, funding, funded, tab, generation], reload);
   // The by-pool table's Probe cost cell reads a dollar side's probes, and under native the billed probes beside the
   // whole read's equivalent. Probes count, so a pool left with probe rows alone on that side keeps its figure.
   const poolFunding = nativeWarming ? 'billed' : warming && funded ? funding : undefined;
   const fundedByPool = useAsync(
     () => (poolFunding !== undefined ? api.getAnalyticsBreakdown({ ...query, funding: poolFunding, groupBy: 'pool', includeProbes: true }) : Promise.resolve<AnalyticsGroup[] | null>(null)),
     [query, poolFunding, generation],
+    reload,
   );
   const placements = useAsync(
     () => (tab === 'cache' && sessionId === null ? api.analyticsPlacements({ from: fromIso, keyIds: filters.keyId, poolIds: filters.poolId, to: toIso }) : Promise.resolve<PlacementRow[] | null>(sessionId === null ? null : [])),
