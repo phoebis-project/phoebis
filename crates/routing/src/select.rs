@@ -597,19 +597,18 @@ fn budget_unknown(
 /// pin's own decayed burn, or the median of the pool's priced warm pins for a fresh session, absent with none, which
 /// reads as zero), on the windows the request's model draws. A window nothing prices is absent from both. The
 /// destination gate's fit and the shedding round read it.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn pin_figures(
     state: &RoutingState,
-    snapshot: &RegistrySnapshot,
     pool: &PoolRow,
     request: &SelectRequest,
-    pin: Option<&PinRow>,
+    figures: Figures<'_>,
     tier: &str,
     now: i64,
 ) -> (BTreeMap<String, f64>, BTreeMap<String, f64>) {
     let share = state.share();
     let model = request.canonical_model.as_str();
     let average_ms = burn_average_ms(pool);
+    let pin = figures.pin();
     // A pin never renewed with usage reads its context from the body, as a fresh session does, and a fresh
     // session's TTL is unknown before a pin exists, so its write prices at five minutes.
     let (tokens, ttl_ms) = match pin {
@@ -628,23 +627,6 @@ pub(crate) fn pin_figures(
             ..PinUsage::default()
         }
     };
-    // A fresh session's prior: the pool's warm pins, each priced per window below, the unpriced ones left out of
-    // the median so one of them does not zero it.
-    let warm_pins: Vec<PinRow> = match pin {
-        Some(_) => Vec::new(),
-        None => {
-            let members: HashSet<&str> = snapshot
-                .members(&pool.id)
-                .iter()
-                .map(|m| m.account_id.as_str())
-                .collect();
-            state
-                .pins()
-                .into_iter()
-                .filter(|p| members.contains(p.account_id.as_str()) && warm(p, now))
-                .collect()
-        }
-    };
     let priced = |window: &str, p: &PinRow| {
         share
             .rate(window, tier, &p.model, &p.burn, now)
@@ -660,10 +642,11 @@ pub(crate) fn pin_figures(
         {
             rewrite.insert(window.to_string(), share);
         }
-        let rate = match pin {
-            Some(pin) => priced(window, pin),
-            // A pin burns the windows its own model draws, so a Sonnet pin adds nothing to a Fable week's prior.
-            None => median(
+        let rate = match figures {
+            Figures::Pin(pin) => priced(window, pin),
+            // A pin burns the windows its own model draws, so a Sonnet pin adds nothing to a Fable week's prior. The
+            // unpriced ones are left out of the median so one of them does not zero it.
+            Figures::Fresh(warm_pins) => median(
                 warm_pins
                     .iter()
                     .filter(|p| plan_windows(&p.model).any(|w| w == window))
@@ -676,6 +659,49 @@ pub(crate) fn pin_figures(
         }
     }
     (rewrite, burn)
+}
+
+/// Whose rewrite and burn `pin_figures` prices.
+#[derive(Clone, Copy)]
+pub(crate) enum Figures<'a> {
+    /// A live pin's own: its last context and its decayed burn.
+    Pin(&'a PinRow),
+    /// A fresh session's: the body and the median burn of the pool's warm pins, which `fresh_prior` collects once per
+    /// walk since every candidate of the walk reads the same set.
+    Fresh(&'a [PinRow]),
+}
+
+impl<'a> Figures<'a> {
+    /// `pin`'s figures, or the fresh session's from `prior` where there is no pin.
+    fn of(pin: Option<&'a PinRow>, prior: &'a [PinRow]) -> Self {
+        pin.map_or(Figures::Fresh(prior), Figures::Pin)
+    }
+
+    fn pin(self) -> Option<&'a PinRow> {
+        match self {
+            Figures::Pin(pin) => Some(pin),
+            Figures::Fresh(_) => None,
+        }
+    }
+}
+
+/// A fresh session's prior: the pool's warm pins at `now`, each priced per window by `pin_figures`.
+fn fresh_prior(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    now: i64,
+) -> Vec<PinRow> {
+    let members: HashSet<&str> = snapshot
+        .members(&pool.id)
+        .iter()
+        .map(|m| m.account_id.as_str())
+        .collect();
+    state
+        .pins()
+        .into_iter()
+        .filter(|p| members.contains(p.account_id.as_str()) && warm(p, now))
+        .collect()
 }
 
 /// The median of `values`, the mean of the two middle ones for an even count, `None` for none.
@@ -1563,6 +1589,7 @@ fn run(
     let fitting: Vec<&Candidate> = if moving.is_some() {
         selection_set.clone()
     } else {
+        let prior = fresh_prior(state, snapshot, pool, request.now);
         let mut fitting = Vec::with_capacity(selection_set.len());
         for c in selection_set.iter().copied() {
             let read = fit_of(
@@ -1570,7 +1597,7 @@ fn run(
                 snapshot,
                 pool,
                 request,
-                None,
+                Figures::Fresh(&prior),
                 &c.account_id,
                 &[],
                 request.now,
@@ -1759,12 +1786,15 @@ fn run(
     // nothing priced is nothing to book, so an unpriced destination leaves no entry to expire or release.
     if !(request.count || request.probe || request.fast) {
         if let Some(tier) = snapshot.tier(&chosen.account_id) {
+            let prior = match moving {
+                Some(_) => Vec::new(),
+                None => fresh_prior(state, snapshot, pool, request.now),
+            };
             let (rewrite, burn) = pin_figures(
                 state,
-                snapshot,
                 pool,
                 request,
-                moving.as_ref(),
+                Figures::of(moving.as_ref(), &prior),
                 tier,
                 request.now,
             );
@@ -2113,7 +2143,7 @@ pub(crate) fn fit_of(
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
     request: &SelectRequest,
-    pin: Option<&PinRow>,
+    figures: Figures<'_>,
     candidate: &str,
     planned: &[Reservation],
     now: i64,
@@ -2155,7 +2185,7 @@ pub(crate) fn fit_of(
         return read;
     }
     let (rewrite, pin_burn) = tier
-        .map(|tier| pin_figures(state, snapshot, pool, request, pin, tier, now))
+        .map(|tier| pin_figures(state, pool, request, figures, tier, now))
         .unwrap_or_default();
     let projections = projections_of(
         state,
@@ -2496,7 +2526,7 @@ fn gate<'a>(
                     snapshot,
                     pool,
                     request,
-                    Some(current),
+                    Figures::Pin(current),
                     &c.account_id,
                     &[],
                     now,
@@ -3141,7 +3171,7 @@ fn destination_of(
                     snapshot,
                     pool,
                     request,
-                    Some(pin),
+                    Figures::Pin(pin),
                     &c.account_id,
                     planned,
                     now,
@@ -3294,7 +3324,7 @@ fn shed_round(
                 Some((destination, fit)) => {
                     let destination_tier = snapshot.tier(&destination).unwrap_or_default();
                     let (rewrite, pin_burn) =
-                        pin_figures(state, snapshot, pool, &req, Some(p), destination_tier, now);
+                        pin_figures(state, pool, &req, Figures::Pin(p), destination_tier, now);
                     read.runway_ms = fit.runway_ms;
                     read.rewrite = rewrite.get(trigger.window).copied();
                     marks.push(Mark {
@@ -3712,7 +3742,7 @@ fn blocked(
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
     request: &SelectRequest,
-    pin: Option<&PinRow>,
+    figures: Figures<'_>,
     account_id: &str,
 ) -> Option<&'static str> {
     let now = request.now;
@@ -3723,7 +3753,7 @@ fn blocked(
         snapshot,
         pool,
         request,
-        pin,
+        figures,
         account_id,
         &[],
         now,
@@ -3896,10 +3926,23 @@ fn placement_of<'a>(
         entry.prefix_tokens > 0
             && (is_subagent || entry.prefix_tokens >= pool.affinity.min_shared_prefix_tokens)
     };
+    let prior = match moving {
+        Some(_) => Vec::new(),
+        None => fresh_prior(state, snapshot, pool, now),
+    };
     let walk = affinity.walk(&request.canonical_model, &request.static_boundaries, |e| {
         entry_gate(e)
             .or_else(|| (!size_gate(e)).then_some("size_gate"))
-            .or_else(|| blocked(state, snapshot, pool, request, moving, &e.account_id))
+            .or_else(|| {
+                blocked(
+                    state,
+                    snapshot,
+                    pool,
+                    request,
+                    Figures::of(moving, &prior),
+                    &e.account_id,
+                )
+            })
     });
     record_lookups(rec, &walk, now, false);
     let Some(visited) = walk.matched.map(|i| &walk.visited[i]) else {
