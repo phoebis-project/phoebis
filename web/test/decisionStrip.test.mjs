@@ -309,6 +309,16 @@ test('with load shedding off the shed station reads not run and its Round group 
   ]);
 });
 
+test('the Fit table reads unbounded on a row with a projection and no runway, and leaves blank a row with no projection', async () => {
+  const shed = await recordOf('req_868264bc-611/1');
+  const unbounded = (ids) => ({ ...shed, walk: shed.walk.map((s) => (s.step === 'fit' ? { ...s, facts: s.facts.filter((f) => !(f.key === 'runway_ms' && ids.includes(f.accountId))) } : s)) });
+  const runways = (record) => stationPlan(record, 'fit').block.table.rows.map((r) => [r.account.value, r.cells.runway_ms?.text ?? '']);
+  assert.deepEqual(runways(unbounded(['primary'])), [['primary', 'unbounded'], ['nightly', 'none'], ['overflow', '']]);
+  const every = unbounded(['primary', 'nightly']);
+  assert.ok(stationPlan(every, 'fit').block.table.columns.some((c) => c.label === 'runway'), 'the column stands where no row carries the fact');
+  assert.deepEqual(runways(every), [['primary', 'unbounded'], ['nightly', 'unbounded'], ['overflow', '']]);
+});
+
 test("the Fit station's table reads a row per candidate the gate read with its columns window by window, and the Reserve station lists the booking", async () => {
   const shed = await recordOf('req_868264bc-611/1');
   const { table } = stationPlan(shed, 'fit').block;

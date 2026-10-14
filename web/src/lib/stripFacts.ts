@@ -172,7 +172,14 @@ function tableOf(step: WalkStep, record: DecisionRecord, at: number, now: number
     const toned = step.step === 'fit' && f.key === 'verdict' && typeof f.value === 'string' ? { tone: verdictTone(f.value, 'fit') } : {};
     account.cells[f.key] = cells === null ? { text: valueText(f.key, f.value, f.unit, at), ...toned } : { text: cells.pace, ...(cells.paceTitle === null ? {} : { title: cells.paceTitle }) };
   }
-  if (step.step === 'fit') columns.sort((a, b) => fitRank(a.key) - fitRank(b.key));
+  if (step.step === 'fit') {
+    // The engine writes no runway for an unbounded one, so a row with a projection and no runway reads unbounded, as the
+    // card's Runway does, and only a row the gate projected nothing for lacks the fact.
+    const unbounded = [...rows.values()].filter((r) => Object.keys(r.cells).some((key) => key.startsWith('projection_')) && r.cells.runway_ms === undefined);
+    if (unbounded.length > 0 && !columns.some((c) => c.key === 'runway_ms')) columns.push({ key: 'runway_ms', label: keyWord('runway_ms'), numeric: true });
+    for (const r of unbounded) r.cells.runway_ms = { text: 'unbounded' };
+    columns.sort((a, b) => fitRank(a.key) - fitRank(b.key));
+  }
   // A cell the account lacks stays blank.
   const table = [...rows.values()].map((r) => ({ account: r.account, cells: Object.fromEntries(columns.map((c) => [c.key, r.cells[c.key] ?? null])) }));
   return { block: { kind: 'table', table: { columns, loose, rows: table } }, renderer: 'table', unplaced };
