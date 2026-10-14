@@ -1877,11 +1877,14 @@ impl RoutingState {
         now: i64,
         average_ms: i64,
     ) -> BTreeMap<String, f64> {
-        // A pin a live booking names counts through the booking's burn alone, so a moved pin counts once while its
-        // move is in flight.
+        // A pin a live booking on this account names counts through the booking's burn alone, so a moved pin counts
+        // once while its move is in flight. The booking is matched on the account and the pin row, never on the key
+        // across accounts: a booking a request still in flight on the source holds there must not hide the live
+        // row another request of the session moved onto the destination.
         let reserved: HashSet<PinKey> = self
             .reservations
             .values()
+            .filter(|reservation| reservation.account_id == account_id)
             .filter_map(|reservation| reservation.pin.clone())
             .collect();
         let mut shares = BTreeMap::new();
@@ -2091,6 +2094,13 @@ impl RoutingState {
                     self.renewed.remove(&dated_key);
                 }
                 rekey.upsert_pins.push(moved);
+            }
+        }
+        // A booking names its pin by key, and the suppression in `burn_shares` matches that key against the live
+        // row, so the reference follows the row under the dated id or the pin would count beside its booking.
+        for reservation in self.reservations.values_mut() {
+            if let Some(pin) = reservation.pin.as_mut().filter(|pin| pin.model == spelling) {
+                pin.model = dated_id.to_string();
             }
         }
 
@@ -3494,6 +3504,79 @@ mod tests {
         assert!(
             close(fresh[FIVE_HOUR], 0.01),
             "no time passed, no decay: {fresh:?}"
+        );
+    }
+
+    #[test]
+    fn a_booking_left_on_the_source_by_a_request_in_flight_hides_no_live_pin_on_the_destination() {
+        // Two requests share the pin: r1 is placed on a and stays in flight there while r2 fails over to b, where
+        // the pin's row now sits, and completes.
+        let (pin, _) = burning("shared", 10_000.0);
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![pin.clone()],
+            ..RoutingLoad::default()
+        });
+        state.set_share(input_rates());
+        state.book_reservation(
+            "r1",
+            reservation("a", 1, Some(pin.key()), &[], &[(FIVE_HOUR, 0.01)], 0, 10),
+        );
+        state.remove_pin(&pin.key());
+        state.put_pin(PinRow {
+            account_id: "b".into(),
+            epoch: 2,
+            ..pin.clone()
+        });
+        state.book_reservation(
+            "r2",
+            reservation("b", 2, Some(pin.key()), &[], &[(FIVE_HOUR, 0.01)], 0, 10),
+        );
+        assert!(
+            state.release_reservation("r2").is_some(),
+            "r2's usage releases its booking"
+        );
+        let on_b = state.burn_shares("b", &|_| true, "t", 0, 1_800_000);
+        assert!(
+            close(on_b.get(FIVE_HOUR).copied().unwrap_or(0.0), 0.01),
+            "b's live pin counts though r1's booking on a names its key: {on_b:?}"
+        );
+        let on_a = state.burn_shares("a", &|_| true, "t", 0, 1_800_000);
+        assert!(
+            close(on_a[FIVE_HOUR], 0.01),
+            "a carries r1's booking alone: {on_a:?}"
+        );
+    }
+
+    #[test]
+    fn a_rekey_moves_a_bookings_pin_with_the_row_so_the_pin_still_counts_once() {
+        let (pin, _) = burning("undated", 10_000.0);
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![pin.clone()],
+            ..RoutingLoad::default()
+        });
+        state.set_share(input_rates());
+        state.book_reservation(
+            "r",
+            reservation("a", 1, Some(pin.key()), &[], &[(FIVE_HOUR, 0.01)], 0, 10),
+        );
+        let (write, _) = state.rekey("m", "m-20260101", 5);
+        assert_eq!(
+            write.upsert_pins.len(),
+            1,
+            "the pin moves under the dated id"
+        );
+        let shares = state.burn_shares("a", &|_| true, "t", 0, 1_800_000);
+        assert!(
+            close(shares[FIVE_HOUR], 0.01),
+            "the booking's burn alone, the rekeyed pin left out: {shares:?}"
+        );
+        assert_eq!(
+            state
+                .reservation("r")
+                .and_then(|r| r.pin.as_ref())
+                .map(|p| p.model.as_str()),
+            Some("m-20260101"),
+            "the booking names the pin by its new key"
         );
     }
 
