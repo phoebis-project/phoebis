@@ -63,25 +63,37 @@ export const FIXTURES: Record<string, Fixture> = {
           "id": "five_hour",
           "utilization": 0.62,
           "resets_at": 1791724600000,
-          "observed_at": 1791720900000
+          "observed_at": 1791720900000,
+          "projection": null,
+          "horizon": null,
+          "burn": null
         },
         {
           "id": "seven_day",
           "utilization": 0.41,
           "resets_at": 1791807400000,
-          "observed_at": 1791720900000
+          "observed_at": 1791720900000,
+          "projection": null,
+          "horizon": null,
+          "burn": null
         },
         {
           "id": "seven_day_fable",
           "utilization": 0.12,
           "resets_at": 1791807400000,
-          "observed_at": 1791720900000
+          "observed_at": 1791720900000,
+          "projection": null,
+          "horizon": null,
+          "burn": null
         },
         {
           "id": "seven_day_opus",
           "utilization": 0.03,
           "resets_at": 1791807400000,
-          "observed_at": 1791720900000
+          "observed_at": 1791720900000,
+          "projection": null,
+          "horizon": null,
+          "burn": null
         }
       ],
       "fast_lane": {
@@ -325,25 +337,37 @@ export const FIXTURES: Record<string, Fixture> = {
               "id": "five_hour",
               "utilization": 0.62,
               "resets_at": 1791724600000,
-              "observed_at": 1791720900000
+              "observed_at": 1791720900000,
+              "projection": null,
+              "horizon": null,
+              "burn": null
             },
             {
               "id": "seven_day",
               "utilization": 0.41,
               "resets_at": 1791807400000,
-              "observed_at": 1791720900000
+              "observed_at": 1791720900000,
+              "projection": null,
+              "horizon": null,
+              "burn": null
             },
             {
               "id": "seven_day_fable",
               "utilization": 0.12,
               "resets_at": 1791807400000,
-              "observed_at": 1791720900000
+              "observed_at": 1791720900000,
+              "projection": null,
+              "horizon": null,
+              "burn": null
             },
             {
               "id": "seven_day_opus",
               "utilization": 0.03,
               "resets_at": 1791807400000,
-              "observed_at": 1791720900000
+              "observed_at": 1791720900000,
+              "projection": null,
+              "horizon": null,
+              "burn": null
             }
           ],
           "fast_lane": {
@@ -3810,6 +3834,11 @@ export const FIXTURES: Record<string, Fixture> = {
       ],
       "moves": {
         "spent": 1
+      },
+      "moves_by_reason_and_fit": {
+        "spent": {
+          "unknown": 1
+        }
       }
     }
   },
@@ -6398,6 +6427,89 @@ export const FIXTURES: Record<string, Fixture> = {
             "tier": "opus",
             "weight_of": "claude-opus-5-5"
           }
+        },
+        {
+          "kind": "wall_reached",
+          "subject": {
+            "type": "account",
+            "id": "business",
+            "label": "Business"
+          },
+          "link": {
+            "page": "accounts",
+            "id": "business"
+          },
+          "pools": [
+            "main"
+          ],
+          "since": 1791719800000,
+          "detail": {
+            "projection_error": 0.04,
+            "setting": [
+              "shed_cap",
+              "window_ceiling"
+            ],
+            "walls": 1,
+            "windows": [
+              "five_hour"
+            ]
+          }
+        },
+        {
+          "kind": "destination_spent",
+          "subject": {
+            "type": "account",
+            "id": "business",
+            "label": "Business"
+          },
+          "link": {
+            "page": "accounts",
+            "id": "business"
+          },
+          "pools": [
+            "main"
+          ],
+          "since": 1791718000000,
+          "detail": {
+            "fits": {
+              "rewrite_only": 1
+            },
+            "moves": 1,
+            "setting": [
+              "window_ceiling"
+            ],
+            "windows": [
+              "five_hour"
+            ]
+          }
+        },
+        {
+          "kind": "shed_no_runway",
+          "subject": {
+            "type": "pool",
+            "id": "main",
+            "label": "Main"
+          },
+          "link": {
+            "page": "pools",
+            "id": "main"
+          },
+          "pools": [
+            "main"
+          ],
+          "since": 1791717700000,
+          "detail": {
+            "accounts": [
+              "business"
+            ],
+            "rounds": 1,
+            "setting": [
+              "window_ceiling"
+            ],
+            "setting_values": {
+              "window_ceiling": 0.95
+            }
+          }
         }
       ]
     }
@@ -6479,55 +6591,55 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "route": "PATCH /admin/pools/{id}",
-          "field": "burn_window_seconds",
-          "value": 60,
+          "field": "burn_average_seconds",
+          "value": 600,
           "status": 200
         },
         {
           "route": "PATCH /admin/pools/{id}",
-          "field": "burn_window_seconds",
-          "value": 59,
+          "field": "burn_average_seconds",
+          "value": 599,
           "status": 400,
-          "error": "burn_window_seconds is at least 60"
+          "error": "burn_average_seconds is between 600 and 7200"
         },
         {
           "route": "PATCH /admin/pools/{id}",
-          "field": "burn_window_seconds",
-          "value": 604800,
+          "field": "burn_average_seconds",
+          "value": 7200,
           "status": 200
         },
         {
           "route": "PATCH /admin/pools/{id}",
-          "field": "burn_window_seconds",
-          "value": 604801,
+          "field": "burn_average_seconds",
+          "value": 7201,
           "status": 400,
-          "error": "burn_window_seconds is at most 604800 (one week)"
+          "error": "burn_average_seconds is between 600 and 7200"
         },
         {
           "route": "PATCH /admin/pools/{id}",
-          "field": "source_dwell_seconds",
-          "value": 60,
+          "field": "shed_dwell_seconds",
+          "value": 300,
           "status": 200
         },
         {
           "route": "PATCH /admin/pools/{id}",
-          "field": "source_dwell_seconds",
-          "value": 59,
+          "field": "shed_dwell_seconds",
+          "value": 299,
           "status": 400,
-          "error": "source_dwell_seconds is at least 60"
+          "error": "shed_dwell_seconds is between 300 and 7200"
         },
         {
           "route": "PATCH /admin/pools/{id}",
-          "field": "source_dwell_seconds",
-          "value": 604800,
+          "field": "shed_dwell_seconds",
+          "value": 7200,
           "status": 200
         },
         {
           "route": "PATCH /admin/pools/{id}",
-          "field": "source_dwell_seconds",
-          "value": 604801,
+          "field": "shed_dwell_seconds",
+          "value": 7201,
           "status": 400,
-          "error": "source_dwell_seconds is at most 604800 (one week)"
+          "error": "shed_dwell_seconds is between 300 and 7200"
         },
         {
           "route": "PATCH /admin/pools/{id}",
@@ -6610,6 +6722,58 @@ export const FIXTURES: Record<string, Fixture> = {
           "field": "in_flight_cap",
           "value": 4294967296,
           "status": 400
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "window_ceiling",
+          "value": 0.5,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "window_ceiling",
+          "value": 0.49,
+          "status": 400,
+          "error": "window_ceiling is between 0.5 and 1.0"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "window_ceiling",
+          "value": 1,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "window_ceiling",
+          "value": 1.01,
+          "status": 400,
+          "error": "window_ceiling is between 0.5 and 1.0"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "shed_cap",
+          "value": 0.1,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "shed_cap",
+          "value": 0.09,
+          "status": 400,
+          "error": "shed_cap is between 0.1 and 1.0"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "shed_cap",
+          "value": 1,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "shed_cap",
+          "value": 1.01,
+          "status": 400,
+          "error": "shed_cap is between 0.1 and 1.0"
         },
         {
           "route": "PATCH /admin/pools/{id}",
@@ -7955,7 +8119,7 @@ export const FIXTURES: Record<string, Fixture> = {
     "body": {
       "request_id": "r-static",
       "seq": 1,
-      "version": 1,
+      "version": 2,
       "request": {
         "request_id": "r-static",
         "attempt": 1,
@@ -7990,7 +8154,8 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         "attempted": [],
         "holds": [],
-        "registry_revision": 42
+        "registry_revision": 50,
+        "body_tokens": 0
       },
       "pin": {
         "found": "none",
@@ -8007,7 +8172,10 @@ export const FIXTURES: Record<string, Fixture> = {
         "marked": false,
         "warmth": null,
         "warmth_cause": null,
-        "released": []
+        "released": [],
+        "marked_at": null,
+        "marked_on": null,
+        "marked_window": null
       },
       "pin_reason": null,
       "settings": {
@@ -8019,20 +8187,18 @@ export const FIXTURES: Record<string, Fixture> = {
         "session_placement": "by_warm_prefix",
         "min_shared_prefix_tokens": 20000,
         "subagent_placement": "by_strategy",
-        "select_below_utilization": null,
-        "shed_ahead_of_pace": null,
+        "window_ceiling": 0.95,
+        "load_shedding": true,
         "migrate_when_spent": true,
         "overage_move_grace_minutes": 30,
         "wind_down_minutes": 30,
-        "shed_share": 0.5,
-        "burn_window_seconds": 600,
-        "source_dwell_seconds": 900,
+        "shed_cap": 0.2,
+        "burn_average_seconds": 1800,
+        "shed_dwell_seconds": 900,
         "warm_sessions": "when_needed",
         "in_flight_cap": 16,
         "retry_in_place_seconds": 60,
-        "pace_floor": 0.05,
-        "migrate_band": 0.05,
-        "pool_updated_at": 1791721000039
+        "pool_updated_at": 1791721000047
       },
       "candidates": [
         {
@@ -8059,7 +8225,10 @@ export const FIXTURES: Record<string, Fixture> = {
               "source": "head",
               "observed_at": 1791720995000,
               "age_ms": 5000,
-              "ahead": null
+              "ahead": null,
+              "projection": null,
+              "horizon": null,
+              "reserved": 0
             },
             "fast_output": {
               "utilization": 0.08,
@@ -8067,7 +8236,10 @@ export const FIXTURES: Record<string, Fixture> = {
               "source": "head",
               "observed_at": 1791720995000,
               "age_ms": 5000,
-              "ahead": null
+              "ahead": null,
+              "projection": null,
+              "horizon": null,
+              "reserved": 0
             }
           },
           "allowance_known": false,
@@ -8078,7 +8250,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "deadline": null,
             "hours": 168,
             "score": 0.005952380952380952,
-            "window": "seven_day"
+            "window": "seven_day",
+            "burn": 0
           },
           "budget": [
             {
@@ -8135,7 +8308,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "partition": null,
           "rank": null,
           "score": null,
-          "verdict": "chosen"
+          "verdict": "chosen",
+          "runway_ms": null,
+          "fit": "fits",
+          "binding": null,
+          "burn": {}
         },
         {
           "account_id": "direct",
@@ -8163,7 +8340,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "deadline": null,
             "hours": null,
             "score": 1,
-            "window": null
+            "window": null,
+            "burn": 0
           },
           "budget": [
             {
@@ -8196,7 +8374,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "partition": null,
           "rank": null,
           "score": null,
-          "verdict": "not_needed"
+          "verdict": "not_needed",
+          "runway_ms": null,
+          "fit": "fits",
+          "binding": null,
+          "burn": {}
         }
       ],
       "walk": [
@@ -8247,19 +8429,13 @@ export const FIXTURES: Record<string, Fixture> = {
               "unit": null
             },
             {
-              "key": "above_ceiling",
-              "value": "off",
-              "account_id": null,
-              "unit": null
-            },
-            {
-              "key": "winding_down",
+              "key": "no_fit",
               "value": 0,
               "account_id": null,
               "unit": null
             },
             {
-              "key": "floor",
+              "key": "winding_down",
               "value": 0,
               "account_id": null,
               "unit": null
@@ -8319,6 +8495,18 @@ export const FIXTURES: Record<string, Fixture> = {
               "unit": null
             }
           ]
+        },
+        {
+          "step": "reserve",
+          "verdict": "none",
+          "facts": [
+            {
+              "key": "account_id",
+              "value": "business",
+              "account_id": "business",
+              "unit": null
+            }
+          ]
         }
       ],
       "outcome": {
@@ -8353,6 +8541,8 @@ export const FIXTURES: Record<string, Fixture> = {
         "refusal": null,
         "cohort_hold": null,
         "shed_marks": null,
+        "mark_cleared": null,
+        "reservation": null,
         "completion": {
           "status": 200,
           "cache_read_tokens": 500,
@@ -9061,22 +9251,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "subagent_placement": "by_strategy",
           "session_placement": "by_strategy",
           "min_shared_prefix_tokens": 20000,
-          "shed_ahead_of_pace": null,
-          "select_below_utilization": null,
+          "window_ceiling": 0.95,
           "model_rules": [
             {
               "pattern": "claude-haiku-*",
               "not": true
             }
           ],
-          "shed_share": 0.5,
-          "burn_window_seconds": 600,
-          "source_dwell_seconds": 900,
+          "load_shedding": true,
+          "shed_cap": 0.2,
+          "burn_average_seconds": 1800,
+          "shed_dwell_seconds": 900,
           "migrate_when_spent": true,
           "warm_sessions": "when_needed",
           "retry_in_place_seconds": 60,
           "in_flight_cap": 16,
-          "pace_floor": 0.05,
           "overage_move_grace_minutes": 30,
           "wind_down_minutes": 30,
           "moves_per_hour": {
@@ -9146,7 +9335,9 @@ export const FIXTURES: Record<string, Fixture> = {
                   "period_end": 1793491200000
                 }
               ],
-              "active_pins": 1
+              "active_pins": 1,
+              "pace_score": 0.005952380952380952,
+              "burn": null
             },
             {
               "account_id": "direct",
@@ -9163,14 +9354,16 @@ export const FIXTURES: Record<string, Fixture> = {
                   "period_end": 1793491200000
                 }
               ],
-              "active_pins": 0
+              "active_pins": 0,
+              "pace_score": 1,
+              "burn": null
             }
           ],
           "keys": [
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "ZFPxvgA5",
+              "prefix": "xJtLSLB5",
               "enabled": true
             }
           ],
@@ -9509,6 +9702,15 @@ export const FIXTURES: Record<string, Fixture> = {
                 "seven_day": 0.000010183333333333331
               },
               "estimated": true
+            }
+          ],
+          "warnings": [
+            {
+              "code": "cap_under_quarter",
+              "fields": [
+                "shed_cap"
+              ],
+              "text": "A shed cap under 25 percent removes at most a quarter of the burn per round, so a window far over the ceiling needs several rounds and dwells to come under it."
             }
           ]
         }
@@ -11153,12 +11355,12 @@ export const FIXTURES: Record<string, Fixture> = {
     }
   },
   "routing_log": {
-    "route": "GET /admin/routing-log?from=2026-10-11T11:16:40Z&to=2026-10-11T12:17:40Z&kinds=exhausted,held,moved,placed,refused,renewed,probe,account_state_changed,budget_period_ended,budget_reached,catalog_changed,cooldown_cleared,cooldown_set,fast_credits_changed,ledger_gap,model_permitted,model_rejected,overage_ended,overage_started,pin_created,pin_expired,pin_migrated,pin_released,poll_backoff_ended,poll_backoff_started,refresh_failed,refresh_succeeded,refresh_uncertain,registry_changed,router_started,shedding_round,warm_prefix_expired,wind_down_started,window_reset,window_spent&limit=200",
+    "route": "GET /admin/routing-log?from=2026-10-11T11:16:40Z&to=2026-10-11T12:17:40Z&kinds=exhausted,held,moved,placed,refused,renewed,probe,account_state_changed,budget_period_ended,budget_reached,catalog_changed,cooldown_cleared,cooldown_set,fast_credits_changed,ledger_gap,mark_cleared,model_permitted,model_rejected,overage_ended,overage_started,pin_created,pin_expired,pin_migrated,pin_released,poll_backoff_ended,poll_backoff_started,refresh_failed,refresh_succeeded,refresh_uncertain,registry_changed,reservation_expired,router_started,shedding_round,warm_prefix_expired,wind_down_started,window_reset,window_spent&limit=200",
     "body": {
       "rows": [
         {
           "type": "event",
-          "id": 37,
+          "id": 39,
           "at": 1791721060000,
           "kind": "router_started",
           "account_id": null,
@@ -11463,6 +11665,12 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "fact": [
             {
+              "key": "runway",
+              "value": "unbounded",
+              "unit": "text",
+              "entity": null
+            },
+            {
               "key": "pick",
               "value": "only candidate",
               "unit": "text",
@@ -11595,7 +11803,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "hold": {
             "account_id": "business",
             "cohort": null,
-            "bound_ms": 60000
+            "bound_ms": 60000,
+            "reason": "cap",
+            "until": null
           },
           "exhaustion": null,
           "refusal": null,
@@ -11763,7 +11973,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "hold": {
             "account_id": "direct",
             "cohort": null,
-            "bound_ms": 60000
+            "bound_ms": 60000,
+            "reason": "cap",
+            "until": null
           },
           "exhaustion": null,
           "refusal": null,
@@ -11819,7 +12031,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "hold": {
             "account_id": "business",
             "cohort": null,
-            "bound_ms": 60000
+            "bound_ms": 60000,
+            "reason": "cap",
+            "until": null
           },
           "exhaustion": null,
           "refusal": null,
@@ -12067,7 +12281,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "agent_id": "main",
             "from_account": "business",
             "epoch": 5,
-            "reason": "spent"
+            "reason": "spent",
+            "fit": "fits",
+            "runway_ms": null,
+            "binding": null
           }
         },
         {
@@ -12260,8 +12477,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "strategy": "pace",
               "affinity_ttl_seconds": 600,
               "overage_policy": "prefer_plan",
-              "shed_ahead_of_pace": null,
-              "select_below_utilization": null,
+              "window_ceiling": 0.95,
               "model_rules": [
                 {
                   "pattern": "claude-haiku-*",
@@ -12270,14 +12486,14 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "body_capture_hours": 24,
               "prefer_subscription": true,
-              "shed_share": 0.5,
-              "burn_window_seconds": 600,
-              "source_dwell_seconds": 900,
+              "shed_cap": 0.2,
+              "burn_average_seconds": 1800,
+              "shed_dwell_seconds": 900,
+              "load_shedding": true,
               "migrate_when_spent": true,
               "warm_sessions": "when_needed",
               "retry_in_place_seconds": 60,
               "in_flight_cap": 16,
-              "pace_floor": 0.05,
               "overage_move_grace_minutes": 30,
               "wind_down_minutes": 30,
               "cache_ttl": {},
@@ -12307,7 +12523,30 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 36,
+          "id": 24,
+          "at": 1791718480000,
+          "kind": "reservation_expired",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": "r-failover",
+          "actor": null,
+          "detail": {
+            "attempt": 1,
+            "cause": "canceled",
+            "shares": {
+              "five_hour": 0.004,
+              "seven_day": 0.0007
+            },
+            "age_ms": 42000
+          }
+        },
+        {
+          "type": "event",
+          "id": 38,
           "at": 1791718420000,
           "kind": "registry_changed",
           "account_id": null,
@@ -12331,7 +12570,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 35,
+          "id": 37,
           "at": 1791718360000,
           "kind": "refresh_uncertain",
           "account_id": "business",
@@ -12349,7 +12588,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 34,
+          "id": 36,
           "at": 1791718300000,
           "kind": "refresh_failed",
           "account_id": "business",
@@ -12367,7 +12606,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 33,
+          "id": 35,
           "at": 1791718240000,
           "kind": "refresh_succeeded",
           "account_id": "business",
@@ -12386,7 +12625,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 32,
+          "id": 34,
           "at": 1791718180000,
           "kind": "account_state_changed",
           "account_id": "business",
@@ -12406,7 +12645,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 31,
+          "id": 33,
           "at": 1791718120000,
           "kind": "ledger_gap",
           "account_id": null,
@@ -12424,7 +12663,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 30,
+          "id": 32,
           "at": 1791718060000,
           "kind": "budget_period_ended",
           "account_id": "business",
@@ -12443,7 +12682,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 29,
+          "id": 31,
           "at": 1791718000000,
           "kind": "budget_reached",
           "account_id": "business",
@@ -12464,7 +12703,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 28,
+          "id": 30,
           "at": 1791717940000,
           "kind": "catalog_changed",
           "account_id": "business",
@@ -12487,7 +12726,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 27,
+          "id": 29,
           "at": 1791717880000,
           "kind": "poll_backoff_ended",
           "account_id": "business",
@@ -12506,7 +12745,29 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 26,
+          "id": 23,
+          "at": 1791717820000,
+          "kind": "mark_cleared",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s0",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "agent_id": "main",
+            "reason": "moved",
+            "marked_at": 1791717520000,
+            "marked_on": "business",
+            "marked_window": "five_hour",
+            "projection": null
+          }
+        },
+        {
+          "type": "event",
+          "id": 28,
           "at": 1791717760000,
           "kind": "poll_backoff_started",
           "account_id": "business",
@@ -12527,7 +12788,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 25,
+          "id": 27,
           "at": 1791717700000,
           "kind": "window_reset",
           "account_id": "business",
@@ -12548,7 +12809,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 24,
+          "id": 26,
           "at": 1791717640000,
           "kind": "wind_down_started",
           "account_id": "business",
@@ -12567,7 +12828,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 23,
+          "id": 25,
           "at": 1791717580000,
           "kind": "warm_prefix_expired",
           "account_id": "direct",
@@ -12608,15 +12869,16 @@ export const FIXTURES: Record<string, Fixture> = {
           "detail": {
             "window": "five_hour",
             "utilization": 0.71,
-            "elapsed_share": 0.5,
-            "ahead": 0.21,
-            "threshold": 0.15,
-            "margin": 0.06,
+            "projection": 0.99,
+            "horizon": 1791719920000,
+            "ceiling": 0.95,
             "unit": "window_share",
-            "burn_window_seconds": 900,
-            "shed_share": 0.5,
+            "burn_average_seconds": 1800,
+            "shed_cap": 0.2,
             "burn_sum": 0.12,
-            "target": 0.06,
+            "excess": 0.06,
+            "target": 0.024,
+            "removed": 0.07,
             "warm_sessions": "when_needed",
             "pins": [
               {
@@ -12629,6 +12891,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "last_input_tokens": 48100,
                 "per_rewrite": 0.004,
                 "marked": true,
+                "rewrite": 0.005,
+                "planned": "direct",
+                "runway_ms": null,
+                "skip": null,
                 "note": null
               }
             ],
@@ -12640,6 +12906,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "model": "claude-sonnet-5"
               }
             ],
+            "outcome": "marked 1",
+            "reason": null,
             "dwell_seconds": 900,
             "dwell_until": 1791718420000,
             "persisted": true
@@ -12761,6 +13029,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "burn_equivalent": 0,
           "estimated": false,
           "burn_at": null,
+          "runway_ms": null,
+          "runway_bounded": null,
           "cache_ttl_ms": 300000,
           "last_input_tokens": 0,
           "last_refresh_at": 1791721000000,
@@ -12797,6 +13067,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "burn_equivalent": null,
           "estimated": false,
           "burn_at": null,
+          "runway_ms": null,
+          "runway_bounded": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
           "last_refresh_at": null,
@@ -12833,6 +13105,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "burn_equivalent": null,
           "estimated": false,
           "burn_at": null,
+          "runway_ms": null,
+          "runway_bounded": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
           "last_refresh_at": null,
@@ -12869,6 +13143,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "burn_equivalent": null,
           "estimated": false,
           "burn_at": null,
+          "runway_ms": null,
+          "runway_bounded": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
           "last_refresh_at": null,
@@ -12905,6 +13181,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "burn_equivalent": null,
           "estimated": false,
           "burn_at": null,
+          "runway_ms": null,
+          "runway_bounded": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
           "last_refresh_at": null,
@@ -13552,7 +13830,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "ready": true,
       "dead": [],
       "ledger": {
-        "schema_version": 34,
+        "schema_version": 35,
         "written": 19,
         "dropped": 0,
         "write_failures": 0,
@@ -13577,6 +13855,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "affinity": 0,
           "cooldown": 0,
           "credits": 0,
+          "ended": 0,
           "member_spend": 0,
           "overage": 0,
           "pin_invalidated": 0,

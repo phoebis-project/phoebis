@@ -8,7 +8,7 @@
     "ready": true,
     "dead": [],
     "ledger": {
-      "schema_version": 34,
+      "schema_version": 35,
       "written": 19,
       "dropped": 0,
       "write_failures": 0,
@@ -33,6 +33,7 @@
         "affinity": 0,
         "cooldown": 0,
         "credits": 0,
+        "ended": 0,
         "member_spend": 0,
         "overage": 0,
         "pin_invalidated": 0,
