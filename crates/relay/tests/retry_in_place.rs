@@ -490,6 +490,85 @@ async fn a_reset_that_moves_during_the_wait_moves_the_pin_rather_than_holding_th
 }
 
 #[tokio::test]
+async fn a_reset_wait_the_request_deadline_would_outlast_is_refused_and_the_sibling_tried() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(A, "/v1/messages", json_200());
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    // 35 s is five past the margin, so the request's deadline is five seconds after its admission on the harness's
+    // clock, which stands still.
+    let h = harness_with_limits(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+        phoebis_relay::Limits {
+            head_timeout: Duration::from_secs(35),
+            ..default_limits()
+        },
+    )
+    .await;
+    let first = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&first).account_id, "a", "s1 pins to a");
+    drain(first).await;
+    // A poll reads b's allowance, which the spent rule has to know before it moves the pin there.
+    let reading = |utilization: f64, reset: i64| WindowReading {
+        utilization,
+        reset: Some(reset),
+        observed_at: NOW,
+        source: WindowSource::Poll,
+    };
+    h.router
+        .report(Report::Sample {
+            account_id: "b".into(),
+            sample: UtilizationSample::default()
+                .with(FIVE_HOUR, reading(0.3, NOW + 3 * 3_600_000))
+                .with(SEVEN_DAY, reading(0.1, NOW + 72 * 3_600_000)),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    // Another session's 429 reads a's 5-hour window spent with its reset ten seconds out: inside the retry bound and
+    // past the deadline of a request admitted now.
+    up.push_credential_rule(A, "/v1/messages", json_429_spent(NOW / 1_000 + 10));
+    let spent = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s2"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&spent).account_id, "b");
+    drain(spent).await;
+    let mut events = h.router.subscribe_events();
+    // Bounded on the wall clock: a wait for the reset would run on the harness's clock, which never reaches it.
+    let resp = tokio::time::timeout(
+        Duration::from_secs(5),
+        h.app.clone().oneshot(request_for(KEY, MODEL, "s1")),
+    )
+    .await
+    .expect("the request answers without waiting for the reset")
+    .unwrap();
+    let o = outcome(&resp);
+    assert_eq!(
+        (resp.status().as_u16(), o.account_id.as_str(), o.attempt),
+        (200, "b", 1),
+        "the pin moves to the sibling rather than waiting past the deadline"
+    );
+    drain(resp).await;
+    let seen = events_through_cache_map(&mut events, &o.request_id).await;
+    assert_eq!(
+        decisions_of(&seen, &o.request_id),
+        [(1, 1, "held"), (2, 1, "moved")],
+        "the hold is answered, its wait refused, and the sibling tried"
+    );
+    assert_eq!(credentials_seen(&up), [A, A, B, B]);
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_second_throttle_on_the_retry_fails_over_or_ends_at_the_pools_exhaustion() {
     // One account and two throttles: one retry in place, then the second throttle fails over, nothing is left,
     // and the pool answers with the cooldown's deadline.

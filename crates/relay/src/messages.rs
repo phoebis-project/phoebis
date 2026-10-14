@@ -1855,11 +1855,27 @@ impl Relay {
                         )
                     });
                     // A spent window about to reset: the request sleeps to the hold's end, the later of the reset and
-                    // the cooldown's end, or to its one bound when that comes first, and selects again with the
-                    // account still open to it, so the pin renews in place. A wait the bound cut short, or one the account left during, passes the account over.
+                    // the cooldown's end, or to its one bound or its deadline when one of those comes first, and
+                    // selects again with the account still open to it, so the pin renews in place. A wait the bound
+                    // cut short, or one the account left during, passes the account over. A hold's end past the
+                    // request's deadline would end the wait with the request answered exhausted, so that wait is
+                    // refused and the account passed over, and the selection that follows tries a sibling as the
+                    // retry-in-place path does.
                     if hold.reason == "reset" {
+                        if admitted
+                            .deadline
+                            .zip(hold.until)
+                            .is_some_and(|(deadline, until)| until > deadline)
+                        {
+                            held_out = true;
+                            attempted.push(account_id);
+                            continue;
+                        }
+                        let end = admitted
+                            .deadline
+                            .map_or(hold_bound, |deadline| deadline.min(hold_bound));
                         let waited = self
-                            .wait_out(hold.until.unwrap_or(now), Some(hold_bound), &answer.cancel)
+                            .wait_out(hold.until.unwrap_or(now), Some(end), &answer.cancel)
                             .await;
                         hold.held_ms = started.elapsed().as_millis() as u64;
                         hold.ran_out = matches!(waited, Waited::Deadline);
