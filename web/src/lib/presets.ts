@@ -208,13 +208,14 @@ export function shedPreview(
     if (!pool.loadShedding) continue;
     // The served burn is a pin's share of the account's 5-hour window. A round on a weekly window reads each pin's
     // burn scaled by the account's burn on that window over its 5-hour burn, the preview's approximation of the
-    // router's pricing of each pin on the fired window. A pin served in dollars has no share to scale.
+    // router's pricing of each pin on the fired window. A pin served in dollars has no share to scale, and a pin whose
+    // model does not draw the fired window burns nothing on it, as the router prices none there, so both read unpriced.
     const fiveHour = readingOf(account, '5h')?.burn ?? null;
     const scale = fired.id === '5h' ? 1 : fiveHour !== null && fiveHour > 0 && fired.burn !== null ? fired.burn / fiveHour : null;
     const walked = pins.map((s) => {
       const served = s.burn === null || s.burnUnit !== 'window_share' ? null : burnDecayed(s.burn, s.burnAt, now, windowMs);
       return {
-        burn: served === null || scale === null ? null : served * scale,
+        burn: served === null || scale === null || !windowsOf(s.model).includes(fired.id) ? null : served * scale,
         id: `${s.keyId}/${s.sessionId}/${s.model ?? ''}`,
         order: served,
         // A pin with no prompt size reported yet ranks as the cheapest rewrite.

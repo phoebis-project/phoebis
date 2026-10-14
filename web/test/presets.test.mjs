@@ -210,6 +210,19 @@ test("the preview reads a sibling's runway on every window the pin's model draws
   assert.equal(d.shedPreviewLine(preview, NOW), '1 member projects over the ceiling: hot. A round there would mark 2 sessions (0 warm), 4.0 %/h of the excess, to move to a sibling with runway.');
 });
 
+test('a round fired by the Fable week counts the pins whose model draws it alone, so it plans no Sonnet move', () => {
+  // fable-hot crosses on its Fable week alone: 99 % five hours out under the ceiling of 90, an excess of 1.8 points an
+  // hour, while its shared windows sit under it. The Sonnet pin burns five points an hour and the Fable pin one, but
+  // only the Fable pin draws the week that fired, so the round marks it and the Sonnet pin reads unpriced there.
+  const fableHot = oauth('fable-hot', 0.5, 0.4, 0.99);
+  const sibling = oauth('cool', 0.3, 0.2, 0.3);
+  const pins = [pin('fable-hot', 'sonnet-a', 0.05, false), pin('fable-hot', 'fable-b', 0.01, false, { model: 'claude-fable-5-1' })];
+  const preview = d.shedPreview(pool([fableHot, sibling]), [fableHot, sibling], pins, NOW);
+  assert.deepEqual(preview.hot.map((h) => [h.label, h.window, h.excess.toFixed(3)]), [['fable-hot', '7d_fable', '0.018']]);
+  assert.deepEqual([preview.sessions, preview.covered.toFixed(3), preview.unpriced], [1, '0.010', false], "the Fable pin's point alone, never the Sonnet pin's five");
+  assert.equal(d.shedPreviewLine(preview, NOW), '1 member projects over the ceiling: fable-hot. A round there would mark 1 session (0 warm), 1.0 %/h of the excess, to move to a sibling with runway.');
+});
+
 test("a round on a weekly window scales the pins' 5-hour burn by the account's burn on that window", () => {
   // weekly crosses on its 7-day window alone: 97 % at a horizon five hours out under a ceiling of 95, an excess of 0.4
   // points an hour. Its sessions burn the 7-day window a quarter as fast as the 5-hour one, so the pins' 5 and 3 points
