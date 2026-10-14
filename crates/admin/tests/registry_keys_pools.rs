@@ -3073,7 +3073,8 @@ async fn the_pool_answer_lists_each_warning_that_holds_and_none_that_does_not() 
         );
     }
     // The affinity check runs while the policy injects, which takes the policy on and its injection on: the affinity
-    // at the longest of the four TTLs clears it, and with the affinity under it again, the policy turned off does.
+    // at the longest of the four TTLs clears it, and with the affinity under it again, the injection turned off on a
+    // policy that stays on clears it, as the policy turned off does.
     let affinity = || {
         serde_json::json!([warning(
             "affinity_under_cache_ttl",
@@ -3096,6 +3097,14 @@ async fn the_pool_answer_lists_each_warning_that_holds_and_none_that_does_not() 
     for (body, expected) in [
         (r#"{"affinity_ttl_seconds":3600}"#, serde_json::json!([])),
         (r#"{"affinity_ttl_seconds":600}"#, affinity()),
+        (
+            r#"{"cache_ttl":{"enabled":true,"inject_when_absent":false}}"#,
+            serde_json::json!([]),
+        ),
+        (
+            r#"{"cache_ttl":{"enabled":true,"inject_when_absent":true}}"#,
+            affinity(),
+        ),
         (r#"{"cache_ttl":{"enabled":false}}"#, serde_json::json!([])),
     ] {
         let patched = json(patch(app, "/admin/pools/affinity", body, Some(cookie)).await).await;

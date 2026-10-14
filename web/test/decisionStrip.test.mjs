@@ -258,7 +258,7 @@ test('a move draws Fit after Move and Reserve after its pick or its static rung,
 test('a spent move held for the reset ends in the fourth terminus drawn at the Held position while a fresh line keeps three', async () => {
   const held = modelOf(await recordOf('req_9d4c1a73-e58/2'));
   assert.deepEqual(read(held), ['Pin: match (taken)', 'Eligible: match (taken)', 'spent: held (taken)', ...FIVE_RULES('not run', 'idle').slice(1), 'Renew: not run (idle)', 'Reserve: none (idle)']);
-  assert.deepEqual([held.shape, held.decisive, held.branch], ['pinned', 'move:spent', null]);
+  assert.deepEqual([held.shape, held.decisive, held.host, held.branch], ['pinned', 'move:spent', 'move:spent', null]);
   assert.deepEqual(terminiOf(held), ['Chosen: - (idle)', 'Held for the reset: held (taken)', 'Refused: - (idle, not drawn)']);
   assert.deepEqual(held.termini.map(d.terminusName), ['Chosen, not reached', 'Held for the reset, held', 'Refused, not reached']);
   const layout = d.layoutStrip(held, 958);
