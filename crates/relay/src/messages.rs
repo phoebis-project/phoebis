@@ -1865,7 +1865,7 @@ impl Relay {
                         if admitted
                             .deadline
                             .zip(hold.until)
-                            .is_some_and(|(deadline, until)| until > deadline)
+                            .is_some_and(|(deadline, until)| until >= deadline)
                         {
                             held_out = true;
                             attempted.push(account_id);
