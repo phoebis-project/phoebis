@@ -15444,6 +15444,58 @@ fn a_placement_books_its_rewrite_on_the_destination_until_the_usage_replaces_it_
 }
 
 #[test]
+fn a_failover_to_a_destination_that_books_nothing_releases_the_sources_booking() {
+    let s = snapshot_with_terms(
+        Pool {
+            members: vec![("a", 0), ("b", 1)],
+            kinds: vec![("b", AccountKind::ApiKey)],
+            ..Pool::default()
+        },
+        tier_terms(&["a"]),
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.set_share(ratio_pricer());
+    st.record_sample("a", sample(0.5, 0.1, T));
+    let req = placing(&s, "r-1", "s1", T);
+    assert_eq!(
+        landed(select(&mut st, &s, &req, &mut rng()).0),
+        ("a".into(), None)
+    );
+    assert!(
+        st.reservation("r-1").is_some_and(|r| r.account_id == "a"),
+        "the placement books on a"
+    );
+    // The stream on a fails over before any usage lands: the second attempt's selection places the request on the
+    // API-key sibling, which prices nothing and so books nothing.
+    let failover = SelectRequest {
+        attempt: 2,
+        seq: 2,
+        ..placing(&s, "r-1", "s1", T + 1_000)
+    };
+    let failover = SelectRequest {
+        attempted: vec!["a".into()],
+        ..failover
+    };
+    let d = decide(&mut st, &s, &failover, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("b".into(), None));
+    let reserve = line(&d.record, "reserve");
+    assert_eq!(
+        (reserve.verdict, fact(reserve, "account_id")),
+        ("none", &FactValue::Text("b".into())),
+        "the API-key destination books nothing"
+    );
+    assert_eq!(
+        st.reservation("r-1"),
+        None,
+        "and the source's booking left with the failover"
+    );
+    assert!(
+        close(five_hour(&st, "a", T + 1_000), 0.5),
+        "a's prediction no longer carries the rewrite"
+    );
+}
+
+#[test]
 fn a_moving_pin_keeps_its_burn_and_its_last_prompt_on_the_new_row() {
     let s = snapshot(Pool {
         members: vec![("a", 0), ("b", 1)],

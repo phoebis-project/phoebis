@@ -1781,10 +1781,15 @@ fn run(
     };
     let cohort_hold = cohort_hold(&request.holds);
 
-    // A move or a fresh placement books its rewrite and burn on the destination until the usage replaces it or the
-    // request ends. A count writes no cache, a probe replays a recipe the account carries, and a fast request draws
-    // usage credits and no plan window, so none of them books. A destination without a tier prices nothing, and
-    // nothing priced is nothing to book, so an unpriced destination leaves no entry to expire or release.
+    // A move or a fresh placement releases the request's previous booking first, so a failover's booking replaces it
+    // on a priced destination and the source's leaves even where the destination books nothing, else the source
+    // would carry the rewrite and burn of a stream it no longer serves until the usage, the end or the expiry. A
+    // retry in place renews and never reaches here, so its booking stands. Then the selection books its rewrite and
+    // burn on the destination until the usage replaces it or the request ends. A count writes no cache, a probe
+    // replays a recipe the account carries, and a fast request draws usage credits and no plan window, so none of
+    // them books. A destination without a tier prices nothing, and nothing priced is nothing to book, so an unpriced
+    // destination leaves no entry to expire or release.
+    state.release_reservation(&request.request_id);
     if !(request.count || request.probe || request.fast) {
         if let Some(tier) = snapshot.tier(&chosen.account_id) {
             let prior = match moving {
