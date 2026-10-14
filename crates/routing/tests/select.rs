@@ -16989,6 +16989,46 @@ fn a_renewal_names_the_first_window_whose_projection_at_its_horizon_reaches_the_
 }
 
 #[test]
+fn a_renewal_names_no_window_whose_projection_reads_the_ceiling_exactly() {
+    // A round fires over the ceiling, strictly, so a renewal row names a window only where a round would fire. The
+    // pin's hundred tokens a second carry the 5-hour window from 0.5 to the ceiling exactly at its reset 144 minutes
+    // out, the ceiling being that projection as the engine computes it.
+    let at_horizon = 0.5 + (100.0 / 10_000_000.0) * 8_640.0;
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        window_ceiling: at_horizon,
+        ..Pool::default()
+    });
+    let renew = |input: f64| {
+        let mut st = priced(vec![burning("s1", "a", input, true, T)]);
+        st.record_sample(
+            "a",
+            refreshing(0.5, T + 144 * MINUTE, T + 72 * HOUR, T - 500),
+        );
+        decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng())
+    };
+    let d = renew(100.0);
+    assert_eq!(d.record.outcome.kind, "renewed");
+    assert_eq!(
+        candidate(&d.record, "a").windows[FIVE_HOUR].projection,
+        Some(at_horizon),
+        "the projection reads the ceiling exactly"
+    );
+    assert_eq!(
+        summary_facts(&d),
+        vec![("idle", FactValue::Int(1_000), Some("ms"))],
+        "at the ceiling no round fires, so the row names the idle age"
+    );
+    // One token a second more and the projection is over the ceiling: the row names the window.
+    let d = renew(101.0);
+    assert_eq!(d.record.outcome.kind, "renewed");
+    assert_eq!(
+        summary_facts(&d),
+        vec![(FIVE_HOUR, FactValue::Number(0.5), Some("percent"))]
+    );
+}
+
+#[test]
 fn a_count_or_bound_renewal_names_the_window_whose_projection_reaches_the_ceiling() {
     let s = tiered(Pool {
         members: vec![("a", 0), ("b", 1)],

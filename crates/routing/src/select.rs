@@ -5242,12 +5242,14 @@ impl Readings<'_> {
             .as_deref()
             .and_then(|id| self.member(id));
         if let (Some(pool), Some(member)) = (self.pool, member) {
-            // The windows the round's trigger read, in its order, the first at the ceiling named by its utilization.
+            // The windows the round's trigger read, in its order, the first over the ceiling named by its
+            // utilization: the trigger's own comparison, strict, so the row never names a window no round would
+            // fire on.
             for name in self.trigger_windows.iter().copied() {
                 if let Some(window) = member
                     .windows
                     .get(name)
-                    .filter(|w| w.projection.is_some_and(|p| p >= ceiling(pool, name)))
+                    .filter(|w| w.projection.is_some_and(|p| p > ceiling(pool, name)))
                 {
                     return vec![summary_fact(
                         name,
