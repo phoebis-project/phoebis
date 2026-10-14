@@ -177,6 +177,13 @@ test('a member over the ceiling with no priced pin reads that a round would mark
   assert.equal(line([hot, cool], []), said, 'no pin at all');
 });
 
+test('the preview reads no priced pin only where a round walks: the switch on and a member over the ceiling', () => {
+  assert.equal(d.shedPreview(pool([hot, cool], { loadShedding: false }), [hot, cool], [], NOW).unpriced, false, 'the switch off walks no member');
+  const near = oauth('near', 0.85, 0.3);
+  assert.equal(d.shedPreview(pool([near, cool]), [near, cool], [], NOW).unpriced, false, 'no member over the ceiling walks none');
+  assert.equal(d.shedPreview(pool([hot, cool]), [hot, cool], [], NOW).unpriced, true, 'a member over the ceiling with no pin to price');
+});
+
 test("the preview reads a sibling's runway on every window the pin's model draws", () => {
   const fableFull = oauth('busy', 0.3, 0.2, 0.92);
   const fable = (id, burn) => pin('hot', id, burn, false, { model: 'claude-fable-5-1' });

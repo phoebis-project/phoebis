@@ -243,7 +243,8 @@ export function shedPreview(
     noRunway: marked === 0 && walkable > 0 && stranded === walkable,
     off: !pool.loadShedding,
     sessions: marked,
-    unpriced: marked === 0 && priced === 0,
+    // A walk reads the pins' prices, so with the switch off or no member over the ceiling there is no price to lack.
+    unpriced: pool.loadShedding && hot.length > 0 && marked === 0 && priced === 0,
     warm: warmMarked,
   };
 }
