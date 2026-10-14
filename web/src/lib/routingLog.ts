@@ -1688,6 +1688,48 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       break;
     case 'shedding_round': {
       const w = window === null ? 'window' : wordOf(WINDOW_WORD, window);
+      // A round written before the projection trigger carries per-second rates in its own unit and a threshold in
+      // place of a ceiling: it keeps its conversion and its reading, as the version 1 record keeps its own maps.
+      if (d.ceiling === undefined && d.threshold !== undefined) {
+        const unit = str(d.unit);
+        const perHour = (v: unknown, label?: string) => {
+          const n = num(v);
+          return n === null ? null : plain(unit === 'usd' ? `${fmtUsd(n * 3_600)}/h` : hourlyShare(n * 3_600), label);
+        };
+        const burnWindow = num(d.burn_window_seconds);
+        const dwellSeconds = num(d.dwell_seconds);
+        add('Started by', request, session, agent === null ? null : plain(agent, 'agent'));
+        add('Reading', pct(d.utilization, w), pct(d.threshold, 'threshold'));
+        add('Unit', text(d.unit));
+        add('Burn window', burnWindow === null ? null : plain(span(burnWindow * 1_000)));
+        add('Share', pct(d.shed_share, 'share'), perHour(d.burn_sum, 'burn'), perHour(d.target, 'to shed'));
+        add('Warm sessions', text(d.warm_sessions));
+        const legacyPins = list(d.pins).map(rec);
+        if (legacyPins.length > 0) {
+          pairs.push({
+            chips: [],
+            label: 'Pins',
+            table: {
+              head: ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', 'Mark'],
+              rows: legacyPins.map((p) => {
+                const last = num(p.last_input_tokens);
+                return [
+                  sessionChip(str(p.session_id) ?? ''),
+                  plain(str(p.agent_id) ?? '-'),
+                  plain(p.cold === true ? 'cold' : 'warm'),
+                  perHour(p.burn) ?? plain('-'),
+                  plain(last === null ? '-' : fmtCompact(last)),
+                  plain(p.marked === true ? 'marked' : (str(p.note) ?? '-')),
+                ];
+              }),
+            },
+          });
+        }
+        add('Marks kept until', time(d.dwell_until));
+        add('Dwell', dwellSeconds === null ? null : plain(span(dwellSeconds * 1_000)));
+        if (typeof d.persisted === 'boolean') add('Survive a restart', plain(d.persisted ? 'persisted' : 'not persisted'));
+        break;
+      }
       const at = atOf(row);
       const projection = num(d.projection);
       const horizon = num(d.horizon);

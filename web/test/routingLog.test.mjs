@@ -834,6 +834,30 @@ test('the pin moved, shedding round, cleared mark and expired reservation detail
   assert.deepEqual([weekly.Trigger, weekly['Planned destinations'], weekly.Outcome, weekly.Skipped], [['7d projection 96% in 5 h over the ceiling 95%'], ['nightly', 'secondary'], ['marked 2'], undefined]);
   assert.deepEqual(weekly.Pins.rows.map((r) => r.slice(5).map(chipText)), [['0.4%', 'nightly', 'marked'], ['0.3%', 'secondary', 'marked']]);
 
+  // A round written before the projection trigger carries per-second rates in its own unit and a threshold in place of
+  // a ceiling: it keeps its conversion and its reading, so a burn of 0.0001 a second reads 36 %/h or $0.36/h.
+  const legacy = (unit) =>
+    Object.fromEntries(
+      d.detailPairs(
+        event(
+          'shedding_round',
+          {
+            ahead: 0.91, burn_sum: 0.0005, burn_window_seconds: 600, dwell_seconds: 900, dwell_until: ms(14, 15), elapsed_share: 0.06, margin: 0.01, marks: [], persisted: true,
+            pins: [{ agent_id: 'c21e', burn: 0.0001, cold: true, key_id: 'desktop', last_input_tokens: 48_100, marked: true, model: 'claude-sonnet-5', note: null, per_rewrite: 0.0001 / 48_100, session_id: 's1' }],
+            shed_share: 0.5, target: 0.00025, threshold: 0.9, unit, utilization: 0.97, warm_sessions: 'when_needed', window: 'five_hour',
+          },
+          { requestId: 'req_1', sessionId: 's1-0000-4000' },
+        ),
+        NOW,
+        [],
+      ).map((p) => [p.label, p.table ? p.table.rows.map((r) => r.map(chipText)) : texts(p.chips)]),
+    );
+  const share = legacy('window_share');
+  assert.deepEqual(Object.keys(share), ['When', 'Account', 'Started by', 'Reading', 'Unit', 'Burn window', 'Share', 'Warm sessions', 'Pins', 'Marks kept until', 'Dwell', 'Survive a restart']);
+  assert.deepEqual([share.Reading, share.Share, share.Pins], [['5h 97%', 'threshold 90%'], ['share 50%', 'burn 180.0 %/h', 'to shed 90.0 %/h'], [['s1', 'c21e', 'cold', '36.0 %/h', '48.1K', 'marked']]]);
+  const dollars = legacy('usd');
+  assert.deepEqual([dollars.Share, dollars.Pins[0][3]], [['share 50%', 'burn $1.80/h', 'to shed $0.90/h'], '$0.36/h']);
+
   const cleared = (more) => pairs('mark_cleared', { agent_id: 'main', marked_at: ms(13, 0), marked_on: 'primary', marked_window: 'five_hour', projection: null, ...more }, { keyId: 'desktop', model: 'claude-sonnet-5' });
   const healed = cleared({ projection: 0.91, reason: 'healed' });
   assert.deepEqual([healed.Reason, healed.Marked, healed['Standing for']], [['healed: the 5h projection read 91% under the ceiling'], ['13:00', 'on primary'], ['1 h']]);
