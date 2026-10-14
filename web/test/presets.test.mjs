@@ -184,6 +184,21 @@ test('the preview reads no priced pin only where a round walks: the switch on an
   assert.equal(d.shedPreview(pool([hot, cool]), [hot, cool], [], NOW).unpriced, true, 'a member over the ceiling with no pin to price');
 });
 
+/** The round's sentence over `hot` when it would mark no priced pin for `reason`. */
+const quiet = (reason) => `1 member projects over the ceiling: hot. A round there would mark no session: ${reason}`;
+
+test("a round that would mark no priced pin because each is its member's last says so", () => {
+  assert.equal(line([hot, cool], [pin('hot', 'only', 0.03, false)]), quiet("each is its member's last."));
+});
+
+test('a round under never that would mark no priced pin because each is warm says so', () => {
+  assert.equal(line([hot, cool], [pin('hot', 'a', 0.03, true), pin('hot', 'b', 0.02, true)], { warmSessions: 'never' }), quiet('each is warm.'));
+});
+
+test('a round that would mark no priced pin because none burns, a zero target, says so', () => {
+  assert.equal(line([hot, cool], [pin('hot', 'a', 0, false), pin('hot', 'b', 0, false)]), quiet('none burns.'));
+});
+
 test("the preview reads a sibling's runway on every window the pin's model draws", () => {
   const fableFull = oauth('busy', 0.3, 0.2, 0.92);
   const fable = (id, burn) => pin('hot', id, burn, false, { model: 'claude-fable-5-1' });

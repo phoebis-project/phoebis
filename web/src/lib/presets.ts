@@ -122,6 +122,13 @@ export interface ShedPreview {
   noRunway: boolean;
   /** The pool's switch is off: no round runs, whatever the projection reads. */
   off: boolean;
+  /**
+   * Why the rounds mark nothing though a pin there is priced, read over every member over the ceiling in the walk's
+   * order: the priced pins burn nothing, so the target is zero (`burnless`), each priced pin is warm under `never`
+   * (`warm`), or each pin a round could mark is its member's last (`last`). Null where a round marks a session, where
+   * no pin is priced and where no sibling has runway.
+   */
+  quiet: 'burnless' | 'last' | 'warm' | null;
   sessions: number;
   /** The rounds mark nothing because no pin on the members over the ceiling is priced, or none is pinned there. */
   unpriced: boolean;
@@ -178,6 +185,7 @@ export function shedPreview(
   let walkable = 0;
   let stranded = 0;
   let priced = 0;
+  let burning = 0;
   for (const { account } of listed) {
     if (account.kind === 'api_key') continue;
     const pins = sessions
@@ -234,14 +242,18 @@ export function shedPreview(
     warmMarked += taken.filter((p) => p.warm).length;
     walkable += walked.filter(open).length;
     priced += walked.filter((p) => p.burn !== null).length;
+    burning += total;
     stranded += walked.filter((p) => open(p) && !p.runway).length;
   }
+  const noRunway = marked === 0 && walkable > 0 && stranded === walkable;
+  const walkedQuiet = pool.loadShedding && hot.length > 0 && marked === 0 && priced > 0 && !noRunway;
   return {
     closest: hot.length === 0 ? closest : null,
     covered,
     hot,
-    noRunway: marked === 0 && walkable > 0 && stranded === walkable,
+    noRunway,
     off: !pool.loadShedding,
+    quiet: !walkedQuiet ? null : burning === 0 ? 'burnless' : walkable === 0 ? 'warm' : 'last',
     sessions: marked,
     // A walk reads the pins' prices, so with the switch off or no member over the ceiling there is no price to lack.
     unpriced: pool.loadShedding && hot.length > 0 && marked === 0 && priced === 0,
@@ -252,10 +264,12 @@ export function shedPreview(
 /** A share as a whole percent with the space before the sign, as the pool card's badge writes it. */
 const percentText = (share: number) => `${Math.round(share * 100)} %`;
 
+const QUIET_REASON: Record<NonNullable<ShedPreview['quiet']>, string> = { burnless: 'none burns.', last: "each is its member's last.", warm: 'each is warm.' };
+
 /**
  * The shedding group's dry run in up to three sentences: the switch when it is off, the members whose projection
  * crosses the ceiling or the one closest to it, and the round they would run, or that no sibling has runway for their
- * sessions, or that none of them is priced. A 5-hour horizon reads its clock time, a weekly one the span to it.
+ * sessions, or why a round would mark none of them. A 5-hour horizon reads its clock time, a weekly one the span to it.
  */
 export function shedPreviewLine(preview: ShedPreview, now: number = Date.now()): string {
   const off = preview.off ? ['Load shedding is off: no round runs.'] : [];
@@ -272,6 +286,8 @@ export function shedPreviewLine(preview: ShedPreview, now: number = Date.now()):
     ? 'No sibling has runway for them, so nothing would be marked.'
     : preview.unpriced
       ? 'A round there would mark no session: none is priced.'
-      : `A round there would mark ${count} (${preview.warm} warm), ${(preview.covered * 100).toFixed(1)} %/h of the excess, to move to a sibling with runway.`;
+      : preview.quiet !== null
+        ? `A round there would mark no session: ${QUIET_REASON[preview.quiet]}`
+        : `A round there would mark ${count} (${preview.warm} warm), ${(preview.covered * 100).toFixed(1)} %/h of the excess, to move to a sibling with runway.`;
   return `${over} ${round}`;
 }
