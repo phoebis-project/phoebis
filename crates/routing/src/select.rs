@@ -4710,7 +4710,7 @@ fn candidate_facts(
         }
         for name in all_plan_windows() {
             if let Some(reading) = state.predicted(id, name, now) {
-                // The shared windows alone carry a lead; a model week's reading names none.
+                // The shared windows alone carry a lead. A model week's reading names none.
                 let ahead = (name == FIVE_HOUR || name == SEVEN_DAY).then(|| {
                     reading.utilization - elapsed_share(snapshot, id, &reading, name, now)
                 });
