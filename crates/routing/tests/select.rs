@@ -15815,6 +15815,46 @@ fn a_fresh_sessions_prior_counts_a_pin_only_on_the_windows_its_model_draws() {
 }
 
 #[test]
+fn a_fresh_sessions_prior_leaves_out_the_warm_pins_a_former_pool_left_on_the_account() {
+    // a moved from p1 to p2 with s1's warm pin under p1's key still on it, which p2's projections already leave out.
+    let s = on_tier(&shedding_pools(
+        &[("k1", "p1"), ("k2", "p2")],
+        &[("p1", "b", 0), ("p2", "a", 0), ("p2", "c", 1)],
+    ));
+    let mut st = priced(vec![PinRow {
+        key_id: "k1".into(),
+        ..burning("s1", "a", 100.0, true, T)
+    }]);
+    st.record_sample("a", sample(0.5, 0.1, T));
+    let req = SelectRequest {
+        body_tokens: 1_000,
+        ..select_request(
+            &s,
+            "k2",
+            Some("s9"),
+            "claude-sonnet-5",
+            "main",
+            true,
+            &[],
+            T,
+        )
+    };
+    assert_eq!(
+        landed(select(&mut st, &s, &req, &mut rng()).0),
+        ("a".into(), None),
+        "a, at priority 0, fits the fresh session"
+    );
+    let booked = st
+        .reservation("r-1")
+        .expect("the placement books its rewrite");
+    assert_eq!(
+        booked.burn.get(FIVE_HOUR).copied().unwrap_or(0.0),
+        0.0,
+        "the former pool's pin shapes no prior of p2's: {booked:?}"
+    );
+}
+
+#[test]
 fn a_spent_move_books_the_pins_last_prompt_as_its_rewrite_and_its_own_decayed_burn() {
     let pool = || Pool {
         members: vec![("a", 0), ("b", 1)],

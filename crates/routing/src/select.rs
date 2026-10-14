@@ -685,7 +685,9 @@ impl<'a> Figures<'a> {
     }
 }
 
-/// A fresh session's prior: the pool's warm pins at `now`, each priced per window by `pin_figures`.
+/// A fresh session's prior: the warm pins the pool keeps on its members at `now`, each priced per window by
+/// `pin_figures`. The key-to-pool filter of `in_pool` leaves out a pin a former pool left on a member, as the
+/// projections leave it out of the standing burn, so another pool's sessions shape no placement of this one.
 fn fresh_prior(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -697,10 +699,11 @@ fn fresh_prior(
         .iter()
         .map(|m| m.account_id.as_str())
         .collect();
+    let kept = in_pool(snapshot, pool);
     state
         .pins()
         .into_iter()
-        .filter(|p| members.contains(p.account_id.as_str()) && warm(p, now))
+        .filter(|p| members.contains(p.account_id.as_str()) && kept(p) && warm(p, now))
         .collect()
 }
 
