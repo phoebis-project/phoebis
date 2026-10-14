@@ -2308,8 +2308,12 @@ fn projections(
 }
 
 /// Every pin with its burn decayed to `now` by its pool's burn average (the default preset's for a key whose pool left
-/// the registry) and its runway on its own account under that pool, read by `standing_runway` for each pin.
+/// the registry) and its runway on its own account under that pool, read by `standing_runway` once per pool, account
+/// and set of windows, since the account's projection already holds every pin's burn and every pin drawing those
+/// windows there reads the same runway.
 fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) -> Vec<PinStanding> {
+    type Runway = Option<(Option<i64>, Option<String>)>;
+    let mut runways: HashMap<(String, String, Vec<&'static str>), Runway> = HashMap::new();
     state
         .pins()
         .into_iter()
@@ -2319,7 +2323,16 @@ fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) ->
                 .and_then(|key| snapshot.pool(&key.pool_id));
             let average_ms = pool.map_or_else(default_burn_average_ms, burn_average_ms);
             let runway = pool.and_then(|pool| {
-                standing_runway(state, snapshot, pool, &pin.account_id, &pin.model, now)
+                runways
+                    .entry((
+                        pool.id.clone(),
+                        pin.account_id.clone(),
+                        plan_windows(&pin.model).collect(),
+                    ))
+                    .or_insert_with(|| {
+                        standing_runway(state, snapshot, pool, &pin.account_id, &pin.model, now)
+                    })
+                    .clone()
             });
             let (runway_ms, runway_bounded, binding) = match runway {
                 None => (None, None, None),
