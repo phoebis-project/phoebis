@@ -6,7 +6,7 @@ import { api } from '@/api';
 import { windowId } from '@/api/decode';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
 import { useAppSettings } from '@/app/settings';
-import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, MemberBudget, PlacementRow, RequestLog, RewritePoint, SubscriptionCosts } from '@/api/types';
+import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, MemberBudget, PlacementRow, RequestLog, RewritesAnswer, SubscriptionCosts } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
 import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, accountSlots, type ChartInk } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
@@ -30,6 +30,7 @@ import { ESTIMATED_TITLE, equivalentShort, fmtAbsolute, fmtCompact, fmtDayTick, 
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/hooks';
 import { linkedKeyIds, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
+import { words } from '@/lib/routingLog';
 import { UNIT_FUNDING, UNIT_POSITIONS, type UnitPosition } from '@/lib/unit';
 import { WINDOW_LABEL } from '@/lib/windows';
 
@@ -1927,11 +1928,23 @@ function SpeedCard({ axis, points, error, loading }: { axis: TimeAxis; error: st
   );
 }
 
-function RewritesCard({ answer, axis, error, loading, unfiltered }: { answer: { moves: Record<string, number>; points: RewritePoint[] } | null; axis: TimeAxis; error: string | null; loading: boolean; unfiltered: boolean }) {
+/** The destination fits in the gate's order, so a reason's bar reads from its best landings to its worst. */
+const MOVE_FITS = ['fits', 'rewrite_only', 'least_bad', 'unknown'];
+const fitRank = (fit: string) => (MOVE_FITS.includes(fit) ? MOVE_FITS.indexOf(fit) : MOVE_FITS.length);
+/** A fit's segment in the verdict's tone, `unknown` (a move whose record carries no fit) in the muted series ink. */
+const fitColor = (ink: ChartInk, fit: string): string => (fit === 'fits' ? ink.good : fit === 'rewrite_only' ? ink.warning : fit === 'least_bad' ? ink.serious : ink.muted);
+
+function RewritesCard({ answer, axis, error, loading, unfiltered }: { answer: RewritesAnswer | null; axis: TimeAxis; error: string | null; loading: boolean; unfiltered: boolean }) {
   const ink = useChartInk();
   const data = useMemo(() => (answer?.points ?? []).map((p) => ({ at: Date.parse(p.at), rewriteTokens: p.rewriteTokens })), [answer]);
   const total = data.reduce((n, p) => n + p.rewriteTokens, 0);
   const moves = Object.entries(answer?.moves ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  const fitsOf = (reason: string) =>
+    Object.entries(answer?.movesByReasonAndFit[reason] ?? {})
+      .filter(([, n]) => n > 0)
+      .sort(([a], [b]) => fitRank(a) - fitRank(b) || a.localeCompare(b));
+  const drawn = [...new Set(moves.flatMap(([reason]) => fitsOf(reason).map(([fit]) => fit)))].sort((a, b) => fitRank(a) - fitRank(b) || a.localeCompare(b));
+  const longest = Math.max(1, ...moves.map(([, n]) => n));
   return (
     <ChartCard
       title="Migration rewrites"
@@ -1940,19 +1953,42 @@ function RewritesCard({ answer, axis, error, loading, unfiltered }: { answer: { 
       loading={loading}
       legend={[{ color: ink.series[1], label: 'Rewrite tokens', value: fmtCompact(total) }]}
       footer={
-        <ul className="legend" aria-label="Moves by reason">
-          <li className="muted">Moves</li>
-          {moves.length === 0 ? (
-            <li className="muted">none in range</li>
-          ) : (
-            moves.map(([reason, n]) => (
-              <li key={reason}>
-                {upperFirst(moveLabel(reason))}
-                <span className="legend__value num">{fmtInt(n)}</span>
-              </li>
-            ))
+        <>
+          <ul className="legend" aria-label="Moves by destination fit">
+            <li className="muted">Moves</li>
+            {moves.length === 0 ? (
+              <li className="muted">none in range</li>
+            ) : (
+              drawn.map((fit) => (
+                <li key={fit}>
+                  <span className="legend__swatch legend__swatch--rect" style={{ background: fitColor(ink, fit) }} />
+                  {words(fit)}
+                </li>
+              ))
+            )}
+          </ul>
+          {moves.length > 0 && (
+            <ul className="hbars hbars--moves" aria-label="Moves by reason">
+              {moves.map(([reason, n]) => {
+                const label = upperFirst(moveLabel(reason));
+                const fits = fitsOf(reason);
+                return (
+                  <li key={reason}>
+                    <span className="hbars__label">{label}</span>
+                    <div className="hbars__track">
+                      <span className="hbars__stack" role="img" aria-label={`${label}: ${fits.map(([fit, k]) => `${words(fit)} ${fmtInt(k)}`).join(', ')}`} style={{ width: `${(n / longest) * 100}%` }}>
+                        {fits.map(([fit, k]) => (
+                          <span key={fit} className="hbars__seg" title={`${words(fit)} ${fmtInt(k)}`} style={{ background: fitColor(ink, fit), flexGrow: k }} />
+                        ))}
+                      </span>
+                    </div>
+                    <span className="hbars__value num">{fmtInt(n)}</span>
+                  </li>
+                );
+              })}
+            </ul>
           )}
-        </ul>
+        </>
       }
     >
       <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>

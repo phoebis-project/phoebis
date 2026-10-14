@@ -40,6 +40,9 @@ export { leafName, stationModel, stationName, terminusName } from '@/lib/decisio
 export { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, shareLabel, shortModel, spanText, undatedModel } from '@/lib/format';
 // The pace mark's offset and the end it runs to, so the check and the meter place it by one arithmetic.
 export { endOf, remainingTimeShare } from '@/lib/quota';
+// The projection's phrase, its burn and the span it spells, so a check computes the words a window draws from the one
+// derivation the pages draw them from, at the instant the page read.
+export { burnWords, minuteSpan, projectionWords } from '@/lib/quota';
 // A request's native unit, so a check picks the rows it reads by the rule the Cost cell draws them by.
 export { costUnitOf } from '@/lib/requests';
 // The drawer's widenings, so a check reads the drawer's links against the addresses the page builds them from.

@@ -10,7 +10,7 @@ import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/comp
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinute, fmtPct, fmtRelative, fmtShortTime, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, endOf, extraUsageState, isExpired, isSubscription, meterTone, paceWords, planChip, pollReading, remainingOf, remainingTimeShare, soonestReset, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, isExpired, isSubscription, meterTone, paceWords, planChip, pollReading, projectionWords, remainingOf, remainingTimeShare, soonestReset, windowOf, type ExtraUsageState } from '@/lib/quota';
 
 type Sort = 'default' | 'soonest';
 
@@ -300,15 +300,18 @@ function WindowChip({ name, window: w, className, now }: { className: string; na
 }
 
 /**
- * One window as three cells of the card grid: the chip, the meter, and the reset label. The grid sizes the chip and
- * the reset to their content and hands the meter the rest, and `qwin__chip` names the chip's cell for the checks that
- * read a row by its cells. Under 900 px the reset label takes a row of its own under the meter.
+ * One window as three cells of the card grid: the chip, the meter, and the reset label, which carries the projection
+ * at the window's horizon after the reset and names the burn behind it on its hover. The grid sizes the chip and the
+ * reset to their content and hands the meter the rest, and `qwin__chip` names the chip's cell for the checks that read
+ * a row by its cells. Under 900 px the reset label takes a row of its own under the meter.
  */
 function QuotaWindow({ end, name, window: w, now, soon }: { end: number | null; name: string; now: number; soon: boolean; window: RateLimitWindow | null }) {
   // The last reading describes a window that has since reset, so its share says nothing until the next one.
   const live = w && !isExpired(w, now) ? w : null;
   const pace = live ? paceWords(live, now, end) : null;
   const reading = live ? `${live.label}: ${fmtPct(remainingOf(live))} left${pace ? `, ${pace}` : ''}` : '';
+  const projection = live ? projectionWords(live, now) : null;
+  const burn = live ? burnWords(live) : null;
   return (
     <>
       <WindowChip name={name} window={w} now={now} className="qwin__chip" />
@@ -320,8 +323,9 @@ function QuotaWindow({ end, name, window: w, now, soon }: { end: number | null; 
         </div>
       )}
       {live ? (
-        <span className={`qwin__reset ${soon ? 'is-soon' : ''}`} title={`${fmtAbsolute(live.resetsAt)}${soon ? ', the first of this account to recover' : ''}`}>
+        <span className={`qwin__reset ${soon ? 'is-soon' : ''}`} title={`${fmtAbsolute(live.resetsAt)}${soon ? ', the first of this account to recover' : ''}${burn ? `, ${burn}` : ''}`}>
           resets {fmtRelative(live.resetsAt, now)}
+          {projection && `, ${projection}`}
         </span>
       ) : w ? (
         <span className="qwin__reset muted" title={`no reading since the reset, ${fmtAbsolute(w.resetsAt)}`}>

@@ -286,6 +286,15 @@
   white-space: nowrap;
 }
 
+/* A whole bar's reset and projection each stay whole, so the line breaks between them, never inside one. */
+.wbar__reset--split {
+  white-space: normal;
+}
+
+.wbar__part {
+  white-space: nowrap;
+}
+
 .wbar__reset.is-soon,
 .qwin__reset.is-soon {
   color: var(--accent-ink);
@@ -467,14 +476,14 @@
 
 /* A card always holds a 120 px meter beside the widest chip and reset label the console draws: 2 px of border and
    28 px of body padding, the chip "Fable 100% left" (121 px in DejaVu Sans, against the story's 112 px), two 6 px
-   gaps, the 120 px meter and the reset column's 114 px bound (--qwin-reset on .qcard__windows), so the grid reflows
-   before a meter shrinks under 120 px. Two cards and the 14 px gap take 808 px, so two sit in a row once the content
+   gaps, the 120 px meter and the reset column's 240 px bound (--qwin-reset on .qcard__windows), so the grid reflows
+   before a meter shrinks under 120 px. Two cards and the 14 px gap take 1060 px, so two sit in a row once the content
    area reaches that: the window less the 232 px sidebar (--sidebar-w) and the content's 28 px of padding each side.
    Every row takes the tallest card's height, so a card that holds more than the rest (an expired window's wrapped
    reset, a longer error) moves no delimiter against its neighbors in any row. */
 .quota-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(397px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(523px, 1fr));
   grid-auto-rows: 1fr;
   gap: 14px;
 }
@@ -678,13 +687,13 @@
  * One line per window: chip, meter, reset. The chip and the reset size to their content and the meter takes what is
  * left, at least 120 px, so the meters read at the card widths the two-section layout leaves. The meters' starts
  * differ from card to card, by about 16 px in DejaVu Sans between a card with a Fable share and one without, the trade
- * for their room. The reset column is bounded at 114 px, past the widest live label, "resets in 23h 59m" (109 px in
- * DejaVu Sans, the widest fallback the console meets, against the story's 102 px), so a live label never wraps, and
- * past the first clause of an expired window's line, "expired 2d 0h ago," (113 px), so that longer line wraps inside
- * the column after its first clause rather than widening it.
+ * for their room. The reset column is bounded at 240 px, past the widest live label with the projection after its
+ * reset, "resets in 23h 59m, 104% in 4 h 59 min" (234 px in DejaVu Sans, the widest fallback the console meets, against
+ * the story's 217 px), so a live label never wraps, and past the first clause of an expired window's line, "expired 2d
+ * 0h ago," (113 px), so that longer line wraps inside the column after its first clause rather than widening it.
  */
 .qcard__windows {
-  --qwin-reset: 114px;
+  --qwin-reset: 240px;
 
   display: grid;
   grid-template-columns: max-content minmax(120px, 1fr) fit-content(var(--qwin-reset));
@@ -751,7 +760,7 @@
    for the widest chip, the 6 px gap and a meter of 120 px or more. */
 @media (max-width: 900px) {
   .quota-grid {
-    grid-template-columns: repeat(auto-fill, minmax(min(397px, 100%), 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(523px, 100%), 1fr));
   }
 
   .qcard__windows {
@@ -3419,6 +3428,14 @@
   padding-left: 12px;
 }
 
+/* The two fill columns share what the fit columns leave, but never shrink under the fork badge's widest word with the
+   badge's padding (63.8 px) and the cell's (8 px), so a column set wider than the card scrolls inside its wrap rather
+   than cutting that word. The default set leaves them 112 px at 1280 px. */
+.sessions-table th.col-fill,
+.sessions-table td.col-fill {
+  min-width: 72px;
+}
+
 .sessions-table th:last-child,
 .srow > td:last-child {
   padding-right: 12px;
@@ -4258,6 +4275,41 @@
 
 .hbars--errors .hbars__track {
   height: 10px;
+}
+
+/* The moves by reason: the rows share one grid, so the bars start at one edge after the widest reason, "Fast lane
+   cooling", and each bar is as long as its reason's moves against the busiest reason's, stacked by destination fit. */
+.hbars--moves {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.hbars--moves li {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+}
+
+.hbars--moves .hbars__track {
+  height: 10px;
+}
+
+.hbars__stack {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 0 4px 4px 0;
+}
+
+/* A fit of one move among many keeps a sliver rather than vanishing from its bar. */
+.hbars__seg {
+  flex-basis: 0;
+  min-width: 2px;
 }
 
 /* Reason labels run to "Previous message not found", so the first column is wider than the error codes'. */

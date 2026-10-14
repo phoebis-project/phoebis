@@ -92,6 +92,23 @@ const burnEquivalentOf = (burn: number | null, accountId: string): number | null
   return burn === null || own === null || anchor === null ? null : (burn * own) / anchor;
 };
 
+/**
+ * A pinned row's runway, set from the row's index rather than drawn, so the rows after it keep their rolls: the pinned
+ * rows take a span, none, unbounded and no projection in turn, the four readings the Runway cell draws.
+ */
+function runwayOf(i: number): Pick<Session, 'runwayBounded' | 'runwayMs'> {
+  switch (i % 4) {
+    case 0:
+      return { runwayBounded: true, runwayMs: (47 + i * 23) * MINUTE };
+    case 1:
+      return { runwayBounded: true, runwayMs: 0 };
+    case 2:
+      return { runwayBounded: false, runwayMs: null };
+    default:
+      return { runwayBounded: null, runwayMs: null };
+  }
+}
+
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // An entry past the story's session ids draws one the ledger never saw. The draw runs where the spec writes its id
   // out as well, so the rows after this one keep their rolls.
@@ -152,6 +169,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     lastInputTokens: pinned ? lastInputRoll : null,
     lastRefreshAt: pinned ? lastRefreshRoll : null,
     shedFrom: null,
+    ...(pinned ? runwayOf(i) : { runwayBounded: null, runwayMs: null }),
     agents: spec.agents,
     companion: spec.companion,
     companionSince: spec.companion === 'silent' ? ago(rng.int(12, 150) * MINUTE) : null,

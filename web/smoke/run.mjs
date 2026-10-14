@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, minuteSpan, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, projectionWords, React, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -211,6 +211,26 @@ const waitText = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 :
 /**
  * A Sessions row's cell under the header that reads `header`, so a check names its column whatever the control hides.
  */
+/**
+ * The window bars of one account's card with the phrase each should read: the projection's words at `at`, compact or
+ * whole as the bar draws them, from the mock's own windows, null for a window that carries none. A bar names its
+ * window by its label (`5h` or `5-hour`, `7d` or `7-day`, `Fable`, else the window's key).
+ */
+const barPhrases = (bars, account, at, compact) =>
+  bars
+    .filter((b) => !b.classList.contains('wbar--absent'))
+    .map((b) => {
+      const label = b.querySelector('.wbar__label')?.textContent ?? '';
+      const id = { '5-hour': '5h', '5h': '5h', '7-day': '7d', '7d': '7d' }[label] ?? label;
+      const w = label === 'Fable' ? account.fableWindow : (account.windows.find((x) => x.id === id) ?? null);
+      return { compact, label, text: b.querySelector('.wbar__reset')?.textContent ?? '', want: w === null ? null : projectionWords(w, at, compact) };
+    });
+/**
+ * The bars of `barPhrases` that misread their phrase: a compact bar reads it alone in the reset's place, a whole bar
+ * after its reset, and a bar whose window carries none reads its reset alone.
+ */
+const barsOff = (read) =>
+  read.filter((r) => (r.want === null ? r.text.includes(', ') || r.text.includes('%') : r.compact ? r.text !== r.want : !r.text.endsWith(`, ${r.want}`) || !r.text.startsWith('resets ')));
 const sessionCell = (m, tr, header) => {
   const i = [...m.container.querySelectorAll('.sessions-table thead th')].findIndex((th) => th.textContent?.trim() === header);
   return i < 0 ? undefined : tr?.children[i];
@@ -719,6 +739,24 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: "/ an account's cooldown line reads the row that cools it, never its fast lane's", ok: /^cooldown ends in 5[34]m$/.test(cooldownLine ?? ''), missing: [cooldownLine ?? 'no cooldown line on primary'] });
 }
 {
+  // The account cards draw the compact bars three to a card, each window with a projection reading the compact phrase
+  // in its reset's place, at one frozen instant so the span to a weekly horizon is the page's own.
+  const at = Date.now();
+  const page = await mount('/', { now: at });
+  const accounts = await api.listAccounts();
+  const read = [...page.container.querySelectorAll('a.account-mini')].flatMap((card) => {
+    const a = accounts.find((x) => x.id === idOf(card));
+    return a ? barPhrases([...card.querySelectorAll('.wbar')], a, at, true).map((r) => ({ account: a.id, ...r })) : [];
+  });
+  const primary = read.find((r) => r.account === 'primary' && r.label === '5h')?.text ?? '';
+  results.push({
+    name: "/ each account card's window bars read the compact projection in the reset's place, primary's 5-hour 81% at reset",
+    ok: read.some((r) => r.want !== null) && barsOff(read).length === 0 && primary === '81% at reset',
+    missing: [...barsOff(read).map((r) => JSON.stringify(r)), primary || 'no 5h bar on primary'],
+  });
+  page.unmount();
+}
+{
   // The recent requests' table is a glance, so under native, the shell's default, a subscription row's Cost cell reads
   // its 20x 5-hour equivalent alone in the short form, with every equivalent, the dollar equivalent and the revisions
   // in force on its title and the mark where the row is estimated, while the Requests cell keeps the full reading. An
@@ -946,6 +984,59 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
     ok: JSON.stringify(drawn) === JSON.stringify(wanted),
     missing: [JSON.stringify(drawn)],
   });
+}
+{
+  // The projection rides the reset label after the reset, on one line, read at one frozen instant so the span to a
+  // weekly horizon is the one the page drew: the smoke's clock runs past the mock's anchor, so the phrase comes from the
+  // shared words and the mock's own windows rather than a literal span. The story's figures are the burns its windows
+  // carry: nightly's 5-hour window and primary's reach their reset, and primary's 7-day window reads its five hours.
+  const at = Date.now();
+  const q = await mount('/quota', { now: at });
+  const accounts = (await api.listAccounts()).filter((a) => a.kind === 'oauth');
+  const cellOf = (label, name) => {
+    const card = [...q.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
+    const chip = [...(card?.querySelectorAll('.qcard__windows .qwin__chip') ?? [])].find((c) => c.querySelector('.qchip__name')?.textContent === name);
+    const reset = chip?.nextElementSibling?.nextElementSibling ?? null;
+    return { text: reset?.textContent ?? '', title: reset?.getAttribute('title') ?? '' };
+  };
+  const windowsOf = (a) => [['5h', a.windows.find((w) => w.id === '5h') ?? null], ['7d', a.windows.find((w) => w.id === '7d') ?? null], ['Fable', a.fableWindow]];
+  const live = accounts.flatMap((a) => windowsOf(a).filter(([, w]) => w !== null && !(w.resetsAt !== null && Date.parse(w.resetsAt) < at)).map(([name, w]) => ({ account: a.label, name, w, ...cellOf(a.label, name) })));
+  const projected = live.filter((r) => projectionWords(r.w, at) !== null);
+  const offPhrase = projected.filter((r) => !/^resets in \S+( \S+)?, /.test(r.text) || r.text !== `${r.text.split(', ')[0]}, ${projectionWords(r.w, at)}`);
+  results.push({
+    name: "/quota every live window with a projection reads it after the reset label, at the reset or in the span to its horizon",
+    ok: projected.length > 0 && offPhrase.length === 0,
+    missing: offPhrase.map((r) => `${r.account} ${r.name}: ${JSON.stringify(r.text)}, not ending ${JSON.stringify(projectionWords(r.w, at))}`),
+  });
+  const wOf = (id, label) => accounts.find((a) => a.id === id)?.windows.find((w) => w.id === label) ?? null;
+  const weekly = wOf('primary', '7d');
+  const story = { nightly5h: cellOf('nightly', '5h').text, primary5h: cellOf('primary', '5h').text, primary7d: cellOf('primary', '7d').text };
+  results.push({
+    name: "/quota nightly's 5-hour window reads 104% at the reset, primary's 81% at the reset and its 7-day window 44% in the span to its horizon",
+    ok:
+      story.nightly5h.endsWith(', 104% at the reset') &&
+      story.primary5h.endsWith(', 81% at the reset') &&
+      weekly !== null &&
+      projectionWords(weekly, at)?.startsWith('44% in ') === true &&
+      story.primary7d.endsWith(`, ${projectionWords(weekly, at)}`),
+    missing: [JSON.stringify(story), weekly ? String(projectionWords(weekly, at)) : 'no 7-day window on primary'],
+  });
+  const burned = live.filter((r) => burnWords(r.w) !== null);
+  const offBurn = burned.filter((r) => !r.title.endsWith(`, ${burnWords(r.w)}`));
+  results.push({
+    name: "/quota the reset label's hover names the burn the sessions on the account run the window at",
+    ok: burned.length > 0 && offBurn.length === 0 && cellOf('primary', '5h').title.endsWith(', the sessions on this account burn 8.5% an hour'),
+    missing: [...offBurn.map((r) => `${r.account} ${r.name}: ${JSON.stringify(r.title)}`), `primary 5h ${JSON.stringify(cellOf('primary', '5h').title)}`],
+  });
+  // The story's legacy is read by no router, so its live 7-day window carries no projection and no burn.
+  const bare = cellOf('legacy', '7d');
+  const legacyWeek = wOf('legacy', '7d');
+  results.push({
+    name: '/quota a window without a projection reads its reset label and its hover as before',
+    ok: legacyWeek !== null && legacyWeek.projection === null && /^resets in \d+d \d+h$/.test(bare.text) && !bare.title.includes('burn') && !bare.title.includes(', the sessions'),
+    missing: [JSON.stringify(bare), JSON.stringify(legacyWeek)],
+  });
+  q.unmount();
 }
 {
   // The mark's offset compares exactly only when the page and the check read one instant, so the check mounts its
@@ -1714,6 +1805,33 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     ok: JSON.stringify(usageBars) === JSON.stringify(['5-hour', '7-day', 'Fable', 'seven_day_opus']),
     missing: usageBars,
   });
+}
+{
+  // The list's rows draw the compact bars, each window with a projection reading the compact phrase in its reset's
+  // place, and the detail card the whole ones, reading the whole phrase after the reset. One frozen instant keeps the
+  // span to a weekly horizon the page's own.
+  const at = Date.now();
+  const page = await mount('/accounts/primary', { now: at });
+  const accounts = await api.listAccounts();
+  const rows = [...page.container.querySelectorAll('a.account-row')].flatMap((row) => {
+    const a = accounts.find((x) => x.id === new URL(row.getAttribute('href') ?? '/', 'http://127.0.0.1').pathname.split('/').pop());
+    return a ? barPhrases([...row.querySelectorAll('.wbar')], a, at, true).map((r) => ({ account: a.id, ...r })) : [];
+  });
+  const primary = accounts.find((a) => a.id === 'primary');
+  const detail = primary ? barPhrases([...(page.container.querySelector('.detail .wbars--3')?.querySelectorAll('.wbar') ?? [])], primary, at, false) : [];
+  const rowText = rows.find((r) => r.account === 'primary' && r.label === '5h')?.text ?? '';
+  const detailText = detail.find((r) => r.label === '5-hour')?.text ?? '';
+  results.push({
+    name: "/accounts each row's window bars read the compact projection in the reset's place, primary's 5-hour 81% at reset",
+    ok: rows.some((r) => r.want !== null) && barsOff(rows).length === 0 && rowText === '81% at reset',
+    missing: [...barsOff(rows).map((r) => JSON.stringify(r)), rowText || 'no 5h bar on primary'],
+  });
+  results.push({
+    name: "/accounts the detail card's window bars read the whole projection after the reset, primary's 5-hour 81% at the reset",
+    ok: detail.length === 4 && barsOff(detail).length === 0 && /^resets in .+, 81% at the reset$/.test(detailText),
+    missing: [...barsOff(detail).map((r) => JSON.stringify(r)), detailText || 'no 5-hour bar on the detail'],
+  });
+  page.unmount();
 }
 {
   [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Disconnect')?.click();
@@ -14043,8 +14161,42 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const failovers = card('Failovers');
   results.push({ name: '/analytics the migration rewrites card sits beside Failovers', ok: failovers !== undefined && failovers.nextElementSibling === card('Migration rewrites'), missing: [failovers?.nextElementSibling?.querySelector('.card__title')?.textContent ?? 'no sibling'] });
   const moves = await api.getAnalyticsRewrites({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() });
-  const moveLegend = legendOf('Migration rewrites').slice(2);
-  results.push({ name: '/analytics the rewrites legend names each move reason the range holds', ok: Object.keys(moves.moves).length > 1 && moveLegend.length === Object.keys(moves.moves).length && moveLegend.includes('Failed over') && moveLegend.includes('Shed'), missing: moveLegend });
+  const moveBars = [...(card('Migration rewrites')?.querySelectorAll('.hbars--moves li') ?? [])].map((li) => li.querySelector('.hbars__label')?.textContent?.trim() ?? '');
+  results.push({ name: '/analytics the moves chart draws one bar for each move reason the range holds', ok: Object.keys(moves.moves).length > 1 && moveBars.length === Object.keys(moves.moves).length && moveBars.includes('Failed over') && moveBars.includes('Shed'), missing: moveBars });
+  {
+    // Each reason's bar stacks its moves by the fit of the destination they landed on, read against the answer the page
+    // drew: a segment per fit in the gate's order, titled with the fit's words and its count, and the bar labeled with
+    // the reason and the total `moves` answers for it. The story's reasons land on different fits, so two bars split
+    // apart.
+    const { getAnalyticsRewrites } = api;
+    let answer = null;
+    api.getAnalyticsRewrites = async (...args) => (answer = await getAnalyticsRewrites.apply(api, args));
+    const page = await mount('/analytics', { now: Date.now() });
+    api.getAnalyticsRewrites = getAnalyticsRewrites;
+    const rewrites = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Migration rewrites');
+    const drawn = [...(rewrites?.querySelectorAll('.hbars--moves li') ?? [])].map((li) => ({
+      label: li.querySelector('.hbars__label')?.textContent?.trim() ?? '',
+      segments: [...li.querySelectorAll('.hbars__seg')].map((seg) => seg.getAttribute('title') ?? ''),
+      total: li.querySelector('.hbars__value')?.textContent?.trim() ?? '',
+    }));
+    const ORDER = ['fits', 'rewrite_only', 'least_bad', 'unknown'];
+    const want = Object.keys(answer?.moves ?? {})
+      .sort((a, b) => a.localeCompare(b))
+      .map((reason) => ({
+        segments: Object.entries(answer.movesByReasonAndFit[reason] ?? {})
+          .filter(([, n]) => n > 0)
+          .sort(([a], [b]) => ORDER.indexOf(a) - ORDER.indexOf(b))
+          .map(([fit, n]) => `${fit.replace(/_/g, ' ')} ${fmtInt(n)}`),
+        total: fmtInt(answer.moves[reason]),
+      }));
+    const splits = new Set(drawn.map((b) => b.segments.map((t) => t.replace(/ [\d,]+$/, '')).join('+')));
+    results.push({
+      name: "/analytics the moves chart stacks each reason's bar by destination fit, each segment titled with its fit and count and the bar with the reason's total",
+      ok: answer !== null && drawn.length === want.length && drawn.every((b, i) => b.label !== '' && JSON.stringify(b.segments) === JSON.stringify(want[i].segments) && b.total === want[i].total) && splits.size >= 2,
+      missing: [JSON.stringify(drawn), JSON.stringify(want)],
+    });
+    page.unmount();
+  }
 
   await tab(m, 'Burn');
   await burnGroup('account');
@@ -16754,7 +16906,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   const cell = (tr, header) => sessionCell(m, tr, header);
   const heads = () => [...m.container.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim() ?? '');
   // The optional columns the control offers: the Session column is the row's identity and is always drawn.
-  const COLUMNS = ['Key', 'Model', 'Account', 'Last used', 'Requests', 'Last request', 'Agents', 'Companion', 'Cache warming', 'Next probe'];
+  const COLUMNS = ['Key', 'Model', 'Account', 'Runway', 'Last used', 'Requests', 'Last request', 'Agents', 'Companion', 'Cache warming', 'Next probe'];
   const HIDDEN = ['Last request', 'Agents', 'Next probe'];
   {
     // The default set fits the card at 1280 by 800 without these three, each one tick away in the control.
@@ -16775,6 +16927,25 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
         label === `${COLUMNS.length - HIDDEN.length}, Columns: ${COLUMNS.length - HIDDEN.length} of ${COLUMNS.length} shown` &&
         document.querySelector('.popover .cols-popover') === null,
       missing: [JSON.stringify(offered), JSON.stringify(shown), String(label)],
+    });
+  }
+  {
+    // The Runway cell reads the pin's runway as the route answers it: a span through the shared formatter, none at
+    // zero, unbounded where no window binds, and a dash on a pinned row with no projection and on an unpinned row. The
+    // story's rows carry each reading.
+    const listed = await api.listSessions();
+    const idOfRow = (s) => `session-${encodeURIComponent(`${s.keyId}:${s.keyGeneration}:${s.sessionId}`)}`;
+    const want = (s) => (!s.pinned ? '-' : s.runwayMs !== null ? (s.runwayMs === 0 ? 'none' : minuteSpan(s.runwayMs)) : s.runwayBounded === false ? 'unbounded' : '-');
+    const read = rows().map((tr) => {
+      const s = listed.find((x) => idOfRow(x) === tr.id);
+      return { got: cell(tr, 'Runway')?.textContent?.trim() ?? 'no Runway cell', pinned: s?.pinned ?? null, row: tr.id.slice(0, 40), want: s ? want(s) : 'no session' };
+    });
+    const off = read.filter((r) => r.got !== r.want);
+    const kinds = new Set(read.map((r) => (r.want !== '-' ? (['none', 'unbounded'].includes(r.want) ? r.want : 'span') : r.pinned ? 'no projection' : 'unpinned')));
+    results.push({
+      name: '/sessions the Runway cell reads a span, none, unbounded, or a dash on a pinned row without a projection and on an unpinned row',
+      ok: read.length > 0 && off.length === 0 && ['span', 'none', 'unbounded', 'no projection', 'unpinned'].every((k) => kinds.has(k)),
+      missing: [...off.slice(0, 6).map((r) => JSON.stringify(r)), [...kinds].join(',')],
     });
   }
   results.push({

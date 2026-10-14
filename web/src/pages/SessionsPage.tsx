@@ -15,7 +15,7 @@ import { clock } from '@/lib/clock';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel } from '@/lib/format';
 import { CAUSE_HINT, CAUSE_LABEL, isReleasedLine, orderRecipes, releasedCount, requestsRange, WARNING_CAUSES } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
-import type { BadgeTone } from '@/lib/quota';
+import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 
 // The optional columns: the Session column is the row's identity and the table's fill column, so it is always drawn.
@@ -23,6 +23,7 @@ const SESSION_COLUMNS = [
   { id: 'key', label: 'Key' },
   { id: 'model', label: 'Model' },
   { id: 'account', label: 'Account' },
+  { id: 'runway', label: 'Runway' },
   { id: 'lastUsed', label: 'Last used' },
   { id: 'requests', label: 'Requests' },
   { id: 'lastRequest', label: 'Last request' },
@@ -35,6 +36,12 @@ type SessionColumnId = (typeof SESSION_COLUMNS)[number]['id'];
 // The default set fits the card at 1280 by 800 without these: Last used carries recency, Cache warming and the expanded
 // row carry the agents and their next probes.
 const HIDDEN_BY_DEFAULT: readonly SessionColumnId[] = ['agents', 'lastRequest', 'nextProbe'];
+
+/**
+ * The pin's runway on its account as the route answers it: a span, `none` at zero, `unbounded` where no window binds.
+ * Null for a row with no pin or no projection, which the cell draws as a dash.
+ */
+const runwayWord = (s: Session): string | null => (!s.pinned ? null : s.runwayMs !== null ? (s.runwayMs === 0 ? 'none' : minuteSpan(s.runwayMs)) : s.runwayBounded === false ? 'unbounded' : null);
 
 /** The id as sent on hover where the cell shows less of it. */
 const modelTitle = (model: string, shown: string) => (shown === model ? undefined : model);
@@ -426,6 +433,7 @@ export function SessionsPage() {
                   {visible.has('key') && <th className="col-fit">Key</th>}
                   {visible.has('model') && <th className="col-fit">Model</th>}
                   {visible.has('account') && <th className="col-fit">Account</th>}
+                  {visible.has('runway') && <th className="col-fit">Runway</th>}
                   {visible.has('lastUsed') && <th className="col-fit">Last used</th>}
                   {visible.has('requests') && <th className="col-fit right">Requests</th>}
                   {visible.has('lastRequest') && <th className="col-fit">Last request</th>}
@@ -604,6 +612,7 @@ function SessionRows({
             </span>
           </td>
         )}
+        {visible.has('runway') && <td className="col-fit">{runwayWord(session) ?? <span className="muted">-</span>}</td>}
         {/* Expiry rides under the last-used time rather than in a column of its own, which is 90px the 1600px window did not have. */}
         {visible.has('lastUsed') && (
           <td className="col-fit" title={fmtAbsolute(lastUsed)}>

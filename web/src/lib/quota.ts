@@ -1,5 +1,5 @@
 import type { Account, ExtraUsage, PollOutcome, QuotaPoll, RateLimitWindow, WindowId } from '@/api/types';
-import { fmtAbsolute, fmtRelative, instant } from '@/lib/format';
+import { fmtAbsolute, fmtPct, fmtRelative, instant } from '@/lib/format';
 
 export type MeterTone = 'good' | 'low' | 'warn';
 
@@ -27,6 +27,7 @@ export const windowOf = (account: Account, id: WindowId) => account.windows.find
 export const isExpired = (w: RateLimitWindow, now: number) => w.resetsAt !== null && Date.parse(w.resetsAt) < now;
 
 const HOUR = 3_600_000;
+const MINUTE = 60_000;
 
 /** The end the router's pace reads (`term::end_of`): the saved end while the account is cancelled, else a trial end still ahead. */
 export function endOf(account: Pick<Account, 'cancelled' | 'subscription'>, now: number): number | null {
@@ -78,6 +79,35 @@ export function paceWords(w: RateLimitWindow, now: number, end: number | null): 
   const lead = aheadOf(w, w.periodHours * HOUR, now, end);
   const words = Math.abs(lead) < 0.01 ? 'on pace' : `${Math.round(Math.abs(lead) * 100)}% ${lead > 0 ? 'ahead of' : 'behind'} pace`;
   return `${words}${toEndWords(paceEnd(w.resetsAt, end), now)}`;
+}
+
+/**
+ * A span rounded to the minute in the routing log's spelling: `27 min`, `5 h`, `4 h 59 min`, `3 d 5 h`. A horizon five
+ * hours out reads `5 h` though the page reads it seconds after the route computed it.
+ */
+export function minuteSpan(ms: number): string {
+  const minutes = Math.max(0, Math.round(ms / MINUTE));
+  const pair = (major: number, majorUnit: string, minor: number, minorUnit: string) => (minor > 0 ? `${major} ${majorUnit} ${minor} ${minorUnit}` : `${major} ${majorUnit}`);
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 24 * 60) return pair(Math.floor(minutes / 60), 'h', minutes % 60, 'min');
+  return pair(Math.floor(minutes / (24 * 60)), 'd', Math.floor((minutes % (24 * 60)) / 60), 'h');
+}
+
+/**
+ * The projection at the window's horizon, `104% at the reset` where the horizon is the reset and `44% in 5 h` where it
+ * falls earlier (five hours out on a weekly window, or the account's end), with `at reset` in the compact form the
+ * window bars draw. Null without a projection.
+ */
+export function projectionWords(w: Pick<RateLimitWindow, 'horizon' | 'projection' | 'resetsAt'>, now: number, compact = false): string | null {
+  if (w.projection === null || w.horizon === null) return null;
+  const horizon = Date.parse(w.horizon);
+  const atReset = w.resetsAt !== null && Date.parse(w.resetsAt) === horizon;
+  return `${fmtPct(w.projection)} ${atReset ? (compact ? 'at reset' : 'at the reset') : `in ${minuteSpan(horizon - now)}`}`;
+}
+
+/** The burn behind a projection, `the sessions on this account burn 7.3% an hour`. Null without a burn. */
+export function burnWords(w: Pick<RateLimitWindow, 'burn'>): string | null {
+  return w.burn === null ? null : `the sessions on this account burn ${fmtPct(w.burn, 1)} an hour`;
 }
 
 export const isSubscription = (account: Account) => account.kind === 'oauth';

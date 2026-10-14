@@ -541,7 +541,7 @@ async function sidebarBrand(theme) {
 /**
  * The dashboard's attention line above the tiles: one 22 px row per line of badges with the lead on the first and a
  * 6 px gap between rows, every badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges, the
- * line inside the content box and clear of the tiles. The mock pass draws the story's ten items. The router pass
+ * line inside the content box and clear of the tiles. The mock pass draws the story's fourteen items. The router pass
  * seeds an exhaustion of its main pool, which any request the pool serves later in the run (a keepalive probe among
  * them) clears: the light pass, which reaches the dashboard first, requires that item, so a route answering an empty
  * list fails it, and the dark pass draws that item or the quiet line, never the unavailable one.
@@ -571,7 +571,7 @@ async function attentionLine(theme) {
   if (read.bottom > read.gridTop) say('reaches into the tiles');
   const texts = read.badges.map((b) => b.text);
   if (mock) {
-    if (read.lead !== '10 need attention' || texts.length !== 10) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the story's ten items`);
+    if (read.lead !== '14 need attention' || texts.length !== 14) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the story's fourteen items`);
   } else if (theme === 'light') {
     if (read.lead === null || !texts.includes('Pool exhausted: Main')) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the seeded exhaustion`);
   } else if (read.lead === null ? JSON.stringify(texts) !== '["Nothing needs attention"]' : !texts.includes('Pool exhausted: Main')) {
@@ -2017,6 +2017,42 @@ async function deleteAccountButton(theme) {
 }
 
 /**
+ * The window bars of the dashboard's account cards and the Accounts page's rows and detail card: each bar's reset line
+ * stays inside its bar. A compact bar, three to a card, reads its projection in its reset's place on one line, and a
+ * whole bar its reset and its projection each whole on its line, on one line where the bar holds both. The mock's story
+ * projects its subscription windows, so its pass has phrases to read, and the router's seed draws no subscription bar.
+ */
+async function windowBarLines(theme, path) {
+  const say = (what) => failures.push(`${theme} ${path}: ${what}`);
+  const read = await page.evaluate(() => {
+    // A run of text by its own boxes: the lines it takes and its widest line.
+    const runOf = (el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const rects = [...range.getClientRects()].filter((r) => r.width > 0);
+      return { lines: new Set(rects.map((r) => Math.round(r.top))).size, width: Math.round(Math.max(0, ...rects.map((r) => r.width)) * 10) / 10 };
+    };
+    return [...document.querySelectorAll('.wbars .wbar:not(.wbar--absent)')].map((bar) => {
+      const reset = bar.querySelector('.wbar__reset');
+      return {
+        bar: Math.round(bar.getBoundingClientRect().width * 10) / 10,
+        compact: bar.closest('.wbars--compact') !== null,
+        line: runOf(reset),
+        parts: [...reset.querySelectorAll('.wbar__part')].map(runOf),
+        words: reset.textContent?.trim() ?? '',
+      };
+    });
+  });
+  measurements.push(`${theme} ${path} window bar lines ${JSON.stringify(read.map((r) => [r.compact ? 'compact' : 'whole', r.words, r.line.width, r.line.lines, r.bar]))}`);
+  if (mock && !read.some((r) => r.compact && /^\d+% (at reset|in )/.test(r.words))) say('the story projects its subscription windows, yet no compact window bar reads a projection');
+  for (const r of read) {
+    const kind = r.compact ? 'compact window bar' : 'window bar';
+    if (r.line.width > r.bar + 0.5) say(`the ${kind}'s line ${JSON.stringify(r.words)} needs ${r.line.width}px of its ${r.bar}px bar`);
+    if (r.parts.length === 0 ? r.line.lines > 1 : r.parts.some((part) => part.lines > 1) || r.line.lines > r.parts.length) say(`the ${kind}'s line ${JSON.stringify(r.words)} wraps inside ${r.parts.length === 0 ? 'itself' : 'a part'}, over ${r.line.lines} lines`);
+  }
+}
+
+/**
  * The line under an account's name on the dashboard, in the Accounts list and head, and in the pool dialog's
  * members table is its email, and an account without one draws no line: its label a second time says nothing,
  * and an empty line reads as a value that failed to load. The router's seed has one API-key account and no
@@ -2266,7 +2302,9 @@ async function quotaCardHeights(theme) {
 }
 
 /** The card grid's floor (`.quota-grid`), the measured figure its comment carries. */
-const QUOTA_FLOOR = 397;
+const QUOTA_FLOOR = 523;
+/** The reset column's bound (`--qwin-reset` on `.qcard__windows`), past the widest live label with its projection. */
+const QUOTA_RESET = 240;
 
 /** Two phone windows under the shell's 900 px breakpoint, where the content is narrower than the card grid's floor. */
 const QUOTA_NARROW = [
@@ -2278,7 +2316,7 @@ const QUOTA_NARROW = [
  * Every Quota card's window grid holds its three columns: each meter, live or absent, at least 120 px wide, the grid
  * needing no more than its own width, no chip, meter or reset label ending past the room inside the card's border and
  * its body's padding, where the card's `overflow: hidden` would cut it, the chip column no wider than the card's
- * widest chip and the reset column no wider than the card's widest reset label within its 114 px bound. A meter held
+ * widest chip and the reset column no wider than the card's widest reset label within its 240 px bound. A meter held
  * at its 120 px minimum while the columns run past the card passes a width reading alone, and a fixed column on a card
  * wide enough passes every reading but its own. The pace mark stands out of flow inside its meter, so the meter's box
  * and the columns read the same with it, and `quotaChips` reads the mark. The check reads in the window the pass set,
@@ -2364,7 +2402,7 @@ async function quotaMeters(theme) {
       const label = Math.max(...resets.map((x) => x.content));
       const resetColumn = Math.max(...resets.map((x) => x.width));
       if (chips.length > 0 && chipColumn > widest + 1) say(`${card.name}'s chip column is ${chipColumn}px wide ${at}, more than 1 px past its widest chip's ${widest}px`);
-      if (where !== 'narrow' && resets.length > 0 && resetColumn > Math.min(label, 114) + 1) say(`${card.name}'s reset column is ${resetColumn}px wide ${at}, more than 1 px past ${label < 114 ? `its widest label's ${label}px` : 'its 114 px bound'}`);
+      if (where !== 'narrow' && resets.length > 0 && resetColumn > Math.min(label, QUOTA_RESET) + 1) say(`${card.name}'s reset column is ${resetColumn}px wide ${at}, more than 1 px past ${label < QUOTA_RESET ? `its widest label's ${label}px` : `its ${QUOTA_RESET} px bound`}`);
     }
     if (where === 'floor') {
       for (const card of got.cards.filter((c) => Math.abs(c.width - QUOTA_FLOOR) > 0.5)) say(`${card.name} stands ${card.width}px wide ${at}, not on the card grid's ${QUOTA_FLOOR}px floor`);
@@ -4998,8 +5036,8 @@ async function stripIdleContrast(theme) {
  * strip is as high as its rows. A renewal walks no rung, so the Prefix cell's two chips are read on the first rung
  * placement the log lists. The router's seed places no request by a rung and records no move, so there that check
  * stands down and the shed move's badge colors are the story's alone. A station's popover keeps inside the card at the
- * two viewports and at 700 by 800: the mock pass reads the shed move's Move station (the widest popover), its Cool
- * reading (the widest table) and its striped Pick table, and the fresh placement's Pick station, the seeded router's
+ * two viewports and at 700 by 800: the mock pass reads the shed move's Move station (the widest popover), its striped
+ * Fit table (the widest table) and its Pick table, and the fresh placement's Pick station, the seeded router's
  * pass the station its first card's candidates hang from. The open card draws its record's station count at both
  * viewports, and every station's and way out's word holds the card's muted contrast with an idle way out among them,
  * read on the seeded router's first card and on the mock's fresh placement, whose Pick station the mock pass then opens
@@ -6267,10 +6305,10 @@ async function sessionForkMark(theme) {
 /**
  * Every fork link on Sessions lies inside its cell's content box with its words whole and takes a pointer at its
  * center, with the default columns.
- * The badge sits under the id and wraps its words when the column is narrower than they are, so
- * its height is free and its width is what the measurement records beside its cell's. The story forks three sessions
- * beside their bases, one of them without a pin, so the mock pass requires three links. The router pass measures the
- * links its seed draws and records their count.
+ * The badge sits under the id and wraps its words when the column is narrower than they
+ * are, so its height is free and its width is what the measurement records beside its cell's. The story forks three
+ * sessions beside their bases, one of them without a pin, so the mock pass requires three links. The router pass
+ * measures the links its seed draws and records their count.
  */
 async function sessionForkBadges(theme) {
   const say = (what) => failures.push(`${theme} /sessions fork badges: ${what}`);
@@ -6299,13 +6337,14 @@ async function sessionForkBadges(theme) {
         };
       });
       window.scrollTo(0, 0);
-      return links;
+      const wrap = document.querySelector('.sessions-table')?.closest('.table-wrap');
+      return { links, wrap: wrap ? { client: wrap.clientWidth, scroll: wrap.scrollWidth } : null };
     });
   for (const [set, on] of [
     ['the default columns', false],
   ]) {
-    const links = await read();
-    measurements.push(`${theme} /sessions fork badges with ${set}: ${links.length} links ${JSON.stringify(links)}`);
+    const { links, wrap } = await read();
+    measurements.push(`${theme} /sessions fork badges with ${set}: ${links.length} links ${JSON.stringify(links)}, the wrap ${JSON.stringify(wrap)}`);
     if (mock && links.length !== 3) say(`${links.length} fork links are drawn with ${set}, not the story's three`);
     for (const l of links) {
       const name = `"${l.text}" with ${set}`;
@@ -6517,6 +6556,7 @@ try {
         await ringLinesSpan(theme);
       }
       if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);
+      if (['/', '/accounts'].includes(view.path)) await windowBarLines(theme, view.path);
       if (view.path === '/sessions') {
         await sessionsLead(theme);
         await costReference(theme);
