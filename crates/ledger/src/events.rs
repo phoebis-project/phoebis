@@ -128,6 +128,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             fit,
             runway_ms,
             binding,
+            cause,
             at,
         } => EventRecord {
             at: *at,
@@ -145,6 +146,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                     "fit": fit,
                     "runway_ms": runway_ms,
                     "binding": binding,
+                    "cause": cause,
                 })
                 .to_string(),
             ),
@@ -815,6 +817,64 @@ mod tests {
     use phoebis_routing::RouterEvent;
 
     #[test]
+    fn a_pin_migrated_event_maps_its_cause_into_the_detail_or_null() {
+        let moved = |cause| {
+            let e = event_of(&RouterEvent::PinMigrated {
+                key_id: "k".into(),
+                session_id: "s".into(),
+                agent_id: "main".into(),
+                model: "m".into(),
+                from_account: "a".into(),
+                to_account: "b".into(),
+                epoch: 7,
+                reason: "cooldown".into(),
+                fit: Some("fits"),
+                runway_ms: None,
+                binding: None,
+                cause,
+                at: 5,
+            })
+            .expect("a pin row");
+            serde_json::from_str::<serde_json::Value>(e.detail.as_deref().unwrap()).unwrap()
+        };
+        let detail = moved(Some(phoebis_routing::MoveCause::Cooldown {
+            scope: "account".into(),
+            reason: "rate_limit".into(),
+            window: Some("five_hour".into()),
+        }));
+        assert_eq!(
+            detail["cause"],
+            json!({ "scope": "account", "reason": "rate_limit", "window": "five_hour" }),
+            "a failover's cause is one object"
+        );
+        assert_eq!(
+            detail
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "agent_id",
+                "from_account",
+                "epoch",
+                "reason",
+                "fit",
+                "runway_ms",
+                "binding",
+                "cause"
+            ],
+            "the cause follows the destination's fit"
+        );
+        let detail = moved(None);
+        assert_eq!(
+            detail.get("cause"),
+            Some(&serde_json::Value::Null),
+            "a rule's move writes the key as null"
+        );
+    }
+
+    #[test]
     fn router_events_map_to_rows_with_the_ids_in_their_columns_and_the_rest_in_detail() {
         let e = event_of(&RouterEvent::PinMigrated {
             key_id: "k".into(),
@@ -828,6 +888,7 @@ mod tests {
             fit: Some("rewrite_only"),
             runway_ms: Some(5_400_000),
             binding: Some("five_hour".into()),
+            cause: None,
             at: 5,
         })
         .expect("a pin row");

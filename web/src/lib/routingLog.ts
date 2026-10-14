@@ -537,7 +537,7 @@ export function byOf(row: RoutingLogRow, page: readonly RoutingLogRow[] = []): C
 }
 
 /** The moves a failed attempt forced, whose Fact is the answer that attempt got. */
-const FAILOVER_MOVES = new Set(['cooldown', 'fast_lane']);
+const FAILOVER_MOVES = new Set(['cooldown', 'fast_lane', 'mark']);
 
 /**
  * The status a failover's failed attempt answered. The move lands in the second of the decision that placed the next
@@ -1146,13 +1146,28 @@ function prefixEntryOf(c: RecordCandidate, record: DecisionRecord): PrefixEntry 
   return order.find((e): e is PrefixEntry => e !== null && e.refusedBy !== null) ?? null;
 }
 
+/** A cooldown's reason and window as the console words them, with no deadline. */
+function cooledWords(reason: string | null, window: string | null): string {
+  const r = reason ?? '';
+  if (r === 'model_rejected' || window === 'model_rejection') return 'model 404';
+  if (r === 'fast_rate_limit' || window === 'fast') return 'fast lane 429';
+  if (r === 'rate_limit') return window !== null && own(WINDOW_WORD, window) ? `429 on ${WINDOW_WORD[window]}` : '429';
+  return words(r || 'cooldown');
+}
+
 function cooldownWords(o: NonNullable<RecordCandidate['obstacle']>, now: number): string {
   const until = o.until === null ? '' : ` until ${formatFact(o.until, 'time', now)}`;
-  const reason = o.reason ?? '';
-  if (reason === 'model_rejected' || o.window === 'model_rejection') return `model 404${until}`;
-  if (reason === 'fast_rate_limit' || o.window === 'fast') return `fast lane 429${until}`;
-  if (reason === 'rate_limit') return o.window !== null && own(WINDOW_WORD, o.window) ? `429 on ${WINDOW_WORD[o.window]}${until}` : `429${until}`;
-  return `${words(reason || 'cooldown')}${until}`;
+  return `${cooledWords(o.reason, o.window)}${until}`;
+}
+
+/**
+ * A failover's cause in one spelling for the event card and the record card: a cooldown's reason and window as
+ * `cooldownWords` spells them ("429 on 5h", "fast lane 429"), a mark as `<state> by <cause>` in the words the account
+ * state card reads.
+ */
+function causeWords(cause: { cause?: string | null; reason?: string | null; scope?: string | null; state?: string | null; window?: string | null }): string {
+  if (typeof cause.state === 'string') return `${wordOf(STATE_WORD, cause.state)} by ${wordOf(CAUSE_WORD, cause.cause ?? 'unrecorded')}`;
+  return cooledWords(cause.reason ?? null, cause.window ?? null);
 }
 
 /** The budget a member's budget obstacle names by its period. */
@@ -1626,6 +1641,11 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('From', from === null ? null : accountChip(from));
       add('To', row.accountId === null ? null : accountChip(row.accountId), epoch === null ? null : plain(fmtInt(epoch), 'epoch'));
       add('Reason', plain(moveLabel(reason)));
+      // A failover's detail carries its cause as an object, a rule's move and a failover that marked nothing a null.
+      if (d.cause !== null && typeof d.cause === 'object' && !Array.isArray(d.cause)) {
+        const cause = rec(d.cause);
+        add('Cause', plain(causeWords({ cause: str(cause.cause), reason: str(cause.reason), scope: str(cause.scope), state: str(cause.state), window: str(cause.window) })));
+      }
       add('Moved by', plain(RULE_MOVES.has(reason) ? `${words(reason)} rule` : FAILOVER_MOVES.has(reason) ? 'failover' : words(reason || 'move')));
       // A move the gate read carries its verdict, and the detail carries a null runway where no window bounds it.
       const fit = str(d.fit);

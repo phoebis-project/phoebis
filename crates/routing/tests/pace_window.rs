@@ -111,6 +111,7 @@ fn request(s: &RegistrySnapshot, model: &str, now: i64) -> SelectRequest {
         static_boundaries: Arc::from([]),
         marker: false,
         parent_agent_id: None,
+        failed_over: None,
         holds: Vec::new(),
         dialed: false,
         held_out: false,

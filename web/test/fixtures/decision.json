@@ -432,6 +432,7 @@
       "shed_marks": null,
       "mark_cleared": null,
       "reservation": null,
+      "cause": null,
       "completion": {
         "status": 200,
         "cache_read_tokens": 500,

@@ -928,7 +928,8 @@
           "reason": "spent",
           "fit": "fits",
           "runway_ms": null,
-          "binding": null
+          "binding": null,
+          "cause": null
         }
       },
       {

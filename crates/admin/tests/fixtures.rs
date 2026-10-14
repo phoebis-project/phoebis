@@ -488,6 +488,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
+            failed_over: None,
             holds: Vec::new(),
             dialed: false,
             held_out: false,
@@ -573,6 +574,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
+            failed_over: None,
             holds: vec![phoebis_routing::HoldFacts {
                 account_id: "direct".into(),
                 cohort: Some("direct".into()),
@@ -1535,6 +1537,7 @@ fn asked(
         static_boundaries: Arc::from([]),
         marker: false,
         parent_agent_id: None,
+        failed_over: None,
         holds: Vec::new(),
         dialed: false,
         held_out: false,

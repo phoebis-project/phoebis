@@ -482,6 +482,24 @@ pub struct Outcome {
     pub mark_cleared: Option<MarkClearedFacts>,
     /// What the selection booked on the chosen account, `None` for an outcome that books nothing.
     pub reservation: Option<ReservationFacts>,
+    /// Why the failover this decision lands moved the session, `None` for every other decision.
+    pub cause: Option<MoveCause>,
+}
+
+/// Why a failover moved the session: the cooldown's row, or the mark's state. Serialized under `cause` on the outcome
+/// and the event, `None` for a rule's move.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(untagged)]
+pub enum MoveCause {
+    Cooldown {
+        scope: String,
+        reason: String,
+        window: Option<String>,
+    },
+    Mark {
+        state: &'static str,
+        cause: &'static str,
+    },
 }
 
 /// A mark the decision cleared: `healed` when the heal check found the trigger gone at the pin's request, `moved` when
@@ -817,6 +835,7 @@ impl DecisionRecord {
                 shed_marks: None,
                 mark_cleared: None,
                 reservation: None,
+                cause: None,
             },
         };
         let fact = if refusal.kind == "client" {
@@ -1092,6 +1111,7 @@ mod tests {
                 shed_marks: None,
                 mark_cleared: None,
                 reservation: None,
+                cause: None,
             },
         }
     }

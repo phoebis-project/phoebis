@@ -1761,6 +1761,7 @@ impl Relay {
                             && admitted.cache_ttl_policy.inject_when_absent
                             && !admitted.auxiliary),
                     parent_agent_id: identity.parent_agent_id.clone(),
+                    failed_over: None,
                     holds: holds.clone(),
                     dialed,
                     held_out,
@@ -4569,6 +4570,7 @@ pub(crate) fn failover_reports(
         reports.push(Report::PinInvalidated {
             account_id: account_id.to_string(),
             pin,
+            mark: mark.as_ref().map(|(state, cause, _)| (*state, *cause)),
             incarnation: generations.0,
             lifecycle_generation: generations.1,
             credential_generation: generations.2,

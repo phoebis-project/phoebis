@@ -15,10 +15,11 @@ use crate::affinity::{AffinityEntry, AffinityMap, RungWalk, Visited};
 use crate::record::{
     key_fact, settings_of, BudgetFacts, By, CandidateFacts, ChainFacts, CooldownFacts,
     CreditsFacts, DecisionRecord, DecisionSummary, ExhaustionFacts, Fact, FactEntity, FactValue,
-    HoldOutcome, LaneFacts, MarkClearedFacts, ObstacleFacts, Outcome, OverageFacts,
-    PaceFacts, PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts,
-    RequestFacts, RequestFlags, ReservationFacts, Score, ShedPinFacts, ShedRoundFacts, SummaryFact,
-    TermFacts, WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION, WALK_STEPS,
+    HoldOutcome, LaneFacts, MarkClearedFacts, MoveCause, ObstacleFacts, Outcome,
+    OverageFacts, PaceFacts, PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup,
+    RefusalFacts, RequestFacts, RequestFlags, ReservationFacts, Score, ShedPinFacts,
+    ShedRoundFacts, SummaryFact, TermFacts, WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION,
+    WALK_STEPS,
 };
 use crate::state::{
     all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, load_shedding,
@@ -107,6 +108,9 @@ pub struct SelectRequest {
     /// The holds this request already waited through, oldest first: the relay carries each `Held` answer's
     /// facts into the next selection, so the attempt that follows a hold names it.
     pub holds: Vec<HoldFacts>,
+    /// The pin a failover took off its account inside the migration window, which the routing task hands to the
+    /// selection that lands the session again, `None` for every other request.
+    pub failed_over: Option<FailedOver>,
     /// Whether a leg of this request was already dispatched, as the relay reads it: true once a selection placed a
     /// leg, whether or not that leg reached the wire. `attempted` cannot stand in for it, since an account whose hold
     /// ran out, or one passed over at its cap, is attempted with nothing dialed.
@@ -122,6 +126,17 @@ pub struct SelectRequest {
     /// The relay's estimate of the body's prompt tokens from its bytes (canonical bytes over four, the byte
     /// estimate the static affinity entries carry): a fresh session's rewrite, since it has no pin to read one from.
     pub body_tokens: u64,
+}
+
+/// The pin a failover took off its account, handed to the selection that lands the session again.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FailedOver {
+    pub from_account_id: String,
+    /// `cooldown`, `fast_lane` or `mark`, the move's reason on the record and the event.
+    pub reason: &'static str,
+    /// The row the invalidation took, whose burn the landing prices and the new pin carries.
+    pub row: PinRow,
+    pub cause: Option<MoveCause>,
 }
 
 /// The cache lane key, `<model>|<speed>|<thinking>|<effort>`: the one spelling the relay composes and every pin,
@@ -595,9 +610,9 @@ fn budget_unknown(
 
 /// The rewrite per plan window (the pin's last context, or `body_tokens` for a fresh session or a pin never renewed
 /// with usage, as one cache write at the lane's TTL on `tier` at the band of `now`) and the burn per plan window (the
-/// pin's own decayed burn, or the median of the pool's priced warm pins for a fresh session, absent with none, which
-/// reads as zero), on the windows the request's model draws. A window nothing prices is absent from both. The
-/// destination gate's fit and the shedding round read it.
+/// pin's own decayed burn, or for a fresh session the decayed burn of the row a failover took off its source, else the
+/// median of the pool's priced warm pins, absent with none, which reads as zero), on the windows the request's model
+/// draws. A window nothing prices is absent from both. The destination gate's fit and the shedding round read it.
 pub(crate) fn pin_figures(
     state: &RoutingState,
     pool: &PoolRow,
@@ -645,6 +660,12 @@ pub(crate) fn pin_figures(
         }
         let rate = match figures {
             Figures::Pin(pin) => priced(window, pin),
+            // A failover's landing knows the session's own burn, while the destination's cache is cold, so the
+            // rewrite above stays the body's.
+            Figures::Fresh(_) if request.failed_over.is_some() => request
+                .failed_over
+                .as_ref()
+                .and_then(|failed_over| priced(window, &failed_over.row)),
             // A pin burns the windows its own model draws, so a Sonnet pin adds nothing to a Fable week's prior. The
             // unpriced ones are left out of the median so one of them does not zero it.
             Figures::Fresh(warm_pins) => median(
@@ -1369,8 +1390,9 @@ fn run(
     // The row a move takes off its source, whose burn and last prompt the new row carries.
     let mut moving: Option<PinRow> = None;
     let mut selection_set: Vec<&Candidate> = eligible.clone();
-    // The fit reads whose runway breaks the strategy's tie: a move's from its rule's gate, a fresh placement's from the
-    // `no_fit` partition.
+    // The fit reads whose runway breaks the strategy's tie: a move's from its rule's gate, a placement's from the
+    // `no_fit` partition, which keeps the reads of the candidates that fit. `choose` reads them for a move or a
+    // failed-over request, never for a fresh session.
     let mut reads: Vec<(String, FitRead)> = Vec::new();
     if let Some(mut current) = pin.take() {
         let mut moved_off = false;
@@ -1596,11 +1618,16 @@ fn run(
     // ordered, read with the moving pin already, so they stay as the gate left them with the gate's reads. A fresh
     // placement reads every candidate with the fresh prior, and one ending inside the next five hours never fits. It
     // keeps the read of each candidate that fits, so a fall-through to the whole set carries no runway to break a tie.
+    // A failed-over request falls through the gate's orders before the whole set, so a session that has to land
+    // somewhere lands where its burn runs longest. The rung that kept the set is the `ladder` fact.
+    let mut ladder = None;
     let fitting: Vec<&Candidate> = if moving.is_some() {
         selection_set.clone()
     } else {
         let prior = fresh_prior(state, snapshot, pool, request.now);
         let mut fitting = Vec::with_capacity(selection_set.len());
+        let mut rewrite_only: Vec<(&Candidate, FitRead)> = Vec::new();
+        let mut least_bad: Vec<&Candidate> = Vec::new();
         for c in selection_set.iter().copied() {
             let read = fit_of(
                 state,
@@ -1618,12 +1645,36 @@ fn run(
                 member.fit = Some(read.verdict);
                 member.binding = read.binding.clone();
             }
-            if read.verdict == "fits" {
-                fitting.push(c);
-                reads.push((c.account_id.clone(), read));
+            if read.verdict != "ending" {
+                least_bad.push(c);
+            }
+            match read.verdict {
+                "fits" => {
+                    fitting.push(c);
+                    reads.push((c.account_id.clone(), read));
+                }
+                "rewrite_only" => rewrite_only.push((c, read)),
+                _ => {}
             }
         }
-        fitting
+        if request.failed_over.is_none() {
+            fitting
+        } else if !fitting.is_empty() {
+            ladder = Some("fits");
+            fitting
+        } else if !rewrite_only.is_empty() {
+            ladder = Some("rewrite_only");
+            longest(rewrite_only.iter().map(|(c, read)| (*c, read)).collect())
+                .into_iter()
+                .map(|(c, _)| c)
+                .collect()
+        } else if !least_bad.is_empty() {
+            ladder = Some("least_bad");
+            least_bad
+        } else {
+            ladder = Some("every");
+            Vec::new()
+        }
     };
     partitions.push(narrow(
         &mut selection_set,
@@ -1632,6 +1683,9 @@ fn run(
         "no_fit",
         rec,
     ));
+    if let Some(rung) = ladder {
+        partitions.push(Fact::text("ladder", rung));
+    }
     // A session should not start on an account about to end.
     let not_winding_down: Vec<&Candidate> = selection_set
         .iter()
@@ -1674,9 +1728,13 @@ fn run(
     let (chosen, tier, placement) = if let Some((candidate, placement)) = placed {
         (candidate, None, Some(placement))
     } else {
-        // The runway breaks the strategy's tie for a move alone: a fresh session, held at the cap or not, keeps the
-        // strategy's own draw among its ties, which spreads new sessions over them.
-        let tie_reads: &[(String, FitRead)] = if moving.is_some() { &reads } else { &[] };
+        // The runway breaks the strategy's tie for a move and a failed-over request alone: a fresh session, held at
+        // the cap or not, keeps the strategy's own draw among its ties, which spreads new sessions over them.
+        let tie_reads: &[(String, FitRead)] = if moving.is_some() || request.failed_over.is_some() {
+            &reads
+        } else {
+            &[]
+        };
         let Some((strategy_choice, tier)) = choose(
             state,
             snapshot,
@@ -1845,13 +1903,17 @@ fn run(
     // on an account at its cap would carry the agent's next message past the cap, since a renewal never reads it.
     let pin_ref = session.filter(|_| !request.count).map(|session| {
         let epoch = state.fresh_epoch();
+        // A failover's landing carries the row its source lost and remembers the source as a shed move does.
+        let failed_over = request.failed_over.as_ref();
         let row = fresh_pin(
             request,
             session,
             epoch,
             chosen,
-            shed_from.clone(),
-            moving.as_ref(),
+            shed_from
+                .clone()
+                .or_else(|| failed_over.map(|f| f.from_account_id.clone())),
+            moving.as_ref().or(failed_over.map(|f| &f.row)),
         );
         let lane = row.lane.clone();
         rec.pin_written = Some(PinWritten {
@@ -1912,8 +1974,9 @@ fn run(
 }
 
 /// A pin under `session` on `chosen`, created by this request with the request's hashes stamped. `moving` is the
-/// row a move takes off its source, whose burn averages and last prompt the new row carries, so the destination's
-/// projection counts the pin from the moment it lands and a later move prices its rewrite from a figure.
+/// row a move takes off its source or a failover took off its account, whose burn averages and last prompt the new row
+/// carries, so the destination's projection counts the pin from the moment it lands and a later move prices its
+/// rewrite from a figure.
 fn fresh_pin(
     request: &SelectRequest,
     session: &str,
@@ -1961,8 +2024,8 @@ fn fresh_pin(
         // A fresh pin has no cache to be cold about, and its TTL is the default until the first report.
         last_refresh_at: request.now,
         cache_ttl_ms: 300_000,
-        // The shed pin remembers its source for the dwell, so no round sends it straight back; every other move
-        // clears both.
+        // A shed move and a failover's landing remember the source for the dwell, so no round sends the session
+        // straight back. Every other move clears both.
         shed_at: shed_from.is_some().then_some(request.now),
         shed_from,
         static_hash: None,
@@ -5025,6 +5088,7 @@ fn finish(
         shed_marks: shed_round.as_ref().map(|round| round.facts.marks.clone()),
         mark_cleared,
         reservation,
+        cause: None,
     };
     let mut skipped = 0;
     match result {
@@ -5044,6 +5108,13 @@ fn finish(
             outcome.rung = selection.trace.placement.clone();
             outcome.in_overage = selection.in_overage;
             outcome.cohort_hold = selection.trace.cohort_hold.clone();
+            // The decision that lands a failover's session on a pin names its cause. A held or exhausted one lands
+            // nothing, and neither does a token count, which writes no pin.
+            outcome.cause = request
+                .failed_over
+                .as_ref()
+                .filter(|_| selection.pin.is_some())
+                .and_then(|failed_over| failed_over.cause.clone());
             skipped = u32::try_from(selection.trace.skipped.len()).unwrap_or(u32::MAX);
         }
         SelectResult::Held { account_id, hold } => {

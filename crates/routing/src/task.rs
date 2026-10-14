@@ -21,11 +21,11 @@ use crate::affinity::{
     ConversationQuery, PredecessorQuery, PurgedEntry,
 };
 use crate::record::{
-    CacheMapEntry, DecisionRecord, DecisionSummary, PinEventFacts, RefusalFacts, RefusedRequest,
-    ShedRoundFacts,
+    CacheMapEntry, DecisionRecord, DecisionSummary, MoveCause, PinEventFacts, RefusalFacts,
+    RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    decide, pace_of, projection_of, release_reasons, Decided, MigrateReason, Refusal,
+    decide, pace_of, projection_of, release_reasons, Decided, FailedOver, MigrateReason, Refusal,
     SelectRequest, SelectResult, FIVE_HOUR_MS,
 };
 use crate::state::{
@@ -67,6 +67,16 @@ const EVENTS: usize = 1_024;
 /// How long after an invalidation the next pin for the same triple counts as a migration rather than a new
 /// session. A failover re-selects within one request, well inside this.
 const MIGRATION_WINDOW_MS: i64 = 60_000;
+
+/// The pin a failover invalidated, kept for `MIGRATION_WINDOW_MS` so the landing reads its figures and names its cause.
+struct Invalidated {
+    account_id: String,
+    /// `cooldown`, `fast_lane` or `mark`.
+    reason: &'static str,
+    at: i64,
+    row: PinRow,
+    cause: Option<MoveCause>,
+}
 
 /// How far apart two readings' resets may lie and still name one reset: a head names its resets in whole seconds and
 /// the poll in milliseconds, so the two sources disagree about one reset by under a second, while a window's next
@@ -151,6 +161,9 @@ pub enum RouterEvent {
         fit: Option<&'static str>,
         runway_ms: Option<i64>,
         binding: Option<String>,
+        /// Why a failover moved the session, `None` for a rule's move and for a failover the relay sent with
+        /// neither a cooldown nor a mark.
+        cause: Option<MoveCause>,
         at: i64,
     },
     PinReleased {
@@ -458,9 +471,12 @@ pub enum Report {
         evidence: OverageEvidence,
         incarnation: u64,
     },
+    /// A failover without a cooldown ended the pin. `mark` is the state the verdict marks the account with and who
+    /// moved it, `None` for a failover that marks nothing (a 401 whose refresh failed without marking the account).
     PinInvalidated {
         account_id: String,
         pin: PinRef,
+        mark: Option<(AccountState, StateCause)>,
         incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
@@ -819,8 +835,10 @@ enum Command {
     StateMoved {
         rows: Vec<MovedState>,
     },
+    /// Boxed, since a failed-over request carries a whole pin row and the mailbox holds every command at the largest
+    /// variant's size.
     Select {
-        request: SelectRequest,
+        request: Box<SelectRequest>,
         reply: oneshot::Sender<SelectAnswer>,
     },
     Shutdown {
@@ -1004,7 +1022,11 @@ impl RouterHandle {
     }
 
     pub async fn select(&self, request: SelectRequest) -> Result<SelectAnswer, RouterGone> {
-        self.ask(|reply| Command::Select { request, reply }).await
+        self.ask(|reply| Command::Select {
+            request: Box::new(request),
+            reply,
+        })
+        .await
     }
 
     /// A request the relay refused before asking for a selection, recorded as the request's one decision: sends
@@ -1466,9 +1488,10 @@ struct Task {
     /// The loop's own way back into its mailbox, weak so it never keeps its receiver alive: upgraded for the one
     /// load a task runs, and dropped with that task.
     handle_tx: mpsc::WeakSender<Command>,
-    /// The account a pin was invalidated from, why, and when. The next select for that same key
-    /// within `MIGRATION_WINDOW_MS` reports a migration rather than a fresh pin; older entries go on purge.
-    invalidated: HashMap<PinKey, (String, &'static str, i64)>,
+    /// The pin a failover invalidated, under its key. The next select for that same key within
+    /// `MIGRATION_WINDOW_MS` lands on the row's figures and reports a migration rather than a fresh pin, and the purge
+    /// drops older entries.
+    invalidated: HashMap<PinKey, Invalidated>,
     /// The reloads the running load answers: those that were waiting when it started.
     load_waiters: Vec<oneshot::Sender<Result<(), String>>>,
     /// Whether a registry load runs. At most one does.
@@ -2584,6 +2607,20 @@ impl Task {
                 let before = pin_key
                     .as_ref()
                     .and_then(|key| self.state.pin(key).cloned());
+                // A failover inside the window lands on the row its source lost: the selection prices the session's
+                // own burn and names the cause on the record. A key that holds a pin again is no landing, and the
+                // entry stays until a selection lands the session, so a held one leaves it for the next.
+                request.failed_over = pin_key
+                    .as_ref()
+                    .filter(|_| before.is_none())
+                    .and_then(|key| self.invalidated.get(key))
+                    .filter(|entry| request.now - entry.at <= MIGRATION_WINDOW_MS)
+                    .map(|entry| FailedOver {
+                        from_account_id: entry.account_id.clone(),
+                        reason: entry.reason,
+                        row: entry.row.clone(),
+                        cause: entry.cause.clone(),
+                    });
                 // The facts are read against the state the selection runs on, before it moves anything.
                 let released = before
                     .as_ref()
@@ -2628,9 +2665,13 @@ impl Task {
                             match self
                                 .invalidated
                                 .remove(key)
-                                .filter(|(_, _, at)| now - at <= MIGRATION_WINDOW_MS)
+                                .filter(|entry| now - entry.at <= MIGRATION_WINDOW_MS)
                             {
-                                Some((from, reason, _)) => {
+                                Some(Invalidated {
+                                    account_id: from,
+                                    reason,
+                                    ..
+                                }) => {
                                     // A hard fail-over's move is named on the attempt row the same way a
                                     // selector's move is.
                                     if let SelectResult::Selected(selection) = &mut result {
@@ -2655,6 +2696,7 @@ impl Task {
                                         fit,
                                         runway_ms,
                                         binding,
+                                        cause: record.outcome.cause.clone(),
                                         at: now,
                                     });
                                 }
@@ -2709,6 +2751,7 @@ impl Task {
                                         fit,
                                         runway_ms,
                                         binding,
+                                        cause: None,
                                         at: now,
                                     });
                                 }
@@ -3170,6 +3213,11 @@ impl Task {
                 } else {
                     "cooldown"
                 };
+                let cause = MoveCause::Cooldown {
+                    scope: row.scope.clone(),
+                    reason: row.reason.clone(),
+                    window: Some(row.window.clone()),
+                };
                 let mut writes = Vec::new();
                 if self.state.record_cooldown(row.clone()) {
                     self.emit(RouterEvent::CooldownSet {
@@ -3208,17 +3256,21 @@ impl Task {
                             "a fast refusal from a lane the pin has left leaves the pin"
                         );
                     } else {
-                        // The row leaves with the invalidation, so its mark is read before it.
-                        let row = self.state.pin(&key).cloned();
-                        if self.state.invalidate_pin(&pin, &account_id) {
+                        if let Some(row) = self.state.invalidate_pin(&pin, &account_id) {
                             let now = (self.clock)();
-                            self.invalidated
-                                .insert(key.clone(), (account_id.clone(), moved, now));
-                            if let Some(event) =
-                                row.as_ref().and_then(|row| released_mark(row, now))
-                            {
+                            if let Some(event) = released_mark(&row, now) {
                                 self.emit(event);
                             }
+                            self.invalidated.insert(
+                                key.clone(),
+                                Invalidated {
+                                    account_id: account_id.clone(),
+                                    reason: moved,
+                                    at: now,
+                                    row,
+                                    cause: Some(cause),
+                                },
+                            );
                             writes.push(StateWrite::DeletePin(key));
                         }
                     }
@@ -3333,6 +3385,7 @@ impl Task {
             Report::PinInvalidated {
                 account_id,
                 mut pin,
+                mark,
                 incarnation,
                 lifecycle_generation,
                 credential_generation,
@@ -3352,15 +3405,26 @@ impl Task {
                     agent_id: pin.agent_id.clone(),
                     model: pin.model.clone(),
                 };
-                // The row leaves with the invalidation, so its mark is read before it.
-                let row = self.state.pin(&key).cloned();
-                if self.state.invalidate_pin(&pin, &account_id) {
+                if let Some(row) = self.state.invalidate_pin(&pin, &account_id) {
                     let now = (self.clock)();
-                    self.invalidated
-                        .insert(key.clone(), (account_id.clone(), "mark", now));
-                    if let Some(event) = row.as_ref().and_then(|row| released_mark(row, now)) {
+                    if let Some(event) = released_mark(&row, now) {
                         self.emit(event);
                     }
+                    self.invalidated.insert(
+                        key.clone(),
+                        Invalidated {
+                            account_id: account_id.clone(),
+                            // The reason stays `mark` for a failover the relay sent unmarked too, which names no
+                            // cause.
+                            reason: "mark",
+                            at: now,
+                            row,
+                            cause: mark.map(|(state, cause)| MoveCause::Mark {
+                                state: state.as_str(),
+                                cause: cause.as_str(),
+                            }),
+                        },
+                    );
                     self.write(vec![StateWrite::DeletePin(key)]);
                 }
             }
@@ -3713,13 +3777,14 @@ impl Task {
             .cloned()
             .collect();
         for key in keys {
-            if let Some(value) = self.invalidated.remove(&key) {
+            if let Some(mut entry) = self.invalidated.remove(&key) {
+                entry.row.model = dated_id.to_string();
                 self.invalidated.insert(
                     PinKey {
                         model: dated_id.to_string(),
                         ..key
                     },
-                    value,
+                    entry,
                 );
             }
         }
@@ -3927,7 +3992,7 @@ impl Task {
             "purged expired and orphaned routing state"
         );
         self.invalidated
-            .retain(|_, (_, _, at)| now - *at <= MIGRATION_WINDOW_MS);
+            .retain(|_, entry| now - entry.at <= MIGRATION_WINDOW_MS);
         for (account_id, scope) in &purged.cooldowns {
             self.emit(RouterEvent::CooldownCleared {
                 account_id: account_id.clone(),

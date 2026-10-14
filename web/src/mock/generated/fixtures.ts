@@ -8619,6 +8619,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "shed_marks": null,
         "mark_cleared": null,
         "reservation": null,
+        "cause": null,
         "completion": {
           "status": 200,
           "cache_read_tokens": 500,
@@ -12365,7 +12366,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "reason": "spent",
             "fit": "fits",
             "runway_ms": null,
-            "binding": null
+            "binding": null,
+            "cause": null
           }
         },
         {

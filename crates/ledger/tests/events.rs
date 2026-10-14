@@ -1074,6 +1074,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             fit: Some("fits"),
             runway_ms: None,
             binding: None,
+            cause: None,
             at: 1,
         },
         RouterEvent::PinReleased {

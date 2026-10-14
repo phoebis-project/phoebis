@@ -2006,8 +2006,9 @@ impl RoutingState {
             .insert((pool_id.to_string(), account_id.to_string()), at);
     }
 
-    /// A late failure from account A must not remove a newer pin on account B, so both have to match.
-    pub fn invalidate_pin(&mut self, pin: &PinRef, account_id: &str) -> bool {
+    /// A late failure from account A must not remove a newer pin on account B, so both have to match. Answers the row
+    /// the invalidation took, whose figures the failover's landing reads, `None` when nothing matched.
+    pub fn invalidate_pin(&mut self, pin: &PinRef, account_id: &str) -> Option<PinRow> {
         let key = PinKey {
             key_id: pin.key_id.clone(),
             session_id: pin.session_id.clone(),
@@ -2019,9 +2020,10 @@ impl RoutingState {
             .get(&key)
             .is_some_and(|p| p.epoch == pin.epoch && p.account_id == account_id);
         if matches {
-            self.take_pin(&key);
+            self.take_pin(&key)
+        } else {
+            None
         }
-        matches
     }
 
     /// Records the resolution and moves every pin and every model cooldown keyed on `spelling` to `dated_id`

@@ -123,6 +123,7 @@ const EVENTS = [
   ['pin moved by the shed rule', event('pin_migrated', { agent_id: 'main', epoch: 23, from_account: 'secondary', reason: 'shed' }), 'shed', ['epoch 23']],
   ['pin moved, a failover', event('pin_migrated', { agent_id: 'main', epoch: 54, from_account: 'secondary', reason: 'cooldown' }, { sessionId: 's-moved' }), d.PIN_MIGRATION_LABEL.cooldown, ['answer 429'], failover('cooldown', 429)],
   ['pin moved, the fast lane', event('pin_migrated', { agent_id: 'main', epoch: 55, from_account: 'secondary', reason: 'fast_lane' }, { sessionId: 's-moved' }), 'fast lane cooling', ['answer 429'], failover('fast_lane', 429)],
+  ['pin moved, a mark', event('pin_migrated', { agent_id: 'main', cause: { cause: 'funding_refused', state: 'funding_required' }, epoch: 56, from_account: 'secondary', reason: 'mark' }, { sessionId: 's-moved' }), d.PIN_MIGRATION_LABEL.mark, ['answer 400'], failover('mark', 400)],
   ['pin expired, found idle by the sweep', event('pin_expired', { agent_id: 'main', reasons: ['expired'] }), 'idle', []],
   ['pin expired, any other reason', event('pin_expired', { agent_id: 'main', reasons: ['cooldown', 'spent'] }), 'account cooled', []],
   ['pin released by hand', event('pin_released', { agent_id: 'main' }, { actor: 'admin' }), 'by hand', []],
@@ -205,7 +206,7 @@ test('a pin created with no placement beside it reads the placement word', () =>
 });
 
 test('a failover or fast-lane move whose failed attempt is not drawn reads no answer and never the epoch', () => {
-  for (const reason of ['cooldown', 'fast_lane']) {
+  for (const reason of ['cooldown', 'fast_lane', 'mark']) {
     const move = event('pin_migrated', { agent_id: 'main', epoch: 54, from_account: 'secondary', reason }, { sessionId: 's-moved' });
     const [second] = failover(reason, 429);
     assert.deepEqual(read(move).facts, [], `${reason}, no rows drawn`);
@@ -753,7 +754,10 @@ const DETAIL_EVENTS = {
   overage_started: [{}, ['Effect']],
   pin_created: [{ agent_id: 'main', epoch: 52 }, ['Key', 'Session', 'Agent', 'Model', 'Epoch']],
   pin_expired: [{ agent_id: 'main', reasons: ['cooldown', 'spent'] }, ['Key', 'Session', 'Agent', 'Model', 'Reasons', 'Found by']],
-  pin_migrated: [{ agent_id: 'main', binding: 'five_hour', epoch: 53, fit: 'least_bad', from_account: 'secondary', reason: 'spent', runway_ms: 0 }, ['From', 'To', 'Reason', 'Moved by', 'Destination fit', 'Runway', 'Key', 'Session', 'Agent', 'Model']],
+  pin_migrated: [
+    { agent_id: 'main', binding: 'five_hour', cause: { cause: 'funding_refused', state: 'funding_required' }, epoch: 53, fit: 'least_bad', from_account: 'secondary', reason: 'mark', runway_ms: 0 },
+    ['From', 'To', 'Reason', 'Cause', 'Moved by', 'Destination fit', 'Runway', 'Key', 'Session', 'Agent', 'Model'],
+  ],
   pin_released: [{ agent_id: 'main' }, ['Actor', 'Key', 'Session', 'Agent', 'Model']],
   poll_backoff_ended: [{ attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) }, ['Backed off', 'Attempts', 'Resumed']],
   poll_backoff_started: [{ attempts: 1, endpoint: 'usage', last_clean_poll_at: ms(13, 43), next_attempt_at: ms(13, 53), reason: '429' }, ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect']],
@@ -789,6 +793,9 @@ test('every event kind has its detail pairs starting with When, Account and Pool
     assert.deepEqual(pairs.slice(3).map((p) => p.label), own, kind);
     for (const p of pairs) for (const c of p.chips) assert.ok(!/(?<!\d),|,(?!\d)|;/.test(chipText(c)), `${kind} ${p.label}: ${chipText(c)}`);
   }
+  // A mark's move is a failover, and its cause reads in the account state card's words.
+  const marked = Object.fromEntries(d.detailPairs(event('pin_migrated', DETAIL_EVENTS.pin_migrated[0]), NOW, []).map((p) => [p.label, texts(p.chips)]));
+  assert.deepEqual([marked.Reason, marked.Cause, marked['Moved by']], [[d.PIN_MIGRATION_LABEL.mark], ['funding required by credit balance'], ['failover']]);
   const without = d.detailPairs(event('router_started', { pins_loaded: 10 }, { accountId: null }), NOW, []);
   assert.deepEqual(without.slice(0, 2).map((p) => p.label), ['When', 'Pins loaded']);
   const round = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, []).find((p) => p.label === 'Pins');
@@ -820,6 +827,12 @@ test('the pin moved, shedding round, cleared mark and expired reservation detail
   assert.deepEqual([moved({ binding: 'five_hour', fit: 'least_bad', runway_ms: 0 })['Destination fit'], moved({ binding: 'five_hour', fit: 'least_bad', runway_ms: 0 }).Runway], [['least bad'], ['none']]);
   assert.deepEqual([moved({ binding: null, fit: 'rewrite_only', runway_ms: null })['Destination fit'], moved({ binding: null, fit: 'rewrite_only', runway_ms: null }).Runway], [['rewrite only'], ['unbounded']]);
   assert.deepEqual(Object.keys(moved({})), ['When', 'Account', 'From', 'To', 'Reason', 'Moved by', 'Session', 'Agent'], 'a move the ledger wrote before the gate reads neither pair');
+  // A failover's cause reads as the cooldown's own words, and a rule's move or a cause-less failover draws no Cause row.
+  const cooled = moved({ cause: { reason: 'rate_limit', scope: 'account', window: 'five_hour' }, reason: 'cooldown' });
+  assert.deepEqual([cooled.Cause, cooled['Moved by']], [['429 on 5h'], ['failover']]);
+  assert.deepEqual(moved({ cause: { reason: 'fast_rate_limit', scope: 'fast', window: 'fast' }, reason: 'fast_lane' }).Cause, ['fast lane 429']);
+  assert.deepEqual(Object.keys(cooled), ['When', 'Account', 'From', 'To', 'Reason', 'Cause', 'Moved by', 'Session', 'Agent']);
+  assert.equal(moved({ cause: null, reason: 'mark' }).Cause, undefined);
 
   const pin = (o) => ({ agent_id: 'c21e', burn: 0.07, cold: false, key_id: 'desktop', last_input_tokens: 48_100, marked: false, model: 'claude-sonnet-5', note: null, per_rewrite: 0.004, planned: null, rewrite: null, runway_ms: null, session_id: 'bcc805b6-0588', skip: null, ...o });
   const round = (more) => pairs('shedding_round', { burn_average_seconds: 1_800, burn_sum: 0.146, ceiling: 0.95, dwell_seconds: 900, dwell_until: ms(14, 15), excess: 0.095, horizon: ms(18, 20), marks: [], outcome: 'nothing_to_mark', persisted: true, projection: 0.99, reason: 'no_runway', removed: 0.073, shed_cap: 0.5, target: 0.075, unit: 'window_share', utilization: 0.9, warm_sessions: 'when_needed', window: 'five_hour', ...more });

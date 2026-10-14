@@ -9,8 +9,8 @@ use phoebis_ledger::{Assembler, Record};
 use phoebis_oauth::AcquireError;
 use phoebis_profile::fixtures::{body, BodyFixture};
 use phoebis_routing::{
-    DecisionRecord, DecisionSummary, FactValue, Report, RouterConfig, RouterEvent, SharePricer,
-    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR,
+    DecisionRecord, DecisionSummary, FactValue, MoveCause, Report, RouterConfig, RouterEvent,
+    SharePricer, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR,
 };
 use phoebis_store::{AccountState, Failover, StateCause, SubscriptionRow};
 use tokio::sync::broadcast;
@@ -200,6 +200,7 @@ async fn a_429_migrates_the_session_and_it_stays_on_the_replacement_after_recove
     .await;
     up.add_credential_rule(A, "/v1/messages", json_429_unified(RESET, "five_hour"));
     let h = two_accounts(&up).await;
+    let mut events = h.router.subscribe_events();
     let resp = h
         .app
         .clone()
@@ -213,6 +214,32 @@ async fn a_429_migrates_the_session_and_it_stays_on_the_replacement_after_recove
         ("b", 2, None)
     );
     assert_eq!(credentials_seen(&up), [A, B]);
+    let seen = router_events_until(
+        &mut events,
+        |event| matches!(event, RouterEvent::PinMigrated { session_id, .. } if session_id == "s1"),
+    )
+    .await;
+    match seen.last() {
+        Some(RouterEvent::PinMigrated {
+            from_account,
+            reason,
+            cause,
+            ..
+        }) => assert_eq!(
+            (from_account.as_str(), reason.as_str(), cause),
+            (
+                "a",
+                "cooldown",
+                &Some(MoveCause::Cooldown {
+                    scope: "account".into(),
+                    reason: "rate_limit".into(),
+                    window: Some("five_hour".into()),
+                })
+            ),
+            "the move names the cooldown's row as its cause"
+        ),
+        other => panic!("{other:?}"),
+    }
     let cooldowns = h.router.cooldowns().await.unwrap();
     assert_eq!(
         (
@@ -1217,6 +1244,67 @@ async fn a_credit_balance_refusal_stores_funding_refused() {
         stored_with(&h, "k1", AccountState::FundingRequired).await,
         StateCause::FundingRefused
     );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_credit_balance_refusal_moves_the_pin_with_the_marks_state_as_its_cause() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.add_credential_rule(
+        "sk-ant-api03-KEY1",
+        "/v1/messages",
+        Respond::Json {
+            status: 400,
+            headers: vec![],
+            body: br#"{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}"#.to_vec(),
+        },
+    );
+    let h = harness(
+        &up,
+        &[api_key("k1", "sk-ant-api03-KEY1", 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    let mut events = h.router.subscribe_events();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "b")
+    );
+    let seen = router_events_until(
+        &mut events,
+        |event| matches!(event, RouterEvent::PinMigrated { session_id, .. } if session_id == "s1"),
+    )
+    .await;
+    match seen.last() {
+        Some(RouterEvent::PinMigrated {
+            from_account,
+            reason,
+            cause,
+            ..
+        }) => assert_eq!(
+            (from_account.as_str(), reason.as_str(), cause),
+            (
+                "k1",
+                "mark",
+                &Some(MoveCause::Mark {
+                    state: "funding_required",
+                    cause: "funding_refused",
+                })
+            ),
+            "the mark the relay reported travels with the move"
+        ),
+        other => panic!("{other:?}"),
+    }
     up.shutdown().await;
 }
 

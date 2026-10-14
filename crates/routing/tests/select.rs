@@ -2,9 +2,9 @@ use phoebis_routing::{
     cohort_hold, decide, effective_warm, lane_key, release_reasons, resolve, select, warm,
     warmth_of, AccountTicket, AffinityChain, AffinityMap, AffinityRow, BudgetFacts, BurnRates,
     BurnUnit, CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditsState, Decided,
-    DecisionRecord, EvidenceSource, Exhaustion, FactEntity, FactValue, HoldFacts, HoldOutcome,
-    LaneFacts, LongContextRates, MemberSpend, MigrateReason,
-    OverageEvidence, PinKeyFacts, PinRef, Placement, RateTable, Rates, RefusalFacts,
+    DecisionRecord, EvidenceSource, Exhaustion, FactEntity, FactValue, FailedOver, HoldFacts,
+    HoldOutcome, LaneFacts, LongContextRates, MemberSpend, MigrateReason,
+    MoveCause, OverageEvidence, PinKeyFacts, PinRef, Placement, RateTable, Rates, RefusalFacts,
     RefusedRequest, RegistrySnapshot, RequestFlags, Reservation, RoutingState, SelectRequest,
     SelectResult, SharePricer, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause,
     WindowReading, WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
@@ -414,6 +414,7 @@ fn select_request(
         static_boundaries: Arc::from([]),
         marker: false,
         parent_agent_id: None,
+        failed_over: None,
         holds: Vec::new(),
         dialed: false,
         held_out: false,
@@ -2555,14 +2556,14 @@ fn overage_evidence_only_moves_forward_and_a_pin_is_invalidated_only_by_its_own_
         ..pin.clone()
     };
     assert!(
-        !st.invalidate_pin(&other, &sel.account.id),
+        st.invalidate_pin(&other, &sel.account.id).is_none(),
         "a newer epoch is another pin"
     );
     assert!(
-        !st.invalidate_pin(&pin, "zzz"),
+        st.invalidate_pin(&pin, "zzz").is_none(),
         "another account's failure leaves it alone"
     );
-    assert!(st.invalidate_pin(&pin, &sel.account.id));
+    assert!(st.invalidate_pin(&pin, &sel.account.id).is_some());
     assert!(st.pins().is_empty());
 }
 
@@ -12258,17 +12259,19 @@ fn a_pin_that_fails_over_off_its_account_leaves_its_mark_with_the_row() {
     let fail_over = |st: &mut RoutingState, account: &str, until: i64| {
         let current = pinned(st, "s1");
         st.record_cooldown(cooled(account, "account", until, "five_hour", "rate_limit"));
-        assert!(st.invalidate_pin(
-            &PinRef {
-                key_id: "k".into(),
-                session_id: "s1".into(),
-                agent_id: "main".into(),
-                model: "claude-sonnet-5".into(),
-                epoch: current.epoch,
-                lane: current.lane,
-            },
-            account,
-        ));
+        assert!(st
+            .invalidate_pin(
+                &PinRef {
+                    key_id: "k".into(),
+                    session_id: "s1".into(),
+                    agent_id: "main".into(),
+                    model: "claude-sonnet-5".into(),
+                    epoch: current.epoch,
+                    lane: current.lane,
+                },
+                account,
+            )
+            .is_some());
     };
     fail_over(&mut st, "a", T + 5_000);
     assert!(
@@ -16565,6 +16568,309 @@ fn a_candidate_ending_inside_the_next_five_hours_is_no_destination_for_a_move() 
             &FactValue::Text("ending".into())
         );
     }
+}
+
+/// `placing`'s request of `s1` as the selection after a failover: `from` attempted and the pin the failover took off it
+/// handed over under `reason` with `cause`.
+fn failing_over(
+    s: &RegistrySnapshot,
+    from: &str,
+    reason: &'static str,
+    row: PinRow,
+    cause: Option<MoveCause>,
+    now: i64,
+) -> SelectRequest {
+    SelectRequest {
+        attempt: 2,
+        seq: 2,
+        attempted: vec![from.into()],
+        failed_over: Some(FailedOver {
+            from_account_id: from.into(),
+            reason,
+            row,
+            cause,
+        }),
+        ..placing(s, "r-1", "s1", now)
+    }
+}
+
+/// The partitions line's `ladder` fact, `None` where the line names no rung.
+fn ladder_of(record: &DecisionRecord) -> Option<&FactValue> {
+    line(record, "partitions")
+        .facts
+        .iter()
+        .find(|f| f.key == "ladder")
+        .map(|f| &f.value)
+}
+
+#[test]
+fn a_failover_lands_on_the_invalidated_rows_burn_and_books_it() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    // Two warm pins on b burn 200 and 400 input tokens a second, so the pool's warm-pin median is 300, while the row
+    // the failover took off a burns 100.
+    let mut st = priced(vec![
+        gated_pin("w1", "b", 200.0),
+        gated_pin("w2", "b", 400.0),
+    ]);
+    st.record_sample("b", refreshing(0.3, T + HOUR, T + 3 * HOUR, T - 500));
+    let row = burning("s1", "a", 100.0, true, T);
+    let cause = MoveCause::Cooldown {
+        scope: "account".into(),
+        reason: "rate_limit".into(),
+        window: Some("five_hour".into()),
+    };
+    let req = failing_over(&s, "a", "cooldown", row.clone(), Some(cause.clone()), T);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("b".into(), None));
+    // b: 0.3 and the 200 000-token rewrite of 0.02 leave 0.63 of the window to the ceiling. The two pins on b burn
+    // 0.00006 of it a second, and the row's own 0.00001 takes the total to 0.00007: 9 000 s. The median's 0.00003
+    // would read 7 000 s.
+    let b = candidate(&d.record, "b");
+    assert_eq!(
+        (b.runway_ms, b.fit, b.binding.as_deref()),
+        (Some(9_000_000), Some("fits"), Some("five_hour")),
+        "the fit reads the row's burn"
+    );
+    let reserve = line(&d.record, "reserve");
+    assert!(
+        close(number(fact_of(reserve, "burn_five_hour", "b")), 0.036),
+        "the booking burns the row's 0.00001 a second, 0.036 an hour: {:?}",
+        reserve.facts
+    );
+    let booked = st.reservation("r-1").expect("the landing books on b");
+    assert!(close(booked.burn[FIVE_HOUR], 0.000_01), "{booked:?}");
+    assert!(close(booked.rewrite[FIVE_HOUR], 0.02), "{booked:?}");
+    assert_eq!(
+        d.record.outcome.cause,
+        Some(cause),
+        "the landing carries the cooldown's cause"
+    );
+    assert_eq!(
+        serde_json::to_value(&d.record.outcome).unwrap()["cause"],
+        serde_json::json!({ "scope": "account", "reason": "rate_limit", "window": "five_hour" })
+    );
+    assert_eq!(
+        d.record.outcome.from_account_id, None,
+        "the routing task names the account the failover left"
+    );
+    let landed_pin = pinned(&st, "s1");
+    assert_eq!(
+        (
+            landed_pin.burn,
+            landed_pin.burn_at,
+            landed_pin.burn_banded,
+            landed_pin.last_input_tokens
+        ),
+        (
+            row.burn,
+            row.burn_at,
+            row.burn_banded,
+            row.last_input_tokens
+        ),
+        "the new pin carries the row's averages and its last prompt"
+    );
+}
+
+#[test]
+fn a_failover_landing_remembers_its_source_for_the_rounds_dwell() {
+    let s = tiered(shedding_pool(Shedding::default()));
+    // A second warm session on b, cooler than the one landing, so a round on b may mark the landed one first.
+    let mut st = rounding(vec![burning("s0", "b", 1.0, true, T)]);
+    st.record_sample("a", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    let req = failing_over(
+        &s,
+        "a",
+        "cooldown",
+        burning("s1", "a", 4.0, false, T),
+        None,
+        T,
+    );
+    assert_eq!(
+        landed(select(&mut st, &s, &req, &mut rng()).0),
+        ("b".into(), None)
+    );
+    let landed_pin = pinned(&st, "s1");
+    assert_eq!(
+        (landed_pin.shed_from.as_deref(), landed_pin.shed_at),
+        (Some("a"), Some(T)),
+        "the landing remembers the account it left"
+    );
+    // b crosses its ceiling under the session's burn while a sits far under its own: a round on b runs at the
+    // session's next request, inside the dwell, and finds no destination but the account the session left.
+    let at = T + 1_000;
+    st.record_sample("a", refreshing(0.1, at + HOUR, at + 72 * HOUR, at));
+    st.record_sample("b", refreshing(0.94, at + HOUR, at + 72 * HOUR, at));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T + 2_000), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), None),
+        "the session is not planned straight back onto a"
+    );
+    let round = d.shed_round.expect("b's round ran").facts;
+    let landed_entry = round
+        .pins
+        .iter()
+        .find(|p| p.session_id == "s1")
+        .expect("the round read the landed session");
+    assert_eq!(
+        (landed_entry.marked, landed_entry.skip),
+        (false, Some("no_runway")),
+        "a is no destination inside the dwell, and b has no other sibling"
+    );
+}
+
+#[test]
+fn a_failed_over_landing_falls_through_the_ladder_before_every_candidate() {
+    // a warm pin on a gives the pool a median burn of 1 000 input tokens a second, the failed-over row's own, so a
+    // fresh session reads the siblings as the landing does.
+    let state = |b: f64, c: f64| {
+        let mut st = priced(vec![gated_pin("w", "a", 1_000.0)]);
+        gated_siblings(&mut st, b, c);
+        st
+    };
+    let row = || gated_pin("s1", "a", 1_000.0);
+    let s = tiered(gate_pool());
+
+    // b: 0.94 and the rewrite of 0.02 pass the ceiling, so b reads least_bad. c: 0.5 and the rewrite leave 0.43, which
+    // the row's burn of 0.0001 a second reaches in 4 300 s, short of the three hours to the reset: rewrite_only.
+    let mut st = state(0.94, 0.5);
+    let d = decide(
+        &mut st,
+        &s,
+        &failing_over(&s, "a", "cooldown", row(), None, T),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("c".into(), None),
+        "the rewrite_only candidate takes the landing over b, which the strategy ranks higher"
+    );
+    assert_eq!(
+        (
+            candidate(&d.record, "b").fit,
+            candidate(&d.record, "c").fit,
+            candidate(&d.record, "c").runway_ms
+        ),
+        (Some("least_bad"), Some("rewrite_only"), Some(4_300_000))
+    );
+    let partitions = line(&d.record, "partitions");
+    assert_eq!(fact(partitions, "no_fit"), &FactValue::Int(1));
+    assert_eq!(
+        ladder_of(&d.record),
+        Some(&FactValue::Text("rewrite_only".into()))
+    );
+
+    // Neither takes the rewrite: the landing is the strategy's among the least bad.
+    let mut st = state(0.94, 0.94);
+    let d = decide(
+        &mut st,
+        &s,
+        &failing_over(&s, "a", "cooldown", row(), None, T),
+        &mut rng(),
+    );
+    assert_eq!(landed(d.result.clone()), ("b".into(), None));
+    assert_eq!(
+        ladder_of(&d.record),
+        Some(&FactValue::Text("least_bad".into()))
+    );
+
+    // Both siblings end inside the next five hours: every candidate serves.
+    let mut terms = tier_terms(&["a", "b", "c"]);
+    for term in &mut terms {
+        if term.account_id != "a" {
+            term.cancelled = true;
+            term.ends_at = Some(T + 2 * HOUR);
+        }
+    }
+    let ending = snapshot_with_terms(gate_pool(), terms);
+    let mut st = state(0.3, 0.3);
+    let d = decide(
+        &mut st,
+        &ending,
+        &failing_over(&ending, "a", "cooldown", row(), None, T),
+        &mut rng(),
+    );
+    let (to, _) = landed(d.result.clone());
+    assert!(["b", "c"].contains(&to.as_str()), "{to}");
+    assert_eq!(
+        (candidate(&d.record, "b").fit, candidate(&d.record, "c").fit),
+        (Some("ending"), Some("ending"))
+    );
+    assert_eq!(
+        fact(line(&d.record, "partitions"), "no_fit"),
+        &FactValue::Text("fell_through".into())
+    );
+    assert_eq!(ladder_of(&d.record), Some(&FactValue::Text("every".into())));
+
+    // A fresh session's partition keeps its one fall-through and names no rung.
+    let mut st = state(0.94, 0.94);
+    let d = decide(&mut st, &s, &placing(&s, "r-2", "s2", T), &mut rng());
+    assert_eq!(
+        fact(line(&d.record, "partitions"), "no_fit"),
+        &FactValue::Text("fell_through".into())
+    );
+    assert_eq!(ladder_of(&d.record), None);
+}
+
+#[test]
+fn a_failovers_cause_for_a_mark_names_the_state_and_its_cause() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mark = MoveCause::Mark {
+        state: "funding_required",
+        cause: "funding_refused",
+    };
+    let mut st = priced(Vec::new());
+    let d = decide(
+        &mut st,
+        &s,
+        &failing_over(
+            &s,
+            "a",
+            "mark",
+            burning("s1", "a", 100.0, true, T),
+            Some(mark.clone()),
+            T,
+        ),
+        &mut rng(),
+    );
+    assert_eq!(landed(d.result.clone()), ("b".into(), None));
+    assert_eq!(d.record.outcome.cause, Some(mark.clone()));
+    assert_eq!(
+        serde_json::to_value(&d.record.outcome).unwrap()["cause"],
+        serde_json::json!({ "state": "funding_required", "cause": "funding_refused" })
+    );
+    // A failover with nowhere to land is no move, so its exhaustion names no cause.
+    let alone = tiered(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = priced(Vec::new());
+    let d = decide(
+        &mut st,
+        &alone,
+        &failing_over(
+            &alone,
+            "a",
+            "mark",
+            burning("s1", "a", 100.0, true, T),
+            Some(mark),
+            T,
+        ),
+        &mut rng(),
+    );
+    assert!(
+        matches!(d.result, SelectResult::Exhausted(_)),
+        "{:?}",
+        d.result
+    );
+    assert_eq!(d.record.outcome.cause, None);
 }
 
 #[test]

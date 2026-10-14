@@ -7,12 +7,12 @@ use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
     credits_from_usage, lane_key, resolve, sample_from_usage, spawn, AffinityReport, BandWeight,
     BurnRates, BurnUnit, ClientClass, ConversationLookup, CreditsState, DecisionRecord,
-    DecisionSummary, Exhaustion, KeyRefusal, LongContextRates, MemberSpend, PinRef,
-    PinUsage, PredecessorQuery, Presented, RateTable, Rates, Refusal, RefusalFacts, RefusedRequest,
-    ReloadError, Report, ResolveError, RouterConfig, RouterHandle, RoutingState, SelectRequest,
-    SelectResult, SharePricer, UtilizationSample, WindowReading, WindowSource, WriterStatus,
-    COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
-    SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
+    DecisionSummary, Exhaustion, KeyRefusal, LongContextRates, MemberSpend, MoveCause,
+    PinRef, PinUsage, PredecessorQuery, Presented, RateTable, Rates, Refusal, RefusalFacts,
+    RefusedRequest, ReloadError, Report, ResolveError, RouterConfig, RouterHandle, RoutingState,
+    SelectRequest, SelectResult, SharePricer, UtilizationSample, WindowReading, WindowSource,
+    WriterStatus, COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
+    IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
@@ -164,6 +164,7 @@ fn request(
         static_boundaries: Arc::from([]),
         marker: false,
         parent_agent_id: None,
+        failed_over: None,
         holds: Vec::new(),
         dialed: false,
         held_out: false,
@@ -849,6 +850,7 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
         Report::PinInvalidated {
             account_id: "a".into(),
             pin: pin.clone(),
+            mark: None,
             incarnation: 1,
             lifecycle_generation: 1,
             credential_generation: 1,
@@ -1066,6 +1068,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
+            failed_over: None,
             holds: Vec::new(),
             dialed: false,
             held_out: false,
@@ -1202,6 +1205,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
+            failed_over: None,
             holds: Vec::new(),
             dialed: false,
             held_out: false,
@@ -2485,6 +2489,7 @@ async fn a_pin_mark_from_the_previous_holder_leaves_the_new_holders_pin_alone() 
     let mark = |incarnation| Report::PinInvalidated {
         account_id: "a".into(),
         pin: pin.clone(),
+        mark: None,
         incarnation,
         lifecycle_generation: 1,
         credential_generation: 1,
@@ -4559,10 +4564,28 @@ async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
         Some(a.as_str()),
         "the record names the account the fail-over left, as the pin's move does"
     );
-    assert!(matches!(
-        next_event(&mut events).await,
-        RouterEvent::PinMigrated { reason, from_account, .. } if reason == "cooldown" && from_account == a
-    ));
+    let cooldown = Some(MoveCause::Cooldown {
+        scope: "account".into(),
+        reason: "rate_limit".into(),
+        window: Some("five_hour".into()),
+    });
+    assert_eq!(
+        record.outcome.cause, cooldown,
+        "the record carries the cooldown's row as the cause"
+    );
+    match next_event(&mut events).await {
+        RouterEvent::PinMigrated {
+            reason,
+            from_account,
+            cause,
+            ..
+        } => assert_eq!(
+            (reason.as_str(), from_account.as_str(), cause),
+            ("cooldown", a.as_str(), cooldown),
+            "the event carries the cause beside its reason"
+        ),
+        other => panic!("{other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -4626,13 +4649,171 @@ async fn a_fast_row_with_a_pin_invalidates_it_under_fast_lane() {
         (sel.account.id.as_str(), sel.trace.moved),
         (to, Some("fast_lane"))
     );
-    let (placed, _) = next_decision(&mut events).await;
+    let (placed, record) = next_decision(&mut events).await;
     assert_eq!((placed.kind, placed.rule), ("placed", Some("fast_lane")));
+    let fast_row = Some(MoveCause::Cooldown {
+        scope: "fast".into(),
+        reason: FAST_RATE_LIMIT_REASON.into(),
+        window: Some("fast".into()),
+    });
+    assert_eq!(record.outcome.cause, fast_row);
+    match next_event(&mut events).await {
+        RouterEvent::PinMigrated {
+            from_account,
+            to_account,
+            reason,
+            cause,
+            ..
+        } => assert_eq!(
+            (
+                from_account.as_str(),
+                to_account.as_str(),
+                reason.as_str(),
+                cause
+            ),
+            (from.as_str(), to, "fast_lane", fast_row)
+        ),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_mark_without_a_cooldown_moves_the_pin_with_the_marks_state_as_its_cause() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let first = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let SelectResult::Selected(selection) = &first.result else {
+        panic!("{:?}", first.result)
+    };
+    // Both members sit at one priority, so the strategy may start the session on either.
+    let from = selection.account.id.clone();
+    let to = if from == "a" { "b" } else { "a" };
+    let pin = selection.pin.clone().unwrap();
+    assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(matches!(
         next_event(&mut events).await,
-        RouterEvent::PinMigrated { from_account, to_account, reason, .. }
-            if from_account == from && to_account == to && reason == "fast_lane"
+        RouterEvent::PinCreated { .. }
     ));
+    handle
+        .report(Report::PinInvalidated {
+            account_id: from.clone(),
+            pin,
+            mark: Some((AccountState::FundingRequired, StateCause::FundingRefused)),
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        })
+        .await;
+    let second = handle
+        .select(SelectRequest {
+            attempted: vec![from.clone()],
+            ..request(&handle, Some("s1"), 1_100)
+        })
+        .await
+        .unwrap();
+    let SelectResult::Selected(sel) = &second.result else {
+        panic!("{:?}", second.result)
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.trace.moved),
+        (to, Some("mark"))
+    );
+    let mark = Some(MoveCause::Mark {
+        state: "funding_required",
+        cause: "funding_refused",
+    });
+    let (placed, record) = next_decision(&mut events).await;
+    assert_eq!(
+        (placed.rule, &record.outcome.cause),
+        (Some("mark"), &mark),
+        "the record names the mark's state and who moved it"
+    );
+    match next_event(&mut events).await {
+        RouterEvent::PinMigrated { reason, cause, .. } => {
+            assert_eq!((reason.as_str(), cause), ("mark", mark))
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_fail_over_after_a_cooldown_lands_on_the_invalidated_pins_own_burn() {
+    use phoebis_routing::RouterEvent;
+    let store = shedding_store(&["a", "b"]);
+    with_tier(&store, "a");
+    with_tier(&store, "b");
+    store
+        .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    handle.report(windows("a", 0.3, 0.1, AT)).await;
+    handle.report(windows("b", 0.3, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(Report::Cooldown {
+            account_id: "a".into(),
+            row: CooldownRow {
+                account_id: "a".into(),
+                scope: "account".into(),
+                until: AT + HOUR,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: Some(pin_of(&handle).await),
+            lifecycle_generation: 1,
+            credential_generation: 1,
+            incarnation: 1,
+        })
+        .await;
+    assert_eq!(
+        landed_on(
+            handle
+                .select(SelectRequest {
+                    attempted: vec!["a".into()],
+                    ..request(&handle, Some("s1"), AT)
+                })
+                .await
+                .unwrap()
+        ),
+        ("b".into(), None)
+    );
+    let record = loop {
+        if let RouterEvent::Decision { record, .. } = next_event(&mut events).await {
+            break *record;
+        }
+    };
+    // The pool keeps no warm pin, so a fresh session's prior burns nothing. The row the cooldown took off a burns 10
+    // input tokens a second, a tenth of the 5-hour window an hour, which reaches b's 0.65 to the ceiling in 6.5 hours.
+    let b = record
+        .candidates
+        .iter()
+        .find(|c| c.account_id == "b")
+        .expect("b's row");
+    assert_eq!(
+        (b.runway_ms, b.fit),
+        (Some(23_400_000), Some("fits")),
+        "the landing's fit reads the invalidated pin's burn"
+    );
+    let booked = record
+        .outcome
+        .reservation
+        .as_ref()
+        .expect("the landing books the pin's burn");
+    assert!(
+        close(booked.burn.get(FIVE_HOUR).copied(), 0.1),
+        "{booked:?}"
+    );
 }
 
 /// The poll's extra-usage state of account `a`, read at `fetched_at` and converted as the poll converts it.
@@ -8837,12 +9018,18 @@ async fn a_pin_migrated_event_carries_the_destinations_fit_runway_and_binding() 
         fit,
         runway_ms,
         binding,
+        cause,
         ..
     } = migrated
     else {
         unreachable!()
     };
     assert_eq!(to_account, "b");
+    assert_eq!(
+        (cause, &record.outcome.cause),
+        (None, &None),
+        "a rule's move carries no cause"
+    );
     assert_eq!(
         (fit, binding.as_deref()),
         (Some("rewrite_only"), Some("five_hour"))
