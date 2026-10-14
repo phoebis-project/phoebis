@@ -184,11 +184,11 @@ A subscription account's plan-side figures read as a share of its own 5-hour and
 window named. An API-key account, and a subscription account in overage, read dollars, and an overage request adds to
 no window share.
 
-A fast answer draws no plan window: it adds nothing to the share, the prediction, or the burn a shedding round ranks by.
-It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`, which Spend per minute
-charts under every grouping. An answer in overage reads the same in the burn figures, a zero share in Plan per hour and
-its dollars in `usd`. A member's budget counts a fast answer at the fast cells, a subscription member's as an API-key
-member's.
+A fast answer draws no plan window: it adds nothing to the share, the prediction, the projection, or the burn a shedding
+round ranks by. It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`, which
+Spend per minute charts under every grouping. An answer in overage reads the same in the burn figures, a zero share in
+Plan per hour and its dollars in `usd`. A member's budget counts a fast answer at the fast cells, a subscription
+member's as an API-key member's.
 
 The subscription cost model (`crates/ledger/subscription_costs.yaml`) ships beside the price table and holds constants:
 a token costs its model's weight times its type's multiplier in units on every window, a window holds a capacity in
@@ -239,34 +239,39 @@ read 0.025. Thinking tokens count as output. A model that breaks a shared consta
 name its own multiplier for a type or its own weight on a window. The shipped file has none.
 
 The peak band covers weekdays from 5 to 11 AM Pacific time, read in the `America/Los_Angeles` zone the file names with
-the end hour excluded, so its UTC hours move by an hour when daylight time starts and ends. A 5-hour window holds 0.7
-of its capacity inside the band, so a request completing inside it spends 1/0.7 of the share it would outside. The
-7-day window's factor is 1, so the week has no band. The edges are steps, and Saturday and Sunday are outside the band.
-The meter charges a request when it completes, so the prediction weighs a request's 5-hour share by the band in force at
-its completion, and a session's burn keeps a copy weighed by the band at each renewal, which the shedding round prices
-on plan quota so the order reads what the meter charges. The analytics routes read the hourly rollups instead, which
-fold a request under the hour it arrived in, so their shares and 20x equivalents weigh it by that hour's band rather
-than by the band at its completion. The burn route groups by the analytics' ten dimensions, read from the rollups the
-same way, and by session, which reads the attempts, each weighed by the band at its completion. The shares answer under
-the account grouping, or under every grouping when the filter names exactly one account, since shares of different
-accounts' windows do not add, and the 20x equivalents answer under every grouping. The Tiers and peak band tab of the
-cost reference names this week's hours in your zone ([The cost reference](console.md#the-cost-reference)).
+the end hour excluded, so its UTC hours move by an hour when daylight time starts and ends. A 5-hour window holds 0.7 of
+its capacity inside the band, so a request completing inside it spends 1/0.7 of the share it would outside. The 7-day
+window's factor is 1, so the week has no band. The edges are steps, and Saturday and Sunday are outside the band. The
+meter charges a request when it completes, so the prediction weighs a request's 5-hour share by the band in force at its
+completion, and a session's burn, an average whose time constant is the pool's `burn_average_seconds`, keeps a copy
+weighed by the band at each renewal, which the shedding round prices on the anchor tier's 5-hour rates on plan quota so
+its order reads what the meter charged. The projection prices the plain copy, on every window the session's model draws,
+at the band in force when it reads, since it carries the burn forward from now. The analytics routes read the hourly
+rollups instead, which fold a request under the hour it arrived in, so their shares and 20x equivalents weigh it by that
+hour's band rather than by the band at its completion. The burn route groups by the analytics' ten dimensions, read from
+the rollups the same way, and by session, which reads the attempts, each weighed by the band at its completion. The
+shares answer under the account grouping, or under every grouping when the filter names exactly one account, since
+shares of different accounts' windows do not add, and the 20x equivalents answer under every grouping. The Tiers and
+peak band tab of the cost reference names this week's hours in your zone ([The cost
+reference](console.md#the-cost-reference)).
 
 The Fable-scoped week is a row of the file, `model_windows.seven_day_fable`, half the 7-day window on every tier, so a
 Fable request's share of it is twice its 7-day share.
 
 A model without a weight of its own reads the weight of the latest weighed model of its model tier as an estimate: the
-prediction charges it, the shedding round ranks its pin by that estimate, and every route that answers its figure
-answers `estimated` true beside it, which the console draws as a `~` before the figure. Once the model has served a
+prediction charges it, the projection and the shedding round price its pin's burn by that estimate, and every route that
+answers its figure answers `estimated` true beside it, which the console draws as a `~` before the figure. Once the
+model has served a
 plan-funded request since the start, the ledger raises the `model_unweighted` attention item for the `phoebis_attention`
 gauge, `GET /admin/attention` answers it, and the console lists it on the dashboard's attention line with a link to the
 [Models](console.md#models) view ([Conditions and gauges](#conditions-and-gauges)). A model of no model tier, or of a
-model tier with no weighed model, prices no share: the prediction adds no charge, the shedding round ranks the pin after
-every priced one, the analytics list the share under model unlisted and the cost reference shows a dash. An account tier
-without a capacity on a window prices no share there either, and the prediction adds no charge on that window. The
-shedding round ranks that tier's pins like any other, on the anchor tier's rates, and in the analytics an account on a
-tier the file lacks reads tier unknown, while a window the file leaves `null` on a listed tier reads model unlisted. A
-dated model id reads the weight of its undated name.
+model tier with no weighed model, prices no share: the prediction adds no charge, the projection adds no burn, the
+shedding round ranks the pin after every priced one and never marks it, the analytics list the share under model
+unlisted and the cost reference shows a dash. An account tier without a capacity on a window prices no share there
+either, and the prediction adds no charge and the projection no burn on that window. The shedding round orders that
+tier's pins like any other, on the anchor tier's rates, and marks none of them for a round on that window, and in the
+analytics an account on a tier the file lacks reads tier unknown, while a window the file leaves `null` on a listed tier
+reads model unlisted. A dated model id reads the weight of its undated name.
 
 The file is a revision list in the price table's shape: `revisions`, each entry an `effective` date and the whole model
 of that date, in force from 00:00 UTC of its date to the next entry's, an instant before the first entry reading the
@@ -429,14 +434,17 @@ The Traffic, Burn, Latency, Cache, Cost, Cache warming and Accounts sections, th
 
 The router exports what needs an operator as Prometheus gauges and shows the same conditions on the dashboard's
 attention line and the pool cards, which read `GET /admin/attention` (see [API reference](api-reference.md)), worst
-first and the oldest first within a kind. `phoebis_attention` carries the labels `kind` and `subject`, reads 1 while
-the cause holds and 0 once it clears, and has a series for every subject the kind applies to, so a cleared condition
-reads 0 rather than vanishing. A deleted account or pool loses its series at the next read, except that a pool a parked
-record names keeps a holding `ledger_record_parked` series after it is deleted, and the `-` subject's and a deleted
-pool's `ledger_record_parked` series leave when their rows go. A restart starts the conditions fed by the request bus
-over, and the usage poll keeps its backoff in memory as well, so `poll_backoff` reads 0 until a new backoff run is
-thirty minutes old. The conditions read from the registry, and `ledger_record_parked`, read from the ledger file, hold
-again at the first read.
+first and the oldest first within a kind. `phoebis_attention` carries the labels `kind` and `subject`, reads 1 while the
+cause holds and 0 once it clears, and has a series for every subject the kind applies to, so a cleared condition reads 0
+rather than vanishing. A deleted account or pool loses its series at the next read, except that a pool a parked record
+names keeps a holding `ledger_record_parked` series after it is deleted, and the `-` subject's and a deleted pool's
+`ledger_record_parked` series leave when their rows go. A deleted account or pool a routing condition holds on keeps
+that series the same way, until the fold's trailing day lets its row go. A restart starts the conditions fed by the
+request bus over, and the usage poll keeps its backoff in memory as well, so `poll_backoff` reads 0 until a new backoff
+run is thirty minutes old. The conditions read from the registry, and `ledger_record_parked`, read from the ledger file,
+hold again at the first read. The three routing conditions, `wall_reached`, `destination_spent` and `shed_no_runway`,
+read a table the ledger folds from its events of the trailing 24 hours once an hour and at start, so a restart holds
+them again at the first fold.
 
 | Kind | Subject | Clears when |
 | --- | --- | --- |
@@ -452,6 +460,9 @@ again at the first read.
 | `ledger_record_parked` | the pool, or `-` for a record without one | the next start or the Replay button lands them |
 | `poll_backoff` | the polled account | a poll answers clean |
 | `model_unweighted` | the model | a later subscription request on the model is priced at a cost model entry that weighs it, or the router restarts |
+| `wall_reached` | the account | no window of the account read spent in the last 24 hours |
+| `destination_spent` | the destination account | no move onto the account was followed by a spent window within an hour in the last 24 hours |
+| `shed_no_runway` | the pool | no round of the pool marked nothing for want of a destination in the last 24 hours |
 
 **`pool_exhausted`** holds while a request of the pool has ended exhausted and none of the pool's requests has
 succeeded since. It is fed by the request bus. An `incomplete` answer neither raises nor clears it. The detail names the
@@ -521,6 +532,27 @@ plan-funded request on the model raises it again. A later plan-funded request pr
 the model clears it. The subject is the model, the dashboard's line reads the item as "Model weight estimated", and it
 opens the [Models](console.md#models) view. It dates from the run's first request, and the detail names the model, its
 model tier, the model whose weight stands in and the requests served since.
+
+**`wall_reached`** holds while a window of the account read spent in the last 24 hours: a `window_spent` event of any
+source, the prediction's among them, so a wall the router predicted counts before a head or the poll reads it. The
+ledger folds the three routing conditions from its events once an hour and at start into one table, which the gauge and
+`GET /admin/attention` read, so a condition clears at the first fold whose trailing day holds none of its events. The
+subject is the account, and the item dates from the oldest wall of the day. The detail counts the walls, names their
+windows and the settings `shed_cap` and `window_ceiling`, and gives the projection error: one less the projection of the
+newest shedding round on the wall's window within that window's length before the wall, null with none. The item opens
+the [routing log](console.md#routing-log) on the account's spent windows since the condition began.
+
+**`destination_spent`** holds while a move landed on the account in the last 24 hours and a `window_spent` event of any
+source followed on it within the hour. It is folded as `wall_reached` is. The subject is the destination account, and
+the item dates from the oldest such move. The detail counts the moves, gives their destination fits with a count each
+and names the spent windows and the setting `window_ceiling`. The item opens the routing log on the account's moves and
+spent windows since the condition began.
+
+**`shed_no_runway`** holds while a shedding round of the pool marked nothing for want of a destination with runway (the
+outcome `nothing_to_mark` with the reason `no_runway`) in the last 24 hours, one round being enough. It is folded as
+`wall_reached` is. The subject is the pool, and the item dates from the oldest such round. The detail counts the rounds
+and names the accounts they ran on and the setting `window_ceiling` with the pool's value. The item opens the routing
+log on the pool's shedding rounds since the condition began.
 
 A threshold is a Prometheus rule over the gauge:
 

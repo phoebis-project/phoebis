@@ -66,17 +66,16 @@ outside its bound gets:
 | `subagent_placement` | `by_strategy` | `by_cohort`, `by_strategy` or `with_main`: `subagent_placement must be by_cohort, by_strategy, or with_main`. See Selection |
 | `session_placement` | `by_strategy` | `by_strategy` or `by_warm_prefix`: `session_placement must be by_strategy or by_warm_prefix`. See Selection |
 | `min_shared_prefix_tokens` | `20000` | a whole number, 0 or more. See Selection |
-| `shed_ahead_of_pace` | unset | 0 to 1: `shed_ahead_of_pace is between 0 and 1`. The console proposes 20 %. See Moves |
-| `select_below_utilization` | unset | 0 to 1: `select_below_utilization is between 0 and 1`. The console proposes 80 %. See Selection |
+| `window_ceiling` | `0.95` | 0.5 to 1: `window_ceiling is between 0.5 and 1.0`. See Selection and Moves |
 | `model_rules` | empty | an ordered list of `{pattern, not}`, at most 256: `model_rules holds at most 256 entries`. See Model rules |
-| `shed_share` | `0.5` | 0 to 1: `shed_share is between 0 and 1`. See Moves |
-| `burn_window_seconds` | `600` | 60 to 604800: `burn_window_seconds is at least 60`, `burn_window_seconds is at most 604800 (one week)`. See Moves |
-| `source_dwell_seconds` | `900` | 60 to 604800: `source_dwell_seconds is at least 60`, `source_dwell_seconds is at most 604800 (one week)`. See Moves |
+| `load_shedding` | `true` | a switch: off, no round runs. See Moves |
+| `shed_cap` | `0.5` | 0.1 to 1: `shed_cap is between 0.1 and 1.0`. See Moves |
+| `burn_average_seconds` | `1800` | 600 to 7200: `burn_average_seconds is between 600 and 7200`. See Moves |
+| `shed_dwell_seconds` | `900` | 300 to 7200: `shed_dwell_seconds is between 300 and 7200`. See Moves |
 | `migrate_when_spent` | `true` | `true` or `false`. See Moves |
 | `warm_sessions` | `when_needed` | `always`, `never` or `when_needed`: `warm_sessions must be always, never, or when_needed`. See Moves |
 | `retry_in_place_seconds` | `60` | 0 to 300: `retry_in_place_seconds is 0 to 300`. See Retry in place |
 | `in_flight_cap` | `16` | at least 1: `in_flight_cap is at least 1`. See In-flight caps |
-| `pace_floor` | `0.05` | 0 to 1: `pace_floor is between 0 and 1`. See Selection |
 | `overage_move_grace_minutes` | `30` | 0 to 300: `overage_move_grace_minutes is 0 to 300`. See Moves |
 | `wind_down_minutes` | `30` | 0 to 10080, a week: `wind_down_minutes is at most 10080 (one week)`. See Subscription end |
 | `keepalive` | `enabled` off when the pool is created over the API without the block, on in the console's create form | a policy object of four fields, on [The four fields](keepalive.md#the-four-fields) |
@@ -115,21 +114,22 @@ dialog's "Prioritize subscription accounts" toggle sets it.
 
 Each strategy's rule, as the pool dialog's Strategy hint states it:
 
-**`pace`**: Within the first priority tier that has an eligible account, the one with the most allowance left in the
-window it reads, the model's own Fable week where the model has one, else the 7-day window, per hour until that window
-resets or the subscription ends. An unsampled account counts as untouched, and ties are random.
+**`pace`**: Pace scores each member by its spare rate: the allowance left in the window it reads, the model's own Fable
+week where the model has one, else the 7-day window, per hour until that window resets or the subscription ends, less
+what its sessions burn of that window an hour, within the first priority tier that has an eligible account. An API-key
+member scores the room left in its worst bucket. An unsampled account counts as untouched, and ties are random.
 
 **`priority`**: Within the first priority tier that has an eligible account, any of them at random.
 
 **`round_robin`**: Within the first priority tier that has an eligible account, each in turn. A restart starts the
 round again.
 
-The console's pool dialog offers, in its expert view, `shed_share`, `burn_window_seconds` and `source_dwell_seconds`
-together as three presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300 s, 600 s) and
-conservative (0.3, 900 s, 1800 s). It offers `in_flight_cap`, `retry_in_place_seconds` and `pace_floor` the same way:
-balanced (16, 60 s, 5 %, the default), fast (8, 20 s, 10 %) and conservative (16, 120 s, 5 %), where balanced and
-conservative differ in the retry-in-place bound alone. The Pools view, its cards and the dialog are described on
-[Pools](console.md#pools).
+The console's pool dialog offers, in its expert view, `shed_cap`, `burn_average_seconds` and `shed_dwell_seconds`
+together as three presets beside custom: balanced (0.5, 1800 s, 900 s, the default), fast (0.5, 900 s, 600 s) and
+conservative (0.3, 3600 s, 1800 s). A preset leaves `load_shedding` as it is. It offers `in_flight_cap` and
+`retry_in_place_seconds` the same way: balanced (16, 60 s, the default), fast (8, 20 s) and conservative (16, 120 s),
+where balanced and conservative differ in the retry-in-place bound alone. The Pools view, its cards and the dialog are
+described on [Pools](console.md#pools).
 
 Under `when_cached` a request that carries no `cache_control` marker, and receives none from the cache TTL policy,
 creates no pin and lands by the strategy instead of pinning. A non-portable request keeps its pin either way.
@@ -284,24 +284,23 @@ The upstream shares no cached prefix across those, so an entry of another lane i
 deepest static boundary places a subagent under `by_cohort` or a main conversation under `by_warm_prefix`, when the
 request carries or receives a cache marker, the entry's estimate (the relay's, from the request's bytes) is above
 zero, the shared prefix is at least `min_shared_prefix_tokens` for a main conversation, and the account is not at its
-cap, at or above the ceiling (`select_below_utilization`), at or above the shedding margin less its 0.05 band on its
-windows ahead of their pace (`shed_ahead_of_pace`, a subscription account), without room in its worst live rate-limit
-bucket (an API-key account while a margin is set: a reading at or above 1.0, whatever its value), under the Pace floor,
-or winding down. The threshold binds a main conversation alone: a subagent cohort lands together on any shared prefix
-above zero, and an entry with a zero estimate places nothing for either. A cooling account never reaches either rung,
-since the eligible set excludes it. A spent account is in the eligible set, and both rungs refuse it through the
-allowance check. A subagent under `with_main` lands its first request on its parent agent's pin in place of the static
-walk, and one under `by_strategy` skips the static walk. Every case that finds no live match lands by the strategy. A
-held request of a subagent cohort waits where its cohort already is rather than on the strategy's own pick, and a
-session already on an account, under any of its agents, is never held while that account can still serve. A token
-count is never placed and never held: it is bound to no cap and occupies no slot, so its pin or the strategy decides
-it. It creates no pin, since it touches no cache: a count with a pin follows it past the cap and the move rules, and
-one without lands by the strategy and leaves the agent's next message to be placed under the cap. An entry's warmth
-lasts the marker's TTL on its tier. When every marker of the request carried one TTL and the response reports its cache
-writes at the other alone, the reported TTL is the lifetime of the message boundaries that response wrote, and of the
-static boundaries only when the response read nothing from the cache, since the usage names no tier. A static tier the
-response read from and a tier it only read keep their marker's lifetime, and a request with markers at both TTLs keeps
-each marker's.
+cap, without runway for the request (its rewrite and the burn of its sessions would take a window over `window_ceiling`
+before the window's horizon, or its worst live rate-limit bucket is full for an API-key account, see [The windows the
+router works from](#the-windows-the-router-works-from)), or winding down. The threshold binds a main conversation alone:
+a subagent cohort lands together on any shared prefix above zero, and an entry with a zero estimate places nothing for
+either. A cooling account never reaches either rung, since the eligible set excludes it. A spent account is in the
+eligible set, and both rungs refuse it through the allowance check. A subagent under `with_main` lands its first request
+on its parent agent's pin in place of the static walk, and one under `by_strategy` skips the static walk. Every case
+that finds no live match lands by the strategy. A held request of a subagent cohort waits where its cohort already is
+rather than on the strategy's own pick, and a session already on an account, under any of its agents, is never held
+while that account can still serve. A token count is never placed and never held: it is bound to no cap and occupies no
+slot, so its pin or the strategy decides it. It creates no pin, since it touches no cache: a count with a pin follows it
+past the cap and the move rules, and one without lands by the strategy and leaves the agent's next message to be placed
+under the cap. An entry's warmth lasts the marker's TTL on its tier. When every marker of the request carried one TTL
+and the response reports its cache writes at the other alone, the reported TTL is the lifetime of the message boundaries
+that response wrote, and of the static boundaries only when the response read nothing from the cache, since the usage
+names no tier. A static tier the response read from and a tier it only read keep their marker's lifetime, and a request
+with markers at both TTLs keeps each marker's.
 
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, `ready` or
 `funding_required` past its retry instant, off cooldown, and not already tried by this request. A request sent fast is
@@ -320,25 +319,28 @@ whose week or either shared window reads at or above 1 drops outright, unless th
 the poll has not read the account's extra usage as blocked, in which case it stays and orders behind every plan-funded
 account. An account already at the pool's `in_flight_cap` takes no fresh placement, ahead of every preference below.
 With every account at its cap the request is held for a slot instead (see **In-flight caps**, below). The rest are
-preferences that fall back to the wider set rather than stranding the request: `select_below_utilization` drops every
-account at or above that threshold in 5-hour utilization, and an account winding down toward its subscription end (see
-**Subscription end**, below) is skipped for a fresh placement too.
+preferences that fall back to the wider set rather than stranding the request: the request's fit drops every account
+without runway for it, and falls back to the whole set when none has it, and an account winding down toward its
+subscription end (see **Subscription end**, below) is skipped for a fresh placement too. A fresh session's fit reads the
+relay's estimate of the body's tokens as its rewrite and the median burn of the pool's warm sessions as its burn, a
+window the account has not read counts as untouched, and an account whose subscription ends within the next five hours
+never fits.
 
 What remains is ordered in tiers. With `prefer_subscription` on, the set splits into three kind groups walked in order,
 plan quota, overage, then API key. Within a group, or across the whole set with the flag off, tiers order by priority
 ascending, then, under `prefer_plan`, an account not in overage before one in overage. An account kept under `allow`
 with a spent window joins the overage group with the flag on, and with it off sorts behind every account that is not,
 whatever the priorities. The strategy picks inside the first non-empty tier. `pace` reads each account's sample as a
-window map: a subscription account scores by remaining allowance in its own window (the model's own Fable week where
-the model has one, else the 7-day window) over the hours to the earlier of that window's reset and the account's
-derived end. An API-key account scores by one minus its worst live rate-limit bucket's utilization alone, with no
-division by hours, since a bucket refills within a minute and its own reset never enters the score. Either way a window
-nobody has read reads as untouched: remaining 1 over the full week. A subscription window read past its reset reads as
-the router's own use since it, while an API-key bucket past its reset is refunded and reads as untouched, with no share
-of the router's own. Ties are random. An account whose remaining allowance in that window (the model's own Fable week
-where the model has one, else the 7-day window) is at or below the pool's `pace_floor` is kept as the last resort,
-ranked by the same score among the others below it, once no account above the floor remains. `priority` and
-`round_robin` read no sample and no floor at all.
+window map: a subscription account scores by its spare rate, the remaining allowance in its own window (the model's own
+Fable week where the model has one, else the 7-day window) over the hours to the earlier of that window's reset and the
+account's derived end, less the burn of the sessions already pinned to the account on that window, in share per hour. An
+account at 0.3 used with two heavy sessions can thus rank below an idle one at 0.6, and the score reads negative where
+the account spends faster than its pace allows. An API-key account scores by one minus its worst live rate-limit
+bucket's utilization alone, with no division by hours and no burn, since a bucket refills within a minute and its own
+reset never enters the score. Either way a window nobody has read reads as untouched: remaining 1 over the full week. A
+subscription window read past its reset reads as the router's own use since it, while an API-key bucket past its reset
+is refunded and reads as untouched, with no share of the router's own. Ties are random. `priority` and `round_robin`
+read no sample at all.
 
 
 A non-portable request, one whose body references a `file_id`, a `container` or a server-tool result, is answered by
@@ -373,6 +375,27 @@ and while an account backs off, since when and when its next attempt comes. The 
 [`phoebis_attention` gauge](statistics.md#conditions-and-gauges) holds once an account has backed off for thirty
 minutes.
 
+**The projection** Every move and placement reads where each plan window of a subscription account is headed: its
+prediction plus the burn of the sessions pinned to it under the pool's keys, priced per window on the account's tier at
+the band of now, times the time to the window's horizon. The 5-hour window's horizon is the earlier of its reset and the
+account's subscription end. A weekly window's, the 7-day window's and a model's own week's, is the earliest of five
+hours from now, its reset and the end, so a weekly projection looks five hours ahead at most. A 5-hour reading past its
+reset with no new reset looks five hours ahead too, since the window opens with the next request. `burn_average_seconds`
+(default 1800) is the time constant of each session's burn average, the figure the projection carries forward (see
+**Burn**, below). A burn the cost model cannot price adds nothing, so an account whose tier the profile has not named
+projects its prediction alone, and an API-key account has no plan window and no projection.
+
+A session's runway on an account is the time until that account's projection, with the session's cold rewrite (its last
+prompt as one cache write) added now and its burn added to the account's, reaches `window_ceiling`: none when the
+rewrite alone takes a window there, unbounded when nothing burns. The session fits the account when the runway reaches
+the horizon on every window its model draws, `five_hour`, `seven_day` and the model's own week where it has one. An
+API-key account fits while its worst live rate-limit bucket reads under 1.0.
+
+A move or a placement books its rewrite and its burn on the destination as a reservation, which the destination's
+prediction and burn count until the request's usage replaces it, the request ends without usage, or the reservation
+turns an hour old, so two moves in one second see each other. A token count, a keepalive probe, a request sent fast and
+a renewal book nothing, and a restart drops every reservation with the requests it belonged to.
+
 ### Moves
 
 A live pin on a portable request moves only when its session sends a request, and only by one of five rules, checked
@@ -381,25 +404,35 @@ and names the move after itself. A pin on an account past its subscription end r
 `subscription_ended` exclusion releases it, as a cooldown releases a cooled account's pin. A request sent fast takes
 neither the spent nor the overage rule, since it draws usage credits and no plan window.
 
-With `shed_ahead_of_pace` set, every rule prefers a cool destination, so a moved session does not land where the next
-round would shed it again. A cool sibling reads under the margin minus 0.05 (`MIGRATE_BAND`) on how far the 5-hour and
-7-day windows of a subscription account run ahead of their pace, or holds room (under 1.0) in the worst live rate-limit
-bucket of an API-key account, whatever the margin, since a bucket refills within its minute. An unsampled account reads
-as under. The account has run no shedding round within `source_dwell_seconds`, and it has room under the pool's
-`in_flight_cap`. When no destination of a rule is cool, the rule still moves the pin to one of them, so a full cool
-sibling never keeps a free hot one from the session. Only the shed rule insists on a cool one.
+Every rule takes its destination through one gate, the destination gate. It leaves out the source, the siblings the
+rule's own test refuses and every sibling whose subscription ends within the next five hours, since that end falls
+inside every horizon. It reads the moving session's fit on each sibling left (see **The projection**, above) and sorts
+them into three orders: the siblings the session fits, else the siblings where its rewrite lands under the ceiling but
+its burn runs out before a horizon, those with the longest runway among them with every tie kept, else the rest, the
+least bad. The rule answers the first order that holds a sibling, the fitting ones in the set's order, and the strategy
+picks among them, so Pace moves the session to the fitting sibling with the most spare rate. A sibling at the pool's
+`in_flight_cap` stays out of the first two orders, so a move does not pick a full account while a free fitting one
+exists. A sibling without a reading of a window the model draws, or whose tier the profile has not named, reads least
+bad for a move, since its rewrite cannot be priced there. A placement reads such an account as untouched instead: an
+OAuth account without a tier fits with an unbounded runway, so of its windows only a spent one keeps a fresh session off
+it, however high its utilization reads. The shed rule moves a marked pin only to a destination it fits, with the longest
+runway (a tie left to the strategy), and keeps the mark otherwise. The decision record names the order the gate took and
+lists every sibling it read with its projection, rewrite, runway and verdict.
 
 **Spent** The pinned account's allowance for the session's model is spent: the model's own week and both shared windows
 for a model with a week of its own, the shared plan windows otherwise (any of those readings at or above 1.0), while
 that reading stands (until its reset, or until the next reading for one that names none). With `migrate_when_spent` on
-(the default), the pin moves on this request to a sibling that holds allowance in those windows, without waiting for
-the upstream's 429. The shedding budget does not apply, and the band and the dwell only order the siblings: one ahead
-of its pace by the band's line that still holds allowance still receives the session when no cool one can. The router
-has to know the sibling's allowance: an API-key account has no plan window to spend, and any other sibling needs a
-reading of each of those windows, from a head, the poll or the windows kept across restarts, carried forward as the
-windows passage says. A sibling with none stays out of the choice. Under `prefer_plan` a sibling in overage does not
-receive a spent pin, since the overage move would hand the session straight back. With the toggle off, or no sibling
-holding allowance, the session stays.
+(the default), the pin moves on this request to a sibling that holds allowance in those windows, without waiting for the
+upstream's 429. The siblings that hold allowance pass the destination gate's three orders, so the session lands on one
+it fits when one exists, else on the one its rewrite fits with the longest runway, else on the least bad. When the spent
+window resets within `retry_in_place_seconds`, the request waits in place for the reset instead of moving cold, once per
+account, and the decision reads held for the reset. The wait runs to the later of the reset and the end of any cooldown
+the 429 set, so the request does not select again on a cooling account, and it holds only when that later instant falls
+within the bound. The router has to know the sibling's allowance: an API-key account has no plan window to spend, and
+any other sibling needs a reading of each of those windows, from a head, the poll or the windows kept across restarts,
+carried forward as the windows passage says. A sibling with none stays out of the choice. Under `prefer_plan` a sibling
+in overage does not receive a spent pin, since the overage move would hand the session straight back. With the toggle
+off, or no sibling holding allowance, the session stays.
 
 **Overage** Under `prefer_plan`, a pin on a subscription account in overage returns to plan quota: warm or cold, it
 moves to a subscription sibling that is not in overage, never to an API-key account. The sibling has to hold allowance
@@ -408,39 +441,59 @@ names falls within `overage_move_grace_minutes` (default 30, `0` for no wait), s
 back soon keeps its cache and moves at most once. Evidence that names no reset moves the pin at once.
 
 **Return to plan** A pin on an API-key account moves to a subscription sibling that holds allowance and is not in
-overage once its cache is cold, or once it has sat on the account for `source_dwell_seconds` since it landed there. An
+overage once its cache is cold, or once it has sat on the account for `shed_dwell_seconds` since it landed there. An
 API key names no reset, so no grace applies.
 
 **Drain** A cold pin on an account winding down toward its subscription end moves to an eligible sibling that is not
 winding down. A warm one stays (see **Subscription end**, below).
 
-**Shed** With `shed_ahead_of_pace` set, a request pinned to an account whose 5-hour or 7-day window runs ahead of its
-pace by at least the margin (the prediction less the share of the window already elapsed toward the window's reset, or
-toward the account's subscription end when that comes first, where a 5-hour window past its reset reads the router's
-own use since) starts a shedding round there, at most once per `source_dwell_seconds`. The round orders the pool's pins
-on the account, cold ones first by burn, then warm ones by burn over rewrite cost (the pin's last prompt size in
-tokens), and marks them in that order until the marked burn reaches `shed_share` (default 0.5) of the burn on the
-account over `burn_window_seconds` (default 600). It never marks the pool's last unmarked pin there, so a pool with one
-session on the account sheds nothing, and no round takes all of an account's burn. A pin a former pool left on the
-account is outside the round until it ends. A pin whose burn carries the total past the share stays marked, and the
-round stops there. A pin whose burn the cost model cannot price ranks after every priced pin of its group, counts
-nothing toward the share and is never marked, so a session is never shed on a guess. `warm_sessions` bounds the order:
-`never` stops after the cold pins, `when_needed` (the default) goes on to the warm ones, and `always` orders every pin
-by burn over rewrite cost, cold or warm. While the account runs on its plan, a pin whose last refreshing request was
-sent in fast mode is out of the round: fast mode draws usage credits and no plan window, so the pin has no share to
-shed. In dollars, on an API-key account or one in overage, it stays in the round. A session that returns to standard
-requests brings its pin back with the plan burn it still carries.
+**Shed** With the pool's `load_shedding` on (the default), a request pinned to an account starts a shedding round there
+when the account's projection on one of its plan windows reads over `window_ceiling` at that window's horizon (see **The
+projection**, above). The windows are tested in the order `five_hour`, `seven_day`, then each model week a pin of the
+pool on the account draws, and the first that crosses fires and is the round's window. A weekly window's horizon lies
+five hours ahead at most, so a weekly wall is shed only in its last five hours, when the gate also stops placing new
+sessions there. A round runs on an account at most once per `shed_dwell_seconds`, and a selection runs one round at
+most. The excess is the burn that, removed now, lands the fired window's projection on the ceiling at its horizon. The
+round's target is the lesser of the excess and `shed_cap` (default 0.5) of the burn of the round's pins on that window,
+so the excess sets the amount and the cap bounds it.
+
+With `load_shedding` off no round runs and nothing is marked, and a mark already standing is released at the session's
+next request, which renews the pin in place. The destination gate, the reservations and `window_ceiling` on every move
+and placement stay in force. The spent move has its own toggle, `migrate_when_spent`, which the switch does not touch.
+
+The round orders the pool's pins on the account, cold ones first by burn, then warm ones by burn over rewrite cost (the
+pin's last prompt size in tokens), each burn read from the pin's average decayed with `burn_average_seconds`.
+`warm_sessions` bounds the order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm
+ones, and `always` orders every pin by burn over rewrite cost, cold or warm. A pin a former pool left on the account is
+outside the round until it ends. While the account runs on its plan, a pin whose last refreshing request was sent in
+fast mode is out of the round: fast mode draws usage credits and no plan window, so the pin has no share to shed. In
+dollars, on an API-key account or one in overage, it stays in the round. A session that returns to standard requests
+brings its pin back with the plan burn it still carries. The round then walks the pins in that order while the burn it
+removed, each pin's burn on the fired window, is under the target. A pin with a standing mark counts its burn as removed
+and is skipped as `standing`, since its move is pending. The pool's last unmarked pin on the account is never marked
+(`last_pin`), so a pool with one session there sheds nothing and no round takes all of an account's burn. A pin whose
+burn the cost model cannot price counts nothing and is never marked (`unpriced`), so a session is never shed on a guess.
+A pin the shed rule's gate finds no destination for is skipped as `no_runway` and counts nothing. Every other pin is
+marked with the destination the gate planned for it, and the walk counts that destination's planned rewrite and burn for
+the pins after it, so two marks do not take one sibling's headroom twice. A pin whose burn carries the removed burn past
+the target stays marked, and the walk stops there. A round that marks nothing records why: `no_runway` when no priced
+pin had a destination, `last_pin` when the account had one pin, `standing` when every pin walked was a pending move, and
+`unpriced` when no burn was priced. Either way the round is recorded, so the dwell holds.
 
 A marked session moves at its next request, the request that ran the round included, since the mark check follows the
-round. It moves onto a cool sibling (see above) that did not shed this pin within `source_dwell_seconds`. A mark from a
-round on plan quota moves a standard request alone: a fast-mode request of the marked session stays where it is. A pin
-on an account cooling for the session's model, marked or not, is released rather than moved, with `cooldown` among its
-reasons: the selection's renew step does not renew it, the fresh placement takes its place, and a mark goes with it. The
-round on the account still runs, since a cooldown can hold one model alone. An unmarked pin never moves for utilization.
-The marks last for the dwell: a marked session that stays idle never moves, and no new round runs on the account until
-its dwell passes. The round's marks and its dwell are written to the registry and survive a restart, so a restart
-neither forgets a mark nor starts a fresh round inside the dwell. A held request does not survive one (the relay's open
-connection closes and the client retries), and the routing log's router started row says so.
+round. It moves only to a sibling it fits, the one with the longest runway, never within `shed_dwell_seconds` back to an
+account that shed it, and with none it renews in place and keeps its mark. A mark from a round on plan quota moves a
+standard request alone: a fast-mode request of the marked session stays where it is. A pin on an account cooling for the
+session's model, marked or not, is released rather than moved, with `cooldown` among its reasons: the selection's renew
+step does not renew it, the fresh placement takes its place, and a mark goes with it. The round on the account still
+runs, since a cooldown can hold one model alone. An unmarked pin never moves for utilization. A mark holds until the pin
+moves, is released or expires, or its account heals: when the account's projection on the marked window reads under the
+ceiling at the pin's next request, the mark clears and the pin stays. A later round adds its marks beside the standing
+ones. `shed_dwell_seconds` (default 900) thus has two roles, the pause between two rounds on one account and the time a
+shed session keeps off the account that shed it. The marks live on the pins' rows in the registry, beside each account's
+last round, so a restart neither forgets a mark nor starts a fresh round inside the dwell. A held request does not
+survive one (the relay's open connection closes and the client retries), and the routing log's router started row says
+so.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
 or `compaction` request ([`x-claude-code-request-class`](client.md#claude_code_gateway_hint_headers)) refreshes it, and
@@ -460,32 +513,40 @@ renewal counts as a refresh while the pin still holds the lane the probe was sen
 session moved to another lane refreshed another cache and leaves the pin as it was. A `count_tokens` request creates no
 cache entry, so it neither refreshes nor colds the pin and leaves its cache TTL as it was.
 
-**Burn** Each pin keeps its usage over `burn_window_seconds` as typed tokens per hour (input, cache read, 5-minute and
-1-hour cache writes, output) for the pin's one model, in three copies: one plain and one weighed by the peak band at
-each renewal for its standard answers, and a third for its fast answers, priced at the fast cells where the model has
-them. The registry keeps all three on the pin's row, so a restart reads each as saved. Nothing is priced until it is
-read: the round prices the banded copy as a share of the account's 5-hour window while a subscription account runs on
-its plan, and the plain copy in dollars, at the set the pin's last prompt selects on a model priced by prompt length
+**Burn** Each pin keeps an average of its usage as typed tokens per second (input, cache read, 5-minute and 1-hour cache
+writes, output) for the pin's one model, decayed with the pool's `burn_average_seconds` (default 1800) as its time
+constant, in three copies: one plain and one weighed by the peak band at each renewal for its standard answers, and a
+third for its fast answers, priced at the fast cells where the model has them. The registry keeps all three on the pin's
+row, so a restart reads each as saved, and a move carries them onto the pin's new row, so its destination counts the
+session's burn from the moment it lands. Nothing is priced until it is read: the round orders its pins by the banded
+copy as a share of the anchor tier's 5-hour window while a subscription account runs on its plan, and by the plain copy
+in dollars, at the set the pin's last prompt selects on a model priced by prompt length
 ([Pricing](statistics.md#pricing)), with the fast copy added in, on an API-key account or a subscription account in
 overage, so leaving overage switches the reading without a reset and a session that moves between tiers reads the right
-share on both. A keepalive probe's usage never counts. A burn the model cannot price, for a model it has no weight for
-or a tier it has no capacity for, reads as none.
+share on both. The projection, the round's walk and the spare rate price the plain copy on the account's tier, on every
+window the pin's model draws, at the band in force when they read. A keepalive probe's usage never counts. A burn the
+model cannot price, for a model it has no weight for or a tier it has no capacity for, reads as none.
 
 Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `fast_lane`, `mark`, `overage`,
 `return_to_plan`, `shed` or `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session,
-`fast_lane` when a fast-mode rejection moved the session, the others after the rule above that moved it. A pin released
-without a move records `pin_expired` with `reasons`, every fact the selection found against the account: `attempted`,
-`budget` (the pinned member has reached one of its spend budgets), `budget_unknown` (the ledger is degraded and the
-pinned member carries a budget), `cooldown`, `deleted`, `expired`, `fast_credits` (a fast request's pinned account whose
-`fast_credits` row stands or whose usage credits the poll reads as unavailable) and `fast_rate_limit` (one whose `fast`
-row is the blocking row that stands latest), `overage`, `paused`, `spent`, `subscription_ended`, `unserved`, the
-account's state when it cannot serve (`disconnected`, `funding_required` until its retry is admitted, `reauth_required`,
-`unpaired`), or `released` when the selection found nothing else against the account, as with a move whose destination
-emptied. A pin whose creating request was answered 400, 403 or 404, or was bound to its account and ended at an
-authentication failure that marked nothing, with no cooldown or mark on the account and no other turn of the session
-renewing it meanwhile, records the single reason `client_error`: it never served, so the session's next request is
-placed afresh rather than moved. Releasing a session by hand, from the Sessions view ([Sessions](console.md#sessions))
-or `POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
+`fast_lane` when a fast-mode rejection moved the session, the others after the rule above that moved it. A move a rule's
+gate read adds the destination's fit (`fits`, `rewrite_only` or `least_bad`), its runway and the window that binds it. A
+mark that clears records `mark_cleared` with the reason `healed` (the account's projection on the marked window read
+under the ceiling again), `moved` or `released`. A reservation that leaves without the usage that would have replaced it
+records `reservation_expired`, with the relay's word for a request that ended without usage (`canceled`, `exhausted`,
+`refused` or `transport_error`) or `timeout` for a booking an hour old. A pin released without a move records
+`pin_expired` with `reasons`, every fact the selection found against the account: `attempted`, `budget` (the pinned
+member has reached one of its spend budgets), `budget_unknown` (the ledger is degraded and the pinned member carries a
+budget), `cooldown`, `deleted`, `expired`, `fast_credits` (a fast request's pinned account whose `fast_credits` row
+stands or whose usage credits the poll reads as unavailable) and `fast_rate_limit` (one whose `fast` row is the blocking
+row that stands latest), `overage`, `paused`, `spent`, `subscription_ended`, `unserved`, the account's state when it
+cannot serve (`disconnected`, `funding_required` until its retry is admitted, `reauth_required`, `unpaired`), or
+`released` when the selection found nothing else against the account, as with a move whose destination emptied. A pin
+whose creating request was answered 400, 403 or 404, or was bound to its account and ended at an authentication failure
+that marked nothing, with no cooldown or mark on the account and no other turn of the session renewing it meanwhile,
+records the single reason `client_error`: it never served, so the session's next request is placed afresh rather than
+moved. Releasing a session by hand, from the Sessions view ([Sessions](console.md#sessions)) or
+`POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
 
 ## Cooldowns and failover
 
@@ -695,19 +756,19 @@ returned, a stream for its whole length, whether it finishes, fails or the clien
 account is charged by the selection that chose it, so two selections answered together never read the same free slot,
 and a retry on the same account is charged at its dispatch. The count is kept by the router itself, and no report is
 involved. A token count is not counted: it occupies no slot, is never passed over at the cap and is never held for one.
-An account at the pool's `in_flight_cap` (default 16) is passed over while a sibling is under it, even a sibling above
-`select_below_utilization`: the cap is a bound, the ceiling a preference. Only when every account that could serve is
-at its cap is the request held: it waits for a slot on the account it would have chosen, and every hold of one request
-shares one bound of `retry_in_place_seconds` from the first hold, whatever the pool's size. A slot that frees inside it
-lands the request there, and past it the request is selected again with that account passed over. With every account
-passed over it is answered `429` with the error code `accounts_at_cap` and a `Retry-After` of the pool's
-`retry_in_place_seconds` held between 1 and 19 seconds: the client waits out a `Retry-After` under 20 seconds and treats
-a longer one as a block it does not retry. A request is held at most once per account and never past the request's one
-bound: a hold that runs out, or whose freed slot another request takes first, adds the account to the request's
-attempted set and the selection runs again. A request that dialed an account before its holds ran out, and a pool with
-no account to hold for, keep the `503 accounts_unavailable` below. A request whose session already holds a pin under
-any agent is never held, and a move whose every destination is at its cap is not made: the pin renews in place and the
-next request judges the move again. A held subagent waits where its cohort is.
+An account at the pool's `in_flight_cap` (default 16) is passed over while a sibling is under it, even a sibling the
+request does not fit: the cap is a bound, the fit a preference. Only when every account that could serve is at its cap
+is the request held: it waits for a slot on the account it would have chosen, and every hold of one request shares one
+bound of `retry_in_place_seconds` from the first hold, whatever the pool's size. A slot that frees inside it lands the
+request there, and past it the request is selected again with that account passed over. With every account passed over
+it is answered `429` with the error code `accounts_at_cap` and a `Retry-After` of the pool's `retry_in_place_seconds`
+held between 1 and 19 seconds: the client waits out a `Retry-After` under 20 seconds and treats a longer one as a block
+it does not retry. A request is held at most once per account and never past the request's one bound: a hold that runs
+out, or whose freed slot another request takes first, adds the account to the request's attempted set and the selection
+runs again. A request that dialed an account before its holds ran out, and a pool with no account to hold for, keep the
+`503 accounts_unavailable` below. A request whose session already holds a pin under any agent is never held, and a move
+whose every destination is at its cap is not made: the pin renews in place and the next request judges the move again. A
+held subagent waits where its cohort is.
 
 ### When nothing can serve
 
@@ -775,7 +836,7 @@ A pool's `overage_policy` chooses what happens once an account starts billing ex
   `overage_move_grace_minutes` (default 30). An API-key sibling is never its destination, since a move onto an API-key
   account is kept for a hard reason. A hard reason on the account instead, such as a spent window or a cooldown, takes
   the move it already has, which may land on an API-key sibling. An API-key member returns to plan quota the same way,
-  independent of this policy, once its pin is cold or has sat on the account for `source_dwell_seconds`
+  independent of this policy, once its pin is cold or has sat on the account for `shed_dwell_seconds`
   ([Moves](#moves)).
 - **Allow** (`allow`): ignore extra usage.
 - **Never** (`never`): treat an account in extra usage as unavailable until its window resets.
@@ -820,7 +881,9 @@ end from the profile's start, or a trial end already passed, advanced to the nex
 month and time of day, editable before it is saved. A trial end still ahead counts as an end the same way, even on an
 account nobody has cancelled.
 
-Inside `wind_down_minutes` (default 30) of its end, an account takes a fresh session only as the last resort, and a
-cold pin moves off it once another account can serve. A warm session stays (the **Drain** rule of [Moves](#moves)).
-Past the end, a cancelled account is the obstacle `subscription_ended`, and the upstream refuses the dead credential, so
-the session's next request fails over to a sibling.
+Within five hours of its end, an account is no destination for any move and leaves the set a fresh placement keeps for
+its fit, since the end falls inside every horizon ([Moves](#moves)). Inside `wind_down_minutes` (default 30) of its end,
+an account takes a fresh session only as the last resort, and a cold pin moves off it once another account can serve. A
+warm session stays (the **Drain** rule of [Moves](#moves)). Past the end, a cancelled account is the obstacle
+`subscription_ended`, and the upstream refuses the dead credential, so the session's next request fails over to a
+sibling.
