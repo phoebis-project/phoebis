@@ -2639,8 +2639,17 @@ fn move_of<'a>(
                 request.fast,
             )
             .map(|row| row.until);
+        // Once per source: a sample read during the wait can move the reset past the hold's end, and a second hold
+        // on the account the request held on or attempted would repeat until the request's deadline, so the rule
+        // continues to the move or the exhaustion instead.
+        let held_on = request.attempted.contains(&current.account_id)
+            || request
+                .holds
+                .iter()
+                .any(|hold| hold.account_id == current.account_id);
         if let Some((reset, spent_window, until)) =
             refunded_at(state, &current.account_id, window, now)
+                .filter(|_| !held_on)
                 .map(|(reset, spent_window)| {
                     (
                         reset,

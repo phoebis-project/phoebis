@@ -13,7 +13,7 @@ use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_profile::fixtures::{body, BodyFixture};
 use phoebis_routing::{
     DecisionRecord, DecisionSummary, Report, RouterConfig, RouterEvent, SharePricer,
-    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR,
+    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
 };
 use phoebis_store::SubscriptionRow;
 use tokio::sync::broadcast;
@@ -361,6 +361,131 @@ async fn a_spent_window_resetting_inside_the_bound_is_waited_out_in_place_and_th
         "the renewal's decision carries the one wait with its reason"
     );
     assert_eq!(credentials_seen(&up), [A, A, B, A]);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_reset_that_moves_during_the_wait_moves_the_pin_rather_than_holding_the_request_again() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(A, "/v1/messages", json_200());
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    let first = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&first).account_id, "a", "s1 pins to a");
+    drain(first).await;
+    up.push_credential_rule(A, "/v1/messages", json_429_spent(NOW / 1_000 + 2));
+    let spent = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s2"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&spent).account_id, "b");
+    drain(spent).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let app = h.app.clone();
+    let waiting =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
+    let mut seen = Vec::new();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the hold's decision arrives")
+            .expect("not lagged");
+        let held =
+            matches!(&event, RouterEvent::Decision { summary, .. } if summary.kind == "held");
+        seen.push(event);
+        if held {
+            break;
+        }
+    }
+    // A poll during the wait reads the window still spent, its reset a minute out: past the hold's end and inside the
+    // bound of the selection that follows it, so without the one-hold rule the request would hold on a again. The
+    // head's reading is dated by the upstream's clock, so the poll's is dated just after it to replace it.
+    let read_at = h
+        .router
+        .samples()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|(id, _)| id == "a")
+        .and_then(|(_, sample)| sample.windows.get(FIVE_HOUR).map(|r| r.observed_at))
+        .expect("the 429 recorded a's reading");
+    let reading = |utilization: f64, reset: i64| WindowReading {
+        utilization,
+        reset: Some(reset),
+        observed_at: read_at + 1,
+        source: WindowSource::Poll,
+    };
+    h.router
+        .report(Report::Sample {
+            account_id: "a".into(),
+            sample: UtilizationSample::default().with(FIVE_HOUR, reading(1.0, NOW + 63_000)),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    // The same poll reads b's allowance, which the spent rule has to know before it moves the pin there.
+    h.router
+        .report(Report::Sample {
+            account_id: "b".into(),
+            sample: UtilizationSample::default()
+                .with(FIVE_HOUR, reading(0.3, NOW + 3 * 3_600_000))
+                .with(SEVEN_DAY, reading(0.1, NOW + 72 * 3_600_000)),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    h.clock.store(NOW + 3_000, Ordering::SeqCst);
+    // The decision after the wait is read as it lands, so a second hold fails the case rather than spinning it.
+    let second = loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the decision after the wait arrives")
+            .expect("not lagged");
+        let kind = match &event {
+            RouterEvent::Decision { summary, .. } => Some(summary.kind),
+            _ => None,
+        };
+        seen.push(event);
+        if let Some(kind) = kind {
+            break kind;
+        }
+    };
+    assert_eq!(
+        second, "moved",
+        "the request held once and moves on its next selection"
+    );
+    let resp = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .expect("the request lands on the sibling")
+        .unwrap();
+    tokio::time::resume();
+    let o = outcome(&resp);
+    assert_eq!(
+        (resp.status().as_u16(), o.account_id.as_str(), o.attempt),
+        (200, "b", 1),
+        "one wire attempt, on the sibling the pin moved to"
+    );
+    drain(resp).await;
+    seen.extend(events_through_cache_map(&mut events, &o.request_id).await);
+    assert_eq!(
+        decisions_of(&seen, &o.request_id),
+        [(1, 1, "held"), (2, 1, "moved")],
+        "the request's decisions stay at one hold"
+    );
+    assert_eq!(credentials_seen(&up), [A, A, B, B]);
     up.shutdown().await;
 }
 

@@ -16494,6 +16494,64 @@ fn a_spent_pin_waits_in_place_for_a_reset_inside_the_retry_bound_and_moves_past_
 }
 
 #[test]
+fn a_request_holds_for_a_reset_once_per_source_and_moves_when_the_reset_moved_during_the_wait() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let spent = || {
+        let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
+        st.record_sample("a", refreshing(1.0, T + 30_000, T + 72 * HOUR, T - 500));
+        st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+        st
+    };
+    let mut st = spent();
+    let SelectResult::Held { hold, .. } = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    )
+    .0
+    else {
+        panic!("the reset 30 s out holds the request")
+    };
+    // A newer sample read during the wait moves the reset to 45 s past the hold's end, inside the bound of the
+    // selection that follows, and the wait cleared, so the account is held on and not attempted.
+    st.record_sample("a", refreshing(1.0, T + 75_000, T + 72 * HOUR, T + 29_000));
+    let after = SelectRequest {
+        seq: 2,
+        holds: vec![HoldFacts {
+            held_ms: 30_000,
+            ..hold
+        }],
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 30_000)
+    };
+    let d = decide(&mut st, &s, &after, &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent)),
+        "the second selection moves the pin rather than holding on the account it held on"
+    );
+    assert_ne!(line(&d.record, "move:spent").verdict, "held");
+    // An account the request attempted is no source to hold on either.
+    let mut st = spent();
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &["a"], T),
+                &mut rng()
+            )
+            .0
+        ),
+        ("b".into(), Some(MigrateReason::Spent)),
+        "a reset inside the bound on an attempted account moves the pin"
+    );
+}
+
+#[test]
 fn the_shed_rule_takes_the_one_fitting_destination_with_the_longest_runway_or_none() {
     let s = tiered(gate_pool());
     let round = |b: f64, c: f64| {
