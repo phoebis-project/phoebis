@@ -19,8 +19,8 @@ export function boundPatterns(text: string): { cut: boolean; text: string } {
 }
 
 export interface GroupByProps<G extends string> {
-  /** The options in the page's order, the label the select prints. */
-  options: readonly { label: string; value: G }[];
+  /** The options in the page's order, the label the select prints, and a title where an option needs a word on itself. */
+  options: readonly { label: string; title?: string; value: G }[];
   onChange: (next: G) => void;
   value: G;
 }
@@ -32,7 +32,7 @@ export function GroupBy<G extends string>({ onChange, options, value }: GroupByP
       <span className="muted">Group by</span>
       <Select aria-label="Group by" value={value} onChange={(e) => onChange(e.target.value as G)} className="groupby-select">
         {options.map((o) => (
-          <option key={o.value} value={o.value}>
+          <option key={o.value} value={o.value} title={o.title}>
             {o.label}
           </option>
         ))}

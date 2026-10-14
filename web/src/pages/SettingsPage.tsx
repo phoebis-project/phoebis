@@ -2,10 +2,13 @@ import { api } from '@/api';
 import { effectiveLabel } from '@/api/decode';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { IconMonitor, IconMoon, IconSun } from '@/components/ui/icons';
-import { Badge, Button, Card, CopyButton, ErrorState, KeyValue, Segmented, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, CopyButton, ErrorState, KeyValue, Segmented, Select, Skeleton } from '@/components/ui/primitives';
+import { UnitLegend } from '@/components/ui/UnitControls';
+import { revisionAt } from '@/lib/costs';
 import type { TimeFormat } from '@/lib/format';
-import { useAsync } from '@/lib/hooks';
+import { useAsync, useNow } from '@/lib/hooks';
 import { snippetFor } from '@/lib/snippet';
+import { positionOf, UNIT_LABEL, UNIT_POSITIONS } from '@/lib/unit';
 
 const ENV_TERMS: { body: string; term: string }[] = [
   {
@@ -45,13 +48,26 @@ const ENV_TERMS: { body: string; term: string }[] = [
 /** These come from the configuration file and the admin API only reads them, so each says where it is set. */
 const bootstrapNote = (setting: string) => `Set by ${setting} in the configuration file`;
 
+/**
+ * A table's date in force, its revision count and the next date while one is pending, read at one instant by the rule
+ * the cost reference's select reads. An answer that lists no revision names the date it sent alone.
+ */
+const revisionsNote = (revisions: { effective: string; effectiveDate: string | null }[], sent: string, now: number): string => {
+  const inForce = revisionAt(revisions, now);
+  if (inForce === null) return `effective ${effectiveLabel(sent)}`;
+  const pending = revisions.find((r) => r !== inForce && r.effectiveDate !== null && Date.parse(r.effectiveDate) > now);
+  const count = revisions.length === 1 ? '1 revision' : `${revisions.length} revisions`;
+  return `effective ${effectiveLabel(inForce.effective)}, ${count}${pending === undefined ? '' : `, next ${effectiveLabel(pending.effective)}`}`;
+};
+
 function SecretBadge({ configured }: { configured: boolean }) {
   return <Badge tone={configured ? 'good' : 'warning'}>{configured ? 'configured' : 'not configured'}</Badge>;
 }
 
 export function SettingsPage() {
   const settings = useAsync(() => api.getSettings(), []);
-  const { theme, setTheme, timeFormat, setTimeFormat } = useAppSettings();
+  const { theme, setTheme, timeFormat, setTimeFormat, unit, setUnit } = useAppSettings();
+  const now = useNow(60_000);
   const s = settings.data;
   const snippet = snippetFor(s?.listeners ?? null);
 
@@ -89,6 +105,23 @@ export function SettingsPage() {
             ]}
           />
         </div>
+        <div className="setting-row">
+          <div>
+            <b>Unit</b>
+            <p className="muted">The unit every view prices a request in. Native reads a subscription request as 20x window equivalents and a billed request in dollars.</p>
+          </div>
+          {/* The legend sits beside the mirror too, since the top bar gives its button up at a phone's width. */}
+          <div className="unit-setting">
+            <Select aria-label="Unit" value={unit} onChange={(e) => setUnit(positionOf(e.target.value))}>
+              {UNIT_POSITIONS.map((p) => (
+                <option key={p} value={p}>
+                  {UNIT_LABEL[p]}
+                </option>
+              ))}
+            </Select>
+            <UnitLegend />
+          </div>
+        </div>
       </Card>
 
       <Card title="About">
@@ -100,8 +133,8 @@ export function SettingsPage() {
                 { label: 'Profile', value: s.about.profile, mono: true },
                 { label: 'Metrics listener', value: s.listeners.metrics, mono: true, title: 'The Prometheus scrape endpoint.' },
                 { label: 'Ledger path', value: s.storage.ledgerPath, mono: true, title: bootstrapNote('stats.ledger_path') },
-                { label: 'API prices path', value: `${s.storage.apiPricesPath ?? 'not configured'}, effective ${effectiveLabel(s.apiPrices.effective)}`, mono: s.storage.apiPricesPath !== null, title: bootstrapNote('stats.api_prices_path') },
-                { label: 'Subscription costs path', value: `${s.storage.subscriptionCostsPath ?? 'not configured'}${s.subscriptionCosts.problem === null ? `, effective ${effectiveLabel(s.subscriptionCosts.effective)}` : `. ${s.subscriptionCosts.problem}`}`, mono: s.subscriptionCosts.problem === null && s.storage.subscriptionCostsPath !== null, title: bootstrapNote('stats.subscription_costs_path') },
+                { label: 'API prices path', value: `${s.storage.apiPricesPath ?? 'not configured'}, ${revisionsNote(s.apiPrices.revisions, s.apiPrices.effective, now)}`, mono: s.storage.apiPricesPath !== null, title: bootstrapNote('stats.api_prices_path') },
+                { label: 'Subscription costs path', value: `${s.storage.subscriptionCostsPath ?? 'not configured'}${s.subscriptionCosts.problem === null ? `, ${revisionsNote(s.subscriptionCosts.revisions, s.subscriptionCosts.effective, now)}` : `. ${s.subscriptionCosts.problem}`}`, mono: s.subscriptionCosts.problem === null && s.storage.subscriptionCostsPath !== null, title: bootstrapNote('stats.subscription_costs_path') },
                 { label: 'Storage path', value: s.storage.path, mono: true, title: bootstrapNote('storage.path') },
                 { label: 'Admin secret', value: <SecretBadge configured={s.access.adminConfigured} />, title: 'The secret the variable admin.secret_env names. It reaches every route.' },
               ]}

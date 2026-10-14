@@ -1,7 +1,8 @@
 import type { Api } from '@/api/client';
-import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, FundingFilter, PinMigrationReason, Placement, PlacementRow, SubscriptionCosts, WindowSample } from '@/api/types';
+import type { Account, AccountRollup, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, PinMigrationReason, Placement, PlacementRow, SubscriptionCosts, WindowSample } from '@/api/types';
 import { tierCapacity, tierRow, type CostWindow } from '@/lib/costs';
-import { fmtCompact, fmtInt, fmtPct, fmtShare } from '@/lib/format';
+import { earlierHolderLabel, equivalentShort, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtShare, fmtUsd, withEstimate } from '@/lib/format';
+import type { UnitPosition } from '@/lib/unit';
 import { WINDOW_LABEL, windowKeyId } from '@/lib/windows';
 
 /** Why a session's pin moved, as the pool card's moves tile, the rewrites legend and the routing log word it. */
@@ -49,11 +50,18 @@ export const OTHER_KEY = 'other';
  */
 export type BurnLineUnit = BurnUnit | 'unknown';
 const OTHER_LABEL: Record<BurnLineUnit, string> = { unknown: 'Other (tier unknown)', usd: 'Other (dollars)', window_share: 'Other (plan)' };
+/**
+ * The figure the plan charts read off the burn points: each account's share of its own windows, which the route
+ * answers where a group holds one account's rows, or the 20x window equivalents, which it answers under every grouping.
+ */
+export type BurnFigure = 'equivalent' | 'share';
 
 export interface BurnLine {
-  /** The highest 5-hour share per hour the range reached; null for a line with no share in any bucket. */
+  /** Whether any bucket of the line priced through the tier fallback, so the legend lists the estimated entry. */
+  estimated: boolean;
+  /** The highest 5-hour figure per hour the range reached, null for a line with no figure in any bucket. */
   fiveHourPeak: number | null;
-  /** The range's 5-hour share per hour over the buckets that read one; null on a window the line never priced. */
+  /** The range's 5-hour figure per hour over the buckets that read one, null on a window the line never priced. */
   fiveHourPerHour: number | null;
   key: string;
   label: string;
@@ -67,11 +75,17 @@ export interface BurnLine {
    */
   unit: BurnLineUnit;
   /**
-   * Per window, whether a bucket with tokens has no share on it: a model the cost model has no weight for, or a tier it
-   * has no capacity for on that window. False on a line that does not chart window share.
+   * Per window, whether a bucket with tokens has no figure on it: a model of no known model tier, or a tier the cost
+   * model has no capacity for on that window. False on a line the plan charts do not draw.
    */
   unpriced: { fiveHour: boolean; sevenDay: boolean };
   usdPerMinute: number;
+  /**
+   * The range's model week figure per hour over the buckets that answered one. The route answers none alike for a
+   * bucket off every model with a week of its own and for one it could not price, so a gap is left out rather than read
+   * as zero. Null for a line that never ran on such a model.
+   */
+  weekPerHour: number | null;
 }
 
 /**
@@ -81,6 +95,8 @@ export interface BurnLine {
 export interface BurnRow {
   at: number;
   cached: number[];
+  /** Per slot, whether a point of the bucket priced through the model tier's fallback weight. */
+  estimated: boolean[];
   /**
    * Null where the slot's traffic could not be priced, or on a window the line never priced; an idle slot reads zero
    * on a window the line priced.
@@ -106,15 +122,29 @@ export interface BurnRow {
   tokens: number[];
   uncached: number[];
   usd: number[];
+  /** The model week's figure per hour, null where no row of the bucket ran on a model with a week of its own or the
+   *  route could not price one there. */
+  week: (number | null)[];
+  /** Per slot, whether a point of the bucket carried a model week figure, so a gap marks no estimate. */
+  weekAnswered: boolean[];
+}
+
+/** One window's running figure over a slot's points: null until a point carries one, and latched once a point with
+ *  traffic carries none, since a partial sum would read as the slot's figure. */
+interface WindowFold {
+  sum: number | null;
+  unpriced: boolean;
 }
 
 interface Sum {
   cached: number;
-  fiveHour: number | null;
-  sevenDay: number | null;
+  estimated: boolean;
+  fiveHour: WindowFold;
+  sevenDay: WindowFold;
   tokens: number;
   uncached: number;
   usd: number;
+  week: number | null;
 }
 
 /**
@@ -142,16 +172,30 @@ export function isolatedSlots(values: (number | null)[]): boolean[] {
 
 /**
  * The burn route's answer with the accounts beside it, read together: a profile refresh can supply a tier the last
- * read lacked, and the plan chart sizes each account from the tiers of the read that answered its buckets. Only the
- * account grouping sizes its lines, so another grouping reads no account and a failed account read leaves it whole.
+ * read lacked, and the plan charts size each account from the tiers of the read that answered its buckets. Only a
+ * read whose groups each hold one account's rows answers shares to size (the account grouping, or the Accounts filter
+ * naming exactly one account), so any other reads no account and a failed account read leaves it whole.
  */
 export async function readBurn(
   source: Pick<Api, 'getAnalyticsBurn' | 'listAccounts'>,
   range: Pick<AnalyticsQuery, 'from' | 'to'>,
   groupBy: BurnGroup,
+  filters: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'> = {},
 ): Promise<{ accounts: Account[]; answer: { bucketSeconds: number; points: BurnPoint[] } }> {
-  const [answer, accounts] = await Promise.all([source.getAnalyticsBurn(range, groupBy), groupBy === 'account' ? source.listAccounts() : Promise.resolve<Account[]>([])]);
+  const sizes = groupBy === 'account' || filters.accountIds?.length === 1;
+  const [answer, accounts] = await Promise.all([source.getAnalyticsBurn(range, groupBy, filters), sizes ? source.listAccounts() : Promise.resolve<Account[]>([])]);
   return { accounts, answer };
+}
+
+/** An earlier holder of a key id groups under `<id>@<generation>`, which the breakdown labels by its creation. */
+const EARLIER_HOLDER = /^(.+)@(\d+)$/;
+/**
+ * A burn group's label: the breakdown's for an earlier key holder, `unattributed` for what the router never attributed.
+ */
+function burnLabelOf(groupBy: BurnGroup, key: string): string {
+  if (key === '-') return 'unattributed';
+  const holder = groupBy === 'key' ? EARLIER_HOLDER.exec(key) : null;
+  return holder === null ? key : earlierHolderLabel(holder[1], Number(holder[2]));
 }
 
 /**
@@ -166,28 +210,73 @@ export function sizedAccounts(accounts: Account[], costs: SubscriptionCosts, win
   return new Set(accounts.filter((a) => a.subscription !== null && sizes(a.subscription.rateLimitTier)).map((a) => a.id));
 }
 
-/**
- * The Cost section's unit position. Named apart from `CostUnit` in `web/src/lib/requests.ts` (a request's native
- * unit), since the test entry re-exports both modules and one name for two types would clash.
- */
-export type AnalyticsUnit = 'all' | 'equivalent' | 'share' | 'usd';
-/** The select's order: the default first, then the money, the shares and the shares' dollar equivalent. */
-export const COST_UNITS: readonly AnalyticsUnit[] = ['all', 'usd', 'share', 'equivalent'];
-export const UNIT_LABEL: Record<AnalyticsUnit, string> = { all: 'All in dollars', equivalent: 'Dollar equivalent', share: 'Window shares', usd: 'Billed dollars' };
-/**
- * The funding side of a position: the second query's under `usd` and `equivalent` (the page's own reads serve under
- * `all` and `share`, since a share sums plan-funded rows alone whatever the filter) and the session fold's under
- * `usd`, `share` and `equivalent`.
- */
-export const UNIT_FUNDING: Record<AnalyticsUnit, FundingFilter | undefined> = { all: undefined, equivalent: 'plan', share: 'plan', usd: 'billed' };
 export const SHARE_NOTE = "Shares read under the account grouping alone, since shares of different accounts' windows do not add.";
 /**
- * The one account whose shares the tiles read: the account filter's one entry under the account grouping, and null
- * for none or several, where the tiles read "per account below".
+ * The note under Window shares of a surface that reads one account's own windows, such as a tile or the cache cost
+ * card, with no account named: the route answers a named account's shares under any grouping, so the filter alone is
+ * needed, whatever the grouping.
  */
-export const oneAccountOf = (groupBy: AnalyticsGroupBy, accountIds: string[]): string | null => (groupBy === 'account' && accountIds.length === 1 ? accountIds[0] : null);
+export const ONE_ACCOUNT_SHARE_NOTE = "Shares of one account's windows alone: name one account in the Accounts filter.";
+/**
+ * The note under Window shares of a surface that reads a share per group, such as the Cost chart or a Burn plan card,
+ * where no group holds one account's rows: either half makes each group one account's.
+ */
+export const GROUPED_SHARE_NOTE = "Shares of one account's windows alone: group by account, or name one account in the Accounts filter.";
 
 const SHARED_WINDOWS = ['five_hour', 'seven_day'];
+
+/**
+ * One named account's shares over the groups the route answered them on, the Accounts filter naming that account:
+ * each window summed over the groups, since every group is the one account's. A window carried as null is left out,
+ * and so is a shared window that a group `required` to carry it lacks, since a partial sum would read as the
+ * account's. A model week sums where a group carries one, a group off such a model carrying none. Null where no group
+ * answered a map, and where a required group answered none, whatever the others priced.
+ */
+export function oneAccountShares<T>(groups: AnalyticsGroup[], read: (g: AnalyticsGroup) => Record<string, T | null> | null, add: (a: T, b: T) => T, required: (g: AnalyticsGroup) => boolean = () => false): Record<string, T> | null {
+  // The required test runs over every group before a missing map drops one, or the others would read as the whole.
+  const answered = groups.map((g) => ({ map: read(g), required: required(g) }));
+  if (answered.some((a) => a.map === null && a.required)) return null;
+  const maps = answered.flatMap((a) => (a.map === null ? [] : [{ map: a.map, required: a.required }]));
+  if (maps.length === 0) return null;
+  const out: Record<string, T> = {};
+  const left = new Set<string>();
+  for (const { map, required: carries } of maps) {
+    if (carries) for (const window of SHARED_WINDOWS) if (!own(map, window)) left.add(window);
+    for (const [window, v] of Object.entries(map)) {
+      if (v === null) left.add(window);
+      else out[window] = own(out, window) ? add(out[window], v) : v;
+    }
+  }
+  for (const window of left) delete out[window];
+  return out;
+}
+
+/**
+ * Whether a group carries chargeable plan usage, so it must carry both shared windows on its shares and equivalents and
+ * one it lacks is a window the ledger could not price a plan row on. The one rule the sums of `fold.ts` and the named
+ * account's whole read. The ledger prices nothing on a row with no token, and of a group's plan tokens the routes
+ * answer the output count alone, so a group whose plan rows wrote no output token is let off. A group that carries no
+ * plan count has plan rows where it carries an equivalent window at all, as `sidesOf` reads it.
+ */
+export const planRowsRequired = (g: AnalyticsGroup): boolean => (g.planRequests === null ? Object.keys(g.costEquivalent).length > 0 : g.planRequests > 0 && g.planOutputTokens !== 0);
+export const addReadWrite = (a: { read: number; write: number }, b: { read: number; write: number }) => ({ read: a.read + b.read, write: a.write + b.write });
+/**
+ * Whether a group's probes oblige it to carry both shared probe windows: answered probes alone, since a held or skipped
+ * probe never ran, on a group with chargeable plan usage, since the routes answer no count of the plan-funded probes
+ * apart from the billed ones and a group of billed traffic alone (an API-key account's, or one in overage) runs billed
+ * probes, which carry no plan window to lack.
+ */
+export const probesRequired = (g: AnalyticsGroup): boolean => g.probes.ok > 0 && planRowsRequired(g);
+/**
+ * The named account's whole: the position's totals with its shares summed over the groups the route answered them on.
+ */
+export const oneAccountGroupOf = (totals: AnalyticsGroup, groups: AnalyticsGroup[]): AnalyticsGroup => ({
+  ...totals,
+  cacheShares: oneAccountShares(groups, (g) => g.cacheShares, addReadWrite, planRowsRequired),
+  costShares: oneAccountShares(groups, (g) => g.costShares, (a, b) => a + b, planRowsRequired),
+  probeShares: oneAccountShares(groups, (g) => g.probeShares, (a, b) => ({ cost: a.cost + b.cost, wasted: a.wasted === null || b.wasted === null ? null : a.wasted + b.wasted }), probesRequired),
+});
+
 /** The model week's key in a share map, the one key beside the two shared windows, undefined where the map has none. */
 export const weekKeyOf = (shares: Record<string, unknown>): string | undefined => Object.keys(shares).find((k) => !SHARED_WINDOWS.includes(k));
 /**
@@ -222,15 +311,124 @@ export function shareRow(g: AnalyticsGroup): { fiveHour: string | null; perReque
   };
 }
 
+/** The positions a dollar figure of the Analytics page reads under. */
+export type DollarPosition = Exclude<UnitPosition, 'native' | 'share'>;
 /**
- * Per account the 7-day share (solid) and the model week's (dashed) per bucket as `<account>:7d` and
- * `<account>:week`, the 5-hour share beside them as `<account>:5h` for the tooltip, a gap (null) where a bucket has
- * none, and per account the key its model week is charted under (`weeks`), undefined where no bucket names one. The
- * accounts are the groups carrying a share map, so an API key account draws no line.
+ * Native reads both sides of one answer with no funding filter, so its dollar figures are the whole's, as the dollar
+ * figures drawn under the shares are.
  */
-export function shareLines(points: AnalyticsPoint[]): { accounts: string[]; data: Record<string, number | null>[]; weeks: Record<string, string | undefined> } {
+export const dollarsOf = (unit: UnitPosition): DollarPosition => (unit === 'native' || unit === 'share' ? 'all' : unit);
+/** A dollar position's requests, as the Cost chart's and table's subtitles and the first tile's note name them. */
+export const UNIT_SUBSET: Record<DollarPosition, string> = { all: 'all requests', equivalent: "the subscription accounts' requests at the API price list", usd: 'the overage, fast mode and API key requests at the API price list' };
+/**
+ * Native's requests, each side in the unit its funding pays in, as the Cost table's subtitle and the first tile's note
+ * name them.
+ */
+export const NATIVE_SUBSET = 'the subscription requests in 20x window equivalents and the billed requests in dollars';
+/** Native's requests where a surface reads the 7-day window alone, each side in the unit its funding pays in. */
+export const NATIVE_7D_SUBSET = 'the subscription requests in 20x 7-day equivalents and the billed requests in dollars';
+/** The Cost section's meta line per dollar position, after the dollars in range. */
+const UNIT_META: Record<DollarPosition, string> = { all: 'all requests', equivalent: 'equivalent', usd: 'billed' };
+/** The first Cost tile's label per dollar position. */
+const UNIT_TILE_LABEL: Record<DollarPosition, string> = { all: 'Estimated cost', equivalent: 'Dollar equivalent', usd: 'Billed dollars' };
+
+/**
+ * A 20x window equivalent with its window named and the tilde before it where an estimate priced it, or a dash where
+ * the window holds none, as a dollar figure's `usdOrDash`. A dash is no figure, so no estimate marks it.
+ */
+export const equivalentOrDash = (windowKey: string, v: number | null | undefined, estimated = false): string => (v === null || v === undefined ? '-' : `${estimated ? '~' : ''}${fmtEquivalent(windowKey, v)}`);
+/**
+ * A native table cell, short enough that the table's columns fit its card: the 20x equivalent in its window's short
+ * word ("0.244% 20x 7d"), the tilde before an estimated figure, and for a cell that sums both fundings the billed
+ * dollars under it. `undefined` leaves out a side with no rows, and null reads a dash for a side with nothing priced.
+ * The title carries the full reading and the estimate.
+ */
+export function nativeCellOf(windowKey: string, equivalent: number | null | undefined, estimated: boolean, billed?: number | null): { main: string; sub: string; title: string } {
+  const marked = estimated && equivalent !== null && equivalent !== undefined;
+  const sides = [
+    ...(equivalent === undefined ? [] : [equivalent === null ? { full: null, short: '-' } : { full: fmtEquivalent(windowKey, equivalent), short: `${marked ? '~' : ''}${equivalentShort(windowKey, equivalent)}` }]),
+    ...(billed === undefined ? [] : [billed === null ? { full: null, short: '-' } : { full: `${fmtUsd(billed)} billed`, short: fmtUsd(billed) }]),
+  ];
+  if (sides.length === 0) return { main: '-', sub: '', title: '' };
+  const [main, second] = sides;
+  return { main: main.short, sub: second === undefined ? '' : second.full ?? second.short, title: withEstimate(sides.flatMap((s) => (s.full === null ? [] : [s.full])).join(', '), marked) };
+}
+/**
+ * The two sides of a sum over both fundings: the plan rows' 20x equivalent on a window and the billed rows' dollars,
+ * in `nativeCellOf`'s vocabulary: undefined leaves out a side with no rows, and a null equivalent reads a dash for plan
+ * rows the route priced nothing on the window, since the ledger leaves a window out when it cannot price a plan row
+ * there. The route and the session fold count the plan requests, and a group that carries no count tells the sides
+ * apart by their figures. A sum with no row on either side reads both, so an empty range reads its zero in each unit
+ * rather than nothing.
+ */
+export function sidesOf(g: Pick<AnalyticsGroup, 'billedUsd' | 'costEquivalent' | 'planRequests' | 'requests'>, window: string): { billed: number | undefined; equivalent: number | null | undefined } {
+  const plan = g.planRequests === null ? Object.keys(g.costEquivalent).length > 0 : g.planRequests > 0;
+  const billed = g.planRequests === null ? g.billedUsd > 0 : g.requests > g.planRequests;
+  const equivalent = own(g.costEquivalent, window) ? g.costEquivalent[window] : null;
+  return plan || billed ? { billed: billed ? g.billedUsd : undefined, equivalent: plan ? equivalent : undefined } : { billed: g.billedUsd, equivalent: equivalent ?? 0 };
+}
+
+/** One figure of a Cost tile, with the word naming its side where the tile stacks two. */
+export interface CostFigure {
+  text: string;
+  word?: string;
+}
+/**
+ * A sum's native figures on `window`, each with its funding's word: the plan rows' 20x equivalent, the tilde before it
+ * where an estimate priced it, then the billed rows' dollars. The sides read as `sidesOf` answers them: a side
+ * undefined for want of rows is left out, a null equivalent reads a dash under the subscription word, and a sum with no
+ * row on either side reads both, so it shows its zero in each unit rather than nothing. `marked` says whether the
+ * equivalent carries the tilde, so the figure's element takes the estimate's title.
+ */
+export function nativeFiguresOf(window: string, sides: { billed: number | undefined; equivalent: number | null | undefined }, estimated: boolean): { figures: CostFigure[]; marked: boolean } {
+  const none = sides.billed === undefined && sides.equivalent === undefined;
+  const equivalent = none ? 0 : sides.equivalent;
+  const billed = none ? 0 : sides.billed;
+  const marked = estimated && !none && equivalent !== null && equivalent !== undefined;
+  return {
+    figures: [...(equivalent === undefined ? [] : [{ text: equivalentOrDash(window, equivalent, marked), word: 'subscription' }]), ...(billed === undefined ? [] : [{ text: fmtUsd(billed), word: 'billed' }])],
+    marked,
+  };
+}
+/** The Cost section's head under a position, as `costHeadOf` reads it. */
+export interface CostHead {
+  /** Whether a figure of the head carries the estimated mark, so its element takes the estimate's title. */
+  estimated: boolean;
+  meta: string;
+  /** The requests the Cost table's subtitle names, null under the shares, whose table names its own. */
+  subset: string | null;
+  /** The first tile, null under the shares, which read per account. */
+  tile: { figures: CostFigure[]; label: string; note: string } | null;
+}
+/**
+ * The Cost section's meta line, its first tile and the requests its table reads, from the position's totals. Native
+ * pairs the plan rows' 20x 7-day equivalent with the billed dollars, a side with no rows left out, the equivalent
+ * marked where an estimate priced a row of it and a dash where the route priced none. A dollar position reads its
+ * dollars under its own words, and the shares read per account, so under them the head holds the meta alone.
+ */
+export function costHeadOf(unit: UnitPosition, totals: AnalyticsGroup): CostHead {
+  if (unit === 'share') return { estimated: false, meta: 'shares per account', subset: null, tile: null };
+  if (unit === 'native') {
+    const { figures, marked } = nativeFiguresOf('seven_day', sidesOf(totals, 'seven_day'), totals.estimated);
+    return { estimated: marked, meta: `${figures.map((f) => f.text).join(' and ')} in range`, subset: NATIVE_SUBSET, tile: { figures, label: 'Cost', note: NATIVE_SUBSET } };
+  }
+  const dollars = dollarsOf(unit);
+  const figure = fmtUsd(totals.costUsd);
+  return { estimated: false, meta: `${figure} in range, ${UNIT_META[dollars]}`, subset: UNIT_SUBSET[dollars], tile: { figures: [{ text: figure }], label: UNIT_TILE_LABEL[dollars], note: dollars === 'all' ? 'at the effective price list' : UNIT_SUBSET[dollars] } };
+}
+
+/**
+ * Per group the 7-day share (solid) and the model week's (dashed) per bucket as `<group>:7d` and `<group>:week`, the
+ * 5-hour share beside them as `<group>:5h` for the tooltip, a gap (null) where a bucket has none, per group the key its
+ * model week is charted under (`weeks`), undefined where no bucket names one, and the group's label, which names the
+ * line under the page's grouping. The groups are the ones carrying a share map: each account under the account
+ * grouping, an API key account drawing no line, or each group of the one account the Accounts filter names.
+ */
+export function shareLines(points: AnalyticsPoint[]): { accounts: string[]; data: Record<string, number | null>[]; labels: Record<string, string>; weeks: Record<string, string | undefined> } {
   const accounts = [...new Set(points.flatMap((p) => p.groups.filter((g) => g.costShares !== null).map((g) => g.key)))].sort((a, b) => a.localeCompare(b));
   const weeks: Record<string, string | undefined> = Object.fromEntries(accounts.map((a) => [a, undefined]));
+  const labels: Record<string, string> = {};
+  for (const p of points) for (const g of p.groups) if (g.costShares !== null) labels[g.key] ??= g.label;
   const data = points.map((p) => {
     const row: Record<string, number | null> = { at: Date.parse(p.at) };
     for (const a of accounts) for (const w of ['5h', '7d', 'week']) row[`${a}:${w}`] = null;
@@ -244,7 +442,7 @@ export function shareLines(points: AnalyticsPoint[]): { accounts: string[]; data
     }
     return row;
   });
-  return { accounts, data, weeks };
+  return { accounts, data, labels, weeks };
 }
 
 const HOUR_MS = 3_600_000;
@@ -318,10 +516,12 @@ const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
 
 /**
  * The burn route's points as chart lines and rows. The request-class grouping folds into its two legend entries;
- * every other grouping keeps the groups with the most tokens and sums the rest as other, whose shares stay empty
- * since shares of different windows do not add up. Under the account grouping the rest folds once per unit, since
- * a subscription account's window share and an API-key account's dollars chart on different axes. `sized` names
- * the accounts whose tier the cost model sizes, which chart in window share whatever their buckets priced.
+ * every other grouping keeps the groups with the most tokens and sums the rest as other, which draws no plan line, so
+ * its plan figures stay empty. Under the account grouping the rest folds once per unit, since a subscription account's
+ * window share and an API-key account's dollars chart on different axes. Where the shares answer (that grouping, or
+ * `account`, the one account the Accounts filter names) a line's unit is its account's. `sized` names the accounts
+ * whose tier the cost model sizes, which chart in window share whatever their buckets priced. `figure` picks what the
+ * plan rows carry: the shares, or the 20x window equivalents, which add across accounts and tiers.
  *
  * `rangeEndMs` is the end of the range the points were read for and `nowMs` the instant of that read, the end when
  * absent. The route reads whole hours through the hour ceiling of the end, so a bucket covers its width up to the hour
@@ -335,15 +535,20 @@ export function foldBurn(
   max = MAX_BURN_LINES,
   rangeEndMs?: number,
   nowMs = rangeEndMs,
+  options: { account?: string | null; figure?: BurnFigure } = {},
 ): { lines: BurnLine[]; rows: BurnRow[] } {
+  const figure = options.figure ?? 'share';
+  const account = options.account ?? null;
   const lineOf = (group: string) => (groupBy === 'request_class' ? classLegendOf(group) : group);
   const tokens = new Map<string, number>();
   for (const p of points) tokens.set(lineOf(p.group), (tokens.get(lineOf(p.group)) ?? 0) + p.cachedTokens + p.uncachedTokens);
   // The category comes from the tier on file rather than from whether a bucket priced, so an account whose range
   // ran on unweighted models alone still charts as a plan line and its unpriced windows show.
   const byAccount = groupBy === 'account';
-  const subscribed = new Set(byAccount ? points.filter((p) => p.unit === 'window_share').map((p) => p.group) : []);
-  const unitOf = (group: string): BurnLineUnit => (subscribed.has(group) ? (sized.has(group) ? 'window_share' : 'unknown') : 'usd');
+  const shared = byAccount || account !== null;
+  // Keyed by the line, so the request class grouping's two folded lines read their classes' unit.
+  const subscribed = new Set(shared ? points.filter((p) => p.unit === 'window_share').map((p) => lineOf(p.group)) : []);
+  const unitOf = (group: string): BurnLineUnit => (subscribed.has(group) ? (sized.has(byAccount ? group : (account ?? '')) ? 'window_share' : 'unknown') : 'usd');
   const ranked = [...tokens.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k]) => k);
   const kept: string[] = groupBy === 'request_class' ? LEGEND_ORDER : ranked.slice(0, max);
   const folded = groupBy === 'request_class' ? [] : ranked.slice(max);
@@ -351,11 +556,16 @@ export function foldBurn(
   // The rests take the slots after the kept lines, so a group whose id happens to read `other` stays its own line.
   const slots = kept.length + rests.length;
   const slotOf = (group: string) => (kept.includes(lineOf(group)) ? kept.indexOf(lineOf(group)) : kept.length + rests.indexOf(unitOf(group)));
+  const figures = (p: BurnPoint) => (figure === 'share' ? [p.fiveHourShare, p.sevenDayShare, p.modelWeekShare] : [p.fiveHourEquivalent, p.sevenDayEquivalent, p.modelWeekEquivalent]);
+  const add = (into: WindowFold, value: number | null, traffic: boolean) => {
+    if (value !== null) into.sum = (into.sum ?? 0) + value;
+    else if (traffic) into.unpriced = true;
+  };
 
   const byAt = new Map<number, Sum[]>();
   for (const p of points) {
     const at = Date.parse(p.at);
-    const sums = byAt.get(at) ?? Array.from({ length: slots }, (): Sum => ({ cached: 0, fiveHour: null, sevenDay: null, tokens: 0, uncached: 0, usd: 0 }));
+    const sums = byAt.get(at) ?? Array.from({ length: slots }, (): Sum => ({ cached: 0, estimated: false, fiveHour: { sum: null, unpriced: false }, sevenDay: { sum: null, unpriced: false }, tokens: 0, uncached: 0, usd: 0, week: null }));
     byAt.set(at, sums);
     const slot = slotOf(p.group);
     const s = sums[slot];
@@ -364,14 +574,19 @@ export function foldBurn(
     s.uncached += p.uncachedTokens;
     s.usd += p.usd;
     if (slot >= kept.length) continue;
-    if (p.fiveHourShare !== null) s.fiveHour = (s.fiveHour ?? 0) + p.fiveHourShare;
-    if (p.sevenDayShare !== null) s.sevenDay = (s.sevenDay ?? 0) + p.sevenDayShare;
+    const [fiveHour, sevenDay, week] = figures(p);
+    add(s.fiveHour, fiveHour, p.tokens > 0);
+    add(s.sevenDay, sevenDay, p.tokens > 0);
+    // A null model week is a bucket the route did not price on the week, so it adds nothing here and is drawn as a gap.
+    if (week !== null) s.week = (s.week ?? 0) + week;
+    if (p.estimated) s.estimated = true;
   }
   const secondsOf = (at: number) => {
     if (rangeEndMs === undefined) return bucketSeconds;
     const covered = Math.min(at + bucketSeconds * 1_000, hourCeil(rangeEndMs), nowMs ?? rangeEndMs);
     return Math.max(1, (covered - at) / 1_000);
   };
+  const perHour = (w: WindowFold, hours: number) => (w.unpriced || w.sum === null ? null : w.sum / hours);
   const rows = [...byAt.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([at, sums]): BurnRow => {
@@ -381,14 +596,17 @@ export function foldBurn(
       return {
         at,
         cached: sums.map((s) => s.cached / minutes),
-        fiveHour: sums.map((s) => (s.fiveHour === null ? null : s.fiveHour / hours)),
+        estimated: sums.map((s) => s.estimated),
+        fiveHour: sums.map((s) => perHour(s.fiveHour, hours)),
         partial: seconds < bucketSeconds,
         seconds,
         setsScale: seconds >= bucketSeconds * SCALE_FLOOR,
-        sevenDay: sums.map((s) => (s.sevenDay === null ? null : s.sevenDay / hours)),
+        sevenDay: sums.map((s) => perHour(s.sevenDay, hours)),
         tokens: sums.map((s) => s.tokens),
         uncached: sums.map((s) => s.uncached / minutes),
         usd: sums.map((s) => s.usd / minutes),
+        week: sums.map((s) => (s.week === null ? null : s.week / hours)),
+        weekAnswered: sums.map((s) => s.week !== null),
       };
     });
   // Weighed by the share of its width a bucket covers rather than its seconds: the same mean, and a range of full
@@ -399,31 +617,35 @@ export function foldBurn(
   const lines = Array.from({ length: slots }, (_, i): BurnLine => {
     const rest = i >= kept.length ? rests[i - kept.length] : null;
     // A window the line never priced traffic on stays null in every slot, idle ones included, so its legend reads a
-    // dash; one it priced counts an idle slot (no token of any type) as zero, and a slot with tokens and no share
-    // stays null. An idle slot's own share never makes the window priced: a failed request's row carries no token
-    // and a listed model prices it at zero.
-    const foldWindow = (read: (r: BurnRow) => (number | null)[]) => {
-      const priced = rows.some((r) => r.tokens[i] > 0 && read(r)[i] !== null);
-      for (const r of rows) if (r.tokens[i] === 0) read(r)[i] = priced ? 0 : null;
-      const shares = rows.flatMap((r) => (read(r)[i] === null ? [] : [{ value: read(r)[i] as number, weight: weightOf(r) }]));
-      return { perHour: priced ? weighedMean(shares) : null, unpriced: rows.some((r) => slotUnpriced(read(r)[i], r.tokens[i])) };
+    // dash. One it priced counts an idle slot (no token of any type) as zero, and a slot with tokens and no figure
+    // stays null. An idle slot's own figure never makes the window priced: a failed request's row carries no token and
+    // a listed model prices it at zero. The model week fills no slot: a null there is either a bucket off every model
+    // with a week of its own or one the route could not price, which the route does not tell apart, so it stays a gap.
+    const foldWindow = (read: (r: BurnRow) => (number | null)[], gaps: 'none' | 'idle') => {
+      const priced = rows.some((r) => (gaps === 'none' || r.tokens[i] > 0) && read(r)[i] !== null);
+      if (gaps === 'idle') for (const r of rows) if (r.tokens[i] === 0) read(r)[i] = priced ? 0 : null;
+      const figures = rows.flatMap((r) => (read(r)[i] === null ? [] : [{ value: read(r)[i] as number, weight: weightOf(r) }]));
+      return { perHour: priced ? weighedMean(figures) : null, unpriced: rows.some((r) => slotUnpriced(read(r)[i], r.tokens[i])) };
     };
-    const fiveHour = foldWindow((r) => r.fiveHour);
-    const sevenDay = foldWindow((r) => r.sevenDay);
-    const shares = rows.filter((r) => r.setsScale).map((r) => r.fiveHour[i]).filter((v): v is number => v !== null);
-    // Only a window-share line lacks a share for want of a row; every other line's slots read null by construction.
-    const plan = rest === null && unitOf(kept[i]) === 'window_share';
-    const figures = {
-      fiveHourPeak: shares.length ? Math.max(...shares) : null,
+    const fiveHour = foldWindow((r) => r.fiveHour, 'idle');
+    const sevenDay = foldWindow((r) => r.sevenDay, 'idle');
+    const week = foldWindow((r) => r.week, 'none');
+    const peaks = rows.filter((r) => r.setsScale).map((r) => r.fiveHour[i]).filter((v): v is number => v !== null);
+    // Under the shares only a window-share line can lack a figure for want of a row, and under the equivalents every
+    // line can.
+    const plan = rest === null && (figure === 'equivalent' || unitOf(kept[i]) === 'window_share');
+    const figuresOf = {
+      estimated: rest === null && rows.some((r) => r.estimated[i]),
+      fiveHourPeak: peaks.length ? Math.max(...peaks) : null,
       fiveHourPerHour: fiveHour.perHour,
       sevenDayPerHour: sevenDay.perHour,
       tokensPerMinute: mean((r) => r.cached[i] + r.uncached[i]),
       unpriced: { fiveHour: plan && fiveHour.unpriced, sevenDay: plan && sevenDay.unpriced },
       usdPerMinute: mean((r) => r.usd[i]),
+      weekPerHour: week.perHour,
     };
-    if (rest === null) return { ...figures, key: kept[i], label: kept[i] === '-' ? 'unattributed' : kept[i], other: false, unit: unitOf(kept[i]) };
-    const byUnit = groupBy === 'account';
-    return { ...figures, key: byUnit ? `${OTHER_KEY}-${rest}` : OTHER_KEY, label: byUnit ? OTHER_LABEL[rest] : 'Other', other: true, unit: rest };
+    if (rest === null) return { ...figuresOf, key: kept[i], label: burnLabelOf(groupBy, kept[i]), other: false, unit: unitOf(kept[i]) };
+    return { ...figuresOf, key: byAccount ? `${OTHER_KEY}-${rest}` : OTHER_KEY, label: byAccount ? OTHER_LABEL[rest] : 'Other', other: true, unit: rest };
   });
   return { lines, rows };
 }

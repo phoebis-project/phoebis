@@ -1000,6 +1000,46 @@ async fn every_route_is_captured_and_holds_its_shape() {
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
+    // A plan-funded answer on a model the shipped cost model does not list, whose id names a model tier it weighs, so
+    // the attention capture holds the unweighted model's item and the analytics captures a figure priced as an
+    // estimate. An unlisted id rather than a listed unweighted one, so a revision that weighs a listed model moves
+    // nothing here. It lands after the requests capture and in the newest hour, so the request list keeps its rows and
+    // the newest priced burn point still carries cache reads and output.
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            model: "claude-opus-99".into(),
+            canonical_model: "claude-opus-99".into(),
+            session_id: None,
+            ..request(
+                key_generation,
+                "r-unweighted",
+                now - 60_000,
+                "desktop",
+                "s1",
+                200,
+                "succeeded",
+            )
+        },
+        attempts: vec![attempt(
+            "r-unweighted",
+            1,
+            "business",
+            200,
+            "succeeded",
+            now - 60_000,
+        )],
+        bodies: None,
+    });
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        parts
+            .attention
+            .conditions(now)
+            .unwrap()
+            .iter()
+            .any(|c| c.kind == phoebis_attention::Kind::ModelUnweighted && c.holds)
+            .then_some(())
+    })
+    .await;
     // One exhaustion on the harness's pool, fed to the reader as the bus would, so the attention capture carries an
     // item of the shape the console decodes.
     parts

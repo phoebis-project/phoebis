@@ -31,14 +31,14 @@ pub(crate) struct AttentionItem {
     /// condition whose account or pool the registry no longer holds.
     pub link: Option<AttentionLink>,
     /// The pools the item belongs to: an account's memberships, a pool's own id, the pool of a drift item's key.
-    /// Empty for a router subject, a deleted pool, and a routing condition whose account or pool the registry no
-    /// longer holds.
+    /// Empty for a router subject, a model, a deleted pool, and a routing condition whose account or pool the
+    /// registry no longer holds.
     pub pools: Vec<String>,
     /// Unix milliseconds: the start of the backoff run, the first failed attempt of a refresh run, the first
     /// exhaustion or refusal of a run, the oldest parked row, the refused certificate reload, 30 days before a
-    /// certificate's end, the oldest qualifying event of the trailing 24 hours for `wall_reached`,
-    /// `destination_spent` and `shed_no_runway`, or for the two account states and a degraded writer the first read of
-    /// this process that saw the state.
+    /// certificate's end, the first plan-funded landing of an unweighted model's run, the oldest qualifying event of
+    /// the trailing 24 hours for `wall_reached`, `destination_spent` and `shed_no_runway`, or for the two account
+    /// states and a degraded writer the first read of this process that saw the state.
     pub since: Option<i64>,
     /// `account` and `label`, or `account`, `failures`, `last_error` and `outcome`, or `account`, `backoff_since`,
     /// `next_attempt_at` and `rate_limited_in_a_row`, or `pool` and `key`, or `client_version`, `trigger` and `key`,
@@ -46,11 +46,13 @@ pub(crate) struct AttentionItem {
     /// one. The two certificate items carry `cert_file`. `certificate_reload_failed` adds `key_file`, `error` (the
     /// loader's line) and `serving_since` (when the pair the listener still serves was loaded).
     /// `certificate_expiring` adds `expires` (the leaf's end) and `days_left` (whole days from the read, negative
-    /// once past). The routing conditions carry `setting`, the names of the settings they read against:
-    /// `wall_reached` with `walls`, `windows` and `projection_error` (one less the projection of the newest shedding
-    /// round on the account inside the window's length before the wall, null with none), `destination_spent` with
-    /// `moves`, `fits` (the moves' destination fits with counts) and `windows`, and `shed_no_runway` with `rounds`,
-    /// `accounts` and `setting_values` (the pool's value of each setting `setting` names).
+    /// once past). `model_unweighted` carries `model`, `requests` (the plan-funded requests its run served), `tier`
+    /// (its model tier) and `weight_of` (the tier's latest weighted model, whose weight prices it). The routing
+    /// conditions carry `setting`, the names of the settings they read against: `wall_reached` with `walls`,
+    /// `windows` and `projection_error` (one less the projection of the newest shedding round on the account inside
+    /// the window's length before the wall, null with none), `destination_spent` with `moves`, `fits` (the moves'
+    /// destination fits with counts) and `windows`, and `shed_no_runway` with `rounds`, `accounts` and
+    /// `setting_values` (the pool's value of each setting `setting` names).
     #[schema(value_type = Object)]
     pub detail: Value,
 }
@@ -58,21 +60,21 @@ pub(crate) struct AttentionItem {
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AttentionSubject {
-    /// `account`, `pool`, `client` or `router`.
+    /// `account`, `pool`, `client`, `router` or `model`.
     #[serde(rename = "type")]
     #[schema(example = "account")]
     pub kind: String,
     pub id: String,
-    /// The account's or the pool's label, a deleted pool's id, the client version, or the router's component:
-    /// `ledger`, `routing`, a listener's pair as `proxy.tls` or `admin.tls`, or `-` for a parked record without a
-    /// pool.
+    /// The account's or the pool's label, a deleted pool's id, the client version, the router's component
+    /// (`ledger`, `routing`, a listener's pair as `proxy.tls` or `admin.tls`, or `-` for a parked record without a
+    /// pool), or a model's undated id.
     pub label: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AttentionLink {
-    /// `accounts`, `pools` or `keys`.
+    /// `accounts`, `pools`, `keys` or `models`.
     #[schema(example = "accounts")]
     pub page: String,
     /// Where the operator fixes it.
@@ -83,10 +85,10 @@ pub(crate) struct AttentionLink {
 ///
 /// Answers the operator conditions that hold now, worst first (`pool_exhausted`, `client_drift`, `writer_degraded`,
 /// `certificate_reload_failed`, `reauth_required`, `funding_required`, `refresh_failed`, `certificate_expiring`,
-/// `ledger_record_parked`, `poll_backoff`, `wall_reached`, `destination_spent`, `shed_no_runway`) and the oldest first
-/// within a kind. The last three read the routing log of the trailing 24 hours, which the ledger folds hourly. The
-/// same reader feeds the `phoebis_attention` gauge on the metrics listener, so a scrape and this answer never
-/// disagree.
+/// `ledger_record_parked`, `poll_backoff`, `model_unweighted`, `wall_reached`, `destination_spent`, `shed_no_runway`)
+/// and the oldest first within a kind. The last three read the routing log of the trailing 24 hours, which the ledger
+/// folds hourly. The same reader feeds the `phoebis_attention` gauge on the metrics listener, so a scrape and this
+/// answer never disagree.
 #[utoipa::path(
     get,
     path = "/admin/attention",
@@ -100,12 +102,7 @@ pub(crate) struct AttentionLink {
 pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     // A failed read answers 500 and never an empty list, which the dashboard would draw as the quiet state.
     let mut held: Vec<_> = match state.attention.conditions((state.clock)()) {
-        // The console at main reads an unknown kind as an exhausted pool, so the kind reaches the route when the
-        // console learns it.
-        Ok(conditions) => conditions
-            .into_iter()
-            .filter(|c| c.holds && c.kind != phoebis_attention::Kind::ModelUnweighted)
-            .collect(),
+        Ok(conditions) => conditions.into_iter().filter(|c| c.holds).collect(),
         Err(error) => {
             tracing::warn!(%error, "the attention read failed, so the route answers 500");
             return failure(StatusCode::INTERNAL_SERVER_ERROR, "storage failure");

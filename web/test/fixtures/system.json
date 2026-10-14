@@ -8,8 +8,8 @@
     "ready": true,
     "dead": [],
     "ledger": {
-      "schema_version": 35,
-      "written": 18,
+      "schema_version": 34,
+      "written": 19,
       "dropped": 0,
       "write_failures": 0,
       "cache_map_orphans": 1,
@@ -33,7 +33,6 @@
         "affinity": 0,
         "cooldown": 0,
         "credits": 0,
-        "ended": 0,
         "member_spend": 0,
         "overage": 0,
         "pin_invalidated": 0,
@@ -62,7 +61,7 @@
         "panics": 0
       }
     ],
-    "pricing_unknown_models": 0,
+    "pricing_unknown_models": 1,
     "pricing": {
       "api_prices": {
         "path": null,

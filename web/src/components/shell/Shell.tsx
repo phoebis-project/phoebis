@@ -3,10 +3,11 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { api } from '@/api';
 import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
-import { useAsync } from '@/lib/hooks';
+import { useAsync, useMediaQuery } from '@/lib/hooks';
 import { Button, Descriptions, Segmented, Toast, Toggle } from '@/components/ui/primitives';
-import { IconChart, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconRoute, IconSessions, IconShield, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
+import { IconArrowRight, IconChart, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconRoute, IconSessions, IconShield, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
 import { Mark } from '@/components/ui/Mark';
+import { UnitLegend, UnitSwitch } from '@/components/ui/UnitControls';
 
 type NavItem = { icon: ReactNode; label: string; to: string };
 
@@ -42,7 +43,8 @@ export const PAGE_TITLES: Record<string, string> = {
 
 export function Shell() {
   const { pathname } = useLocation();
-  const { expertView, setExpertView, setTheme, theme } = useAppSettings();
+  const { expertView, setExpertView, setModelTiers, setTheme, setUnit, theme, unit } = useAppSettings();
+  const narrow = useMediaQuery('(max-width: 900px)');
   const { done, logout, queue } = useSession();
   const settings = useAsync(() => api.getSettings(), []);
   const [navOpen, setNavOpen] = useState(false);
@@ -60,6 +62,11 @@ export function Shell() {
   useEffect(() => {
     document.title = `${title} - Phoebis Router`;
   }, [title]);
+
+  // The settings answer is the one the shell holds for every view, so the views' model orders read its tiers.
+  useEffect(() => {
+    if (settings.data) setModelTiers({ modelTier: settings.data.subscriptionCosts.modelTier, tierOrder: settings.data.subscriptionCosts.tierOrder });
+  }, [settings.data, setModelTiers]);
 
   return (
     <div className={`shell ${navOpen ? 'nav-open' : ''}`}>
@@ -104,8 +111,10 @@ export function Shell() {
           </button>
           <h1 className="topbar__title">{title}</h1>
           <div className="topbar__right">
-            <Button variant="ghost" size="sm" aria-label="Log out" onClick={() => void logout()}>
-              Log out
+            <UnitSwitch unit={unit} onChange={setUnit} short={narrow} />
+            <UnitLegend />
+            <Button variant="ghost" size="sm" className="topbar__logout" aria-label="Log out" title="Log out" icon={<IconArrowRight size={15} />} onClick={() => void logout()}>
+              <span className="topbar__logout-label">Log out</span>
             </Button>
             <Segmented<ThemeChoice>
               ariaLabel="Theme"

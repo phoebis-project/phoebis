@@ -1,7 +1,8 @@
 import { iso, PIN_RELEASE_REASON_VALUES } from '@/api/decode';
-import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
+import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { ROUTING_LOG_CODEC, type RangeValue } from './address';
 import { moveLabel, own } from './analytics';
+import { compareByModelTier } from './costs';
 import type { ChipText } from './filterBar';
 import { fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, shortModel } from './format';
 import { planLabel, POLL_OUTCOME_LABEL } from './quota';
@@ -717,23 +718,17 @@ export const clockMinute = (at: number, now: number): LogLink => {
   return { from, to: Math.min(from + MINUTE - 1, now) };
 };
 
-const FAMILIES = ['fable', 'opus', 'sonnet', 'haiku'];
+// Held at module level, as the time format is, so `compareModels` keeps the shape `Array.sort` takes.
+let modelTiers: ModelTiers = { modelTier: {}, tierOrder: [] };
 
-/** Model ids in the order fable, opus, sonnet, haiku, newest version first. An id of no known family sorts last. */
+/** The two tier members the shell read off the settings answer. The empty pair compares by version and id alone. */
+export const setModelTiers = (tiers: ModelTiers): void => {
+  modelTiers = tiers;
+};
+
+/** Model ids in the cost model's tier order, newest version first, an id of a tier the order lacks last. */
 export function compareModels(a: string, b: string): number {
-  const read = (id: string) => {
-    const family = FAMILIES.findIndex((f) => id.includes(`-${f}-`) || id.endsWith(`-${f}`));
-    const version = (id.replace(/-\d{8}$/, '').match(/(\d+(?:-\d+)*)$/)?.[1] ?? '').split('-').filter(Boolean).map(Number);
-    return { family: family < 0 ? FAMILIES.length : family, version };
-  };
-  const x = read(a);
-  const y = read(b);
-  if (x.family !== y.family) return x.family - y.family;
-  for (let i = 0; i < Math.max(x.version.length, y.version.length); i += 1) {
-    const d = (y.version[i] ?? 0) - (x.version[i] ?? 0);
-    if (d !== 0) return d;
-  }
-  return a.localeCompare(b);
+  return compareByModelTier(modelTiers, a, b);
 }
 
 // The decision card and the event detail: the record's walk, its candidates, its folds and its outcome, and an event's

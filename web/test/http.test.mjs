@@ -228,6 +228,13 @@ test('the burn and rewrite reads send the range and the grouping and answer what
     'both window shares read as the route answers them',
   );
   assert.deepEqual([rewrites.moves, rewrites.points.length], [{ spent: 1 }, bodies['/admin/analytics/rewrites'].points.length]);
+  await api.getAnalyticsBurn(range, 'user_agent', { accountIds: ['primary'], userAgentGroups: ['a,1', 'b'] });
+  const filtered = new URL(calls[2].url, 'http://x');
+  assert.deepEqual(
+    [filtered.searchParams.get('accounts'), filtered.searchParams.get('group_by'), filtered.searchParams.get('user_agent_groups')],
+    ['primary', 'user_agent', 'a,1\nb'],
+    'the Accounts filter and the user agent groups, one pattern per line, travel with the grouping',
+  );
 });
 
 test('the placements read sends the range and the key and pool lists, the budgets read no query, and both decode', async () => {
@@ -493,13 +500,17 @@ test('the attention read is one GET, and its failures reach no toast, since the 
   const calls = stub(() => answer(200, body));
   const items = await new HttpApi().getAttention();
   assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['GET', '/admin/attention']]);
-  assert.deepEqual(items.map((i) => [i.kind, i.subject.id, i.link]), [
-    ['pool_exhausted', 'main', { id: 'main', page: 'pools' }],
-    ['ledger_record_parked', 'main', { id: 'main', page: 'pools' }],
-    ['wall_reached', 'business', { id: 'business', page: 'accounts' }],
-    ['destination_spent', 'business', { id: 'business', page: 'accounts' }],
-    ['shed_no_runway', 'main', { id: 'main', page: 'pools' }],
-  ]);
+  assert.deepEqual(items.map((i) => [i.kind, i.subject.id, i.link]), body.items.map((i) => [i.kind, i.subject.id, { id: i.link.id, page: i.link.page }]), 'every captured kind decodes as itself, its link whole');
+  assert.ok(items.some((i) => i.kind === 'model_unweighted'), "the capture's unweighted model among them");
+  assert.deepEqual(
+    items.filter((i) => ['wall_reached', 'destination_spent', 'shed_no_runway'].includes(i.kind)).map((i) => [i.kind, i.subject.id, i.link]),
+    [
+      ['wall_reached', 'business', { id: 'business', page: 'accounts' }],
+      ['destination_spent', 'business', { id: 'business', page: 'accounts' }],
+      ['shed_no_runway', 'main', { id: 'main', page: 'pools' }],
+    ],
+    "the capture's three routing conditions among them, each with its link",
+  );
   stub(() => answer(500, { error: 'the store is unavailable' }));
   await assert.rejects(new HttpApi().getAttention(), (e) => e instanceof ApiError && e.status === 500 && e.message === 'the store is unavailable');
   stub(() => Promise.reject(new TypeError('fetch failed')));

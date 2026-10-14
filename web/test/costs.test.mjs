@@ -43,21 +43,24 @@ test("an override replaces the multiplier and the window's weight it names and l
   close(d.shareOf(costs, 'five_hour', MAX_20X, 'claude-haiku-4-5', usage({ input: 1 }), OUT), 0.005, "Haiku's input on the 5-hour window, 0.5 x 1 / 100");
 });
 
-test('a model an override weighs on the week alone is weighted, a dash on the 5-hour window and a share on the week', () => {
+test("a model an override weighs on the week alone prices the week at its own weight and the 5-hour window at its model tier's latest", () => {
   // The test table leaves Opus 5 at null; this copy weighs it 3 on the week through an override.
   const weekOnly = { ...costs, overrides: { ...costs.overrides, 'claude-opus-5': { weightByWindow: { seven_day: 3 } } } };
-  assert.equal(d.isWeighted(weekOnly, 'claude-opus-5'), true, 'above the divider');
-  assert.equal(d.isWeighted(costs, 'claude-opus-5'), false, 'under the divider without the override');
-  assert.equal(d.shareOf(weekOnly, 'five_hour', MAX_20X, 'claude-opus-5', usage({ input: 1 }), OUT), null, 'the 5-hour window');
+  assert.equal(d.isWeighted(weekOnly, 'claude-opus-5'), true, 'weighted through the override');
+  assert.equal(d.isWeighted(costs, 'claude-opus-5'), true, "weighted without the override too, at its model tier's latest");
+  close(d.shareOf(weekOnly, 'five_hour', MAX_20X, 'claude-opus-5', usage({ input: 1 }), OUT), 0.02, "the 5-hour window at Opus 5.5's weight, 2 / 100");
+  assert.equal(d.weightOrFallback(weekOnly, 'claude-opus-5', 'five_hour')?.estimated, true, 'an estimate on the 5-hour window');
   close(d.shareOf(weekOnly, 'seven_day', MAX_20X, 'claude-opus-5', usage({ input: 1 }), OUT), 0.003, 'the week, 3 x 1 / 1000');
+  assert.equal(d.weightOrFallback(weekOnly, 'claude-opus-5', 'seven_day')?.estimated, false, 'its own weight on the week');
 });
 
 test('a Fable model an override weighs on the Fable week alone is weighted, a dash on the shared windows and a share on its week', () => {
   // The test table weighs Fable 5.1 10; this copy leaves its shared weight null and weighs it 10 on the Fable week.
   const FABLE = 'claude-fable-5-1';
   const weekOnly = { ...costs, modelWeight: { ...costs.modelWeight, [FABLE]: null }, overrides: { ...costs.overrides, [FABLE]: { weightByWindow: { seven_day_fable: 10 } } } };
-  assert.equal(d.isWeighted(weekOnly, FABLE), true, 'above the divider');
-  assert.equal(d.isWeighted({ ...weekOnly, overrides: costs.overrides }, FABLE), false, 'under the divider without the override');
+  assert.equal(d.isWeighted(weekOnly, FABLE), true, 'weighted through the override');
+  // Fable 5.1 is the one Fable model of the test table, so its model tier has no weighed model to read.
+  assert.equal(d.isWeighted({ ...weekOnly, overrides: costs.overrides }, FABLE), false, 'unweighted without the override');
   assert.equal(d.shareOf(weekOnly, 'five_hour', MAX_20X, FABLE, usage({ input: 1 }), OUT), null, 'the 5-hour window');
   assert.equal(d.shareOf(weekOnly, 'seven_day', MAX_20X, FABLE, usage({ input: 1 }), OUT), null, 'the 7-day window');
   close(d.shareOf(weekOnly, 'seven_day_fable', MAX_20X, FABLE, usage({ input: 1 }), OUT), 0.02, 'the Fable week, 10 x 1 / 1000 / 0.5');
@@ -65,16 +68,18 @@ test('a Fable model an override weighs on the Fable week alone is weighted, a da
   assert.deepEqual(d.modelWeeks(weekOnly, OPUS), [], 'an Opus model carries none');
   // Opus carries no Fable week, so a weight there prices nothing it sends.
   const opusWeek = { ...costs, modelWeight: { ...costs.modelWeight, 'claude-opus-5': null }, overrides: { ...costs.overrides, 'claude-opus-5': { weightByWindow: { seven_day_fable: 10 } } } };
-  assert.equal(d.isWeighted(opusWeek, 'claude-opus-5'), false, 'a week the model does not carry weighs nothing');
+  assert.deepEqual(d.weightedWindows(opusWeek, 'claude-opus-5'), ['five_hour', 'seven_day'], "a week the model does not carry weighs nothing, and the shared windows read its model tier's latest");
 });
 
-test('a dated id reads its undated weight, and an unweighted model or an unsized tier prices no share', () => {
+test("a dated id reads its undated weight, an unweighted model of a weighted model tier its tier's latest, and a model of no tier or an unsized tier prices no share", () => {
   close(d.shareOf(costs, 'five_hour', MAX_20X, 'claude-opus-5-5-20260101', usage({ input: 1 }), OUT), 0.02, 'the dated id');
-  assert.equal(d.shareOf(costs, 'five_hour', MAX_20X, 'claude-opus-5', usage({ input: 1 }), OUT), null, 'a null weight');
-  assert.equal(d.shareOf(costs, 'five_hour', MAX_20X, 'claude-sonnet-5', usage({ input: 1 }), OUT), null, 'a model the file does not list');
+  close(d.shareOf(costs, 'five_hour', MAX_20X, 'claude-opus-5', usage({ input: 1 }), OUT), 0.02, "a null weight reads Opus 5.5's, 2 / 100");
+  close(d.shareOf(costs, 'five_hour', MAX_20X, 'claude-sonnet-5', usage({ input: 1 }), OUT), 0.01, "a model the file does not list reads Sonnet 5.5's by its id's segment, 1 / 100");
+  assert.equal(d.shareOf(costs, 'five_hour', MAX_20X, 'claude-unknown-1', usage({ input: 1 }), OUT), null, 'a model of no model tier');
   assert.equal(d.shareOf(costs, 'seven_day', 'default_claude_team', OPUS, usage({ input: 1 }), OUT), null, "the Team week's null capacity");
   assert.equal(d.shareOf(costs, 'five_hour', 'claude_enterprise', OPUS, usage({ input: 1 }), OUT), null, 'a tier the file does not list');
   assert.equal(d.ratesOf(costs, 'five_hour_extra', MAX_20X, OPUS), null, 'a window the file does not price');
+  assert.equal(d.weightOf(costs, 'claude-mystery-2', 'five_hour'), null, 'a model tier with no weighed model');
 });
 
 test("a tier's capacity is read as stored, then with the default_ prefix taken off or put on", () => {
@@ -262,11 +267,47 @@ test("the band's local hours read on the clock a caller passes, and a run past m
   assert.equal(d.bandCaption(costs, NOW, 'Asia/Tokyo', clock24), 'Mon to Fri, 21:00 to 03:00 the next day here (Asia/Tokyo). In Los Angeles: Mon to Fri, 05:00 to 11:00.');
 });
 
-test('the models list family by family, Fable, Opus, Sonnet, Haiku, the newest version first, whatever order a file keeps', () => {
-  // The test tables' models in reverse, a dated id, and a family the order does not name, which goes last.
-  const shuffled = [...Object.keys(costs.modelWeight).reverse(), 'claude-mystery-2', 'claude-opus-4-8', 'claude-sonnet-5-20250101'];
-  assert.deepEqual(d.familyOrder(shuffled), ['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5-5', 'claude-sonnet-5-20250101', 'claude-haiku-4-5', 'claude-mystery-2']);
+test("the models list tier by tier in the cost model's order, the newest version first, a model of no tier last, whatever order a file keeps", () => {
+  // The test tables' models in reverse, a dated id, the mystery tier the order names last, and two ids of no tier.
+  const shuffled = [...Object.keys(costs.modelWeight).reverse(), 'claude-unknown-1', 'claude-mystery-2', 'claude-opus-4-8', 'claude-unknown-2', 'claude-sonnet-5-20250101'];
+  assert.deepEqual(costs.tierOrder, ['fable', 'opus', 'sonnet', 'haiku', 'mystery'], 'the test tables order five model tiers');
+  assert.deepEqual(d.tierOrder(shuffled, costs), ['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5-5', 'claude-sonnet-5-20250101', 'claude-haiku-4-5', 'claude-mystery-2', 'claude-unknown-2', 'claude-unknown-1']);
   assert.deepEqual(shuffled.slice(0, 2), ['claude-haiku-4-5', 'claude-sonnet-5-5'], 'the input is left as it was');
+  // Each tier's newest model leads its group, and each id of no tier is a group of its own, so none folds under
+  // another.
+  assert.deepEqual(d.tierGroups(shuffled, costs), [
+    { models: ['claude-fable-5-1'], tier: 'fable' },
+    { models: ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8'], tier: 'opus' },
+    { models: ['claude-sonnet-5-5', 'claude-sonnet-5-20250101'], tier: 'sonnet' },
+    { models: ['claude-haiku-4-5'], tier: 'haiku' },
+    { models: ['claude-mystery-2'], tier: 'mystery' },
+    { models: ['claude-unknown-2'], tier: null },
+    { models: ['claude-unknown-1'], tier: null },
+  ]);
+  // The empty model names no tier, so every id is of none, by version and then id, and nothing folds.
+  const empty = d.decodeSubscriptionCosts(undefined);
+  const ids = ['claude-haiku-4-5', 'claude-opus-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-sonnet-5-5'];
+  assert.deepEqual(d.tierOrder(ids, empty), ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-1', 'claude-opus-5', 'claude-haiku-4-5']);
+  assert.deepEqual(d.tierGroups(ids, empty).map((g) => g.models), [['claude-opus-5-5'], ['claude-sonnet-5-5'], ['claude-fable-5-1'], ['claude-opus-5'], ['claude-haiku-4-5']]);
+  assert.ok(d.tierGroups(ids, empty).every((g) => g.tier === null));
+});
+
+test("a model_tier entry moves a model into the tier it names, in both orders", () => {
+  const remapped = { ...costs, modelTier: { ...costs.modelTier, 'claude-opus-4-8': 'haiku' } };
+  const ids = ['claude-haiku-4-5', 'claude-opus-4-8', 'claude-opus-5-5', 'claude-sonnet-5-5'];
+  // Inside the Haiku tier Opus 4.8 is the newer version.
+  assert.deepEqual(d.tierOrder(ids, remapped), ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-opus-4-8', 'claude-haiku-4-5']);
+  assert.deepEqual(d.tierGroups(ids, remapped).find((g) => g.tier === 'haiku')?.models, ['claude-opus-4-8', 'claude-haiku-4-5']);
+  assert.deepEqual(d.tierGroups(ids, remapped).find((g) => g.tier === 'opus')?.models, ['claude-opus-5-5']);
+});
+
+test("the weight readers read an unweighted model of a weighted model tier at the tier's latest weighed model", () => {
+  const u = usage({ cacheRead: 10, input: 1, output: 1 });
+  assert.equal(d.weightOf(costs, 'claude-opus-4-8', 'five_hour'), costs.modelWeight[OPUS], "Opus 4.8 reads Opus 5.5's base weight");
+  assert.equal(d.isWeighted(costs, 'claude-opus-4-8'), true);
+  assert.equal(d.weightOf(costs, 'claude-mystery-2', 'five_hour'), null, 'a model tier with no weighed model');
+  assert.equal(d.isWeighted(costs, 'claude-mystery-2'), false);
+  for (const at of [IN, OUT]) assert.equal(d.shareOf(costs, 'five_hour', MAX_20X, 'claude-opus-4-8', u, at), d.shareOrFallback(costs, 'five_hour', MAX_20X, 'claude-opus-4-8', u, at)?.share, 'the share is the fallback share');
 });
 
 test("the caption names the band in the viewing zone beside the zone the file defines it in, or once where they are one", () => {
@@ -345,4 +386,165 @@ test('fundingOf reads the account kind, then a fast answer, then overage, and a 
   assert.equal(d.fundingOf(attempt({})), 'plan');
   assert.equal(d.fundingOf(attempt({ overageInUse: null, response: { speed: null } })), 'plan', 'an unread flag and an unreported speed leave the window paying');
   assert.equal(d.fundingOf(null), 'api_key', 'a request with no attempt is billed in dollars');
+});
+
+test('the native unit of a subscription window is the 20x equivalent, and of every other funding dollars', () => {
+  assert.equal(d.nativeOf('plan'), 'equivalent');
+  for (const funding of ['api_key', 'fast', 'overage']) assert.equal(d.nativeOf(funding), 'usd', funding);
+});
+
+// The shipped cost model, as the settings answer carries it.
+const shipped = d.decodeSettings(JSON.parse(readFileSync(new URL('./fixtures/settings.json', import.meta.url), 'utf8')).body).subscriptionCosts;
+
+test("a model's tier is its model_tier entry, then its undated id's, then the tier its id names when the order lists it", () => {
+  assert.equal(d.modelTierOf(costs, OPUS), 'opus', 'a listed id');
+  assert.equal(d.modelTierOf(costs, 'claude-opus-5-5-20260101'), 'opus', "a dated id reads its undated id's entry");
+  assert.equal(d.modelTierOf(costs, 'claude-opus-6'), 'opus', 'an unlisted id reads the tier it names');
+  assert.equal(d.modelTierOf(costs, 'claude-mystery-2'), 'mystery', 'the fifth tier');
+  assert.equal(d.modelTierOf(costs, 'gpt-5'), null, 'an id of no tier');
+  assert.equal(d.modelTierOf(costs, 'claude-nova-1'), null, 'a tier the order does not list');
+  assert.equal(d.modelTierOf({ ...costs, modelTier: { ...costs.modelTier, 'claude-nova-1': 'opus' } }, 'claude-nova-1'), 'opus', 'the entry wins over the id');
+  assert.equal(d.modelTierOf({ modelTier: {}, tierOrder: [] }, OPUS), null, 'a cost model with no tiers names none');
+});
+
+test("a model tier's latest weighed model is its weighted model of the newest version, and a tier with none has none", () => {
+  assert.deepEqual(
+    tables.subscription_costs.content.tier_order.map((tier) => d.latestWeighted(costs, tier)),
+    ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-4-5', null],
+    'the test tables weigh one model per tier but the fifth, and Opus 5 carries a null weight',
+  );
+  const newer = { ...costs, modelTier: { ...costs.modelTier, 'claude-opus-6': 'opus' }, modelWeight: { ...costs.modelWeight, 'claude-opus-6': 3 } };
+  assert.equal(d.latestWeighted(newer, 'opus'), 'claude-opus-6', 'a newer weighted model takes over');
+  assert.equal(d.latestWeighted(costs, 'nova'), null, 'a tier the order does not list');
+  // The fallback reads the donor's base weight, so a newer model weighed by its overrides alone stands in for no one.
+  const overridden = {
+    ...costs,
+    modelTier: { ...costs.modelTier, 'claude-opus-6': 'opus' },
+    modelWeight: { ...costs.modelWeight, 'claude-opus-6': null },
+    overrides: { ...costs.overrides, 'claude-opus-6': { weightByWindow: { five_hour: 3, seven_day: 3 } } },
+  };
+  const donor = d.latestWeighted(costs, 'opus');
+  assert.equal(d.latestWeighted(overridden, 'opus'), donor, 'a model with a null base weight is no donor, its overrides notwithstanding');
+  assert.deepEqual(d.weightOrFallback(overridden, 'claude-opus-4-8', 'five_hour'), { estimated: true, weight: costs.modelWeight[donor] }, "an unweighted model still reads the weighed donor's base weight");
+});
+
+test("a model the cost model weighs reads its own weight, and an unweighted model of a weighted tier its tier's latest base weight, marked estimated", () => {
+  assert.deepEqual(d.weightOrFallback(costs, OPUS, 'five_hour'), { estimated: false, weight: costs.modelWeight[OPUS] });
+  const donor = d.latestWeighted(costs, 'opus');
+  for (const model of ['claude-opus-4-8', 'claude-opus-5', 'claude-opus-9']) {
+    for (const window of ['five_hour', 'seven_day']) assert.deepEqual(d.weightOrFallback(costs, model, window), { estimated: true, weight: costs.modelWeight[donor] }, `${model} on ${window}`);
+  }
+  assert.equal(d.weightOrFallback(costs, 'claude-mystery-2', 'five_hour'), null, 'a tier with no weighted model');
+  assert.equal(d.weightOrFallback(costs, 'gpt-5', 'five_hour'), null, 'a model of no tier');
+  const haiku = 'claude-haiku-4-5';
+  assert.deepEqual(d.weightOrFallback(costs, haiku, 'seven_day'), { estimated: false, weight: costs.overrides[haiku].weightByWindow.seven_day }, "a model's own override counts");
+});
+
+test("the fallback reads the donor's base weight and never the donor's override", () => {
+  // A Haiku model the file lists without a weight, beside a donor whose week carries an override at another weight.
+  const unweighted = 'claude-haiku-9';
+  const tables = { ...costs, modelTier: { ...costs.modelTier, [unweighted]: 'haiku' }, modelWeight: { ...costs.modelWeight, [unweighted]: null } };
+  const donor = d.latestWeighted(tables, 'haiku');
+  const override = tables.overrides[donor].weightByWindow.seven_day;
+  assert.notEqual(override, tables.modelWeight[donor], "the donor's week weighs otherwise than its base");
+  for (const window of ['five_hour', 'seven_day']) assert.deepEqual(d.weightOrFallback(tables, unweighted, window), { estimated: true, weight: tables.modelWeight[donor] }, window);
+  assert.deepEqual(d.weightOrFallback(tables, donor, 'seven_day'), { estimated: false, weight: override }, 'the donor itself keeps its override');
+});
+
+test('a share and a 20x equivalent price an unweighted model of a weighted tier at the fallback weight, and the equivalent is the share under the anchor tier alone', () => {
+  const u = usage({ cacheRead: 10, input: 1, output: 1 });
+  for (const window of ['five_hour', 'seven_day']) assert.deepEqual(d.shareOrFallback(costs, window, MAX_20X, OPUS, u, OUT), { estimated: false, share: d.shareOf(costs, window, MAX_20X, OPUS, u, OUT) }, `a weighted model on ${window}`);
+  // Opus 4.8 has no override, so at the donor's weight it prices as the donor does.
+  close(d.shareOrFallback(costs, 'five_hour', MAX_20X, 'claude-opus-4-8', u, IN)?.share, d.shareOf(costs, 'five_hour', MAX_20X, OPUS, u, IN), 'Opus 4.8 at Opus 5.5 in band');
+  assert.equal(d.shareOrFallback(costs, 'five_hour', MAX_20X, 'claude-opus-4-8', u, IN)?.estimated, true);
+  assert.equal(d.shareOrFallback(costs, 'five_hour', MAX_20X, 'claude-mystery-2', u, OUT), null, 'a tier with no weighted model');
+  assert.equal(d.shareOrFallback(costs, 'seven_day', 'default_claude_team', OPUS, u, OUT), null, 'an unsized window');
+  const unzoned = { ...costs, peak: { ...costs.peak, zone: '' } };
+  assert.equal(d.shareOrFallback(unzoned, 'five_hour', MAX_20X, 'claude-opus-4-8', u, OUT), null, 'a band state this browser cannot read');
+  const anchor = d.anchorTier(costs);
+  for (const model of [OPUS, 'claude-opus-4-8', 'claude-fable-5-1']) {
+    for (const window of ['five_hour', 'seven_day', ...d.modelWeeks(costs, model)]) {
+      const anchored = d.shareOrFallback(costs, window, anchor, model, u, IN);
+      assert.ok(anchored !== null, `${model} prices on ${window} under the anchor tier`);
+      assert.deepEqual(d.equivalentOf(costs, window, model, u, IN), { equivalent: anchored?.share, estimated: anchored?.estimated }, `${model} on ${window}`);
+    }
+  }
+  assert.deepEqual(d.modelWeeks(costs, 'claude-fable-5-1'), ['seven_day_fable'], 'a Fable model reads its third column');
+  // No other tier's capacity reaches the equivalent, while it moves the tier's own share.
+  const resized = { ...costs, capacity: { ...costs.capacity, default_claude_ai: { fiveHour: 1, sevenDay: 1 } } };
+  assert.deepEqual(d.equivalentOf(resized, 'five_hour', OPUS, u, OUT), d.equivalentOf(costs, 'five_hour', OPUS, u, OUT));
+  assert.notEqual(d.shareOrFallback(resized, 'five_hour', 'default_claude_ai', OPUS, u, OUT)?.share, d.shareOrFallback(costs, 'five_hour', 'default_claude_ai', OPUS, u, OUT)?.share);
+  assert.equal(d.equivalentOf(costs, 'five_hour', 'claude-mystery-2', u, OUT), null, 'a model the fallback cannot price');
+});
+
+test('an account tier the cost model does not size reads no share, while the 20x equivalent prices its requests under the anchor tier', () => {
+  // A cost model without Pro's row, as the console reads a team account the shipped model does not size.
+  const { default_claude_ai: _pro, ...sized } = costs.capacity;
+  const tierless = { ...costs, capacity: sized };
+  const u = usage({ input: 1 });
+  for (const model of [OPUS, 'claude-opus-4-8']) {
+    assert.equal(d.shareOrFallback(tierless, 'five_hour', 'default_claude_ai', model, u, OUT), null, `${model} on the unsized tier`);
+    const equivalent = d.equivalentOf(tierless, 'five_hour', model, u, OUT);
+    assert.ok(equivalent !== null && equivalent.equivalent > 0, `${model} still reads its equivalent`);
+    close(equivalent?.equivalent, d.equivalentOf(costs, 'five_hour', model, u, OUT)?.equivalent, `${model}'s equivalent reads no account tier`);
+  }
+});
+
+test('the worked figures: a million input tokens of a model read its units over the anchor tier\'s capacity on each window, whatever the account tier', () => {
+  const model = 'claude-opus-5-5';
+  const anchor = d.anchorTier(shipped);
+  const million = usage({ input: 1_000_000 });
+  const units = 1_000_000 * shipped.modelWeight[model] * shipped.typeMultiplier.input;
+  close(d.equivalentOf(shipped, 'five_hour', model, million, OUT)?.equivalent, units / d.tierCapacity(shipped, anchor, 'five_hour'), 'the 20x 5-hour window');
+  close(d.equivalentOf(shipped, 'five_hour', model, million, IN)?.equivalent, units / d.tierCapacity(shipped, anchor, 'five_hour') / shipped.peak.capacityFactor.fiveHour, 'inside the band');
+  close(d.equivalentOf(shipped, 'seven_day', model, million, OUT)?.equivalent, units / d.tierCapacity(shipped, anchor, 'seven_day'), 'the 20x 7-day window');
+  assert.deepEqual(d.modelWeeks(shipped, model), [], 'Opus 5.5 carries no model week');
+  const fable = 'claude-fable-5-1';
+  const fableUnits = 1_000_000 * shipped.modelWeight[fable] * shipped.typeMultiplier.input;
+  close(d.equivalentOf(shipped, 'seven_day_fable', fable, million, OUT)?.equivalent, fableUnits / d.tierCapacity(shipped, anchor, 'seven_day') / shipped.modelWindows.seven_day_fable.capacityFactor, 'the 20x Fable week');
+  const output = usage({ output: 1_000_000 });
+  close(d.equivalentOf(shipped, 'five_hour', model, output, OUT)?.equivalent, (1_000_000 * shipped.modelWeight[model] * shipped.typeMultiplier.output) / d.tierCapacity(shipped, anchor, 'five_hour'), 'output tokens at their multiplier');
+  // The same request on a Pro account reads its own window's share apart and the one equivalent.
+  const pro = 'default_claude_ai';
+  close(d.shareOrFallback(shipped, 'five_hour', pro, model, million, OUT)?.share, units / d.tierCapacity(shipped, pro, 'five_hour'), "a Pro account's own 5-hour share");
+  close(d.shareOrFallback(shipped, 'five_hour', anchor, model, million, OUT)?.share, d.equivalentOf(shipped, 'five_hour', model, million, OUT)?.equivalent, 'the equivalent is the anchor tier\'s share');
+});
+
+test('every helper that reads a weight answers and returns for a weighted model, an unweighted model of a weighted tier and a model of no tier', () => {
+  const u = usage({ input: 1 });
+  const read = (model) => ({
+    equivalentOf: d.equivalentOf(costs, 'five_hour', model, u, OUT),
+    isWeighted: d.isWeighted(costs, model),
+    latestWeighted: d.modelTierOf(costs, model) === null ? null : d.latestWeighted(costs, d.modelTierOf(costs, model)),
+    ratesOf: d.ratesOf(costs, 'five_hour', MAX_20X, model),
+    shareIn: d.shareIn(costs, 'five_hour', MAX_20X, model, u, false),
+    shareOf: d.shareOf(costs, 'five_hour', MAX_20X, model, u, OUT),
+    shareOrFallback: d.shareOrFallback(costs, 'five_hour', MAX_20X, model, u, OUT),
+    weightOf: d.weightOf(costs, model, 'five_hour'),
+    weightOrFallback: d.weightOrFallback(costs, model, 'five_hour'),
+    weightedWindows: d.weightedWindows(costs, model),
+  });
+  const weighted = read(OPUS);
+  assert.ok(Object.values(weighted).every((v) => v !== null && v !== false && !(Array.isArray(v) && v.length === 0)), `a weighted model prices through every helper: ${JSON.stringify(weighted)}`);
+  const fallback = read('claude-opus-4-8');
+  // Opus 4.8 carries no override, so at the donor's weight every reader answers what it answers for the donor.
+  assert.deepEqual([fallback.weightOf, fallback.isWeighted, fallback.weightedWindows, fallback.ratesOf, fallback.shareIn, fallback.shareOf, fallback.latestWeighted], [weighted.weightOf, true, ['five_hour', 'seven_day'], weighted.ratesOf, weighted.shareIn, weighted.shareOf, OPUS], "the plain readers price it at its model tier's latest");
+  assert.deepEqual([fallback.weightOrFallback?.estimated, fallback.shareOrFallback?.estimated, fallback.equivalentOf?.estimated], [true, true, true], 'the fallback readers price it, estimated');
+  for (const model of ['claude-mystery-2', 'claude-unknown-1']) assert.deepEqual(Object.values(read(model)), [null, false, null, null, null, null, null, null, null, []], `${model} prices nowhere`);
+});
+
+test('the entry in force at an instant is the latest dated at or before it, else the first', () => {
+  const wired = d.decodeSettings({ api_prices: tables.api_prices, subscription_costs: tables.subscription_costs });
+  const revisions = wired.apiPrices.revisions ?? [];
+  assert.deepEqual(revisions.map((r) => r.effective), ['2026-01-01', '2026-02-01'], 'the test tables carry two price entries');
+  const between = Date.UTC(2026, 0, 15);
+  assert.equal(d.revisionAt(revisions, between), revisions[0], 'an instant between the two reads the earlier');
+  assert.equal(d.revisionAt(revisions, new Date(between).toISOString()), revisions[0], 'given as an ISO string too');
+  assert.equal(d.revisionAt(revisions, Date.UTC(2025, 11, 1)), revisions[0], 'an instant before the first reads the first');
+  assert.equal(d.revisionAt(revisions, '2025-12-01T00:00:00.000Z'), revisions[0]);
+  assert.equal(d.revisionAt(revisions, Date.parse(revisions[1].effectiveDate)), revisions[1], 'the entry is in force from its own midnight');
+  assert.equal(d.revisionAt(revisions, Date.UTC(2026, 8, 16)), revisions[1], 'an instant after the last reads the last');
+  assert.equal(d.revisionAt(revisions, '2026-09-16T14:30:00Z'), revisions[1]);
+  assert.equal(d.revisionAt([], between), null, 'an empty list has none');
+  assert.equal(d.revisionAt(wired.subscriptionCosts.revisions ?? [], between)?.content.modelWeight[OPUS], costs.modelWeight[OPUS], "the cost model's entries read the same way");
 });

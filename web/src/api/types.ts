@@ -240,7 +240,7 @@ export interface QuotaSnapshot {
  * The conditions that need the operator, worst first: the order the route ranks by and the dashboard's line draws,
  * so not alphabetical.
  */
-export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'wall_reached', 'destination_spent', 'shed_no_runway'] as const;
+export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'model_unweighted', 'wall_reached', 'destination_spent', 'shed_no_runway'] as const;
 export type AttentionKind = (typeof ATTENTION_KIND_VALUES)[number];
 
 /** One condition that holds now, as `GET /admin/attention` answers it. */
@@ -249,17 +249,17 @@ export interface AttentionItem {
   detail: Record<string, unknown>;
   kind: AttentionKind;
   /** Where the operator fixes it; null for a drift refusal that carried no key, a router subject and a deleted pool. */
-  link: { id: string; page: 'accounts' | 'keys' | 'pools' } | null;
+  link: { id: string; page: 'accounts' | 'keys' | 'models' | 'pools' } | null;
   /** The pools the item belongs to, which a pool card filters the same list by. */
   pools: string[];
   /** When the condition started, as an ISO instant. */
   since: string;
   /**
-   * An account or a pool by id and label, a client version as both, or one of the router's own components as both:
-   * the ledger or the routing state writer, a listener's pair by its key (`proxy.tls`, `admin.tls`), or `-` for a
-   * parked record without a pool.
+   * An account or a pool by id and label, a client version as both, a model's undated id as both, or one of the
+   * router's own components as both: the ledger or the routing state writer, a listener's pair by its key
+   * (`proxy.tls`, `admin.tls`), or `-` for a parked record without a pool.
    */
-  subject: { id: string; label: string; type: 'account' | 'client' | 'pool' | 'router' };
+  subject: { id: string; label: string; type: 'account' | 'client' | 'model' | 'pool' | 'router' };
 }
 
 /** What `POST /admin/ledger/parked/replay` landed, and the parked records the ledger still refuses. */
@@ -307,9 +307,21 @@ export interface PoolCacheTtl {
   plan: TtlRules;
 }
 
+/** The two shared windows' 20x equivalents, where a figure sums across models and draws no model week. */
+export interface SharedEquivalent {
+  fiveHour: number;
+  sevenDay: number;
+}
+
 export interface TrafficBucket {
   at: string;
+  /** The dollars of the bucket's requests no subscription window paid. */
+  billedUsd: number;
   costUsd: number;
+  /** The plan-funded requests' 20x equivalents. */
+  equivalent: SharedEquivalent;
+  /** True when any request of the bucket priced through the model tier's fallback weight. */
+  estimated: boolean;
   failed: number;
   requests: number;
   tokens: number;
@@ -378,6 +390,8 @@ export interface Pool {
   affinityTtlSeconds: number;
   /** Whether the client's server-side auto mode checks travel; off drops them. */
   autoModeServer: boolean;
+  /** The day's dollars of the requests no subscription window paid. */
+  billed24h: number;
   /** Hours of captured request and response bodies for keys with no override; 0 is off. */
   bodyCaptureHours: number;
   /** The time constant of each session's burn average, which the projection and the shedding round read. */
@@ -387,6 +401,10 @@ export interface Pool {
   /** Always answered; `enabled` off is how a pool that rewrites no breakpoint reads. */
   cacheTtl: PoolCacheTtl;
   cost24h: number;
+  /** The day's plan-funded requests' 20x equivalents. */
+  equivalent24h: SharedEquivalent;
+  /** True when any request of the day priced through the model tier's fallback weight. */
+  estimated24h: boolean;
   id: string;
   /** Requests in flight one member may hold before a fresh session skips it. */
   inFlightCap: number;
@@ -459,7 +477,9 @@ export interface ApiKey {
   /** Sessions on this key never receive cache-warming probes. */
   keepaliveOptOut: boolean;
   lastUsedAt: string | null;
-  lifetime: { cost: number; requests: number };
+  /** `billedUsd` is the dollars of the requests no subscription window paid, `equivalent` the plan-funded requests'
+   *  20x equivalents, and `estimated` true when any request priced through the model tier's fallback weight. */
+  lifetime: { billedUsd: number; cost: number; equivalent: SharedEquivalent; estimated: boolean; requests: number };
   /** Whether `GET /v1/models` under this key lists an `id[1m]` twin beside every long-context model. */
   longContextTwins: boolean;
   modelRules: ModelRule[];
@@ -478,7 +498,8 @@ export interface ApiKey {
   status: KeyStatus;
   /** The stamp of the row's last write, which `revision` carries. */
   updatedAt: string;
-  usage7d: { cost: number; requests: number; tokens: number };
+  /** The week's figures, read as `lifetime`'s. */
+  usage7d: { billedUsd: number; cost: number; equivalent: SharedEquivalent; estimated: boolean; requests: number; tokens: number };
 }
 
 export interface CreatedApiKey {
@@ -588,6 +609,8 @@ export interface Attempt {
   /** The answer's `service_tier`, null on an answer that carried none. */
   serviceTier: string | null;
   startedAt: string;
+  /** The account tier the attempt's account was on when it landed, null for an API-key account and an unknown tier. */
+  tier: string | null;
   /** The `id` of the message the answer carried, the join to a transcript's assistant entry; null without one. */
   upstreamMessageId: string | null;
   upstreamRequestId: string | null;
@@ -660,12 +683,19 @@ export interface RequestLog {
   clientDrift: string | null;
   compaction: string | null;
   contextCompacted: string | null;
+  /**
+   * The plan request's 20x equivalents by window key, a window the model has no weight on kept as its key with null,
+   * as the route's `WindowShares` answers it, and null for a billed request.
+   */
+  costEquivalent: Record<string, number | null> | null;
   costShares: CostShares | null;
   costUsd: number;
   /** The member's source on the serving leg's body; null for a body that went without one. */
   diagnosticsSource: DiagnosticsSource | null;
   durationMs: number | null;
   errorCode: string | null;
+  /** True when the request's figures priced through the model tier's fallback weight. */
+  estimated: boolean;
   /** A request whose session branched from another: the depth where the two part, and the session it branched from. */
   forkDepth: number | null;
   forkedFrom: string | null;
@@ -691,6 +721,10 @@ export interface RequestLog {
   sessionId: string | null;
   shape: RequestShape;
   status: number | null;
+  /**
+   * The serving attempt's account tier, null for an API-key account, a request no attempt served and an unknown tier.
+   */
+  tier: string | null;
   transport: Transport;
   ttfbMs: number | null;
   /** First content token; later than `ttfbMs` on streams that open with metadata. */
@@ -1233,28 +1267,43 @@ export interface MemberBudget {
 /** One group of one bucket or of the whole range, as the analytics routes sum it. */
 export interface AnalyticsGroup {
   attempts: number;
+  /** The dollars of the billed rows alone by token kind, the cache halves null on a fold as `cost`'s are. */
+  billed: AnalyticsGroup['cost'];
+  billedUsd: number;
+  /** The plan rows' 20x window equivalents by window key, `read` and `write` apart, and empty on a fold. */
+  cacheEquivalent: Record<string, { read: number; write: number }>;
   cacheHits: number;
   cacheMisses: number;
   /** The eight known reasons always, beside any other name the route answered. */
   cacheMissReasons: Record<CacheMissReason, number>;
   /**
-   * Keyed by the ledger's window ids. Null for an api_key group, under a grouping other than account and on a
-   * group folded from request rows, which prices no cache share. A window is absent where the group's models do not
-   * apply to it or where a row could not be priced on it. `probeShares` is keyed the same.
+   * Keyed by the ledger's window ids. Null for an api_key group, under a grouping other than account unless the
+   * query names exactly one account, and on a group folded from request rows, which prices no cache share. A window is
+   * absent where the group's models do not apply to it or where a row could not be priced on it. `probeShares` is
+   * keyed the same.
    */
   cacheShares: Record<string, { read: number; write: number }> | null;
   /** The cache read and write costs are null on a group folded from request rows, which carry one total. */
   cost: Omit<CostSplit, 'cacheRead' | 'cacheWrite'> & { cacheRead: number | null; cacheWrite: number | null };
   /**
-   * Keyed by the ledger's window ids. Null for an api_key group, under a grouping other than account, and on a
-   * group folded from request rows with no plan-funded row or with one whose account the route could not price. A
+   * The plan rows' 20x window equivalent by window key (`five_hour`, `seven_day`, a model week), under every grouping.
+   */
+  costEquivalent: Record<string, number>;
+  /**
+   * Keyed by the ledger's window ids. Null for an api_key group, under a grouping other than account unless the
+   * query names exactly one account, and on a group folded from request rows with no plan-funded row or with one
+   * whose account the route could not price. A
    * window is absent where the group's models do not apply to it. The route answers a window a row could not be
    * priced on as absent too, while a fold of the request rows carries such a window as a key with null, so a reader
    * treats the two alike.
    */
   costShares: Record<string, number | null> | null;
   costUsd: number;
+  /** The plan rows' 20x 7-day equivalent by token kind, null on a fold, which carries one total. */
+  equivalentSplit: CostSplit | null;
   errors: Record<string, number>;
+  /** True when any plan row priced through the model tier's fallback weight. */
+  estimated: boolean;
   exhausted: number;
   expiredBetweenTurns: number;
   failed: number;
@@ -1277,10 +1326,15 @@ export interface AnalyticsGroup {
   keyId: string | null;
   label: string;
   percentiles: Record<keyof LatencyHistograms, { p50: number | null; p90: number | null; p95: number | null; p99: number | null }>;
-  /** The plan-funded requests and output tokens the shares were summed over, null where `costShares` is. */
+  /**
+   * The plan-funded requests and output tokens, which the routes and a fold of request rows answer under every
+   * grouping. The output count is the one plan token count a group carries, so `planRowsRequired` reads it.
+   */
   planOutputTokens: number | null;
   planRequests: number | null;
   probeCostUsd: number;
+  /** The plan-funded probes' 20x window equivalents by window key, `cost` and `wasted` apart, and empty without one. */
+  probeEquivalent: Record<string, { cost: number; wasted: number }>;
   probes: { failed: number; held: number; migrated: number; ok: number; skipped: number };
   /** `wasted` is null while the group's probe dollars are zero, and the map is null whole on a fold, which prices no probe share. */
   probeShares: Record<string, { cost: number; wasted: number | null }> | null;
@@ -1341,19 +1395,37 @@ export interface AccountRollup {
   windows: Partial<Record<string, WindowSample>>;
 }
 
-/** The dimensions the burn route groups on; `session` reads the twenty sessions with the most tokens. */
-export type BurnGroup = 'account' | 'key' | 'request_class' | 'session';
+/**
+ * The dimensions the burn route groups on: the breakdown's, and `session`, which reads the twenty sessions with the
+ * most tokens and which no other route groups on.
+ */
+export type BurnGroup = Exclude<AnalyticsGroupBy, 'all'> | 'session';
 
 /** One group's burn over one bucket, as `GET /admin/analytics/burn` answers it. */
 export interface BurnPoint {
   at: string;
   /** Cache-read tokens. */
   cachedTokens: number;
+  /** True when any plan row of the bucket priced through the model tier's fallback weight. */
+  estimated: boolean;
+  /** The bucket's plan rows as a 20x 5-hour equivalent, the band weighed in, under every grouping. A billed row adds a
+   *  zero, so a bucket with tokens and no plan row reads 0. Null for an idle bucket and for one holding a row the cost
+   *  model cannot price on the window. */
+  fiveHourEquivalent: number | null;
   /** A subscription account's spend in the bucket as a fraction of its own 5-hour window, the band weighed in; null
    *  for an API-key account, one whose tier is unknown, a bucket with no row the cost model prices (an idle hour among
-   *  them) or one holding a row the cost model cannot price, and under every other grouping. */
+   *  them) or one holding a row the cost model cannot price, and wherever the group holds more than one account's rows
+   *  (every grouping but the account one, unless the Accounts filter names exactly one account). */
   fiveHourShare: number | null;
   group: string;
+  /** The same plan rows as a 20x equivalent of the model's own week, null where no row of the bucket is on a model
+   *  with a week of its own. */
+  modelWeekEquivalent: number | null;
+  /** The same spend as a fraction of the account's model week, null where `fiveHourShare` is and where no row of the
+   *  bucket is on a model with a week of its own. */
+  modelWeekShare: number | null;
+  /** The same plan rows as a 20x 7-day equivalent, unbanded. */
+  sevenDayEquivalent: number | null;
   /** The same spend as a fraction of the account's 7-day window, unbanded. */
   sevenDayShare: number | null;
   /** Every token of the bucket, all five types: zero for a bucket with no traffic the ledger can attribute. */
@@ -1361,7 +1433,7 @@ export interface BurnPoint {
   /** Uncached input tokens. */
   uncachedTokens: number;
   /** What the account spends in: a subscription's window share, even while no tier prices it, or an API key's
-   *  dollars; null under every other grouping, and for an account the registry no longer holds. */
+   *  dollars. Null where the shares are, and for an account the registry no longer holds. */
   unit: BurnUnit | null;
   /** An API-key account's estimated cost. */
   usd: number;
@@ -1404,6 +1476,9 @@ export interface Session {
   burn: number | null;
   /** The instant the served burn is decayed to, null with no pin or for a pin never folded. */
   burnAt: string | null;
+  /** A plan pin's burn per hour as a 20x 5-hour equivalent, read under no account tier. Null where `burn` is and for a
+   *  pin that spends dollars. */
+  burnEquivalent: number | null;
   /** Null for a session with no pin, or one whose account left the registry: no kind is left to pick a unit from. */
   burnUnit: BurnUnit | null;
   /** The cache TTL in force at the pin's last refresh; null for a session with no pin. */
@@ -1413,6 +1488,8 @@ export interface Session {
   companionSince: string | null;
   createdAt: string | null;
   epoch: number | null;
+  /** True when the pin's burn priced through the model tier's fallback weight. */
+  estimated: boolean;
   /** The depth where a forked session parts from its base; null with `forkedFrom`. */
   forkDepth: number | null;
   /** The session this one branched from, null for one that branched from none. */
@@ -1597,12 +1674,33 @@ export interface TypeMultiplier { cacheRead: number; cacheWrite1h: number; cache
 export interface SubscriptionCosts {
   capacity: Record<string, { fiveHour: number | null; sevenDay: number | null }>;
   effective: string;
+  /** Each undated model id's model tier, a name of `tierOrder`. */
+  modelTier: Record<string, string>;
   modelWeight: Record<string, number | null>;
   modelWindows: Record<string, { capacityFactor: number; of: string }>;
   overrides: Record<string, { typeMultiplier?: Partial<TypeMultiplier>; weightByWindow?: Record<string, number> }>;
   peak: { capacityFactor: { fiveHour: number; sevenDay: number }; fromHour: number; toHour: number; weekdays: boolean; zone: string };
+  /** The model tiers in display order. */
+  tierOrder: string[];
   typeMultiplier: TypeMultiplier;
   unit: { definedBy: { band: string; tier: string; window: string }; unitsPerWindow: number };
+}
+
+/** The two members every model tier order reads, so a caller with the cost model's members alone can order models. */
+export type ModelTiers = Pick<SubscriptionCosts, 'modelTier' | 'tierOrder'>;
+
+/** One dated entry of the price table: `effective` as the router sent it, `effectiveDate` the instant it parses to. */
+export interface PriceRevision {
+  effective: string;
+  effectiveDate: string | null;
+  models: ModelPrice[];
+}
+
+/** One dated entry of the subscription cost model, read as strictly as the entry in force. */
+export interface CostRevision {
+  content: SubscriptionCosts;
+  effective: string;
+  effectiveDate: string | null;
 }
 
 export interface Settings {
@@ -1610,9 +1708,10 @@ export interface Settings {
   access: { adminConfigured: boolean };
   /**
    * The price table used to cost the ledger, its rows in the file's order. `effective` is the date as the router sent
-   * it, `effectiveDate` the instant it parses to, or null when it is not a date.
+   * it, `effectiveDate` the instant it parses to, or null when it is not a date. `revisions` lists every dated entry
+   * of the file, ascending by date, the entry in force among them.
    */
-  apiPrices: { effective: string; effectiveDate: string | null; models: ModelPrice[]; source: string };
+  apiPrices: { effective: string; effectiveDate: string | null; models: ModelPrice[]; revisions: PriceRevision[]; source: string };
   /** `proxyTls`: whether the proxy listener terminates TLS itself, which sets the client snippet's scheme. */
   listeners: { metrics: string; proxy: string; proxyTls: boolean };
   retention: { bodyCaptureMaxHours: number };
@@ -1624,8 +1723,9 @@ export interface Settings {
    * The envelope's `content` with its `source` beside it; an answer without the envelope reads as an empty model.
    * `problem` is the sentence the cost views show in place of a model the answer carries and the console cannot read,
    * which then reads as the empty model too; null otherwise.
+   * `revisions` lists every dated entry of the file, ascending by date, and is empty where the model reads as empty.
    */
-  subscriptionCosts: SubscriptionCosts & { problem: string | null; source: string };
+  subscriptionCosts: SubscriptionCosts & { problem: string | null; revisions: CostRevision[]; source: string };
 }
 
 export interface SessionInfo {
@@ -1642,9 +1742,16 @@ export interface AccountInput {
 export interface Overview {
   /** The router's live pins, which the session rows overcount: those also hold ledger-only and historical sessions. */
   activePins: number;
+  /** The day's dollars of the requests no subscription window paid. */
+  billed24h: number;
   cost24h: number;
+  /** The day's plan-funded requests' 20x equivalents. */
+  equivalent24h: SharedEquivalent;
   errorRate24h: number | null;
-  hourly: { at: string; cost: number; errors: number; requests: number; tokens: number }[];
+  /** True when any request of the day priced through the model tier's fallback weight. */
+  estimated24h: boolean;
+  /** `billed` and `equivalent` split each hour as `billed24h` and `equivalent24h` split the day. */
+  hourly: { at: string; billed: number; cost: number; equivalent: SharedEquivalent; errors: number; requests: number; tokens: number }[];
   requests24h: number;
   tokens24h: number;
   tokensCached24h: number;

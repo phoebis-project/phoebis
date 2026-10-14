@@ -3,7 +3,7 @@ import { AFFINITY_MODE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALU
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, MemberEligibility,
-  ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
+  ModelRule, ModelsState, Overview, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
 import { foldEffort, foldRequestClass } from '@/lib/dimensions';
@@ -17,7 +17,7 @@ import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE, memberPins } from './operations';
 import { KEYS, POOLS, composedFor, resolvedFor, servedFigures } from './pools';
-import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
+import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById, requestSidesOf } from './requests';
 import { createRng } from './rng';
 import { ROUTING_LOG_KINDS, getDecision, listRoutingLog } from './routingLog';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
@@ -542,8 +542,8 @@ export class MockApi implements Api {
       lastUsedAt: null,
       notes: input.notes,
       bodyCaptureHours: input.bodyCaptureHours,
-      usage7d: { cost: 0, requests: 0, tokens: 0 },
-      lifetime: { cost: 0, requests: 0 },
+      usage7d: { billedUsd: 0, cost: 0, equivalent: { fiveHour: 0, sevenDay: 0 }, estimated: false, requests: 0, tokens: 0 },
+      lifetime: { billedUsd: 0, cost: 0, equivalent: { fiveHour: 0, sevenDay: 0 }, estimated: false, requests: 0 },
     };
     this.keys = [key, ...this.keys];
     return latency({ key, secret }, 300);
@@ -631,8 +631,8 @@ export class MockApi implements Api {
     return latency(breakdownOf(emptyStore() ? [] : ALL_ROLLUPS, query));
   }
 
-  getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup) {
-    return latency(burnOf(emptyStore() ? [] : ALL_ROLLUPS, range, groupBy));
+  getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup, filters?: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'>) {
+    return latency(burnOf(emptyStore() ? [] : ALL_ROLLUPS, range, groupBy, filters));
   }
 
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>) {
@@ -701,10 +701,12 @@ export class MockApi implements Api {
     const empty = emptyStore();
     // The route answers its 24 hourly buckets over an empty ledger too, at zero, so each spark draws a flat line.
     const last24h = empty ? [] : DAY_ROWS;
-    const hourlyMap = new Map<string, { at: string; cost: number; errors: number; requests: number; tokens: number }>();
+    const hourlyMap = new Map<string, Overview['hourly'][number]>();
     for (let i = 23; i >= 0; i -= 1) {
-      const at = iso(Math.floor((NOW - i * 3_600_000) / 3_600_000) * 3_600_000);
-      hourlyMap.set(at, { at, cost: 0, errors: 0, requests: 0, tokens: 0 });
+      const startMs = Math.floor((NOW - i * 3_600_000) / 3_600_000) * 3_600_000;
+      const at = iso(startMs);
+      const { billedUsd, equivalent } = requestSidesOf(last24h.filter((r) => Date.parse(r.at) >= startMs && Date.parse(r.at) < startMs + 3_600_000));
+      hourlyMap.set(at, { at, billed: billedUsd, cost: 0, equivalent, errors: 0, requests: 0, tokens: 0 });
     }
     let tokens = 0;
     let cached = 0;
@@ -726,11 +728,15 @@ export class MockApi implements Api {
       }
     }
     const top = [...errorCodes.entries()].sort((a, b) => b[1] - a[1])[0];
+    const day = requestSidesOf(last24h);
     return latency({
       // Counted off the pools, so the dashboard and the Pools view cannot disagree on the router's pins.
       activePins: empty ? 0 : this.pools.reduce((n, p) => n + poolPins(p), 0),
+      billed24h: day.billedUsd,
       cost24h: cost,
+      equivalent24h: day.equivalent,
       errorRate24h: last24h.length ? last24h.filter((r) => r.status !== 200).length / last24h.length : null,
+      estimated24h: day.estimated,
       hourly: [...hourlyMap.values()],
       requests24h: last24h.length,
       tokens24h: tokens,

@@ -9,26 +9,26 @@
         "key": "desktop",
         "label": "desktop",
         "key_id": "desktop",
-        "requests": 5,
-        "succeeded": 3,
+        "requests": 6,
+        "succeeded": 4,
         "rate_limited": 0,
         "failed": 1,
         "exhausted": 0,
         "rejected": 0,
-        "attempts": 6,
+        "attempts": 7,
         "failovers": 1,
         "incomplete": 1,
-        "cache_hits": 5,
+        "cache_hits": 6,
         "cache_misses": 0,
         "uncached": 0,
         "expired_between_turns": 0,
         "tokens": {
-          "cache_read": 3000,
+          "cache_read": 3500,
           "cache_write_1h": 0,
-          "cache_write_5m": 1200,
-          "output": 600,
-          "thinking": 240,
-          "uncached_input": 6000,
+          "cache_write_5m": 1400,
+          "output": 700,
+          "thinking": 280,
+          "uncached_input": 7000,
           "web_fetch": 0,
           "web_search": 0
         },
@@ -44,7 +44,7 @@
           "upstream_error": 1
         },
         "cache_miss_reasons": {
-          "none": 5
+          "none": 6
         },
         "histograms": {
           "duration_ms": [
@@ -85,7 +85,7 @@
             0,
             0,
             0,
-            5,
+            6,
             0,
             0,
             0,
@@ -142,7 +142,7 @@
             0,
             0,
             0,
-            4,
+            5,
             0,
             0,
             0,
@@ -206,7 +206,7 @@
             0,
             0,
             0,
-            4,
+            5,
             0,
             0,
             0,
@@ -277,7 +277,7 @@
             0,
             0,
             0,
-            4,
+            5,
             0,
             0,
             0,
@@ -356,20 +356,20 @@
         "cost_shares": null,
         "cache_shares": null,
         "probe_shares": null,
-        "plan_requests": 3,
-        "plan_output_tokens": 300,
+        "plan_requests": 4,
+        "plan_output_tokens": 400,
         "cost_equivalent": {
-          "five_hour": 0.00005287500000000001,
-          "seven_day": 8.812499999999999e-6
+          "five_hour": 0.000078725,
+          "seven_day": 0.000013120833333333332
         },
         "cache_equivalent": {
           "five_hour": {
-            "read": 3.75e-7,
-            "write": 7.500000000000001e-6
+            "read": 5.583333333333333e-7,
+            "write": 0.00001116666666666667
           },
           "seven_day": {
-            "read": 6.250000000000001e-8,
-            "write": 1.25e-6
+            "read": 9.305555555555557e-8,
+            "write": 1.8611111111111113e-6
           }
         },
         "probe_equivalent": {},
@@ -381,12 +381,12 @@
           "output": 0.003
         },
         "equivalent_split": {
-          "input": 5e-6,
-          "cache_read": 6.250000000000001e-8,
-          "cache_write": 1.25e-6,
-          "output": 2.5e-6
+          "input": 7.444444444444444e-6,
+          "cache_read": 9.305555555555557e-8,
+          "cache_write": 1.8611111111111113e-6,
+          "output": 3.7222222222222225e-6
         },
-        "estimated": false
+        "estimated": true
       },
       {
         "key": "desktop@1791720940000",

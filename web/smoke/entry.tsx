@@ -17,8 +17,12 @@ import { fakeClock } from './clock';
 export { api, decodeSettings, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, planLabel, SessionNotKept, SETTINGS_WIRE };
 // The transport itself, for the check that needs its 401 path, which no mock call takes.
 export { call };
+// The fold the Cost section sums its groups by, so a check reads the totals the page draws from one derivation.
+export { sumGroups } from '@/api/fold';
 export { AttentionRows } from '@/components/AttentionRows';
-export { ATTENTION_REFRESH_MS } from '@/lib/attention';
+export { GROUPED_SHARE_NOTE, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, SHARE_NOTE } from '@/lib/analytics';
+// The model item's sentence, so the attention line's check reads its title against the story's own detail.
+export { ATTENTION_REFRESH_MS, attentionDetail } from '@/lib/attention';
 export { default as React } from 'react';
 export { AttemptCount, AttemptTrail } from '@/components/ui/AttemptTrail';
 // The viewer's row height and margin, so a body check bounds the drawn rows by the figures the viewer draws by.
@@ -29,11 +33,11 @@ export { PlanRates } from '@/components/costs/PlanRates';
 export { Expert, Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumber, Toggle } from '@/components/ui/primitives';
 // The figures and the model form a Dashboard check computes its expectation from, so the check and the page read one
 // derivation; the cost reference's and the About card's checks read theirs the same way.
-export { anchorTier, bandFactor, bandRuns, familyOrder, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, shareOf, weightOf, windowMultiple } from '@/lib/costs';
+export { anchorTier, bandFactor, bandRuns, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, revisionAt, shareOf, tierGroups, tierOrder, weightOf, weightOrFallback, windowMultiple } from '@/lib/costs';
 // The strip's model and its buttons' names, so a card check spells the stations a record draws and the names a reader
 // hears from the derivation the strip reads.
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';
-export { earlierHolderLabel, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, shortModel, spanText } from '@/lib/format';
+export { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, shareLabel, shortModel, spanText, undatedModel } from '@/lib/format';
 // The pace mark's offset and the end it runs to, so the check and the meter place it by one arithmetic.
 export { endOf, remainingTimeShare } from '@/lib/quota';
 // A request's native unit, so a check picks the rows it reads by the rule the Cost cell draws them by.
@@ -43,6 +47,8 @@ export { requestsWiden } from '@/lib/requestsLink';
 export { fmtWindows, ringFigures } from '@/lib/rings';
 // The walk's words, so a card check reads a popover's column and its title as the console words them.
 export { ALL_KINDS, keyWord, STEP_NAME } from '@/lib/routingLog';
+// The legend's words, so the shell's check reads the popover against the one source the console draws it from.
+export { UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE } from '@/lib/unit';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;
 export const requestEvents = REQUEST_EVENTS;
 export const requests = REQUESTS;

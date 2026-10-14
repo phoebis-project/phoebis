@@ -46,86 +46,23 @@
         }
       },
       {
-        "kind": "wall_reached",
+        "kind": "model_unweighted",
         "subject": {
-          "type": "account",
-          "id": "business",
-          "label": "Business"
+          "type": "model",
+          "id": "claude-opus-99",
+          "label": "claude-opus-99"
         },
         "link": {
-          "page": "accounts",
-          "id": "business"
+          "page": "models",
+          "id": "claude-opus-99"
         },
-        "pools": [
-          "main"
-        ],
-        "since": 1791719800000,
+        "pools": [],
+        "since": 1791720940000,
         "detail": {
-          "projection_error": 0.04,
-          "setting": [
-            "shed_cap",
-            "window_ceiling"
-          ],
-          "walls": 1,
-          "windows": [
-            "five_hour"
-          ]
-        }
-      },
-      {
-        "kind": "destination_spent",
-        "subject": {
-          "type": "account",
-          "id": "business",
-          "label": "Business"
-        },
-        "link": {
-          "page": "accounts",
-          "id": "business"
-        },
-        "pools": [
-          "main"
-        ],
-        "since": 1791718000000,
-        "detail": {
-          "fits": {
-            "rewrite_only": 1
-          },
-          "moves": 1,
-          "setting": [
-            "window_ceiling"
-          ],
-          "windows": [
-            "five_hour"
-          ]
-        }
-      },
-      {
-        "kind": "shed_no_runway",
-        "subject": {
-          "type": "pool",
-          "id": "main",
-          "label": "Main"
-        },
-        "link": {
-          "page": "pools",
-          "id": "main"
-        },
-        "pools": [
-          "main"
-        ],
-        "since": 1791717700000,
-        "detail": {
-          "accounts": [
-            "business"
-          ],
-          "rounds": 1,
-          "setting": [
-            "window_ceiling"
-          ],
-          "setting_values": {
-            "window_ceiling": 0.95
-          }
+          "model": "claude-opus-99",
+          "requests": 1,
+          "tier": "opus",
+          "weight_of": "claude-opus-5-5"
         }
       }
     ]

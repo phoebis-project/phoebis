@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import { iso } from '@/api/decode';
 import type { DecisionKind, FactEntity, RoutingLogQuery, RoutingLogRow } from '@/api/types';
+import { useAppSettings } from '@/app/settings';
 import { type Paging, useFollow } from '@/app/useFollow';
 import { DecisionCard } from '@/components/DecisionCard';
 import { EventDetail } from '@/components/EventDetail';
@@ -12,11 +13,12 @@ import { IconChevronLeft, IconChevronRight, IconChevronsLeft } from '@/component
 import { Badge, Button, Card, EmptyState, ErrorState, Skeleton, useDescription } from '@/components/ui/primitives';
 import { addressWindow, type LogFilters, RANGE_PRESETS, ROUTING_LOG_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
+import { compareByModelTier } from '@/lib/costs';
 import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, FOLLOW_OVERRUN, readEnd, spanEnded } from '@/lib/follow';
 import { fmtAbsolute, fmtInt, fmtTime, upperFirst } from '@/lib/format';
 import { useAsync, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
-import { ALL_KINDS, byOf, compareModels, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref } from '@/lib/routingLog';
+import { ALL_KINDS, byOf, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref } from '@/lib/routingLog';
 
 const PAGE_SIZE = 25;
 
@@ -54,6 +56,17 @@ export function RoutingLogPage() {
   const pools = useAsync(() => api.listPools(), []);
   const accounts = useAsync(() => api.listAccounts(), []);
   const catalog = useAsync(() => api.listCatalog(), []);
+  // The model tiers come with the shell's settings answer, which can land after the catalog, so the list sorts again
+  // when they do.
+  const { modelTiers } = useAppSettings();
+  const modelOptions = useMemo<Option[]>(
+    () =>
+      (catalog.data ?? [])
+        .map((m) => m.id)
+        .sort((a, b) => compareByModelTier(modelTiers, a, b))
+        .map((id) => ({ label: id, value: id })),
+    [catalog.data, modelTiers],
+  );
 
   // The cursor and the pages before it belong to the address they were read under, so a filter change drops them in
   // the render that brings it, and one list request follows.
@@ -142,10 +155,7 @@ export function RoutingLogPage() {
     accounts: (accounts.data ?? []).map((a) => ({ label: a.label, value: a.id })),
     keys: (keys.data ?? []).map((k) => ({ label: k.name, value: k.id })),
     kinds: KIND_OPTIONS,
-    models: (catalog.data ?? [])
-      .map((m) => m.id)
-      .sort(compareModels)
-      .map((id) => ({ label: id, value: id })),
+    models: modelOptions,
     pools: (pools.data ?? []).map((p) => ({ label: p.name, value: p.id })),
   };
   const disabled = { ...notLoadedReason('keys', 'key', keys), ...notLoadedReason('pools', 'pool', pools), ...notLoadedReason('accounts', 'account', accounts), ...notLoadedReason('models', 'model', catalog) };

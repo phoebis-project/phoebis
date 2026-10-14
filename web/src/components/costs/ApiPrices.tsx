@@ -1,7 +1,7 @@
-import type { ModelPrice, PriceCells } from '@/api/types';
-import { familyOrder } from '@/lib/costs';
+import type { ModelPrice, ModelTiers, PriceCells } from '@/api/types';
+import { tierGroups } from '@/lib/costs';
 import { fmtCompact, fmtInt } from '@/lib/format';
-import { TOKEN_TYPES } from './PlanRates';
+import { FoldRow, TOKEN_TYPES } from './PlanRates';
 
 const CELL: Record<(typeof TOKEN_TYPES)[number]['key'], keyof PriceCells> = {
   cacheRead: 'cacheReadPerM',
@@ -19,11 +19,15 @@ const LONG_CONTEXT = (over: number) =>
   `What an attempt whose prompt is longer than ${fmtInt(over)} tokens costs. The prompt is its uncached input, its cache reads and its cache writes together.`;
 
 /**
- * The dollar list prices per million tokens family by family, a fast-mode row under each model with one and a row
- * under each model priced by prompt length at its prices over the threshold.
+ * The dollar list prices per million tokens, one row per model tier with its newest model and the older models folded
+ * under a row of their own, a fast-mode row under each model with one and a row under each model priced by prompt
+ * length at its prices over the threshold.
  */
-export function ApiPrices({ prices }: { prices: ModelPrice[] }) {
-  const rows = familyOrder(prices.map((p) => p.model)).flatMap((model) => prices.filter((p) => p.model === model));
+export function ApiPrices({ costs, olderOpen, onToggleOlder, prices }: { costs: ModelTiers; olderOpen: boolean; onToggleOlder: () => void; prices: ModelPrice[] }) {
+  const groups = tierGroups(prices.map((p) => p.model), costs);
+  const rowsOf = (models: string[]) => models.flatMap((model) => prices.filter((p) => p.model === model));
+  const shown = rowsOf(groups.map((g) => g.models[0]));
+  const older = rowsOf(groups.flatMap((g) => g.models.slice(1)));
   const cells = (row: PriceCells) =>
     TOKEN_TYPES.map((t, i) => {
       const usd = row[CELL[t.key]];
@@ -34,6 +38,34 @@ export function ApiPrices({ prices }: { prices: ModelPrice[] }) {
           {none ? <span className="muted">-</span> : fmtPrice(usd)}
         </td>
       );
+    });
+  // A model and its sub-rows share one stripe, and the count runs on through the fold, so the stripes alternate
+  // whether the older models show or not.
+  const body = (rows: ModelPrice[], from: number) =>
+    rows.flatMap((p, i) => {
+      const alt = (from + i) % 2 ? 'is-alt' : '';
+      return [
+        <tr key={p.model} className={`${alt}${p.fast || p.longContext ? ' has-sub' : ''}`}>
+          <td className="mono">{p.model}</td>
+          {cells(p)}
+        </tr>,
+        ...(p.fast
+          ? [
+              <tr key={`${p.model} fast`} className={`cost-ref__sub ${alt}`}>
+                <td title={FAST_MODE}>fast mode</td>
+                {cells(p.fast)}
+              </tr>,
+            ]
+          : []),
+        ...(p.longContext
+          ? [
+              <tr key={`${p.model} long-context`} className={`cost-ref__sub ${alt}`}>
+                <td title={LONG_CONTEXT(p.longContext.over)}>prompt over {fmtCompact(p.longContext.over)} tokens</td>
+                {cells(p.longContext)}
+              </tr>,
+            ]
+          : []),
+      ];
     });
   return (
     <>
@@ -54,32 +86,9 @@ export function ApiPrices({ prices }: { prices: ModelPrice[] }) {
             </tr>
           </thead>
           <tbody>
-            {rows.flatMap((p, n) => {
-              // A model and its sub-rows share one stripe.
-              const alt = n % 2 ? 'is-alt' : '';
-              return [
-                <tr key={p.model} className={`${alt}${p.fast || p.longContext ? ' has-sub' : ''}`}>
-                  <td className="mono">{p.model}</td>
-                  {cells(p)}
-                </tr>,
-                ...(p.fast
-                  ? [
-                      <tr key={`${p.model} fast`} className={`cost-ref__sub ${alt}`}>
-                        <td title={FAST_MODE}>fast mode</td>
-                        {cells(p.fast)}
-                      </tr>,
-                    ]
-                  : []),
-                ...(p.longContext
-                  ? [
-                      <tr key={`${p.model} long-context`} className={`cost-ref__sub ${alt}`}>
-                        <td title={LONG_CONTEXT(p.longContext.over)}>prompt over {fmtCompact(p.longContext.over)} tokens</td>
-                        {cells(p.longContext)}
-                      </tr>,
-                    ]
-                  : []),
-              ];
-            })}
+            {body(shown, 0)}
+            {older.length > 0 && <FoldRow cols={1 + TOKEN_TYPES.length} count={older.length} onToggle={onToggleOlder} open={olderOpen} />}
+            {olderOpen && body(older, shown.length)}
           </tbody>
         </table>
       </div>

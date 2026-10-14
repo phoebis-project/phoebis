@@ -4016,20 +4016,33 @@
   height: 6px;
 }
 
-/* Every second model on --surface-2 over --surface, a model's sub-rows on its shade. The divider is one step
+/* The donor's id is the widest text the weight column draws, so the cell wraps beside its bar rather than widening
+   the table past the dialog, and breaks before the id rather than at a hyphen inside it. */
+.cost-ref__weight .cost-ref__val--estimated {
+  white-space: normal;
+}
+
+.cost-ref__val--estimated .cost-ref__donor {
+  white-space: nowrap;
+}
+
+/* Every second model on --surface-2 over --surface, a model's sub-rows on its shade. The fold row is one step
    heavier, so it never reads as a stripe. A cell past a full window takes the warning tint in place of its stripe. */
 .cost-ref__tiers tr.is-alt td,
 .cost-ref__table tr.is-alt td {
   background: var(--surface-2);
 }
 
-.cost-ref__table tr.is-divider td {
-  padding-top: 10px;
-  padding-bottom: 4px;
+.cost-ref__table tr.cost-ref__fold td {
+  padding-top: 5px;
+  padding-bottom: 5px;
   font-size: 12px;
-  color: var(--ink-2);
-  white-space: normal;
   background: var(--surface-3);
+}
+
+.cost-ref__fold .link-btn {
+  padding: 0;
+  color: var(--ink-2);
 }
 
 .cost-ref__table tr td.is-full {
@@ -4050,17 +4063,9 @@
   backdrop-filter: blur(8px);
 }
 
-/* One shape for the three selects that share it, the page's group-by, Burn's group-by and the Unit select: a 160 px
-   select after its label. */
+/* The page's group-by: a 160 px select after its label. */
 .groupby-select {
   width: 160px;
-}
-
-/* Burn's reason takes the rest of the select's line, two lines of text at 1280 and 1440, and drops under the select
-   once less than 360 px is left there. */
-.analytics-groupby__reason {
-  flex: 1 1 360px;
-  font-size: 12.5px;
 }
 
 .analytics-section {
@@ -4173,6 +4178,74 @@
   grid-template-columns: 148px 1fr;
   gap: 20px;
   align-items: center;
+}
+
+/* A native Cost figure keeps its window's name whole, so a narrow tile moves the funding's word under the figure
+   rather than breaking "7-day" at its hyphen. The inline block leaves a break before the word. */
+.cost-figure {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+/* Each equivalent cell names its window in its short word, so at 1280 px the six figure columns fit a 990 px card at
+   8 px of padding a side beside a group column that keeps a floor of sixteen characters plus its 12 px a side. Longer
+   figures scroll the table inside its wrap. */
+.native-cost-table td.col-fill {
+  min-width: calc(16ch + 24px);
+}
+
+.native-cost-table .col-fit {
+  padding-right: 8px;
+  padding-left: 8px;
+}
+
+/* Two rings share one card, so the card takes its grid's whole row, which the Billed by card would otherwise leave half
+   empty beside it. Each ring sets its list under it, since half a narrow card leaves the list no room beside the ring,
+   and below 700 px the rings stack and each list returns beside its ring. */
+/* The Burn grid draws three plan cards beside the spend card, or two without a model week, so an odd last card spans
+   the row rather than leaving a half empty. */
+.burn-grid > .card:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+.grid-2 > .card:has(.split-pair) {
+  grid-column: 1 / -1;
+}
+
+/* Each ring's list takes the height its figures need, the subscription ring's naming the window, so the two columns
+   keep their own heights and the rings stay on one line. */
+.split-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
+.split-pair .split-row {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  justify-items: center;
+}
+
+/* A list as wide as a whole half card would set each figure far from its label. */
+.split-pair .remaining__list {
+  width: 100%;
+  max-width: 260px;
+}
+
+@media (max-width: 699.98px) {
+  .split-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .split-pair .split-row {
+    grid-template-columns: 148px 1fr;
+    justify-items: stretch;
+  }
+
+  .split-pair .remaining__list {
+    max-width: none;
+  }
 }
 
 .hbars--errors li {

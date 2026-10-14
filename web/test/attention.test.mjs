@@ -8,7 +8,7 @@ const item = (kind, over = {}) => ({ detail: {}, kind, link: null, pools: [], si
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 test('the attention kinds rank worst first, the order the route answers in', () => {
-  assert.deepEqual([...ATTENTION_KIND_VALUES], ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'wall_reached', 'destination_spent', 'shed_no_runway']);
+  assert.deepEqual([...ATTENTION_KIND_VALUES], ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'model_unweighted', 'wall_reached', 'destination_spent', 'shed_no_runway']);
 });
 
 test("a listener's two certificate kinds decode as themselves, never as the worst kind", () => {
@@ -25,6 +25,7 @@ test('each attention kind has its word and its tone, a client drift serious', ()
     destination_spent: 'Destination spent within the hour',
     funding_required: 'Funding required',
     ledger_record_parked: 'Priced record parked',
+    model_unweighted: 'Model weight estimated',
     poll_backoff: 'Usage poll backing off',
     pool_exhausted: 'Pool exhausted',
     reauth_required: 'Re-auth required',
@@ -33,7 +34,7 @@ test('each attention kind has its word and its tone, a client drift serious', ()
     wall_reached: 'Wall reached under the ceiling',
     writer_degraded: 'State writer degraded',
   });
-  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'serious', 'critical', 'serious', 'critical', 'warning', 'serious', 'warning', 'warning', 'warning', 'warning']);
+  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'serious', 'critical', 'serious', 'critical', 'warning', 'serious', 'warning', 'warning', 'warning', 'warning', 'warning']);
 });
 
 test('an item opens the page where its condition is fixed, and an item without a link opens nothing', () => {
@@ -42,6 +43,8 @@ test('an item opens the page where its condition is fixed, and an item without a
   assert.equal(attentionHref(item('client_drift', { link: { id: 'a b#c', page: 'keys' } }), NOW), '/keys#a%20b%23c', 'an id travels encoded');
   assert.equal(attentionHref(item('client_drift'), NOW), null, 'a drift refusal that carried no key has nothing to open');
   assert.equal(attentionHref(item('writer_degraded', { subject: { id: 'routing', label: 'routing', type: 'router' } }), NOW), null, "the router's own component has nothing to open");
+  const model = decodeAttention({ detail: {}, kind: 'model_unweighted', link: { id: 'claude-sonnet-4-6', page: 'models' }, pools: [], since: NOW, subject: { id: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6', type: 'model' } });
+  assert.equal(attentionHref(model, NOW), '/models#claude-sonnet-4-6', "an unweighted model's item opens the Models page on the model");
 });
 
 test('a pool exhausted item opens the routing log since the condition began and the other kinds keep their targets', () => {
@@ -74,6 +77,16 @@ test("a row reads each kind's detail as one sentence", () => {
   assert.equal(sentence('ledger_record_parked', { accounts: ['research'], count: 1, pool: 'jobs' }), "1 priced record parked, landing at the next start or on the dashboard's Replay (research)");
   assert.equal(sentence('ledger_record_parked', { accounts: ['primary', 'overflow'], count: 3, pool: null }), "3 priced records parked, landing at the next start or on the dashboard's Replay (primary, overflow)");
   assert.equal(sentence('ledger_record_parked', { accounts: [], count: 2, pool: 'jobs' }), "2 priced records parked, landing at the next start or on the dashboard's Replay", 'a record that names no account adds none');
+  const since = fmtAbsolute(item('model_unweighted').since);
+  assert.equal(
+    sentence('model_unweighted', { model: 'claude-sonnet-4-6', requests: 12, tier: 'sonnet', weight_of: 'claude-sonnet-5-5' }),
+    `claude-sonnet-4-6 has no measured weight, so its 12 plan-funded requests since ${since} priced at the weight of claude-sonnet-5-5, the latest weighted model of the sonnet model tier`,
+  );
+  assert.equal(
+    sentence('model_unweighted', { model: 'claude-opus-99', requests: 1, tier: null, weight_of: null }),
+    `claude-opus-99 has no measured weight, so its 1 plan-funded request since ${since} priced at the weight of the latest weighted model of its model tier`,
+    'a detail missing its tier and its donor names neither',
+  );
 });
 
 test("a listener's certificate items read the listener, the file, the date and what to do", () => {
@@ -134,6 +147,8 @@ test("a badge's title for an item that carries no pool leads with its sentence, 
   );
   const degraded = item('writer_degraded', { detail: { component: 'ledger' } });
   assert.equal(attentionTitle(degraded, NOW), [attentionDetail(degraded, NOW), 'component: ledger', 'started 2h 0m ago'].join('\n'));
+  const model = item('model_unweighted', { detail: { model: 'claude-sonnet-4-6', requests: 12, tier: 'sonnet', weight_of: 'claude-sonnet-5-5' }, subject: { id: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6', type: 'model' } });
+  assert.equal(attentionTitle(model, NOW).split('\n')[0], attentionDetail(model, NOW), "a model's item belongs to no pool card, so its title leads with its sentence");
   const pooled = item('writer_degraded', { detail: { component: 'ledger' }, pools: ['all'] });
   assert.equal(attentionTitle(pooled, NOW), ['component: ledger', 'started 2h 0m ago'].join('\n'), "an item a pool carries reads its sentence on that pool's card");
 });

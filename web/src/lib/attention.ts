@@ -9,6 +9,7 @@ export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   destination_spent: 'Destination spent within the hour',
   funding_required: 'Funding required',
   ledger_record_parked: 'Priced record parked',
+  model_unweighted: 'Model weight estimated',
   poll_backoff: 'Usage poll backing off',
   pool_exhausted: 'Pool exhausted',
   reauth_required: 'Re-auth required',
@@ -24,6 +25,7 @@ export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'serious' | 'war
   destination_spent: 'warning',
   funding_required: 'serious',
   ledger_record_parked: 'serious',
+  model_unweighted: 'warning',
   poll_backoff: 'warning',
   pool_exhausted: 'critical',
   reauth_required: 'critical',
@@ -59,8 +61,8 @@ function conditionLog({ kind, link }: LinkedItem): { log: Pick<LogLink, 'account
 
 /**
  * A `pool_exhausted` item opens the routing log on the pool's exhausted decisions from the condition's start, and a
- * routing condition on its subject's rounds, moves and walls since then. Every other kind opens the account, pool or
- * key where it is fixed. Null when the item names none.
+ * routing condition on its subject's rounds, moves and walls since then. Every other kind opens the account, pool, key
+ * or model where it is fixed. Null when the item names none.
  */
 export function attentionHref(item: LinkedItem, now: number): string | null {
   const { link } = item;
@@ -145,6 +147,13 @@ export function attentionDetail(item: AttentionItem, now: number): string {
     }
     case 'certificate_reload_failed':
       return `The ${listenerOf(item)} listener's pair did not load: ${text(d.error) ?? ''}. The router keeps serving the pair it loaded at ${fmtAbsolute(instant(d.serving_since))}.`;
+    case 'model_unweighted': {
+      const n = count(d.requests);
+      const donor = text(d.weight_of);
+      const tier = text(d.tier);
+      const latest = `the latest weighted model of ${tier ? `the ${tier} model tier` : 'its model tier'}`;
+      return `${text(d.model) ?? item.subject.id} has no measured weight, so its ${n} plan-funded ${n === 1 ? 'request' : 'requests'} since ${fmtAbsolute(item.since)} priced at the weight of ${donor ? `${donor}, ${latest}` : latest}`;
+    }
     case 'wall_reached':
     case 'destination_spent':
     case 'shed_no_runway':

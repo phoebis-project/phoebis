@@ -370,26 +370,26 @@
       {
         "key": "standard",
         "label": "standard",
-        "requests": 5,
-        "succeeded": 3,
+        "requests": 6,
+        "succeeded": 4,
         "rate_limited": 0,
         "failed": 1,
         "exhausted": 0,
         "rejected": 0,
-        "attempts": 6,
+        "attempts": 7,
         "failovers": 0,
         "incomplete": 1,
-        "cache_hits": 5,
+        "cache_hits": 6,
         "cache_misses": 0,
         "uncached": 0,
         "expired_between_turns": 0,
         "tokens": {
-          "cache_read": 3000,
+          "cache_read": 3500,
           "cache_write_1h": 0,
-          "cache_write_5m": 1200,
-          "output": 600,
-          "thinking": 240,
-          "uncached_input": 6000,
+          "cache_write_5m": 1400,
+          "output": 700,
+          "thinking": 280,
+          "uncached_input": 7000,
           "web_fetch": 0,
           "web_search": 0
         },
@@ -405,7 +405,7 @@
           "upstream_error": 1
         },
         "cache_miss_reasons": {
-          "none": 5
+          "none": 6
         },
         "histograms": {
           "duration_ms": [
@@ -446,7 +446,7 @@
             0,
             0,
             0,
-            5,
+            6,
             0,
             0,
             0,
@@ -503,7 +503,7 @@
             0,
             0,
             0,
-            5,
+            6,
             0,
             0,
             0,
@@ -567,7 +567,7 @@
             0,
             0,
             0,
-            5,
+            6,
             0,
             0,
             0,
@@ -638,7 +638,7 @@
             0,
             0,
             0,
-            5,
+            6,
             0,
             0,
             0,
@@ -717,20 +717,20 @@
         "cost_shares": null,
         "cache_shares": null,
         "probe_shares": null,
-        "plan_requests": 4,
-        "plan_output_tokens": 400,
+        "plan_requests": 5,
+        "plan_output_tokens": 500,
         "cost_equivalent": {
-          "five_hour": 0.0000705,
-          "seven_day": 0.00001175
+          "five_hour": 0.00009635,
+          "seven_day": 0.000016058333333333332
         },
         "cache_equivalent": {
           "five_hour": {
-            "read": 5e-7,
-            "write": 0.00001
+            "read": 6.833333333333333e-7,
+            "write": 0.000013666666666666667
           },
           "seven_day": {
-            "read": 8.333333333333335e-8,
-            "write": 1.6666666666666669e-6
+            "read": 1.138888888888889e-7,
+            "write": 2.2777777777777776e-6
           }
         },
         "probe_equivalent": {},
@@ -742,12 +742,12 @@
           "output": 0.002
         },
         "equivalent_split": {
-          "input": 6.666666666666667e-6,
-          "cache_read": 8.333333333333335e-8,
-          "cache_write": 1.6666666666666669e-6,
-          "output": 3.3333333333333333e-6
+          "input": 9.11111111111111e-6,
+          "cache_read": 1.138888888888889e-7,
+          "cache_write": 2.2777777777777776e-6,
+          "output": 4.555555555555555e-6
         },
-        "estimated": false
+        "estimated": true
       }
     ]
   }

@@ -2,23 +2,26 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '@/api';
 import { slug } from '@/api/http';
-import type { ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
+import type { ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool, SharedEquivalent } from '@/api/types';
 import { useSession } from '@/app/session';
+import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { FilterBar } from '@/components/FilterBar';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
-import { Tile } from '@/components/ui/Tile';
+import { figuresValue, Tile } from '@/components/ui/Tile';
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { KEYS_CODEC, type KeysAddress } from '@/lib/address';
+import { nativeFiguresOf, SHARE_NOTE, type DollarPosition } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { clock } from '@/lib/clock';
 import { KEYS_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import type { PauseCause } from '@/lib/follow';
-import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
+import { ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
 import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, sortKeys, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { scrollToElement } from '@/lib/scroll';
+import type { UnitPosition } from '@/lib/unit';
 
 const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
 const isKeyGroup = (value: string | null): value is KeyGroup => value !== null && (KEY_GROUPS as readonly string[]).includes(value);
@@ -44,7 +47,58 @@ const STATUS_OPTIONS = [
   { label: 'Revoked', value: 'revoked' },
 ];
 
+/** A sum over both fundings, as a key's lifetime and week and a pool's day carry it. */
+export interface FundedSum {
+  /** The rows no subscription window paid, in dollars. */
+  billedUsd: number;
+  cost: number;
+  /** The plan rows' 20x equivalents. */
+  equivalent: SharedEquivalent;
+  estimated: boolean;
+}
+/** A dollar position's dollars of a sum: every row's, the billed rows', or the plan rows' at the API price list. */
+export const dollarsUnder = (unit: DollarPosition, s: FundedSum): number => (unit === 'all' ? s.cost : unit === 'usd' ? s.billedUsd : s.cost - s.billedUsd);
+/**
+ * A sum's two sides on the 7-day window, each undefined where it has no rows, so a sum of one funding shows one figure
+ * and no "0%" side.
+ */
+export const nativeSidesOf = (s: FundedSum): { billed: number | undefined; equivalent: number | undefined } => ({ billed: s.billedUsd > 0 ? s.billedUsd : undefined, equivalent: s.equivalent.sevenDay > 0 ? s.equivalent.sevenDay : undefined });
+/**
+ * A tile over a sum under a position. Native stacks the two sides with their words, and an empty sum reads its zero in
+ * each unit rather than nothing. The shares are one account's, and these tiles sum every account, so they read a dash.
+ */
+export function sumTileOf(unit: UnitPosition, s: FundedSum): { title?: string; value: ReactNode } {
+  if (unit === 'share') return { title: SHARE_NOTE, value: '-' };
+  if (unit !== 'native') return { value: fmtUsd(dollarsUnder(unit, s)) };
+  const { figures, marked } = nativeFiguresOf('seven_day', nativeSidesOf(s), s.estimated);
+  return { title: marked ? ESTIMATED_TITLE : undefined, value: figuresValue(figures) };
+}
+/**
+ * A key's figure as a label or a line reads it: native's two sides on one line, a side with no rows left out and a
+ * dash titled `empty` where neither has any, a dollar position's dollars, and under the shares a dash, since a key
+ * spans its pool's accounts.
+ */
+function keyFigureOf(unit: UnitPosition, s: FundedSum, empty: string): { text: string; title?: string } {
+  if (unit === 'share') return { text: '-', title: SHARE_NOTE };
+  if (unit !== 'native') return { text: fmtUsd(dollarsUnder(unit, s)) };
+  const sides = nativeSidesOf(s);
+  if (sides.equivalent === undefined && sides.billed === undefined) return { text: '-', title: empty };
+  const { figures, marked } = nativeFiguresOf('seven_day', sides, s.estimated);
+  return { text: figures.map((f) => (f.word === 'billed' ? `${f.text} billed` : f.text)).join(', '), title: marked ? ESTIMATED_TITLE : undefined };
+}
+
+/** A key row's 7-day figure under its tokens. */
+function WeekLine({ unit, usage }: { unit: UnitPosition; usage: FundedSum }) {
+  const figure = keyFigureOf(unit, usage, 'No request in the last 7 days');
+  return (
+    <span className="sub" title={figure.title}>
+      {figure.text}
+    </span>
+  );
+}
+
 export function KeysPage() {
+  const { unit } = useAppSettings();
   const now = useNow();
   const ink = useChartInk();
   const location = useLocation();
@@ -162,10 +216,21 @@ export function KeysPage() {
         keys: keys.data.length,
         active: keys.data.filter((k) => k.status === 'active').length,
         requests: keys.data.reduce((s, k) => s + k.lifetime.requests, 0),
-        cost: keys.data.reduce((s, k) => s + k.lifetime.cost, 0),
+        lifetime: {
+          billedUsd: keys.data.reduce((s, k) => s + k.lifetime.billedUsd, 0),
+          cost: keys.data.reduce((s, k) => s + k.lifetime.cost, 0),
+          equivalent: { fiveHour: keys.data.reduce((s, k) => s + k.lifetime.equivalent.fiveHour, 0), sevenDay: keys.data.reduce((s, k) => s + k.lifetime.equivalent.sevenDay, 0) },
+          estimated: keys.data.some((k) => k.lifetime.estimated),
+        },
       }
     : null;
-  const maxCost = Math.max(1, ...(keys.data ?? []).map((k) => k.lifetime.cost));
+  const lifetimeTile = totals ? sumTileOf(unit, totals.lifetime) : null;
+  // The bars rank by the equivalent under native, where a billed key's dollars read in its label alone, and under the
+  // shares no key reads a figure to rank by.
+  const rankOf = (k: ApiKey) => (unit === 'native' ? k.lifetime.equivalent.sevenDay : unit === 'share' ? 0 : dollarsUnder(unit, k.lifetime));
+  // The top rank sets the full width: a fixed floor such as a dollar would dwarf the equivalent's bars, each a small
+  // fraction of a window.
+  const maxRank = Math.max(0, ...(keys.data ?? []).map(rankOf));
 
   /** Runs one key mutation and reloads the table behind it; a rejection only toasts, leaving the list alone. */
   const run = async (action: () => Promise<void>) => {
@@ -209,7 +274,7 @@ export function KeysPage() {
         <Tile label="Keys" value={totals ? fmtInt(totals.keys) : null} />
         <Tile label="Active" value={totals ? fmtInt(totals.active) : null} />
         <Tile label="Lifetime requests" value={totals ? fmtCompact(totals.requests) : null} />
-        <Tile label="Lifetime cost" value={totals ? fmtUsd(totals.cost) : null} />
+        <Tile label="Lifetime cost" value={lifetimeTile?.value ?? null} title={lifetimeTile?.title} />
       </div>
 
       <div className="keys-layout">
@@ -217,22 +282,25 @@ export function KeysPage() {
           {keys.data ? (
             <ul className="hbars">
               {[...keys.data]
-                .sort((a, b) => b.lifetime.cost - a.lifetime.cost)
-                .map((k) => (
-                  <li key={k.id}>
-                    <div className="hbars__head">
-                      <span>
-                        {k.name} <span className="muted mono">{k.prefix}…</span>
-                      </span>
-                      <span className="num">
-                        {fmtUsd(k.lifetime.cost)} <span className="muted">{fmtCompact(k.lifetime.requests)} {k.lifetime.requests === 1 ? 'request' : 'requests'}</span>
-                      </span>
-                    </div>
-                    <div className="hbars__track">
-                      <span className="hbars__fill" style={{ width: `${(k.lifetime.cost / maxCost) * 100}%`, background: ink.series[0] }} />
-                    </div>
-                  </li>
-                ))}
+                .sort((a, b) => rankOf(b) - rankOf(a))
+                .map((k) => {
+                  const figure = keyFigureOf(unit, k.lifetime, 'No request yet');
+                  return (
+                    <li key={k.id}>
+                      <div className="hbars__head">
+                        <span>
+                          {k.name} <span className="muted mono">{k.prefix}…</span>
+                        </span>
+                        <span className="num">
+                          <span title={figure.title}>{figure.text}</span> <span className="muted">{fmtCompact(k.lifetime.requests)} {k.lifetime.requests === 1 ? 'request' : 'requests'}</span>
+                        </span>
+                      </div>
+                      <div className="hbars__track">
+                        <span className="hbars__fill" style={{ width: `${maxRank > 0 ? (rankOf(k) / maxRank) * 100 : 0}%`, background: ink.series[0] }} />
+                      </div>
+                    </li>
+                  );
+                })}
             </ul>
           ) : (
             <Skeleton height={120} />
@@ -292,7 +360,7 @@ export function KeysPage() {
                         <td className="col-fill">{k.modelRules.length ? <span className="mono" title={k.modelRules.map((r) => (r.not ? `NOT ${r.pattern}` : r.pattern)).join(', ')}>{k.modelRules.length === 1 ? '1 rule' : `${k.modelRules.length} rules`}{k.modelRulesMode === 'replace' && ' (replace)'}</span> : <span className="muted" title={NO_RULES[k.modelRulesMode]}>{NO_RULES[k.modelRulesMode]}</span>}</td>
                         <td className="right num col-fit">
                           {fmtCompact(k.usage7d.tokens)} tok
-                          <span className="sub">{fmtUsd(k.usage7d.cost)}</span>
+                          <WeekLine unit={unit} usage={k.usage7d} />
                         </td>
                         <td className="col-fit" title={k.expiresAt ? fmtAbsolute(k.expiresAt) : undefined}>{k.expiresAt ? fmtDate(k.expiresAt) : <span className="muted">Never</span>}</td>
                         <td className="col-fill">

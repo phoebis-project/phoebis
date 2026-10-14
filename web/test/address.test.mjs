@@ -12,7 +12,7 @@ const write = (codec, filters) => codec.toParams(filters).toString();
 /** Each view's codec over a filled address: every list with two ids, every text set, every flag on, every choice off its default. */
 const FILLED = {
   ACCOUNTS_CODEC: { search: 'git', sort: 'usage', status: 'paused' },
-  ANALYTICS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', burn: 'session', by: 'account', class: 'claude-code/*', groups: 'claude-cli/2.1.*\nclaude-cli/2.0.*', key: 'desktop@1000', keys: ['desktop', 'laptop'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], probes: true, range: preset('7d'), session: '407dd39b-dd60', unit: 'share' },
+  ANALYTICS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', by: 'session', class: 'claude-code/*', groups: 'claude-cli/2.1.*\nclaude-cli/2.0.*', key: 'desktop@1000', keys: ['desktop', 'laptop'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], probes: true, range: preset('7d'), session: '407dd39b-dd60', unit: 'share' },
   KEYS_CODEC: { pools: ['all', 'jobs'], search: 'lap', status: 'active' },
   MODELS_CODEC: { key: 'laptop' },
   POOLS_CODEC: {},
@@ -109,8 +109,8 @@ test('a value outside a choice reads as the default', () => {
   assert.equal(read(d.REQUESTS_CODEC, 'kind=bogus').kind, '');
   assert.equal(read(d.REQUESTS_CODEC, 'rows=7').rows, '25');
   assert.equal(read(d.ANALYTICS_CODEC, 'by=all').by, 'key');
-  assert.equal(read(d.ANALYTICS_CODEC, 'unit=euro').unit, 'all');
-  assert.equal(read(d.ANALYTICS_CODEC, 'burn=pool').burn, 'account');
+  assert.equal(read(d.ANALYTICS_CODEC, 'by=session').by, 'session', "the group-by takes the Burn section's own session grouping");
+  assert.equal(read(d.ANALYTICS_CODEC, 'burn=session').by, 'key', 'and no grouping of its own travels for the Burn section');
 });
 
 test('an unknown key is absent after a round trip', () => {
