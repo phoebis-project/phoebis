@@ -462,23 +462,24 @@ next request, which renews the pin in place. The destination gate, the reservati
 and placement stay in force. The spent move has its own toggle, `migrate_when_spent`, which the switch does not touch.
 
 The round orders the pool's pins on the account, cold ones first by burn, then warm ones by burn over rewrite cost (the
-pin's last prompt size in tokens), each burn read from the pin's average decayed with `burn_average_seconds`.
-`warm_sessions` bounds the order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm
-ones, and `always` orders every pin by burn over rewrite cost, cold or warm. A pin a former pool left on the account is
-outside the round until it ends. While the account runs on its plan, a pin whose last refreshing request was sent in
-fast mode is out of the round: fast mode draws usage credits and no plan window, so the pin has no share to shed. In
-dollars, on an API-key account or one in overage, it stays in the round. A session that returns to standard requests
-brings its pin back with the plan burn it still carries. The round then walks the pins in that order while the burn it
-removed, each pin's burn on the fired window, is under the target. A pin with a standing mark counts its burn as removed
-and is skipped as `standing`, since its move is pending. The pool's last unmarked pin on the account is never marked
-(`last_pin`), so a pool with one session there sheds nothing and no round takes all of an account's burn. A pin whose
-burn the cost model cannot price counts nothing and is never marked (`unpriced`), so a session is never shed on a guess.
-A pin the shed rule's gate finds no destination for is skipped as `no_runway` and counts nothing. Every other pin is
-marked with the destination the gate planned for it, and the walk counts that destination's planned rewrite and burn for
-the pins after it, so two marks do not take one sibling's headroom twice. A pin whose burn carries the removed burn past
-the target stays marked, and the walk stops there. A round that marks nothing records why: `no_runway` when no priced
-pin had a destination, `last_pin` when the account had one pin, `standing` when every pin walked was a pending move, and
-`unpriced` when no burn was priced. Either way the round is recorded, so the dwell holds.
+pin's last prompt size in tokens), a pin whose burn the cost model cannot price after every priced pin of its group,
+each burn read from the pin's average decayed with `burn_average_seconds`. `warm_sessions` bounds the order: `never`
+stops after the cold pins, `when_needed` (the default) goes on to the warm ones, and `always` orders every pin by burn
+over rewrite cost, cold or warm. A pin a former pool left on the account is outside the round until it ends. While the
+account runs on its plan, a pin whose last refreshing request was sent in fast mode is out of the round: fast mode draws
+usage credits and no plan window, so the pin has no share to shed. In dollars, on an API-key account or one in overage,
+it stays in the round. A session that returns to standard requests brings its pin back with the plan burn it still
+carries. The round then walks the pins in that order while the burn it removed, each pin's burn on the fired window, is
+under the target. A pin with a standing mark counts its burn as removed and is skipped as `standing`, since its move is
+pending. The pool's last unmarked pin on the account is never marked (`last_pin`), so a pool with one session there
+sheds nothing and no round takes all of an account's burn. A pin whose burn the cost model cannot price counts nothing
+and is never marked (`unpriced`), so a session is never shed on a guess. A pin the shed rule's gate finds no destination
+for is skipped as `no_runway` and counts nothing. Every other pin is marked with the destination the gate planned for
+it, and the walk counts that destination's planned rewrite and burn for the pins after it, so two marks do not take one
+sibling's headroom twice. A pin whose burn carries the removed burn past the target stays marked, and the walk stops
+there. A round that marks nothing records why: `no_runway` when no priced pin had a destination, `last_pin` when the
+account had one pin, `standing` when every pin walked was a pending move, and `unpriced` when no burn was priced. Either
+way the round is recorded, so the dwell holds.
 
 A marked session moves at its next request, the request that ran the round included, since the mark check follows the
 round. It moves only to a sibling it fits, the one with the longest runway, never within `shed_dwell_seconds` back to an

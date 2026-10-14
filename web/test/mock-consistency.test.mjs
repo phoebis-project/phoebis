@@ -878,7 +878,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       // A move's destinations carry its gate's fit. A placement's fit is computed here over the members the spent and
       // cap partitions left, and the members they dropped read none, so the no-fit count follows the computed fits.
       let members = set.map((c) => ({ ...c }));
-      // A drawn token count and a drawn cohort hold read no fit: the generator draws their account without one, and
+      // A drawn token count and a drawn hold read no fit: the generator draws their account without one, and
       // neither takes a slot the cap could keep that choice by.
       const unread = !d.STORY_IDS.has(r.requestId) && (r.request.flags.count || r.outcome.kind === 'held');
       if (unread) assert.ok(set.every((c) => c.fit === null), `${r.requestId}/${r.seq} reads a fit`);

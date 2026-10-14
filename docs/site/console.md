@@ -830,9 +830,9 @@ destination gate's table: a row per candidate the gate read with its projection,
 window the gate read, its runway, the window that binds, its end and its verdict, the station's own verdict naming the
 order the gate took. Reserve stands after Pick, or after the last step where no pick ran, and lists the booking (the
 account, the share reserved and the burn on each window, the expiry and the attempt), or reads "Nothing was booked: the
-pin renewed in place." on a renewal and "Nothing was booked." where nothing else was booked. A fresh placement's
-partitions draw as the stations Spent, At cap, No fit and Winding down. A click or a hover on a station, a candidate or
-a terminus opens its facts in a popover, and Tab, Enter, Space and Escape walk them from the keyboard.
+pin renewed in place." on a renewal and "Nothing was booked." on any other decision that booked nothing. A fresh
+placement's partitions draw as the stations Spent, At cap, No fit and Winding down. A click or a hover on a station, a
+candidate or a terminus opens its facts in a popover, and Tab, Enter, Space and Escape walk them from the keyboard.
 
 "Candidates, in the walk's order" lists every pool member with the chosen or held-on member tinted: Account with its
 plan beneath, Tier (`plan P0`, `overage P0`, `keys P1`), 5h, 7d and Fable as three lines each (the utilization, the
@@ -850,7 +850,7 @@ warning tone and `ending` neutral. Three folds, "Request facts", "Pin and warmth
 not looked up or pinning off) and `Settings in force since {time}`, stay closed until opened. The settings
 fold lists the pool's nineteen settings in the card's order with Load shedding reading `on` or `off`,
 or "The key and its pool had left the registry". A version 1 record reads `not recorded` for
-Load shedding and Window ceiling and lists after them, each marked `(then)`, the three settings it carried that a
+Load shedding and Window ceiling and lists after the nineteen, each marked `(then)`, the three settings it carried that a
 version 2 record does not. "Outcome" lists the pin written, the reservation (the account, the share per window and the
 expiry), the cache-map entries the answer wrote (`pending` until it ends), the cache read with the TTL tier of its
 deepest entry, the hold, reading `for the reset at {time}` where the request waited for a reset, the answer an
@@ -908,9 +908,11 @@ kinds and what each row records:
 | window reset | A quota window reset, with the reading before it. |
 | window spent | A response head, the poll or the prediction read a quota window at its limit. |
 
-Other views open the log on what they show: a Requests row and its drawer on the request a quarter hour either side,
-the Sessions row menu's "View in routing log" on the session's decisions an hour either side of its last request, a
-pool card's "Moves in the last hour" figure on the pool's moved decisions over the last hour, the card's pool
-exhausted row and the dashboard's pool exhausted item on the pool's exhausted decisions from the moment the condition
-began, the "Routing log" action on an account's Requests card on the account's rows over the last hour, and the Models
-view's button on the model rejected and model permitted rows of the last 24 hours.
+Other views open the log on what they show: a Requests row and its drawer on the request a quarter hour either side, the
+Sessions row menu's "View in routing log" on the session's decisions an hour either side of its last request, a pool
+card's "Moves in the last hour" figure on the pool's moved decisions over the last hour, the card's pool exhausted row
+and the dashboard's pool exhausted item on the pool's exhausted decisions from the moment the condition began, the
+routing conditions' dashboard items and pool card rows on the pool's shedding rounds, the account's moves and spent
+windows, or its spent windows, from the moment the condition began, the "Routing log" action on an account's Requests
+card on the account's rows over the last hour, and the Models view's button on the model rejected and model permitted
+rows of the last 24 hours.

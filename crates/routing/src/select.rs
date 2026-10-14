@@ -1425,7 +1425,8 @@ fn run(
                 );
             }
             // A hold is for a fresh placement: with every destination at its cap the move is not made, the pin
-            // renews in place at step 5, and the next request judges the move again.
+            // renews in place at step 5 while its account stays eligible (a cooled one is released there and the
+            // request placed afresh), and the next request judges the move again.
             if let MoveVerdict::Move(reason, set) = moved {
                 let cap = pool.failover.in_flight_cap;
                 let loads: Vec<u32> = set
@@ -1819,9 +1820,6 @@ fn run(
                 state.book_reservation(&request.request_id, reservation);
             }
         }
-    }
-    if rec.reservation.is_none() {
-        rec.step("reserve", "none", vec![account_fact(&chosen.account_id)]);
     }
 
     // Step 7: a fresh pin with a fresh epoch. A token count touches no cache, so it creates none: a pin it left
@@ -2488,8 +2486,8 @@ fn longest<'a, 'r>(
 }
 
 /// The three orders over the siblings `keep` admits: the candidates the pin fits to the horizon on every window its
-/// model draws, else the one where the rewrite alone fits with the longest runway, else the rest. A tie inside an
-/// order is the strategy's to break: the fit has read every window the model draws, so no second reading of a week
+/// model draws, else those where the rewrite alone fits at the longest runway, every tie kept, else the rest. A tie
+/// inside an order is the strategy's to break: the fit has read every window the model draws, so no second reading of a week
 /// orders the candidates again. A candidate at its in-flight cap leaves the first two orders, so a move does not pick
 /// a full account while a free fitting one exists, and reaches the last, where the cap filter reads it as today. The
 /// shed rule (`one`) takes the first order alone, reduced to the longest runway. Every read lands on the member's row
@@ -3133,8 +3131,9 @@ fn pin_request(request: &SelectRequest, pin: &PinRow, current: bool) -> SelectRe
 /// The shed rule's destination for `pin` among the eligible siblings, as its own move would read it: the no-return
 /// keep, the allowance filter and the cap as `gate` applies them, the order `fits` alone reduced to the longest runway,
 /// and the strategy's pick among the tied as `rank` reads it, so the plan names the account the pin's own move lands
-/// on when nothing changes before its next request. `planned` holds the reservations the round planned for its earlier
-/// marks, which the fit counts on their destinations. `None` when nothing fits.
+/// on when nothing changes before its next request, save a runway tie under Pace or Priority, where the plan names the
+/// first tied candidate and the move draws one of them at random. `planned` holds the reservations the round planned
+/// for its earlier marks, which the fit counts on their destinations. `None` when nothing fits.
 #[allow(clippy::too_many_arguments)]
 fn destination_of(
     state: &RoutingState,

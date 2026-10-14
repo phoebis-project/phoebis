@@ -83,8 +83,8 @@ export function paceWords(w: RateLimitWindow, now: number, end: number | null): 
 
 /**
  * A span rounded to the minute in the routing log's spelling: `27 min`, `5 h`, `4 h 59 min`, `3 d 5 h`. A horizon five
- * hours out reads `5 h` though the page reads it seconds after the route computed it, and a span under a minute reads
- * `1 min`, so `0 min` never stands beside a zero runway's `none`.
+ * hours out reads `5 h` though the page reads it seconds after the route computed it, and a positive span under a
+ * minute reads `1 min`, so `0 min` never stands beside a zero runway's `none`.
  */
 export function minuteSpan(ms: number): string {
   const minutes = ms > 0 ? Math.max(1, Math.round(ms / MINUTE)) : 0;

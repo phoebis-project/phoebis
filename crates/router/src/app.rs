@@ -734,8 +734,9 @@ pub async fn run_until(
 /// The routing task's burn prices and peak band: the model's 5-hour share per token on its anchor tier and its band,
 /// and for dollars `prices`, the revision of the table `Pricing::load` chose that is in force at the start `now`, the
 /// share of an account's window a completed request consumed, and the share per second a pin's burn consumes, both
-/// priced through the model on the account's tier. The burn rates and the measured windows are read at `now` and fixed
-/// for the life of the process, so a pending revision takes effect at the next start.
+/// priced through the model on the account's tier. The `BurnRates` tables and the measured windows are read at `now` and
+/// fixed for the life of the process, so a pending revision reaches them at the next start, while the two shares price
+/// at each call's instant under the revision in force then.
 fn router_config(
     prices: &phoebis_ledger::PriceTable,
     tables: Arc<phoebis_ledger::PlanTables>,

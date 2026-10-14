@@ -743,6 +743,7 @@ enum Command {
     Cooldowns {
         reply: oneshot::Sender<Vec<CooldownRow>>,
     },
+    #[cfg(any(test, feature = "debug-hooks"))]
     FastBurns {
         reply: oneshot::Sender<HashMap<PinKey, PinBurn>>,
     },
@@ -1260,7 +1261,9 @@ impl RouterHandle {
             .await
     }
     /// Each pin's fast usage by key, the copy `BurnRates::price_pin` sums beside the row under `BurnUnit::Usd`.
-    /// A pin without fast usage has no entry.
+    /// A pin without fast usage has no entry. The fast-mode tests probe the copy through it and no production path
+    /// reads it, so it is compiled under the `debug-hooks` feature alone.
+    #[cfg(any(test, feature = "debug-hooks"))]
     pub async fn fast_burns(&self) -> Result<HashMap<PinKey, PinBurn>, RouterGone> {
         self.ask(|reply| Command::FastBurns { reply }).await
     }
@@ -2964,6 +2967,7 @@ impl Task {
                     (self.clock)(),
                 ));
             }
+            #[cfg(any(test, feature = "debug-hooks"))]
             Command::FastBurns { reply } => {
                 let _ = reply.send(self.state.fast_burns());
             }
@@ -4049,8 +4053,8 @@ impl Task {
     }
 
     /// Announces the window spent when the router's own figure took its prediction from `before`, under 1.0, to 1.0 or
-    /// above: a charge, or a booking the usage has not replaced yet. Once per account, window and reset, so a later
-    /// charge of the same cycle announces nothing.
+    /// above: a charge, or a booking the usage has not replaced yet. Once per account, window and reset cycle (a wall
+    /// with no reset counts through its window's length), so a later charge of the same cycle announces nothing.
     fn predicted_spent(
         &mut self,
         account_id: &str,

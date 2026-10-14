@@ -2330,23 +2330,22 @@ const QUOTA_NARROW = [
 /**
  * Every Quota card's window grid holds its three columns: each meter, live or absent, at least 120 px wide, the grid
  * needing no more than its own width, no chip, meter or reset label ending past the room inside the card's border and
- * its body's padding, where the card's `overflow: hidden` would cut it, the chip column no wider than the card's
- * widest chip and the reset column no wider than the card's widest reset label within its 120 px bound, a label split
- * between its reset and its projection read by its wider part. A split label's unbroken width runs past the bound,
- * so its card's column stands at the bound. In the mock pass two cards stand in a row at the pass's 1280 by 800, as
- * the floor is set for. A meter held
- * at its 120 px minimum while the columns run past the card passes a width reading alone, and a fixed column on a card
- * wide enough passes every reading but its own. The pace mark stands out of flow inside its meter, so the meter's box
- * and the columns read the same with it, and `quotaChips` reads the mark. The check reads in the window the pass set,
- * then in one that lands two cards on the card grid's floor: twice the floor and the grid's 14 px gap beside the
- * gutter the first reading measures, the grid's left edge and the content's right padding, so the sidebar's width and
- * the page's padding come from the page. A higher floor sets one card in a row there, and a lower one keeps two in a
- * row in a window 1 px narrower, which the check reads next. Last it reads in two phone windows, where the shell drops
- * its sidebar and the content is narrower than the floor. There the page scrolls nothing sideways and every card ends
- * inside the window, and the readings above hold except the reset column's, since the reset label takes a row of its
- * own across the grid. Then it puts the pass's window back. A resize arms no timer on this page, and the check steps no
- * clock and scrolls nothing, so the view's shot keeps its instants and its topbar. The router's seed has no
- * subscription account, so only the story's pass has meters to read.
+ * its body's padding, where the card's `overflow: hidden` would cut it, the chip column no wider than the card's widest
+ * chip and the reset column no wider than the card's widest reset label within its 120 px bound, a label split between
+ * its reset and its projection read by its wider part. A split label's unbroken width runs past the bound, so its
+ * card's column stands at the bound. In the mock pass two cards stand in a row at the pass's 1280 by 800, as the floor
+ * is set for. A meter held at its 120 px minimum while the columns run past the card passes a width reading alone, and
+ * a fixed column on a card wide enough passes every reading but its own. The pace mark stands out of flow inside its
+ * meter, so the meter's box and the columns read the same with it, and `quotaChips` reads the mark. The check reads in
+ * the window the pass set, then in one that lands two cards on the card grid's floor: twice the floor and the grid's 14
+ * px gap beside the gutter the first reading measures, the grid's left edge and the content's right padding, so the
+ * sidebar's width and the page's padding come from the page. A higher floor sets one card in a row there, and a lower
+ * one keeps two in a row in a window 1 px narrower, which the check reads next. Last it reads in two phone windows,
+ * where the shell drops its sidebar and the content is narrower than the floor. There the page scrolls nothing sideways
+ * and every card ends inside the window, and the readings above hold except the reset column's, since the reset label
+ * takes a row of its own across the grid. Then it puts the pass's window back. A resize arms no timer on this page, and
+ * the check steps no clock and scrolls nothing, so the view's shot keeps its instants and its topbar. The router's seed
+ * has no subscription account, so only the story's pass has meters to read.
  */
 async function quotaMeters(theme) {
   const say = (what) => failures.push(`${theme} /quota: ${what}`);

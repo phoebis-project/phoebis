@@ -617,7 +617,8 @@ pub const IN_FLIGHT_RECLAIM_MS: i64 = 3_600_000;
 pub struct Reservation {
     pub account_id: String,
     /// The wire attempt whose selection booked it, a fact for the record and the expiry event. The map's key is the
-    /// request id alone, so a retry in place or a refresh pass keeps the booking and a failover's selection replaces it.
+    /// request id alone, so a retry in place or a refresh pass keeps the booking and a failover's selection replaces
+    /// it.
     pub attempt: u32,
     /// The pin the selection wrote, `None` for a request that pins nothing and still lands its body.
     pub pin: Option<PinKey>,
@@ -1093,7 +1094,9 @@ impl RoutingState {
         }
     }
 
-    /// Every pin with fast usage, by key, for a reader outside the loop that prices the pins beside their rows.
+    /// Every pin with fast usage, by key. The fast-mode tests probe the copy through it and no production path reads
+    /// it, so it is compiled under the `debug-hooks` feature alone.
+    #[cfg(any(test, feature = "debug-hooks"))]
     pub fn fast_burns(&self) -> HashMap<PinKey, PinBurn> {
         self.pins
             .iter()

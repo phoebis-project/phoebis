@@ -49,10 +49,11 @@ pub(crate) struct AttentionItem {
     /// once past). `model_unweighted` carries `model`, `requests` (the plan-funded requests its run served), `tier`
     /// (its model tier) and `weight_of` (the tier's latest weighted model, whose weight prices it). The routing
     /// conditions carry `setting`, the names of the settings they read against: `wall_reached` with `walls`,
-    /// `windows` and `projection_error` (one less the projection of the newest shedding round on the account inside
-    /// the window's length before the wall, null with none), `destination_spent` with `moves`, `fits` (the moves'
-    /// destination fits with counts) and `windows`, and `shed_no_runway` with `rounds`, `accounts` and
-    /// `setting_values` (the pool's value of each setting `setting` names).
+    /// `windows` and `projection_error` (one less the projection of the newest shedding round on the account on the
+    /// wall's window inside the window's length before the wall, null with none), `destination_spent` with `moves`,
+    /// `fits` (the moves' destination fits with counts) and `windows`, and `shed_no_runway` with `rounds`, `accounts`
+    /// and `setting_values` (the pool's value of each setting `setting` names, present only for a pool the registry
+    /// still holds).
     #[schema(value_type = Object)]
     pub detail: Value,
 }

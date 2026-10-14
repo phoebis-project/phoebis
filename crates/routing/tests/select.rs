@@ -3018,8 +3018,9 @@ fn a_rounds_fitting_destinations_order_by_the_longest_runway_and_then_by_the_str
         st.record_sample("c", c);
         decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng())
     };
-    // b and c read alike on both windows, so their runways tie. b's week at 0.5 with a tenth gone runs 0.4 ahead of its
-    // pace, c's with six tenths gone runs behind it: the order keeps both and the strategy picks b, the higher priority.
+    // b and c read alike on both windows, so their runways tie. b's week at 0.5 with a tenth gone runs 0.4 ahead of
+    // its pace, c's with six tenths gone runs behind it: the order keeps both and the strategy picks b, the higher
+    // priority.
     let d = run(weekly(0.3, 0.5, 9, T - 500), weekly(0.3, 0.5, 4, T - 500));
     assert_eq!(
         landed(d.result.clone()),
@@ -17046,7 +17047,7 @@ fn a_round_counts_a_siblings_headroom_once_across_its_marks() {
             ("s2", true, Some("c"), None),
             ("s3", false, None, None),
         ],
-        "the first mark plans b, and the second pin's fit reads b with that plan's rewrite and burn on it, so it plans c"
+        "the first mark plans b, and the second pin's fit reads b with that plan's rewrite and burn, so it plans c"
     );
     assert_eq!(round.outcome, "marked 2");
 

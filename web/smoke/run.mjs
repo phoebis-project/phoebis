@@ -492,6 +492,9 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   // address's path stands for it.
   const target = (href) => href?.split('?')[0] ?? null;
   const read = badges().map((b) => [b.text, b.tone, target(b.href), members(b.title)]);
+  // The model's item counts the story's own Sonnet 4.6 plan requests and names its tier's latest weighted model, so
+  // its members are read off the mock's answer rather than written here.
+  const unweighted = (await api.getAttention()).find((i) => i.kind === 'model_unweighted');
   const want = [
     ['Pool exhausted: jobs', 'badge--critical', '/routing-log', ['key: ci', 'pool: jobs']],
     ['Client drift: 2.1.271', 'badge--serious', '/keys#laptop', ['client_version: 2.1.271', 'key: laptop', 'trigger: hash']],
@@ -502,6 +505,10 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     ['Certificate expiring: proxy.tls', 'badge--warning', null, ["The proxy listener's certificate /etc/phoebis/proxy.pem expires in 12 days (<instant>). Replace the pair and run phoebis tls reload.", 'cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', 'expires: <instant>']],
     ['Priced record parked: jobs', 'badge--serious', '/pools#jobs', ['accounts: ["research"]', 'count: 1', 'pool: jobs']],
     ['Usage poll backing off: secondary', 'badge--warning', '/accounts/secondary', ['account: secondary', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
+    // The model's item ranks after the poll backoff and before the routing conditions, the route's order of the kinds.
+    ...(unweighted
+      ? [['Model weight estimated: claude-sonnet-4-6', 'badge--warning', '/models#claude-sonnet-4-6', [attentionDetail(unweighted, Date.now()), `model: ${unweighted.detail.model}`, `requests: ${unweighted.detail.requests}`, `tier: ${unweighted.detail.tier}`, `weight_of: ${unweighted.detail.weight_of}`]]]
+      : []),
     // A routing condition's badge reads its words, the count, the setting and the start, and opens the routing log.
     // Nightly's wall has no round before it, so it names no projection.
     ['nightly: 1 wall reached on the 5h window, shed_cap and window_ceiling, since 12:01', 'badge--warning', '/routing-log', ['setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]']],
@@ -519,14 +526,6 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
       ['accounts: ["primary"]', 'rounds: 1', 'setting: ["window_ceiling"]', 'setting_values: {"window_ceiling":0.75}'],
     ],
   ];
-  // The model's item counts the story's own Sonnet 4.6 plan requests and names its tier's latest weighted model, so
-  // its members are read off the mock's answer rather than written here. It ranks after the poll backoff and before
-  // the routing conditions, the route's order of the kinds.
-  const unweighted = (await api.getAttention()).find((i) => i.kind === 'model_unweighted');
-  if (unweighted) {
-    const d = unweighted.detail;
-    want.splice(9, 0, ['Model weight estimated: claude-sonnet-4-6', 'badge--warning', '/models#claude-sonnet-4-6', [attentionDetail(unweighted, Date.now()), `model: ${d.model}`, `requests: ${d.requests}`, `tier: ${d.tier}`, `weight_of: ${d.weight_of}`]]);
-  }
   const ages = badges().map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
     name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log and an unweighted model's the Models page, and titled with its detail and age, its sentence first where no pool card draws it",

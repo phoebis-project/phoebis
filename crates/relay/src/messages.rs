@@ -1854,9 +1854,9 @@ impl Relay {
                             now.saturating_add(retry_in_place_ms),
                         )
                     });
-                    // A spent window about to reset: the request sleeps to the reset, or to its one bound when
-                    // that comes first, and selects again with the account still open to it, so the pin renews in
-                    // place. A wait the bound cut short, or one the account left during, passes the account over.
+                    // A spent window about to reset: the request sleeps to the hold's end, the later of the reset and
+                    // the cooldown's end, or to its one bound when that comes first, and selects again with the
+                    // account still open to it, so the pin renews in place. A wait the bound cut short, or one the account left during, passes the account over.
                     if hold.reason == "reset" {
                         let waited = self
                             .wait_out(hold.until.unwrap_or(now), Some(hold_bound), &answer.cancel)

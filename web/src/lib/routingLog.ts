@@ -1621,7 +1621,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('To', row.accountId === null ? null : accountChip(row.accountId), epoch === null ? null : plain(fmtInt(epoch), 'epoch'));
       add('Reason', plain(moveLabel(reason)));
       add('Moved by', plain(RULE_MOVES.has(reason) ? `${words(reason)} rule` : FAILOVER_MOVES.has(reason) ? 'failover' : words(reason || 'move')));
-      // A move the gate read carries its verdict, and a runway no window bounds is written as none at all.
+      // A move the gate read carries its verdict, and the detail carries a null runway where no window bounds it.
       const fit = str(d.fit);
       if (fit !== null) {
         const runway = num(d.runway_ms);

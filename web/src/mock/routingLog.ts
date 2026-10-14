@@ -31,7 +31,11 @@ const round5 = (x: number) => Math.round(x * 100_000) / 100_000;
 /** A rewrite of `tokens` per plan window the model draws, in window share. */
 export const rewriteOf = (tokens: number, model: string): Record<string, number> =>
   Object.fromEntries(drawnWindows(model).map((w) => [w, round5(tokens * WRITE_SHARE[w] * familyWeight(model))]));
-/** The tokens a request's body carries, the relay's estimate a fresh session's rewrite is priced from. */
+/**
+ * The tokens a request's body carries, the relay's estimate a fresh session's rewrite is priced from. The mock holds no
+ * estimate of its own and reads the usage the request reported, so a request that ended with no usage, which the
+ * router books at its body's estimate, books and later expires a zero share here.
+ */
 const bodyTokensOf = (r: RequestLog) => r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h;
 /**
  * A fresh session's burn per hour: the pool's warm pins' median as the story's hour reads it. The drawn day's
@@ -744,7 +748,7 @@ const freshFitOf = (spec: Spec, c: RecordCandidate, pool: PoolSeed) => fitOf(c, 
 /**
  * The no-fit partition's reading of a placement's members, drawn or written by hand, as the engine reads it: every
  * member the spent and cap partitions left, or the whole set the cap holds for a slot, and none of the members they
- * dropped. A drawn token count and a drawn cohort hold read none: the request generator draws their account without
+ * dropped. A drawn token count and a drawn hold read none: the request generator draws their account without
  * the fit, and neither takes a slot the cap could keep that choice by.
  */
 function readPlacementFits(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed): void {
@@ -1519,7 +1523,7 @@ function buildDecisions() {
 
 const built = buildDecisions();
 
-/** One Record v1 per decision of every mock request, keyed `${requestId}/${seq}`. */
+/** One version 2 record per decision of every mock request, keyed `${requestId}/${seq}`. */
 export const DECISIONS: Map<string, DecisionRecord> = built.decisions;
 /** One summary per record, the routing log's decision rows, newest first. */
 export const SUMMARIES: DecisionSummary[] = built.summaries;
