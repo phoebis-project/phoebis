@@ -331,7 +331,7 @@ abort the request and send it again. Before the head, the first byte has a windo
 32 KiB of request body, with one retry near 600 seconds. `CLAUDE_ENABLE_BYTE_WATCHDOG` and
 `CLAUDE_ENABLE_STREAM_WATCHDOG` switch the watchdog off.
 
-Three waits of the router meet those clocks. The router's own guards on the upstream, 600 seconds for the response head
+Four waits of the router meet those clocks. The router's own guards on the upstream, 600 seconds for the response head
 and 600 seconds for the gap between two stream events, sit above the client's window, so a dead upstream stream is cut
 by the client at 180 seconds with the watchdog on, and the router's guard stands behind it
 ([The relay's waits](relay.md#the-relays-waits)). A retry in place is the second wait: on a throttle the router sleeps
@@ -340,9 +340,15 @@ the throttle's delay on the same account before any byte of the head reaches the
 the request and send it again while the router is still waiting ([Retry in place](routing.md#retry-in-place)). The hold
 for a slot is the third, under the same bound: when every account that could serve is at its in-flight cap, the router
 holds the request for a slot before any byte of the head reaches the client
-([In-flight caps](routing.md#in-flight-caps)). The choice is the operator's: keep the bound at or under the window, or
-switch the watchdog off for that client with `CLAUDE_ENABLE_BYTE_WATCHDOG=0`, `API_FORCE_IDLE_TIMEOUT=0` and
-`API_TIMEOUT_MS=18000000`, which lets the client wait out a hold longer than its window.
+([In-flight caps](routing.md#in-flight-caps)). The slow-down's hold is the fourth, with a bound of its own: on a pool
+whose `slow_down` is on, a request of a slowed account's session waits before any byte of the head for the pin's cycle
+times the slow-down, up to the pool's `slow_down_hold_seconds` (1 to 300, default 120), served before a slot or reset
+wait and under the same 180 s window, so the default leaves 60 s for the upstream's head and the pre-commit hold, and a
+bound over 150 s draws the pool's `hold_over_window` warning ([Slow-down](routing.md#slow-down)). A hold that crosses
+the window costs one visible retry, since the retry rejoins the pin's deadline. The choice is the operator's: keep each
+bound at or under the window, or switch the watchdog off for that client with `CLAUDE_ENABLE_BYTE_WATCHDOG=0`,
+`API_FORCE_IDLE_TIMEOUT=0` and `API_TIMEOUT_MS=18000000`, which lets the client wait out a hold longer than its window,
+the slow-down's among them where the operator raises its bound.
 
 ## How a request is identified
 
