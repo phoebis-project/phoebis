@@ -817,6 +817,8 @@ pub(crate) struct Observation {
     pub id: String,
     pub attempt: u8,
     pub started: i64,
+    /// The relay's receipt of the request, the instant its own request row keys its band at.
+    pub received_at: i64,
     pub recipe: Recipe,
     pub ready: bool,
     pub expected: u64,
@@ -2249,6 +2251,7 @@ impl Engine {
             id: observed.request_id.clone(),
             attempt: 0,
             started: now,
+            received_at: observed.received_at,
             recipe,
             ready: false,
             expected: 0,
@@ -2529,12 +2532,12 @@ impl Engine {
             .is_some_and(|o| o.ready && o.expected > 0);
         // The TTL this request's own evidence settled on, set at a stream's first event or, for an answer without a
         // stream, by the reading just above. The write a credited request avoided would have taken it, and a discard
-        // below clears the observation. Its arrival picks the revision its band reads, as its own request row's does.
+        // below clears the observation. Its receipt picks the revision its band reads, as its own request row's does.
         let (observed_ttl, arrived) = inner.sessions[&key]
             .agents
             .get(&agent_id)
             .and_then(|a| a.current.as_ref())
-            .map_or((0, now), |o| (o.ttl_ms, o.started));
+            .map_or((0, now), |o| (o.ttl_ms, o.received_at));
         if !proved {
             let poisoned = inner.sessions[&key]
                 .agents
@@ -3484,6 +3487,7 @@ mod tests {
             id: "r".into(),
             attempt: 1,
             started: 0,
+            received_at: 0,
             recipe,
             ready: true,
             expected: 2_000,

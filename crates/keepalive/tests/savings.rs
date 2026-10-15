@@ -2773,9 +2773,9 @@ async fn a_credit_keys_its_requests_tier_and_band_and_reaches_the_saving_shares(
     }
 }
 
-/// A credit keys the band its request's own row keys, read at the request's arrival: a Haiku 5.5 request received a
+/// A credit keys the band its request's own row keys, read at the relay's receipt: a Haiku 5.5 request received a
 /// minute and a half before February, whose prompt passes January's long-context threshold and not February's, and
-/// answered after midnight, files its credit under `long` beside its request row.
+/// observed by the engine and answered after midnight, files its credit under `long` beside its request row.
 #[tokio::test]
 async fn a_credit_answered_across_a_revision_boundary_keys_the_band_of_its_requests_arrival() {
     const HAIKU: &str = "claude-haiku-5-5";
@@ -2814,13 +2814,14 @@ async fn a_credit_answered_across_a_revision_boundary_keys_the_band_of_its_reque
         (r.up.requests().len() > sent).then_some(())
     })
     .await;
-    r.pump(None).await;
     let received = r.now();
     assert!(
         received < february,
         "the relay received the request on January 31"
     );
+    // The engine observes the request only after midnight, so its own clock at the observation reads February.
     r.advance_attended(february + 60_000 - received);
+    r.pump(None).await;
     r.up.release();
     let resp = pending.await.unwrap();
     assert_eq!(resp.status(), 200);
