@@ -138,11 +138,20 @@ test('a pool input holds every engine bound', () => {
   assert.deepEqual(
     d.poolRefusals({ ...input, returnToPlanDwellSeconds: 86_401, slowDownHoldSeconds: 0, slowDownStretchSeconds: 59 }, accounts).map((r) => [r.group, r.field, r.text]),
     [
-      ['shedding', 'Stretch (s)', 'Stretch (s) is a whole number from 60 to 18,000.'],
-      ['shedding', 'Hold (s)', 'Hold (s) is a whole number from 1 to 300.'],
+      ['slowDown', 'Stretch (s)', 'Stretch (s) is a whole number from 60 to 18,000.'],
+      ['slowDown', 'Hold (s)', 'Hold (s) is a whole number from 1 to 300.'],
       ['overage', 'Return dwell (s)', 'Return dwell (s) is a whole number from 0 to 86,400.'],
     ],
-    'the slow-down fields refuse beside shedding, the return dwell in the overage group',
+    'the slow-down fields refuse in their own group, the return dwell in the overage group',
+  );
+  assert.deepEqual(
+    d.poolRefusals({ ...input, burnAverageSeconds: 599, shedCap: 1.2, windowCeiling: 0.49 }, accounts).map((r) => [r.group, r.field]),
+    [
+      ['utilization', 'Window ceiling (%)'],
+      ['utilization', 'Burn average (s)'],
+      ['shedding', 'Shed cap (%)'],
+    ],
+    'the burn average refuses under Windows, after the ceiling and before the shed cap',
   );
 });
 
@@ -329,7 +338,7 @@ test('a pool refusal names the group its control sits in', () => {
     [{ windowCeiling: 0.49 }, refused('Window ceiling (%)', 'utilization', 'Window ceiling (%) is from 50 to 100.')],
     [{ windowCeiling: Number.NaN }, refused('Window ceiling (%)', 'utilization', 'Window ceiling (%) is from 50 to 100.')],
     [{ shedCap: 1.2 }, refused('Shed cap (%)', 'shedding', 'Shed cap (%) is from 10 to 100.')],
-    [{ burnAverageSeconds: 599 }, refused('Burn average (s)', 'shedding', 'Burn average (s) is a whole number from 600 to 7,200.')],
+    [{ burnAverageSeconds: 599 }, refused('Burn average (s)', 'utilization', 'Burn average (s) is a whole number from 600 to 7,200.')],
     [{ shedDwellSeconds: 299 }, refused('Shed dwell (s)', 'shedding', 'Shed dwell (s) is a whole number from 300 to 7,200.')],
     [{ warmSessions: 'sometimes' }, refused('Warm sessions', 'shedding', 'Warm sessions is one of its listed choices.')],
     [{ inFlightCap: 0 }, refused('In flight', 'failover', 'In flight is a whole number from 1 to 4,294,967,295.')],
@@ -397,7 +406,7 @@ test("refusals come in rail order, a new pool's first two the name and the membe
     refusals.slice(0, 2).map((r) => r.text),
     ['the pool needs a name.', 'the pool needs a member.'],
   );
-  assert.deepEqual(d.POOL_GROUPS, ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'bodyCapture', 'cacheDiagnostics']);
+  assert.deepEqual(d.POOL_GROUPS, ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'slowDown', 'failover', 'overage', 'cacheTtl', 'keepalive', 'bodyCapture', 'cacheDiagnostics']);
 });
 
 test('every bounded engine field is refused once it leaves its bound', () => {

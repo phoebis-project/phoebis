@@ -3119,16 +3119,45 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   }
   const strip = (name) => [...(card(name)?.querySelectorAll('.pool__features .badge') ?? [])].map((b) => [b.textContent?.trim(), b.getAttribute('href'), b.getAttribute('title')]);
   // The shedding badge draws on every card, reading the pool's ceiling with its switch on, so all reads its 75 % and
-  // jobs and work the store's 95 %.
+  // jobs and work the store's 95 %. The slow-down badge draws on work alone, the one pool with the switch on, and reads
+  // its threshold of 30 minutes.
   const shedding = (id, ceiling) => [`sheds above ${ceiling} %`, `/pools?edit=${id}&group=shedding`, 'Opens the pool dialog on Load shedding'];
   results.push({
     name: "/pools the strip badges the features a pool has on, and the shedding's state, and opens the dialog on their groups",
     ok:
       JSON.stringify(strip('all')) === JSON.stringify([shedding('all', 75), ['cache TTL', '/pools?edit=all&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=all&group=keepalive', 'Opens the pool dialog on Keepalive']]) &&
       JSON.stringify(strip('jobs')) === JSON.stringify([shedding('jobs', 95)]) &&
-      JSON.stringify(strip('work')) === JSON.stringify([['server-side auto mode off', '/pools?edit=work&group=autoMode', 'Opens the pool dialog on Auto mode'], shedding('work', 95), ['cache TTL', '/pools?edit=work&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=work&group=keepalive', 'Opens the pool dialog on Keepalive']]),
+      JSON.stringify(strip('work')) ===
+        JSON.stringify([
+          ['server-side auto mode off', '/pools?edit=work&group=autoMode', 'Opens the pool dialog on Auto mode'],
+          shedding('work', 95),
+          ['slows above 30 min', '/pools?edit=work&group=slowDown', 'Opens the pool dialog on Slow-down'],
+          ['cache TTL', '/pools?edit=work&group=cacheTtl', 'Opens the pool dialog on Cache TTL'],
+          ['keepalive', '/pools?edit=work&group=keepalive', 'Opens the pool dialog on Keepalive'],
+        ]),
     missing: [...strip('all'), ...strip('jobs'), ...strip('work')].map((b) => b.join(' | ')),
   });
+  {
+    // studio, work's subscription member, is slowed to half its speed: its Standing cell draws the chip after the next
+    // badge, with the account's slow-down in its hover, and annex, the API-key member, draws none.
+    const studio = (await api.listAccounts()).find((a) => a.id === 'studio')?.slowDown ?? null;
+    const servingRow = (label) => [...(card('work')?.querySelectorAll('.serving tbody tr') ?? [])].find((tr) => tr.children[1]?.querySelector('a')?.textContent?.trim() === label);
+    const chipsOf = (label) => [...(servingRow(label)?.children[2]?.querySelectorAll('.speed-chip .badge') ?? [])].map((b) => [b.textContent?.trim(), b.className.replace('badge ', ''), b.getAttribute('title') ?? '']);
+    const standingOf = (label) => [...(servingRow(label)?.children[2]?.querySelectorAll('.chips > *') ?? [])].map((c) => c.textContent?.trim());
+    // The clock reads as the page writes a time of day, in the zone the run pins.
+    const since = studio?.since ? new Date(studio.since).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit' }) : 'no since';
+    const hover = `slowed since ${since}: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min threshold`;
+    results.push({
+      name: "/pools a slowed member's Standing cell draws its speed chip with the slow-down in its hover, and an unslowed one none",
+      ok:
+        studio?.factor === 0.5 &&
+        JSON.stringify(chipsOf('studio')) === JSON.stringify([['0.5x', 'badge--warning', hover]]) &&
+        JSON.stringify(standingOf('studio')) === '["next","0.5x"]' &&
+        chipsOf('Studio annex').length === 0 &&
+        (card('all')?.querySelector('.speed-chip') ?? null) === null,
+      missing: [JSON.stringify(studio), ...chipsOf('studio').map((c) => c.join(' | ')), JSON.stringify(standingOf('studio')), String(chipsOf('Studio annex').length)],
+    });
+  }
   const badged = [...cards.entries()].filter(([, c]) => [...c.querySelectorAll('.badge')].some((b) => b.textContent?.trim() === 'server-side auto mode off')).map(([name]) => name);
   results.push({ name: '/pools the card of a pool with server-side auto mode off carries the badge, and no other card does', ok: JSON.stringify(badged) === '["work"]', missing: badged });
   const origin = new Date(CLOCK_ORIGIN);
@@ -3504,8 +3533,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   });
   {
     // Each warning names the fields it reads, and the tile opens the dialog on the group of the first one's first
-    // field: all's affinity warning reads the affinity first, so Pinning, and jobs' spent moves warning the Load
-    // shedding group that holds Migrate when spent.
+    // field: all's affinity warning reads the affinity first, so Pinning, and jobs' spent moves warning the Failover
+    // group that holds Migrate when spent.
     const tileLink = (name) => card(name)?.querySelector('.pool__stats > div:nth-child(6) dd a');
     const hrefs = ['all', 'jobs', 'work'].map((name) => tileLink(name)?.getAttribute('href') ?? null);
     const opener = await mount('/pools');
@@ -3517,7 +3546,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     opener.unmount();
     results.push({
       name: "/pools the Warnings tile opens the pool dialog on the group of its first warning's first field, and a pool without one draws no link",
-      ok: JSON.stringify(hrefs) === JSON.stringify(['/pools?edit=all&group=pinning', '/pools?edit=jobs&group=shedding', null]) && title === 'Edit pool all' && shownGroup === 'Pinning',
+      ok: JSON.stringify(hrefs) === JSON.stringify(['/pools?edit=all&group=pinning', '/pools?edit=jobs&group=failover', null]) && title === 'Edit pool all' && shownGroup === 'Pinning',
       missing: [...hrefs.map(String), title, shownGroup],
     });
   }
@@ -3784,6 +3813,25 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   });
 }
 {
+  // work keeps the slow-down on and studio reads half its speed, 42 minutes against the pool's 30, so the preview
+  // names it and the wait its sessions take, while annex, its API-key sibling, is never slowed.
+  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  rail(dlg, 'slowDown')?.click();
+  await m.settle(120);
+  const line = group(dlg, 'Slow-down')?.querySelector('.slow-down-preview')?.textContent ?? '';
+  const shownGroup = [...(dlg?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
+  const switchOn = group(dlg, 'Slow-down')?.querySelector('button[role="switch"][aria-label="Slow-down"]')?.getAttribute('aria-checked');
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(300);
+  results.push({
+    name: "/pools the slow-down preview names work's slowed member, its stretch against the threshold and the wait its sessions take",
+    ok: line === '1 member is slowed: studio at 0.5x (42 min of 30 min). A session there waits its cycle times 1.0, up to 120 s.' && shownGroup === 'Slow-down' && switchOn === 'true' && m.container.querySelector('dialog[open]') === null,
+    missing: [line, shownGroup, String(switchOn)],
+  });
+}
+{
   // A warming pool with no member resolves nothing: its card draws the chip and no line, and its dialog no figure.
   const work = (await api.listPools()).find((p) => p.id === 'work');
   await api.createPool({ ...work, members: [], name: 'bare' });
@@ -3910,11 +3958,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({ name: '/pools keys section is not a multi-select', ok: keysGroup !== undefined && keysMulti.length === 0, missing: keysGroup === undefined ? ['no Keys group'] : keysMulti });
 
   // Grouped dialog: a two-level rail beside one group at a time, one heading per group.
-  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Window ceiling', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
+  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
   const railParents = [...(dlg?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const railGroups = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   results.push({
-    name: '/pools dialog rail lists the five parents and the sixteen groups in order',
+    name: '/pools dialog rail lists the five parents and the seventeen groups in order',
     ok: JSON.stringify(railParents) === JSON.stringify(['Pool', 'Routing', 'Load', 'Caching', 'Visibility']) && JSON.stringify(railGroups) === JSON.stringify(groupLabels),
     missing: [...railParents, ...railGroups],
   });
@@ -3936,13 +3984,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const members = group(dlg, 'Members');
     results.push({
       name: '/pools choosing a group hides every other group and marks its rail entry',
-      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 15 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
+      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 16 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
       missing: shown(),
     });
     results.push({ name: "/pools focus lands on the group's heading", ok: !!members && document.activeElement === members.querySelector('h3'), missing: [document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'] });
     dlg?.querySelector('.dialog-rail__parent[data-parent="Load"]')?.click();
     await m.settle(120);
-    results.push({ name: '/pools a parent heading chooses its first group', ok: JSON.stringify(shown()) === '["Window ceiling"]', missing: shown() });
+    results.push({ name: '/pools a parent heading chooses its first group', ok: JSON.stringify(shown()) === '["Windows"]', missing: shown() });
 
     // A refusal typed while another group shows still marks its own group and names itself in the footer.
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -3963,7 +4011,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({
       name: '/pools a refusal marks its group and its parent and fills the footer line, and Go to focuses the field',
       ok:
-        JSON.stringify(marks) === '[true,true,"Window ceiling"]' &&
+        JSON.stringify(marks) === '[true,true,"Windows"]' &&
         held[0] === true &&
         held[1].startsWith('Save is held: The minimum shared prefix is a whole number of tokens, 0 or more.') &&
         goTo !== undefined &&
@@ -3989,7 +4037,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
     expect('/pools the Keys group states that its actions apply at once', group(dlg, 'Keys')?.textContent ?? '', ["A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool. Rotation and expiry are on the Keys page"]);
     const overageLabels = [...(group(dlg, 'Overage and plan end')?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
-    results.push({ name: '/pools Overage and plan end holds Overage policy, Overage grace and Wind down', ok: JSON.stringify(overageLabels) === '["Overage policy","Overage grace (min)","Wind down (min)"]', missing: overageLabels });
+    results.push({
+      name: '/pools Overage and plan end holds Overage policy, Overage grace, Return to plan, Return dwell and Wind down',
+      ok: JSON.stringify(overageLabels) === '["Overage policy","Overage grace (min)","Return to plan","Return dwell (s)","Wind down (min)"]',
+      missing: overageLabels,
+    });
     results.push({ name: '/pools the pool dialog carries no subtitle', ok: !!dlg && dlg.querySelector(':scope > .dialog__inner > .dialog__head .dialog__subtitle') === null, missing: [dlg?.querySelector(':scope > .dialog__inner > .dialog__head .dialog__subtitle')?.textContent ?? ''] });
     const keepalive = group(dlg, 'Keepalive');
     results.push({ name: '/pools the Keepalive warning closes its group', ok: keepalive?.lastElementChild?.classList.contains('callout--warning') === true, missing: [keepalive?.lastElementChild?.className ?? 'no Keepalive group'] });
@@ -4097,14 +4149,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const read = lines.map((c) => [c.textContent?.replace(/\s+/g, ' ').trim(), [...c.querySelectorAll('button')].map((b) => b.textContent?.trim())]);
     const wanted = [
       ['The session affinity ends before the cache TTL the pool injects, so a pin can expire while its cache is warm and the next request can land cold elsewhere. Go to Pinning.', ['Pinning']],
-      ['A ceiling under 80 percent leaves a fifth of every window unused and moves sessions that would have finished the window warm. Go to Window ceiling.', ['Window ceiling']],
+      ['A ceiling under 80 percent leaves a fifth of every window unused and moves sessions that would have finished the window warm. Go to Windows.', ['Windows']],
     ];
     [...(lines[1]?.querySelectorAll('button') ?? [])][0]?.click();
     await m.settle(120);
     const shownNow = [...(dlg?.querySelectorAll('section.dialog-group') ?? [])].filter((s) => !s.hidden).map((s) => s.getAttribute('aria-label'));
     results.push({
       name: "/pools the dialog lists the saved pool's warnings above its groups, each linking to the group of its first field",
-      ok: JSON.stringify(read) === JSON.stringify(wanted) && JSON.stringify(shownNow) === '["Window ceiling"]' && lines.every((c) => c.closest('section.dialog-group') === null),
+      ok: JSON.stringify(read) === JSON.stringify(wanted) && JSON.stringify(shownNow) === '["Windows"]' && lines.every((c) => c.closest('section.dialog-group') === null),
       missing: [...read.map((r) => JSON.stringify(r)), ...shownNow],
     });
   }
@@ -4123,7 +4175,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const introOf = (groupLabel) => card(groupLabel)?.querySelector('.dialog-group__intro')?.textContent ?? null;
     const values = (groupLabel, labels) => labels.map((label) => field(groupLabel, label)?.value ?? null);
     const disabled = (groupLabel, labels) => labels.map((label) => field(groupLabel, label)?.disabled ?? null);
-    const SHED = ['Shed cap (%)', 'Burn average (s)', 'Shed dwell (s)'];
+    const SHED = ['Shed cap (%)', 'Shed dwell (s)'];
+    const AVERAGE = ['Burn average (s)'];
+    // A shedding preset reaches the cap and the dwell in Load shedding and the average under Windows.
+    const shedValues = () => [...values('Load shedding', SHED), ...values('Windows', AVERAGE)];
+    const shedDisabled = () => [...disabled('Load shedding', SHED), ...disabled('Windows', AVERAGE)];
     const FAIL = ['In flight', 'Retry in place (s)'];
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
     const type = async (input, value) => {
@@ -4133,9 +4189,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       await m.settle(120);
     };
     const shedSwitch = () => card('Load shedding')?.querySelector('button[role="switch"][aria-label="Load shedding"]');
+    const slowSwitch = () => card('Slow-down')?.querySelector('button[role="switch"][aria-label="Slow-down"]');
     const preview = () => card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
-    expect('/pools the load groups draw the ceiling, the bar and the shedding, failover and overage controls', ['Window ceiling', 'Load shedding', 'Failover', 'Overage and plan end'].map((label) => card(label)?.textContent ?? '').join(' '), [
+    const slowPreview = () => card('Slow-down')?.querySelector('.slow-down-preview')?.textContent ?? '';
+    expect('/pools the load groups draw the ceiling, the average and the bar, then the shedding, slow-down, failover and overage controls', ['Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end'].map((label) => card(label)?.textContent ?? '').join(' '), [
       'Window ceiling (%)',
+      'Burn average (s)',
       'Member utilization',
       'Load shedding',
       'Balanced',
@@ -4143,33 +4202,37 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       'Conservative',
       'Custom',
       'Shed cap (%)',
-      'Burn average (s)',
       'Shed dwell (s)',
-      'Migrate when spent',
       'Warm sessions',
       'Never:',
       'When needed:',
       'Always:',
       'Preview',
+      'Slow-down',
+      'Stretch (s)',
+      'Hold (s)',
       'Failover',
+      'Migrate when spent',
       'Overage grace',
+      'Return to plan',
+      'When cold:',
+      'Return dwell (s)',
       'Wind down',
     ]);
-    const ceilingField = () => field('Window ceiling', 'Window ceiling (%)');
+    const ceilingField = () => field('Windows', 'Window ceiling (%)');
     results.push({
-      name: '/pools the Window ceiling group opens with its intro and draws the ceiling from 50 to 100 with its hint, then the bar',
+      name: '/pools the Windows group opens with its intro and draws the ceiling from 50 to 100 with its hint, the burn average, then the bar',
       ok:
-        introOf('Window ceiling') ===
-          'The ceiling is the share of a window the router keeps every account under: a session lands only where its rewrite and its burn stay under it until the window resets, and a round moves sessions off an account whose sessions would take it over.' &&
-        JSON.stringify(labelsOf('Window ceiling')) === '["Window ceiling (%)","Member utilization"]' &&
-        hintOf('Window ceiling', 'Window ceiling (%)') === 'A move or a new session lands on a member only where its windows stay under this share until they reset, or for the next five hours on a weekly window. A round runs on a member whose window would pass it.' &&
+        introOf('Windows') === "The windows the router works from: the share of each it keeps every account under, and the span each session's burn is averaged over." &&
+        JSON.stringify(labelsOf('Windows')) === '["Window ceiling (%)","Burn average (s)","Member utilization"]' &&
+        hintOf('Windows', 'Window ceiling (%)') === 'A move or a new session lands on a member only where its windows stay under this share until they reset, or for the next five hours on a weekly window. A round runs on a member whose window would pass it.' &&
         ceilingField()?.value === '75' &&
         ceilingField()?.getAttribute('min') === '50' &&
         ceilingField()?.getAttribute('max') === '100',
-      missing: [String(introOf('Window ceiling')), JSON.stringify(labelsOf('Window ceiling')), String(hintOf('Window ceiling', 'Window ceiling (%)')), String(ceilingField()?.value), String(ceilingField()?.getAttribute('min')), String(ceilingField()?.getAttribute('max'))],
+      missing: [String(introOf('Windows')), JSON.stringify(labelsOf('Windows')), String(hintOf('Windows', 'Window ceiling (%)')), String(ceilingField()?.value), String(ceilingField()?.getAttribute('min')), String(ceilingField()?.getAttribute('max'))],
     });
     {
-      const util = card('Window ceiling');
+      const util = card('Windows');
       const ticks = [...(util?.querySelectorAll('.ubar__track .ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
       const handle = () => util?.querySelector('[role="slider"][aria-label="Window ceiling"]');
       const atStored = [handle()?.className, handle()?.style.left, handle()?.getAttribute('aria-valuetext'), handle()?.getAttribute('aria-valuemin'), handle()?.getAttribute('aria-valuemax')];
@@ -4193,30 +4256,30 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       // A ceiling out of its range reads in the footer and on the rail, with no callout under the bar.
       await type(ceilingField(), '120');
       const status = dlg?.querySelector('.dialog__status')?.textContent ?? '';
-      const outOfRange = [card('Window ceiling')?.querySelector('.callout--critical')?.textContent ?? null, status, !!rail(dlg, 'utilization')?.querySelector('.dialog-rail__dot')];
+      const outOfRange = [card('Windows')?.querySelector('.callout--critical')?.textContent ?? null, status, !!rail(dlg, 'utilization')?.querySelector('.dialog-rail__dot')];
       await type(ceilingField(), '75');
       results.push({
         name: '/pools a ceiling out of range holds the save from the footer and the rail',
-        ok: outOfRange[0] === null && outOfRange[1] === 'Save is held: Window ceiling (%) is from 50 to 100.Go to Window ceiling' && outOfRange[2] === true,
+        ok: outOfRange[0] === null && outOfRange[1] === 'Save is held: Window ceiling (%) is from 50 to 100.Go to Windows' && outOfRange[2] === true,
         missing: outOfRange.map(String),
       });
     }
-    const migrate = card('Load shedding')?.querySelector('button[role="switch"][aria-label="Migrate when spent"]');
+    const migrate = card('Failover')?.querySelector('button[role="switch"][aria-label="Migrate when spent"]');
     results.push({
-      name: '/pools Load shedding opens with its intro and draws its switch first, as Migrate when spent is drawn, then the cap, the average and the dwell with their hints',
+      name: '/pools Load shedding opens with its intro and draws its switch first, as Migrate when spent is drawn under Failover, then the cap and the dwell with their hints, the average under Windows',
       ok:
         introOf('Load shedding') ===
-          'A member whose window would pass the ceiling before its reset, or within five hours on a weekly window, runs a round that marks the sessions that cover the excess, and each moves to a sibling with runway at its next request.' &&
-        JSON.stringify(labelsOf('Load shedding')) === JSON.stringify(['Load shedding', 'Preset', 'Shed cap (%)', 'Burn average (s)', 'Shed dwell (s)', 'Migrate when spent', 'Warm sessions', 'Preview']) &&
+          'A member whose window would pass the ceiling before its reset, or within five hours on a weekly window, runs a round that marks the sessions that cover the excess, and each moves to a sibling with runway at its next request. With the slow-down on, a round fires when the time the slow-down adds passes the stretch threshold, and removes only what the slow-down cannot cover.' &&
+        JSON.stringify(labelsOf('Load shedding')) === JSON.stringify(['Load shedding', 'Preset', 'Shed cap (%)', 'Shed dwell (s)', 'Warm sessions', 'Preview']) &&
         shedSwitch()?.getAttribute('aria-checked') === 'true' &&
         shedSwitch()?.closest('.field')?.className === migrate?.closest('.field')?.className &&
         migrate?.closest('.field')?.classList.contains('field--beside') === true &&
         hintOf('Load shedding', 'Shed cap (%)') === "The most of the member's burn one round removes. The round removes what brings the window under the ceiling, up to this." &&
-        hintOf('Load shedding', 'Burn average (s)') === "The time constant of each session's burn average. The projection and the round read it." &&
+        hintOf('Windows', 'Burn average (s)') === "The time constant of each session's burn average. The projection, the slow-down and the round read it." &&
         hintOf('Load shedding', 'Shed dwell (s)') === 'The least time between two rounds on one member, and how long a moved session stays off it.' &&
         field('Load shedding', 'Shed cap (%)')?.getAttribute('min') === '10' &&
         field('Load shedding', 'Shed cap (%)')?.getAttribute('max') === '100',
-      missing: [String(introOf('Load shedding')), JSON.stringify(labelsOf('Load shedding')), String(shedSwitch()?.getAttribute('aria-checked')), String(shedSwitch()?.closest('.field')?.className), ...SHED.map((label) => String(hintOf('Load shedding', label)))],
+      missing: [String(introOf('Load shedding')), JSON.stringify(labelsOf('Load shedding')), String(shedSwitch()?.getAttribute('aria-checked')), String(shedSwitch()?.closest('.field')?.className), String(migrate?.closest('.field')?.className), ...SHED.map((label) => String(hintOf('Load shedding', label))), String(hintOf('Windows', 'Burn average (s)'))],
     });
     const names = (label) => JSON.stringify(pills(label).map((p) => p.textContent?.trim()));
     results.push({
@@ -4225,30 +4288,33 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         names('Load shedding preset') === '["Balanced","Fast","Conservative","Custom"]' &&
         names('Failover preset') === '["Balanced","Fast","Conservative","Custom"]' &&
         JSON.stringify([pressed('Load shedding preset'), pressed('Failover preset')]) === '[["Balanced"],["Balanced"]]' &&
-        JSON.stringify(disabled('Load shedding', SHED)) === '[true,true,true]' &&
+        JSON.stringify(shedDisabled()) === '[true,true,true]' &&
         JSON.stringify(disabled('Failover', FAIL)) === '[true,true]',
-      missing: [names('Load shedding preset'), names('Failover preset'), JSON.stringify([pressed('Load shedding preset'), pressed('Failover preset')]), JSON.stringify(disabled('Load shedding', SHED)), JSON.stringify(disabled('Failover', FAIL))],
+      missing: [names('Load shedding preset'), names('Failover preset'), JSON.stringify([pressed('Load shedding preset'), pressed('Failover preset')]), JSON.stringify(shedDisabled()), JSON.stringify(disabled('Failover', FAIL))],
     });
     await pick('Load shedding preset', 'Fast');
-    const fast = [values('Load shedding', SHED), disabled('Load shedding', SHED)];
+    const fast = [shedValues(), shedDisabled()];
     await pick('Load shedding preset', 'Custom');
-    const fromFast = [values('Load shedding', SHED), disabled('Load shedding', SHED)];
-    await type(field('Load shedding', 'Burn average (s)'), '1000');
+    const fromFast = [shedValues(), shedDisabled()];
+    await type(field('Windows', 'Burn average (s)'), '1000');
     const edited = pressed('Load shedding preset');
     await pick('Load shedding preset', 'Conservative');
-    const conservative = [values('Load shedding', SHED), disabled('Load shedding', SHED), (card('Load shedding')?.textContent ?? '').includes('Averages over an hour and waits longer between rounds: fewer cache rewrites, slower relief.')];
+    const conservative = [shedValues(), shedDisabled(), (card('Load shedding')?.textContent ?? '').includes('Averages over an hour and waits longer between rounds: fewer cache rewrites, slower relief.')];
+    await pick('Load shedding preset', 'Custom');
+    const customHint = hintOf('Load shedding', 'Preset');
     await pick('Load shedding preset', 'Balanced');
-    const balanced = [values('Load shedding', SHED), disabled('Load shedding', SHED)];
+    const balanced = [shedValues(), shedDisabled()];
     results.push({
-      name: '/pools a shedding pill writes the cap, the average and the dwell into the disabled fields, Custom enables them, and an edit stays custom until a preset is picked',
+      name: '/pools a shedding pill writes the cap and the dwell and the average under Windows into the disabled fields, Custom enables them, and an edit stays custom until a preset is picked',
       ok:
-        JSON.stringify(fast) === '[["50","900","600"],[true,true,true]]' &&
-        JSON.stringify(fromFast) === '[["50","900","600"],[false,false,false]]' &&
+        JSON.stringify(fast) === '[["50","600","900"],[true,true,true]]' &&
+        JSON.stringify(fromFast) === '[["50","600","900"],[false,false,false]]' &&
         JSON.stringify(edited) === '["Custom"]' &&
-        JSON.stringify(conservative) === '[["30","3600","1800"],[true,true,true],true]' &&
+        JSON.stringify(conservative) === '[["30","1800","3600"],[true,true,true],true]' &&
+        customHint === 'Set the cap, the burn average under Windows, and the dwell by hand.' &&
         JSON.stringify(pressed('Load shedding preset')) === '["Balanced"]' &&
-        JSON.stringify(balanced) === '[["50","1800","900"],[true,true,true]]',
-      missing: [JSON.stringify(fast), JSON.stringify(fromFast), JSON.stringify(edited), JSON.stringify(conservative), JSON.stringify(balanced)],
+        JSON.stringify(balanced) === '[["50","900","1800"],[true,true,true]]',
+      missing: [JSON.stringify(fast), JSON.stringify(fromFast), JSON.stringify(edited), JSON.stringify(conservative), String(customHint), JSON.stringify(balanced)],
     });
     // At the mock's clock primary projects 81 % at its 5-hour reset, secondary 100 % and nightly 104 %, all past all's
     // 75 %, and every sibling of each is over it too or out of the rotation. Under a ceiling of 100 nightly alone
@@ -4262,9 +4328,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await type(ceilingField(), '75');
     const offLine = preview();
     await pick('Load shedding preset', 'Fast');
-    const afterPreset = [shedSwitch()?.getAttribute('aria-checked'), disabled('Load shedding', SHED)];
+    const afterPreset = [shedSwitch()?.getAttribute('aria-checked'), shedDisabled()];
     await pick('Load shedding preset', 'Custom');
-    const customOff = disabled('Load shedding', SHED);
+    const customOff = shedDisabled();
     await pick('Load shedding preset', 'Balanced');
     shedSwitch()?.click();
     await m.settle(120);
@@ -4285,6 +4351,41 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         shedSwitch()?.getAttribute('aria-checked') === 'true',
       missing: [offRaised, offLine, JSON.stringify(afterPreset), JSON.stringify(customOff), String(shedSwitch()?.getAttribute('aria-checked'))],
     });
+    {
+      // all keeps the slow-down off, so its preview reads the off line. Turned on in the dialog it reads that no member
+      // is slowed, since the route serves no slow-down on a pool whose stored switch is off.
+      const stretch = field('Slow-down', 'Stretch (s)');
+      const hold = field('Slow-down', 'Hold (s)');
+      const ranges = [stretch?.value, stretch?.getAttribute('min'), stretch?.getAttribute('max'), hold?.value, hold?.getAttribute('min'), hold?.getAttribute('max')];
+      const hints = ['Slow-down', 'Stretch (s)', 'Hold (s)'].map((label) => hintOf('Slow-down', label));
+      const off = [slowSwitch()?.getAttribute('aria-checked'), slowPreview()];
+      slowSwitch()?.click();
+      await m.settle(120);
+      const on = [slowSwitch()?.getAttribute('aria-checked'), slowPreview()];
+      slowSwitch()?.click();
+      await m.settle(120);
+      results.push({
+        name: '/pools Slow-down opens with its intro and draws its switch as Load shedding is drawn, then the stretch and the hold in their bounds with their hints',
+        ok:
+          introOf('Slow-down') ===
+            'The slow-down holds each request of a session before it is forwarded, so an account whose sessions would pass the ceiling before the reset reaches it under the ceiling instead. A session waits its own cycle times the slow-down, so a fast session waits more than a slow one and each keeps its share.' &&
+          JSON.stringify(labelsOf('Slow-down')) === '["Slow-down","Stretch (s)","Hold (s)","Preview"]' &&
+          slowSwitch()?.closest('.field')?.className === shedSwitch()?.closest('.field')?.className &&
+          JSON.stringify(hints) ===
+            JSON.stringify([
+              'Holds requests on a member whose five-hour window would pass the ceiling. Auxiliary requests, compactions, the fast lane, probes and token counts are never held.',
+              'The time the slow-down may add to a session before a round moves sessions off the member, with load shedding on. Under it the slow-down holds alone.',
+              "The longest one request waits. 120 s leaves 60 s of the client's 180 s first-byte window for the upstream's head.",
+            ]) &&
+          JSON.stringify(ranges) === '["9000","60","18000","120","1","300"]',
+        missing: [String(introOf('Slow-down')), JSON.stringify(labelsOf('Slow-down')), String(slowSwitch()?.closest('.field')?.className), ...hints.map(String), JSON.stringify(ranges)],
+      });
+      results.push({
+        name: '/pools the slow-down preview reads its off line on a pool whose switch is off, and no slowed member once the switch is turned on in the dialog',
+        ok: JSON.stringify(off) === JSON.stringify(['false', 'Slow-down is off: no request is held.']) && JSON.stringify(on) === JSON.stringify(['true', 'No member is slowed.']) && slowSwitch()?.getAttribute('aria-checked') === 'false',
+        missing: [JSON.stringify(off), JSON.stringify(on)],
+      });
+    }
     await pick('Failover preset', 'Conservative');
     const failoverConservative = [(card('Failover')?.textContent ?? '').includes('Waits out a longer throttle before moving on.'), values('Failover', FAIL), disabled('Failover', FAIL)];
     await pick('Failover preset', 'Custom');
@@ -4296,14 +4397,47 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       missing: [JSON.stringify(failoverConservative), JSON.stringify(fromConservative), JSON.stringify(pressed('Failover preset'))],
     });
     results.push({
-      name: '/pools Failover draws the preset, the cap and the retry bound alone, and its intro names no Pace',
-      ok: JSON.stringify(labelsOf('Failover')) === '["Preset","In flight","Retry in place (s)"]' && introOf('Failover') === 'How long a request waits out a throttle on its member, and how many requests one member serves at once.',
-      missing: [JSON.stringify(labelsOf('Failover')), String(introOf('Failover'))],
+      name: '/pools Failover draws the preset, the cap, the retry bound and Migrate when spent with its hint, and its intro names no Pace',
+      ok:
+        JSON.stringify(labelsOf('Failover')) === '["Preset","In flight","Retry in place (s)","Migrate when spent"]' &&
+        introOf('Failover') === 'How long a request waits out a throttle on its member, how many requests one member serves at once, and whether a spent window moves the session at once.' &&
+        hintOf('Failover', 'Migrate when spent') === "Moves a session off a member whose window for its model is spent, to a sibling with allowance left, without waiting for a round or the upstream's 429.",
+      missing: [JSON.stringify(labelsOf('Failover')), String(introOf('Failover')), String(hintOf('Failover', 'Migrate when spent'))],
     });
     expect('/pools the overage group states the grace and the wind down', card('Overage and plan end')?.textContent ?? '', [
       'Under Prefer plan quota, a session stays on an account in overage while its window resets within this many minutes. At 0 it moves at once.',
-      'This long before a cancelled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. The end is set on the Accounts page',
+      'This long before a cancelled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. Inside it the account is no destination for a move. The end is set on the Accounts page',
     ]);
+    {
+      // The return dwell is the one Always reads, so the other two modes draw it disabled.
+      const radio = card('Overage and plan end')?.querySelector('[role="radiogroup"][aria-label="Return to plan"]');
+      const items = () => [...(radio?.querySelectorAll('.radio-list__item') ?? [])];
+      const choices = items().map((l) => l.textContent?.replace(/\s+/g, ' ').trim());
+      const choose = async (title) => {
+        items().find((l) => l.textContent?.trim().startsWith(`${title}:`))?.querySelector('input[type="radio"]')?.click();
+        await m.settle(120);
+      };
+      const dwell = () => field('Overage and plan end', 'Return dwell (s)');
+      const atAlways = [items().map((l) => l.querySelector('input')?.checked), dwell()?.value, dwell()?.disabled, dwell()?.getAttribute('min'), dwell()?.getAttribute('max')];
+      await choose('When cold');
+      const cold = [items().map((l) => l.querySelector('input')?.checked), dwell()?.disabled];
+      await choose('Never');
+      const never = [items().map((l) => l.querySelector('input')?.checked), dwell()?.disabled];
+      await choose('Always');
+      results.push({
+        name: '/pools Return to plan offers Always, When cold and Never with their words and its hint, and Return dwell is drawn disabled unless Always',
+        ok:
+          JSON.stringify(choices) ===
+            JSON.stringify(['Always: at once when cold, after the dwell when warm', 'When cold: only when the move is free: a compaction, a restart or a lane change', 'Never: the session stays until the member refuses it']) &&
+          hintOf('Overage and plan end', 'Return to plan') === 'When a session on an API-key member returns to a subscription member. Under Never it leaves the metered member on expiry, a cooldown or a mark alone.' &&
+          hintOf('Overage and plan end', 'Return dwell (s)') === 'Under Always, how long a warm session stays on the API-key member before it returns. 0 returns it at once.' &&
+          JSON.stringify(atAlways) === '[[true,false,false],"900",false,"0","86400"]' &&
+          JSON.stringify(cold) === '[[false,true,false],true]' &&
+          JSON.stringify(never) === '[[false,false,true],true]' &&
+          dwell()?.disabled === false,
+        missing: [...choices.map(String), String(hintOf('Overage and plan end', 'Return to plan')), String(hintOf('Overage and plan end', 'Return dwell (s)')), JSON.stringify(atAlways), JSON.stringify(cold), JSON.stringify(never)],
+      });
+    }
     // Pool all runs the Pace strategy, so the Strategy field draws its hint. The Accounts page link carries its
     // screen-reader note after its words, so the closing sentence is read without its period.
     expect('/pools the Pace strategy hint names the spare rate over the Fable week or the 7-day window', card('Selection')?.textContent ?? '', [
@@ -5181,7 +5315,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     // A new pool starts where the route seeds one: the ceiling at 95 % and its switch on. The route computes the
     // warnings, so an unsaved pool lists none.
     const shedSwitch = group(dlg, 'Load shedding')?.querySelector('button[role="switch"][aria-label="Load shedding"]');
-    const ceiling = group(dlg, 'Window ceiling')?.querySelector('input[aria-label="Window ceiling (%)"]');
+    const ceiling = group(dlg, 'Windows')?.querySelector('input[aria-label="Window ceiling (%)"]');
     results.push({
       name: '/pools create dialog starts with Load shedding on under a ceiling of 95 %, and lists no warnings',
       ok: shedSwitch?.getAttribute('aria-checked') === 'true' && ceiling?.value === '95' && dlg?.querySelector('.pool-warnings') === null,
@@ -5493,7 +5627,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const card = [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'work');
   const row = [...(card?.querySelectorAll('.serving tbody tr') ?? [])].find((tr) => tr.children[1]?.querySelector('a')?.textContent?.trim() === 'studio');
   const lines = [...(row?.querySelectorAll('td:nth-child(2) .num') ?? [])].map((c) => c.textContent?.replace(/\s+/g, ' ').trim());
-  const standingBadges = [...(row?.querySelectorAll('td:nth-child(3) .badge') ?? [])].map((b) => b.textContent?.trim());
+  // studio is slowed, so its speed chip stands beside the Standing badges this check reads.
+  const standingBadges = [...(row?.querySelectorAll('td:nth-child(3) .badge') ?? [])].filter((b) => !b.closest('.speed-chip')).map((b) => b.textContent?.trim());
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
@@ -5640,7 +5775,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const eighty = await savedCeiling(dlg);
   results.push({
     name: '/pools a ceiling typed under 50 holds the save, and 80 % typed back saves as 0.8',
-    ok: low[0] === true && low[1] === 'Save is held: Window ceiling (%) is from 50 to 100.Go to Window ceiling' && low[2] === 'true' && eighty === 0.8 && !m.container.querySelector('dialog[open]'),
+    ok: low[0] === true && low[1] === 'Save is held: Window ceiling (%) is from 50 to 100.Go to Windows' && low[2] === 'true' && eighty === 0.8 && !m.container.querySelector('dialog[open]'),
     missing: [...low.map(String), String(eighty)],
   });
   // The story's pool back, so the checks below read the pool the fixture holds.
@@ -6120,7 +6255,7 @@ localStorage.removeItem('phoebis.expertView');
   const labels = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const parents = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   x = await mount('/fixtures/grouped-dialog?expertOnly=autoMode');
-  results.push({ name: 'an expert-only group leaves the rail while the mode is off', ok: !labels(x).includes('Auto mode') && labels(x).length === 15 && parents(x).join() === 'Pool,Routing,Load,Caching,Visibility', missing: labels(x) });
+  results.push({ name: 'an expert-only group leaves the rail while the mode is off', ok: !labels(x).includes('Auto mode') && labels(x).length === 16 && parents(x).join() === 'Pool,Routing,Load,Caching,Visibility', missing: labels(x) });
   [...(group(dialogOf(x), 'Identity')?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'Auto mode')?.click();
   await x.settle(150);
   results.push({
@@ -6133,7 +6268,7 @@ localStorage.removeItem('phoebis.expertView');
   x = await mount('/fixtures/grouped-dialog?expertOnly=identity,members,keys,models,autoMode');
   await x.settle(100);
   const panel = (page) => [...(dialogOf(page)?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
-  results.push({ name: 'an expert-only run leaves with its parent heading', ok: parents(x).join() === 'Routing,Load,Caching,Visibility' && labels(x).length === 11, missing: parents(x) });
+  results.push({ name: 'an expert-only run leaves with its parent heading', ok: parents(x).join() === 'Routing,Load,Caching,Visibility' && labels(x).length === 12, missing: parents(x) });
   results.push({
     name: 'a chosen group the filter takes off gives way to the first shown group',
     ok: panel(x) === 'Selection' && rail(dialogOf(x), 'selection')?.getAttribute('aria-current') === 'true' && localStorage.getItem('phoebis.expertView') === null,
@@ -6165,8 +6300,8 @@ localStorage.removeItem('phoebis.expertView');
   const headingsOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])].map((h) => h.textContent?.trim());
   const foot = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
   const PARENTS = ['Pool', 'Routing', 'Load', 'Caching', 'Visibility'];
-  const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Pinning', 'Window ceiling', 'Load shedding', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture'];
-  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Window ceiling', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
+  const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Pinning', 'Windows', 'Load shedding', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture'];
+  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
   const KEEPALIVE = ['Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Return rate by idle age'];
   // Each group's labels and line with the mode off, the Interfaces' plain fields; the line is null where none draws.
   const PLAIN_FIELDS = {
@@ -6176,9 +6311,9 @@ localStorage.removeItem('phoebis.expertView');
     Models: [['Model rules'], null],
     Selection: [['Strategy', 'Prioritize subscription accounts'], null],
     Pinning: [['Session affinity'], '1 more setting in the '],
-    'Window ceiling': [['Window ceiling (%)', 'Member utilization'], null],
-    'Load shedding': [['Load shedding'], '7 more settings in the '],
-    'Overage and plan end': [['Overage policy'], '2 more settings in the '],
+    Windows: [['Window ceiling (%)', 'Member utilization'], '1 more setting in the '],
+    'Load shedding': [['Load shedding'], '5 more settings in the '],
+    'Overage and plan end': [['Overage policy'], '4 more settings in the '],
     'Cache TTL': [['Set the cache TTL for this pool', 'Write cost'], '3 more settings in the '],
     Keepalive: [KEEPALIVE, null],
     'Body capture': [['Capture request and response bodies', 'Retention (hours)'], null],
@@ -6188,9 +6323,11 @@ localStorage.removeItem('phoebis.expertView');
     'Auto mode': ['Support server-side auto mode'],
     Placement: ['Subagent placement', 'Session placement', 'Minimum shared prefix, tokens'],
     Pinning: ['Session affinity', 'Pin sessions'],
-    'Load shedding': ['Load shedding', 'Preset', 'Shed cap (%)', 'Burn average (s)', 'Shed dwell (s)', 'Migrate when spent', 'Warm sessions', 'Preview'],
-    Failover: ['Preset', 'In flight', 'Retry in place (s)'],
-    'Overage and plan end': ['Overage policy', 'Overage grace (min)', 'Wind down (min)'],
+    Windows: ['Window ceiling (%)', 'Burn average (s)', 'Member utilization'],
+    'Load shedding': ['Load shedding', 'Preset', 'Shed cap (%)', 'Shed dwell (s)', 'Warm sessions', 'Preview'],
+    'Slow-down': ['Slow-down', 'Stretch (s)', 'Hold (s)', 'Preview'],
+    Failover: ['Preset', 'In flight', 'Retry in place (s)', 'Migrate when spent'],
+    'Overage and plan end': ['Overage policy', 'Overage grace (min)', 'Return to plan', 'Return dwell (s)', 'Wind down (min)'],
     'Cache TTL': ['Set the cache TTL for this pool', 'Add a cache marker to a request without one', 'Write cost', 'Plan writes', 'Metered writes'],
     'Cache diagnostics': ['Cache diagnostics'],
   };
@@ -6208,7 +6345,7 @@ localStorage.removeItem('phoebis.expertView');
   let dlg = await open('all');
   const plainRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
   results.push({
-    name: '/pools with the mode off the rail and the body hold twelve groups under the five parents, the four expert-only groups gone',
+    name: '/pools with the mode off the rail and the body hold twelve groups under the five parents, the five expert-only groups gone',
     ok: JSON.stringify(plainRail) === JSON.stringify([PARENTS, PLAIN_GROUPS, PLAIN_GROUPS]) && (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 17,
     missing: plainRail.map((x) => JSON.stringify(x)),
   });
@@ -6220,11 +6357,11 @@ localStorage.removeItem('phoebis.expertView');
       .filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(PLAIN_FIELDS[label]))
       .map(([label, read]) => `${label}: ${JSON.stringify(read)}`),
   });
-  const memberHint = () => [...(group(dlg, 'Window ceiling')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Member utilization')?.querySelector('.field__hint')?.textContent ?? 'no hint';
+  const memberHint = () => [...(group(dlg, 'Windows')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Member utilization')?.querySelector('.field__hint')?.textContent ?? 'no hint';
   const plainHint = memberHint();
   results.push({
     name: "/pools with the mode off the member utilization hint names the ceiling's handle, since every view draws it",
-    ok: plainHint.includes("the ceiling's handle") && plainHint.includes('arrow keys') && group(dlg, 'Window ceiling')?.querySelector('[role="slider"][aria-label="Window ceiling"]') != null,
+    ok: plainHint.includes("the ceiling's handle") && plainHint.includes('arrow keys') && group(dlg, 'Windows')?.querySelector('[role="slider"][aria-label="Window ceiling"]') != null,
     missing: [plainHint],
   });
   const drawnExpert = ['select[aria-label="Pin sessions"]', '[aria-label="Load shedding preset"]', '[aria-label="Failover preset"]', '[data-rule-set]', 'button[role="switch"][aria-label="Add a cache marker to a request without one"]', 'button[role="switch"][aria-label="Cache diagnostics"]', 'button[role="switch"][aria-label="Migrate when spent"]'].filter((s) => dlg?.querySelector(s) !== null);
@@ -6234,11 +6371,11 @@ localStorage.removeItem('phoebis.expertView');
   const expertRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
   const expertRead = Object.fromEntries(Object.keys(EXPERT_FIELDS).map((label) => [label, labelsIn(group(dlg, label))]));
   results.push({
-    name: '/pools the line turns the mode on: the rail holds all 21 entries, every group draws its expert fields, and no line is left',
+    name: '/pools the line turns the mode on: the rail holds all 22 entries, every group draws its expert fields, and no line is left',
     ok:
       localStorage.getItem('phoebis.expertView') === 'on' &&
       JSON.stringify(expertRail) === JSON.stringify([PARENTS, EVERY_GROUP, EVERY_GROUP]) &&
-      (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 21 &&
+      (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 22 &&
       JSON.stringify(expertRead) === JSON.stringify(EXPERT_FIELDS) &&
       dlg?.querySelector('.dialog-group__more') === null,
     missing: [localStorage.getItem('phoebis.expertView'), ...expertRail.map((x) => JSON.stringify(x)), ...Object.entries(expertRead).filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(EXPERT_FIELDS[label])).map(([label, read]) => `${label}: ${JSON.stringify(read)}`)],
@@ -6342,8 +6479,8 @@ localStorage.removeItem('phoebis.expertView');
   results.push({
     name: '/pools a refusal on a field the plain view hides shows the field, and the footer names it and reaches it with the mode still off',
     ok:
-      JSON.stringify(before) === '["hidden","7 more settings in the "]' &&
-      JSON.stringify(refused) === JSON.stringify(['off', 'true', 'Save is held: Shed cap (%) is from 10 to 100.Go to Load shedding', true, '6 more settings in the ']) &&
+      JSON.stringify(before) === '["hidden","5 more settings in the "]' &&
+      JSON.stringify(refused) === JSON.stringify(['off', 'true', 'Save is held: Shed cap (%) is from 10 to 100.Go to Load shedding', true, '4 more settings in the ']) &&
       shed()?.hidden === false &&
       !!cap() &&
       document.activeElement === cap() &&
@@ -6363,7 +6500,7 @@ localStorage.removeItem('phoebis.expertView');
       ceiling.dispatchEvent(new window.Event('input', { bubbles: true }));
       await p.settle(120);
     }
-    const handle = () => group(dlg, 'Window ceiling')?.querySelector('[role="slider"][aria-label="Window ceiling"]');
+    const handle = () => group(dlg, 'Windows')?.querySelector('[role="slider"][aria-label="Window ceiling"]');
     const read = () => [handle()?.getAttribute('aria-valuenow'), handle()?.getAttribute('aria-valuemin'), handle()?.getAttribute('aria-valuemax'), handle()?.style.left, handle()?.getAttribute('aria-valuetext')];
     const past = read();
     if (ceiling) {

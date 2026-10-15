@@ -261,7 +261,7 @@ async function groupedDialogFixture(theme) {
     measurements.push(`${theme} /fixtures/grouped-dialog ${state} ${JSON.stringify(read)}`);
     const sayIn = (what) => say(`${state}: ${what}`);
     if (read.frame.width !== 1040 || read.frame.height !== 752) sayIn(`the frame measures ${read.frame.width} by ${read.frame.height}, not 1040 by 752`);
-    if (read.groups !== 16 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 16 under 5`);
+    if (read.groups !== 17 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 17 under 5`);
     if (read.wrapped.length) sayIn(`${read.wrapped.join(', ')} wraps onto a second line`);
     if (read.truncated.length) sayIn(`${read.truncated.join(', ')} is cut short by its ellipsis`);
     if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px`);
@@ -462,14 +462,14 @@ async function groupedDialogFixture(theme) {
     await choose('overage');
     await check('Overage and plan end chosen');
     await choose('utilization');
-    await check('Window ceiling chosen');
+    await check('Windows chosen');
     await load('?refused=overage,utilization');
     await check('Identity chosen, both refused');
     await levels('Identity chosen, both refused');
     await choose('overage');
     await check('Overage and plan end chosen, both refused');
     await choose('utilization');
-    await check('Window ceiling chosen, both refused');
+    await check('Windows chosen, both refused');
     await load('?create=1');
     await check('Identity chosen, marked');
     await levels('Identity chosen, marked');
@@ -874,9 +874,10 @@ async function poolCachingControls(theme) {
 }
 
 /**
- * The Load shedding group's switch, drawn in every view, against the Migrate when spent switch below it, drawn in the
- * expert view: the same switch with its label beside it, so either reading smaller or lighter than the other is the
- * defect to catch.
+ * The Load shedding group's switch, drawn in every view, against the Migrate when spent switch under Failover and the
+ * Slow-down switch, both drawn in the expert view: the same switch with its label beside it, so one reading smaller or
+ * lighter than another is the defect to catch. Each is read while its group shows, since a hidden group's boxes
+ * measure nothing.
  */
 async function poolSheddingSwitch(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
@@ -893,26 +894,37 @@ async function poolSheddingSwitch(theme) {
     return;
   }
   await settle();
-  const pair = await dialog.evaluate((el) => {
-    const read = (label) => {
-      const toggle = el.querySelector(`button[role="switch"][aria-label="${label}"]`);
-      const field = toggle?.closest('.field');
-      if (!field) return null;
-      const text = getComputedStyle(field.querySelector('.field__label'));
-      const box = toggle.getBoundingClientRect();
-      return { field: field.className, label: `${text.fontSize} ${text.fontWeight} ${text.color}`, switch: `${box.width} ${box.height}` };
-    };
-    const shedding = read('Load shedding');
-    const migrate = read('Migrate when spent');
-    return shedding && migrate ? { migrate, shedding } : null;
-  });
-  if (!pair) {
-    say('the Load shedding and Migrate when spent switches are not both drawn to compare');
-  } else {
-    measurements.push(`${theme} /pools load shedding switch ${JSON.stringify(pair.shedding)}`);
-    measurements.push(`${theme} /pools migrate when spent switch ${JSON.stringify(pair.migrate)}`);
-    const differs = ['field', 'label', 'switch'].filter((key) => pair.shedding[key] !== pair.migrate[key]);
-    if (differs.length) say(`the Load shedding switch's ${differs.join(', ')} differs from the Migrate when spent switch's`);
+  const read = (group, label) =>
+    dialog.evaluate(
+      (el, [group, label]) => {
+        const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === group);
+        const toggle = section?.querySelector(`button[role="switch"][aria-label="${label}"]`);
+        const field = toggle?.closest('.field');
+        if (!field || section.hidden) return null;
+        const text = getComputedStyle(field.querySelector('.field__label'));
+        const box = toggle.getBoundingClientRect();
+        return { field: field.className, label: `${text.fontSize} ${text.fontWeight} ${text.color}`, switch: `${box.width} ${box.height}` };
+      },
+      [group, label],
+    );
+  const shedding = await read('Load shedding', 'Load shedding');
+  const others = [];
+  for (const [group, label] of [['Failover', 'Migrate when spent'], ['Slow-down', 'Slow-down']]) {
+    await railEntry(dialog, group).click();
+    await settle();
+    others.push([label, await read(group, label)]);
+  }
+  if (!shedding) say('the Load shedding switch is not drawn to compare');
+  else measurements.push(`${theme} /pools load shedding switch ${JSON.stringify(shedding)}`);
+  for (const [label, other] of others) {
+    if (!other) {
+      say(`the ${label} switch is not drawn to compare`);
+      continue;
+    }
+    measurements.push(`${theme} /pools ${label.toLowerCase()} switch ${JSON.stringify(other)}`);
+    if (!shedding) continue;
+    const differs = ['field', 'label', 'switch'].filter((key) => shedding[key] !== other[key]);
+    if (differs.length) say(`the Load shedding switch's ${differs.join(', ')} differs from the ${label} switch's`);
   }
   await closeByEscape(dialog, `${theme} /pools load shedding switch dialog`, say);
   await expertView(false).catch(() => {});
@@ -922,7 +934,8 @@ async function poolSheddingSwitch(theme) {
 /**
  * The load groups in the expert view against the controls beside them, each measured while its group shows: a preset
  * pill against a session-affinity pill, the overage grace field against the window ceiling field, and a warm-sessions
- * choice against an overage choice. Then the utilization bar's ceiling handle and the shedding preview line.
+ * choice against an overage choice. Then the utilization bar's ceiling handle and the shedding and slow-down preview
+ * lines.
  */
 async function poolRoutingCards(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
@@ -931,9 +944,9 @@ async function poolRoutingCards(theme) {
     await expertView(true);
     await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
-    await railEntry(dialog, 'Window ceiling').click();
+    await railEntry(dialog, 'Windows').click();
   } catch (error) {
-    say(`the pool dialog never reached its Window ceiling group (${error instanceof Error ? error.message : String(error)})`);
+    say(`the pool dialog never reached its Windows group (${error instanceof Error ? error.message : String(error)})`);
     await page.keyboard.press('Escape');
     await expertView(false).catch(() => {});
     return;
@@ -962,6 +975,7 @@ async function poolRoutingCards(theme) {
       const track = el.querySelector('.ubar__track')?.getBoundingClientRect();
       const knob = handle?.getBoundingClientRect();
       const preview = shown(el.querySelector('.shed-preview'));
+      const slowDownPreview = shown(el.querySelector('.slow-down-preview'));
       return {
         affinityPill: box(idlePill('Session affinity')),
         ceilingField: box(el.querySelector('input[aria-label="Window ceiling (%)"]')),
@@ -971,6 +985,7 @@ async function poolRoutingCards(theme) {
         overageField: box(el.querySelector('input[aria-label="Overage grace (min)"]') ?? [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Overage grace (min)')?.querySelector('input')),
         preview: preview ? (preview.textContent ?? '').trim() : null,
         sheddingPill: box(idlePill('Load shedding preset')),
+        slowDownPreview: slowDownPreview ? (slowDownPreview.textContent ?? '').trim() : null,
         warmChoice: box(idleChoice('Warm sessions')),
       };
     });
@@ -979,7 +994,7 @@ async function poolRoutingCards(theme) {
     for (const [key, value] of Object.entries(part)) if (value !== null) read[key] = value;
   };
   keep(await measure());
-  for (const label of ['Pinning', 'Load shedding', 'Failover', 'Overage and plan end']) {
+  for (const label of ['Pinning', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end']) {
     await railEntry(dialog, label).click();
     await settle();
     keep(await measure());
@@ -1003,6 +1018,7 @@ async function poolRoutingCards(theme) {
   if (!read.handle) say('the utilization bar draws no ceiling handle');
   else if (!read.handle.inside || read.handle.value === null) say(`the ceiling handle sits off its track (${JSON.stringify(read.handle)})`);
   if (!read.preview || !/^(Load shedding is off: no round runs\. )?(\d+ members? projects? over the ceiling|No member projects over the ceiling on any window)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
+  if (!read.slowDownPreview || !/^(Slow-down is off: no request is held\.|No member is slowed[.:]|\d+ members? (is|are) slowed: )/.test(read.slowDownPreview)) say(`the slow-down preview reads ${JSON.stringify(read.slowDownPreview)}`);
   await closeByEscape(dialog, `${theme} /pools routing groups dialog`, say);
   await expertView(false).catch(() => {});
   await atRest();
@@ -1018,9 +1034,9 @@ async function utilizationCeiling(theme) {
   try {
     await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
-    await railEntry(dialog, 'Window ceiling').click();
+    await railEntry(dialog, 'Windows').click();
   } catch (error) {
-    say(`the pool dialog never reached its Window ceiling group (${error instanceof Error ? error.message : String(error)})`);
+    say(`the pool dialog never reached its Windows group (${error instanceof Error ? error.message : String(error)})`);
     await page.keyboard.press('Escape');
     return;
   }
@@ -1150,9 +1166,9 @@ async function poolCardLayout(theme) {
 }
 
 /** The pool dialog's groups in rail order. */
-const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Window ceiling', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
+const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
 /** The groups whose every field is expert, which the rail leaves out while the mode is off. */
-const POOL_EXPERT_GROUPS = ['Auto mode', 'Placement', 'Failover', 'Cache diagnostics'];
+const POOL_EXPERT_GROUPS = ['Auto mode', 'Placement', 'Slow-down', 'Failover', 'Cache diagnostics'];
 /**
  * Per group, the switches whose dependents the geometry pass turns off, and the controls that must go disabled. An
  * `expert` switch and the `expertControls` are drawn in the expert view alone, so the plain walk leaves them out.
@@ -1407,14 +1423,18 @@ async function poolDialogWalk(theme, mode) {
       return null;
     }, group);
     if (gated) found.push(gated);
-    const preset = { 'Load shedding': ['Load shedding preset', ['Shed cap (%)', 'Burn average (s)', 'Shed dwell (s)']], Failover: ['Failover preset', ['In flight', 'Retry in place (s)']] }[group];
+    // Each preset field with the group that draws it: the shedding preset reaches the average under Windows.
+    const preset = {
+      'Load shedding': ['Load shedding preset', [['Load shedding', 'Shed cap (%)'], ['Windows', 'Burn average (s)'], ['Load shedding', 'Shed dwell (s)']]],
+      Failover: ['Failover preset', [['Failover', 'In flight'], ['Failover', 'Retry in place (s)']]],
+    }[group];
     // The presets and their fields are expert, so the plain walk reaches Load shedding with neither drawn.
     if (preset && expert) {
       const state = await dialog.evaluate(
         (el, [label, pills, fields]) => {
-          const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === label);
-          const pressed = [...(section?.querySelectorAll(`[aria-label="${pills}"] .pill[aria-pressed="true"]`) ?? [])].map((p) => p.textContent?.trim());
-          const inputs = fields.map((f) => [...(section?.querySelectorAll('.field') ?? [])].find((x) => x.querySelector('.field__label')?.textContent?.trim() === f)?.querySelector('input'));
+          const sectionOf = (name) => [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === name);
+          const pressed = [...(sectionOf(label)?.querySelectorAll(`[aria-label="${pills}"] .pill[aria-pressed="true"]`) ?? [])].map((p) => p.textContent?.trim());
+          const inputs = fields.map(([home, f]) => [...(sectionOf(home)?.querySelectorAll('.field') ?? [])].find((x) => x.querySelector('.field__label')?.textContent?.trim() === f)?.querySelector('input'));
           return { disabled: inputs.map((i) => (i ? i.disabled : null)), pressed };
         },
         [group, ...preset],

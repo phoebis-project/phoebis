@@ -1,6 +1,6 @@
-import type { Account, MemberEligibility, Pool, PoolMember, PoolStrategy } from '@/api/types';
-import { fmtAbsolute, fmtDuration, fmtPeriodEnd, fmtRelative, fmtShortTime } from './format';
-import { endOf } from './quota';
+import type { Account, AccountSlowDown, MemberEligibility, Pool, PoolMember, PoolStrategy } from '@/api/types';
+import { fmtAbsolute, fmtDuration, fmtPeriodEnd, fmtRelative, fmtShortTime, instant } from './format';
+import { endOf, minuteSpan } from './quota';
 
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { pace: 'Pace', priority: 'Priority, then random', round_robin: 'Round robin' };
 /** The kind tiers, in the order selection walks them. */
@@ -68,6 +68,33 @@ export function overageBadge(reset: string | null, now: number): StandingBadge {
 export function windingDownBadge(end: number, now: number): StandingBadge {
   const at = fmtAbsolute(new Date(end).toISOString());
   return end > now ? { text: `winding down ${fmtDuration(end - now)}`, title: `Winding down to the plan's end at ${at}` } : { text: 'winding down', title: `Winding down past the plan's end at ${at}` };
+}
+
+/** A speed factor as its chip reads it: `0.5x`, `0.35x`, `0.95x`, two decimals with a trailing zero dropped. */
+export const speedWord = (factor: number): string => `${Number(factor.toFixed(2))}x`;
+
+/**
+ * `slowed since 17:40: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min
+ * threshold`, or `under the 30 min threshold` while no round can fire. With `since` null the words start at `the
+ * sessions on this account`. Null where `slowDown` is null or its factor 1.
+ */
+export function speedHover(slowDown: AccountSlowDown | null, now: number): string | null {
+  if (slowDown === null || slowDown.factor >= 1) return null;
+  // The round fires on a stretch above the threshold, so one at it reads under.
+  const side = slowDown.stretchMs > slowDown.thresholdMs ? 'over' : 'under';
+  const words = `the sessions on this account would pass the ceiling ${minuteSpan(slowDown.stretchMs)} before the reset, ${side} the ${minuteSpan(slowDown.thresholdMs)} threshold`;
+  return slowDown.since === null ? words : `slowed since ${instant(Date.parse(slowDown.since), now)}: ${words}`;
+}
+
+/**
+ * A serving member's speed chip: its account's slow-down with the hover where the account is loaded, else the factor
+ * the pools route serves on the member with no hover. A loaded account without a slow-down draws none, whatever the
+ * member carries.
+ */
+export function memberSpeed(member: Pick<PoolMember, 'speed'>, account: Account | null, now: number): { factor: number | null; hover: string | null } {
+  if (account === null) return { factor: member.speed, hover: null };
+  const slowDown = account.slowDown ?? null;
+  return slowDown === null ? { factor: null, hover: null } : { factor: slowDown.factor, hover: speedHover(slowDown, now) };
 }
 
 /**

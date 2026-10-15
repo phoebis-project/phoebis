@@ -1,6 +1,7 @@
 import type { Account, MemberEligibility, Pool, RateLimitWindow, Session } from '@/api/types';
 import { fmtDuration, instant } from './format';
-import { endOf, windowOf } from './quota';
+import { endOf, minuteSpan, windowOf } from './quota';
+import { speedWord } from './selection';
 
 export type SheddingPreset = 'balanced' | 'conservative' | 'custom' | 'fast';
 
@@ -80,7 +81,6 @@ function burnDecayed(burn: number, burnAt: string | null, now: number, windowMs:
 }
 
 const HOUR_MS = 3_600_000;
-const FIVE_HOURS_MS = 5 * HOUR_MS;
 
 /** A plan window the trigger reads, in the order the router's round walks them: the shared windows, then the week. */
 export type ShedWindow = '5h' | '7d' | '7d_fable';
@@ -146,7 +146,7 @@ export interface ShedPreview {
  * saved yet does.
  */
 export function shedPreview(
-  pool: Pick<Pool, 'burnAverageSeconds' | 'loadShedding' | 'shedCap' | 'warmSessions' | 'windowCeiling'> & { members: { accountId: string; eligible?: MemberEligibility; priority: number }[] },
+  pool: Pick<Pool, 'burnAverageSeconds' | 'loadShedding' | 'shedCap' | 'warmSessions' | 'windDownMinutes' | 'windowCeiling'> & { members: { accountId: string; eligible?: MemberEligibility; priority: number }[] },
   accounts: Account[],
   sessions: Session[],
   now: number,
@@ -161,14 +161,15 @@ export function shedPreview(
     .sort((a, b) => a.priority - b.priority || a.account.label.localeCompare(b.account.label));
   // The preview's reading of the gate: a sibling has runway for a pin while its served projection sits under the
   // ceiling on every window the pin's model draws. The router also adds the pin's rewrite and burn and counts the
-  // round's planned reservations, which the served figures cannot replay, so this is an approximation of its read. An
-  // end inside the next five hours falls inside every horizon, so such a sibling is no destination whatever it reads.
+  // round's planned reservations, which the served figures cannot replay, so this is an approximation of its read. A
+  // sibling whose end falls inside the pool's wind-down is no destination whatever it reads, an end exactly the
+  // wind-down away included.
   const hasRunway = (source: string, model: string | null) =>
     listed.some(
       ({ account, eligible }) =>
         account.id !== source &&
         eligible &&
-        (endOf(account, now) ?? Number.POSITIVE_INFINITY) >= now + FIVE_HOURS_MS &&
+        (endOf(account, now) ?? Number.POSITIVE_INFINITY) - pool.windDownMinutes * 60_000 > now &&
         (account.kind === 'api_key'
           ? bucketRoom(account, now)
           : windowsOf(model).every((id) => {
@@ -291,4 +292,71 @@ export function shedPreviewLine(preview: ShedPreview, now: number = Date.now()):
         ? `A round there would mark no session: ${QUIET_REASON[preview.quiet]}`
         : `A round there would mark ${count} (${preview.warm} warm), ${(preview.covered * 100).toFixed(1)} %/h of the excess, to move to a sibling with runway.`;
   return `${over} ${round}`;
+}
+
+/** The slow-down group's dry run, from the slow-down the routes serve on each member. */
+export interface SlowDownPreview {
+  /** The member whose stretch is longest under the threshold, null where no member reads one under it. */
+  closest: { label: string; stretchMs: number } | null;
+  holdSeconds: number;
+  /** The pool's switch is off: no request is held. */
+  off: boolean;
+  /**
+   * The members read at a factor under 1, in the order the Members group lists them. The stretch is null on a member
+   * whose account did not load, which counts by the factor the pools route serves on it alone.
+   */
+  slowed: { factor: number; label: string; stretchMs: number | null }[];
+  thresholdMs: number;
+}
+
+/**
+ * The slow-down group's dry run, replayed from the data the routes serve: a loaded account reads the factor and the
+ * stretch the router last read for it at a pinned selection, and a member whose account did not load reads the factor
+ * the pools route serves on it. The threshold and the hold are the pool's as the dialog holds them.
+ */
+export function slowDownPreview(
+  pool: Pick<Pool, 'slowDown' | 'slowDownHoldSeconds' | 'slowDownStretchSeconds'> & { members: { accountId: string; priority: number; speed?: number | null }[] },
+  accounts: Account[],
+): SlowDownPreview {
+  const thresholdMs = pool.slowDownStretchSeconds * 1_000;
+  const byId = new Map(accounts.map((a) => [a.id, a]));
+  const read = pool.members
+    .map((m) => {
+      const account = byId.get(m.accountId);
+      if (account === undefined) return { factor: m.speed ?? null, label: m.accountId, priority: m.priority, stretchMs: null };
+      const slowDown = account.slowDown ?? null;
+      return { factor: slowDown?.factor ?? null, label: account.label, priority: m.priority, stretchMs: slowDown?.stretchMs ?? null };
+    })
+    .sort((a, b) => a.priority - b.priority || a.label.localeCompare(b.label));
+  let closest: SlowDownPreview['closest'] = null;
+  for (const { label, stretchMs } of read) {
+    if (stretchMs !== null && stretchMs < thresholdMs && (closest === null || stretchMs > closest.stretchMs)) closest = { label, stretchMs };
+  }
+  return {
+    closest,
+    holdSeconds: pool.slowDownHoldSeconds,
+    off: !pool.slowDown,
+    slowed: read.flatMap(({ factor, label, stretchMs }) => (factor !== null && factor < 1 ? [{ factor, label, stretchMs }] : [])),
+    thresholdMs,
+  };
+}
+
+/**
+ * The slow-down group's dry run in up to two sentences: the switch when it is off, the members slowed with their
+ * factors and stretches or the one closest to the threshold, and the wait a session on the slowest member takes.
+ */
+export function slowDownPreviewLine(preview: SlowDownPreview): string {
+  if (preview.off) return 'Slow-down is off: no request is held.';
+  const { closest, slowed } = preview;
+  const threshold = minuteSpan(preview.thresholdMs);
+  if (slowed.length === 0) return closest === null ? 'No member is slowed.' : `No member is slowed: the closest is ${closest.label}, ${minuteSpan(closest.stretchMs)} of the ${threshold} threshold.`;
+  const named = slowed.map(({ factor, label, stretchMs }) => `${label} at ${speedWord(factor)}${stretchMs === null ? '' : ` (${minuteSpan(stretchMs)} of ${threshold})`}`);
+  // The first of the lowest factors, so a tie names the member listed first.
+  const slowest = slowed.reduce((low, m) => (m.factor < low.factor ? m : low));
+  const hold = `${preview.holdSeconds} s`;
+  const head = slowed.length === 1 ? `1 member is slowed: ${named[0]}.` : `${slowed.length} members are slowed: ${named.join(', ')}.`;
+  const who = slowed.length === 1 ? 'A session there' : `A session on ${slowest.label}`;
+  // A factor of 0 is a window at its ceiling, where every held request waits the whole hold.
+  const wait = slowest.factor > 0 ? `waits its cycle times ${(1 / slowest.factor - 1).toFixed(1)}, up to ${hold}` : `waits the full ${hold}`;
+  return `${head} ${who} ${wait}.`;
 }

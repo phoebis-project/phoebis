@@ -5,7 +5,7 @@ import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, type PoolInput }
 import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type PoolEngineFields } from '@/api/client';
 import { slug } from '@/api/http';
 import type {
-  Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, KeepaliveOverview, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolMember, PoolStrategy, PoolWarning, Range, Session,
+  Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, KeepaliveOverview, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolMember, PoolStrategy, PoolWarning, Range, ReturnToPlan, Session,
   SessionPlacement, SubagentPlacement, TtlRules, WarmSessions,
 } from '@/api/types';
 import { useSession } from '@/app/session';
@@ -17,6 +17,7 @@ import { FilterBar } from '@/components/FilterBar';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { AttentionLine } from '@/components/ui/AttentionLine';
 import { CostReferenceLink } from '@/components/ui/CostReference';
+import { SpeedChip } from '@/components/ui/SpeedChip';
 import { Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
@@ -29,11 +30,11 @@ import { fmtAbsolute, fmtCompact, fmtDuration, fmtEquivalent, fmtHourTick, fmtHo
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
 import { refreshAttention, useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
-import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
-import { windowOf } from '@/lib/quota';
+import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
+import { minuteSpan, windowOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
-import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, overageBadge, poolStatusSentence, selectionOrder, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
+import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, memberSpeed, overageBadge, poolStatusSentence, selectionOrder, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
 import { dollarsUnder, KeyDialog, nativeSidesOf, sumTileOf, type FundedSum } from './KeysPage';
 
 const KEY_STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
@@ -42,7 +43,7 @@ const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutr
 const CREATE_MARKS: Partial<Record<PoolGroup, string>> = { identity: 'needed', keys: 'after saving', members: 'needed' };
 // Every field of these groups belongs to the expert view, so with the mode off a group has nothing to show and leaves
 // the rail.
-const EXPERT_ONLY: ReadonlySet<PoolGroup> = new Set(['autoMode', 'cacheDiagnostics', 'failover', 'placement']);
+const EXPERT_ONLY: ReadonlySet<PoolGroup> = new Set(['autoMode', 'cacheDiagnostics', 'failover', 'placement', 'slowDown']);
 const isPoolGroup = (value: string | null): value is PoolGroup => value !== null && (POOL_GROUPS as readonly string[]).includes(value);
 const percentOf = (share: number) => Math.round(share * 10_000) / 100;
 /** The route's bounds on the two shares the dialog reads in percent: the window ceiling and the shed cap. */
@@ -56,19 +57,23 @@ const FEATURES: { group: PoolGroup; on: (pool: Pool) => boolean; word: (pool: Po
   { group: 'autoMode', on: (p) => !p.autoModeServer, word: () => 'server-side auto mode off' },
   // Drawn on every pool, so a pool whose switch is off says so on its card.
   { group: 'shedding', on: () => true, word: (p) => (p.loadShedding ? `sheds above ${percentOf(p.windowCeiling)} %` : 'shedding off') },
+  { group: 'slowDown', on: (p) => p.slowDown, word: (p) => `slows above ${minuteSpan(p.slowDownStretchSeconds * 1_000)}` },
   { group: 'cacheTtl', on: (p) => p.cacheTtl.enabled, word: () => 'cache TTL' },
   { group: 'keepalive', on: (p) => p.keepalive.enabled, word: () => 'keepalive' },
 ];
 /** The dialog group that edits each pool field a warning names. */
 const WARNING_FIELD_GROUP: Readonly<Record<string, PoolGroup>> = {
   affinity_ttl_seconds: 'pinning',
-  burn_average_seconds: 'shedding',
+  burn_average_seconds: 'utilization',
   cache_ttl: 'cacheTtl',
   in_flight_cap: 'failover',
   load_shedding: 'shedding',
-  migrate_when_spent: 'shedding',
+  migrate_when_spent: 'failover',
+  return_to_plan_dwell_seconds: 'overage',
   shed_cap: 'shedding',
   shed_dwell_seconds: 'shedding',
+  slow_down_hold_seconds: 'slowDown',
+  slow_down_stretch_seconds: 'slowDown',
   warm_sessions: 'shedding',
   window_ceiling: 'utilization',
 };
@@ -150,7 +155,7 @@ const PRESET_LABEL: Record<SheddingPreset, string> = { balanced: 'Balanced', con
 const SHEDDING_HINT: Record<SheddingPreset, string> = {
   balanced: 'The default.',
   conservative: 'Averages over an hour and waits longer between rounds: fewer cache rewrites, slower relief.',
-  custom: 'Set the cap, the burn average, and the dwell by hand.',
+  custom: 'Set the cap, the burn average under Windows, and the dwell by hand.',
   fast: 'Averages over fifteen minutes and sheds again sooner: faster relief, more cache rewrites.',
 };
 const FAILOVER_HINT: Record<FailoverPreset, string> = {
@@ -159,6 +164,12 @@ const FAILOVER_HINT: Record<FailoverPreset, string> = {
   custom: 'Set the cap and the retry bound by hand.',
   fast: 'Moves on sooner and spreads placements wider.',
 };
+// A scale from the most returns to none.
+const RETURN_CHOICES: { body: string; title: string; value: ReturnToPlan }[] = [
+  { value: 'always', title: 'Always', body: 'at once when cold, after the dwell when warm' },
+  { value: 'when_cold', title: 'When cold', body: 'only when the move is free: a compaction, a restart or a lane change' },
+  { value: 'never', title: 'Never', body: 'the session stays until the member refuses it' },
+];
 // A scale from the fewest warm sessions moved to the most.
 const WARM_CHOICES: { body: string; title: string; value: WarmSessions }[] = [
   { value: 'never', title: 'Never', body: 'a round marks cold sessions only, whatever the excess still asks' },
@@ -734,6 +745,7 @@ function PoolCard({
                         ? `${p.account.label}: in overage, taken after the plan-funded members of this tier`
                         : `${p.account.label}: rank ${p.rank} in this tier`;
                 const whyId = `${standingId}-${p.account.id}`;
+                const speed = memberSpeed({ speed: m?.speed ?? null }, p.account, now);
                 return (
                   <tr key={p.account.id} className={isNext ? 'is-next' : undefined}>
                     <td className="pool__prio num col-fit">{grouped ? `${GROUP_LABEL[tier.group]} P${tier.priority}` : `P${tier.priority}`}</td>
@@ -749,6 +761,7 @@ function PoolCard({
                         {/* The route's budget verdict says this itself; the badge stands for a member the route names
                             an earlier obstacle for. */}
                         {!isNext && m && m.budgetUntil !== null && m.eligible !== 'budget' && <AtBudget periodEnd={m.budgetUntil} />}
+                        <SpeedChip factor={speed.factor} hover={speed.hover} />
                       </span>
                       <span id={whyId} className="sr-only">
                         {why}
@@ -761,6 +774,7 @@ function PoolCard({
             )}
             {unlisted.map((m) => {
               const whyId = `${standingId}-${m.accountId}`;
+              const speed = memberSpeed(m, null, now);
               return (
                 <tr key={m.accountId}>
                   <td className="pool__prio num col-fit">P{m.priority}</td>
@@ -768,6 +782,7 @@ function PoolCard({
                   <td className="serving__standing col-fit" aria-describedby={whyId}>
                     <span className="chips">
                       <Eligibility verdict={m.eligible} account={undefined} now={now} periodEnd={m.budgetUntil} />
+                      <SpeedChip factor={speed.factor} hover={speed.hover} />
                     </span>
                     <span id={whyId} className="sr-only">
                       {`${m.accountId}: not a known account`}
@@ -1341,6 +1356,9 @@ export function PoolDialog({
   // The route's verdict per stored member, so a member in cooldown is no destination for a shed session.
   const verdict = new Map((pool?.members ?? []).map((m) => [m.accountId, m.eligible]));
   const preview = shedPreview({ ...input, members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) })) }, accounts, sessions, now);
+  // The route's factor per stored member, which a member whose account did not load is read by.
+  const speedOf = new Map((pool?.members ?? []).map((m) => [m.accountId, m.speed]));
+  const slowPreview = slowDownPreview({ ...input, members: input.members.map((m) => ({ ...m, speed: speedOf.get(m.accountId) ?? null })) }, accounts);
   const setCacheTtl = <K extends keyof PoolCacheTtl>(key: K, value: PoolCacheTtl[K]) => setForm((f) => ({ ...f, cacheTtl: { ...f.cacheTtl, [key]: value } }));
 
   const startMove = (k: ApiKey) => {
@@ -1836,7 +1854,7 @@ export function PoolDialog({
     utilization: (
       <>
         <p className="dialog-group__intro">
-          The ceiling is the share of a window the router keeps every account under: a session lands only where its rewrite and its burn stay under it until the window resets, and a round moves sessions off an account whose sessions would take it over.
+          The windows the router works from: the share of each it keeps every account under, and the span each session&apos;s burn is averaged over.
         </p>
         <div className="cells">
           <Field
@@ -1854,6 +1872,19 @@ export function PoolDialog({
               aria-invalid={invalid('Window ceiling (%)')}
             />
           </Field>
+          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.burnAverageSeconds)}>
+            <Field label={ENGINE_FIELD_LABELS.burnAverageSeconds} className="cell--half" hint="The time constant of each session's burn average. The projection, the slow-down and the round read it.">
+              <Input
+                type="number"
+                min={ENGINE_BOUNDS.burnAverageSeconds.min}
+                step={60}
+                value={form.engine.burnAverageSeconds}
+                onChange={(e) => setEngine('burnAverageSeconds', Number(e.target.value))}
+                disabled={sheddingPill !== 'custom'}
+                aria-invalid={invalid(ENGINE_FIELD_LABELS.burnAverageSeconds)}
+              />
+            </Field>
+          </Expert>
           <Field
             label="Member utilization"
             plain
@@ -1876,7 +1907,7 @@ export function PoolDialog({
     shedding: (
       <>
         <p className="dialog-group__intro">
-          A member whose window would pass the <GroupLink id="utilization">ceiling</GroupLink> before its reset, or within five hours on a weekly window, runs a round that marks the sessions that cover the excess, and each moves to a sibling with runway at its next request.
+          A member whose window would pass the <GroupLink id="utilization">ceiling</GroupLink> before its reset, or within five hours on a weekly window, runs a round that marks the sessions that cover the excess, and each moves to a sibling with runway at its next request. With the slow-down on, a round fires when the time the slow-down adds passes the stretch threshold, and removes only what the slow-down cannot cover.
         </p>
         <div className="cells">
           <Field label="Load shedding" beside hint="Off, no round runs and nothing is marked. The ceiling still holds every move and new session, and Migrate when spent keeps its own switch.">
@@ -1900,19 +1931,6 @@ export function PoolDialog({
               />
             </Field>
           </Expert>
-          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.burnAverageSeconds)}>
-            <Field label={ENGINE_FIELD_LABELS.burnAverageSeconds} className="cell--half" hint="The time constant of each session's burn average. The projection and the round read it.">
-              <Input
-                type="number"
-                min={ENGINE_BOUNDS.burnAverageSeconds.min}
-                step={60}
-                value={form.engine.burnAverageSeconds}
-                onChange={(e) => setEngine('burnAverageSeconds', Number(e.target.value))}
-                disabled={sheddingPill !== 'custom'}
-                aria-invalid={invalid(ENGINE_FIELD_LABELS.burnAverageSeconds)}
-              />
-            </Field>
-          </Expert>
           <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.shedDwellSeconds)}>
             <Field label={ENGINE_FIELD_LABELS.shedDwellSeconds} className="cell--half" hint="The least time between two rounds on one member, and how long a moved session stays off it.">
               <Input
@@ -1924,11 +1942,6 @@ export function PoolDialog({
                 disabled={sheddingPill !== 'custom'}
                 aria-invalid={invalid(ENGINE_FIELD_LABELS.shedDwellSeconds)}
               />
-            </Field>
-          </Expert>
-          <Expert>
-            <Field label="Migrate when spent" beside hint="Moves a session off a member whose window for its model is spent, to a sibling with allowance left, without waiting for a round or the upstream's 429.">
-              <Toggle checked={form.engine.migrateWhenSpent} onChange={(v) => setEngine('migrateWhenSpent', v)} label="Migrate when spent" />
             </Field>
           </Expert>
           <Expert refused={refusedFields.has('Warm sessions')}>
@@ -1963,10 +1976,61 @@ export function PoolDialog({
         </div>
       </>
     ),
+    slowDown: (
+      <>
+        <p className="dialog-group__intro">
+          The slow-down holds each request of a session before it is forwarded, so an account whose sessions would pass the ceiling before the reset reaches it under the ceiling instead. A session waits its own cycle times the slow-down, so a fast session waits more than a slow one and each keeps its share.
+        </p>
+        <div className="cells">
+          <Expert>
+            <Field label="Slow-down" beside hint="Holds requests on a member whose five-hour window would pass the ceiling. Auxiliary requests, compactions, the fast lane, probes and token counts are never held.">
+              <Toggle checked={form.engine.slowDown} onChange={(v) => setEngine('slowDown', v)} label="Slow-down" />
+            </Field>
+          </Expert>
+          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.slowDownStretchSeconds)}>
+            <Field
+              label={ENGINE_FIELD_LABELS.slowDownStretchSeconds}
+              className="cell--half"
+              hint="The time the slow-down may add to a session before a round moves sessions off the member, with load shedding on. Under it the slow-down holds alone."
+            >
+              <Input
+                type="number"
+                min={ENGINE_BOUNDS.slowDownStretchSeconds.min}
+                max={ENGINE_BOUNDS.slowDownStretchSeconds.max}
+                step={60}
+                value={form.engine.slowDownStretchSeconds}
+                onChange={(e) => setEngine('slowDownStretchSeconds', Number(e.target.value))}
+                aria-invalid={invalid(ENGINE_FIELD_LABELS.slowDownStretchSeconds)}
+              />
+            </Field>
+          </Expert>
+          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.slowDownHoldSeconds)}>
+            <Field label={ENGINE_FIELD_LABELS.slowDownHoldSeconds} className="cell--half" hint="The longest one request waits. 120 s leaves 60 s of the client's 180 s first-byte window for the upstream's head.">
+              <Input
+                type="number"
+                min={ENGINE_BOUNDS.slowDownHoldSeconds.min}
+                max={ENGINE_BOUNDS.slowDownHoldSeconds.max}
+                value={form.engine.slowDownHoldSeconds}
+                onChange={(e) => setEngine('slowDownHoldSeconds', Number(e.target.value))}
+                aria-invalid={invalid(ENGINE_FIELD_LABELS.slowDownHoldSeconds)}
+              />
+            </Field>
+          </Expert>
+          <Expert>
+            <Field label="Preview" plain>
+              {/* Drawn as the shedding preview is, under a class of its own so a check reads the one it means. */}
+              <p className="shed-preview slow-down-preview num" role="status">
+                {slowDownPreviewLine(slowPreview)}
+              </p>
+            </Field>
+          </Expert>
+        </div>
+      </>
+    ),
     failover: (
       <>
         <p className="dialog-group__intro">
-          How long a request waits out a throttle on its member, and how many requests one member serves at once.
+          How long a request waits out a throttle on its member, how many requests one member serves at once, and whether a spent window moves the session at once.
         </p>
         <div className="cells">
           <Expert>
@@ -2001,6 +2065,11 @@ export function PoolDialog({
                 disabled={failoverPill !== 'custom'}
                 aria-invalid={invalid(ENGINE_FIELD_LABELS.retryInPlaceSeconds)}
               />
+            </Field>
+          </Expert>
+          <Expert>
+            <Field label="Migrate when spent" beside hint="Moves a session off a member whose window for its model is spent, to a sibling with allowance left, without waiting for a round or the upstream's 429.">
+              <Toggle checked={form.engine.migrateWhenSpent} onChange={(v) => setEngine('migrateWhenSpent', v)} label="Migrate when spent" />
             </Field>
           </Expert>
         </div>
@@ -2040,12 +2109,39 @@ export function PoolDialog({
             />
           </Field>
         </Expert>
+        <Expert refused={refusedFields.has('Return to plan')}>
+          <Field label="Return to plan" plain hint="When a session on an API-key member returns to a subscription member. Under Never it leaves the metered member on expiry, a cooldown or a mark alone.">
+            <div className="radio-list" role="radiogroup" aria-label="Return to plan" aria-invalid={invalid('Return to plan')}>
+              {RETURN_CHOICES.map((c) => (
+                <label key={c.value} className={`radio-list__item ${form.engine.returnToPlan === c.value ? 'is-active' : ''}`}>
+                  <input type="radio" name={`return-${pool?.id ?? 'new'}`} checked={form.engine.returnToPlan === c.value} onChange={() => setEngine('returnToPlan', c.value)} />
+                  <span>
+                    <b>{c.title}:</b> {c.body}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </Field>
+        </Expert>
+        <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.returnToPlanDwellSeconds)}>
+          <Field label={ENGINE_FIELD_LABELS.returnToPlanDwellSeconds} hint="Under Always, how long a warm session stays on the API-key member before it returns. 0 returns it at once.">
+            <Input
+              type="number"
+              min={ENGINE_BOUNDS.returnToPlanDwellSeconds.min}
+              max={ENGINE_BOUNDS.returnToPlanDwellSeconds.max}
+              value={form.engine.returnToPlanDwellSeconds}
+              onChange={(e) => setEngine('returnToPlanDwellSeconds', Number(e.target.value))}
+              disabled={form.engine.returnToPlan !== 'always'}
+              aria-invalid={invalid(ENGINE_FIELD_LABELS.returnToPlanDwellSeconds)}
+            />
+          </Field>
+        </Expert>
         <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.windDownMinutes)}>
           <Field
             label={ENGINE_FIELD_LABELS.windDownMinutes}
             hint={
               <>
-                This long before a cancelled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. The end is set on the <PageLink to="/accounts">Accounts page</PageLink>.
+                This long before a cancelled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. Inside it the account is no destination for a move. The end is set on the <PageLink to="/accounts">Accounts page</PageLink>.
               </>
             }
           >
