@@ -587,20 +587,20 @@ its `reason` (the cooldown row's own word, such as `rate_limit`) and its `window
 and the state's `cause`. A failover with neither, a 401 whose refresh failed with a transient error the request could
 not wait out, carries none. A mark that clears records `mark_cleared` with the reason `healed` (the account's projection
 on the marked window read under the ceiling again, or its stretch under the threshold for a mark the stretch made),
-`moved` or `released`. A reservation that leaves without the usage that would have replaced it
-records `reservation_expired`, with the relay's word for a request that ended without usage (`canceled`, `exhausted`,
-`refused` or `transport_error`) or `timeout` for a booking an hour old. A pin released without a move records
-`pin_expired` with `reasons`, every fact the selection found against the account: `attempted`, `budget` (the pinned
-member has reached one of its spend budgets), `budget_unknown` (the ledger is degraded and the pinned member carries a
-budget), `cooldown`, `deleted`, `expired`, `fast_credits` (a fast request's pinned account whose `fast_credits` row
-stands or whose usage credits the poll reads as unavailable) and `fast_rate_limit` (one whose `fast` row is the blocking
-row that stands latest), `overage`, `paused`, `spent`, `subscription_ended`, `unserved`, the account's state when it
-cannot serve (`disconnected`, `funding_required` until its retry is admitted, `reauth_required`, `unpaired`), or
-`released` when the selection found nothing else against the account, as with a move whose destination emptied. A pin
-whose creating request was answered 400, 403 or 404, or was bound to its account and ended at an authentication failure
-that marked nothing, with no cooldown or mark on the account and no other turn of the session renewing it meanwhile,
-records the single reason `client_error`: it never served, so the session's next request is placed afresh rather than
-moved. Releasing a session by hand, from the Sessions view ([Sessions](console.md#sessions)) or
+`moved` or `released`. A reservation that leaves without the usage that would have replaced it records
+`reservation_expired`, with the relay's word for a request that ended without usage (`canceled`, `exhausted`, `refused`
+or `transport_error`) or `timeout` for a booking an hour old. A pin released without a move records `pin_expired` with
+`reasons`, every fact the selection found against the account: `attempted`, `budget` (the pinned member has reached one
+of its spend budgets), `budget_unknown` (the ledger is degraded and the pinned member carries a budget), `cooldown`,
+`deleted`, `expired`, `fast_credits` (a fast request's pinned account whose `fast_credits` row stands or whose usage
+credits the poll reads as unavailable) and `fast_rate_limit` (one whose `fast` row is the blocking row that stands
+latest), `overage`, `paused`, `spent`, `subscription_ended`, `unserved`, the account's state when it cannot serve
+(`disconnected`, `funding_required` until its retry is admitted, `reauth_required`, `unpaired`), or `released` when the
+selection found nothing else against the account, as with a move whose destination emptied. A pin whose creating request
+was answered 400, 403 or 404, or was bound to its account and ended at an authentication failure that marked nothing,
+with no cooldown or mark on the account and no other turn of the session renewing it meanwhile, records the single
+reason `client_error`: it never served, so the session's next request is placed afresh rather than moved. Releasing a
+session by hand, from the Sessions view ([Sessions](console.md#sessions)) or
 `POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
 
 ### Slow-down
@@ -964,8 +964,8 @@ A pool's `overage_policy` chooses what happens once an account starts billing ex
   account is kept for a hard reason. A hard reason on the account instead, such as a spent window or a cooldown, takes
   the move it already has, which may land on an API-key sibling. An API-key member returns to plan quota independent of
   this policy, as the pool's `return_to_plan` says: under `always` once its pin is cold or has sat on the account for
-  `return_to_plan_dwell_seconds`, under `when_cold` on a free move alone, and under `never` not at all
-  ([Moves](#moves)).
+  `return_to_plan_dwell_seconds`, under `when_cold` on a free move alone, and under `never` only once an expiry, a
+  cooldown or a mark ends its pin ([Moves](#moves)).
 - **Allow** (`allow`): ignore extra usage.
 - **Never** (`never`): treat an account in extra usage as unavailable until its window resets.
 
