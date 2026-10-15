@@ -1066,9 +1066,10 @@
   border-radius: var(--radius-pill);
 }
 
-/* A neutral tint, so the used fill's tone reads against it and the label keeps its contrast over both. */
+/* The account's color at two strengths, the body here and the used fill over it. At 22% and 45% of the color over
+   the surface the label's ink holds 4.5:1 or better over both in either theme, on every series color. */
 .lane__bar--live {
-  background: var(--surface-3);
+  background: color-mix(in srgb, var(--lane-color) 22%, var(--surface));
 }
 
 .lane__bar--next {
@@ -1080,7 +1081,7 @@
 }
 
 /* The fill's clip at the pill's own radius, so a fill that reaches the bar's end keeps the rounded corners rather than
-   drawing square ones past them. The reset mark sits outside it, since it stands past the bar's edge. */
+   drawing square ones past them. */
 .lane__clip {
   position: absolute;
   inset: 0;
@@ -1088,37 +1089,14 @@
   border-radius: inherit;
 }
 
-/*
- * The window's used share, in the window's tone, so the bar reads against the now line. The tone's soft background,
- * as the lane chips draw it, keeps the ink label legible where it crosses the fill.
- */
+/* The window's used share in the stronger of the account's two strengths, so the bar reads against the now line. Its
+   end is rounded as the bar's own, a pill inside the pill, and the bar's rounded end is the reset. */
 .lane__used {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 0;
-  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
-}
-
-.lane__used--good {
-  background: var(--good-soft);
-}
-
-.lane__used--warn {
-  background: var(--warning-soft);
-}
-
-.lane__used--low {
-  background: var(--critical-soft);
-}
-
-.lane__reset-mark {
-  position: absolute;
-  top: -3px;
-  right: 0;
-  bottom: -3px;
-  width: 2px;
-  background: var(--lane-color);
+  background: color-mix(in srgb, var(--lane-color) 45%, var(--surface));
   border-radius: var(--radius-pill);
 }
 
@@ -1175,8 +1153,9 @@
   border-radius: var(--radius-pill);
 }
 
+/* The legend samples the bars' two strengths on the first series color, as the upcoming swatch samples its outline. */
 .lane__swatch--live {
-  background: var(--surface-3);
+  background: color-mix(in srgb, var(--series-1) 22%, var(--surface));
 }
 
 .lane__swatch--next {
@@ -1184,7 +1163,7 @@
 }
 
 .lane__swatch--used {
-  background: var(--good-soft);
+  background: color-mix(in srgb, var(--series-1) 45%, var(--surface));
 }
 
 .lane__swatch--past {
@@ -1207,6 +1186,32 @@
 
 .timeline__note {
   flex-basis: 100%;
+}
+
+/* Under 900 px the shell drops its sidebar and each lane stacks: the head above its track, the day cells across the
+   chart's whole width, and the axis without its Account column. */
+@media (max-width: 900px) {
+  .timeline__chart {
+    --tl-left: 0px;
+    --tl-gap: 0px;
+  }
+
+  .timeline__axis,
+  .lane {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .timeline__axis-label {
+    display: none;
+  }
+
+  .lane__head {
+    padding-bottom: 4px;
+  }
+
+  .lane__chips {
+    padding-left: 0;
+  }
 }
 
 /* Accounts */
@@ -3172,11 +3177,6 @@
   .remaining {
     grid-template-columns: 1fr;
     justify-items: center;
-  }
-
-  .timeline__axis,
-  .lane {
-    grid-template-columns: 110px 1fr;
   }
 
   /* Two columns of four rows, the last of one tile: the base rule's left hairline would land on the first column's

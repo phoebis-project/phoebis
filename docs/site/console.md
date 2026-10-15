@@ -154,6 +154,7 @@ past the share of the window elapsed (the lead the router answers for each windo
 window or with the window expired last. Each live window's meter reads the share left and its pace,
 `{window}: {pct} left, {n}% ahead of pace`, `{n}% behind pace` or `on pace`, with ` to its end at {time}` where the pace
 runs to the subscription's end rather than the reset, and a mark at the share of the window still to come.
+On a screen under 900 px wide the reset label takes a line of its own under the meter.
 Under the meter the window reads `resets {ago}`, followed on a window the router projects by the share the projection
 leaves at the window's horizon: `resets in 2h 13m, 19% left at the reset` where the horizon is the reset (within a
 minute), `resets in 3d 5h, 56% left in 5 h` where it comes earlier (five hours out on a weekly window, or the account's
@@ -177,14 +178,17 @@ how it answered, with the whole message and the backoff on hover, and "Refresh" 
 card that shows an error, whose last poll failed, or that is backing off counts as needing attention.
 
 Quota windows lays the same windows across a calendar titled "Quota windows", with its span and length (`two weeks` in
-the Weekly mode, `three days` in the 5-hour mode), "Previous period", "Today" and "Next period" buttons, the mode
-switch Weekly or 5-hour, an "Account" axis and a now marker. Each lane carries the chips "5-hour limit", "7-day
-limit" and "Fable 7-day limit", each with its share left and its reset on hover, and one bar per window, the current
-bar filling from the window's start to its used share, so a fill past the now line is ahead of pace and one short of
-it behind. An account marked canceled with a saved end shows the end on its lane: no window opens after it, and the
-window that spans it stops there. The legend reads current window, upcoming, used, past window, now and plan ends,
-and the note "Each bar is one full quota window, drawn from when it opened to when it resets, and labeled with the
-instant it resets. Lanes ending together compete for the same days."
+the Weekly mode, `three days` in the 5-hour mode), "Previous period", "Today" and "Next period" buttons, the mode switch
+Weekly or 5-hour, an "Account" axis and a now marker. Each lane carries the chips "5-hour limit", "7-day limit" and
+"Fable 7-day limit", each with its share left and its reset on hover, and one bar per window in the account's color, the
+current bar filled from the window's start by its used share in a stronger tone, so a fill past the now line is ahead of
+pace and one short of it behind, the upcoming window dashed and the elapsed ones muted. The current bar is labeled with
+the share left and its reset, `59% left · Sep 19 20:10`, or with the share alone where the bar is too narrow for both,
+and a bar too narrow for its label keeps it on hover. On a narrow screen each lane stacks its account above its bars and
+the day axis prints short labels. An account marked canceled with a saved end shows the end on its lane: no window opens
+after it, and the window that spans it stops there. The legend reads current window, upcoming, used, past window, now
+and plan ends, and the note "Each bar is one full quota window, drawn from when it opened to when it resets, and labeled
+with the instant it resets. Lanes ending together compete for the same days."
 
 ## Accounts
 

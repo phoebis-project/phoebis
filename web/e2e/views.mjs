@@ -2348,6 +2348,12 @@ async function quotaPollLines(theme) {
 let cardTones = {};
 
 /**
+ * Each card's meter titles by the card's name, read on the Accounts section, so the timeline's bars are read against
+ * the pace their windows answer, which the Quota windows section draws in no words. Empty in the router's pass.
+ */
+let cardReadings = {};
+
+/**
  * The Quota cards' chips with their shares read "left" against the columns that hold them: every card's window
  * chip and reset cell fits its column on one line, the window grid stays inside its card, an expired window's
  * longer reset cell may wrap but never runs past its column, and a live label with a projection breaks between its
@@ -2379,6 +2385,7 @@ async function quotaChips(theme) {
     return {
       chips: [...document.querySelectorAll('.qcard__windows .qchip')].map((chip) => ({ ...cell(chip), parts: [...chip.children].map(lines) })),
       grids: [...document.querySelectorAll('.qcard')].filter((c) => c.querySelector('.qcard__windows')).map((c) => ({ card: Math.round(c.getBoundingClientRect().right), grid: Math.round(c.querySelector('.qcard__windows').getBoundingClientRect().right), name: c.querySelector('.qcard__name')?.textContent?.trim() ?? '' })),
+      readings: Object.fromEntries([...document.querySelectorAll('.qcard')].map((c) => [c.querySelector('.qcard__name')?.textContent?.trim() ?? '', [...c.querySelectorAll('.qcard__windows .meter[title]')].map((m) => m.getAttribute('title'))])),
       marks: [...document.querySelectorAll('.qcard__windows .meter--marked')].map((meter) => {
         const track = meter.getBoundingClientRect();
         const mark = meter.querySelector('.meter__mark')?.getBoundingClientRect() ?? null;
@@ -2391,6 +2398,7 @@ async function quotaChips(theme) {
   measurements.push(`${theme} /quota chips ${JSON.stringify({ chips: read.chips.map((c) => [c.text, c.client]), resets: read.resets.map((c) => [c.text, c.client, c.lines, c.parts.map((p) => p.width)]) })}`);
   measurements.push(`${theme} /quota pace marks ${JSON.stringify(read.marks.map((m) => [m.title, m.left, m.height, m.track]))}`);
   cardTones = read.tones;
+  cardReadings = read.readings;
   if (mock && read.chips.length === 0) say('the story has subscription windows, yet no card chip is drawn');
   if (mock && read.marks.length === 0) say('the story has live windows, yet no meter carries a pace mark');
   if (mock && Object.values(read.tones).some((t) => t === null)) say('the story draws all three card tones, yet one is missing');
@@ -2418,12 +2426,14 @@ async function quotaChips(theme) {
 }
 
 /**
- * The timeline's chips on the Quota windows section against the fixed column that holds them: every lane chip fits
- * it on one line, and a chip with a share draws the background and ink of the card chip of the same tone. Primary's
- * current bar lays its used fill out at the share the page computed, within a pixel, and the lane label's ink reads
- * at 4.5:1 or better over every tone's fill, which the mock pass demands a fill of each tone for, since the story
- * fills bars in all three, and over the live bar's neutral `--surface-3` past the fill. Only the mock pass draws the
- * section.
+ * The timeline on the Quota windows section against its lane chips, its lanes' swatches and its now line: every lane
+ * chip fits its fixed column on one line, and a chip with a share draws the background and ink of the card chip of the
+ * same tone. Every live bar draws its account's color at two strengths, read against the dot that names the lane: its
+ * body and its used fill are each the dot's color mixed into `--surface`, the body at one strength and the fill at a
+ * stronger one on every lane, and the label's ink reads at 4.5:1 or better over both. Primary's fill lays out at the
+ * share the page computed, within a pixel, and its end stands past the now line where its weekly window answers a lead
+ * ahead of pace and short of it where the lead is behind, as the card's meter words the pace. Only the mock pass draws
+ * the section.
  */
 async function quotaLaneChips(theme) {
   const say = (what) => failures.push(`${theme} /quota#quota-windows: ${what}`);
@@ -2431,53 +2441,57 @@ async function quotaLaneChips(theme) {
     const lane = [...document.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'primary');
     const bar = lane?.querySelector('.lane__bar--live') ?? null;
     const used = bar?.querySelector('.lane__used') ?? null;
+    const now = document.querySelector('.timeline__now')?.getBoundingClientRect() ?? null;
+    const probe = document.createElement('span');
+    probe.style.background = 'var(--surface)';
+    document.body.append(probe);
+    const surface = getComputedStyle(probe).backgroundColor;
+    probe.remove();
     return {
       chips: [...document.querySelectorAll('.tl-chip')].map((el) => ({ background: getComputedStyle(el).backgroundColor, client: el.clientWidth, color: getComputedStyle(el).color, scroll: el.scrollWidth, text: el.textContent?.trim() ?? '', tone: [...el.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? null })),
-      fill: bar && used ? { bar: bar.getBoundingClientRect().width, share: parseFloat(used.style.width), width: used.getBoundingClientRect().width } : null,
-      // The label starts where the fill starts, so each tone's fill is read under the label of its own bar.
-      fills: [...document.querySelectorAll('.lane__bar--live .lane__used')].map((el) => {
-        const bar = el.closest('.lane__bar');
-        return { background: getComputedStyle(el).backgroundColor, ink: getComputedStyle(bar.querySelector('.lane__label') ?? bar).color, tone: [...el.classList].find((n) => n.startsWith('lane__used--'))?.slice('lane__used--'.length) ?? null };
+      fill: bar && used ? { bar: bar.getBoundingClientRect().width, end: Math.round(used.getBoundingClientRect().right * 10) / 10, now: now ? Math.round((now.left + now.width / 2) * 10) / 10 : null, share: parseFloat(used.style.width), width: used.getBoundingClientRect().width } : null,
+      // The label starts where the fill starts, so it crosses the fill and then the body past it.
+      live: [...document.querySelectorAll('.lane__bar--live')].map((el) => {
+        const row = el.closest('.lane');
+        const fill = el.querySelector('.lane__used');
+        const dot = row?.querySelector('.lane__dot');
+        return { body: getComputedStyle(el).backgroundColor, fill: fill ? getComputedStyle(fill).backgroundColor : null, ink: getComputedStyle(el.querySelector('.lane__label') ?? el).color, name: row?.querySelector('.lane__name')?.textContent?.trim() ?? '', swatch: dot ? getComputedStyle(dot).backgroundColor : null };
       }),
-      // Past the used fill the label reads on the live bar's own tint, the neutral `--surface-3`, read off a probe.
-      live: [...document.querySelectorAll('.lane__bar--live')].map((bar) => ({ background: getComputedStyle(bar).backgroundColor, ink: getComputedStyle(bar.querySelector('.lane__label') ?? bar).color })),
-      surface3: (() => {
-        const probe = document.createElement('span');
-        probe.style.background = 'var(--surface-3)';
-        document.body.append(probe);
-        const color = getComputedStyle(probe).backgroundColor;
-        probe.remove();
-        return color;
-      })(),
+      surface,
     };
   });
   const lanes = read.chips;
-  measurements.push(`${theme} /quota#quota-windows lane chips ${JSON.stringify(lanes.map((c) => [c.text, c.client]))} primary's used fill ${JSON.stringify(read.fill)}`);
-  // One figure per tone: the lane label's ink over the fill it crosses, by the WCAG contrast formula.
-  const luminance = (rgb) => {
-    const [r, g, b] = (rgb.match(/\d+(\.\d+)?/g) ?? ['0', '0', '0']).slice(0, 3).map((n) => {
-      const c = Number(n) / 255;
-      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-    });
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  // The share of the swatch a mix into the surface carries, read on the channel where the two differ most, and whether
+  // the mix is that share of the swatch on every channel within a step of 255.
+  const surface = colorChannels(read.surface).rgb;
+  const strength = (css, swatch) => {
+    if (css === null || swatch === null) return null;
+    const mixed = colorChannels(css).rgb;
+    const ink = colorChannels(swatch).rgb;
+    const at = [0, 1, 2].reduce((best, i) => (Math.abs(ink[i] - surface[i]) > Math.abs(ink[best] - surface[best]) ? i : best), 0);
+    const share = (mixed[at] - surface[at]) / (ink[at] - surface[at]);
+    return { exact: [0, 1, 2].every((i) => Math.abs(surface[i] + share * (ink[i] - surface[i]) - mixed[i]) <= 1.5), pct: Math.round(share * 100) };
   };
-  const contrast = (a, b) => {
-    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-    return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100;
-  };
-  const byTone = new Map(read.fills.map((f) => [f.tone, { ...f, ratio: contrast(f.ink, f.background) }]));
-  measurements.push(`${theme} /quota#quota-windows label over fill ${JSON.stringify([...byTone.values()].map((f) => [f.tone, f.ink, f.background, f.ratio]))}`);
-  if (mock && ['good', 'low', 'warn'].some((tone) => !byTone.has(tone))) say(`the story fills bars in every tone, yet only ${[...byTone.keys()].join(', ') || 'none'} drew`);
-  for (const f of byTone.values()) {
-    if (f.ratio < 4.5) say(`the label reads ${f.ink} over the ${f.tone} fill ${f.background} at ${f.ratio}:1, under 4.5:1`);
-  }
-  // A tinted bar computes to `color(srgb r g b)`, whose 0 to 1 channels the reader above would take for 0 to 255.
-  const live = [...new Map(read.live.map((b) => [`${b.ink} ${b.background}`, { ...b, ratio: contrastOf(colorChannels(b.ink).rgb, colorChannels(b.background).rgb) }])).values()];
-  measurements.push(`${theme} /quota#quota-windows label over the live bar ${JSON.stringify(live.map((b) => [b.ink, b.background, b.ratio]))}, --surface-3 ${read.surface3}`);
+  const live = read.live.map((b) => {
+    const body = strength(b.body, b.swatch);
+    const fill = strength(b.fill, b.swatch);
+    const ink = colorChannels(b.ink).rgb;
+    return { ...b, bodyPct: body?.pct ?? null, bodyRatio: contrastOf(ink, colorChannels(b.body).rgb), exact: [body, fill].every((s) => s === null || s.exact), fillPct: fill?.pct ?? null, fillRatio: b.fill === null ? null : contrastOf(ink, colorChannels(b.fill).rgb) };
+  });
+  const reading = (cardReadings.primary ?? []).find((t) => t.startsWith('7-day:')) ?? null;
+  const pace = reading === null ? null : /ahead of pace/.test(reading) ? 1 : /behind pace/.test(reading) ? -1 : 0;
+  measurements.push(`${theme} /quota#quota-windows lane chips ${JSON.stringify(lanes.map((c) => [c.text, c.client]))} primary's used fill ${JSON.stringify({ ...read.fill, reading })}`);
+  measurements.push(`${theme} /quota#quota-windows live bars over ${read.surface} ${JSON.stringify(live.map((b) => [b.name, b.swatch, b.body, b.bodyPct, b.bodyRatio, b.fill, b.fillPct, b.fillRatio, b.ink]))}`);
   if (mock && live.length === 0) say('the story has current windows, yet no live bar is drawn');
+  if (mock && !live.some((b) => b.fill !== null)) say('the story has current windows with a share, yet no live bar draws a used fill');
+  const first = live.find((b) => b.fill !== null);
   for (const b of live) {
-    if (b.background !== read.surface3) say(`a live bar draws ${b.background}, not the neutral --surface-3 ${read.surface3}`);
-    if (b.ratio < 4.5) say(`the label reads ${b.ink} over the live bar's ${b.background} at ${b.ratio}:1, under 4.5:1`);
+    if (b.swatch === null) say(`${b.name}'s lane draws no dot to read its color against`);
+    else if (!b.exact) say(`${b.name}'s live bar draws ${b.body} and ${b.fill ?? 'no fill'}, not its dot's ${b.swatch} mixed into ${read.surface}`);
+    if (b.fillPct !== null && b.bodyPct !== null && b.fillPct <= b.bodyPct) say(`${b.name}'s fill carries ${b.fillPct}% of its color, no stronger than the body's ${b.bodyPct}%`);
+    if (b.bodyRatio < 4.5) say(`the label reads ${b.ink} over ${b.name}'s live bar ${b.body} at ${b.bodyRatio}:1, under 4.5:1`);
+    if (b.fillRatio !== null && b.fillRatio < 4.5) say(`the label reads ${b.ink} over ${b.name}'s fill ${b.fill} at ${b.fillRatio}:1, under 4.5:1`);
+    if (first && b.fill !== null) failures.push(...compare(b, first, ['bodyPct', 'fillPct'], `${theme} /quota#quota-windows: ${b.name}'s strengths against ${first.name}'s`));
   }
   if (mock && lanes.length === 0) say('the story has subscription windows, yet no lane chip is drawn');
   if (mock && !lanes.some((c) => c.tone !== null)) say('the story has windows with a share, yet no lane chip is toned');
@@ -2490,6 +2504,159 @@ async function quotaLaneChips(theme) {
   }
   if (mock && read.fill === null) say("primary's current bar draws no used fill");
   if (read.fill && Math.abs(read.fill.width - (read.fill.share / 100) * read.fill.bar) > 1) say(`primary's used fill is ${read.fill.width}px of its ${read.fill.bar}px bar, where the page computed ${read.fill.share}%`);
+  if (mock && pace === null) say("primary's 7-day card meter words no pace to read its bar against");
+  if (read.fill && pace !== null) {
+    if (read.fill.now === null) say("primary's live bar has no now line to be read against");
+    else if (pace > 0 && read.fill.end <= read.fill.now) say(`primary's fill ends at ${read.fill.end}px, short of the now line at ${read.fill.now}px, where its window reads ${JSON.stringify(reading)}`);
+    else if (pace < 0 && read.fill.end >= read.fill.now) say(`primary's fill ends at ${read.fill.end}px, past the now line at ${read.fill.now}px, where its window reads ${JSON.stringify(reading)}`);
+  }
+}
+
+/** The phone windows the timeline is read at: the 340 px nothing may scroll sideways from, and a common phone. */
+const TIMELINE_PHONES = [
+  { height: 900, width: 340 },
+  { height: 900, width: 400 },
+];
+
+/**
+ * The Quota windows timeline in two phone windows under the shell's 900 px breakpoint, in either zoom: the axis and
+ * every lane one column, the chart's left column and its gap at 0px and the chips without their indent, so each lane's
+ * head and track start at the lane's content left and the day cells and the raster over the tracks' left, within a
+ * pixel. The now line stands where its calc places the chart's now share on the lanes' box, within a pixel, which is up
+ * to the lanes' 12 px padding off the same share of a track, recorded beside it. Every lane stacks its head above its
+ * track, every chip stays inside its lane, every day cell prints its short labels whole with the full words on its
+ * title, no bar's label is cut, the chart's content fits its box and the document its window, and the legend stays
+ * inside the card. Then it puts the pass's window and the Weekly zoom back, so the view's shot reads the desktop chart.
+ * Only the mock pass draws the section.
+ */
+async function timelinePhone(theme) {
+  const say = (what) => failures.push(`${theme} /quota#quota-windows: ${what}`);
+  const read = () =>
+    page.evaluate(() => {
+      const tenth = (v) => Math.round(v * 10) / 10;
+      const chart = document.querySelector('.timeline__chart');
+      const lanes = document.querySelector('.timeline__lanes');
+      const card = document.querySelector('.timeline');
+      if (!chart || !lanes || !card) return null;
+      const box = (el) => el.getBoundingClientRect();
+      const contentLeft = (el) => tenth(box(el).left + el.clientLeft + parseFloat(getComputedStyle(el).paddingLeft));
+      const style = getComputedStyle(chart);
+      const tlLeft = parseFloat(style.getPropertyValue('--tl-left'));
+      const tlGap = parseFloat(style.getPropertyValue('--tl-gap'));
+      const now = document.querySelector('.timeline__now');
+      // The page writes the now share as the last factor of the line's calc.
+      const share = now ? Number(/\*\s*([-\d.e]+)\)\s*$/.exec(now.style.left)?.[1] ?? NaN) : null;
+      const track = document.querySelector('.lane__track');
+      const cells = document.querySelector('.timeline__cells');
+      const legend = document.querySelector('.timeline__legend');
+      const inside = (inner, outer) => inner.left >= outer.left - 0.5 && inner.right <= outer.right + 0.5 && inner.top >= outer.top - 0.5 && inner.bottom <= outer.bottom + 0.5;
+      return {
+        axis: getComputedStyle(document.querySelector('.timeline__axis')).gridTemplateColumns,
+        cells: [...document.querySelectorAll('.timeline__cell')].map((cell) => {
+          const [head, sub] = [cell.querySelector('.timeline__cell-head'), cell.querySelector('.timeline__cell-sub')];
+          return { cut: [head, sub].some((el) => el !== null && el.scrollWidth > el.clientWidth), head: head?.textContent ?? '', sub: sub?.textContent ?? '', title: cell.getAttribute('title') ?? '', width: tenth(box(cell).width) };
+        }),
+        cellsLeft: cells ? tenth(box(cells).left) : null,
+        cellsRight: cells ? tenth(box(cells).right) : null,
+        chart: { client: chart.clientWidth, gap: style.getPropertyValue('--tl-gap').trim(), left: style.getPropertyValue('--tl-left').trim(), scroll: chart.scrollWidth },
+        chips: [...document.querySelectorAll('.lane__chips')].map((el) => getComputedStyle(el).paddingLeft),
+        // A label's drawn words, without the reset part its share-alone step hides.
+        cut: [...document.querySelectorAll('.lane__label')].filter((el) => el.getClientRects().length > 0 && el.scrollWidth > el.clientWidth).map((el) => el.innerText),
+        document: { client: document.documentElement.clientWidth, inner: window.innerWidth, scroll: document.documentElement.scrollWidth },
+        labels: [...document.querySelectorAll('.lane__label')].filter((el) => el.getClientRects().length > 0).map((el) => [el.innerText, el.clientWidth]),
+        lanes: [...document.querySelectorAll('.lane')].map((lane) => {
+          const head = lane.querySelector('.lane__head');
+          const row = lane.querySelector('.lane__track');
+          const outer = box(lane);
+          return {
+            chipsOut: [...lane.querySelectorAll('.tl-chip')].filter((chip) => !inside(box(chip), outer)).map((chip) => chip.textContent?.trim() ?? ''),
+            columns: getComputedStyle(lane).gridTemplateColumns,
+            content: contentLeft(lane),
+            head: head ? tenth(box(head).left) : null,
+            headBottom: head ? tenth(box(head).bottom) : null,
+            name: lane.querySelector('.lane__name')?.textContent?.trim() ?? '',
+            track: row ? tenth(box(row).left) : null,
+            trackTop: row ? tenth(box(row).top) : null,
+          };
+        }),
+        legendInside: legend ? inside(box(legend), box(card)) : null,
+        now:
+          now && share !== null
+            ? {
+                drawn: tenth(box(now).left + box(now).width / 2),
+                share,
+                // Where the line's calc puts it, on the lanes' padding box, and where the same share of a track lies.
+                tracked: track ? tenth(box(track).left + box(track).width * share) : null,
+                want: tenth(box(lanes).left + lanes.clientLeft + tlLeft + tlGap + (lanes.clientWidth - tlLeft - tlGap) * share),
+              }
+            : null,
+        raster: (() => {
+          const raster = document.querySelector('.timeline__raster');
+          return raster ? tenth(box(raster).left) : null;
+        })(),
+        trackLeft: track ? tenth(box(track).left) : null,
+        trackRight: track ? tenth(box(track).right) : null,
+      };
+    });
+  const zoom = async (label) => {
+    await page.locator('.timeline .segmented button', { hasText: label }).click();
+    await settle();
+    await settle();
+  };
+  const check = (got, where) => {
+    if (got === null) {
+      say(`${where} no timeline to measure`);
+      return;
+    }
+    const oneTrack = (columns) => columns.trim() !== '' && !/\s/.test(columns.trim());
+    if (!oneTrack(got.axis)) say(`${where} the axis lays out ${got.axis}, not one column`);
+    for (const lane of got.lanes.filter((l) => !oneTrack(l.columns))) say(`${where} ${lane.name}'s lane lays out ${lane.columns}, not one column`);
+    if (got.chart.left !== '0px' || got.chart.gap !== '0px') say(`${where} the chart's left column is ${got.chart.left} and its gap ${got.chart.gap}, not 0px`);
+    for (const padding of got.chips.filter((p) => p !== '0px')) say(`${where} a lane's chips stand ${padding} in from its head`);
+    if (mock && got.lanes.length === 0) say(`${where} the story has subscription windows, yet no lane is drawn`);
+    for (const lane of got.lanes) {
+      // A lane and the axis above it span the chart's content alike, so their one column reads the same width.
+      failures.push(...compare({ columns: lane.columns }, { columns: got.axis }, ['columns'], `${theme} /quota#quota-windows: ${where} ${lane.name}'s lane against the axis`));
+      if (lane.head === null || Math.abs(lane.head - lane.content) > 1) say(`${where} ${lane.name}'s head starts at ${lane.head}px, not its lane's content left ${lane.content}px`);
+      if (lane.track === null || Math.abs(lane.track - lane.content) > 1) say(`${where} ${lane.name}'s track starts at ${lane.track}px, not its lane's content left ${lane.content}px`);
+      if (lane.headBottom === null || lane.trackTop === null || lane.headBottom > lane.trackTop + 0.5) say(`${where} ${lane.name}'s head ends at ${lane.headBottom}px, below its track's top ${lane.trackTop}px, so the lane does not stack`);
+      if (lane.chipsOut.length > 0) say(`${where} ${lane.name}'s chips ${JSON.stringify(lane.chipsOut)} stand outside its lane`);
+    }
+    if (got.trackLeft !== null) {
+      if (got.raster === null || Math.abs(got.raster - got.trackLeft) > 1) say(`${where} the raster starts at ${got.raster}px, not the tracks' left ${got.trackLeft}px`);
+      if (got.cellsLeft === null || Math.abs(got.cellsLeft - got.trackLeft) > 1 || Math.abs(got.cellsRight - got.trackRight) > 1) say(`${where} the day cells span ${got.cellsLeft}px to ${got.cellsRight}px over tracks from ${got.trackLeft}px to ${got.trackRight}px`);
+    }
+    if (mock && got.now === null) say(`${where} the current period draws no now line`);
+    if (got.now && Math.abs(got.now.drawn - got.now.want) > 1) say(`${where} the now line stands at ${got.now.drawn}px, not ${got.now.want}px where the chart's now share ${got.now.share} places it`);
+    for (const cell of got.cells) {
+      if (cell.width >= 40) say(`${where} a day cell is ${cell.width}px wide, where the phone window leaves it under 40 px`);
+      const short = where.includes('5-hour') ? /^(\d{1,2})?$/.test(cell.head) && /^\d{2}$/.test(cell.sub) : /^[A-Z]$/.test(cell.head) && /^\d{1,2}$/.test(cell.sub);
+      if (!short) say(`${where} a day cell prints ${JSON.stringify([cell.head, cell.sub])}, not its short labels`);
+      if (cell.title === '' || !cell.title.includes(cell.sub) || (cell.head !== '' && !cell.title.includes(cell.head))) say(`${where} a day cell prints ${JSON.stringify([cell.head, cell.sub])} under the title ${JSON.stringify(cell.title)}, which does not carry its full words`);
+      if (cell.cut) say(`${where} the day cell ${JSON.stringify(cell.title)} cuts its short labels`);
+    }
+    for (const text of got.cut) say(`${where} the bar label ${JSON.stringify(text)} is cut`);
+    if (got.chart.scroll !== got.chart.client) say(`${where} the chart's content needs ${got.chart.scroll}px of its ${got.chart.client}px`);
+    if (got.document.scroll > got.document.inner) say(`${where} the document needs ${got.document.scroll}px of the ${got.document.inner}px window, so it scrolls sideways`);
+    if (got.legendInside !== true) say(`${where} the legend runs past the timeline's card`);
+  };
+  for (const size of TIMELINE_PHONES) {
+    await page.setViewportSize(size);
+    await settle();
+    await settle();
+    for (const mode of ['Weekly', '5-hour']) {
+      if (mode === '5-hour') await zoom('5-hour');
+      const where = `at ${size.width} by ${size.height} in the ${mode} zoom`;
+      const got = await read();
+      measurements.push(`${theme} /quota#quota-windows timeline ${where} ${JSON.stringify(got === null ? null : { ...got, cells: got.cells.map((c) => [c.head, c.sub, c.title, c.width]) })}`);
+      check(got, where);
+    }
+    await zoom('Weekly');
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  await settle();
+  await atRest();
 }
 
 /**
@@ -2694,6 +2861,70 @@ async function quotaMeters(theme) {
     await check('narrow');
   }
   await page.setViewportSize(was);
+}
+
+/** The window widths the cards' rows are read at, six under the shell's 900 px breakpoint and one above it. */
+const QUOTA_ROW_WIDTHS = [340, 375, 400, 480, 640, 840, 1280];
+
+/**
+ * Every Quota card's window rows at seven window widths, 900 px tall: from 900 px up each reset label stands on its
+ * meter's row beside a meter of 120 px or more, read by the two boxes overlapping, since the row centers its cells,
+ * and under 900 px each label takes a row of its own under its meter. At every width no label is cut, no part of a
+ * split label runs past its label's box, and the page scrolls nothing sideways. The card grid's floor and the reset
+ * column's bound hold the meter at 120 px or more wherever the label stands beside it, so the read guards that layout.
+ * The router's seed has no subscription account, so its pass records a skip. Then it puts the pass's window back.
+ */
+async function quotaMeterRow(theme) {
+  const say = (what) => failures.push(`${theme} /quota: ${what}`);
+  const read = () =>
+    page.evaluate(() => {
+      const tenth = (v) => Math.round(v * 10) / 10;
+      return {
+        page: { client: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth },
+        rows: [...document.querySelectorAll('.qcard__windows')].flatMap((windows) => {
+          const name = windows.closest('.qcard')?.querySelector('.qcard__name')?.textContent?.trim() ?? '';
+          const cells = [...windows.children];
+          // A window is three cells of the grid: its chip, its meter and its reset label.
+          return Array.from({ length: Math.floor(cells.length / 3) }, (_, i) => {
+            const [chip, meter, reset] = cells.slice(i * 3, i * 3 + 3).map((el) => el.getBoundingClientRect());
+            const label = cells[i * 3 + 2];
+            return {
+              cut: label.scrollWidth > label.clientWidth || [...label.querySelectorAll('.qwin__part')].some((part) => [...part.getClientRects()].some((r) => r.left < reset.left - 0.5 || r.right > reset.right + 0.5)),
+              meter: tenth(meter.width),
+              name,
+              overlap: tenth(Math.min(meter.bottom, reset.bottom) - Math.max(meter.top, reset.top)),
+              text: label.textContent?.trim() ?? '',
+              under: tenth(reset.top - Math.max(meter.bottom, chip.bottom)),
+            };
+          });
+        }),
+        view: window.innerWidth,
+      };
+    });
+  if (!mock && (await read()).rows.length === 0) {
+    measurements.push(`${theme} /quota meter row skipped: the seed draws no card`);
+    return;
+  }
+  const was = page.viewportSize();
+  for (const width of QUOTA_ROW_WIDTHS) {
+    await page.setViewportSize({ height: 900, width });
+    await settle();
+    const got = await read();
+    const at = `in a ${got.view}px window`;
+    const wide = got.view >= 900;
+    measurements.push(`${theme} /quota meter row ${at} ${JSON.stringify({ labels: wide ? 'beside the meter' : 'under the meter', meters: [...new Set(got.rows.map((r) => r.meter))], page: got.page, rows: got.rows.map((r) => [r.name, r.meter, r.overlap, r.under]) })}`);
+    if (got.rows.length === 0) say(`the story has subscription windows, yet no card draws them ${at}`);
+    for (const row of got.rows) {
+      const where = `${row.name}'s reset label ${JSON.stringify(row.text)} ${at}`;
+      if (wide && row.overlap <= 0) say(`${where} stands off its meter's row`);
+      if (wide && row.meter < 120) say(`${where} stands beside a meter of ${row.meter}px, under 120 px`);
+      if (!wide && row.under < -0.5) say(`${where} overlaps its meter's row by ${-row.under}px, where the label takes a row of its own under the meter`);
+      if (row.cut) say(`${where} is cut`);
+    }
+    if (got.page.scroll > got.page.client) say(`the page needs ${got.page.scroll}px of its ${got.page.client}px ${at}, so it scrolls sideways`);
+  }
+  await page.setViewportSize(was);
+  await settle();
 }
 
 /**
@@ -7276,8 +7507,12 @@ try {
         await quotaPollLines(theme);
         await quotaCardHeights(theme);
         await quotaMeters(theme);
+        await quotaMeterRow(theme);
       }
-      if (view.path === '/quota#quota-windows') await quotaLaneChips(theme);
+      if (view.path === '/quota#quota-windows') {
+        await quotaLaneChips(theme);
+        await timelinePhone(theme);
+      }
       // After the view's own measures, so the Routing log's first decision is open and its row reads over the stripes.
       await tableStripes(theme, view.path);
       // A full-page capture paints the fixed header and sidebar at the window's scroll offset, over the content, and

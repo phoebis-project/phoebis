@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import type { Account, ExtraUsage, QuotaPoll, QuotaSnapshot, RateLimitWindow } from '@/api/types';
@@ -353,6 +353,8 @@ function QuotaWindow({ end, name, window: w, now, soon }: { end: number | null; 
 /* Reset timeline */
 
 type Mode = 'session' | 'weekly';
+/** A bar label's fallback: 0 the whole label, 1 the share alone, 2 none, the bar's title keeping it. */
+type LabelStep = 0 | 1 | 2;
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 
@@ -404,14 +406,69 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
     const at = span.startMs + i * span.cellMs;
     const d = new Date(at);
     const dayStart = d.getHours() === 0;
+    const head = mode === 'weekly' ? d.toLocaleDateString('en-US', { weekday: 'short' }) : dayStart ? fmtDayShort(at) : '';
+    const day = d.toLocaleDateString('en-US', { day: 'numeric' });
+    const time = fmtShortTime(new Date(at).toISOString());
     return {
       at,
-      head: mode === 'weekly' ? d.toLocaleDateString('en-US', { weekday: 'short' }) : dayStart ? fmtDayShort(at) : '',
-      sub: mode === 'weekly' ? fmtDayShort(at) : fmtShortTime(new Date(at).toISOString()),
+      head,
+      shortHead: mode === 'weekly' ? head.charAt(0) : dayStart ? day : '',
+      shortSub: mode === 'weekly' ? day : time.replace(':00', ''),
+      sub: mode === 'weekly' ? fmtDayShort(at) : time,
       today: new Date(at).setHours(0, 0, 0, 0) === new Date(now).setHours(0, 0, 0, 0),
       weekend: [0, 6].includes(d.getDay()),
     };
   });
+
+  // Under 40 px, the width "Sep 13" takes in the axis's mono face, a day cell prints its short pair with the full words
+  // on its title. A cell no layout measured (jsdom) reads 0 and keeps the full pair.
+  const [narrow, setNarrow] = useState(false);
+  // Each bar label's step, keyed by its account and its start, since two lanes can open a window at the same instant.
+  const [steps, setSteps] = useState<ReadonlyMap<string, LabelStep>>(() => new Map());
+  const chartRef = useRef<HTMLDivElement>(null);
+  const cellsRef = useRef<HTMLDivElement>(null);
+  // Every label is shown whole for the reading and its hidden parts restored before paint, so a label that fell back on
+  // a narrow chart draws whole again once its bar holds it. A label no layout measured (jsdom) reads as fitting.
+  const measure = () => {
+    const cell = cellsRef.current?.firstElementChild?.getBoundingClientRect().width ?? 0;
+    setNarrow(cell > 0 && cell < 40);
+    const chart = chartRef.current;
+    if (chart === null) return;
+    // A live bar's label carries its reset as a part of its own, which the share-alone step hides.
+    const labels = [...chart.querySelectorAll<HTMLElement>('.lane__label')].map((label) => ({ hidden: label.hidden, label, reset: label.querySelector<HTMLElement>('.lane__label-reset') }));
+    const resetsHidden = labels.map(({ reset }) => reset?.hidden ?? false);
+    const show = (withReset: boolean) => {
+      for (const { label, reset } of labels) {
+        label.hidden = false;
+        if (reset !== null) reset.hidden = !withReset;
+      }
+    };
+    const cut = ({ label }: { label: HTMLElement }) => label.scrollWidth > label.clientWidth;
+    show(true);
+    const wholeCut = labels.map(cut);
+    show(false);
+    const shareCut = labels.map(cut);
+    labels.forEach(({ hidden, label, reset }, i) => {
+      label.hidden = hidden;
+      if (reset !== null) reset.hidden = resetsHidden[i];
+    });
+    const next = new Map<string, LabelStep>(labels.map(({ label, reset }, i) => [label.dataset.bar ?? '', !wholeCut[i] ? 0 : reset !== null && !shareCut[i] ? 1 : 2]));
+    setSteps((was) => (was.size === next.size && [...next].every(([key, step]) => was.get(key) === step) ? was : next));
+  };
+  const measureRef = useRef(measure);
+  // Every draw can move a bar or change its words (a mode switch, a period paged, a new reading), so each one measures
+  // again, and the observer covers a resize, since the tracks span the cells' width.
+  useLayoutEffect(() => {
+    measureRef.current = measure;
+    measure();
+  });
+  useEffect(() => {
+    const row = cellsRef.current;
+    if (row === null || typeof ResizeObserver !== 'function') return;
+    const observer = new ResizeObserver(() => measureRef.current());
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, []);
 
   const lanes = accounts
     .map((a) => ({ account: a, window: windowOf(a, mode === 'session' ? '5h' : '7d') }))
@@ -454,14 +511,14 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
         </div>
       </header>
 
-      <div className="timeline__chart">
+      <div ref={chartRef} className="timeline__chart">
         <div className="timeline__axis">
           <div className="timeline__axis-label">Account</div>
-          <div className="timeline__cells">
+          <div ref={cellsRef} className="timeline__cells">
             {cells.map((c) => (
-              <div key={c.at} className={`timeline__cell ${c.today ? 'is-today' : ''}`}>
-                <span className="timeline__cell-head">{c.head}</span>
-                <span className="timeline__cell-sub">{c.sub}</span>
+              <div key={c.at} className={`timeline__cell ${c.today ? 'is-today' : ''}`} title={narrow ? [c.head, c.sub].filter((part) => part !== '').join(' ') : undefined}>
+                <span className="timeline__cell-head">{narrow ? c.shortHead : c.head}</span>
+                <span className="timeline__cell-sub">{narrow ? c.shortSub : c.sub}</span>
               </div>
             ))}
           </div>
@@ -524,7 +581,8 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
                     const from = Math.max(b.start, span.startMs);
                     const to = Math.min(b.stop, span.endMs);
                     const wPct = ((to - from) / width) * 100;
-                    const showLabel = wPct > (mode === 'session' ? 5 : 9);
+                    const key = `${account.id} ${b.start}`;
+                    const step = steps.get(key) ?? 0;
                     // The fill is the window's used share placed from the window's start and cut to the drawn part,
                     // so a fill past the now line reads as ahead of pace and one short of it as behind. It draws only
                     // while the sample is current: an expired sample's bar is projected past its reset, and the
@@ -541,11 +599,20 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
                       >
                         {b.state === 'live' && share !== null && (
                           <span className="lane__clip">
-                            <span className={`lane__used lane__used--${meterTone(remainingOf(w))}`} style={{ width: `${used}%` }} />
+                            <span className="lane__used" style={{ width: `${used}%` }} />
                           </span>
                         )}
-                        {b.stop === b.end && b.end <= span.endMs && <span className="lane__reset-mark" aria-hidden />}
-                        {showLabel && <span className="lane__label">{b.state === 'live' && share ? `${share} · ${stamp(b.end)}` : stamp(b.end)}</span>}
+                        {/* A live bar's label falls back to its share alone, and a reset stamp alone straight to the title. */}
+                        {b.state === 'live' && share !== null ? (
+                          <span className="lane__label" data-bar={key} hidden={step === 2}>
+                            {share}
+                            <span className="lane__label-reset" hidden={step !== 0}> · {stamp(b.end)}</span>
+                          </span>
+                        ) : (
+                          <span className="lane__label" data-bar={key} hidden={step !== 0}>
+                            {stamp(b.end)}
+                          </span>
+                        )}
                       </div>
                     );
                   })}

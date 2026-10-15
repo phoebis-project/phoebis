@@ -1466,7 +1466,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   });
 }
 // The card chips' tones by account and window, read before the section switch hides the cards, for the timeline's
-// chips and fills to be read against: the cards and the lanes draw the three windows in one order.
+// chips to be read against: the cards and the lanes draw the three windows in one order.
 const cardToneOf = new Map([...m.container.querySelectorAll('.qcard')].map((c) => [c.querySelector('.qcard__name')?.textContent?.trim() ?? '', [...c.querySelectorAll('.qchip')].map((q) => [...q.classList].find((n) => n.startsWith('qchip--'))?.slice('qchip--'.length) ?? 'none')]));
 const cardTone = (label, window) => cardToneOf.get(label)?.[['5h', '7d', 'fable'].indexOf(window)] ?? 'no card chip';
 await quotaSection(m, 'Quota windows');
@@ -1545,7 +1545,13 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   const laneOf = (label) => [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === label);
   const accounts = await api.listAccounts();
   const expired = (w) => w.resetsAt !== null && Date.parse(w.resetsAt) < Date.now();
-  const toneOf = (fill) => [...(fill?.classList ?? [])].find((n) => n.startsWith('lane__used--'))?.slice('lane__used--'.length) ?? null;
+  // A fill draws in its account's color when it carries no class but its own and reads `--lane-color` from the lane
+  // whose dot, the account's swatch, reads it too: the nearest element that sets the color is the same for both.
+  const carrierOf = (el) => {
+    for (let at = el ?? null; at !== null; at = at.parentElement) if (at.style?.getPropertyValue('--lane-color')) return at;
+    return null;
+  };
+  const inLaneColor = (fill, lane) => fill !== null && fill !== undefined && fill.className === 'lane__used' && carrierOf(fill) === lane && carrierOf(lane?.querySelector('.lane__dot')) === lane;
   // The page's span: the weekly zoom opens three days before today's midnight and runs two weeks, the 5-hour zoom one
   // day before and three days.
   const fillOf = (label, windowId, days) => {
@@ -1557,7 +1563,7 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
     const to = from + (parseFloat(bar?.style.width ?? 'NaN') / 100) * days * DAY;
     const period = (w?.periodHours ?? 0) * 3_600_000;
     const usedEnd = Date.parse(w?.resetsAt ?? '') - period + Math.min(1, w?.utilization ?? 0) * period;
-    return { drawn: parseFloat(fills[0]?.style.width ?? 'NaN'), fills: fills.length, tone: toneOf(fills[0]), want: Math.max(0, (Math.min(usedEnd, to) - from) / (to - from)) * 100 };
+    return { classes: fills[0]?.className ?? null, color: inLaneColor(fills[0], laneOf(label)), drawn: parseFloat(fills[0]?.style.width ?? 'NaN'), fills: fills.length, want: Math.max(0, (Math.min(usedEnd, to) - from) / (to - from)) * 100 };
   };
   const weekly = fillOf('primary', '7d', 14);
   results.push({ name: "/quota the live bar of primary's lane fills to its window's used share on the weekly zoom", ok: weekly.fills === 1 && Math.abs(weekly.drawn - weekly.want) <= 0.5, missing: [JSON.stringify(weekly)] });
@@ -1565,11 +1571,11 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
     const label = l.querySelector('.lane__name')?.textContent?.trim() ?? '';
     const w = accounts.find((a) => a.label === label)?.windows.find((x) => x.id === '7d') ?? null;
     const bar = l.querySelector('.lane__bar--live');
-    return { fills: bar?.querySelectorAll('.lane__used').length ?? null, label, share: w !== null && !expired(w), tone: toneOf(bar?.querySelector('.lane__used')), utilization: w?.utilization ?? null, width: bar?.querySelector('.lane__used')?.style.width ?? null };
+    return { classes: bar?.querySelector('.lane__used')?.className ?? null, color: inLaneColor(bar?.querySelector('.lane__used'), l), fills: bar?.querySelectorAll('.lane__used').length ?? null, label, share: w !== null && !expired(w), utilization: w?.utilization ?? null, width: bar?.querySelector('.lane__used')?.style.width ?? null };
   });
   const withShare = lanes.filter((l) => l.share);
-  const fillOff = withShare.filter((l) => l.tone !== cardTone(l.label, '7d')).map((l) => `${l.label}: ${l.tone} where the card chip reads ${cardTone(l.label, '7d')}`);
-  results.push({ name: "/quota each live bar's fill on the weekly zoom carries the tone of the same account's 7-day card chip", ok: withShare.length > 0 && fillOff.length === 0, missing: fillOff });
+  const fillOff = withShare.filter((l) => !l.color).map((l) => `${l.label}: ${l.classes ?? 'no fill'}, not in its lane's color`);
+  results.push({ name: "/quota each live bar's fill on the weekly zoom draws in its account's color, the one its lane's dot draws, with no meter tone", ok: withShare.length > 0 && fillOff.length === 0, missing: fillOff });
   const alike = withShare.flatMap((a) => withShare.filter((b) => a.label < b.label && a.utilization !== b.utilization && a.width === b.width).map((b) => `${a.label} and ${b.label} at ${a.width}`));
   results.push({
     name: '/quota no two live bars of windows at different shares fill alike',
@@ -1584,7 +1590,7 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   zoom('Weekly');
   await m.settle();
   results.push({ name: "/quota the live bar of primary's lane fills to its window's used share on the 5-hour zoom", ok: session.fills === 1 && Math.abs(session.drawn - session.want) <= 0.5, missing: [JSON.stringify(session)] });
-  results.push({ name: "/quota the fill of primary's 5-hour bar carries the tone of its 5-hour card chip", ok: session.tone !== null && session.tone === cardTone('primary', '5h'), missing: [String(session.tone), cardTone('primary', '5h')] });
+  results.push({ name: "/quota the fill of primary's 5-hour bar draws in its account's color, the one its lane's dot draws, with no meter tone", ok: session.color, missing: [String(session.classes)] });
 }
 {
   // secondary is cancelled with its saved end five days after the anchor, inside the weekly zoom's current period, so
