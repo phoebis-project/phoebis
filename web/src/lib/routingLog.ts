@@ -1504,7 +1504,10 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
       h.waits.forEach((w, i) => {
         const final = i === h.waits.length - 1;
         const reason = w.reason === 'cap' ? slot : plain(w.reason === 'slow_down' ? 'for the slow-down' : w.reason === 'reset' ? 'for the reset' : words(w.reason));
-        const chips = [...on, reason, final ? ended(w.heldMs) : plain(span(w.heldMs), 'held'), ...(final ? ranOutChip : [])];
+        // The router fills the accounts waited on from the same holds in the same order, so each wait names its own.
+        const waited = h.waitedOn[i] ?? null;
+        const own = waited === null ? on : [accountChip(waited, 'on')];
+        const chips = [...own, reason, final ? ended(w.heldMs) : plain(span(w.heldMs), 'held'), ...(final ? ranOutChip : [])];
         rows.push({ chips, label: 'Hold', ...(w.reason === 'cap' ? { title: HOLD_HINT } : {}) });
       });
     }

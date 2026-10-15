@@ -808,6 +808,11 @@ test("a renewal after a slow-down hold reads the hold's label and one Hold row p
     [['on primary', 'cohort', 'held 2.0 s'], d.HOLD_HINT],
     [['on primary', 'for the slow-down', 'held 42 s'], undefined],
   ]);
+  // Each wait names the account it waited on: the slow-down's on its pin's account, then a slot's on the strategy's pick.
+  assert.deepEqual(rows({ cohort: null, heldMs: 44_000, waitedOn: ['studio', 'primary'], waits: [{ heldMs: 42_000, reason: 'slow_down' }, { heldMs: 2_000, reason: 'cap' }] }), [
+    [['on studio', 'for the slow-down', 'held 42 s'], undefined],
+    [['on primary', 'strategy pick', 'freed after 2.0 s'], d.HOLD_HINT],
+  ]);
   // A row written before the waits reads one row of the summed wait.
   assert.deepEqual(rows({ cohort: null, heldMs: 2_000, waitedOn: ['primary'], waits: [] }), [[['on primary', 'strategy pick', 'freed after 2.0 s'], d.HOLD_HINT]]);
 });
