@@ -177,12 +177,16 @@ function fastLaneReading(v: unknown): FastLaneReading | null {
   return { observedAt: isoOr(r.observed_at, epoch), resetsAt: isoOrNull(r.resets_at), utilization: num(r.utilization) };
 }
 
-/** "Max" or "Pro" from the typed subscription's plan; the tier's own label when the document has no flags. */
+/** The plan's name: the tier's parsed label ("Max 20x", "Max 5x", "Pro") where the pattern parses it, else "Max" or
+ *  "Pro" from the profile's flag, else null. */
 export function planName(sub: Subscription | null): string | null {
   if (sub === null) return null;
+  // `planLabel` answers a tier its pattern does not match unchanged, so a changed answer is the parsed one.
+  const parsed = sub.rateLimitTier ? planLabel(sub.rateLimitTier) : null;
+  if (parsed !== null && parsed !== sub.rateLimitTier) return parsed;
   if (sub.plan === 'max') return 'Max';
   if (sub.plan === 'pro') return 'Pro';
-  return sub.rateLimitTier ? planLabel(sub.rateLimitTier) : null;
+  return null;
 }
 
 export function decodeCatalogModel(v: unknown): CatalogModel {

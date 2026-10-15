@@ -5949,6 +5949,9 @@ async function addAccountDialog(theme) {
  * tokens heading beside it and its cells the type of the Name cells, the other plain text column; no row's levels
  * wrap and the table fits the dialog without scrolling. The mock pass writes the open popup's shot beside the
  * view's; the router's pass keeps to one shot per view, which its test counts.
+ *
+ * The first row's Model cell holds the id with no badge beside it, reads one line as its Name cell does, and keeps the
+ * Name cell's padding.
  */
 async function catalogDialog(theme) {
   const say = (what) => failures.push(`${theme} /accounts catalog: ${what}`);
@@ -5972,12 +5975,16 @@ async function catalogDialog(theme) {
       const heads = [...el.querySelectorAll('thead th')];
       const rows = [...el.querySelectorAll('tbody tr')];
       const wrap = el.querySelector('.table-wrap');
+      const [model, name] = [rows[0]?.firstElementChild, rows[0]?.children[1]];
       return {
         effortCell: cell(rows[0]?.lastElementChild),
         effortHead: cell(heads.at(-1)),
         headings: heads.map((h) => h.textContent?.trim()),
         levels: rows.map((r) => r.lastElementChild?.textContent?.trim()),
-        nameCell: cell(rows[0]?.children[1]),
+        // The id's own text is counted, since a range over the cell also takes the flex box around the id, whose top
+        // sits a pixel above the text's and would read as a second line.
+        modelCell: model ? { ...cell(model), badges: model.querySelectorAll('.badge').length, lines: lines(model.querySelector('.catalog__id') ?? model) } : null,
+        nameCell: name ? { ...cell(name), lines: lines(name) } : null,
         outputHead: cell(heads.find((h) => h.textContent?.trim() === 'Output tokens')),
         overflow: wrap ? wrap.scrollWidth - wrap.clientWidth : null,
         wrapped: rows.filter((r) => lines(r.lastElementChild) > 1).map((r) => r.firstElementChild?.textContent?.trim()),
@@ -5987,6 +5994,9 @@ async function catalogDialog(theme) {
     if (read.headings.at(-1) !== 'Effort levels') say(`the last heading reads ${JSON.stringify(read.headings.at(-1))}, not "Effort levels"`);
     failures.push(...compare(read.effortHead, read.outputHead, ['color', 'font', 'height', 'padding'], `${theme} /accounts catalog: the Effort levels heading against Output tokens`));
     failures.push(...compare(read.effortCell, read.nameCell, ['color', 'font', 'padding'], `${theme} /accounts catalog: an Effort levels cell against its Name cell`));
+    if (read.modelCell?.badges) say("the first row's Model cell draws a badge beside its id");
+    if (read.modelCell?.lines !== 1 || read.nameCell?.lines !== 1) say(`the first row's Model cell reads ${read.modelCell?.lines} lines and its Name cell ${read.nameCell?.lines}, not one each`);
+    failures.push(...compare(read.modelCell, read.nameCell, ['padding'], `${theme} /accounts catalog: the first row's Model cell against its Name cell`));
     if (read.wrapped.length) say(`the effort levels wrap on ${read.wrapped.join(', ')}`);
     if (read.overflow === null || read.overflow > 0) say(`the table runs ${read.overflow} px past the dialog`);
     await tableColumns(theme, 'accounts catalog', 'dialog[open] table', ['Model', 'Name']);

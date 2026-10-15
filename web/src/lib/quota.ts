@@ -166,15 +166,6 @@ export const STATUS_TONE: Record<Account['status'], BadgeTone> = {
   unpaired: 'neutral',
 };
 
-/** The Plan chip's word: the tier's name with its multiple where `planLabel` parses the tier, else the plan's own
- *  name from the profile's flag, so an unparsed tier still reads "Max" or "Pro". Null with no plan at all. */
-export function planChip(account: Pick<Account, 'plan' | 'subscription'>): string | null {
-  const tier = account.subscription?.rateLimitTier ?? '';
-  // `planLabel` answers a tier its pattern does not match unchanged, so a changed answer is the parsed one.
-  const parsed = tier === '' ? tier : planLabel(tier);
-  return parsed !== tier ? parsed : account.plan;
-}
-
 /** The Extra usage line's state: the serious `in_use`, or one of three quiet states drawn in the muted ink. */
 export type ExtraUsageState = 'disabled' | 'enabled' | 'in_use' | 'unreported';
 

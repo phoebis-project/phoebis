@@ -22,7 +22,7 @@ test('an account decodes with its windows, plan, pool, and models', () => {
   const a = d.decodeAccount(body);
   assert.equal(a.id, 'business');
   assert.equal(a.kind, 'oauth');
-  assert.equal(a.plan, 'Max', "the profile's plan flag names the plan, so the badge, the search and the chips read one name");
+  assert.equal(a.plan, 'Max 20x', "the parsed tier names the plan with its multiple, so the badge, the search and the chips read one name");
   assert.equal(d.decodeAccount({ ...body, subscription: { ...body.subscription, plan: null } }).plan, 'Max 20x', "a document without the flags reads the tier's own label");
   assert.equal(a.subscription.rateLimitTier, 'default_claude_max_20x');
   assert.deepEqual(
@@ -248,9 +248,11 @@ test('plan labels read the tier', () => {
   assert.equal(d.planLabel('something_else'), 'something_else');
 });
 
-test('plan names read the flag, then the tier, and nothing without either', () => {
+test('plan names read the parsed tier, then the flag, and nothing without either', () => {
   const sub = { billingType: '', organizationType: '', plan: null, rateLimitTier: '', since: null, trialEndsAt: null };
-  assert.equal(d.planName({ ...sub, plan: 'pro', rateLimitTier: 'default_claude_max_5x' }), 'Pro', 'the flag wins over the tier');
+  assert.equal(d.planName({ ...sub, plan: 'pro', rateLimitTier: 'default_claude_max_5x' }), 'Max 5x', 'the parsed tier wins over the flag');
+  assert.equal(d.planName({ ...sub, plan: 'max', rateLimitTier: 'some_new_tier' }), 'Max', 'a tier the pattern does not parse falls to the flag');
+  assert.equal(d.planName({ ...sub, rateLimitTier: 'some_new_tier' }), null, 'a tier the pattern does not parse names no plan without the flag');
   assert.equal(d.planName({ ...sub, rateLimitTier: 'claude_team' }), 'Team');
   assert.equal(d.planName(sub), null, 'an empty tier names no plan');
   assert.equal(d.planName(null), null);

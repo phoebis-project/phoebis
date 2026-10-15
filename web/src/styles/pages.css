@@ -1385,10 +1385,8 @@
   white-space: nowrap;
 }
 
-/* The id shrinks and cuts while its long-context badge keeps its own width, and the gap stands where a space would. */
 .catalog__model {
   display: flex;
-  gap: 4px;
   align-items: center;
   min-width: 0;
 }
@@ -1398,10 +1396,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.catalog__model > .badge {
-  flex: none;
 }
 
 .req-totals {

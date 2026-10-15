@@ -10,7 +10,7 @@ import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/comp
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinute, fmtPct, fmtRelative, fmtShortTime, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, isExpired, isSubscription, meterTone, paceWords, planChip, pollReading, projectionWords, remainingOf, remainingTimeShare, sortByPace, soonestReset, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, isExpired, isSubscription, meterTone, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, sortByPace, soonestReset, windowOf, type ExtraUsageState } from '@/lib/quota';
 
 type Sort = 'default' | 'pace5h' | 'pace7d' | 'paceWeek' | 'soonest';
 
@@ -194,7 +194,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   const w5 = windowOf(account, '5h');
   const w7 = windowOf(account, '7d');
   const end = endOf(account, now);
-  const plan = planChip(account);
+  const plan = account.plan;
   const trialEndsAt = account.subscription?.trialEndsAt ?? null;
   const endsAt = account.cancelled ? (account.subscription?.endsAt ?? null) : null;
   const soon = (at: string) => Date.parse(at) - now < 7 * DAY;

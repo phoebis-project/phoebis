@@ -11,13 +11,13 @@ test('a window is expired once its reset lies before now, never without a reset'
   assert.equal(d.isExpired(window(null), now), false, 'a window reported without a reset');
 });
 
-test("the plan chip names the tier with its multiple and falls back to the profile's flag", () => {
-  const chip = (plan, rateLimitTier) => d.planChip({ plan, subscription: { rateLimitTier } });
-  assert.equal(chip('Max', 'default_claude_max_20x'), 'Max 20x');
-  assert.equal(chip('Max', 'claude_max_5x'), 'Max 5x');
-  assert.equal(chip('Max', 'anything_else'), 'Max', 'a tier the console does not parse reads the flag');
-  assert.equal(chip(null, 'default_claude_ai'), 'Pro', 'the tier the profile reports for Pro, with no flag to fall back on');
-  assert.equal(d.planChip({ plan: null, subscription: null }), null, 'no plan at all');
+test("the plan's name carries the tier's multiple and falls back to the profile's flag", () => {
+  const name = (plan, rateLimitTier) => d.planName({ billingType: '', endsAt: null, organizationType: '', plan, rateLimitTier, since: null, trialEndsAt: null });
+  assert.equal(name('max', 'default_claude_max_20x'), 'Max 20x');
+  assert.equal(name('max', 'claude_max_5x'), 'Max 5x');
+  assert.equal(name('max', 'anything_else'), 'Max', 'a tier the console does not parse reads the flag');
+  assert.equal(name(null, 'default_claude_ai'), 'Pro', 'the tier the profile reports for Pro, with no flag to fall back on');
+  assert.equal(d.planName(null), null, 'no plan at all');
 });
 
 test('the extra usage line reads in use, enabled, disabled or unreported', () => {

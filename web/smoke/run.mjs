@@ -1846,7 +1846,7 @@ results.push({ name: 'nav calls the pages Accounts and Keys, and no text names t
   const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
   results.push({ name: 'nav has Quota after Dashboard and Sessions, the navigation lists no live view, Keepalive or Plugins', ok: JSON.stringify(nav) === JSON.stringify(['Dashboard', 'Quota', 'Accounts', 'Pools', 'Keys', 'Models', 'Requests', 'Analytics', 'Sessions', 'Settings']), missing: nav });
 }
-expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Identity', 'OAuth login', 'Max since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete account', 'Extra usage this month', 'Add account']);
+expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Identity', 'OAuth login', 'Max 20x since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete account', 'Extra usage this month', 'Add account']);
 {
   // An account belongs to one pool: the list row's foot names it or says there is none, and the Pool card holds the
   // one membership.
@@ -2548,7 +2548,7 @@ expect('/accounts/nightly', m.text(), ['in use', 'Overage since 2h 5']);
   const listed = await openCatalog();
   const heads = [...(listed?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
   const ids = [...(listed?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.querySelector('.catalog__id')?.textContent ?? '');
-  expect('/accounts/primary the catalog popup lists the live catalog', listed?.textContent ?? '', ['As of', 'Refresh', 'claude-sonnet-5', 'Claude Sonnet 5', 'long context', '1,000,000', '128,000']);
+  expect('/accounts/primary the catalog popup lists the live catalog', listed?.textContent ?? '', ['As of', 'Refresh', 'claude-sonnet-5', 'Claude Sonnet 5', '1,000,000', '128,000']);
   results.push({
     name: '/accounts/primary the catalog popup reads six columns, sorted by id',
     ok: JSON.stringify(heads) === JSON.stringify(['Model', 'Name', 'Released', 'Input tokens', 'Output tokens', 'Effort levels']) && ids.length > 1 && ids.every(Boolean) && ids.every((id, i) => i === 0 || ids[i - 1].localeCompare(id) <= 0),
