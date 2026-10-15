@@ -49,9 +49,22 @@ const PIN_GROUPS: GroupKeys[] = [
   { keys: ['idle_ms', 'refresh_age_ms'], label: 'Age' },
   { keys: ['warmth', 'cause', 'marked'], label: 'Warmth' },
 ];
+/**
+ * A key no group names falls to an unlabeled group, so every key the shed line writes has one. A projection's stamp and
+ * wait name their window but join the round, since they say why the round has not run yet.
+ */
 const SHED_GROUPS: GroupKeys[] = [
-  { keys: ['projection_five_hour', 'horizon_five_hour', 'projection_seven_day', 'horizon_seven_day', 'projection_seven_day_fable', 'horizon_seven_day_fable', 'ceiling', 'cooldown', 'window_share_fast'], label: 'Windows' },
-  { keys: ['trigger', 'excess', 'target', 'round', 'marked', 'marks', 'skipped'], label: 'Round' },
+  {
+    keys: ['projection_five_hour', 'horizon_five_hour', 'projection_seven_day', 'horizon_seven_day', 'projection_seven_day_fable', 'horizon_seven_day_fable', 'demand_five_hour', 'factor', 'slow_down', 'speed', 'ceiling', 'cooldown', 'window_share_fast'],
+    label: 'Windows',
+  },
+  {
+    keys: [
+      'trigger', 'excess', 'fired_by', 'over_ms', 'over_since', 'over_since_five_hour', 'wait_five_hour', 'over_since_seven_day', 'wait_seven_day', 'over_since_seven_day_fable', 'wait_seven_day_fable', 'stretch_ms', 'threshold_ms',
+      'target', 'round', 'marked', 'marks', 'skipped',
+    ],
+    label: 'Round',
+  },
   { keys: ['destinations', 'no_destination', 'ending'], label: 'Destinations' },
 ];
 /** A version 1 record's shed rule read the lead over pace. */
@@ -64,7 +77,9 @@ const RENEW_GROUPS: GroupKeys[] = [
   { keys: ['lane'], label: 'Lane' },
   { keys: ['refresh_stamped', 'hashes_stamped'], label: 'Stamps' },
 ];
-const GROUPS_OF: Record<string, GroupKeys[]> = { 'move:shed': SHED_GROUPS, partitions: [{ keys: PARTITION_FACTS, label: null }], pin: PIN_GROUPS, renew: RENEW_GROUPS };
+/** The return rule's mode decides which of the facts after it the rule read, so it reads first. */
+const RETURN_GROUPS: GroupKeys[] = [{ keys: ['mode', 'kind', 'cold', 'dwell_age_ms', 'dwell_ms', 'destinations', 'no_destination', 'ending'], label: null }];
+const GROUPS_OF: Record<string, GroupKeys[]> = { 'move:return_to_plan': RETURN_GROUPS, 'move:shed': SHED_GROUPS, partitions: [{ keys: PARTITION_FACTS, label: null }], pin: PIN_GROUPS, renew: RENEW_GROUPS };
 const LEGACY_GROUPS_OF: Record<string, GroupKeys[]> = { ...GROUPS_OF, 'move:shed': LEGACY_SHED_GROUPS, partitions: [{ keys: LEGACY_PARTITION_FACTS, label: null }] };
 /**
  * The Fit table's columns: the projection, the rewrite and the reserved share of every window the gate read, window by

@@ -132,7 +132,7 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
                           </td>
                         ))
                       )}
-                      <td className="num decision-card__window">
+                      <td className="num decision-card__window" title={cells.projectionTitle ?? undefined}>
                         {cells.projection.map((line, j) => (
                           <span key={j} className={line === '-' ? 'muted' : undefined}>
                             {line}

@@ -3332,7 +3332,7 @@ const BAR_CHIPS = {
   '/analytics': '?accounts=primary&keys=laptop&models=claude-opus-5&pools=jobs&probes=1',
   '/keys': '?pools=all,jobs&status=active',
   '/requests': '?accounts=primary&keys=laptop&models=claude-opus-5&pools=jobs&statuses=200',
-  '/routing-log': '?accounts=primary&keys=laptop&kinds=moved,held,shedding_round,mark_cleared,wind_down_started&models=claude-opus-5&pools=jobs',
+  '/routing-log': '?accounts=primary&keys=laptop&kinds=moved,held,shedding_round,mark_cleared,wind_down_started,slow_down_started,slow_down_ended&models=claude-opus-5&pools=jobs',
 };
 /** A view whose row draws no search holds its slots under this width at rest, far from a second line. */
 const ROW_BOUND = {
@@ -3481,7 +3481,7 @@ async function barRow(theme, view) {
 }
 
 /**
- * The Kinds list through Add filter on the routing log at 1280 by 800, Select all, the eight presets and the 37 kinds:
+ * The Kinds list through Add filter on the routing log at 1280 by 800, Select all, the eight presets and the 39 kinds:
  * its popover keeps 8 px inside the window above and below, where the list scrolls. Records the box.
  */
 async function kindsPopoverInside(theme) {
@@ -3500,7 +3500,7 @@ async function kindsPopoverInside(theme) {
   measurements.push(`${theme} /routing-log kinds popover inside ${JSON.stringify(read)}`);
   if (read === null) say('did not open');
   else {
-    if (read.rows !== 46) say(`lists ${read.rows} rows, not Select all, the eight presets and the 37 kinds`);
+    if (read.rows !== 48) say(`lists ${read.rows} rows, not Select all, the eight presets and the 39 kinds`);
     if (read.top < 8 || read.bottom > read.view - 8) say(`spans ${read.top} to ${read.bottom} px, outside the ${read.view} px window less 8 px above and below`);
   }
   await page.keyboard.press('Escape');
@@ -5091,9 +5091,10 @@ async function stripIdleContrast(theme) {
  * viewports, and every station's and way out's word holds the card's muted contrast with an idle way out among them,
  * read on the seeded router's first card and on the mock's fresh placement, whose Pick station the mock pass then opens
  * and closes by Enter, Escape, Space and Escape. The shed move's shed station's popover keeps inside the window less 8
- * px above and below at both viewports and in a window shorter than its content, where it scrolls. One Escape over the
- * Add filter popover open on its Account step closes a hovered station's popover and the Add filter popover alike, on
- * the seeded router's first card's host station and on the mock's fresh placement's Pick station.
+ * px above and below at both viewports and in a window shorter than its content, where it scrolls, and the stretch
+ * round's, its Round group holding the stretch's rows, at 1280 by 800. One Escape over the Add filter popover open on
+ * its Account step closes a hovered station's popover and the Add filter popover alike, on the seeded router's first
+ * card's host station and on the mock's fresh placement's Pick station.
  */
 async function decisionCard(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -5327,14 +5328,18 @@ async function decisionCard(theme) {
   await popoverBounds(theme, "the fresh placement's Pick station", async (card) => card.locator('.strip-station[data-station="pick"]'));
   await stationKeys(theme, "the fresh placement's Pick station", page.locator('.routing-log__panel .decision-card').last().locator('.strip-station[data-station="pick"]'));
   await escapeReachesFilter(theme, "the fresh placement's Pick station", page.locator('.routing-log__panel .decision-card').last().locator('.strip-station[data-station="pick"]'));
-  // The story's cards for the gate and the reservation, each on its request's page a quarter hour either side of its
-  // decision, which the mock dates back from its load: their strips' words and pointers at 1280 by 800.
-  for (const { ago, id, seq, what } of [
+  // The story's cards for the gate, the reservation and the slow-down, each on its request's page a quarter hour either
+  // side of its decision, which the mock dates back from its load: their strips' words and pointers at 1280 by 800, and
+  // the shed station's popover of the round the stretch fired, whose Round group holds the stretch's rows.
+  for (const { ago, id, seq, shed, what } of [
     { ago: (79 * 60 + 39) * 1_000, id: 'req_9d4c1a73-e58', seq: 2, what: 'spent move held for the reset' },
     { ago: (3 * 3_600 + 28 * 60 + 10) * 1_000, id: 'req_5b2e8d47-c19', seq: 1, what: 'least-bad move' },
     { ago: (17 * 60 + 30) * 1_000, id: 'req_6e1f3b98-a24', seq: 1, what: 'round that marked nothing' },
     { ago: 45 * 60_000, id: 'req_2c7d9f15-b63', seq: 1, what: 'spare-rate placement' },
     { ago: (48 * 60 + 45) * 1_000, id: 'req_7a3f0c26-d81', seq: 1, what: 'booked placement' },
+    { ago: (25 * 60 + 42) * 1_000, id: 'req_9f2e7c5a-c49', seq: 1, what: 'slowed request' },
+    { ago: 25 * 60_000, id: 'req_9f2e7c5a-c49', seq: 2, shed: true, what: 'round fired by the stretch' },
+    { ago: (22 * 60 + 9) * 1_000, id: 'req_b8c3e9d4-e61', seq: 2, what: 'failover landing' },
   ]) {
     const at = (await page.evaluate(() => Date.now())) - ago;
     await page.goto(`${base}/routing-log?request=${id}&from=${new Date(at - quarter).toISOString()}&to=${new Date(at + quarter).toISOString()}`);
@@ -5347,6 +5352,7 @@ async function decisionCard(theme) {
     }
     await stripWords(theme, `the ${what}'s card`);
     await stripPointer(theme, `the ${what}'s card`);
+    if (shed) await shedPopoverHeight(theme, `the ${what}'s card`, false);
   }
 }
 

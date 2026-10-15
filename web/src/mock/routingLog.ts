@@ -389,8 +389,12 @@ const SLOW_READS: { accountId: string; from: number; poolId: string; read: SlowR
     : [{ accountId: 'studio', from: clock(14, 5), poolId: 'work', read: { demand: studioDemand, factor: studioSlowed.factor, overSince: clock(14, 2, 30), reset: clock(15, 29), speed: studioSlowed.speed, stretchMs: studioSlowed.stretchMs } }]),
 ];
 
-/** The account's slow-down read on the shed line, on a pool that slows its pins and for an account it has read. */
+/**
+ * The account's slow-down read on the shed line, on a pool that slows its pins and for an account it has read, and the
+ * switch alone on a pool that does not.
+ */
 function slowFactsOf(source: RecordCandidate | undefined, pool: PoolSeed, at: number): WalkFact[] {
+  if (!pool.slowDown) return [fact('slow_down', 'off')];
   const read = source ? slowReadAt(source.accountId, pool, at) : null;
   if (!source || read === null) return [];
   return [
@@ -739,7 +743,7 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
     return none;
   }
   if (trigger !== null) {
-    facts.push(fact('trigger', trigger.window), ...(trigger.slowed ? [fact('fired_by', 'slow_down')] : []), fact('excess', trigger.excess, 'percent_per_hour'));
+    facts.push(fact('trigger', trigger.window), fact('fired_by', trigger.slowed ? 'slow_down' : 'projection'), fact('excess', trigger.excess, 'percent_per_hour'));
     if (spec.round) {
       const round = roundOf(spec.round, trigger.excess, pool);
       facts.push(fact('round', 'ran'), fact('target', round.target, 'percent_per_hour'), fact('marks', spec.round.marks.map(pinText)), fact('skipped', round.skipped));
@@ -1048,8 +1052,8 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
         for (const c of move.reached) c.inFlight = c.inFlightCap;
         move = moveOf(spec, candidates, pool, source, pin);
       }
-      // On a pool that slows its pins the shed line carries the account's read, whichever rule answered.
-      const pace = slowFactsOf(source, pool, spec.at);
+      // The shed line carries the account's read whichever rule answered, save a probe's, which reads none.
+      const pace = r.kind === 'probe' ? [] : slowFactsOf(source, pool, spec.at);
       walk.push(...move.lines.map((line) => (line.step === 'move:shed' ? { ...line, facts: [...line.facts, ...pace] } : line)));
       if (move.fired !== null) {
         walk.push(step('cap_filter', move.destinations.some((c) => c.inFlight < c.inFlightCap) ? 'passed' : 'dropped', move.destinations.map((c) => fact('in_flight', `${c.inFlight}/${c.inFlightCap}`, 'count', c.accountId))));

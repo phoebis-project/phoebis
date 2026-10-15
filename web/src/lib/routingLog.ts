@@ -6,11 +6,12 @@ import { compareByModelTier } from './costs';
 import type { ChipText } from './filterBar';
 import { fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, shortModel } from './format';
 import { planLabel, POLL_OUTCOME_LABEL } from './quota';
+import { speedWord } from './selection';
 
 // The routing log's words. The routes answer structured values and no English, so a label change touches this module
 // alone and never a route or a fixture.
 
-export type FactLabel = '5h' | '7d' | 'Fable' | 'answer' | 'attempt' | 'capture' | 'cause' | 'client' | 'depth' | 'epoch' | 'field' | 'fields' | 'fit' | 'gap' | 'held' | 'idle' | 'in flight' | 'key' | 'lasted' | 'models' | 'next' | 'over' | 'pick' | 'pins' | 'prefix' | 'rank' | 'resets' | 'retry' | 'runway' | 'spent' | 'state' | 'to' | 'turn' | 'until' | 'was';
+export type FactLabel = '5h' | '7d' | 'Fable' | 'answer' | 'attempt' | 'capture' | 'cause' | 'client' | 'depth' | 'epoch' | 'field' | 'fields' | 'fit' | 'gap' | 'held' | 'idle' | 'in flight' | 'key' | 'lasted' | 'models' | 'next' | 'over' | 'pick' | 'pins' | 'prefix' | 'rank' | 'resets' | 'retry' | 'runway' | 'slow-down' | 'slowest' | 'speed' | 'spent' | 'state' | 'to' | 'turn' | 'until' | 'was';
 
 const LABELS = {
   answer: 'answer',
@@ -20,6 +21,8 @@ const LABELS = {
   client: 'client',
   depth: 'depth',
   epoch: 'epoch',
+  factor: 'speed',
+  factor_min: 'slowest',
   field: 'field',
   fields: 'fields',
   fit: 'fit',
@@ -42,6 +45,7 @@ const LABELS = {
   runway: 'runway',
   seven_day: '7d',
   seven_day_fable: 'Fable',
+  slow_down: 'slow-down',
   spent: 'spent',
   state: 'state',
   to: 'to',
@@ -154,6 +158,8 @@ export const EVENT_KIND_LABEL: Record<string, string> = {
   reservation_expired: 'reservation expired',
   router_started: 'router started',
   shedding_round: 'shedding round',
+  slow_down_ended: 'slow-down ended',
+  slow_down_started: 'slow-down started',
   warm_prefix_expired: 'warm prefix expired',
   wind_down_started: 'wind-down started',
   window_reset: 'window reset',
@@ -169,7 +175,7 @@ export interface KindPreset {
 /** The eight groups of related kinds, in the order a reader follows a request. Every kind belongs to exactly one, and a preset is exactly its members. */
 export const KIND_PRESETS: readonly KindPreset[] = [
   { label: 'placements and pins', members: ['placed', 'renewed', 'pin_created', 'pin_migrated', 'pin_released', 'pin_expired', 'reservation_expired'] },
-  { label: 'moves and holds', members: ['moved', 'held', 'shedding_round', 'mark_cleared', 'wind_down_started'] },
+  { label: 'moves and holds', members: ['moved', 'held', 'shedding_round', 'mark_cleared', 'wind_down_started', 'slow_down_started', 'slow_down_ended'] },
   { label: 'exhaustion and refusals', members: ['exhausted', 'refused', 'window_spent', 'budget_reached'] },
   { label: 'account state and windows', members: ['account_state_changed', 'window_reset', 'overage_started', 'overage_ended', 'budget_period_ended', 'fast_credits_changed', 'refresh_failed', 'refresh_succeeded', 'refresh_uncertain'] },
   { label: 'cooldowns and backoff', members: ['cooldown_set', 'cooldown_cleared', 'poll_backoff_started', 'poll_backoff_ended'] },
@@ -178,7 +184,7 @@ export const KIND_PRESETS: readonly KindPreset[] = [
   { label: 'router life cycle', members: ['router_started', 'ledger_gap'] },
 ];
 
-/** Every kind the Kinds list offers: the six decision kinds, `probe`, and the 30 event kinds. */
+/** Every kind the Kinds list offers: the six decision kinds, `probe`, and the 32 event kinds. */
 export const ALL_KINDS: readonly string[] = [...Object.keys(DECISION_KIND_LABEL), 'probe', ...Object.keys(EVENT_KIND_LABEL)];
 
 /** A kind's word: "probe decisions" for the pseudo-kind, else its label. */
@@ -211,6 +217,7 @@ const EVENT_TONE: Record<string, 'critical' | 'serious' | 'warning'> = {
   cooldown_set: 'warning',
   ledger_gap: 'serious',
   model_rejected: 'warning',
+  slow_down_started: 'warning',
   window_spent: 'warning',
 };
 
@@ -377,7 +384,7 @@ function decisionBy(row: DecisionSummary): Chip {
     case 'exhaustion':
       return { value: exhaustionWord(row) };
     case 'hold':
-      return value === 'strategy_pick' ? strategyChip(row.strategy, row.tier) : { value: words(value) };
+      return value === 'strategy_pick' ? strategyChip(row.strategy, row.tier) : { value: value === 'slow_down' ? LABELS.slow_down : words(value) };
     case 'none':
       return { value: 'no rule fired' };
     case 'refusal':
@@ -513,6 +520,9 @@ function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
       const reading = num(d.utilization);
       return { value: reading === null ? `on ${wordOf(WINDOW_WORD, window)}` : `${fmtPct(reading)} on ${wordOf(WINDOW_WORD, window)}` };
     }
+    case 'slow_down_ended':
+    case 'slow_down_started':
+      return { value: LABELS.slow_down };
     case 'warm_prefix_expired': {
       const ttl = num(rec(d.deepest).ttl_ms);
       return { value: ttl === null ? 'expired' : `${span(ttl)} tier` };
@@ -635,6 +645,12 @@ function eventFacts(e: RoutingEvent, now: number, page: readonly RoutingLogRow[]
       return count('pins', d.pins_loaded);
     case 'shedding_round':
       return [pair('pins', `${list(d.marks).length} of ${list(d.pins).length}`, 'text', now)];
+    case 'slow_down_ended':
+    case 'slow_down_started': {
+      const key = e.kind === 'slow_down_started' ? 'factor' : 'factor_min';
+      const factor = num(d[key]);
+      return factor === null ? [] : [pair(key, speedWord(factor), 'text', now)];
+    }
     case 'warm_prefix_expired': {
       const deepest = rec(d.deepest);
       const tokens = num(deepest.prefix_tokens);
@@ -654,9 +670,13 @@ function eventFacts(e: RoutingEvent, now: number, page: readonly RoutingLogRow[]
   }
 }
 
+/** A speed, the factor or the one the holds realize, reads as the speed chips print it wherever it stands. */
+const SPEED_KEYS = new Set(['factor', 'factor_min', 'speed']);
+
 function decisionFacts(row: DecisionSummary, now: number): FactPair[] {
+  const value = (f: DecisionSummary['fact'][number]) => (SPEED_KEYS.has(f.key) && typeof f.value === 'number' ? speedWord(f.value) : formatFact(f.value, f.unit, now));
   // A key the console has no label for is dropped rather than drawn under a guessed one.
-  return row.fact.flatMap((f) => (own(LABELS, f.key) && !repeatsAt(row, f.unit, f.value) ? [{ entity: f.entity, label: LABELS[f.key as FactKey], value: formatFact(f.value, f.unit, now) }] : []));
+  return row.fact.flatMap((f) => (own(LABELS, f.key) && !repeatsAt(row, f.unit, f.value) ? [{ entity: f.entity, label: LABELS[f.key as FactKey], value: value(f) }] : []));
 }
 
 /**
@@ -827,20 +847,33 @@ export const WALK_KEY: Record<string, string> = {
   burn_five_hour: 'burn 5h',
   burn_seven_day: 'burn 7d',
   burn_seven_day_fable: 'burn Fable',
+  by_runway: 'by runway',
+  cycle_ms: 'cycle',
   deadline_five_hour: "5h to its subscription's end at",
   deadline_seven_day: "7d to its subscription's end at",
+  demand_five_hour: 'demand',
   dwell_age_ms: 'dwell age',
+  dwell_ms: 'dwell',
   elapsed_five_hour: '5h elapsed',
   elapsed_seven_day: '7d elapsed',
   excess: 'excess',
   expires_at: 'expires at',
+  factor: 'speed',
+  fired_by: 'fired by',
   grace_ms: 'grace',
   horizon_five_hour: 'horizon 5h',
   horizon_seven_day: 'horizon 7d',
   horizon_seven_day_fable: 'horizon Fable',
   idle_ms: 'idle',
+  ladder: 'ladder',
   last_shed_age_ms: 'last round',
   migrate_when_spent: 'move when spent',
+  mode: 'mode',
+  over_ms: 'over for',
+  over_since: 'over since',
+  over_since_five_hour: 'over since 5h',
+  over_since_seven_day: 'over since 7d',
+  over_since_seven_day_fable: 'over since Fable',
   prefix_tokens: 'prefix',
   projection_five_hour: 'projection 5h',
   projection_seven_day: 'projection 7d',
@@ -854,8 +887,16 @@ export const WALK_KEY: Record<string, string> = {
   rewrite_seven_day: 'rewrite 7d',
   rewrite_seven_day_fable: 'rewrite Fable',
   runway_ms: 'runway',
+  slow_down: 'slow-down',
+  slow_down_until: 'slowed until',
+  speed: 'realized',
+  stretch_ms: 'stretch',
+  threshold_ms: 'threshold',
   trigger: 'trigger',
+  wait_five_hour: 'wait 5h',
   wait_ms: 'wait',
+  wait_seven_day: 'wait 7d',
+  wait_seven_day_fable: 'wait Fable',
   worst_bucket: 'worst bucket',
 };
 export const keyWord = (key: string) => wordOf(WALK_KEY, key);
@@ -882,6 +923,8 @@ function textWord(key: string, value: string): string {
     case 'trigger':
     case 'window':
       return wordOf(WINDOW_WORD, value);
+    case 'fired_by':
+      return wordOf(LABELS, value);
     default:
       return SNAKE.test(value) ? words(value) : value;
   }
@@ -894,6 +937,7 @@ export const valueText = (key: string, value: unknown, unit: string | null, now:
   if (value === null || value === undefined) return 'none';
   if (typeof value === 'boolean') return value ? 'yes' : 'no';
   if (typeof value === 'number' && key === 'runway_ms' && value === 0) return 'none';
+  if (typeof value === 'number' && SPEED_KEYS.has(key)) return speedWord(value);
   if (typeof value === 'number' && unit === 'percent' && SHARE_KEY.test(key)) return fmtShare(value);
   if (typeof value === 'number') return formatFact(value, unitOf(unit), now);
   if (typeof value === 'string') return unit === 'time' ? formatFact(value, 'time', now) : textWord(key, value);
@@ -1093,6 +1137,8 @@ function shareChips(shares: Record<string, unknown>): Chip[] {
 
 /** `for the reset at 18:20`, or the reset alone where the hold carried no instant. */
 const resetWords = (hold: NonNullable<RecordOutcome['hold']>, now: number) => (hold.until === null ? 'for the reset' : `for the reset at ${formatFact(hold.until, 'time', now)}`);
+/** `for the slow-down until 18:20`, the pin's deadline, or the slow-down alone where the hold carried none. */
+const slowDownWords = (hold: NonNullable<RecordOutcome['hold']>, now: number) => (hold.until === null ? 'for the slow-down' : `for the slow-down until ${formatFact(hold.until, 'time', now)}`);
 
 /** The tier, the rule or the rung, the pin's warmth and the cache verdict once the attempt has usage. */
 export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip[] {
@@ -1112,6 +1158,10 @@ export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip
     if (rung !== null) chips.push({ ...(rung.rung === 'with_main' ? plain(RUNG_WORD.with_main) : plain(`depth ${rung.depth}`, RUNG_WORD[rung.rung])), title: placed });
   }
   if (o.kind === 'held' && o.hold?.reason === 'reset') chips.push(plain(`held ${resetWords(o.hold, Date.parse(record.request.at))}`));
+  if (o.kind === 'held' && o.hold?.reason === 'slow_down') {
+    chips.push(plain(`held ${slowDownWords(o.hold, Date.parse(record.request.at))}`));
+    if (o.hold.factor !== null) chips.push(plain(speedWord(o.hold.factor)));
+  }
   // The chip names the first plan window the booking holds a share of, the 5-hour one wherever it does.
   const booked = o.reservation === null ? undefined : WINDOWS.find((w) => num(o.reservation?.rewrite[w]) !== null);
   if ((o.kind === 'moved' || o.kind === 'placed') && o.reservation !== null && booked !== undefined) chips.push(plain(`reserved ${fmtShare(o.reservation.rewrite[booked])} of ${WINDOW_WORD[booked]}`));
@@ -1284,15 +1334,27 @@ function projectionLines(c: RecordCandidate, record: DecisionRecord, now: number
   return lines.length > 0 ? lines : ['-'];
 }
 
+/**
+ * The Projection cell's hover where a slowed account's demand differs from the burn its sessions achieve: the demand,
+ * the burn and the speed the account is held to, which the projection does not show.
+ */
+function projectionTitle(c: RecordCandidate, now: number): string | null {
+  const demand = own(c.windows, 'five_hour') ? (c.windows.five_hour.demand ?? null) : null;
+  const burn = num(c.burn.five_hour);
+  if (demand === null || burn === null || demand === burn) return null;
+  return `demand ${formatFact(demand, 'percent_per_hour', now)} over burn ${formatFact(burn, 'percent_per_hour', now)}${c.factor === null ? '' : ` at ${speedWord(c.factor)}`}`;
+}
+
 /** The time a pin could stay before its window that binds reaches the ceiling, unbounded where nothing binds. */
 const runwayWord = (c: RecordCandidate) => (c.fit === null ? '-' : c.runwayMs === null ? 'unbounded' : c.runwayMs === 0 ? 'none' : span(c.runwayMs));
 
 /**
  * One member's row of the candidate table: the account and its plan, the tier, the three windows (or a key's one
- * merged reading), the projection and the runway the gate read, the slots, the Pace score with its hover, the prefix
- * entry and the verdict with the one chip that decided it. A chip that names the destination's fit carries its tone.
+ * merged reading), the projection with the demand on its hover and the runway the gate read, the slots, the Pace score
+ * with its hover, the prefix entry and the verdict with the one chip that decided it. A chip that names the
+ * destination's fit carries its tone.
  */
-export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: number): { account: Chip; inFlight: string; pace: string; paceTitle: string | null; plan: string; prefix: { hash: PrefixEntry | null; until: string | null }; projection: string[]; runway: string; tier: string; verdict: { badge: string; chip: Chip | null; tone: VerdictTone | null }; windows: string[][] } {
+export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: number): { account: Chip; inFlight: string; pace: string; paceTitle: string | null; plan: string; prefix: { hash: PrefixEntry | null; until: string | null }; projection: string[]; projectionTitle: string | null; runway: string; tier: string; verdict: { badge: string; chip: Chip | null; tone: VerdictTone | null }; windows: string[][] } {
   const atCap = c.verdict === 'out' && (c.partition === 'at_cap' || c.obstacle?.name === 'at_cap');
   const badge = c.verdict === 'ranked' && c.rank !== null ? `ranked ${ordinal(c.rank)}` : atCap ? 'at cap' : wordOf(VERDICT_BADGE, c.verdict);
   const windows =
@@ -1312,6 +1374,7 @@ export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: 
     plan: planWord(c),
     prefix: { hash: entry, until: entry === null ? null : warmUntil(entry, now) },
     projection: projectionLines(c, record, now),
+    projectionTitle: projectionTitle(c, now),
     runway: runwayWord(c),
     tier: `${tierWord(c.tier, c.kind, 'plan')} P${c.tier[1]}`,
     verdict: { badge, ...verdictChipOf(c, now) },
@@ -1339,20 +1402,25 @@ export const SETTINGS_ROWS: { key: SettingKey; label: string }[] = [
   { key: 'loadShedding', label: 'Load shedding' },
   { key: 'migrateWhenSpent', label: 'Move when spent' },
   { key: 'overageMoveGraceMinutes', label: 'Overage grace' },
+  { key: 'returnToPlan', label: 'Return to plan' },
+  { key: 'returnToPlanDwellSeconds', label: 'Return dwell' },
   { key: 'windDownMinutes', label: 'Wind-down' },
   { key: 'shedCap', label: 'Shed cap' },
   { key: 'burnAverageSeconds', label: 'Burn average' },
   { key: 'shedDwellSeconds', label: 'Shed dwell' },
+  { key: 'slowDown', label: 'Slow-down' },
+  { key: 'slowDownStretchSeconds', label: 'Stretch' },
+  { key: 'slowDownHoldSeconds', label: 'Hold' },
   { key: 'warmSessions', label: 'Warm sessions' },
   { key: 'inFlightCap', label: 'In-flight cap' },
   { key: 'retryInPlaceSeconds', label: 'Retry in place' },
 ];
 
-const SECONDS: readonly SettingKey[] = ['affinityTtlSeconds', 'burnAverageSeconds', 'retryInPlaceSeconds', 'shedDwellSeconds'];
+const SECONDS: readonly SettingKey[] = ['affinityTtlSeconds', 'burnAverageSeconds', 'retryInPlaceSeconds', 'returnToPlanDwellSeconds', 'shedDwellSeconds', 'slowDownHoldSeconds', 'slowDownStretchSeconds'];
 const MINUTES: readonly SettingKey[] = ['overageMoveGraceMinutes', 'windDownMinutes'];
 const SHARES: readonly SettingKey[] = ['shedCap', 'windowCeiling'];
-/** The two settings a version 1 record carried no value for, since the pool had neither when it was written. */
-const UNRECORDED: readonly SettingKey[] = ['loadShedding', 'windowCeiling'];
+/** The settings a record from before carries no value for, since its pool had none of them when it was written. */
+const UNRECORDED: readonly SettingKey[] = ['loadShedding', 'returnToPlan', 'returnToPlanDwellSeconds', 'slowDown', 'slowDownHoldSeconds', 'slowDownStretchSeconds', 'windowCeiling'];
 
 /** One setting's value as the grid draws it: a span, a share, `on` or `off`, or the setting's word. */
 export function settingValue(key: SettingKey, settings: RecordSettings): string {
@@ -1362,6 +1430,8 @@ export function settingValue(key: SettingKey, settings: RecordSettings): string 
   if (v === null) return 'off';
   if (typeof v === 'boolean') return v ? 'on' : 'off';
   if (typeof v === 'number') {
+    // Under `always` a return dwell of 0 returns a warm pin at once, where a zero span elsewhere turns its rule off.
+    if (key === 'returnToPlanDwellSeconds' && v === 0) return 'at once';
     if (SECONDS.includes(key)) return v === 0 ? 'off' : span(v * 1_000);
     if (MINUTES.includes(key)) return span(v * MINUTE);
     if (SHARES.includes(key)) return fmtPct(v);
@@ -1375,12 +1445,16 @@ export function settingValue(key: SettingKey, settings: RecordSettings): string 
 const EXHAUSTION_STATUS: Record<string, number> = { fast_credits: 429, fast_lane: 429, model_rejected: 404, timed: 429 };
 export const PLACE_WORD: Record<string, string> = { strategy_pick: 'strategy pick' };
 
-/** The card's outcome: Pin written, Cache-map entries, Cache read, Hold, Answer and Spend, each where it applies. */
+/**
+ * The card's outcome: Cause, Pin written, Cache-map entries, Cache read, Hold, Answer and Spend, each where it applies.
+ * A failover's landing records a placement, so the Cause row follows the cause whatever the outcome's kind.
+ */
 export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionSummary): CardRow[] {
   const o = record.outcome;
   const c = o.completion;
   const at = Date.parse(record.request.at);
   const rows: CardRow[] = [];
+  if (o.cause) rows.push({ chips: [plain(causeWords(o.cause))], label: 'Cause' });
   if (o.pinWritten !== null && o.accountId !== null) {
     rows.push({ chips: [accountChip(o.accountId, `${o.pinWritten.action} on`), plain(fmtInt(o.pinWritten.epoch), 'epoch'), ...(o.pinWritten.refreshStamped ? [plain(fmtTime(record.request.at), 'refresh')] : [])], label: 'Pin written' });
   }
@@ -1415,6 +1489,16 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
   if (o.hold !== null && o.hold.reason === 'reset') {
     // The pin waits on its own account for the window to reset rather than for a slot.
     rows.push({ chips: [accountChip(o.hold.accountId, 'on'), plain(resetWords(o.hold, now)), plain(span(o.hold.boundMs), 'bound'), ...ranOutChip], label: 'Hold' });
+  } else if (o.hold !== null && o.hold.reason === 'slow_down') {
+    // The pin waits for its deadline rather than for a slot. A rejoin on a pool whose switch is off read no figures.
+    const h = o.hold;
+    const figures = [
+      ...(h.factor === null ? [] : [plain(speedWord(h.factor), 'speed')]),
+      ...(h.stretchMs === null || h.thresholdMs === null ? [] : [plain(`${span(h.stretchMs)} of ${span(h.thresholdMs)}`, 'stretch')]),
+      plain(span(h.boundMs), 'bound'),
+      ...(h.cycleMs === null ? [] : [plain(span(h.cycleMs), 'cycle')]),
+    ];
+    rows.push({ chips: [accountChip(h.accountId, 'on'), plain(slowDownWords(h, now)), ...figures, ...ranOutChip], label: 'Hold' });
   } else if (o.hold !== null) {
     const place = str(record.walk.find((s) => s.step === 'hold')?.facts.find((f) => f.key === 'place')?.value) ?? (o.hold.cohort !== null ? 'cohort' : 'strategy_pick');
     rows.push({ chips: [accountChip(o.hold.accountId, 'on'), plain(wordOf(PLACE_WORD, place)), plain(span(o.hold.boundMs), 'bound'), ...ranOutChip], label: 'Hold', title: HOLD_HINT });
@@ -1490,8 +1574,8 @@ const GAP_MEANING: Record<string, string> = {
 };
 const SOURCE_WORD: Record<string, string> = { head: 'the response head', poll: 'the poll', predicted: 'the prediction' };
 /**
- * A shedding round's rate: a share of the window that fired per hour, on every account, whichever table the round's
- * order read.
+ * A share of a window per hour as an event's detail reads one. A shedding round's rates read so on every account,
+ * whichever table the round's order read.
  */
 const hourlyShare = (perHour: number) => `${(perHour * 100).toFixed(1)} %/h`;
 /** A move's destination fit as the gate worded it. */
@@ -1769,7 +1853,19 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Started by', request, session, agent === null ? null : plain(agent, 'agent'));
       // A weekly window's horizon is one 5-hour length ahead, which reads as the span, and the reset reads as its time.
       const when = horizon === null ? '' : horizon - at === 5 * HOUR ? ` in ${span(horizon - at)}` : ` at ${formatFact(horizon, 'time', now)}`;
-      add('Trigger', projection === null || ceiling === null ? null : plain(`${w} projection ${fmtPct(projection)}${when} over the ceiling ${fmtPct(ceiling)}`));
+      const trigger = str(d.trigger);
+      const stretch = num(d.stretch_ms);
+      const threshold = num(d.threshold_ms);
+      if (trigger === 'slow_down' && stretch !== null && threshold !== null) {
+        // The stretch's round moves its horizon earlier by the threshold and reads the demand, so the reset is the
+        // horizon put back and the burn the round weighed is the demand.
+        add('Trigger', plain(`${w} stretch ${span(stretch)} over the threshold ${span(threshold)}`));
+        const demand = num(d.burn_sum);
+        add('Demand', demand === null ? null : plain(`${hourlyShare(demand)}${horizon === null ? '' : ` to the reset at ${formatFact(horizon + threshold, 'time', now)}`}`));
+      } else {
+        add('Trigger', projection === null || ceiling === null ? null : plain(`${w} projection ${fmtPct(projection)}${when} over the ceiling ${fmtPct(ceiling)}`));
+      }
+      add('Fired by', trigger === null ? null : plain(`the ${wordOf(LABELS, trigger)}`));
       add('Excess', rate(d.excess));
       add('Cap', pct(d.shed_cap), rate(d.target, 'target'), rate(d.removed, 'removed'));
       add('Unit', text(d.unit));
@@ -1818,9 +1914,19 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       const marked = num(d.marked_at);
       const projection = num(d.projection);
       const markedWindow = str(d.marked_window);
+      const stretch = num(d.stretch_ms);
+      const threshold = num(d.threshold_ms);
       pin();
-      // A mark heals when the account's projection reads under the ceiling again on the window that fired.
-      add('Reason', plain(reason === 'healed' && projection !== null ? `healed: the ${markedWindow === null ? 'window' : wordOf(WINDOW_WORD, markedWindow)} projection read ${fmtPct(projection)} under the ceiling` : words(reason)));
+      // A mark heals when the account's projection reads under the ceiling again on the window that fired, or under the
+      // slow-down when its stretch reads under the threshold. The threshold is the detail's own, since the pool's
+      // setting may have moved since.
+      const healed =
+        stretch !== null && threshold !== null
+          ? `healed: the stretch read ${span(stretch)} under the threshold ${span(threshold)}`
+          : projection !== null
+            ? `healed: the ${markedWindow === null ? 'window' : wordOf(WINDOW_WORD, markedWindow)} projection read ${fmtPct(projection)} under the ceiling`
+            : null;
+      add('Reason', plain(reason === 'healed' && healed !== null ? healed : words(reason)));
       add('Marked', time(marked), str(d.marked_on) === null ? null : accountChip(str(d.marked_on) ?? '', 'on'));
       add('Standing for', marked === null ? null : plain(span(atOf(row) - marked)));
       break;
@@ -1833,6 +1939,28 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Reserved', ...shareChips(rec(d.shares)));
       add('Held for', age === null ? null : plain(span(age)));
       add('Effect', plain("the booked share left the account's prediction"));
+      break;
+    }
+    case 'slow_down_ended': {
+      const lasted = num(d.duration_ms);
+      const slowest = num(d.factor_min);
+      const held = num(d.held_ms);
+      add('Lasted', lasted === null ? null : plain(span(lasted)));
+      add('Slowest', slowest === null ? null : plain(speedWord(slowest)));
+      add('Held', held === null ? null : plain(span(held)));
+      add('Effect', plain("requests of the account's sessions pass unheld again"));
+      break;
+    }
+    case 'slow_down_started': {
+      const factor = num(d.factor);
+      const stretch = num(d.stretch_ms);
+      const threshold = num(d.threshold_ms);
+      const demand = num(d.demand);
+      add('Speed', factor === null ? null : plain(speedWord(factor)));
+      add('Stretch', stretch === null || threshold === null ? null : plain(`${span(stretch)} of ${span(threshold)}`));
+      add('Demand', demand === null ? null : plain(hourlyShare(demand)));
+      add('Reset', time(d.reset));
+      add('Effect', plain("requests of the account's sessions wait their cycle times the slow-down up to the hold"));
       break;
     }
     case 'warm_prefix_expired': {
@@ -1921,6 +2049,9 @@ export function pinRows(record: DecisionRecord, now: number): CardRow[] {
   if (p.lane !== null) rows.push({ chips: laneChips(p.lane), label: 'Pin lane' });
   if (p.warmth !== null) rows.push({ chips: [plain(wordOf(WARMTH_WORD, p.warmth))], label: 'Warmth' });
   if (p.warmthCause !== null) rows.push({ chips: [plain(wordOf(WARMTH_CAUSE_WORD, p.warmthCause))], label: 'Cause' });
+  // The cycle a slow-down hold is sized from, and the deadline a second request of the pin joins.
+  if (p.cycleMs !== null) rows.push({ chips: [plain(span(p.cycleMs))], label: 'Cycle' });
+  if (p.slowDownUntil !== null) rows.push({ chips: [plain(formatFact(p.slowDownUntil, 'time', now))], label: 'Slowed until' });
   if (p.marked || p.shed !== null) {
     // A version 1 record carried the mark alone, with no account, instant or window.
     const trigger = p.markedWindow === null ? [] : [plain(`by the ${wordOf(WINDOW_WORD, p.markedWindow)} trigger`)];

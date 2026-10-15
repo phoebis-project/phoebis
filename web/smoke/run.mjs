@@ -10709,7 +10709,7 @@ m.unmount();
       ok:
         box !== null && entries[0] === '+ Select all' && at('Presets') === 1 && JSON.stringify(entries.slice(2, 10)) === JSON.stringify(presets.map((p) => `+ ${p}`)) &&
         at('Decisions') === 10 && JSON.stringify(entries.slice(11, 18)) === JSON.stringify(decisions.map((k) => `+ ${k}`)) && at('Events') === 18 &&
-        events.length === 30 && ['+ Mark cleared', '+ Reservation expired'].every((e) => events.includes(e)) && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
+        events.length === 32 && ['+ Mark cleared', '+ Reservation expired', '+ Slow-down ended', '+ Slow-down started'].every((e) => events.includes(e)) && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
         !entries.some((e) => e.includes('hidden')),
       missing: entries.slice(0, 20),
     });
@@ -10737,7 +10737,7 @@ m.unmount();
       ok:
         rest.address === null && rest.chip === 'no kinds chip' && before === 'true' &&
         one.address === keepalive.join(',') && one.chip === 'kinds: keepalive' && answer.rows.length > 0 && JSON.stringify(one.rows) === JSON.stringify(answer.rows.map(rowKeyOf)) &&
-        back.address === null && back.chip === 'no kinds chip' && back.options === 37 && back.checked === 37,
+        back.address === null && back.chip === 'no kinds chip' && back.options === 39 && back.checked === 39,
       missing: [JSON.stringify(rest), String(before), JSON.stringify(one), `${answer.rows.length} keepalive rows`, JSON.stringify(back)],
     });
   }
@@ -10760,17 +10760,17 @@ m.unmount();
     results.push({
       name: "/routing-log a preset row checks its members and the chip reads the preset's name, a second preset reads both names, and a hand edit reads the kinds' words",
       ok:
-        one.address === 'moved,held,shedding_round,mark_cleared,wind_down_started' && one.chip === 'kinds: moves and holds' &&
-        two.address === 'moved,held,shedding_round,mark_cleared,wind_down_started,cooldown_set,cooldown_cleared,poll_backoff_started,poll_backoff_ended' && two.chip === 'kinds: moves and holds, cooldowns and backoff' &&
-        edited.address === 'moved,shedding_round,mark_cleared,wind_down_started,cooldown_set,cooldown_cleared,poll_backoff_started,poll_backoff_ended' && edited.chip === 'kinds: moved, shedding round, mark cleared +5' &&
-        edited.title === 'moved, shedding round, mark cleared, wind-down started, cooldown set, cooldown cleared, poll backoff started, poll backoff ended' && read === edited.address,
+        one.address === 'moved,held,shedding_round,mark_cleared,wind_down_started,slow_down_started,slow_down_ended' && one.chip === 'kinds: moves and holds' &&
+        two.address === 'moved,held,shedding_round,mark_cleared,wind_down_started,slow_down_started,slow_down_ended,cooldown_set,cooldown_cleared,poll_backoff_started,poll_backoff_ended' && two.chip === 'kinds: moves and holds, cooldowns and backoff' &&
+        edited.address === 'moved,shedding_round,mark_cleared,wind_down_started,slow_down_started,slow_down_ended,cooldown_set,cooldown_cleared,poll_backoff_started,poll_backoff_ended' && edited.chip === 'kinds: moved, shedding round, mark cleared +7' &&
+        edited.title === 'moved, shedding round, mark cleared, wind-down started, slow-down started, slow-down ended, cooldown set, cooldown cleared, poll backoff started, poll backoff ended' && read === edited.address,
       missing: [JSON.stringify(one), JSON.stringify(two), JSON.stringify(edited), String(read)],
     });
   }
   {
     // The links the dashboard, the pool cards and the Models view write name their kinds, which read as any set does.
     const chips = [];
-    for (const kinds of ['exhausted', 'model_rejected,model_permitted', 'moved,held,shedding_round,mark_cleared,wind_down_started', 'wind_down_started,mark_cleared,held,shedding_round,moved']) {
+    for (const kinds of ['exhausted', 'model_rejected,model_permitted', 'moved,held,shedding_round,mark_cleared,wind_down_started,slow_down_started,slow_down_ended', 'slow_down_ended,wind_down_started,mark_cleared,held,slow_down_started,shedding_round,moved']) {
       const page = await mount(`/routing-log?kinds=${kinds}`, { now: CLOCK_ORIGIN });
       chips.push(chipRead(page, 'kinds'));
       page.unmount();
@@ -11682,21 +11682,24 @@ m.unmount();
       await page.settle(50);
       const labels = (f) => kvRows(f?.querySelector('.kv')).map((r) => r.label);
       const settings = kvRows(folds[2]?.querySelector('.kv.decision-card__settings'));
-      const nineteen = ['Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', 'Window ceiling', 'Load shedding', 'Move when spent', 'Overage grace', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Warm sessions', 'In-flight cap', 'Retry in place'];
+      const twentyFour = [
+        'Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', 'Window ceiling', 'Load shedding', 'Move when spent', 'Overage grace', 'Return to plan',
+        'Return dwell', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Slow-down', 'Stretch', 'Hold', 'Warm sessions', 'In-flight cap', 'Retry in place',
+      ];
       const values = Object.fromEntries(settings.map((r) => [r.label, r.dd?.textContent ?? '']));
       // The fold's head names when the pool's settings took force, the settings' own instant.
       const since = folds[2]?.querySelector('summary .decision-card__since')?.textContent ?? null;
       const edited = `since ${new Date(record.settings.poolUpdatedAt).toISOString().slice(11, 16)}`;
       const request = Object.fromEntries(kvRows(folds[0]?.querySelector('.kv')).map((r) => [r.label, r.dd]));
       results.push({
-        name: "/routing-log the three folds open to Request facts, Pin and warmth and the nineteen settings in order, Load shedding on, under the instant the settings took force",
+        name: "/routing-log the three folds open to Request facts, Pin and warmth and the twenty-four settings in order, Load shedding on, under the instant the settings took force",
         ok:
           JSON.stringify(folds.map((f) => f.querySelector('summary')?.firstChild?.textContent)) === JSON.stringify(['Request facts', 'Pin and warmth', 'Settings in force']) && closed.every((o) => o === false) &&
           since === edited && values['Load shedding'] === 'on' && values['Window ceiling'] === fmtPct(record.settings.windowCeiling) && values['Shed cap'] === fmtPct(record.settings.shedCap) &&
           JSON.stringify(labels(folds[0])) === JSON.stringify(['Attempt', 'At', 'Key', 'Pool', 'Agent', 'Class', 'Model resolved', 'Lane', 'Flags']) &&
           request.Key?.querySelector('a')?.getAttribute('href') === `/keys#${record.request.keyId}` && request.Pool?.querySelector('a')?.getAttribute('href') === `/pools#${record.request.poolId}` &&
           JSON.stringify(labels(folds[1])) === JSON.stringify(['Pin on', 'Epoch', 'Created', 'Idle', 'Refresh age', 'Pin lane', 'Warmth', 'Cause']) &&
-          JSON.stringify(settings.map((r) => r.label)) === JSON.stringify(nineteen) && settings.every((r) => (r.dd?.textContent ?? '') !== ''),
+          JSON.stringify(settings.map((r) => r.label)) === JSON.stringify(twentyFour) && settings.every((r) => (r.dd?.textContent ?? '') !== ''),
         missing: [JSON.stringify(closed), String(since), labels(folds[0]).join(','), labels(folds[1]).join(','), settings.map((r) => `${r.label}=${r.dd?.textContent}`).join(',')],
       });
       scan('renewal, folds open', card);
@@ -12057,6 +12060,58 @@ m.unmount();
         what: 'spent move held for the reset',
       },
       {
+        expected: [['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'no'], ['Renew', 'not run'], ['Reserve', 'none']],
+        id: 'req_9f2e7c5a-c49',
+        seq: 1,
+        terminus: ['held_slow_down', 'Held for the slow-down', 'held'],
+        // The hold waits for the pin's deadline at half speed, which its chips, its Hold row and its row's facts name one
+        // value a chip.
+        own: (card, record, page) => {
+          const at = `for the slow-down until ${new Date(record.outcome.hold.until).toISOString().slice(11, 16)}`;
+          const row = rowOf(page, `${record.requestId}/1`);
+          const facts = [...(row?.querySelectorAll('.fact__pair') ?? [])].map((p) => `${p.querySelector('.fact__label')?.textContent} ${p.querySelector('.fact__value')?.textContent}`);
+          return (
+            JSON.stringify(verdictChipsOf(card).slice(-3)) === JSON.stringify([`held ${at}`, '0.5x', 'pin warm']) &&
+            JSON.stringify(outcomeOf(card).Hold) === JSON.stringify(['on studio', at, 'speed 0.5x', 'stretch 42 min 18 s of 30 min', 'bound 2 min', 'cycle 42 s']) &&
+            row?.querySelector('td.routing-log__by .chip')?.textContent === 'slow-down' && JSON.stringify(facts) === JSON.stringify([`until ${at.slice(-5)}`, 'speed 0.5x'])
+          );
+        },
+        what: 'slowed request',
+      },
+      {
+        expected: RENEWAL_STATIONS,
+        id: 'req_9f2e7c5a-c49',
+        seq: 2,
+        terminus: ['chosen', 'Chosen', 'renewed'],
+        // The renewal after the hold runs the round the stretch fires, which its shed rule's Round group names, and the
+        // round's own row on the request's page reads the stretch, the demand to the reset and the source.
+        own: async (card, record, page) => {
+          const round = groupOfPopover(await popoverOf(page, stationButton(card, 'move:shed')), 'Round');
+          const at = Date.parse(record.request.at);
+          const e = (await api.listRoutingLog({ from: iso(at - MINUTE), kinds: ['shedding_round'], limit: 25, request: record.requestId, to: iso(at + MINUTE) })).rows[0];
+          const detail = e === undefined ? null : ((await openRow(page, `event/${e.id}`))?.querySelector('.event-detail') ?? null);
+          scan('round fired by the stretch', detail);
+          const pairs = Object.fromEntries(kvRows(detail?.querySelector(':scope > .kv')).map((p) => [p.label, ddWords(p.dd)]));
+          const reset = e === undefined ? '' : new Date(e.detail.horizon + e.detail.threshold_ms).toISOString().slice(11, 16);
+          return (
+            (popoverRowOf(round, 'fired by') ?? []).includes('fired by slow-down') && (popoverRowOf(round, 'stretch') ?? []).includes('stretch 42 min') && (popoverRowOf(round, 'round') ?? []).includes('round ran') &&
+            e?.detail.trigger === 'slow_down' &&
+            JSON.stringify([pairs.Trigger, pairs.Demand, pairs['Fired by']]) === JSON.stringify([['5h stretch 42 min over the threshold 30 min'], [`12.9 %/h to the reset at ${reset}`], ['the slow-down']])
+          );
+        },
+        what: 'round fired by the stretch',
+      },
+      {
+        expected: [['Pin', 'match'], ['Eligible', 'match'], ['Spent', 'off'], ['At cap', '0 out'], ['No fit', 'fell through'], ['Winding down', '0 out'], ['content', 'none'], ['with main', 'none'], ['static', 'none'], ['Pick', 'chosen'], ['Reserve', 'booked']],
+        id: 'req_b8c3e9d4-e61',
+        seq: 2,
+        terminus: ['chosen', 'Chosen', 'placed'],
+        // The failover lands as a placement that carries the 429 it failed over on, which the card's Outcome names in the
+        // words the move's own row reads below.
+        own: (card) => JSON.stringify(outcomeOf(card).Cause) === JSON.stringify(['429 on 5h']),
+        what: 'failover landing',
+      },
+      {
         expected: [
           ...[['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'fired'], ['drain', 'not run'], ['shed', 'not run'], ['Renew', 'not run']],
           ...[['Move', 'moved'], ['Fit', 'least bad'], ['Cap filter', 'passed'], ['Partitions', 'match'], ['content', 'none'], ['with main', 'none'], ['static', 'none'], ['Pick', 'chosen'], ['Reserve', 'booked']],
@@ -12118,6 +12173,21 @@ m.unmount();
       });
       page.unmount();
     }
+    // The failover landing's move reads the failover and its cause in the words the landing's card reads.
+    const landing = await api.getDecision('req_b8c3e9d4-e61', 2);
+    const at = Date.parse(landing.request.at);
+    const moved = (await api.listRoutingLog({ from: iso(at - MINUTE), kinds: ['pin_migrated'], limit: 25, to: iso(at + MINUTE) })).rows.find((r) => r.accountId === landing.outcome.accountId);
+    const events = await mount(`/routing-log?kinds=pin_migrated&from=${iso(at - MINUTE)}&to=${iso(at + MINUTE)}`, { now: CLOCK_ORIGIN });
+    const detail = moved === undefined ? null : ((await openRow(events, `event/${moved.id}`))?.querySelector('.event-detail') ?? null);
+    scan('failover landing move', detail);
+    const pairs = kvRows(detail?.querySelector(':scope > .kv')).map((p) => [p.label, ddWords(p.dd)]);
+    events.unmount();
+    const pairOf = (label) => pairs.find(([l]) => l === label) ?? null;
+    results.push({
+      name: "/routing-log the failover landing's move reads Moved by failover and its cause, 429 on 5h",
+      ok: moved?.detail.cause?.window === 'five_hour' && JSON.stringify([pairOf('Moved by'), pairOf('Cause')]) === JSON.stringify([['Moved by', ['failover']], ['Cause', ['429 on 5h']]]),
+      missing: [JSON.stringify(moved?.detail ?? null), JSON.stringify(pairs)],
+    });
   }
   {
     // A pinned popover closes on Escape and on a click outside it, and one a hover opened closes on Escape while the
@@ -12542,7 +12612,9 @@ m.unmount();
       registry_changed: ['Change', 'Fields', 'Actor'],
       reservation_expired: ['Request', 'Attempt', 'Cause', 'Reserved', 'Held for', 'Effect'],
       router_started: ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests'],
-      shedding_round: ['Started by', 'Trigger', 'Excess', 'Cap', 'Unit', 'Burn average', 'Warm sessions', 'Pins', 'Skipped', 'Outcome', 'Next round after', 'Dwell', 'Survive a restart'],
+      shedding_round: ['Started by', 'Trigger', 'Fired by', 'Excess', 'Cap', 'Unit', 'Burn average', 'Warm sessions', 'Pins', 'Skipped', 'Outcome', 'Next round after', 'Dwell', 'Survive a restart'],
+      slow_down_ended: ['Lasted', 'Slowest', 'Held', 'Effect'],
+      slow_down_started: ['Speed', 'Stretch', 'Demand', 'Reset', 'Effect'],
       warm_prefix_expired: ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed'],
       wind_down_started: ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from'],
       window_reset: ['Window', 'Before the reset', 'Prediction', 'Next reset'],
@@ -12551,7 +12623,8 @@ m.unmount();
     const EVENT_KINDS = [
       'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
       'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
-      'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset', 'window_spent',
+      'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'warm_prefix_expired', 'wind_down_started',
+      'window_reset', 'window_spent',
     ];
     const utc = (at) => `${new Date(at).toISOString().slice(0, 19).replace('T', ' ')} UTC`;
     const hhmm = (at) => new Date(at).toISOString().slice(11, 16);
@@ -12563,7 +12636,16 @@ m.unmount();
       poll_backoff_ended: (e) => ({ 'Backed off': [`from ${hhmm(e.detail.resumed_at - e.detail.duration_ms)}`, `to ${hhmm(e.detail.resumed_at)}`] }),
       mark_cleared: (e) => ({ Marked: [hhmm(e.detail.marked_at), `on ${e.detail.marked_on}`], Reason: [e.detail.reason] }),
       reservation_expired: (e) => ({ Cause: [e.detail.cause.replace(/_/g, ' ')], Reserved: Object.entries(e.detail.shares).map(([w, v]) => `${{ five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable' }[w]} ${fmtShare(v)}`) }),
-      shedding_round: (e) => ({ Outcome: ['nothing to mark: no runway'], Trigger: [`5h projection ${fmtPct(e.detail.projection)} at ${hhmm(e.detail.horizon)} over the ceiling ${fmtPct(e.detail.ceiling)}`] }),
+      shedding_round: (e) => ({ 'Fired by': ['the projection'], Outcome: ['nothing to mark: no runway'], Trigger: [`5h projection ${fmtPct(e.detail.projection)} at ${hhmm(e.detail.horizon)} over the ceiling ${fmtPct(e.detail.ceiling)}`] }),
+      // The closed span of 09:12 drains its row at 10:40:36, and the open span starts at 13:48 under the threshold.
+      slow_down_ended: (e) => ({ Effect: ["requests of the account's sessions pass unheld again"], Held: ['36 s'], Lasted: ['1 h 26 min'], Slowest: [`${e.detail.factor_min}x`] }),
+      slow_down_started: (e) => ({
+        Demand: [`${(e.detail.demand * 100).toFixed(1)} %/h`],
+        Effect: ["requests of the account's sessions wait their cycle times the slow-down up to the hold"],
+        Reset: [hhmm(e.detail.reset)],
+        Speed: [`${e.detail.factor}x`],
+        Stretch: ['27 min of 30 min'],
+      }),
       window_spent: () => ({ Effect: ['a pinned session moves by the spent rule at its next request or waits in place for a reset within the retry bound'] }),
     };
     const modelLinks = {};

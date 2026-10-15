@@ -130,8 +130,8 @@ export interface Station {
   known: boolean;
 }
 export interface Leaf { accountId: string | null; badge: string; chip: Chip | null; chosen: boolean; more: number; tone: 'accent' | 'neutral' | 'warning' } // `more` > 0 and `accountId` null on the "and N more" leaf
-export type TerminusKind = 'chosen' | 'held' | 'held_reset' | 'refused';
-export const TERMINUS_WORD: Record<TerminusKind, string> = { chosen: 'Chosen', held: 'Held for a slot', held_reset: 'Held for the reset', refused: 'Refused' };
+export type TerminusKind = 'chosen' | 'held' | 'held_reset' | 'held_slow_down' | 'refused';
+export const TERMINUS_WORD: Record<TerminusKind, string> = { chosen: 'Chosen', held: 'Held for a slot', held_reset: 'Held for the reset', held_slow_down: 'Held for the slow-down', refused: 'Refused' };
 export interface Terminus { badge: string | null; drawn: boolean; kind: TerminusKind; state: PathState; tone: VerdictTone; word: string }
 export interface Bracket { group: StripGroup; level: 'line' | 'track'; recorded: boolean; stations: string[]; word: string } // word "Rungs" or "Rungs, not recorded"
 export interface Branch { from: string; kind: 'move' | 'rung' }
@@ -148,8 +148,15 @@ const RESERVE = 'reserve';
 const SHORT_ENDS = new Set(['admission', 'probe', 'selection']);
 const SLOT_OF: Record<DecisionKind, string> = { exhausted: 'exhausted', held: 'hold', moved: 'pick', placed: 'pick', refused: 'exhausted', renewed: 'pick' };
 const TERMINUS_OF: Record<DecisionKind, TerminusKind> = { exhausted: 'refused', held: 'held', moved: 'chosen', placed: 'chosen', refused: 'refused', renewed: 'chosen' };
-/** The terminus an outcome names: a hold for the window's reset is the fourth way out, every other hold a slot's. */
-const terminusOf = (outcome: DecisionRecord['outcome']): TerminusKind => (outcome.kind === 'held' && outcome.hold?.reason === 'reset' ? 'held_reset' : TERMINUS_OF[outcome.kind]);
+const HELD_FOR: Record<string, TerminusKind> = { reset: 'held_reset', slow_down: 'held_slow_down' };
+/**
+ * The terminus an outcome names: a hold for the window's reset is the fourth way out, a hold for the slow-down the
+ * fifth, every other hold a slot's.
+ */
+const terminusOf = (outcome: DecisionRecord['outcome']): TerminusKind => {
+  const reason = outcome.kind === 'held' ? outcome.hold?.reason : undefined;
+  return reason !== undefined && own(HELD_FOR, reason) ? HELD_FOR[reason] : TERMINUS_OF[outcome.kind];
+};
 const CHOSEN_VERDICTS = new Set(['chosen', 'held_on', 'renewed']);
 const MAX_LEAVES = 8;
 const UNKNOWN_KIND: StationKind = { group: null, renderer: 'chips', stub: null };
@@ -425,8 +432,8 @@ function leavesOf(record: DecisionRecord, now: number): Leaf[] {
 function terminiOf(outcome: DecisionRecord['outcome'], shape: StripShape): Terminus[] {
   const kind = outcome.kind;
   const named = terminusOf(outcome);
-  // The fourth way out is drawn only where a walk took it, in the place of Held for a slot.
-  const termini: TerminusKind[] = ['chosen', named === 'held_reset' ? 'held_reset' : 'held', 'refused'];
+  // The fourth and fifth ways out are drawn only where a walk took one, in the place of Held for a slot.
+  const termini: TerminusKind[] = ['chosen', named === 'held_reset' || named === 'held_slow_down' ? named : 'held', 'refused'];
   return termini.map((t) => ({
     badge: t === named ? DECISION_KIND_LABEL[kind] : null,
     // A pinned walk ends in Chosen, and in the terminus its outcome names when that is another.
@@ -531,7 +538,7 @@ const MOVE_END = 1;
 const STUB_ACROSS = 10;
 const STUB_UP = 16;
 const INTO_TERMINUS = 8;
-const TERMINUS_DROP: Record<TerminusKind, number> = { chosen: 0, held: 36, held_reset: 36, refused: 72 };
+const TERMINUS_DROP: Record<TerminusKind, number> = { chosen: 0, held: 36, held_reset: 36, held_slow_down: 36, refused: 72 };
 const KNEE = 0.42;
 const KNEE_EASE = 18;
 const CORNER = 22;
