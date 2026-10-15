@@ -638,6 +638,16 @@ test("the named account's whole leaves out a probe window that a group with prob
   assert.deepEqual(idle.probeShares, { five_hour: { cost: 0.25, wasted: 0.125 }, seven_day: { cost: 0.125, wasted: 0 } }, 'a group without probes adds none and lacks none');
 });
 
+test("the named account's saving latches on the groups that carry a credit, so a probed group with none drops no window", () => {
+  const base = accountGroup();
+  const credited = accountGroup({ keptWarm: { requests: 2, tokens1h: 700, tokens5m: 300 }, probes: { ...base.probes, ok: 2 }, savingShares: { five_hour: 0.25, seven_day: 0.125 } });
+  const probed = accountGroup({ keptWarm: { requests: 0, tokens1h: 0, tokens5m: 0 }, probes: { ...base.probes, ok: 3 }, savingShares: {} });
+  assert.ok(probed.planRequests > 0 && probed.planOutputTokens > 0, 'the probed group holds plan rows with tokens');
+  assert.deepEqual(d.oneAccountGroupOf(base, [credited, probed]).savingShares, { five_hour: 0.25, seven_day: 0.125 }, 'a probed group with no credit adds nothing and drops nothing');
+  const partial = accountGroup({ keptWarm: { requests: 1, tokens1h: 0, tokens5m: 400 }, savingShares: { five_hour: 0.5 } });
+  assert.deepEqual(d.oneAccountGroupOf(base, [credited, partial]).savingShares, { five_hour: 0.75 }, 'a credited group that priced no 7-day saving leaves the window out');
+});
+
 test("a group with nothing to charge a plan window forces no gap on the named account's whole: failures with no token, probes that never ran, billed probes", () => {
   const base = accountGroup();
   const none = Object.fromEntries(Object.keys(base.tokens).map((k) => [k, 0]));

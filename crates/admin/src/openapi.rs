@@ -566,8 +566,8 @@ pub(crate) struct BreakdownRow {
     /// The kept-warm requests' saving, gross of the probes: the write each count avoided at its TTL's rate less the
     /// read it paid, summed over the group's rows.
     pub saving_usd: f64,
-    /// The saving as a share of the account tier's windows, keyed and null under the rules `probe_shares` follows (the
-    /// account grouping, or the one named account).
+    /// The saving as a share of the account tier's windows, keyed and summed as `cost_shares` and null under the same
+    /// rule.
     pub saving_shares: Option<BTreeMap<String, f64>>,
     /// The saving in the 20x window equivalent per window, under every grouping, a window absent where a row could not
     /// be priced on it.

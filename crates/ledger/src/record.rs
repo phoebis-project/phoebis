@@ -358,8 +358,8 @@ pub struct KeepaliveDelta {
     /// credited request's serving account. `None` files under `-`.
     pub tier: Option<String>,
     /// The prompt-length band the row's counts price at: a settled probe's, read at its exchange, or a credited
-    /// request's own, read off its usage against the revision in force at the credit. `None` (standard) for a probe row
-    /// or a skip.
+    /// request's own, read off its usage against the revision in force at its arrival. `None` (standard) for a probe
+    /// row or a skip.
     pub band: Option<crate::pricing::Band>,
     /// The serving account's kind as the engine read it once the probe's answer landed, which files an api_key
     /// account's credit under `billed` beside its request row. `None` for a kept-warm credit, a skip or a

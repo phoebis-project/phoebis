@@ -2359,6 +2359,8 @@ impl GroupSums {
             entry.dollars.saving_usd += kept
                 .usd
                 .map_or(0.0, |usd| usd.cache_write_usd - usd.cache_read_usd);
+            // A credit's row carries no request token, so `PlanSums::add` never reads its fallback mark.
+            entry.plan.estimated |= plan && kept.estimated;
         }
         if plan {
             entry.plan.add(row, row_priced, costs, counted);

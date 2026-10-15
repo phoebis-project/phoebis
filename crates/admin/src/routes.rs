@@ -724,20 +724,8 @@ async fn usage_latest(State(state): State<Arc<AdminState>>, Path(id): Path<Strin
                 .find_map(|(account_id, sample)| (account_id == id).then_some(sample))
         }),
     };
-    let now = (state.clock)();
-    let term = state
-        .store
-        .subscription_term(&id)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    let answer = compose_usage(
-        &id,
-        latest,
-        held,
-        phoebis_routing::term::end_of(&term, now),
-        now,
-    );
+    // The usage answer carries no lead, so it reads no term for one.
+    let answer = compose_usage(&id, latest, held, None, (state.clock)());
     Json(usage_json(
         &id,
         answer.as_ref().ok_or(unread),

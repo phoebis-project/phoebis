@@ -870,6 +870,59 @@ fn the_saving_prices_each_kept_warm_count_at_its_ttls_write_rate_less_the_read()
     );
 }
 
+/// A credit's row carries no request token, so its saving alone prices it: on a model the cost model leaves unweighted
+/// (the test table's Opus 5 beside Opus 5.5 at 2), the saving prices at the model tier's latest weight and marks its
+/// group estimated, as a request row on the model does.
+#[test]
+fn a_credit_whose_saving_prices_at_a_fallback_weight_marks_its_group_estimated() {
+    let prices = phoebis_ledger::test_tables::api_prices();
+    let costs = phoebis_ledger::test_tables::subscription_costs();
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                at: phoebis_ledger::test_tables::JANUARY_2026,
+                key_id: "desktop".into(),
+                pool_id: "main".into(),
+                account_id: "a".into(),
+                canonical_model: "claude-opus-5".into(),
+                kind: "inference".into(),
+                kept_warm_requests: 1,
+                kept_warm_5m_tokens: 2_000,
+                ..Default::default()
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let groups = breakdown(
+        &rows,
+        "all",
+        false,
+        &LiveKeys::default(),
+        &[],
+        None,
+        &prices,
+        &costs,
+    );
+    let group = groups.first().expect("the credit's group");
+    assert!(
+        group.saving_equivalent.contains_key(FIVE_HOUR),
+        "the saving priced on the window: {:?}",
+        group.saving_equivalent
+    );
+    assert!(
+        group.estimated,
+        "a saving priced at the fallback weight marks the group estimated"
+    );
+}
+
 #[test]
 fn a_keepalive_credits_row_files_under_the_reserved_class() {
     let db = LedgerDb::open_in_memory().unwrap();

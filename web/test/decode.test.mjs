@@ -82,11 +82,21 @@ test("a group decodes the kept-warm tokens per TTL and the saving's three member
   assert.deepEqual([group.savingUsd, group.savingShares, group.savingEquivalent], [0.5, { five_hour: 0.01 }, { five_hour: 0.02, seven_day: 0.004 }]);
   assert.equal(d.decodeAnalyticsGroup({ ...wire, saving_shares: null }).savingShares, null, 'a group that holds no one account answers no share');
   assert.equal(d.keptWarmTokens(group.keptWarm), 1_000, 'the charts and the by-pool table print the two counts summed');
-  const sum = d.sumGroups([group, d.decodeAnalyticsGroup({ ...wire, saving_equivalent: { five_hour: 0.03 }, saving_usd: 0.25 })]);
+  const sum = d.sumGroups([group, d.decodeAnalyticsGroup({ ...wire, saving_equivalent: { five_hour: 0.25, seven_day: 0.125 }, saving_usd: 0.25 })]);
   assert.deepEqual(sum.keptWarm, { requests: 4, tokens1h: 1_400, tokens5m: 600 }, 'each count sums apart');
   assert.equal(sum.savingUsd, 0.75, 'the dollars sum');
   assert.equal(sum.savingShares, null, 'a sum of groups carries no share of one account');
-  assert.ok(Math.abs(sum.savingEquivalent.five_hour - 0.05) < 1e-12 && Math.abs(sum.savingEquivalent.seven_day - 0.004) < 1e-12, 'the equivalent adds by window');
+  assert.ok(Math.abs(sum.savingEquivalent.five_hour - 0.27) < 1e-12 && Math.abs(sum.savingEquivalent.seven_day - 0.129) < 1e-12, 'the equivalent adds by window');
+});
+
+test('a sum of groups latches the saving equivalent on the groups that carry a credit, so a probed group with none drops no window', () => {
+  const row = fixture('analytics_breakdown').rows[0];
+  const plan = { plan_output_tokens: 100, plan_requests: 3 };
+  const credited = d.decodeAnalyticsGroup({ ...row, ...plan, kept_warm: { requests: 2, tokens_1h: 700, tokens_5m: 300 }, probes: { ...row.probes, ok: 2 }, saving_equivalent: { five_hour: 0.25, seven_day: 0.125 } });
+  const probed = d.decodeAnalyticsGroup({ ...row, ...plan, kept_warm: { requests: 0, tokens_1h: 0, tokens_5m: 0 }, probes: { ...row.probes, ok: 3 }, saving_equivalent: {} });
+  assert.deepEqual(d.sumGroups([credited, probed]).savingEquivalent, { five_hour: 0.25, seven_day: 0.125 }, 'a probed group with no credit adds nothing and drops nothing');
+  const partial = d.decodeAnalyticsGroup({ ...row, ...plan, kept_warm: { requests: 1, tokens_1h: 0, tokens_5m: 400 }, saving_equivalent: { five_hour: 0.5 } });
+  assert.deepEqual(d.sumGroups([credited, partial]).savingEquivalent, { five_hour: 0.75 }, 'a credited group that priced no 7-day saving leaves the window out');
 });
 
 test('an account decodes its quarantine flag and the router\'s overage evidence', () => {

@@ -11,7 +11,7 @@ import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { endOf } from '@/lib/quota';
 import { ACCOUNTS, QUOTA_HISTORY, accountById } from './accounts';
 import type { HourlyRollup } from './analytics';
-import { cellsFor, priceFor } from './catalog';
+import { cellsFor } from './catalog';
 import { leadOf } from './lead';
 import { keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';
@@ -201,13 +201,10 @@ export function costOf(model: string, u: Usage, fast: boolean, at: string | numb
   return c.input + c.cacheRead + c.cacheWrite + c.output;
 }
 
-/** The cells a prompt of `prompt` tokens selects, as `cellsFor` selects an answer's. Null for a model the entry
- *  lacks. */
+/** The cells `cellsFor` selects for a prompt of `prompt` tokens, whatever tokens the figure it prices counts. Null for
+ *  a model the entry lacks. */
 function cellsAtPrompt(model: string, prompt: number, fast: boolean, at: string | number): PriceCells | null {
-  const row = priceFor(model, at);
-  if (row === null) return null;
-  if (fast && row.fast) return row.fast;
-  return row.longContext && prompt > row.longContext.over ? row.longContext : row;
+  return cellsFor(model, { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: prompt }, fast, at);
 }
 
 /**

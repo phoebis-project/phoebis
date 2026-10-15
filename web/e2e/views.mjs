@@ -5379,8 +5379,9 @@ const compare = (mine, neighbour, keys, what) => {
  * The identity card's subscription end editor on an OAuth account: its date field is the box of the Sort select in
  * the bar (the page's other plain control, where the label editor's field takes the heading's type), its checkbox
  * label the field label's type, its Save the size of the Edit end button it opened from, and opening it moves no row
- * of the card. Ticking the box prefills a date. The router's seed has only an API-key account, which has no
- * editor, so there the check stands down; the mock's first account is an OAuth one.
+ * of the card. Ticking the box leaves the date field empty for the operator to type, the refusal callout names the
+ * date and holds the Save, and the hint reads the billing page's words. The router's seed has only an API-key account,
+ * which has no editor, so there the check stands down, and the mock's first account is an OAuth one.
  */
 async function subscriptionEndForm(theme) {
   const say = (what) => failures.push(`${theme} /accounts: ${what}`);
@@ -5416,17 +5417,23 @@ async function subscriptionEndForm(theme) {
     const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
     const ends = card?.querySelector('input[type="datetime-local"]');
     return {
+      callout: card?.querySelector('[role="alert"]')?.textContent?.trim() ?? null,
+      end: ends?.value ?? null,
       ends: box(ends),
       fieldLabel: type(card?.querySelector('.field .field__label')),
+      hint: card?.querySelector('.field .field__hint')?.textContent?.trim() ?? null,
       sort: box(document.querySelector('.filter-bar select[aria-label="Sort"]')),
-      prefill: ends?.value ?? null,
       tickLabel: type(card?.querySelector('label.row .field__label')),
     };
   });
-  const save = await identity.getByRole('button', { name: 'Save', exact: true }).evaluate(button);
+  const saveButton = identity.getByRole('button', { name: 'Save', exact: true });
+  const save = await saveButton.evaluate(button);
+  const held = await saveButton.isDisabled();
   const rowAfter = await firstRow();
-  measurements.push(`${theme} /accounts subscription end ${JSON.stringify({ ...read, save })}`);
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(read.prefill ?? '')) say(`ticking Cancelled left the end ${JSON.stringify(read.prefill)} rather than the derived date`);
+  measurements.push(`${theme} /accounts subscription end ${JSON.stringify({ ...read, held, save })}`);
+  if (read.end !== '') say(`ticking Cancelled filled the end with ${JSON.stringify(read.end)}, where the operator types it`);
+  if (!(read.callout ?? '').includes('A cancelled plan needs the date it ends.') || !held) say(`ticking Cancelled with no end drew ${JSON.stringify(read.callout)} with Save ${held ? 'held' : 'open'}, not the refusal that names the date`);
+  if (read.hint !== "The date the plan's billing settings show as its end. An annual plan is marked cancelled in its final month only.") say(`the Ends hint reads ${JSON.stringify(read.hint)}`);
   for (const finding of [
     // A select keeps room for its chevron, so the padding is left out.
     ...compare(read.ends, read.sort, ['background', 'border', 'font', 'height', 'radius'], 'the Ends field against the Sort select'),

@@ -221,9 +221,10 @@ async fn a_request_under_the_dated_id_keeps_the_credit_of_a_probe_on_a_recipe_re
     let second = r.observe("main").await;
     assert_eq!(r.status("main").canonical_model, dated);
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    let credit = inference_rows(&rows);
     assert_eq!(
-        inference_rows(&rows).kept_warm_5m_tokens,
-        2_000,
+        (credit.kept_warm_5m_tokens, credit.kept_warm_1h_tokens),
+        (2_000, 0),
         "the probe covered the recipe the request continues, whichever name each was taken under"
     );
     assert!(row(&r, &second).await.kept_warm);
@@ -330,7 +331,11 @@ async fn a_probe_during_a_long_stream_and_a_shortened_ttl_credit_nothing() {
     while let Some(Ok(_)) = http_body_util::BodyExt::frame(&mut streaming).await {}
     r.pump(Some(&id)).await;
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
-    assert_eq!(inference_rows(&rows).kept_warm_5m_tokens, 2_000);
+    let credit = inference_rows(&rows);
+    assert_eq!(
+        (credit.kept_warm_5m_tokens, credit.kept_warm_1h_tokens),
+        (2_000, 0)
+    );
     assert!(
         row(&r, &id).await.kept_warm,
         "the covering probe before the stream started credits it"
@@ -475,7 +480,11 @@ async fn a_migrated_probe_is_priced_and_the_next_request_counts_as_kept_warm() {
         "the pin moved with the probe"
     );
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
-    assert_eq!(inference_rows(&rows).kept_warm_5m_tokens, 2_000);
+    let credit = inference_rows(&rows);
+    assert_eq!(
+        (credit.kept_warm_5m_tokens, credit.kept_warm_1h_tokens),
+        (2_000, 0)
+    );
     assert!(
         row(&r, &second).await.kept_warm,
         "the write the probe paid on the new account is the one the request would have paid"
@@ -1916,10 +1925,11 @@ async fn a_covering_probe_whose_entry_lapsed_settles_expired_while_the_rewrite_a
         (
             credit.kept_warm_requests,
             credit.kept_warm_5m_tokens,
+            credit.kept_warm_1h_tokens,
             probe.wasted_probes,
             probe.wasted_probe_reasons.clone()
         ),
-        (1, 2_000, 1, BTreeMap::from([("expired".to_string(), 1)])),
+        (1, 2_000, 0, 1, BTreeMap::from([("expired".to_string(), 1)])),
         "the rewrite kept the entry the request read, and the first probe's had lapsed"
     );
     assert!(
@@ -2336,8 +2346,12 @@ async fn a_kept_warm_request_on_an_unpriced_model_counts_and_its_recipe_keeps_pr
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
     let credit = inference_rows(&rows);
     assert_eq!(
-        (credit.kept_warm_requests, credit.kept_warm_5m_tokens),
-        (1, 2_000),
+        (
+            credit.kept_warm_requests,
+            credit.kept_warm_5m_tokens,
+            credit.kept_warm_1h_tokens
+        ),
+        (1, 2_000, 0),
         "the mark and the tokens count on a model the price table does not know"
     );
     assert!(row(&r, &second).await.kept_warm);
@@ -2551,7 +2565,11 @@ async fn a_request_that_failed_over_earns_no_credit_from_the_probes_account() {
     let here = r.observe_with("main", &body).await;
     assert_eq!(r.status("main").account_id.as_deref(), Some("a"));
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
-    assert_eq!(inference_rows(&rows).kept_warm_5m_tokens, 2_000);
+    let credit = inference_rows(&rows);
+    assert_eq!(
+        (credit.kept_warm_5m_tokens, credit.kept_warm_1h_tokens),
+        (2_000, 0)
+    );
     assert!(row(&r, &here).await.kept_warm);
 }
 
@@ -2647,7 +2665,11 @@ async fn a_request_kept_warm_on_a_plan_funded_account_is_credited() {
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
     let kept = r.observe_with("main", &body).await;
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
-    assert_eq!(inference_rows(&rows).kept_warm_5m_tokens, 2_000);
+    let credit = inference_rows(&rows);
+    assert_eq!(
+        (credit.kept_warm_5m_tokens, credit.kept_warm_1h_tokens),
+        (2_000, 0)
+    );
     assert!(row(&r, &kept).await.kept_warm);
 }
 
@@ -2749,6 +2771,85 @@ async fn a_credit_keys_its_requests_tier_and_band_and_reaches_the_saving_shares(
             "{window}: the write's share less the read's at the credit's own key"
         );
     }
+}
+
+/// A credit keys the band its request's own row keys, read at the request's arrival: a Haiku 5.5 request received a
+/// minute and a half before February, whose prompt passes January's long-context threshold and not February's, and
+/// answered after midnight, files its credit under `long` beside its request row.
+#[tokio::test]
+async fn a_credit_answered_across_a_revision_boundary_keys_the_band_of_its_requests_arrival() {
+    const HAIKU: &str = "claude-haiku-5-5";
+    const PROMPT: u64 = 1_510;
+    let mut r = rig(RigSpec {
+        pricing: phoebis_ledger::test_tables::api_prices(),
+        ..RigSpec::default()
+    })
+    .await;
+    let february = phoebis_ledger::effective_instant("2026-02-01").expect("a date");
+    // The first request at 23:53 on January 31, its probe at 23:57:30 and the credited request at 23:58:30, the
+    // session started again past the jump.
+    r.advance(february - 420_000 - r.now());
+    r.event(Event {
+        event: "session_start".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let body = body_on(HAIKU);
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    r.advance_attended(60_000);
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(Respond::Json { status: 200, headers: vec![], body: br#"{"id":"m","type":"message","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":10,"cache_read_input_tokens":1500,"output_tokens":10}}"#.to_vec() })),
+    );
+    let sent = r.up.requests().len();
+    let app = r.h.app.clone();
+    let request = r.request_with("main", &body);
+    let pending = tokio::spawn(async move { app.oneshot(request).await.unwrap() });
+    wait_for(Duration::from_secs(5), || {
+        (r.up.requests().len() > sent).then_some(())
+    })
+    .await;
+    r.pump(None).await;
+    let received = r.now();
+    assert!(
+        received < february,
+        "the relay received the request on January 31"
+    );
+    r.advance_attended(february + 60_000 - received);
+    r.up.release();
+    let resp = pending.await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = relay_common::outcome(&resp).request_id;
+    let _ = http_body_util::BodyExt::collect(resp.into_body())
+        .await
+        .unwrap();
+    r.pump(Some(&id)).await;
+    assert_eq!(
+        (
+            r.pricing.in_force(received).band_of(HAIKU, PROMPT),
+            r.pricing.in_force(r.now()).band_of(HAIKU, PROMPT)
+        ),
+        (
+            phoebis_ledger::Band::LongContext,
+            phoebis_ledger::Band::Standard
+        ),
+        "the prompt passes January's threshold and not February's"
+    );
+    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    assert!(row(&r, &id).await.kept_warm);
+    let credit = rows
+        .iter()
+        .find(|row| row.kept_warm_requests > 0)
+        .expect("the credit's row");
+    assert_eq!(
+        credit.band, "long",
+        "the credit keys the band of its request's arrival, not of its answer"
+    );
 }
 
 /// A plan-funded probe on a model the cost model leaves unweighted settles in the window share when its model tier

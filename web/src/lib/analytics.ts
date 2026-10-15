@@ -268,6 +268,11 @@ export const addReadWrite = (a: { read: number; write: number }, b: { read: numb
  */
 export const probesRequired = (g: AnalyticsGroup): boolean => g.probes.ok > 0 && planRowsRequired(g);
 /**
+ * Whether a group's kept-warm credits oblige it to carry both shared saving windows: kept-warm tokens on a group with
+ * chargeable plan usage, so a group whose probes kept nothing warm adds no saving window and lacks none.
+ */
+export const savingRequired = (g: AnalyticsGroup): boolean => keptWarmTokens(g.keptWarm ?? { tokens1h: 0, tokens5m: 0 }) > 0 && planRowsRequired(g);
+/**
  * The named account's whole: the position's totals with its shares summed over the groups the route answered them on.
  */
 export const oneAccountGroupOf = (totals: AnalyticsGroup, groups: AnalyticsGroup[]): AnalyticsGroup => ({
@@ -275,7 +280,7 @@ export const oneAccountGroupOf = (totals: AnalyticsGroup, groups: AnalyticsGroup
   cacheShares: oneAccountShares(groups, (g) => g.cacheShares, addReadWrite, planRowsRequired),
   costShares: oneAccountShares(groups, (g) => g.costShares, (a, b) => a + b, planRowsRequired),
   probeShares: oneAccountShares(groups, (g) => g.probeShares, (a, b) => ({ cost: a.cost + b.cost, wasted: a.wasted === null || b.wasted === null ? null : a.wasted + b.wasted }), probesRequired),
-  savingShares: oneAccountShares(groups, (g) => g.savingShares, (a, b) => a + b, probesRequired),
+  savingShares: oneAccountShares(groups, (g) => g.savingShares, (a, b) => a + b, savingRequired),
 });
 
 /** The two counts summed, the one figure the charts and the by-pool table print per group. */

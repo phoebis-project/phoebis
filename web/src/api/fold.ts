@@ -1,4 +1,4 @@
-import { planRowsRequired, probesRequired } from '@/lib/analytics';
+import { planRowsRequired, probesRequired, savingRequired } from '@/lib/analytics';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { fundingOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
@@ -372,7 +372,7 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
   latchShared(out.costEquivalent, groups, planRowsRequired, (g) => g.costEquivalent);
   latchShared(out.cacheEquivalent, groups, planRowsRequired, (g) => g.cacheEquivalent);
   latchShared(out.probeEquivalent, groups, probesRequired, (g) => g.probeEquivalent);
-  latchShared(out.savingEquivalent, groups, probesRequired, (g) => g.savingEquivalent);
+  latchShared(out.savingEquivalent, groups, savingRequired, (g) => g.savingEquivalent);
   for (const m of METRICS) {
     out.histograms[m] = mergeHistograms(groups.map((g) => g.histograms[m]));
     out.percentiles[m] = quartet(out.histograms[m]);
