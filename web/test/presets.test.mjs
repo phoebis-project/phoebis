@@ -145,10 +145,13 @@ test('the preview reads one member over the ceiling and the round that marks two
   assert.equal(line([hot, cool], three, { shedCap: 0.25 }), '1 member projects over the ceiling: hot. A round there would mark 1 session (0 warm), 3.0 %/h of the excess, to move to a sibling with runway.', 'a quarter of the burn is 2 points an hour, which cold-a reaches alone');
 });
 
-/** An account as the routes serve it with its slow-down read at `factor` and a stretch of `stretchMinutes` against 30. */
-const slowedAccount = (id, factor, stretchMinutes) => ({
+/**
+ * An account as the routes serve it with its slow-down read at `factor` and a stretch of `stretchMinutes` against 30,
+ * the holds having realized `speed`.
+ */
+const slowedAccount = (id, factor, stretchMinutes, speed = factor) => ({
   ...oauth(id, 0.5, 0.5),
-  slowDown: { factor, holdMs: 120_000, since: factor < 1 ? at(NOW - 10 * MINUTE) : null, speed: factor, stretchMs: stretchMinutes * MINUTE, thresholdMs: 30 * MINUTE },
+  slowDown: { factor, holdMs: 120_000, since: factor < 1 ? at(NOW - 10 * MINUTE) : null, speed, stretchMs: stretchMinutes * MINUTE, thresholdMs: 30 * MINUTE },
 });
 /** A pool with the slow-down on, its members in the given order, each carrying the factor its account serves. */
 const slowPool = (accounts, over = {}) => ({
@@ -160,13 +163,18 @@ const slowPool = (accounts, over = {}) => ({
 });
 const slowLine = (accounts, over = {}) => d.slowDownPreviewLine(d.slowDownPreview(slowPool(accounts, over), accounts));
 
-test('the slow-down preview reads off, the closest member and the slowed members, word for word', () => {
+test('the slow-down preview reads off, no slowed member, or the slowed members and the wait on the slowest, word for word', () => {
   const studio = slowedAccount('studio', 0.5, 42);
   const unslowed = (id) => slowedAccount(id, 1, 0);
   assert.equal(slowLine([studio], { slowDown: false }), 'Slow-down is off: no request is held.', 'the switch off holds nothing, whatever a member reads');
   assert.equal(slowLine([oauth('quiet', 0.5, 0.5)]), 'No member is slowed.', 'no member served a slow-down');
-  assert.equal(slowLine([unslowed('calm'), unslowed('still')]), 'No member is slowed: the closest is calm, 0 min of the 30 min threshold.', 'members read at full speed, the first of a tie');
+  assert.equal(slowLine([unslowed('calm'), unslowed('still')]), 'No member is slowed.', 'members read at full speed');
   assert.equal(slowLine([studio, unslowed('annex')]), '1 member is slowed: studio at 0.5x (42 min of 30 min). A session there waits its cycle times 1.0, up to 120 s.');
+  assert.equal(
+    slowLine([slowedAccount('studio', 0.5, 42, 1)]),
+    '1 member is slowed: studio at 0.5x (42 min of 30 min). A session there waits its cycle times 1.0, up to 120 s.',
+    'the factor is read, never the speed the holds realized, which reads 1 until a pin there has a cycle',
+  );
   assert.equal(
     slowLine([slowedAccount('alder', 0.5, 42), slowedAccount('birch', 0.35, 55), unslowed('cedar')]),
     '2 members are slowed: alder at 0.5x (42 min of 30 min), birch at 0.35x (55 min of 30 min). A session on birch waits its cycle times 1.9, up to 120 s.',
@@ -174,8 +182,6 @@ test('the slow-down preview reads off, the closest member and the slowed members
   );
   assert.equal(slowLine([studio], { slowDownHoldSeconds: 60, slowDownStretchSeconds: 9_000 }), '1 member is slowed: studio at 0.5x (42 min of 2 h 30 min). A session there waits its cycle times 1.0, up to 60 s.', "the threshold and the hold are the pool's");
   assert.equal(slowLine([slowedAccount('full', 0, 70)]), '1 member is slowed: full at 0x (1 h 10 min of 30 min). A session there waits the full 120 s.', 'at the ceiling a session waits the whole hold');
-  const trio = [slowedAccount('alder', 0.5, 42), slowedAccount('birch', 0.8, 12), slowedAccount('cedar', 0.9, 6)];
-  assert.deepEqual(d.slowDownPreview(slowPool(trio), trio).closest, { label: 'birch', stretchMs: 12 * MINUTE }, 'the closest is the longest stretch under the threshold');
   const alder = slowedAccount('alder', 0.5, 42);
   const ghost = { ...slowPool([alder]), members: [{ accountId: 'alder', priority: 0, speed: 0.5 }, { accountId: 'ghost', priority: 1, speed: 0.4 }] };
   assert.equal(d.slowDownPreviewLine(d.slowDownPreview(ghost, [alder])), '2 members are slowed: alder at 0.5x (42 min of 30 min), ghost at 0.4x. A session on ghost waits its cycle times 1.5, up to 120 s.', 'a member whose account did not load counts by its own factor, its stretch unknown');

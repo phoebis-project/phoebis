@@ -326,7 +326,12 @@ test('a serving member reads the chip from its account\'s slow-down, from its ow
   const read = slowDown(0.5, 42);
   const studio = account('studio', { slowDown: read });
   assert.deepEqual(d.memberSpeed({ speed: 0.5 }, studio, NOW), { factor: 0.5, hover: d.speedHover(read, NOW) }, 'a loaded account reads its own slow-down');
-  assert.deepEqual(d.memberSpeed({ speed: 0.4 }, studio, NOW), { factor: 0.5, hover: d.speedHover(read, NOW) }, "the account's entry wins over the member's figure");
+  const unheld = { ...read, speed: 1 };
+  assert.deepEqual(d.memberSpeed({ speed: 0.5 }, account('studio', { slowDown: unheld }), NOW), { factor: 0.5, hover: d.speedHover(unheld, NOW) }, 'the chip reads the factor, never the speed the holds realized, which reads 1 until a pin there has a cycle');
+  // The card passes the account only on a pool whose switch is on, so a pool that holds nobody draws no chip for an
+  // entry the purge has not yet dropped: the pools route serves its members no speed.
+  assert.deepEqual(d.memberSpeed({ speed: 0.4 }, studio, NOW), { factor: 0.5, hover: d.speedHover(read, NOW) }, "on a pool with the switch on, the account's entry wins over the member's figure");
+  assert.deepEqual(d.memberSpeed({ speed: null }, null, NOW), { factor: null, hover: null }, 'on a pool with the switch off, the card passes no account and the member serves no speed');
   assert.deepEqual(d.memberSpeed({ speed: 0.5 }, account('plain', { slowDown: null }), NOW), { factor: null, hover: null }, 'a loaded account with no slow-down draws none');
   assert.deepEqual(d.memberSpeed({ speed: null }, account('full', { slowDown: slowDown(1, 0) }), NOW), { factor: 1, hover: null }, 'an account at full speed carries its factor and no hover');
   assert.deepEqual(d.memberSpeed({ speed: 0.4 }, null, NOW), { factor: 0.4, hover: null }, "a member whose account is not loaded reads the pool's own figure");

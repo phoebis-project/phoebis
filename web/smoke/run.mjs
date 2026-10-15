@@ -3158,6 +3158,24 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       missing: [JSON.stringify(studio), ...chipsOf('studio').map((c) => c.join(' | ')), JSON.stringify(standingOf('studio')), String(chipsOf('Studio annex').length)],
     });
   }
+  {
+    // A pool whose switch is off holds nobody, and the pools route serves its members no speed, so work turned off
+    // draws no chip beside studio though the account still carries the entry the last pinned read wrote.
+    const { listPools } = api;
+    api.listPools = async () => (await listPools.call(api)).map((p) => (p.id === 'work' ? { ...p, members: p.members.map((x) => ({ ...x, speed: null })), slowDown: false } : p));
+    const off = await mount('/pools');
+    api.listPools = listPools;
+    const workCard = [...off.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'work');
+    const studioRow = [...(workCard?.querySelectorAll('.serving tbody tr') ?? [])].find((tr) => tr.children[1]?.querySelector('a')?.textContent?.trim() === 'studio');
+    const read = [studioRow ? 'studio row' : 'no studio row', workCard?.querySelectorAll('.speed-chip').length ?? null];
+    const slowed = (await api.listAccounts()).find((a) => a.id === 'studio')?.slowDown?.factor ?? null;
+    off.unmount();
+    results.push({
+      name: "/pools a card whose pool has the slow-down off draws no speed chip, though its member's account still reads slowed",
+      ok: JSON.stringify(read) === '["studio row",0]' && slowed === 0.5,
+      missing: [...read.map(String), String(slowed)],
+    });
+  }
   const badged = [...cards.entries()].filter(([, c]) => [...c.querySelectorAll('.badge')].some((b) => b.textContent?.trim() === 'server-side auto mode off')).map(([name]) => name);
   results.push({ name: '/pools the card of a pool with server-side auto mode off carries the badge, and no other card does', ok: JSON.stringify(badged) === '["work"]', missing: badged });
   const origin = new Date(CLOCK_ORIGIN);
@@ -4424,8 +4442,16 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       await choose('Never');
       const never = [items().map((l) => l.querySelector('input')?.checked), dwell()?.disabled];
       await choose('Always');
+      // A dwell past its bound typed under Always stays editable when the mode moves on, so the hold it puts on the
+      // save can be cleared where it stands.
+      await type(dwell(), '90000');
+      await choose('Never');
+      const refusedNever = [dwell()?.disabled, dwell()?.getAttribute('aria-invalid')];
+      await type(dwell(), '900');
+      const clearedNever = dwell()?.disabled;
+      await choose('Always');
       results.push({
-        name: '/pools Return to plan offers Always, When cold and Never with their words and its hint, and Return dwell is drawn disabled unless Always',
+        name: '/pools Return to plan offers Always, When cold and Never with their words and its hint, and Return dwell is drawn disabled unless Always or refused',
         ok:
           JSON.stringify(choices) ===
             JSON.stringify(['Always: at once when cold, after the dwell when warm', 'When cold: only when the move is free: a compaction, a restart or a lane change', 'Never: the session stays until the member refuses it']) &&
@@ -4434,8 +4460,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
           JSON.stringify(atAlways) === '[[true,false,false],"900",false,"0","86400"]' &&
           JSON.stringify(cold) === '[[false,true,false],true]' &&
           JSON.stringify(never) === '[[false,false,true],true]' &&
+          JSON.stringify(refusedNever) === '[false,"true"]' &&
+          clearedNever === true &&
+          dwell()?.value === '900' &&
           dwell()?.disabled === false,
-        missing: [...choices.map(String), String(hintOf('Overage and plan end', 'Return to plan')), String(hintOf('Overage and plan end', 'Return dwell (s)')), JSON.stringify(atAlways), JSON.stringify(cold), JSON.stringify(never)],
+        missing: [...choices.map(String), String(hintOf('Overage and plan end', 'Return to plan')), String(hintOf('Overage and plan end', 'Return dwell (s)')), JSON.stringify(atAlways), JSON.stringify(cold), JSON.stringify(never), JSON.stringify(refusedNever), String(clearedNever)],
       });
     }
     // Pool all runs the Pace strategy, so the Strategy field draws its hint. The Accounts page link carries its

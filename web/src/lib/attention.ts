@@ -1,6 +1,7 @@
 import type { AttentionItem, AttentionKind } from '@/api/types';
 import { fmtAbsolute, fmtRelative, instant as clockInstant } from './format';
 import { WINDOW_WORD, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
+import { speedWord } from './selection';
 
 export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   certificate_expiring: 'Certificate expiring',
@@ -209,7 +210,7 @@ function conditionWords(item: AttentionItem, now: number): string {
 /**
  * A slowed account's span, the bar it passed, its slowest factor and the stretch it is held to, without the subject.
  * The setting's value is a whole number of seconds, which `conditionWords` would print as a percent. The factor reads
- * to two decimals with a trailing zero dropped, as the speed chips print it.
+ * as the speed chips print it.
  */
 function slowedWords(item: AttentionItem, now: number): string {
   const d = item.detail;
@@ -221,7 +222,7 @@ function slowedWords(item: AttentionItem, now: number): string {
     }),
   );
   const bar = typeof d.bar_ms === 'number' && Number.isFinite(d.bar_ms) ? [`over ${formatFact(d.bar_ms, 'ms', now)}`] : [];
-  const slowest = typeof d.factor_min === 'number' && Number.isFinite(d.factor_min) ? [`slowest ${Number(d.factor_min.toFixed(2))}x`] : [];
+  const slowest = typeof d.factor_min === 'number' && Number.isFinite(d.factor_min) ? [`slowest ${speedWord(d.factor_min)}`] : [];
   return [`slowed ${formatFact(count(d.slowed_ms), 'ms', now)} of the last 24 h`, ...bar, ...slowest, ...(settings ? [settings] : []), `since ${clockInstant(Date.parse(item.since), now)}`].join(', ');
 }
 

@@ -296,8 +296,6 @@ export function shedPreviewLine(preview: ShedPreview, now: number = Date.now()):
 
 /** The slow-down group's dry run, from the slow-down the routes serve on each member. */
 export interface SlowDownPreview {
-  /** The member whose stretch is longest under the threshold, null where no member reads one under it. */
-  closest: { label: string; stretchMs: number } | null;
   holdSeconds: number;
   /** The pool's switch is off: no request is held. */
   off: boolean;
@@ -328,12 +326,7 @@ export function slowDownPreview(
       return { factor: slowDown?.factor ?? null, label: account.label, priority: m.priority, stretchMs: slowDown?.stretchMs ?? null };
     })
     .sort((a, b) => a.priority - b.priority || a.label.localeCompare(b.label));
-  let closest: SlowDownPreview['closest'] = null;
-  for (const { label, stretchMs } of read) {
-    if (stretchMs !== null && stretchMs < thresholdMs && (closest === null || stretchMs > closest.stretchMs)) closest = { label, stretchMs };
-  }
   return {
-    closest,
     holdSeconds: pool.slowDownHoldSeconds,
     off: !pool.slowDown,
     slowed: read.flatMap(({ factor, label, stretchMs }) => (factor !== null && factor < 1 ? [{ factor, label, stretchMs }] : [])),
@@ -342,14 +335,15 @@ export function slowDownPreview(
 }
 
 /**
- * The slow-down group's dry run in up to two sentences: the switch when it is off, the members slowed with their
- * factors and stretches or the one closest to the threshold, and the wait a session on the slowest member takes.
+ * The slow-down group's dry run in up to two sentences: the switch when it is off, or the members slowed with their
+ * factors and stretches and the wait a session on the slowest member takes. A member that is not slowed reads a
+ * stretch of 0, so a pool with none slowed has no nearest member to name.
  */
 export function slowDownPreviewLine(preview: SlowDownPreview): string {
   if (preview.off) return 'Slow-down is off: no request is held.';
-  const { closest, slowed } = preview;
+  const { slowed } = preview;
+  if (slowed.length === 0) return 'No member is slowed.';
   const threshold = minuteSpan(preview.thresholdMs);
-  if (slowed.length === 0) return closest === null ? 'No member is slowed.' : `No member is slowed: the closest is ${closest.label}, ${minuteSpan(closest.stretchMs)} of the ${threshold} threshold.`;
   const named = slowed.map(({ factor, label, stretchMs }) => `${label} at ${speedWord(factor)}${stretchMs === null ? '' : ` (${minuteSpan(stretchMs)} of ${threshold})`}`);
   // The first of the lowest factors, so a tie names the member listed first.
   const slowest = slowed.reduce((low, m) => (m.factor < low.factor ? m : low));

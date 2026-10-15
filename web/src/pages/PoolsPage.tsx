@@ -745,7 +745,8 @@ function PoolCard({
                         ? `${p.account.label}: in overage, taken after the plan-funded members of this tier`
                         : `${p.account.label}: rank ${p.rank} in this tier`;
                 const whyId = `${standingId}-${p.account.id}`;
-                const speed = memberSpeed({ speed: m?.speed ?? null }, p.account, now);
+                // A pool whose switch is off holds nobody, so an entry its account still carries draws no chip here.
+                const speed = memberSpeed({ speed: m?.speed ?? null }, pool.slowDown ? p.account : null, now);
                 return (
                   <tr key={p.account.id} className={isNext ? 'is-next' : undefined}>
                     <td className="pool__prio num col-fit">{grouped ? `${GROUP_LABEL[tier.group]} P${tier.priority}` : `P${tier.priority}`}</td>
@@ -2131,7 +2132,8 @@ export function PoolDialog({
               max={ENGINE_BOUNDS.returnToPlanDwellSeconds.max}
               value={form.engine.returnToPlanDwellSeconds}
               onChange={(e) => setEngine('returnToPlanDwellSeconds', Number(e.target.value))}
-              disabled={form.engine.returnToPlan !== 'always'}
+              // A refused dwell stays editable whatever the mode, or its hold on the save could not be cleared.
+              disabled={form.engine.returnToPlan !== 'always' && !refusedFields.has(ENGINE_FIELD_LABELS.returnToPlanDwellSeconds)}
               aria-invalid={invalid(ENGINE_FIELD_LABELS.returnToPlanDwellSeconds)}
             />
           </Field>
