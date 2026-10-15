@@ -71,38 +71,43 @@ test('a card the poll has not asked yet still names when its snapshot was read',
   assert.equal(reading.title, `checked ${d.fmtAbsolute(fetchedAt)}`);
 });
 
-test("the pace words read ahead, behind or on pace from the window's used and elapsed shares", () => {
+test('the pace words read ahead, behind or on pace from the lead the window carries', () => {
   const now = Date.UTC(2026, 8, 16, 14, 30);
   const MINUTE = 60_000;
   const HOUR = 60 * MINUTE;
-  const window = (periodHours, utilization, resetsInMs) => ({ id: periodHours === 5 ? '5h' : '7d', label: periodHours === 5 ? '5-hour' : '7-day', observedAt: new Date(now - 40_000).toISOString(), periodHours, resetsAt: resetsInMs === null ? null : new Date(now + resetsInMs).toISOString(), utilization });
-  const session = window(5, 0.62, 2 * HOUR + 14 * MINUTE);
+  // The lead the router answers, worked here by hand: the used share less the share of the window elapsed.
+  const window = (periodHours, utilization, resetsInMs, elapsed) => ({ id: periodHours === 5 ? '5h' : '7d', label: periodHours === 5 ? '5-hour' : '7-day', lead: elapsed === null ? null : utilization - elapsed, observedAt: new Date(now - 40_000).toISOString(), periodHours, resetsAt: resetsInMs === null ? null : new Date(now + resetsInMs).toISOString(), utilization });
+  const session = window(5, 0.62, 2 * HOUR + 14 * MINUTE, 166 / 300);
   assert.equal(d.paceWords(session, now, null), '7% ahead of pace', '62% used with 55% of the window elapsed');
-  assert.equal(d.paceWords(window(168, 0.41, 77.7 * HOUR), now, null), '13% behind pace', '41% used with 54% of the week elapsed');
-  assert.equal(d.paceWords(window(5, 0.506, 2.5 * HOUR), now, null), 'on pace', 'a lead under a point reads on pace');
-  assert.equal(d.paceWords(window(5, 0.512, 2.5 * HOUR), now, null), '1% ahead of pace', 'the smallest lead past a point reads one');
-  assert.equal(d.paceWords(window(5, 0.62, null), now, null), null, 'a window without a reset time has no pace');
-  assert.equal(d.remainingTimeShare(session, now, null).toFixed(4), (134 / 300).toFixed(4), 'two hours and fourteen minutes of the five-hour window still to come');
-  assert.equal(d.remainingTimeShare(window(5, 0.62, null), now, null), null, 'a window without a reset time has no share still to come');
+  assert.equal(d.paceWords(window(168, 0.41, 77.7 * HOUR, 90.3 / 168), now, null), '13% behind pace', '41% used with 54% of the week elapsed');
+  assert.equal(d.paceWords(window(5, 0.506, 2.5 * HOUR, 0.5), now, null), 'on pace', 'a lead under a point reads on pace');
+  assert.equal(d.paceWords(window(5, 0.512, 2.5 * HOUR, 0.5), now, null), '1% ahead of pace', 'the smallest lead past a point reads one');
+  assert.equal(d.paceWords(window(5, 0.62, null, 0), now, null), null, 'a window without a reset time has no pace');
+  assert.equal(d.paceWords(window(5, 0.62, 2 * HOUR + 14 * MINUTE, null), now, null), null, 'a window the answer carries no lead for has no pace');
+  assert.equal(d.remainingTimeShare(session).toFixed(4), (134 / 300).toFixed(4), 'two hours and fourteen minutes of the five-hour window still to come');
+  assert.equal(d.remainingTimeShare({ ...session, lead: 0.07, utilization: 0.62 }).toFixed(2), '0.45', 'the share still to come is one less the used share less the lead');
+  assert.equal(d.remainingTimeShare(window(5, 0.62, null, 0)), null, 'a window without a reset time has no share still to come');
 });
 
 test("the pace words run to the account's end when it comes before the window's reset, and name it", () => {
   const now = Date.UTC(2026, 8, 16, 14, 30);
   const HOUR = 3_600_000;
   // Two days into a week that resets in five: to an end two days out half the span has gone, to the reset two sevenths.
-  const week = { id: '7d', label: '7-day', observedAt: new Date(now - 40_000).toISOString(), periodHours: 168, resetsAt: new Date(now + 120 * HOUR).toISOString(), utilization: 0.62 };
+  const week = { id: '7d', label: '7-day', lead: null, observedAt: new Date(now - 40_000).toISOString(), periodHours: 168, resetsAt: new Date(now + 120 * HOUR).toISOString(), utilization: 0.62 };
+  const toReset = { ...week, lead: 0.62 - 48 / 168 };
   const end = now + 48 * HOUR;
-  assert.equal(d.paceWords(week, now, end), `12% ahead of pace to its end at ${d.formatFact(end, 'time', now)}`);
-  assert.equal(d.paceWords(week, now, null), '33% ahead of pace', 'no end reads the reset');
-  assert.equal(d.paceWords(week, now, Date.parse(week.resetsAt)), '33% ahead of pace', 'an end at the reset is the reset');
-  assert.equal(d.paceWords(week, now, now + 200 * HOUR), '33% ahead of pace', 'an end past the reset is the reset');
+  const toEnd = { ...week, lead: 0.62 - 48 / 96 };
+  assert.equal(d.paceWords(toEnd, now, end), `12% ahead of pace to its end at ${d.formatFact(end, 'time', now)}`);
+  assert.equal(d.paceWords(toReset, now, null), '33% ahead of pace', 'no end reads the reset');
+  assert.equal(d.paceWords(toReset, now, Date.parse(week.resetsAt)), '33% ahead of pace', 'an end at the reset is the reset');
+  assert.equal(d.paceWords(toReset, now, now + 200 * HOUR), '33% ahead of pace', 'an end past the reset is the reset');
   const soon = now + 3 * HOUR;
-  assert.equal(d.paceWords({ ...week, utilization: 0.9 }, now, soon), `4% behind pace to its end at ${d.formatFact(soon, 'time', now)}`, '48 of 51 hours gone to an end three hours out');
-  // The meter's mark reads the same deadline, so the fill against it shows the lead the words name.
-  assert.equal(d.remainingTimeShare(week, now, end), 0.5, 'half the span to the end still to come');
-  assert.equal(d.remainingTimeShare(week, now, null).toFixed(4), (120 / 168).toFixed(4), 'five days of the week still to come');
-  assert.equal(d.remainingTimeShare(week, now, Date.parse(week.resetsAt)), d.remainingTimeShare(week, now, null), 'an end at the reset is the reset');
-  assert.equal(d.remainingTimeShare(week, now, now - 72 * HOUR), 0, 'an end at or before the window opened leaves nothing to come');
+  assert.equal(d.paceWords({ ...week, lead: 0.9 - 48 / 51, utilization: 0.9 }, now, soon), `4% behind pace to its end at ${d.formatFact(soon, 'time', now)}`, '48 of 51 hours gone to an end three hours out');
+  // The meter's mark reads the same lead, so the fill against it shows the lead the words name.
+  assert.equal(d.remainingTimeShare(toEnd).toFixed(4), '0.5000', 'half the span to the end still to come');
+  assert.equal(d.remainingTimeShare(toReset).toFixed(4), (120 / 168).toFixed(4), 'five days of the week still to come');
+  assert.equal(d.remainingTimeShare({ ...week, lead: 0.62 - 1 }).toFixed(4), '0.0000', 'an end at or before the window opened leaves nothing to come');
+  assert.equal(d.remainingTimeShare(week), null, 'a window the answer carries no lead for draws no mark');
 });
 
 test('the end a pace reads is the saved end while cancelled, else a trial end still ahead, as the router reads it', () => {
@@ -126,13 +131,17 @@ const DAY = 24 * HOUR;
 test('the projection reads at the reset where its horizon lies within a minute of the reset, since its two instants come from two sources', () => {
   const now = Date.UTC(2026, 8, 16, 14, 30);
   const at = (ms) => new Date(now + ms).toISOString();
-  const window = (horizon, reset) => ({ horizon: at(horizon), projection: 0.81, resetsAt: at(reset) });
+  const window = (horizon, reset) => ({ burn: 0.085, horizon: at(horizon), projection: 0.81, resetsAt: at(reset), utilization: 0.62 });
   const reset = 2 * HOUR + 13 * MINUTE;
-  assert.equal(d.projectionWords(window(reset - 500, reset), now), '81% at the reset', 'a horizon 500 ms before its reset');
-  assert.equal(d.projectionWords(window(reset - 500, reset), now, true), '81% at reset', 'the compact form');
-  assert.equal(d.projectionWords(window(reset, reset), now), '81% at the reset', 'a horizon on its reset');
-  assert.equal(d.projectionWords(window(reset - 2 * MINUTE, reset), now), '81% in 2 h 11 min', 'an end two minutes before the reset');
-  assert.equal(d.projectionWords(window(5 * HOUR, 3 * DAY), now), '81% in 5 h', 'a weekly horizon five hours out');
+  assert.equal(d.projectionWords(window(reset - 500, reset), now), '19% left at the reset', 'a horizon 500 ms before its reset');
+  assert.equal(d.projectionWords(window(reset - 500, reset), now, true), '19% left at reset', 'the compact form');
+  assert.equal(d.projectionWords(window(reset, reset), now), '19% left at the reset', 'a horizon on its reset');
+  assert.equal(d.projectionWords(window(reset - 2 * MINUTE, reset), now), '19% left in 2 h 11 min', 'an end two minutes before the reset');
+  assert.equal(d.projectionWords(window(5 * HOUR, 3 * DAY), now), '19% left in 5 h', 'a weekly horizon five hours out');
+  assert.equal(d.projectionWords(window(5 * HOUR, 3 * DAY), now, true), '19% left in 5 h', 'the compact form of a weekly horizon');
+  // A bar too narrow for the compact words breaks between the share and the horizon, each whole.
+  assert.deepEqual(d.projectionParts(window(reset, reset), now, true), ['19% left', 'at reset']);
+  assert.deepEqual(d.projectionParts(window(5 * HOUR, 3 * DAY), now, true), ['19% left', 'in 5 h']);
 });
 
 test('a span under a minute reads one minute, and a horizon at or before now reads now', () => {
@@ -142,8 +151,33 @@ test('a span under a minute reads one minute, and a horizon at or before now rea
   assert.equal(d.minuteSpan(29_999), '1 min', 'under half a minute');
   assert.equal(d.minuteSpan(5 * HOUR - 20_000), '5 h', 'a span seconds short of five hours');
   assert.equal(d.minuteSpan(4 * HOUR + 59 * MINUTE), '4 h 59 min');
-  const window = (horizon) => ({ horizon: at(horizon), projection: 0.41, resetsAt: at(3 * DAY) });
-  assert.equal(d.projectionWords(window(0), now), '41% now', 'a horizon at now, an end that has come');
-  assert.equal(d.projectionWords(window(-MINUTE), now), '41% now', 'a horizon a minute past');
-  assert.equal(d.projectionWords(window(-MINUTE), now, true), '41% now', 'the compact form');
+  const window = (horizon) => ({ burn: 0, horizon: at(horizon), projection: 0.41, resetsAt: at(3 * DAY), utilization: 0.41 });
+  assert.equal(d.projectionWords(window(0), now), '59% left now', 'a horizon at now, an end that has come');
+  assert.equal(d.projectionWords(window(-MINUTE), now), '59% left now', 'a horizon a minute past');
+  assert.equal(d.projectionWords(window(-MINUTE), now, true), '59% left now', 'the compact form');
+  assert.deepEqual(d.projectionParts(window(-MINUTE), now, true), ['59% left', 'now']);
+});
+
+test('a window the projection spends before its horizon reads the instant it runs out, the same in both forms', () => {
+  const now = Date.UTC(2026, 8, 16, 14, 30);
+  const at = (ms) => new Date(now + ms).toISOString();
+  // 85% used at 12% an hour reaches 109% at a reset two hours out, and the last 15% runs out in an hour and a quarter.
+  const spent = { burn: 0.12, horizon: at(2 * HOUR), projection: 1.09, resetsAt: at(2 * HOUR), utilization: 0.85 };
+  assert.equal(d.projectionWords(spent, now), 'spent in 1 h 15 min');
+  assert.equal(d.projectionWords(spent, now, true), 'spent in 1 h 15 min', 'the compact form');
+  assert.equal(d.projectionWords({ ...spent, resetsAt: at(3 * DAY) }, now), 'spent in 1 h 15 min', 'a weekly horizon before its reset');
+  assert.deepEqual(d.projectionParts(spent, now, true), ['spent', 'in 1 h 15 min']);
+});
+
+test('a projection past the window without a burn reads no share left, and a window already used up reads none now', () => {
+  const now = Date.UTC(2026, 8, 16, 14, 30);
+  const at = (ms) => new Date(now + ms).toISOString();
+  const over = { burn: null, horizon: at(2 * HOUR), projection: 1.09, resetsAt: at(2 * HOUR), utilization: 0.85 };
+  assert.equal(d.projectionWords(over, now), '0% left at the reset', 'a projection past the window with no burn to run out along');
+  assert.equal(d.projectionWords({ ...over, burn: 0 }, now, true), '0% left at reset', 'a burn of zero, in the compact form');
+  assert.equal(d.projectionWords({ ...over, resetsAt: at(3 * DAY) }, now), '0% left in 2 h', 'a horizon before the reset');
+  const full = { burn: 0.12, horizon: at(2 * HOUR), projection: 1.24, resetsAt: at(2 * HOUR), utilization: 1 };
+  assert.equal(d.projectionWords(full, now), '0% left now', 'a window whose used share already reads 1');
+  assert.equal(d.projectionWords({ ...full, utilization: 1.02 }, now, true), '0% left now', 'past 1, in the compact form');
+  assert.equal(d.projectionWords({ ...full, projection: null }, now), null, 'a window without a projection');
 });

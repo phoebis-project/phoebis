@@ -64,7 +64,7 @@ async function storyAt(at) {
   const totalled = requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= totalsFrom);
   const rollups = d.ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
   const settings = await api.getSettings();
-  return { accounts, aheadOf: d.aheadOf, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, lib: d, now, overview, pools, requests, rollups, sessions, settings, totalled, totalledFrom: totalsFrom, weekFrom };
+  return { accounts, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, leadOf: d.leadOf, lib: d, now, overview, pools, requests, rollups, sessions, settings, totalled, totalledFrom: totalsFrom, weekFrom };
 }
 
 /** Every decision record of the story, read as the routing log answers them, newest first. */
@@ -989,7 +989,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const lead = (accountId, windowId) => {
       const account = s.accounts.find((a) => a.id === accountId);
       const w = account.windows.find((x) => x.id === windowId);
-      return s.aheadOf(w, w.periodHours * HOUR, s.now, s.lib.endOf(account, s.now));
+      return s.leadOf(w, w.periodHours * HOUR, s.now, s.lib.endOf(account, s.now));
     };
     assert.ok(lead('primary', '5h') > 0.05, `primary's 5h window reads ${lead('primary', '5h')}, not ahead of pace`);
     assert.ok(lead('primary', '7d') < -0.05, `primary's 7d window reads ${lead('primary', '7d')}, not behind pace`);
@@ -1002,7 +1002,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const a of s.accounts) {
       const end = s.lib.endOf(a, s.now);
       for (const w of [...a.windows, ...(a.fableWindow === null ? [] : [a.fableWindow])]) {
-        const want = s.aheadOf(w, w.periodHours * HOUR, s.now, end);
+        const want = s.leadOf(w, w.periodHours * HOUR, s.now, end);
         assert.ok(typeof w.lead === 'number' && near(w.lead, want), `${a.id}'s ${w.id} leads ${w.lead}, not ${want}`);
         read += 1;
       }
@@ -1021,7 +1021,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(warmed.length > 0, 'the kept tokens split between the two TTLs');
   });
 
-  test(`every decision record reads a plan window's lead as the console's arithmetic does and projects it to its horizon, at ${at}`, async () => {
+  test(`every decision record reads a plan window's lead and projects it to its horizon, at ${at}`, async () => {
     const s = await story;
     let capped = 0;
     let burning = 0;
@@ -1034,7 +1034,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         for (const [name, hours] of [['five_hour', 5], ['seven_day', 168]]) {
           const w = c.windows[name];
           if (!w || w.ahead === null) continue;
-          const want = Math.round(s.aheadOf({ resetsAt: w.reset, utilization: w.utilization }, hours * HOUR, t, end) * 1000) / 1000;
+          const want = Math.round(s.leadOf({ resetsAt: w.reset, utilization: w.utilization }, hours * HOUR, t, end) * 1000) / 1000;
           assert.ok(near(w.ahead, want), `${r.requestId}: ${c.accountId}'s ${name} reads ${w.ahead}, not ${want}`);
         }
         // The 5-hour window runs to its reset and a weekly one five hours out at most, each to the end where it comes

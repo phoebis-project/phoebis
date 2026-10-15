@@ -147,15 +147,18 @@ same order: the header with the label (the email on hover) and the status badge,
 "Fable"), the Extra usage line, the chips and the poll reading. Each live window's meter reads the share left and its
 pace, `{window}: {pct} left, {n}% ahead of pace`, `{n}% behind pace` or `on pace`, with ` to its end at {time}` where
 the pace runs to the subscription's end rather than the reset, and a mark at the share of the window still to come.
-Under the meter the window reads `resets {ago}`, followed on a window the router projects by its projection at the
-window's horizon: `resets in 2h 13m, 81% at the reset` where the horizon is the reset (within a minute),
-`resets in 3d 5h, 44% in 5 h` where it comes earlier (five hours out on a weekly window, or the account's end), and
-`{pct}% now` once it has come. The reset and the projection split over two lines where the column does not hold them on
+Under the meter the window reads `resets {ago}`, followed on a window the router projects by the share the projection
+leaves at the window's horizon: `resets in 2h 13m, 19% left at the reset` where the horizon is the reset (within a
+minute), `resets in 3d 5h, 56% left in 5 h` where it comes earlier (five hours out on a weekly window, or the account's
+end), and `{pct} left now` once it has come. A window the sessions spend before its horizon reads the time until it runs
+out, `spent in 2 h 10 min`. The reset and the projection split over two lines where the column does not hold them on
 one, and the hover adds the burn behind the projection, `the sessions on this account burn 8.5% an hour`. The window
 bars of the Dashboard's account cards and of the Accounts list draw the projection alone in the reset's place, in a
-compact form (`81% at reset`, `44% in 5 h`), with the reset's instant on hover, and keep the reset where the window has
-no projection. The Accounts detail's bars read the whole label, split between its two parts where the bar is narrow. A
-window whose reset has passed with no reading since reads `expired {ago}` instead, with "no reading since the reset,
+compact form (`19% left at reset`, `56% left in 5 h`) that splits between the share and the horizon where the bar is
+narrow, with the reset's instant on hover, and keep the reset where the window has no projection. The Accounts detail's
+bars read the whole label, split between its two parts where the bar is narrow. The Pools dialog's Preview, the Sessions
+Runway column and the routing log keep the used share, the figure that the window ceiling of a pool is measured against.
+A window whose reset has passed with no reading since reads `expired {ago}` instead, with "no reading since the reset,
 {time}" on hover, and draws no share and an empty meter until the next reading, and a window the account does not report
 reads "not reported". A card with no window yet reads "No quota windows reported yet.", and one whose read failed shows
 the error with `, next attempt {time}` and a "Retry" button in the windows' place. The "Extra usage" chip reads `off`,

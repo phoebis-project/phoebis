@@ -36,6 +36,7 @@ export * from '@/lib/unit';
 export { MockApi } from '@/mock';
 export { ACCOUNTS } from '@/mock/accounts';
 export { burnOf, groupsOf } from '@/mock/analytics';
+export { leadOf } from '@/mock/lead';
 export { poolById } from '@/mock/pools';
 export { ALL_ROLLUPS, costSplitOf, requestById, rollups } from '@/mock/requests';
 export { STORY_IDS } from '@/mock/requests';

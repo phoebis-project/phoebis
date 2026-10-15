@@ -2018,9 +2018,10 @@ async function deleteAccountButton(theme) {
 
 /**
  * The window bars of the dashboard's account cards and the Accounts page's rows and detail card: each bar's reset line
- * stays inside its bar. A compact bar, three to a card, reads its projection in its reset's place on one line, and a
- * whole bar its reset and its projection each whole on its line, on one line where the bar holds both. The mock's story
- * projects its subscription windows, so its pass has phrases to read, and the router's seed draws no subscription bar.
+ * stays inside its bar. A compact bar, three to a card, reads its projection in its reset's place, its share and its
+ * horizon as two parts, and a whole bar its reset and its projection as two parts, each part whole on its line and
+ * inside its bar, on one line where the bar holds both. The mock's story projects its subscription windows, so its pass
+ * has phrases to read, and the router's seed draws no subscription bar.
  */
 async function windowBarLines(theme, path) {
   const say = (what) => failures.push(`${theme} ${path}: ${what}`);
@@ -2030,7 +2031,7 @@ async function windowBarLines(theme, path) {
       const range = document.createRange();
       range.selectNodeContents(el);
       const rects = [...range.getClientRects()].filter((r) => r.width > 0);
-      return { lines: new Set(rects.map((r) => Math.round(r.top))).size, width: Math.round(Math.max(0, ...rects.map((r) => r.width)) * 10) / 10 };
+      return { lines: new Set(rects.map((r) => Math.round(r.top))).size, width: Math.round(Math.max(0, ...rects.map((r) => r.width)) * 10) / 10, words: el.textContent?.trim() ?? '' };
     };
     return [...document.querySelectorAll('.wbars .wbar:not(.wbar--absent)')].map((bar) => {
       const reset = bar.querySelector('.wbar__reset');
@@ -2043,11 +2044,14 @@ async function windowBarLines(theme, path) {
       };
     });
   });
-  measurements.push(`${theme} ${path} window bar lines ${JSON.stringify(read.map((r) => [r.compact ? 'compact' : 'whole', r.words, r.line.width, r.line.lines, r.bar]))}`);
-  if (mock && !read.some((r) => r.compact && /^\d+% (at reset|in )/.test(r.words))) say('the story projects its subscription windows, yet no compact window bar reads a projection');
+  measurements.push(`${theme} ${path} window bar lines ${JSON.stringify(read.map((r) => [r.compact ? 'compact' : 'whole', r.words, r.line.width, r.line.lines, r.bar, r.parts.map((part) => part.width)]))}`);
+  const projects = (r) => r.compact && /^\d+% left (at reset|in |now)|^spent in /.test(r.words);
+  if (mock && !read.some(projects)) say('the story projects its subscription windows, yet no compact window bar reads a projection');
   for (const r of read) {
     const kind = r.compact ? 'compact window bar' : 'window bar';
     if (r.line.width > r.bar + 0.5) say(`the ${kind}'s line ${JSON.stringify(r.words)} needs ${r.line.width}px of its ${r.bar}px bar`);
+    for (const part of r.parts.filter((p) => p.width > r.bar + 0.5)) say(`the ${kind}'s part ${JSON.stringify(part.words)} needs ${part.width}px of its ${r.bar}px bar`);
+    if (projects(r) && r.parts.length !== 2) say(`the ${kind}'s projection ${JSON.stringify(r.words)} draws ${r.parts.length} parts, not its share and its horizon as two`);
     if (r.parts.length === 0 ? r.line.lines > 1 : r.parts.some((part) => part.lines > 1) || r.line.lines > r.parts.length) say(`the ${kind}'s line ${JSON.stringify(r.words)} wraps inside ${r.parts.length === 0 ? 'itself' : 'a part'}, over ${r.line.lines} lines`);
   }
 }
@@ -2317,9 +2321,17 @@ async function quotaCardHeights(theme) {
 }
 
 /** The card grid's floor (`.quota-grid`), the measured figure its comment carries. */
-const QUOTA_FLOOR = 403;
+const QUOTA_FLOOR = 433;
 /** The reset column's bound (`--qwin-reset` on `.qcard__windows`), past the widest single part of a live label. */
-const QUOTA_RESET = 120;
+const QUOTA_RESET = 150;
+/**
+ * The widest single parts a reset label can draw, which the story's windows need not reach: a window with nothing used
+ * whose horizon comes just short of five hours out, an idle window at its reset, a window the sessions spend just short
+ * of five hours out, the longest reset's own part and an expired line's first clause.
+ */
+const QUOTA_WORST_PARTS = ['100% left in 4 h 59 min', '100% left at the reset', 'spent in 4 h 59 min', 'resets in 23h 59m,', 'expired 2d 0h ago,'];
+/** The widest live label whole, which no column holds, so it breaks between its two parts. */
+const QUOTA_WIDEST_LABEL = 'resets in 23h 59m, 100% left in 4 h 59 min';
 
 /** Two phone windows under the shell's 900 px breakpoint, where the content is narrower than the card grid's floor. */
 const QUOTA_NARROW = [
@@ -2331,7 +2343,7 @@ const QUOTA_NARROW = [
  * Every Quota card's window grid holds its three columns: each meter, live or absent, at least 120 px wide, the grid
  * needing no more than its own width, no chip, meter or reset label ending past the room inside the card's border and
  * its body's padding, where the card's `overflow: hidden` would cut it, the chip column no wider than the card's widest
- * chip and the reset column no wider than the card's widest reset label within its 120 px bound, a label split between
+ * chip and the reset column no wider than the card's widest reset label within its 150 px bound, a label split between
  * its reset and its projection read by its wider part. A split label's unbroken width runs past the bound, so its
  * card's column stands at the bound. In the mock pass two cards stand in a row at the pass's 1280 by 800, as the floor
  * is set for. A meter held at its 120 px minimum while the columns run past the card passes a width reading alone, and
@@ -2345,7 +2357,8 @@ const QUOTA_NARROW = [
  * and every card ends inside the window, and the readings above hold except the reset column's, since the reset label
  * takes a row of its own across the grid. Then it puts the pass's window back. A resize arms no timer on this page, and
  * the check steps no clock and scrolls nothing, so the view's shot keeps its instants and its topbar. The router's seed
- * has no subscription account, so only the story's pass has meters to read.
+ * has no subscription account, so only the story's pass has meters to read. In the pass's window the bound also holds
+ * each of the widest parts a label can draw (`QUOTA_WORST_PARTS`), drawn off screen in the card's font.
  */
 async function quotaMeters(theme) {
   const say = (what) => failures.push(`${theme} /quota: ${what}`);
@@ -2450,6 +2463,31 @@ async function quotaMeters(theme) {
     if (mock) say('the page draws no card grid to set the floor beside');
     return;
   }
+  // The bound holds the widest part a label can draw, which no window of the story need reach, so each worst case is
+  // drawn off screen in a part of the card's own font, plain and in the bolder weight of the soonest window's label.
+  const worst = await page.evaluate(({ label, texts }) => {
+    const windows = document.querySelector('.qcard__windows');
+    if (!windows) return null;
+    const probe = document.createElement('span');
+    probe.style.cssText = 'left: -10000px; position: absolute; top: 0';
+    const part = document.createElement('span');
+    part.className = 'qwin__part';
+    probe.append(part);
+    windows.append(probe);
+    const width = (text, soon) => {
+      probe.className = soon ? 'qwin__reset is-soon' : 'qwin__reset';
+      part.textContent = text;
+      return Math.round(part.getBoundingClientRect().width * 10) / 10;
+    };
+    const parts = texts.map((text) => [text, width(text, false), width(text, true)]);
+    const whole = [label, width(label, false)];
+    probe.remove();
+    return { bound: parseFloat(getComputedStyle(windows).getPropertyValue('--qwin-reset')), label: whole, parts };
+  }, { label: QUOTA_WIDEST_LABEL, texts: QUOTA_WORST_PARTS });
+  measurements.push(`${theme} /quota reset parts in a ${first.view}px window ${JSON.stringify(worst)}`);
+  if (mock && worst === null) say('the story has subscription windows, yet no window grid is drawn to measure the reset parts in');
+  if (worst !== null && worst.bound !== QUOTA_RESET) say(`the reset column's bound is ${worst.bound}px, not the ${QUOTA_RESET} px the check reads`);
+  for (const [text, plain, soon] of worst?.parts ?? []) if (Math.max(plain, soon) > worst.bound) say(`the part ${JSON.stringify(text)} needs ${Math.max(plain, soon)}px, past the reset column's ${worst.bound} px bound`);
   // Rounded up, since a window a fraction short of twice the floor and the gap sets one card in a row.
   const floor = Math.ceil(first.gutter + 2 * QUOTA_FLOOR + 14);
   await page.setViewportSize({ height: was.height, width: floor });

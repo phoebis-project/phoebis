@@ -8,10 +8,11 @@ import { equivalentOf, fundingOf, modelWeeks, shareOrFallback } from '@/lib/cost
 import { NO_CLASS, NO_EFFORT, foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
-import { aheadOf, endOf } from '@/lib/quota';
+import { endOf } from '@/lib/quota';
 import { ACCOUNTS, QUOTA_HISTORY, accountById } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor, priceFor } from './catalog';
+import { leadOf } from './lead';
 import { keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';
 import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE, TABLES } from './samples';
@@ -2188,7 +2189,7 @@ function accountRollups(): AccountRollup[] {
       if (key === undefined || sample === undefined) continue;
       const sampledMs = Date.parse(sample.at);
       const { resetsAt } = walkBack(w, sampledMs, () => SERVED_FACTOR);
-      const read: WindowSample = { lead: aheadOf({ resetsAt, utilization: sample.utilization }, w.periodHours * HOUR, sampledMs, endOf(account, sampledMs)), resetsAt, sampledAt: sample.at, utilization: sample.utilization };
+      const read: WindowSample = { lead: leadOf({ resetsAt, utilization: sample.utilization }, w.periodHours * HOUR, sampledMs, endOf(account, sampledMs)), resetsAt, sampledAt: sample.at, utilization: sample.utilization };
       windows[key] = read;
     }
     return windows;

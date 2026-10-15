@@ -1,7 +1,8 @@
 import { planName } from '@/api/decode';
 import type { Account, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, WindowId } from '@/api/types';
-import { aheadOf, endOf } from '@/lib/quota';
+import { endOf } from '@/lib/quota';
 import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey } from '@/lib/windows';
+import { leadOf } from './lead';
 import { createRng } from './rng';
 import { ACCOUNT_SAMPLE, QUOTA_SNAPSHOT_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
@@ -53,7 +54,7 @@ export const ACCOUNTS: Account[] = ([
     status: 'cooldown',
     routingEnabled: true,
     // The poll's week for a model the family table has no row for: kept and shown under its key, read by no rule.
-    // Its sessions burn the 5-hour window fast enough to reach 81% at the reset, past the all pool's ceiling.
+    // Its sessions burn the 5-hour window fast enough to read 19% left at the reset, past the all pool's ceiling.
     windows: [win('5h', 0.62, 2 * HOUR + 14 * MINUTE, 40_000, 0.085), win('7d', 0.41, 3 * DAY + 5 * HOUR + 40 * MINUTE, 40_000, 0.006), win('seven_day_opus', 0.08, 3 * DAY + 5 * HOUR + 40 * MINUTE)],
     fableWindow: win('7d_fable', 0.12, 3 * DAY + 5 * HOUR + 40 * MINUTE),
     extraUsage: { disabledReason: null, enabled: true, inUse: false, monthlyLimitCredits: 5000, usedCredits: 1234 },
@@ -263,7 +264,7 @@ export const ACCOUNTS: Account[] = ([
 ] satisfies Account[]).map((a) => {
   // Standing in for the router, which answers each window's lead toward the earlier of its reset and the account's end.
   const end = endOf(a, NOW);
-  const led = (w: RateLimitWindow): RateLimitWindow => ({ ...w, lead: aheadOf(w, w.periodHours * HOUR, NOW, end) });
+  const led = (w: RateLimitWindow): RateLimitWindow => ({ ...w, lead: leadOf(w, w.periodHours * HOUR, NOW, end) });
   return { ...a, fableWindow: a.fableWindow === null ? null : led(a.fableWindow), plan: planName(a.subscription), pool: null, usage: usageOf(a), windows: a.windows.map(led) };
 });
 

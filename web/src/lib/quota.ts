@@ -44,39 +44,19 @@ export const paceEnd = (resetsAt: string | null, end: number | null): number | n
 /** " to its end at 15:42" for the end a pace runs to (`paceEnd`), as the decision card's Pace hover names it; empty for none. */
 export const toEndWords = (end: number | null, now: number): string => (end === null ? '' : ` to its end at ${instant(end, now)}`);
 
-/** The share of a window elapsed from its start to the earlier of its `reset` and the account's `end`, clamped to 0 to 1. */
-function elapsedShare(reset: number, lengthMs: number, now: number, end: number | null): number {
-  const start = reset - lengthMs;
-  const span = Math.min(reset, end ?? reset) - start;
-  // Past its reset a window reads fully elapsed, where the router reads its own use since: an accepted approximation.
-  const elapsed = span <= 0 ? 1 : (now - start) / span;
-  return Math.min(1, Math.max(0, elapsed));
+/** One less the share elapsed, read off the field as the utilization less the lead, so the mark and the words read one
+ *  figure. Null without a reset or without a lead. */
+export function remainingTimeShare(w: RateLimitWindow): number | null {
+  if (w.resetsAt === null || w.lead === null) return null;
+  return Math.min(1, Math.max(0, 1 - (w.utilization - w.lead)));
 }
 
-/**
- * The router's reading: a window's utilization less the share of it that has elapsed, from its start to the earlier
- * of its reset and the account's `end` (`endOf`), clamped to 0 to 1; 0 elapsed without a reset.
- */
-export function aheadOf(window: { resetsAt: string | null; utilization: number }, lengthMs: number, now: number, end: number | null): number {
-  if (window.resetsAt === null) return window.utilization;
-  return window.utilization - elapsedShare(Date.parse(window.resetsAt), lengthMs, now, end);
-}
-
-/**
- * The share of a window's period still to come toward the earlier of its reset and the account's `end`, 0 to 1, so
- * the pace mark and `paceWords` read one deadline. Null without a reset time.
- */
-export function remainingTimeShare(w: RateLimitWindow, now: number, end: number | null): number | null {
-  if (w.resetsAt === null) return null;
-  return 1 - elapsedShare(Date.parse(w.resetsAt), w.periodHours * HOUR, now, end);
-}
-
-/** The lead over pace in words, as `aheadOf` reads it: "12% ahead of pace", "5% behind pace", or "on pace" within
- *  one point (a lead under 0.01), with " to its end at 15:42" where the pace runs to the account's `end`. Null
- *  without a reset time. */
+/** The lead in words off the answer's field: "12% ahead of pace", "5% behind pace", "on pace" within a point, with
+ *  " to its end at 15:42" where the pace runs to the account's end. The lead is as of the answer, not aged on the
+ *  page's clock between reads. Null without a reset or without a lead. */
 export function paceWords(w: RateLimitWindow, now: number, end: number | null): string | null {
-  if (w.resetsAt === null) return null;
-  const lead = aheadOf(w, w.periodHours * HOUR, now, end);
+  if (w.resetsAt === null || w.lead === null) return null;
+  const lead = w.lead;
   const words = Math.abs(lead) < 0.01 ? 'on pace' : `${Math.round(Math.abs(lead) * 100)}% ${lead > 0 ? 'ahead of' : 'behind'} pace`;
   return `${words}${toEndWords(paceEnd(w.resetsAt, end), now)}`;
 }
@@ -95,18 +75,32 @@ export function minuteSpan(ms: number): string {
 }
 
 /**
- * The projection at the window's horizon, `104% at the reset` where the horizon is the reset and `44% in 5 h` where it
- * falls earlier (five hours out on a weekly window, or the account's end), with `at reset` in the compact form the
- * window bars draw, and `41% now` once the horizon has come. Null without a projection.
+ * The share left at the window's horizon: `19% left at the reset` where the horizon is the reset (within a minute),
+ * `56% left in 5 h` where it comes earlier, `59% left now` once it has come, the share `1 - projection` floored at
+ * zero, and `19% left at reset` in the compact form the bars draw. A window the projection spends before its horizon
+ * (`projection` at 1 or more) reads the instant it runs out instead, `spent in 2 h 10 min` in both forms, the span
+ * `(1 - utilization) / burn` hours through `minuteSpan`. With `burn` null or zero it reads `0% left` in the horizon's
+ * form, and a utilization already at 1 or more reads `0% left now`. Null without a projection.
  */
-export function projectionWords(w: Pick<RateLimitWindow, 'horizon' | 'projection' | 'resetsAt'>, now: number, compact = false): string | null {
+export function projectionWords(w: Pick<RateLimitWindow, 'burn' | 'horizon' | 'projection' | 'resetsAt' | 'utilization'>, now: number, compact = false): string | null {
+  const parts = projectionParts(w, now, compact);
+  return parts === null ? null : parts.join(' ');
+}
+
+/** `projectionWords` as its two parts, the share left (or `spent`) and the horizon, so a window bar too narrow for the
+ *  words on one line breaks between the two and keeps each whole. */
+export function projectionParts(w: Pick<RateLimitWindow, 'burn' | 'horizon' | 'projection' | 'resetsAt' | 'utilization'>, now: number, compact = false): [string, string] | null {
   if (w.projection === null || w.horizon === null) return null;
+  if (w.utilization >= 1) return ['0% left', 'now'];
+  // The sessions spend the window before its horizon: the instant the used share reaches 1 along the burn.
+  if (w.projection >= 1 && w.burn !== null && w.burn > 0) return ['spent', `in ${minuteSpan(((1 - w.utilization) / w.burn) * HOUR)}`];
+  const left = `${fmtPct(Math.max(0, 1 - w.projection))} left`;
   const horizon = Date.parse(w.horizon);
-  if (horizon <= now) return `${fmtPct(w.projection)} now`;
+  if (horizon <= now) return [left, 'now'];
   // The route reads the horizon off the router's latest reading and the reset off the ledger's newest sample, whole
   // seconds on one path and milliseconds on the other, so a horizon within a minute of the reset is the reset.
   const atReset = w.resetsAt !== null && Math.abs(Date.parse(w.resetsAt) - horizon) < MINUTE;
-  return `${fmtPct(w.projection)} ${atReset ? (compact ? 'at reset' : 'at the reset') : `in ${minuteSpan(horizon - now)}`}`;
+  return [left, atReset ? (compact ? 'at reset' : 'at the reset') : `in ${minuteSpan(horizon - now)}`];
 }
 
 /** The burn behind a projection, `the sessions on this account burn 7.3% an hour`. Null without a burn. */

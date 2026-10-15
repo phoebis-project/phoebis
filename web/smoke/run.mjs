@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, minuteSpan, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, projectionWords, React, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, minuteSpan, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, projectionWords, React, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, words } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -751,8 +751,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   });
   const primary = read.find((r) => r.account === 'primary' && r.label === '5h')?.text ?? '';
   results.push({
-    name: "/ each account card's window bars read the compact projection in the reset's place, primary's 5-hour 81% at reset",
-    ok: read.some((r) => r.want !== null) && barsOff(read).length === 0 && primary === '81% at reset',
+    name: "/ each account card's window bars read the compact projection in the reset's place, primary's 5-hour 19% left at reset",
+    ok: read.some((r) => r.want !== null) && barsOff(read).length === 0 && primary === '19% left at reset',
     missing: [...barsOff(read).map((r) => JSON.stringify(r)), primary || 'no 5h bar on primary'],
   });
   page.unmount();
@@ -1011,7 +1011,8 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   // The projection rides the reset label after the reset, on one line, read at one frozen instant so the span to a
   // weekly horizon is the one the page drew: the smoke's clock runs past the mock's anchor, so the phrase comes from the
   // shared words and the mock's own windows rather than a literal span. The story's figures are the burns its windows
-  // carry: nightly's 5-hour window and primary's reach their reset, and primary's 7-day window reads its five hours.
+  // carry: nightly's 5-hour window runs out before its reset, primary's reaches its reset with a share left, and
+  // primary's 7-day window reads its five hours.
   const at = Date.now();
   const q = await mount('/quota', { now: at });
   const accounts = (await api.listAccounts()).filter((a) => a.kind === 'oauth');
@@ -1042,12 +1043,12 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   const weekly = wOf('primary', '7d');
   const story = { nightly5h: cellOf('nightly', '5h').text, primary5h: cellOf('primary', '5h').text, primary7d: cellOf('primary', '7d').text };
   results.push({
-    name: "/quota nightly's 5-hour window reads 104% at the reset, primary's 81% at the reset and its 7-day window 44% in the span to its horizon",
+    name: "/quota nightly's 5-hour window reads spent in 1 h 35 min, primary's 19% left at the reset and its 7-day window 56% left in the span to its horizon",
     ok:
-      story.nightly5h.endsWith(', 104% at the reset') &&
-      story.primary5h.endsWith(', 81% at the reset') &&
+      story.nightly5h.endsWith(', spent in 1 h 35 min') &&
+      story.primary5h.endsWith(', 19% left at the reset') &&
       weekly !== null &&
-      projectionWords(weekly, at)?.startsWith('44% in ') === true &&
+      projectionWords(weekly, at)?.startsWith('56% left in ') === true &&
       story.primary7d.endsWith(`, ${projectionWords(weekly, at)}`),
     missing: [JSON.stringify(story), weekly ? String(projectionWords(weekly, at)) : 'no 7-day window on primary'],
   });
@@ -1083,7 +1084,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
       const meter = chip?.nextElementSibling;
       const marks = [...(meter?.querySelectorAll('.meter__mark') ?? [])];
       const live = w !== null && !(w.resetsAt !== null && Date.parse(w.resetsAt) < at);
-      const share = live ? remainingTimeShare(w, at, endOf(a, at)) : null;
+      const share = live ? remainingTimeShare(w) : null;
       rows.push({ account: a.label, left: marks[0]?.style.left ?? null, marks: marks.length, name, title: meter?.getAttribute('title') ?? '', want: share === null ? null : `${share * 100}%` });
     }
   }
@@ -1858,8 +1859,8 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   const rowText = rows.find((r) => r.account === 'primary' && r.label === '5h')?.text ?? '';
   const detailText = detail.find((r) => r.label === '5-hour')?.text ?? '';
   results.push({
-    name: "/accounts each row's window bars read the compact projection in the reset's place, primary's 5-hour 81% at reset",
-    ok: rows.some((r) => r.want !== null) && barsOff(rows).length === 0 && rowText === '81% at reset',
+    name: "/accounts each row's window bars read the compact projection in the reset's place, primary's 5-hour 19% left at reset",
+    ok: rows.some((r) => r.want !== null) && barsOff(rows).length === 0 && rowText === '19% left at reset',
     missing: [...barsOff(rows).map((r) => JSON.stringify(r)), rowText || 'no 5h bar on primary'],
   });
   const opus = primary?.windows.find((w) => w.id === 'seven_day_opus') ?? null;
@@ -1870,8 +1871,8 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     missing: [opusText, JSON.stringify(opus)],
   });
   results.push({
-    name: "/accounts the detail card's window bars read the whole projection after the reset, primary's 5-hour 81% at the reset",
-    ok: detail.length === 4 && barsOff(detail).length === 0 && /^resets in .+, 81% at the reset$/.test(detailText),
+    name: "/accounts the detail card's window bars read the whole projection after the reset, primary's 5-hour 19% left at the reset",
+    ok: detail.length === 4 && barsOff(detail).length === 0 && /^resets in .+, 19% left at the reset$/.test(detailText),
     missing: [...barsOff(detail).map((r) => JSON.stringify(r)), detailText || 'no 5-hour bar on the detail'],
   });
   page.unmount();

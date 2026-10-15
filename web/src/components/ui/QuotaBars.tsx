@@ -1,6 +1,6 @@
 import type { Account, RateLimitWindow } from '@/api/types';
 import { fmtAbsolute, fmtPct, fmtRelative } from '@/lib/format';
-import { isExpired, meterTone, projectionWords, remainingOf } from '@/lib/quota';
+import { isExpired, meterTone, projectionParts, remainingOf } from '@/lib/quota';
 import { WINDOW_ORDER } from '@/lib/windows';
 import { Meter } from './primitives';
 
@@ -8,7 +8,7 @@ export function WindowBar({ window: w, now, soon = false, showLabel = true, comp
   const remaining = remainingOf(w);
   const reset = compact ? fmtRelative(w.resetsAt, now) : `resets ${fmtRelative(w.resetsAt, now)}`;
   // A window past its reset says nothing until its next reading, as the Quota cell's expired line does.
-  const projection = isExpired(w, now) ? null : projectionWords(w, now, compact);
+  const projection = isExpired(w, now) ? null : projectionParts(w, now, compact);
   return (
     <div className="wbar">
       <div className="wbar__head">
@@ -19,16 +19,19 @@ export function WindowBar({ window: w, now, soon = false, showLabel = true, comp
       {/* Three of these share the width of one card, so the compact form drops
           the word and leans on the title for the absolute instant, and a
           window that projects shows the projection in the reset's place, since
-          a third of a card holds one of the two. A whole bar keeps both and
-          breaks between them where it is too narrow. */}
-      <div className={`wbar__reset ${projection !== null && !compact ? 'wbar__reset--split' : ''} ${soon ? 'is-soon' : ''}`} title={`resets ${fmtAbsolute(w.resetsAt)}`}>
+          a third of a card holds one of the two, and breaks it between its
+          share and its horizon where even that is too wide. A whole bar keeps
+          both and breaks between them where it is too narrow. */}
+      <div className={`wbar__reset ${projection !== null ? 'wbar__reset--split' : ''} ${soon ? 'is-soon' : ''}`} title={`resets ${fmtAbsolute(w.resetsAt)}`}>
         {projection === null ? (
           reset
         ) : compact ? (
-          projection
+          <>
+            <span className="wbar__part">{projection[0]}</span> <span className="wbar__part">{projection[1]}</span>
+          </>
         ) : (
           <>
-            <span className="wbar__part">{reset},</span> <span className="wbar__part">{projection}</span>
+            <span className="wbar__part">{reset},</span> <span className="wbar__part">{projection.join(' ')}</span>
           </>
         )}
       </div>
