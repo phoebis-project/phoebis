@@ -590,6 +590,17 @@ test('the session-pin cap exemption is decided by its hold after the pick', asyn
   assert.deepEqual(terminiOf(m), THREE_TERMINI(['chosen', 'placed']));
 });
 
+test("a group's stations sit far enough apart that a badge pill wider than its label clears its neighbors' labels", async () => {
+  // The failover landing's No fit station reads `fell through`, which wraps at the label's width, and its pill around
+  // `through` (63 px in Chromium) stands past the label's edges. Half of it and half of a neighbor's 58 px label take
+  // 60.5 px.
+  const m = modelOf(await recordOf('req_b8c3e9d4-e61/2'));
+  assert.equal(stationOf(m, 'partitions:no_fit').badge, 'fell through');
+  const layout = d.layoutStrip(m, 958);
+  const [atCap, noFit, windingDown] = ['partitions:at_cap', 'partitions:no_fit', 'partitions:winding_down'].map((id) => layout.stations[id].x);
+  assert.ok(noFit - atCap >= 60.5 && windingDown - noFit >= 60.5, `the partitions sit ${noFit - atCap} and ${windingDown - noFit} px apart`);
+});
+
 test("the layout spaces by weight and keeps the surface's height", async () => {
   const freshModel = modelOf(await recordOf('req_ef099b34-453/1'));
   const fresh = d.layoutStrip(freshModel, 958);
@@ -599,10 +610,12 @@ test("the layout spaces by weight and keeps the surface's height", async () => {
   assert.ok(xs.every((x, i) => i === 0 || x > xs[i - 1]), 'every x increases');
   assert.ok(freshModel.stations.every((s) => fresh.stations[s.id].y === 104));
   const parts = freshModel.stations.filter((s) => s.id.startsWith('partitions:')).map((s) => fresh.stations[s.id].x);
-  assert.ok(parts.every((x, i) => i === 0 || Math.abs(x - parts[i - 1] - fresh.unit) < 1e-9), 'the partitions sit one unit apart');
+  // The partitions stand 61 px apart where a unit is narrower, and the way to the termini gives up the room.
+  const gap = Math.max(fresh.unit, 61);
+  assert.ok(parts.every((x, i) => i === 0 || Math.abs(x - parts[i - 1] - gap) < 1e-9), `the partitions sit ${gap} px apart`);
   assert.ok(Math.abs(fresh.stations.eligible.x - fresh.stations.pin.x - 1.45 * fresh.unit) < 1e-9, 'two stations of no group sit 1.45 units apart');
   const last = xs[xs.length - 1];
-  assert.ok(Math.abs(fresh.termini.chosen.x - last - 1.9 * fresh.unit) < 1e-9, 'the termini sit 1.9 units past the last station');
+  assert.ok(Math.abs(fresh.termini.chosen.x - last - (1.9 * fresh.unit - 3 * (gap - fresh.unit))) < 1e-9, 'the termini sit 1.9 units past the last station, less the room the partitions took');
   assert.deepEqual([fresh.termini.chosen.y, fresh.termini.held.y, fresh.termini.refused.y], [104, 140, 176]);
   assert.equal(fresh.height, Math.max(104 + 76 + freshModel.leaves.length * 30 + 4, 208));
   assert.ok(Object.values(fresh.labels).every((l) => l.width > 0 && l.width <= 110));
@@ -723,7 +736,8 @@ test("a station's label is no wider than the way to its nearest neighbor on its 
     const room = neighborOf(capped, id) - 4;
     assert.ok(width > 0 && width <= room + 1e-9, `${id}'s label is ${width} px wide beside ${room} px`);
   }
-  // Two partitions of one group stand a unit apart, both reading "fell through" when neither preference keeps a member.
+  // Two partitions of one group stand 61 px apart at this width, both reading "fell through" when neither preference
+  // keeps a member.
   const freshRecord = await recordOf('req_ef099b34-453/1');
   const fell = (s) => (s.step === 'partitions' ? { ...s, facts: s.facts.map((f) => (f.key === 'no_fit' || f.key === 'winding_down' ? { ...f, value: 'fell_through' } : f)) } : s);
   const m = modelOf({ ...freshRecord, walk: freshRecord.walk.map(fell) });
@@ -733,7 +747,7 @@ test("a station's label is no wider than the way to its nearest neighbor on its 
   for (const id of pair) {
     const label = fresh.labels[id];
     assert.equal(label.above, false, id);
-    assert.ok(Math.abs(label.width - (fresh.unit - 4)) < 1e-9, `${id}'s label is ${label.width} px wide, not the unit of ${fresh.unit} less 4`);
+    assert.ok(Math.abs(label.width - (Math.max(fresh.unit, 61) - 4)) < 1e-9, `${id}'s label is ${label.width} px wide, not the partitions' gap less 4`);
   }
 });
 

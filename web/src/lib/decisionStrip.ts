@@ -516,6 +516,10 @@ const LABEL_MAX = 110;
 const IN_GROUP = 1;
 const BETWEEN = 1.45;
 const END_FRESH = 1.9;
+// A partition's badge can wrap to a word wider than its label (`through` of a failover's `fell through`, a 63 px pill),
+// which stands past the label's edges, so two partitions stand at least this far apart to keep the pill clear of a
+// neighbor's 58 px label.
+const PARTITION_GAP = 61;
 const END_PINNED = 2.2;
 const LEFT = 36;
 const RIGHT = 150;
@@ -722,15 +726,19 @@ function layoutLine(model: StripModel, width: number, measured: LabelHeights | u
   const weights = line.slice(1).map((s, i) => (sameGroup(line[i], s) ? IN_GROUP : BETWEEN));
   const end = model.shape === 'pinned' ? END_PINNED : END_FRESH;
   const unit = Math.min(UNIT_MAX, (width - LEFT - RIGHT) / (sum(weights) + end));
+  // The way on to the termini gives up the room the partitions take past their unit, so every other gap keeps its
+  // weight and its labels their room.
+  const gaps = line.slice(1).map((s, i) => Math.max(weights[i] * unit, s.group === 'partitions' && sameGroup(line[i], s) ? PARTITION_GAP : 0));
+  const taken = sum(gaps) - sum(weights) * unit;
   const y0 = (model.branch?.kind === 'rung' ? Y0_RUNG : Y0) + dy;
   const yu = YU + dy;
   const points: Record<string, Point> = {};
   let x = LEFT;
   line.forEach((s, i) => {
-    if (i > 0) x += weights[i - 1] * unit;
+    if (i > 0) x += gaps[i - 1];
     points[s.id] = { x, y: y0 };
   });
-  let xEnd = x + end * unit;
+  let xEnd = x + end * unit - taken;
   // A leaf runs left from its host, so a short line moves right until the widest leaf fits there, as far as the
   // termini's margin allows.
   const host = model.host !== null && model.leaves.length > 0 ? points[model.host] : undefined;
