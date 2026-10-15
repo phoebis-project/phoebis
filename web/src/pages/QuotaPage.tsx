@@ -10,9 +10,9 @@ import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/comp
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinute, fmtPct, fmtRelative, fmtShortTime, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, isExpired, isSubscription, meterTone, paceWords, planChip, pollReading, projectionWords, remainingOf, remainingTimeShare, soonestReset, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, isExpired, isSubscription, meterTone, paceWords, planChip, pollReading, projectionWords, remainingOf, remainingTimeShare, sortByPace, soonestReset, windowOf, type ExtraUsageState } from '@/lib/quota';
 
-type Sort = 'default' | 'soonest';
+type Sort = 'default' | 'pace5h' | 'pace7d' | 'paceWeek' | 'soonest';
 
 const QUOTA_SECTIONS = [
   { id: 'accounts', label: 'Accounts' },
@@ -49,6 +49,9 @@ export function QuotaPage() {
   const snapById = useMemo(() => new Map(subscriptions.flatMap((a) => (a.usage ? [[a.id, a.usage] as const] : []))), [subscriptions]);
 
   const visible = useMemo(() => {
+    if (sort === 'pace5h') return sortByPace(subscriptions, '5h', now);
+    if (sort === 'pace7d') return sortByPace(subscriptions, '7d', now);
+    if (sort === 'paceWeek') return sortByPace(subscriptions, '7d_fable', now);
     if (sort === 'soonest') {
       const nextReset = (a: Account) => {
         const future = a.windows.flatMap((w) => (w.resetsAt === null ? [] : [Date.parse(w.resetsAt)])).filter((t) => t > now);
@@ -107,6 +110,9 @@ export function QuotaPage() {
             <Select value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sort">
               <option value="default">Default order</option>
               <option value="soonest">Soonest recovery</option>
+              <option value="pace5h">5-hour pace</option>
+              <option value="pace7d">7-day pace</option>
+              <option value="paceWeek">7-day Fable pace</option>
             </Select>
           </div>
           {failure ?? (

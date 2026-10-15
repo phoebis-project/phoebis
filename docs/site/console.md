@@ -110,14 +110,15 @@ of {ago}`, the read being the 24-hour figures, the accounts, the recent requests
 Two rings, "5h remaining" and "7d remaining", show how much of the pooled 5-hour and 7-day capacity is left, under the
 subtitle "Subscription accounts, 5-hour window, weighed by tier" (and its 7-day twin), the first with a "Cost
 reference" link that opens the dialog on Tiers and peak band. Each subscription account is weighed by its tier's
-capacity on the window from the subscription cost model and listed with its own remaining share, the ring's center
-reads the share "of capacity left", and the line under it reads `{n} of {m} {tier} windows left`, such as 0.39 of 1.30
-Max 20x windows. A window whose reset has passed with no reading since counts as a full allowance, and an account whose
-tier the model does not size, or has no capacity for on the window, is named under the ring with the reason. Without a
-subscription account the card reads "No subscription accounts" and "A subscription account reports the window this
-card draws.", and with none sized "No listed account's tier is sized for the 5-hour window." (or 7-day). Each account
-keeps one color across the Dashboard, the Quota view and the Analytics, in the order of its id, the eight colors
-cycling past eight accounts, and an account the registry does not list draws muted.
+capacity on the window from the subscription cost model and listed with its own remaining share, the most of its window
+left first, the ring's center reads the share "of capacity left", and the line under it reads
+`{n} of {m} {tier} windows left`, such as 0.39 of 1.30 Max 20x windows. A window whose reset has passed with no reading
+since counts as a full allowance, and an account whose tier the model does not size, or has no capacity for on the
+window, is named under the ring with the reason. Without a subscription account the card reads "No subscription
+accounts" and "A subscription account reports the window this card draws.", and with none sized "No listed account's
+tier is sized for the 5-hour window." (or 7-day). Each account keeps one color across the Dashboard, the Quota view and
+the Analytics, in the order of its id, the eight colors cycling past eight accounts, and an account the registry does
+not list draws muted.
 
 "Accounts" draws one small card per account, linking to its detail, with the status badge, the email, "Overage active"
 while requests bill as extra usage, the cooldown line, and "API key" for an API-key account. "Recent requests" ("Last
@@ -144,11 +145,14 @@ needing attention, `, {n} need attention`. Auto reload starts at 5 s. A section 
 Accounts, where the view opens, and Quota windows, which a link or a reload with `#quota-windows` lands on. The readings
 are the ledger's [quota samples](statistics.md#quota-samples).
 
-Accounts draws a card per account, sorted "Default order" or "Soonest recovery", every card with the same slots in the
-same order: the header with the label (the email on hover) and the status badge, one row per window ("5h", "7d" and
-"Fable"), the Extra usage line, the chips and the poll reading. Each live window's meter reads the share left and its
-pace, `{window}: {pct} left, {n}% ahead of pace`, `{n}% behind pace` or `on pace`, with ` to its end at {time}` where
-the pace runs to the subscription's end rather than the reset, and a mark at the share of the window still to come.
+Accounts draws a card per account, sorted "Default order", "Soonest recovery", "5-hour pace", "7-day pace" or "7-day
+Fable pace", every card with the same slots in the same order: the header with the label (the email on hover) and the
+status badge, one row per window ("5h", "7d" and "Fable"), the Extra usage line, the chips and the poll reading. The
+three pace orders put the account furthest ahead of that window's pace first, the one whose used share runs furthest
+past the share of the window elapsed (the lead the router answers for each window), and the accounts without the
+window or with the window expired last. Each live window's meter reads the share left and its pace,
+`{window}: {pct} left, {n}% ahead of pace`, `{n}% behind pace` or `on pace`, with ` to its end at {time}` where the pace
+runs to the subscription's end rather than the reset, and a mark at the share of the window still to come.
 Under the meter the window reads `resets {ago}`, followed on a window the router projects by the share the projection
 leaves at the window's horizon: `resets in 2h 13m, 19% left at the reset` where the horizon is the reset (within a
 minute), `resets in 3d 5h, 56% left in 5 h` where it comes earlier (five hours out on a weekly window, or the account's

@@ -181,3 +181,28 @@ test('a projection past the window without a burn reads no share left, and a win
   assert.equal(d.projectionWords({ ...full, utilization: 1.02 }, now, true), '0% left now', 'past 1, in the compact form');
   assert.equal(d.projectionWords({ ...full, projection: null }, now), null, 'a window without a projection');
 });
+
+test('a pace order reads the account furthest ahead of the window first and the ones without a lead on it last, ties by label', () => {
+  const now = Date.UTC(2026, 8, 16, 14, 30);
+  const win = (id, lead, resetsInMs = 2 * HOUR) => ({ id, label: id, lead, observedAt: new Date(now - 40_000).toISOString(), periodHours: id === '5h' ? 5 : 168, resetsAt: new Date(now + resetsInMs).toISOString(), utilization: 0.5 });
+  // The answer carries the model week apart from the account's windows, as the decoder splits it off.
+  const account = (label, windows, fableWindow = null) => ({ fableWindow, id: label, label, windows });
+  const order = (accounts, id) => d.sortByPace(accounts, id, now).map((a) => a.label);
+
+  const both = [account('primary', [win('5h', 0.2)]), account('secondary', [win('5h', -0.1)]), account('nightly', [win('5h', 0.05)])];
+  assert.deepEqual(order(both, '5h'), ['primary', 'nightly', 'secondary'], 'leads of 0.2, -0.1 and 0.05 read 0.2, 0.05, -0.1');
+  assert.deepEqual(
+    both.map((a) => a.label),
+    ['primary', 'secondary', 'nightly'],
+    'the list the page holds keeps its own order',
+  );
+  assert.deepEqual(order([account('weekly', [win('7d', 0.3)]), account('behind', [win('5h', -0.4)])], '5h'), ['behind', 'weekly'], 'an account without the window after one behind its pace');
+  assert.deepEqual(order([account('b', [win('5h', 0.1)]), account('a', [win('5h', 0.1)])], '5h'), ['a', 'b'], 'two equal leads by label');
+  assert.deepEqual(order([account('expired', [win('5h', 0.9, -HOUR)]), account('behind', [win('5h', -0.2)])], '5h'), ['behind', 'expired'], 'an expired window after a lead behind pace');
+  assert.deepEqual(order([account('unread', [win('7d', null)]), account('ahead', [win('7d', 0.1)])], '7d'), ['ahead', 'unread'], 'a window without a lead after one with');
+  assert.deepEqual(order([account('z', []), account('y', [win('5h', 0.4, -HOUR)]), account('x', [win('5h', null)])], '5h'), ['x', 'y', 'z'], 'the accounts without a lead read by label among themselves');
+
+  const weeks = [account('studio', [win('7d', 0.5)], win('7d_fable', -0.3)), account('nightly', [win('7d', -0.5)], win('7d_fable', 0.2)), account('legacy', [win('7d', 0.1)])];
+  assert.deepEqual(order(weeks, '7d_fable'), ['nightly', 'studio', 'legacy'], "the model week reads the account's Fable window, an account without one last");
+  assert.deepEqual(order(weeks, '7d'), ['studio', 'legacy', 'nightly'], 'the 7-day order reads the 7-day window beside it');
+});

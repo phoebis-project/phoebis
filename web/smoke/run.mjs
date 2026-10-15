@@ -822,6 +822,22 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: "/ an account's cooldown line reads the row that cools it, never its fast lane's", ok: /^cooldown ends in 5[34]m$/.test(cooldownLine ?? ''), missing: [cooldownLine ?? 'no cooldown line on primary'] });
 }
 {
+  // Each remaining list reads in its ring's order, the account with the most of its own window left first, so the
+  // shares it prints run down the list. On the story the registry's order of its four routable subscription accounts
+  // runs down on neither window.
+  const listOf = (title) => {
+    const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
+    return [...(card?.querySelectorAll('.remaining__list li') ?? [])].map((li) => [li.querySelector('a')?.textContent ?? '', li.querySelector('.num')?.textContent ?? '']);
+  };
+  const lists = ['5h remaining', '7d remaining'].map((title) => ({ rows: listOf(title), title }));
+  const descending = (rows) => rows.every(([, share], i) => i === 0 || Number.parseFloat(share) <= Number.parseFloat(rows[i - 1][1]));
+  results.push({
+    name: '/ each remaining list reads the account with the most of its own window left first, the shares it prints running down the list',
+    ok: lists.every((l) => l.rows.length === 4 && l.rows.every(([label, share]) => label !== '' && /^\d+%$/.test(share)) && descending(l.rows)),
+    missing: lists.map((l) => `${l.title}: ${JSON.stringify(l.rows)}`),
+  });
+}
+{
   // The account cards draw the compact bars three to a card, each window with a projection reading the compact phrase
   // in its reset's place, at one frozen instant so the span to a weekly horizon is the page's own.
   const at = Date.now();
@@ -1014,6 +1030,57 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
       !names.some((n) => apiKeys.includes(n)) &&
       m.container.querySelector('.timeline') === null,
     missing: [...tabs, JSON.stringify(lists), names.join(','), m.container.querySelector('.timeline') ? 'a timeline is drawn' : 'no timeline'],
+  });
+}
+{
+  // Each pace order reads that window's lead off the account answer, the account furthest ahead first, and an account
+  // whose window is absent, expired or without a lead after every one with a lead, ties by label. The story's leads
+  // lie on both sides of zero on the 5-hour and 7-day windows, so each order moves cards past one another. The page
+  // mounts on its own frozen instant, so the shared mount's later checks keep the default order.
+  const at = Date.now();
+  const q = await mount('/quota', { now: at });
+  const accounts = (await api.listAccounts()).filter((a) => a.kind === 'oauth');
+  const select = q.container.querySelector('#accounts select[aria-label="Sort"]');
+  const options = [...(select?.options ?? [])].map((o) => `${o.value}: ${o.textContent}`);
+  const drawn = () => [...q.container.querySelectorAll('.qcard__name')].map((n) => n.textContent?.trim() ?? '');
+  const leadOn = (a, id) => {
+    const w = id === '7d_fable' ? a.fableWindow : (a.windows.find((x) => x.id === id) ?? null);
+    return w === null || (w.resetsAt !== null && Date.parse(w.resetsAt) < at) ? null : w.lead;
+  };
+  const wanted = (id) =>
+    [...accounts]
+      .sort((a, b) => {
+        const [la, lb] = [leadOn(a, id), leadOn(b, id)];
+        if (la === null || lb === null) return la === lb ? a.label.localeCompare(b.label) : la === null ? 1 : -1;
+        return lb - la || a.label.localeCompare(b.label);
+      })
+      .map((a) => a.label);
+  const sortBy = async (value) => {
+    if (select) setSelect.call(select, value);
+    select?.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await q.settle();
+  };
+  const orders = [];
+  for (const [value, id] of [
+    ['pace5h', '5h'],
+    ['pace7d', '7d'],
+    ['paceWeek', '7d_fable'],
+  ]) {
+    await sortBy(value);
+    orders.push({ drawn: drawn(), value, want: wanted(id) });
+  }
+  const sides = ['5h', '7d'].map((id) => accounts.map((a) => leadOn(a, id)).filter((l) => l !== null)).map((leads) => leads.some((l) => l > 0) && leads.some((l) => l < 0));
+  await sortBy('default');
+  const back = drawn();
+  q.unmount();
+  results.push({
+    name: '/quota sorts its cards five ways, and each pace order reads the account furthest ahead of that window first and the ones without a lead on it last',
+    ok:
+      JSON.stringify(options) === JSON.stringify(['default: Default order', 'soonest: Soonest recovery', 'pace5h: 5-hour pace', 'pace7d: 7-day pace', 'paceWeek: 7-day Fable pace']) &&
+      orders.every((o) => o.want.length > 0 && JSON.stringify(o.drawn) === JSON.stringify(o.want)) &&
+      sides.every(Boolean) &&
+      JSON.stringify(back) === JSON.stringify(accounts.map((a) => a.label)),
+    missing: [JSON.stringify(options), ...orders.map((o) => `${o.value}: ${JSON.stringify(o.drawn)} against ${JSON.stringify(o.want)}`), `leads on both sides of zero on 5h and 7d: ${JSON.stringify(sides)}`, `default: ${JSON.stringify(back)}`],
   });
 }
 {

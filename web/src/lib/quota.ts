@@ -127,6 +127,20 @@ export function soonestReset(account: Account, now: number): WindowId | null {
   return best ? best.id : null;
 }
 
+/** The accounts by one window's lead, the largest first, an account whose window is absent, expired or without a lead
+ *  after every one with a lead, ties by label. `'7d_fable'` reads `fableWindow`. */
+export function sortByPace(accounts: Account[], windowId: '5h' | '7d' | '7d_fable', now: number): Account[] {
+  const leadOf = (a: Account): number | null => {
+    const w = windowId === '7d_fable' ? a.fableWindow : windowOf(a, windowId);
+    return w === null || isExpired(w, now) ? null : w.lead;
+  };
+  return [...accounts].sort((a, b) => {
+    const [la, lb] = [leadOf(a), leadOf(b)];
+    if (la === null || lb === null) return la === lb ? a.label.localeCompare(b.label) : la === null ? 1 : -1;
+    return lb - la || a.label.localeCompare(b.label);
+  });
+}
+
 export const STATUS_LABEL: Record<Account['status'], string> = {
   cooldown: 'Cooling down',
   funding_required: 'Needs funding',

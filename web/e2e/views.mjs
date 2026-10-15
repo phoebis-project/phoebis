@@ -19,8 +19,9 @@ if (Number.isNaN(clockOrigin)) {
   console.error('PHOEBIS_E2E_CLOCK is not an instant');
   process.exit(2);
 }
-// The dashboard's remaining cards and its empty state are read against the router's seeded registry (one API-key
-// account, a list with nothing in it); the mock's story has subscription accounts and no empty list there.
+// The dashboard's empty state is read against the router's seeded registry, where a list holds nothing, and the mock's
+// story draws no empty list there. The remaining cards read empty on the seed's one API-key account and weighed on the
+// story's subscription accounts.
 const mock = process.env.PHOEBIS_E2E_MOCK === '1';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -2620,21 +2621,46 @@ async function quotaMeters(theme) {
 }
 
 /**
- * Both quota donuts against a registry with no subscription account: the seed has one API-key account, so
- * the cards have no window to draw and must say so instead of drawing a ring that reads as exhausted.
+ * Both quota donuts and the lists beside them. The router's seed has one API-key account, so there the cards have no
+ * window to draw and must say so instead of drawing a ring that reads as exhausted. The story weighs subscription
+ * accounts, so there each list reads the account with the most of its own window left first, its printed shares
+ * running down, in the order of its ring's slices (one circle per account in drawn order, the spent arc after them).
  */
 async function remainingCards(theme) {
   const cards = await page.evaluate(() =>
     [...document.querySelectorAll('.card')]
       .filter((c) => /remaining$/.test(c.querySelector('.card__title')?.textContent ?? ''))
-      .map((c) => ({ text: c.textContent ?? '', title: c.querySelector('.card__title')?.textContent ?? '' })),
+      .map((c) => ({
+        rows: [...c.querySelectorAll('.remaining__list li')].map((li) => ({ label: li.querySelector('a')?.textContent ?? '', share: li.querySelector('.num')?.textContent ?? '' })),
+        slices: [...c.querySelectorAll('svg.donut circle > title')]
+          .map((t) => t.textContent ?? '')
+          .filter((t) => !t.startsWith('Spent: '))
+          .map((t) => t.slice(0, t.indexOf(': '))),
+        text: c.textContent ?? '',
+        title: c.querySelector('.card__title')?.textContent ?? '',
+      })),
   );
+  for (const card of cards) measurements.push(`${theme} / remaining list ${JSON.stringify({ rows: card.rows, slices: card.slices, title: card.title })}`);
   if (cards.length !== 2) {
     failures.push(`${theme} /: ${cards.length} remaining cards, expected 5h and 7d`);
     return;
   }
-  for (const card of cards.filter((c) => !c.text.includes('No subscription accounts'))) {
-    failures.push(`${theme} /: the "${card.title}" card draws a ring on a registry with no subscription account (${card.text.slice(0, 80)})`);
+  if (!mock) {
+    for (const card of cards.filter((c) => !c.text.includes('No subscription accounts'))) {
+      failures.push(`${theme} /: the "${card.title}" card draws a ring on a registry with no subscription account (${card.text.slice(0, 80)})`);
+    }
+    return;
+  }
+  for (const card of cards) {
+    const say = (what) => failures.push(`${theme} /: the "${card.title}" list ${what}`);
+    if (card.rows.length === 0) {
+      say('lists no account, yet the story weighs subscription accounts');
+      continue;
+    }
+    const shares = card.rows.map((r) => Number.parseFloat(r.share));
+    const rising = card.rows.filter((r, i) => i > 0 && shares[i] > shares[i - 1]);
+    if (shares.some(Number.isNaN) || rising.length) say(`reads ${card.rows.map((r) => `${r.label} ${r.share}`).join(', ')}, not the most left first`);
+    for (const what of compare({ order: card.rows.map((r) => r.label).join(', ') }, { order: card.slices.join(', ') }, ['order'], 'against its ring')) say(what);
   }
 }
 
@@ -7083,13 +7109,13 @@ try {
         await diagnosticsNav(theme, view.path);
       }
       if (view.path === '/' && !mock) {
-        await remainingCards(theme);
         await errorStateBox(theme);
       }
       if (view.path === '/') {
         await recentRowsOneLine(theme);
         await tableColumns(theme, '', '.dash__recent', ['Key'], 0, { overflowRecorded: mock });
         if (mock) await recentUnderShares(theme);
+        await remainingCards(theme);
         await ringLinesSpan(theme);
       }
       if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);
