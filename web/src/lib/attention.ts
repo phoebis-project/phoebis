@@ -18,6 +18,7 @@ export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   wall_reached: 'Wall reached under the ceiling',
   writer_degraded: 'State writer degraded',
 };
+/** Critical where requests fail now, serious where they fail soon or lose data, warning for the rest. */
 export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'serious' | 'warning'> = {
   certificate_expiring: 'warning',
   certificate_reload_failed: 'serious',
@@ -29,7 +30,7 @@ export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'serious' | 'war
   poll_backoff: 'warning',
   pool_exhausted: 'critical',
   reauth_required: 'critical',
-  refresh_failed: 'critical',
+  refresh_failed: 'serious',
   shed_no_runway: 'warning',
   wall_reached: 'warning',
   writer_degraded: 'serious',

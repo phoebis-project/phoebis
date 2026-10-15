@@ -157,6 +157,23 @@ const escapeOn = async (m) => {
   await m.settle(200);
 };
 /**
+ * The attention line's items as an operator reaches them, in rank order: the badges its row shows, then, where the row
+ * folds some behind "+N more", the rest from the list that badge opens, which Escape closes again. A line no layout
+ * measured folds nothing, so there the row holds them all. Each item reads its text, tone, title and target.
+ */
+async function attentionItems(m) {
+  const line = m.container.querySelector('.attention-line');
+  const read = (b) => ({ href: b.getAttribute('href'), text: b.textContent?.trim() ?? '', title: b.getAttribute('title') ?? '', tone: [...b.classList].find((c) => c.startsWith('badge--')) ?? 'none' });
+  const row = [...(line?.querySelectorAll('.attention-line__items .badge') ?? [])].filter((b) => b.closest('[hidden]') === null).map(read);
+  const fold = line?.querySelector('.attention-line__more');
+  if (!fold) return row;
+  fold.click();
+  await m.settle(200);
+  const list = [...document.querySelectorAll('.attention-line__list .badge')].map(read);
+  await escapeOn(m);
+  return [...row, ...list.slice(row.length)];
+}
+/**
  * A Discard check: the open dialogs counted before `act` and after it, each against its expected count, so a dialog
  * that never opened fails the check too. `extra` is the check's own reading after the click and `detail` what its
  * failure prints beside the counts.
@@ -473,8 +490,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   globalThis.setInterval = realSetInterval;
   const line = () => dash.container.querySelector('.attention-line');
   const lead = () => line()?.querySelector('.attention-line__lead')?.textContent?.trim() ?? null;
-  const badges = () =>
-    [...(line()?.querySelectorAll('.badge') ?? [])].map((b) => ({ href: b.getAttribute('href'), text: b.textContent?.trim() ?? '', title: b.getAttribute('title') ?? '', tone: [...b.classList].find((c) => c.startsWith('badge--')) ?? 'none' }));
+  const badges = () => attentionItems(dash);
   const tick = async () => {
     ticks[0]?.();
     await dash.settle(300);
@@ -491,7 +507,8 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   // The exhausted pool's badge opens the routing log on a range that ends now, which its own check reads; here the
   // address's path stands for it.
   const target = (href) => href?.split('?')[0] ?? null;
-  const read = badges().map((b) => [b.text, b.tone, target(b.href), members(b.title)]);
+  const listed = await badges();
+  const read = listed.map((b) => [b.text, b.tone, target(b.href), members(b.title)]);
   // The model's item counts the story's own Sonnet 4.6 plan requests and names its tier's latest weighted model, so
   // its members are read off the mock's answer rather than written here.
   const unweighted = (await api.getAttention()).find((i) => i.kind === 'model_unweighted');
@@ -501,7 +518,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     ['State writer degraded: routing', 'badge--serious', null, ['routing state is kept in memory until the registry file takes writes again', 'component: routing']],
     ['Re-auth required: legacy', 'badge--critical', '/accounts/legacy', ['serves nothing until its credential is renewed', 'account: legacy', 'label: legacy']],
     ['Funding required: Overflow workspace', 'badge--serious', '/accounts/overflow', ['account: overflow', 'label: Overflow workspace']],
-    ['Credential refresh failed: legacy', 'badge--critical', '/accounts/legacy', ['5 refreshes failed in a row: refresh_token rejected: invalid_grant', 'account: legacy', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
+    ['Credential refresh failed: legacy', 'badge--serious', '/accounts/legacy', ['5 refreshes failed in a row: refresh_token rejected: invalid_grant', 'account: legacy', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
     ['Certificate expiring: proxy.tls', 'badge--warning', null, ["The proxy listener's certificate /etc/phoebis/proxy.pem expires in 12 days (<instant>). Replace the pair and run phoebis tls reload.", 'cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', 'expires: <instant>']],
     ['Priced record parked: jobs', 'badge--serious', '/pools#jobs', ['accounts: ["research"]', 'count: 1', 'pool: jobs']],
     ['Usage poll backing off: secondary', 'badge--warning', '/accounts/secondary', ['account: secondary', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
@@ -526,9 +543,9 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
       ['accounts: ["primary"]', 'rounds: 1', 'setting: ["window_ceiling"]', 'setting_values: {"window_ceiling":0.75}'],
     ],
   ];
-  const ages = badges().map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
+  const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
-    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log and an unweighted model's the Models page, and titled with its detail and age, its sentence first where no pool card draws it",
+    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log and an unweighted model's the Models page, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all fourteen while no layout folds it",
     ok:
       lead() === '14 need attention' &&
       unweighted !== undefined &&
@@ -543,8 +560,8 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   });
   // The writers are the router's own components, so their badge opens nothing; a parked record opens its pool's card,
   // and neither is drawn as the pool's exhaustion.
-  const writer = badges().find((b) => b.text.startsWith('State writer degraded'));
-  const parked = badges().find((b) => b.text.startsWith('Priced record parked'));
+  const writer = listed.find((b) => b.text.startsWith('State writer degraded'));
+  const parked = listed.find((b) => b.text.startsWith('Priced record parked'));
   results.push({
     name: "/ the attention line draws the routing state writer's badge as one that opens nothing and a parked record's as one that opens its pool's card, neither as an exhausted pool",
     ok:
@@ -552,7 +569,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
       writer.href === null &&
       parked?.text === 'Priced record parked: jobs' &&
       parked.href === '/pools#jobs' &&
-      badges().filter((b) => b.text.startsWith('Pool exhausted')).length === 1,
+      listed.filter((b) => b.text.startsWith('Pool exhausted')).length === 1,
     missing: [JSON.stringify(writer ?? null), JSON.stringify(parked ?? null)],
   });
   localStorage.setItem('phoebis.mockEmpty', '1');
@@ -565,7 +582,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   const keyless = { detail: { client_version: '2.1.272', trigger: 'hash' }, kind: 'client_drift', link: null, pools: [], since: new Date(Date.now() - 2 * 60_000).toISOString(), subject: { id: '2.1.272', label: '2.1.272', type: 'client' } };
   api.getAttention = async () => [exhausted, keyless];
   await tick();
-  const gained = [lead(), JSON.stringify(badges().map((b) => [b.text, b.tone, target(b.href)])), line()?.querySelectorAll('a').length];
+  const gained = [lead(), JSON.stringify((await badges()).map((b) => [b.text, b.tone, target(b.href)])), line()?.querySelectorAll('a').length];
   api.getAttention = getAttention;
   await tick();
   const lost = quiet();
@@ -599,6 +616,67 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   await tick();
   results.push({ name: '/ the story back, the next tick draws its fourteen items again', ok: lead() === '14 need attention', missing: [lead() ?? 'no lead'] });
   dash.unmount();
+
+  {
+    // jsdom lays nothing out, so the line reads a browser's sizes here: the lead 120 px, each badge 80, the fold badge
+    // 70 and the Replay pill 150 on a 700 px row, and no stylesheet sets a gap. The row holds the lead, four badges, the
+    // fold badge and the pill, where it would hold eight badges without the room for its other parts. The line measures
+    // as it draws, so the sizes stand before the mount.
+    const measure = window.HTMLElement.prototype.getBoundingClientRect;
+    const widths = [
+      ['attention-line__item', 80],
+      ['attention-line__lead', 120],
+      ['attention-line__more', 70],
+      ['pill', 150],
+    ];
+    window.HTMLElement.prototype.getBoundingClientRect = function () {
+      const width = widths.find(([c]) => this.classList.contains(c))?.[1];
+      return width === undefined ? measure.call(this) : { bottom: 22, height: 22, left: 0, right: width, top: 0, width, x: 0, y: 0 };
+    };
+    Object.defineProperty(window.HTMLElement.prototype, 'clientWidth', {
+      configurable: true,
+      get() {
+        return this.classList.contains('attention-line') ? 700 : 0;
+      },
+    });
+    const page = await mount('/');
+    const narrow = page.container.querySelector('.attention-line');
+    const rowBadges = [...(narrow?.querySelectorAll('.attention-line__items .badge') ?? [])];
+    const shown = rowBadges.filter((b) => b.closest('[hidden]') === null).map((b) => b.textContent?.trim());
+    const fold = narrow?.querySelector('button.attention-line__more') ?? null;
+    const foldRead = [fold?.textContent?.trim(), fold?.getAttribute('title'), fold?.className, fold?.getAttribute('aria-haspopup'), fold?.getAttribute('aria-expanded')];
+    const box = () => document.querySelector('.attention-line__list');
+    fold?.click();
+    await page.settle(200);
+    const entries = [...(box()?.children ?? [])].map((entry) => entry.querySelector('.badge'));
+    const listed = entries.map((b) => [b?.textContent?.trim(), [...(b?.classList ?? [])].find((c) => c.startsWith('badge--')), target(b?.getAttribute('href'))]);
+    const sameTitles = entries.length === rowBadges.length && entries.every((b, i) => b?.getAttribute('title') === rowBadges[i].getAttribute('title'));
+    const opened = [box()?.getAttribute('role'), box()?.getAttribute('aria-label'), fold?.getAttribute('aria-expanded'), box()?.contains(document.activeElement) ?? false];
+    await escapeOn(page);
+    const closed = [box() === null, fold?.getAttribute('aria-expanded'), document.activeElement === fold];
+    fold?.click();
+    await page.settle(200);
+    const link = [...(box()?.querySelectorAll('a.badge') ?? [])].find((a) => a.textContent?.trim() === 'Re-auth required: legacy');
+    link?.click();
+    await page.settle(300);
+    const went = [page.location().pathname, box() === null];
+    page.unmount();
+    window.HTMLElement.prototype.getBoundingClientRect = measure;
+    delete window.HTMLElement.prototype.clientWidth;
+    const texts = want.map(([text]) => text);
+    results.push({
+      name: "/ an attention line too narrow for its fourteen items shows the four that fit and folds the other ten behind \"+10 more\" titled with their words, whose list holds all fourteen worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
+      ok:
+        JSON.stringify(shown) === JSON.stringify(texts.slice(0, 4)) &&
+        JSON.stringify(foldRead) === JSON.stringify(['+10 more', `Folded: ${texts.slice(4).join(', ')}`, 'badge badge--neutral attention-line__more', 'dialog', 'false']) &&
+        JSON.stringify(listed) === JSON.stringify(want.map(([text, tone, href]) => [text, tone, href])) &&
+        sameTitles &&
+        JSON.stringify(opened) === JSON.stringify(['dialog', 'Needs attention', 'true', true]) &&
+        JSON.stringify(closed) === JSON.stringify([true, 'false', true]) &&
+        JSON.stringify(went) === JSON.stringify(['/accounts/legacy', true]),
+      missing: [JSON.stringify(shown), JSON.stringify(foldRead), ...listed.map((l) => JSON.stringify(l)), `same titles ${sameTitles}`, JSON.stringify(opened), JSON.stringify(closed), JSON.stringify(went)],
+    });
+  }
 }
 
 {
@@ -609,22 +687,25 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   const line = () => dash.container.querySelector('.attention-line');
   const button = () => [...(line()?.querySelectorAll('button.pill') ?? [])].find((b) => b.textContent?.trim() === 'Replay parked records');
   const slot = () => line()?.querySelector('.attention-line__replay')?.textContent ?? null;
-  const parked = () => [...(line()?.querySelectorAll('.badge') ?? [])].some((b) => b.textContent?.trim().startsWith('Priced record parked'));
-  const lastBadge = [...(line()?.querySelectorAll('.badge') ?? [])].pop();
+  const parked = async () => (await attentionItems(dash)).some((b) => b.text.startsWith('Priced record parked'));
+  // The pill follows the badges' row, or the fold badge where one draws.
+  const before = line()?.querySelector('.attention-line__more') ?? line()?.querySelector('.attention-line__items');
+  const parkedFirst = await parked();
   results.push({
     name: '/ the attention line carries the Replay button after its badges while a parked record shows, and no answer yet',
-    ok: parked() && button() !== undefined && button()?.disabled === false && lastBadge?.nextElementSibling === button() && slot() === null,
-    missing: [`parked ${parked()}`, button()?.outerHTML.slice(0, 160) ?? 'no button', `after ${lastBadge?.textContent ?? 'no badge'}`, `slot ${JSON.stringify(slot())}`],
+    ok: parkedFirst && button() !== undefined && button()?.disabled === false && before !== null && before?.nextElementSibling === button() && slot() === null,
+    missing: [`parked ${parkedFirst}`, button()?.outerHTML.slice(0, 160) ?? 'no button', `after ${before?.className ?? 'no row'}`, `slot ${JSON.stringify(slot())}`],
   });
   localStorage.setItem('phoebis.mockHeldWriter', '1');
   button()?.click();
   await dash.settle(500);
   localStorage.removeItem('phoebis.mockHeldWriter');
   const toasts = dash.container.querySelectorAll('[role="status"]').length;
+  const parkedHeld = await parked();
   results.push({
     name: "/ a replay under the held writer reads the route's refusal in the slot beside the button, in no toast, and the parked badge stays",
-    ok: slot() === 'the ledger writer is held, try again' && toasts === 0 && parked() && button()?.disabled === false,
-    missing: [`slot ${JSON.stringify(slot())}`, `toasts ${toasts}`, `parked ${parked()}`, button()?.outerHTML.slice(0, 160) ?? 'no button'],
+    ok: slot() === 'the ledger writer is held, try again' && toasts === 0 && parkedHeld && button()?.disabled === false,
+    missing: [`slot ${JSON.stringify(slot())}`, `toasts ${toasts}`, `parked ${parkedHeld}`, button()?.outerHTML.slice(0, 160) ?? 'no button'],
   });
   // The answer is held until the check releases it, so the button is read while the replay runs, whatever the timing.
   const answer = deferNextCall('replayParked');
@@ -634,10 +715,11 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   answer.release();
   answer.restore();
   await dash.settle(700);
+  const parkedAfter = await parked();
   results.push({
     name: '/ a replay reads its counts in the slot, and the read after it takes the parked badge and the button off the line',
-    ok: running[0] === 1 && running[1] === true && slot() === 'Landed 1, 0 still parked' && !parked() && button() === undefined,
-    missing: [`calls ${running[0]}, disabled while it runs ${running[1]}`, `slot ${JSON.stringify(slot())}`, `parked ${parked()}`, button()?.outerHTML.slice(0, 160) ?? 'no button'],
+    ok: running[0] === 1 && running[1] === true && slot() === 'Landed 1, 0 still parked' && !parkedAfter && button() === undefined,
+    missing: [`calls ${running[0]}, disabled while it runs ${running[1]}`, `slot ${JSON.stringify(slot())}`, `parked ${parkedAfter}`, button()?.outerHTML.slice(0, 160) ?? 'no button'],
   });
   // The replay landed the story's record for good, and the checks below read it on the jobs card, so the story takes
   // it back.
@@ -3352,13 +3434,25 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // path stands for it.
   const attentionRows = (name) =>
     [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.children[1]?.textContent?.trim(), li.children[1]?.getAttribute('href')?.split('?')[0] ?? null]);
+  // A row's age as its last cell draws it, beside the age its title carries. Both read the page's own clock, which a
+  // check frozen elsewhere in the run can have moved, so the two are held to each other and to the formatter's shape.
+  const ageOf = (li) => {
+    const cell = li.lastElementChild;
+    const titled = / \(([^()]+)\)$/.exec((li.getAttribute('title') ?? '').split('\n')[0])?.[1] ?? null;
+    return [cell?.matches('span.attention__age.num') ? cell.textContent : null, titled];
+  };
+  const aged = ([age, titled]) => age !== null && age === titled && /^(now|\d+[dhms]( \d+[hm])? ago)$/.test(age);
+  const rowAges = (name) => [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map(ageOf);
   // The story's items: jobs is exhausted and holds a parked record. all draws the laptop key's client drift, the
   // Overflow workspace out of funding, secondary's poll backoff and the three routing conditions (the walls on nightly
   // and secondary, nightly spent within the hour of a move, and all's round without a destination). work draws
   // nothing, since its one member and one key carry no item, and the routing state writer belongs to no pool's card.
   results.push({
-    name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, and a card with none draws no list",
+    name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, each row ending with its age, and a card with none draws no list",
     ok:
+      rowAges('jobs').length === 2 &&
+      rowAges('all').length === 7 &&
+      [...rowAges('jobs'), ...rowAges('all')].every(aged) &&
       JSON.stringify(attentionRows('jobs')) === JSON.stringify([['Pool exhausted', 'jobs', '/routing-log'], ['Priced record parked', 'jobs', null]]) &&
       JSON.stringify(attentionRows('all')) ===
         JSON.stringify([
@@ -3371,15 +3465,16 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
           ['Rounds without a destination', 'all', '/routing-log'],
         ]) &&
       card('work')?.querySelector('.attention') === null,
-    missing: ['jobs', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))}`),
+    missing: ['jobs', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))} ${JSON.stringify(rowAges(name))}`),
   });
   {
     const parkedRow = [...(card('jobs')?.querySelectorAll('ul.attention > li.attention__row') ?? [])].find((li) => li.querySelector('.badge')?.textContent?.trim() === 'Priced record parked');
     const writerRows = [...cards.values()].filter((c) => [...c.querySelectorAll('ul.attention .badge')].some((b) => b.textContent?.trim() === 'State writer degraded')).length;
+    const parkedAge = parkedRow ? ageOf(parkedRow) : [null, null];
     results.push({
-      name: "/pools a pool's card draws its parked records' row with the count and the accounts, and no card draws the state writer",
-      ok: parkedRow?.querySelector('.attention__detail')?.textContent === "1 priced record parked, landing at the next start or on the dashboard's Replay (research)" && writerRows === 0,
-      missing: [parkedRow?.querySelector('.attention__detail')?.textContent ?? 'no parked row', `writer rows ${writerRows}`],
+      name: "/pools a pool's card draws its parked records' row with the count, the accounts and its age, and no card draws the state writer",
+      ok: parkedRow?.querySelector('.attention__detail')?.textContent === "1 priced record parked, landing at the next start or on the dashboard's Replay (research)" && aged(parkedAge) && writerRows === 0,
+      missing: [parkedRow?.querySelector('.attention__detail')?.textContent ?? 'no parked row', JSON.stringify(parkedAge), `writer rows ${writerRows}`],
     });
   }
   const caption = (name) => card(name)?.querySelector('.serving caption');
@@ -3645,9 +3740,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     li.children[1]?.tagName,
     li.querySelector('a')?.getAttribute('href') ?? null,
     li.querySelector('.attention__detail')?.textContent,
+    li.lastElementChild?.matches('span.attention__age.num') ? li.lastElementChild.textContent : null,
     li.getAttribute('title'),
   ]);
-  const row = (label, tone, subject, href, detail, age, log) => [label, tone, subject, href ? 'A' : 'SPAN', href, detail, `${detail} (${age})${log ? `\n${log}` : ''}`];
+  const row = (label, tone, subject, href, detail, age, log) => [label, tone, subject, href ? 'A' : 'SPAN', href, detail, age, `${detail} (${age})${log ? `\n${log}` : ''}`];
   const exhaustedSince = at(1);
   const want = [
     row('Pool exhausted', 'badge--critical', 'jobs', `/routing-log?${new URLSearchParams({ kinds: 'exhausted', pools: 'jobs', from: exhaustedSince, to: isoAt(now) })}`, 'no member could take a request from key ci', '1h ago', `Opens the Routing log: pool jobs, exhausted, since ${exhaustedSince.slice(11, 16)}`),
@@ -3656,12 +3752,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     row('State writer degraded', 'badge--serious', 'ledger', null, 'ledger batches are being retried, and budgeted members are held back until a batch lands', '1h ago'),
     row('Re-auth required', 'badge--critical', 'legacy', '/accounts/legacy', 'serves nothing until its credential is renewed', '5h ago'),
     row('Funding required', 'badge--serious', 'Research workspace', '/accounts/research', 'serves nothing until its organization is funded again', '4h ago'),
-    row('Credential refresh failed', 'badge--critical', 'legacy', '/accounts/legacy', '3 refreshes failed in a row: invalid_grant', '6h ago'),
+    row('Credential refresh failed', 'badge--serious', 'legacy', '/accounts/legacy', '3 refreshes failed in a row: invalid_grant', '6h ago'),
     row('Priced record parked', 'badge--serious', 'jobs', null, "2 priced records parked, landing at the next start or on the dashboard's Replay (research, secondary)", '8h ago'),
     row('Usage poll backing off', 'badge--warning', 'secondary', '/accounts/secondary', '6 rate-limited answers in a row', '2h ago'),
   ];
   results.push({
-    name: "the attention rows keep the route's order, link a subject through the item's link and the pool's exhaustion to the routing log, name the pool's other own row, a keyless drift and a router component alone, and read each detail as one sentence titled with its age",
+    name: "the attention rows keep the route's order, link a subject through the item's link and the pool's exhaustion to the routing log, name the pool's other own row, a keyless drift and a router component alone, and read each detail as one sentence, the age ending the row and closing its title",
     ok: JSON.stringify(rows) === JSON.stringify(want),
     missing: rows.map((r) => r.join(' | ')),
   });

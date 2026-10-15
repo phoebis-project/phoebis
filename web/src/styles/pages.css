@@ -1499,10 +1499,10 @@
   list-style: none;
 }
 
-/* The detail takes the rest of the row and cuts; the whole of it sits in the row's title with its age. */
+/* The detail takes the rest of the row and cuts, the age ends the row, and the whole of it sits in the row's title. */
 .attention__row {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
   font-size: 12.5px;
@@ -1513,6 +1513,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--ink-2);
+}
+
+.attention__age {
+  color: var(--ink-2);
+  white-space: nowrap;
 }
 
 /* The serving table: the caption names the strategy, the next account's row takes the accent tint. */

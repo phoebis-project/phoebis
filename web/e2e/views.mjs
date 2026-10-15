@@ -539,12 +539,15 @@ async function sidebarBrand(theme) {
 }
 
 /**
- * The dashboard's attention line above the tiles: one 22 px row per line of badges with the lead on the first and a
- * 6 px gap between rows, every badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges, the
- * line inside the content box and clear of the tiles. The mock pass draws the story's fourteen items. The router pass
- * seeds an exhaustion of its main pool, which any request the pool serves later in the run (a keepalive probe among
- * them) clears: the light pass, which reaches the dashboard first, requires that item, so a route answering an empty
- * list fails it, and the dark pass draws that item or the quiet line, never the unavailable one.
+ * The dashboard's attention line above the tiles: one 22 px row in every state, every badge it shows and its "+N more"
+ * badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges on the row's one top edge, none past
+ * the content box, and the line on the tiles' left edge and clear of them. The mock pass draws the story's fourteen
+ * items, more than the row holds at 1280 by 800: the badges shown and the fold's count add up to fourteen, the fold
+ * badge draws its dashed border, and its list opens under it inside the window with all fourteen, closing on Escape with
+ * the focus back on the badge. The router pass seeds an exhaustion of its main pool, which any request the pool serves
+ * later in the run (a keepalive probe among them) clears: the light pass, which reaches the dashboard first, requires
+ * that item, so a route answering an empty list fails it, and the dark pass draws that item or the quiet line, never the
+ * unavailable one.
  */
 async function attentionLine(theme) {
   const say = (what) => failures.push(`${theme} /: the attention line ${what}`);
@@ -553,30 +556,96 @@ async function attentionLine(theme) {
     const grid = document.querySelector('.stat-grid');
     if (!line || !grid) return null;
     const box = line.getBoundingClientRect();
-    const badges = [...line.querySelectorAll('.badge')].map((b) => {
+    const tiles = grid.getBoundingClientRect();
+    const badgeOf = (b) => {
       const at = b.getBoundingClientRect();
       const style = getComputedStyle(b);
       return { font: `${style.fontSize} ${style.fontWeight}`, height: at.height, right: at.right, text: b.textContent?.trim() ?? '', top: Math.round(at.top) };
-    });
-    return { badges, bottom: box.bottom, contentRight: line.parentElement.getBoundingClientRect().right, gridTop: grid.getBoundingClientRect().top, height: box.height, lead: line.querySelector('.attention-line__lead')?.textContent?.trim() ?? null };
+    };
+    // A badge the fold hides stands in a hidden wrapper and draws no box.
+    const badges = [...line.querySelectorAll('.badge')].filter((b) => b.closest('[hidden]') === null && !b.classList.contains('attention-line__more')).map(badgeOf);
+    const fold = line.querySelector('.attention-line__more');
+    return {
+      badges,
+      bottom: box.bottom,
+      contentRight: line.parentElement.getBoundingClientRect().right,
+      grid: { left: Math.round(tiles.left), top: tiles.top },
+      height: box.height,
+      lead: line.querySelector('.attention-line__lead')?.textContent?.trim() ?? null,
+      left: Math.round(box.left),
+      more: fold ? { ...badgeOf(fold), border: getComputedStyle(fold).borderTopStyle, title: fold.getAttribute('title') } : null,
+    };
   });
   measurements.push(`${theme} / attention line ${JSON.stringify(read)}`);
   if (!read) return say('is not drawn above the tiles');
-  const rows = new Set(read.badges.map((b) => b.top)).size;
-  if (Math.abs(read.height - (rows * 22 + (rows - 1) * 6)) > 0.5) say(`is ${read.height} px tall over ${rows} rows of badges`);
-  for (const b of read.badges) {
+  if (Math.abs(read.height - 22) > 0.5) say(`is ${read.height} px tall, not one 22 px row`);
+  for (const b of read.more ? [...read.badges, read.more] : read.badges) {
     if (Math.abs(b.height - 22) > 0.5 || b.font !== '12px 500') say(`draws ${JSON.stringify(b.text)} ${b.height} px tall in ${b.font}, not the strip badge's 22 px in 12px 500`);
     if (b.right > read.contentRight + 0.5) say(`runs ${JSON.stringify(b.text)} past the content box`);
   }
-  if (read.bottom > read.gridTop) say('reaches into the tiles');
+  if (read.more && read.badges.length > 0) failures.push(...compare(read.more, read.badges[0], ['font', 'height', 'top'], `${theme} /: the attention line's "+N more" badge against its first badge`));
+  failures.push(...compare({ left: read.left }, { left: read.grid.left }, ['left'], `${theme} /: the attention line against the tiles under it`));
+  if (read.bottom > read.grid.top) say('reaches into the tiles');
   const texts = read.badges.map((b) => b.text);
+  const folded = Number(/^\+(\d+) more$/.exec(read.more?.text ?? '')?.[1] ?? 0);
   if (mock) {
-    if (read.lead !== '14 need attention' || texts.length !== 14) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the story's fourteen items`);
+    if (read.lead !== '14 need attention' || texts.length + folded !== 14 || folded === 0 || read.more?.border !== 'dashed') say(`reads ${read.lead} over ${JSON.stringify(texts)} and ${JSON.stringify(read.more?.text ?? null)}, not the story's fourteen items folded behind a dashed "+N more" at 1280 by 800`);
+    else await attentionList(theme);
   } else if (theme === 'light') {
     if (read.lead === null || !texts.includes('Pool exhausted: Main')) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the seeded exhaustion`);
   } else if (read.lead === null ? JSON.stringify(texts) !== '["Nothing needs attention"]' : !texts.includes('Pool exhausted: Main')) {
     say(`reads ${read.lead} over ${JSON.stringify(texts)}, neither the seeded exhaustion nor the quiet line`);
   }
+}
+
+/**
+ * The list the attention line's "+N more" badge opens: every item, one badge per row, each inside the box, the box 8 px
+ * under the badge and 8 px inside the window, the badge marked expanded while it stands. Escape closes it and hands the
+ * focus back to the badge.
+ */
+async function attentionList(theme) {
+  const say = (what) => failures.push(`${theme} /: the attention line's list ${what}`);
+  await page.locator('.attention-line__more').click();
+  await settle();
+  const read = await page.evaluate(() => {
+    const box = document.querySelector('.attention-line__list');
+    const fold = document.querySelector('.attention-line__more');
+    if (!box || !fold) return null;
+    const r = box.getBoundingClientRect();
+    const at = fold.getBoundingClientRect();
+    const rows = [...box.children].map((row) => row.getBoundingClientRect());
+    const badges = [...box.querySelectorAll('.badge')].map((b) => b.getBoundingClientRect());
+    return {
+      badges: badges.length,
+      bottom: Math.round(r.bottom),
+      expanded: fold.getAttribute('aria-expanded'),
+      gap: Math.round((r.top - at.bottom) * 10) / 10,
+      inside: badges.every((b) => b.left >= r.left && b.right <= r.right && b.bottom <= r.bottom),
+      label: box.getAttribute('aria-label'),
+      left: Math.round(r.left),
+      oneRowEach: rows.every((row, i) => i === 0 || row.top >= rows[i - 1].bottom),
+      right: Math.round(r.right),
+      role: box.getAttribute('role'),
+      rows: rows.length,
+      top: Math.round(r.top),
+      view: { height: window.innerHeight, width: document.documentElement.clientWidth },
+      width: Math.round(r.width),
+    };
+  });
+  measurements.push(`${theme} / attention line list ${JSON.stringify(read)}`);
+  if (!read) say('did not open');
+  else {
+    if (read.badges !== 14 || read.rows !== 14 || !read.oneRowEach) say(`holds ${read.badges} badges over ${read.rows} rows, not the story's fourteen items one per row`);
+    if (!read.inside) say('draws a badge past its box');
+    if (read.role !== 'dialog' || read.label !== 'Needs attention' || read.expanded !== 'true') say(`is ${read.role} named ${JSON.stringify(read.label)} under a badge expanded ${read.expanded}`);
+    if (read.gap !== 8) say(`stands ${read.gap} px under its badge, not 8`);
+    if (read.left < 8 || read.right > read.view.width - 8 || read.bottom > read.view.height - 8) say(`spans ${read.left} to ${read.right} and down to ${read.bottom}, outside the window less 8 px`);
+  }
+  await page.keyboard.press('Escape');
+  await settle();
+  const after = await page.evaluate(() => ({ focus: document.activeElement?.classList.contains('attention-line__more') ?? false, open: document.querySelector('.attention-line__list') !== null }));
+  if (after.open || !after.focus) say(`after Escape reads ${JSON.stringify(after)}, not closed with the focus on "+N more"`);
+  await atRest();
 }
 
 /** The top bar's controls under the one control height: "Log out" and the theme control at 32 px, one top edge. */
@@ -1108,6 +1177,7 @@ async function poolCardLayout(theme) {
   else if (wide.tableBottom > wide.cardBottom) say(`the serving table ends at ${wide.tableBottom}, past the card's bottom at ${wide.cardBottom}`);
   if (JSON.stringify(rowsOf(wide.tops)) !== '[3,3,1]') say(`the tiles stand in rows of ${JSON.stringify(rowsOf(wide.tops))}, not rows of three, then one`);
   if (JSON.stringify(wide.lefts) !== JSON.stringify(['0px', '1px', '1px', '0px', '1px', '1px', '0px'])) say(`the tiles' left hairlines read ${wide.lefts.join(' ')}`);
+  await poolCardAges(theme, say);
   await page.setViewportSize({ height: 800, width: 720 });
   await settle();
   const narrow = await read();
@@ -1147,6 +1217,54 @@ async function poolCardLayout(theme) {
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
   await atRest();
+}
+
+/**
+ * At the pass's viewport, every pool card's attention rows end with the age: the row's last cell is `.attention__age`,
+ * after the detail and on the middle of the row the badge and the subject stand on, in the detail's ink and size, uncut
+ * and inside the card's box. The count says how many rows the read saw, since a router pass whose seeded exhaustion
+ * cleared draws none.
+ */
+async function poolCardAges(theme, say) {
+  const rows = await page.evaluate(() =>
+    [...document.querySelectorAll('.pool')].flatMap((card) => {
+      const box = card.getBoundingClientRect();
+      const name = card.querySelector('.card__title')?.textContent ?? '';
+      return [...card.querySelectorAll('.attention__row')].map((row) => {
+        const r = row.getBoundingClientRect();
+        const cell = (el) => {
+          if (!el) return null;
+          const at = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return { color: style.color, inside: at.left >= box.left - 0.5 && at.right <= box.right + 0.5, left: Math.round(at.left * 10) / 10, middle: Math.round(at.top + at.height / 2 - (r.top + r.height / 2)), right: Math.round(at.right * 10) / 10, size: style.fontSize };
+        };
+        const last = row.lastElementChild;
+        return {
+          age: last?.classList.contains('attention__age') ? { ...cell(last), cut: last.scrollWidth > last.clientWidth, text: last.textContent } : null,
+          badge: cell(row.querySelector('.badge')),
+          card: name,
+          detail: cell(row.querySelector('.attention__detail')),
+          label: row.querySelector('.badge')?.textContent ?? '',
+          subject: cell(row.children[1] ?? null),
+        };
+      });
+    }),
+  );
+  measurements.push(`${theme} /pools card attention rows ${JSON.stringify({ count: rows.length, rows })}`);
+  if (mock && rows.length === 0) say('no card draws an attention row');
+  for (const row of rows) {
+    const what = `the ${row.card} card's ${row.label} row`;
+    if (!row.age) {
+      say(`${what} ends with no age cell`);
+      continue;
+    }
+    if (!row.age.inside) say(`${what} draws its age past the card's box`);
+    if (row.age.cut) say(`${what} cuts its age`);
+    if (row.detail && row.age.left < row.detail.right - 0.5) say(`${what} draws its age before the detail's end`);
+    failures.push(...compare(row.age, row.badge, ['inside', 'middle'], `${theme} /pools card: ${what}'s age against its badge`));
+    failures.push(...compare(row.age, row.subject, ['inside', 'middle'], `${theme} /pools card: ${what}'s age against its subject`));
+    failures.push(...compare(row.age, row.detail, ['color', 'inside', 'middle', 'size'], `${theme} /pools card: ${what}'s age against its detail`));
+  }
 }
 
 /** The pool dialog's groups in rail order. */

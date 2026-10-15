@@ -446,23 +446,23 @@ hold again at the first read. The three routing conditions, `wall_reached`, `des
 read a table the ledger folds from its events of the trailing 24 hours once an hour and at start, so a restart holds
 them again at the first fold.
 
-| Kind | Subject | Clears when |
-| --- | --- | --- |
-| `pool_exhausted` | the pool | a request of the pool succeeds |
-| `client_drift` | the client version | an inference request from that version is relayed, or a re-pinned build starts |
-| `writer_degraded` | the ledger | a batch lands and the spend refresh after it succeeds |
-| `writer_degraded` | the routing state writer | the backlog drains |
-| `certificate_reload_failed` | the listener key | a reload lands or the router restarts |
-| `reauth_required` | the account | the account is paired again, or an API-key account gets a new secret |
-| `funding_required` | the API-key account | a retry succeeds after five minutes (or the [model rejection interval](routing.md#cooldowns-and-failover) when that is shorter), or the operator clears funding |
-| `refresh_failed` | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
-| `certificate_expiring` | the listener key | a pair with more than 30 days left is loaded |
-| `ledger_record_parked` | the pool, or `-` for a record without one | the next start or the Replay button lands them |
-| `poll_backoff` | the polled account | a poll answers clean |
-| `model_unweighted` | the model | a later subscription request on the model is priced at a cost model entry that weighs it, or the router restarts |
-| `wall_reached` | the account | no window of the account read spent in the last 24 hours |
-| `destination_spent` | the destination account | no move onto the account was followed by a spent window within an hour in the last 24 hours |
-| `shed_no_runway` | the pool | no round of the pool marked nothing for want of a destination in the last 24 hours |
+| Kind | Tone | Subject | Clears when |
+| --- | --- | --- | --- |
+| `pool_exhausted` | critical | the pool | a request of the pool succeeds |
+| `client_drift` | serious | the client version | an inference request from that version is relayed, or a re-pinned build starts |
+| `writer_degraded` | serious | the ledger | a batch lands and the spend refresh after it succeeds |
+| `writer_degraded` | serious | the routing state writer | the backlog drains |
+| `certificate_reload_failed` | serious | the listener key | a reload lands or the router restarts |
+| `reauth_required` | critical | the account | the account is paired again, or an API-key account gets a new secret |
+| `funding_required` | serious | the API-key account | a retry succeeds after five minutes (or the [model rejection interval](routing.md#cooldowns-and-failover) when that is shorter), or the operator clears funding |
+| `refresh_failed` | serious | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
+| `certificate_expiring` | warning | the listener key | a pair with more than 30 days left is loaded |
+| `ledger_record_parked` | serious | the pool, or `-` for a record without one | the next start or the Replay button lands them |
+| `poll_backoff` | warning | the polled account | a poll answers clean |
+| `model_unweighted` | warning | the model | a later subscription request on the model is priced at a cost model entry that weighs it, or the router restarts |
+| `wall_reached` | warning | the account | no window of the account read spent in the last 24 hours |
+| `destination_spent` | warning | the destination account | no move onto the account was followed by a spent window within an hour in the last 24 hours |
+| `shed_no_runway` | warning | the pool | no round of the pool marked nothing for want of a destination in the last 24 hours |
 
 **`pool_exhausted`** holds while a request of the pool has ended exhausted and none of the pool's requests has
 succeeded since. It is fed by the request bus. An `incomplete` answer neither raises nor clears it. The detail names the

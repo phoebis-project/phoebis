@@ -23,6 +23,7 @@ export function AttentionRows({ items, now }: { items: AttentionItem[]; now: num
             <Badge tone={ATTENTION_TONE[item.kind]}>{ATTENTION_LABEL[item.kind]}</Badge>
             {to ? <Link to={to}>{subject.label}</Link> : <span>{subject.label}</span>}
             <span className="attention__detail">{detail}</span>
+            <span className="attention__age num">{fmtRelative(item.since, now)}</span>
           </li>
         );
       })}

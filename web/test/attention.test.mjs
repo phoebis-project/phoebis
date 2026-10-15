@@ -17,7 +17,7 @@ test("a listener's two certificate kinds decode as themselves, never as the wors
   assert.deepEqual(kinds, ['certificate_expiring', 'certificate_reload_failed']);
 });
 
-test('each attention kind has its word and its tone, a client drift serious', () => {
+test('each attention kind has its word and its tone, a client drift and a failed refresh serious', () => {
   assert.deepEqual(ATTENTION_LABEL, {
     certificate_expiring: 'Certificate expiring',
     certificate_reload_failed: 'Certificate reload failed',
@@ -34,7 +34,7 @@ test('each attention kind has its word and its tone, a client drift serious', ()
     wall_reached: 'Wall reached under the ceiling',
     writer_degraded: 'State writer degraded',
   });
-  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'serious', 'critical', 'serious', 'critical', 'warning', 'serious', 'warning', 'warning', 'warning', 'warning', 'warning']);
+  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'serious', 'critical', 'serious', 'serious', 'warning', 'serious', 'warning', 'warning', 'warning', 'warning', 'warning']);
 });
 
 test('an item opens the page where its condition is fixed, and an item without a link opens nothing', () => {

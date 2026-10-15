@@ -80,13 +80,14 @@ changes that are not saved.", "Keep editing" and "Discard".
 
 The Dashboard reads its figures again every 30 seconds. A line above the tiles names what needs your attention, worst
 first, each item a badge that opens the account, pool or key where it is fixed, and reads "Nothing needs attention"
-otherwise. An item with no such place (a drift refusal that named no key, a parked record without a pool, a pool deleted
-since, one of the router's own writers, a page unknown to the console) stays a plain badge. The conditions are the ones
-the `phoebis_attention` gauge exports ([Conditions and gauges](statistics.md#conditions-and-gauges)), and the pool
-exhausted item opens the [routing log](#routing-log) on the pool's exhausted decisions from the moment the condition
-began. The model weight estimated item opens the [Models](#models) view. The three routing conditions read as one
-sentence each, the subject first, then the count, the settings they name (with the pool's values where the item carries
-them) and the start, such as
+otherwise. The line keeps one row and folds the badges past it behind a "+N more" badge that opens the full list, so the
+tiles never move. An item with no such place (a drift refusal that named no key, a parked record without a pool, a pool
+deleted since, one of the router's own writers, a page unknown to the console) stays a plain badge. The conditions are
+the ones the `phoebis_attention` gauge exports ([Conditions and gauges](statistics.md#conditions-and-gauges)), and the
+pool exhausted item opens the [routing log](#routing-log) on the pool's exhausted decisions from the moment the
+condition began. The model weight estimated item opens the [Models](#models) view. The three routing conditions read as
+one sentence each, the subject first, then the count, the settings they name (with the pool's values where the item
+carries them) and the start, such as
 `main: 4 rounds marked nothing, no destination had runway, window_ceiling 95 %, since 14:45` for a pool whose rounds
 found no destination with runway. An account's count reads `2 moves landed and the 5h window was spent within the hour`
 where moves onto it were followed by a spent window, or `1 wall reached on the 5h window` where it reached its wall,
@@ -272,10 +273,10 @@ off, "cache TTL" and "keepalive", each opening the dialog on the group that edit
 resolved ceilings in whole hours, `idle {h} · parked {h} · horizon {h}` (a range such as `44h to 71h` where the pool's
 combinations differ). One sentence says what the status means, and attention rows under it list the dashboard's
 conditions filtered to this pool, one row per condition with its badge, its subject linked where it is fixed and its
-detail, the age on hover. The pool's own exhausted row and its Rounds without a destination row open the [routing
-log](#routing-log) on its exhausted decisions or its shedding rounds since the condition began, and an account's
-Destination spent within the hour row opens it on the account's moves and spent windows, its Wall reached under the
-ceiling row on its spent windows.
+detail, ending with its age, the whole on hover. The pool's own exhausted row and its Rounds without a destination row
+open the [routing log](#routing-log) on its exhausted decisions or its shedding rounds since the condition began, and an
+account's Destination spent within the hour row opens it on the account's moves and spent windows, its Wall reached
+under the ceiling row on its spent windows.
 
 The serving table lists who serves next: Tier (`P{n}`, or `plan P{n}`, `overage P{n}` and `API keys P{n}` where the pool
 prefers subscription accounts), Account, Standing and Pins. Standing reads `next` for the member a fresh session lands
