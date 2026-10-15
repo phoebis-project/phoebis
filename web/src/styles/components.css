@@ -1704,8 +1704,8 @@ textarea.input {
 /*
  * The dashboard's attention line. A badge row is 22 px (18 px of line and 2 px of padding each side), and the line
  * holds one row of items in every state, so the tiles below hold still. The badges past the row fold behind "+N more",
- * and the Replay button with its answer takes a second row only where the lead, the fold badge and the button alone
- * do not fit.
+ * and the Replay button with its answer takes a second row only where the lead, the fold badge and the button with its
+ * answer alone do not fit.
  */
 .attention-line {
   display: flex;
@@ -1777,6 +1777,11 @@ textarea.input {
 .attention-line__more {
   padding: 1px 7px;
   border: 1px dashed var(--hairline);
+}
+
+/* The badge's display beats the hidden attribute's UA rule, so the fold badge drawn for the measure says so again. */
+.attention-line__more[hidden] {
+  display: none;
 }
 
 /*

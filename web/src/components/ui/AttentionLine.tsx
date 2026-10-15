@@ -12,8 +12,9 @@ const widthOf = (el: Element | null): number => el?.getBoundingClientRect().widt
  * The dashboard's line above the tiles: what needs the operator, worst first, each a badge that opens where it is
  * fixed. The line keeps one row of items in every state, the loading, quiet and failed ones included, and folds the
  * badges past the row behind "+N more", whose popover lists every item, so the tiles hold still as the router's state
- * changes. Only where the lead, the fold badge and the Replay button alone pass the row's width do the button and its
- * answer take a second row. A failed read never draws the quiet line, which would claim a health the read did not see.
+ * changes. Only where the lead, the fold badge and the Replay button with its answer alone pass the row's width do the
+ * button and its answer take a second row. A failed read never draws the quiet line, which would claim a health the
+ * read did not see.
  *
  * While a parked record shows, the line carries the Replay button after its badges. Its answer, or the route's
  * refusal, reads in the slot beside it rather than a toast, and an answer reads the list again through `refresh`, so
@@ -54,14 +55,17 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
   const folded = badges.slice(fit);
   // The list goes with the badge it hangs from, so a fold drawn again later opens nothing on its own.
   if (open && folded.length === 0) setOpen(false);
+  const parked = drawn && items.some((item) => item.kind === 'ledger_record_parked');
 
-  // How many badges end inside the line with room left for the lead, the fold badge, the Replay button and its slot.
-  // The badges past the last fit are drawn hidden, so each measure shows them for the reading and hides them again
-  // before paint.
+  // How many badges end inside the line, and whether the Replay button and its answer stand beside them or take a
+  // second row. Every width is read in one state no earlier answer shapes: the line on one row, every badge shown and
+  // the fold badge drawn with the widest count it can carry, each put back before paint. The answer rests on the widths
+  // alone, so measuring again finds it again.
   const measure = () => {
     const line = lineRef.current;
     const row = rowRef.current;
-    if (line === null || row === null) return;
+    const more = line?.querySelector<HTMLElement>(':scope > .attention-line__more') ?? null;
+    if (line === null || row === null || more === null) return;
     const width = line.clientWidth;
     // A line no layout measured (jsdom, the smoke) shows every badge, so the checks read them all on the row.
     if (width === 0) {
@@ -70,38 +74,44 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
       return;
     }
     const wraps = [...row.children].filter((el): el is HTMLElement => el instanceof HTMLElement);
-    const hidden = wraps.map((el) => el.hidden);
+    const was = { hidden: wraps.map((el) => el.hidden), line: line.className, more: more.hidden, words: more.textContent };
+    line.className = 'attention-line';
     for (const el of wraps) el.hidden = false;
+    more.hidden = false;
+    more.textContent = `+${wraps.length} more`;
     const widths = wraps.map(widthOf);
-    wraps.forEach((el, i) => {
-      el.hidden = hidden[i];
-    });
     const lead = widthOf(line.querySelector(':scope > .attention-line__lead'));
-    const more = widthOf(line.querySelector(':scope > .attention-line__more'));
+    const fold = widthOf(more);
     const tail = line.querySelector(':scope > .attention-line__tail');
-    // Its parts' own widths, since on a second row the tail spans the line.
     const tailParts = tail === null ? [] : [...tail.children].map(widthOf);
     const tailWidth = tailParts.reduce((sum, w) => sum + w, 0) + (tail === null ? 0 : (parseFloat(getComputedStyle(tail).columnGap) || 0) * Math.max(0, tailParts.length - 1));
     const gap = parseFloat(getComputedStyle(line).columnGap) || 0;
     const rowGap = parseFloat(getComputedStyle(row).columnGap) || 0;
+    line.className = was.line;
+    wraps.forEach((el, i) => {
+      el.hidden = was.hidden[i];
+    });
+    more.hidden = was.more;
+    more.textContent = was.words;
     const fits = (count: number, withTail: boolean) => {
-      const parts = [lead, widths.slice(0, count).reduce((sum, w) => sum + w, 0) + rowGap * Math.max(0, count - 1), ...(count < widths.length ? [more] : []), ...(withTail && tail !== null ? [tailWidth] : [])];
+      const parts = [lead, widths.slice(0, count).reduce((sum, w) => sum + w, 0) + rowGap * Math.max(0, count - 1), ...(count < widths.length ? [fold] : []), ...(withTail && tail !== null ? [tailWidth] : [])];
       return parts.reduce((sum, w) => sum + w, 0) + gap * (parts.length - 1) <= width;
     };
-    // The tail takes a second row only where it cannot stand beside the lead and the fold badge with every badge folded.
-    const wrap = tail !== null && !fits(0, true);
+    // The tail takes a second row only where it fits beside neither every badge nor the lead and the fold badge alone.
+    const wrap = tail !== null && !fits(widths.length, true) && !fits(0, true);
     let count = widths.length;
     while (count > 0 && !fits(count, !wrap)) count -= 1;
     setWrapped(wrap);
     setFit(count);
   };
   const measureRef = useRef(measure);
-  // Every draw can change a part's width (a refresh's items, the replay's answer in the slot), so each one measures
-  // again.
   useLayoutEffect(() => {
     measureRef.current = measure;
-    measure();
   });
+  // A width moves only with the words the line draws (the badges, the lead's count, the Replay button, its answer) or
+  // with the line's own width, which the observer below follows.
+  const words = [...badges.map((b) => b.text), parked ? 'parked' : '', replayed ?? ''].join('\n');
+  useLayoutEffect(() => measureRef.current(), [drawn, words]);
   useEffect(() => {
     const line = lineRef.current;
     if (!drawn || line === null || typeof ResizeObserver !== 'function') return;
@@ -145,7 +155,6 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
         {b.text}
       </Badge>
     );
-  const parked = items.some((item) => item.kind === 'ledger_record_parked');
   return (
     <div ref={lineRef} className={wrapped ? 'attention-line is-wrapped' : 'attention-line'}>
       <span className="attention-line__lead">
@@ -158,21 +167,21 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
           </span>
         ))}
       </span>
-      {folded.length > 0 && (
-        <button
-          ref={setFold}
-          type="button"
-          className="badge badge--neutral attention-line__more"
-          // One item per line, since a routing condition's words carry commas of their own.
-          title={['Folded:', ...folded.map((b) => b.text)].join('\n')}
-          aria-haspopup="dialog"
-          aria-expanded={open}
-          aria-controls={open ? listId : undefined}
-          onClick={() => setOpen((v) => !v)}
-        >
-          {`+${folded.length} more`}
-        </button>
-      )}
+      {/* Drawn while nothing folds as well, hidden, so the measure can read its width before a fold needs it. */}
+      <button
+        ref={setFold}
+        type="button"
+        className="badge badge--neutral attention-line__more"
+        hidden={folded.length === 0}
+        // One item per line, since a routing condition's words carry commas of their own.
+        title={folded.length === 0 ? undefined : ['Folded:', ...folded.map((b) => b.text)].join('\n')}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={open ? listId : undefined}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {`+${folded.length} more`}
+      </button>
       {(parked || slot !== null) && (
         <span className="attention-line__tail">
           {parked && (

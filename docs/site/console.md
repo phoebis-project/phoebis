@@ -94,8 +94,8 @@ where moves onto it were followed by a spent window, or `1 wall reached on the 5
 followed by `the last round projected 96 %` where a round on that window came before. Each opens the [routing
 log](#routing-log) on the pool's shedding rounds, the account's moves and spent windows, or its spent windows, from the
 moment the condition began. A parked ledger record adds "Replay parked records", which answers
-`Landed {n}, {n} still parked`. Where the line is too narrow for its lead, the "+N more" badge and that button together,
-the button and its answer take a second row.
+`Landed {n}, {n} still parked`. Where the line is too narrow for its lead, the "+N more" badge and that button with its
+answer together, the button and its answer take a second row.
 
 Four tiles follow, each with a sparkline over the last 24 hours: "Requests, 24h" with `{n} per hour`, "Tokens, 24h"
 with `{pct} served from cache`, "Estimated cost, 24h" in the top bar's unit, and "Error rate, 24h" with "No requests",

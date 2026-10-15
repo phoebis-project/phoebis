@@ -165,7 +165,7 @@ async function attentionItems(m) {
   const line = m.container.querySelector('.attention-line');
   const read = (b) => ({ href: b.getAttribute('href'), text: b.textContent?.trim() ?? '', title: b.getAttribute('title') ?? '', tone: [...b.classList].find((c) => c.startsWith('badge--')) ?? 'none' });
   const row = [...(line?.querySelectorAll('.attention-line__items .badge') ?? [])].filter((b) => b.closest('[hidden]') === null).map(read);
-  const fold = line?.querySelector('.attention-line__more');
+  const fold = line?.querySelector('.attention-line__more:not([hidden])');
   if (!fold) return row;
   fold.click();
   await m.settle(200);
@@ -619,9 +619,9 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
 
   {
     // jsdom lays nothing out, so the line reads a browser's sizes here: the lead 120 px, each badge 80, the fold badge
-    // 70 and the Replay pill 150 on a 700 px row, and no stylesheet sets a gap. The row holds the lead, four badges, the
-    // fold badge and the pill, where it would hold eight badges without the room for its other parts. The line measures
-    // as it draws, so the sizes stand before the mount.
+    // 70 and the Replay pill 150 on a 700 px row, and no stylesheet sets a gap. The row holds the lead, four badges,
+    // the fold badge and the pill, where it would hold eight badges without the room for its other parts. The line
+    // measures as it draws, so the sizes stand before the mount.
     const measure = window.HTMLElement.prototype.getBoundingClientRect;
     const widths = [
       ['attention-line__item', 80],
@@ -663,18 +663,38 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     await page.settle(300);
     const went = [page.location().pathname, box() === null];
     page.unmount();
-    // At 300 px the lead, the fold badge and the pill alone need 340, so the pill takes a second row and the first holds
-    // the lead, one badge and the fold badge.
+    // At 300 px the lead, the fold badge and the pill alone need 340, so the pill takes a second row and the first
+    // holds the lead, one badge and the fold badge.
     room = 300;
     const tight = await mount('/');
-    const tightLine = tight.container.querySelector('.attention-line');
-    const wrapped = [
-      tightLine?.className,
-      [...(tightLine?.querySelectorAll('.attention-line__items .badge') ?? [])].filter((b) => b.closest('[hidden]') === null).map((b) => b.textContent?.trim()),
-      tightLine?.querySelector('.attention-line__more')?.textContent?.trim(),
-      [...(tightLine?.querySelector('.attention-line__tail')?.children ?? [])].map((c) => c.textContent?.trim()),
-    ];
+    const lineRead = (m) => {
+      const l = m.container.querySelector('.attention-line');
+      return [
+        l?.className ?? null,
+        [...(l?.querySelectorAll('.attention-line__items .badge') ?? [])].filter((b) => b.closest('[hidden]') === null).map((b) => b.textContent?.trim()),
+        l?.querySelector('.attention-line__more:not([hidden])')?.textContent?.trim() ?? null,
+        [...(l?.querySelector('.attention-line__tail')?.children ?? [])].map((c) => c.textContent?.trim()),
+      ];
+    };
+    const wrapped = lineRead(tight);
     tight.unmount();
+    // One parked record at 380 px with a 200 px badge, a 130 px lead, a 100 px fold badge and a 160 px pill: the
+    // badge beside the lead and the pill needs 490 and the fold badge beside them 390, so the pill takes a second row
+    // and the badge stands on the first. The answer must hold from one draw to the next, the line redrawn by a read.
+    const storyAttention = api.getAttention;
+    const parkedOnly = (await storyAttention.call(api)).filter((i) => i.kind === 'ledger_record_parked');
+    api.getAttention = async () => parkedOnly;
+    widths.splice(0, widths.length, ['attention-line__item', 200], ['attention-line__lead', 130], ['attention-line__more', 100], ['pill', 160]);
+    room = 380;
+    const raisedFrom = problems.length;
+    const lone = await mount('/');
+    const loneFirst = lineRead(lone);
+    window.dispatchEvent(new window.Event('focus'));
+    await lone.settle(300);
+    const loneSecond = lineRead(lone);
+    const raised = problems.slice(raisedFrom);
+    lone.unmount();
+    api.getAttention = storyAttention;
     window.HTMLElement.prototype.getBoundingClientRect = measure;
     delete window.HTMLElement.prototype.clientWidth;
     const texts = want.map(([text]) => text);
@@ -697,6 +717,14 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
         JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+13 more', ['Replay parked records']]),
       missing: [JSON.stringify(oneRow), JSON.stringify(wrapped)],
     });
+    results.push({
+      name: '/ a lone parked record beside a Replay button too wide for one row draws the button on a second row and the badge unfolded, and holds that draw from one read to the next',
+      ok:
+        raised.length === 0 &&
+        JSON.stringify(loneFirst) === JSON.stringify(['attention-line is-wrapped', ['Priced record parked: jobs'], null, ['Replay parked records']]) &&
+        JSON.stringify(loneSecond) === JSON.stringify(loneFirst),
+      missing: [JSON.stringify(loneFirst), JSON.stringify(loneSecond), ...raised.map((p) => p.slice(0, 160))],
+    });
   }
 }
 
@@ -709,7 +737,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   const button = () => [...(line()?.querySelectorAll('button.pill') ?? [])].find((b) => b.textContent?.trim() === 'Replay parked records');
   const slot = () => line()?.querySelector('.attention-line__replay')?.textContent ?? null;
   const parked = async () => (await attentionItems(dash)).some((b) => b.text.startsWith('Priced record parked'));
-  // The pill leads the part after the badges' row, or after the fold badge where one draws.
+  // The pill leads the part after the fold badge, which stands hidden while nothing folds.
   const before = line()?.querySelector('.attention-line__more') ?? line()?.querySelector('.attention-line__items');
   const tail = line()?.querySelector('.attention-line__tail') ?? null;
   const parkedFirst = await parked();

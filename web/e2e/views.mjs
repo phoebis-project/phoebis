@@ -544,11 +544,11 @@ async function sidebarBrand(theme) {
  * badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges on the row's one top edge, none past
  * the content box, and the line on the tiles' left edge and clear of them. The mock pass draws the story's fourteen
  * items, more than the row holds at 1280 by 800: the badges shown and the fold's count add up to fourteen, the fold
- * badge draws its dashed border, and its list opens under it inside the window with all fourteen, closing on Escape with
- * the focus back on the badge. The router pass seeds an exhaustion of its main pool, which any request the pool serves
- * later in the run (a keepalive probe among them) clears: the light pass, which reaches the dashboard first, requires
- * that item, so a route answering an empty list fails it, and the dark pass draws that item or the quiet line, never the
- * unavailable one.
+ * badge draws its dashed border, and its list opens under it inside the window with all fourteen, closing on Escape
+ * with the focus back on the badge. The router pass seeds an exhaustion of its main pool, which any request the pool
+ * serves later in the run (a keepalive probe among them) clears: the light pass, which reaches the dashboard first,
+ * requires that item, so a route answering an empty list fails it, and the dark pass draws that item or the quiet line,
+ * never the unavailable one.
  */
 async function attentionLine(theme) {
   const say = (what) => failures.push(`${theme} /: the attention line ${what}`);
@@ -565,7 +565,7 @@ async function attentionLine(theme) {
     };
     // A badge the fold hides stands in a hidden wrapper and draws no box.
     const badges = [...line.querySelectorAll('.badge')].filter((b) => b.closest('[hidden]') === null && !b.classList.contains('attention-line__more')).map(badgeOf);
-    const fold = line.querySelector('.attention-line__more');
+    const fold = line.querySelector('.attention-line__more:not([hidden])');
     return {
       badges,
       bottom: box.bottom,
@@ -653,13 +653,13 @@ async function attentionList(theme) {
 }
 
 /**
- * The attention line at 400 by 800 with the story's Replay button: the lead, the fold badge and the button need more
- * than the line's width, so the button takes a second row. The first row stays one 22 px row of the lead, the badges
- * that fit and the fold badge, the button stands under it inside the content box, and the line ends above the tiles.
- * Back at 1280 by 800 the line is one 22 px row again.
+ * The attention line at phone widths, 360 to 414 by 800, with the story's Replay button. The first row stays one 22 px
+ * row of the lead, the badges that fit and the fold badge. Where the lead, the fold badge and the button need more than
+ * the line's width (at 400 px they need 395 of 368) the button takes a second row and the line is 50 px tall, else the
+ * button stands on the first row. Every part stays inside the line's box, the line ends above the tiles, and a second
+ * read two frames on finds the same draw. Back at 1280 by 800 the line is one 22 px row again.
  */
 async function attentionLineNarrow(theme) {
-  const say = (what) => failures.push(`${theme} /: at 400 px the attention line ${what}`);
   const read = () =>
     page.evaluate(() => {
       const line = document.querySelector('.attention-line');
@@ -679,23 +679,31 @@ async function attentionLineNarrow(theme) {
         height: Math.round(r.height * 10) / 10,
         lead: box(line.querySelector('.attention-line__lead')),
         left: Math.round(r.left * 10) / 10,
-        more: box(line.querySelector('.attention-line__more')),
+        more: box(line.querySelector('.attention-line__more:not([hidden])')),
         pill: box(line.querySelector('.attention-line__tail > .pill')),
         right: Math.round(r.right * 10) / 10,
         wrapped: line.classList.contains('is-wrapped'),
       };
     });
-  await page.setViewportSize({ height: 800, width: 400 });
-  await settle();
-  const narrow = await read();
-  measurements.push(`${theme} / attention line at 400 px ${JSON.stringify(narrow)}`);
-  if (!narrow?.more || !narrow.pill || !narrow.lead) say(`draws ${JSON.stringify(narrow)}, not the lead, the fold badge and the Replay button`);
-  else {
-    if (!narrow.wrapped || Math.abs(narrow.height - 50) > 0.5) say(`is ${narrow.height} px tall, wrapped ${narrow.wrapped}, not a 22 px row with the button on a second one`);
+  for (const width of [360, 375, 390, 400, 414]) {
+    const say = (what) => failures.push(`${theme} /: at ${width} px the attention line ${what}`);
+    await page.setViewportSize({ height: 800, width });
+    await settle();
+    const narrow = await read();
+    await settle();
+    const again = await read();
+    measurements.push(`${theme} / attention line at ${width} px ${JSON.stringify(narrow)}`);
+    if (JSON.stringify(again) !== JSON.stringify(narrow)) say(`changes between two reads, ${JSON.stringify(narrow)} then ${JSON.stringify(again)}`);
+    if (!narrow?.more || !narrow.pill || !narrow.lead) {
+      say(`draws ${JSON.stringify(narrow)}, not the lead, the fold badge and the Replay button`);
+      continue;
+    }
+    if (width === 400 && !narrow.wrapped) say("keeps the Replay button on the badges' row, where the lead, the fold badge and the button need more than the line");
+    if (Math.abs(narrow.height - (narrow.wrapped ? 50 : 22)) > 0.5) say(`is ${narrow.height} px tall, wrapped ${narrow.wrapped}`);
     if (narrow.more.height !== 22 || narrow.more.middle !== 11) say(`draws its fold badge ${narrow.more.height} px tall at ${narrow.more.middle} px, not on a 22 px first row`);
-    failures.push(...compare(narrow.lead, narrow.more, ['middle'], `${theme} /: at 400 px the attention line's lead against its fold badge`));
-    for (const b of narrow.badges) failures.push(...compare(b, narrow.more, ['height', 'middle'], `${theme} /: at 400 px the attention line's badge against its fold badge`));
-    if (narrow.pill.top < narrow.more.top + narrow.more.height) say(`draws the Replay button at ${narrow.pill.top} px, on the badges' row`);
+    failures.push(...compare(narrow.lead, narrow.more, ['middle'], `${theme} /: at ${width} px the attention line's lead against its fold badge`));
+    for (const b of narrow.badges) failures.push(...compare(b, narrow.more, ['height', 'middle'], `${theme} /: at ${width} px the attention line's badge against its fold badge`));
+    if (narrow.wrapped ? narrow.pill.top < narrow.more.top + narrow.more.height : narrow.pill.middle !== narrow.more.middle) say(`draws the Replay button at ${narrow.pill.top} px with the line wrapped ${narrow.wrapped}`);
     for (const part of [narrow.lead, narrow.more, narrow.pill, ...narrow.badges]) {
       if (part.left < narrow.left - 0.5 || part.right > narrow.right + 0.5) say(`draws a part at ${part.left} to ${part.right}, outside its box at ${narrow.left} to ${narrow.right}`);
     }
