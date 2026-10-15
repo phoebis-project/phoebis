@@ -1184,15 +1184,25 @@ impl RoutingState {
 
     /// A fresh pin under a key another pin held (a release that lands the session elsewhere) takes the old one off
     /// its account with its mark and starts unrenewed. A renewal keeps the epoch and the renewal, and the row it
-    /// writes carries the mark as the caller read it.
+    /// writes carries the mark as the caller read it. A fresh pin on another account than the row it replaces clears
+    /// the slow-down deadline standing on the key's pace and keeps the cycle and the last dispatch: the hold was sized
+    /// for the source's window, and the new account's own factor decides the next one. A fresh pin with no row to
+    /// replace counts as such a landing, since a move and a failover take the row off the source before they write.
     pub(crate) fn put_pin(&mut self, mut pin: PinRow) {
         pin.model = self.canonical(&pin.model).to_string();
         let key = pin.key();
         let epoch = pin.epoch;
-        match self.pins.insert(key.clone(), pin) {
-            Some(replaced) if replaced.epoch == epoch => {}
-            _ => {
+        let account_id = pin.account_id.clone();
+        let landed = match self.pins.insert(key.clone(), pin) {
+            Some(replaced) if replaced.epoch == epoch => false,
+            replaced => {
                 self.renewed.remove(&key);
+                replaced.is_none_or(|replaced| replaced.account_id != account_id)
+            }
+        };
+        if landed {
+            if let Some(pace) = self.pin_paces.get_mut(&key) {
+                pace.deadline = None;
             }
         }
     }

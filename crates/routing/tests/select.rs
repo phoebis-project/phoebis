@@ -20962,6 +20962,97 @@ fn a_cooled_source_with_a_standing_deadline_places_the_request_afresh_unheld() {
     assert_eq!((sel.account.id.as_str(), sel.trace.renewed), ("b", false));
 }
 
+/// `s1` held on `a` at `T + 20 s` for its ten-second cycle at about half speed, with the deadline answered.
+fn held_on_a(st: &mut RoutingState, off: &RegistrySnapshot, on: &RegistrySnapshot) -> i64 {
+    cycled(st, off, "s1", 10 * SECOND, T + 10 * SECOND);
+    let (_, hold) = held_on(&decide(
+        st,
+        on,
+        &main_turn(on, "s1", T + 20 * SECOND),
+        &mut rng(),
+    ));
+    let until = hold.until.expect("a deadline");
+    assert!(until > T + 26 * SECOND, "{until}");
+    until
+}
+
+/// A turn of `s1` on `b` before `a`'s deadline goes on at `b`'s factor of 1, and the pin's pace keeps its cycle with
+/// no deadline standing.
+fn renews_on_b_before(st: &mut RoutingState, on: &RegistrySnapshot, until: i64) {
+    let at = T + 26 * SECOND;
+    assert!(at < until);
+    let d = decide(st, on, &main_turn(on, "s1", at), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), None),
+        "the source's deadline holds nothing on b"
+    );
+    assert_eq!(number(fact(line(&d.record, "move:shed"), "factor")), 1.0);
+    let pin = d.record.pin.as_ref().expect("a pin block");
+    assert_eq!(
+        (pin.account_id.as_deref(), pin.cycle_ms, pin.slow_down_until),
+        (Some("b"), Some(10_000), None),
+        "the pin keeps the session's cycle and no deadline"
+    );
+    assert_eq!(
+        st.pin_pace(&pin_key("s1")).and_then(|pace| pace.deadline),
+        None
+    );
+}
+
+#[test]
+fn a_placement_on_another_account_leaves_the_sources_deadline_and_keeps_the_cycle() {
+    let (off, on) = held_pools(120);
+    let mut st = slowed_s1(0.80);
+    let until = held_on_a(&mut st, &off, &on);
+    st.record_cooldown(cooled("a", "account", T + HOUR, "five_hour", "rate_limit"));
+    let d = decide(
+        &mut st,
+        &on,
+        &main_turn(&on, "s1", T + 25 * SECOND),
+        &mut rng(),
+    );
+    assert_eq!(landed(d.result), ("b".into(), None));
+    renews_on_b_before(&mut st, &on, until);
+}
+
+#[test]
+fn a_failover_landing_on_another_account_leaves_the_sources_deadline_and_keeps_the_cycle() {
+    let (off, on) = held_pools(120);
+    let mut st = slowed_s1(0.80);
+    let until = held_on_a(&mut st, &off, &on);
+    // The request fails on a: the invalidation takes the row, and the landing writes the fresh one on b.
+    let current = pinned(&st, "s1");
+    let row = st
+        .invalidate_pin(
+            &PinRef {
+                key_id: "k".into(),
+                session_id: "s1".into(),
+                agent_id: "main".into(),
+                model: "claude-sonnet-5".into(),
+                epoch: current.epoch,
+                lane: current.lane.clone(),
+            },
+            "a",
+        )
+        .expect("the row");
+    let landing = SelectRequest {
+        attempted: vec!["a".into()],
+        failed_over: Some(FailedOver {
+            from_account_id: "a".into(),
+            reason: "cooldown",
+            row,
+            cause: None,
+        }),
+        ..main_turn(&on, "s1", T + 25 * SECOND)
+    };
+    assert_eq!(
+        landed(decide(&mut st, &on, &landing, &mut rng()).result),
+        ("b".into(), None)
+    );
+    renews_on_b_before(&mut st, &on, until);
+}
+
 #[test]
 fn a_shed_moved_pin_is_held_on_its_destination_with_the_cycle_it_carried() {
     let (off, on) = shed_pools();
