@@ -2388,8 +2388,8 @@ impl RoutingState {
     }
 
     /// Sets the stamp at the first reading over the ceiling, clears it at a reading at or under, and replaces a stamp
-    /// older than the window's start (`window_start`: the window's reset less its length, where the reading has a
-    /// reset).
+    /// older than the window's start (`window_start`: the window's reset less its length where the reading names a
+    /// reset, or the reset a 5-hour reading has passed with no sample since).
     pub fn note_projection(
         &mut self,
         pool_id: &str,

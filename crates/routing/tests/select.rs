@@ -22597,6 +22597,32 @@ fn a_stamp_from_before_the_windows_start_is_replaced_at_the_first_reading_over_i
 }
 
 #[test]
+fn a_five_hour_stamp_from_before_a_reset_no_sample_followed_waits_again_in_the_new_window() {
+    let s = waiting_pool();
+    let after = T + HOUR + MINUTE;
+    // The three round pins burn 0.42 of a's 5-hour window an hour as of a minute past the reset, so the new window,
+    // read from nothing with its horizon five hours on, still projects over the ceiling.
+    let mut st = rounding(vec![
+        burning("s1", "a", 16.0, false, after),
+        burning("s2", "a", 14.0, false, after),
+        burning("s3", "a", 12.0, false, after),
+    ]);
+    // The last sample, at T, names the reset an hour out, and the stamp is the old window's.
+    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.stamp_projection_over("p", "a", FIVE_HOUR, T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s3", after), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert!(
+        no_fact(shed, "trigger") && no_fact(shed, "round") && d.shed_round.is_none(),
+        "the new window waits from its own first reading over: {:?}",
+        shed.facts
+    );
+    assert_eq!(fact(shed, "over_since_five_hour"), &FactValue::Int(after));
+    assert_eq!(st.projection_over_since("p", "a", FIVE_HOUR), Some(after));
+}
+
+#[test]
 fn after_a_round_the_dwell_gates_the_next_and_the_standing_stamp_waits_no_second_time() {
     let s = waiting_pool();
     let dwell = shed_dwell_ms(s.pool("p").expect("the pool"));

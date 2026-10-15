@@ -3257,12 +3257,21 @@ fn move_of<'a>(
         } else {
             FIVE_HOUR_MS
         };
+        // A 5-hour reading past its reset names none until the next sample does, while the window it read ended at
+        // that reset: the passed reset starts the new window, so a stamp from the old one waits again.
+        let start = projection.reset.map(|reset| reset - length).or_else(|| {
+            state
+                .sample(source)
+                .and_then(|sample| sample.reading(window))
+                .and_then(|reading| reading.reset)
+                .filter(|reset| *reset <= now)
+        });
         state.note_projection(
             &pool.id,
             source,
             window,
             projection.at_horizon > ceiling(pool, window),
-            projection.reset.map(|reset| reset - length),
+            start,
             now,
         );
     }
