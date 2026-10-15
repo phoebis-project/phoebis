@@ -3213,6 +3213,24 @@ async function wastedProbeRows(theme) {
     for (const row of rows.filter((r) => r.middle < r.line.top || r.middle > r.line.bottom)) {
       failures.push(`${theme} /analytics: the "${row.label}" bar is centered on ${row.middle.toFixed(1)}, outside its label's first line from ${row.line.top.toFixed(1)} to ${row.line.bottom.toFixed(1)}`);
     }
+    // The first reason stands as clear of the panel's tiles as each section's tiles row stands of what follows it, so
+    // the gap is read against the Cache warming and the Cost tiles rows.
+    const tile = (id) =>
+      page.evaluate((id) => {
+        const row = document.querySelector(`#${id} > .tiles-row`);
+        return row?.nextElementSibling ? Math.round((row.nextElementSibling.getBoundingClientRect().top - row.getBoundingClientRect().bottom) * 10) / 10 : null;
+      }, id);
+    const gap = await page.evaluate(() => {
+      const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === 'Wasted probes');
+      const tiles = card.querySelector('.tiles-row');
+      const first = card.querySelector('.hbars--reasons li');
+      return tiles ? Math.round((first.getBoundingClientRect().top - tiles.getBoundingClientRect().bottom) * 10) / 10 : null;
+    });
+    const tilesGap = { cacheWarming: await tile('cache-warming'), cost: (await tabTo(theme, 'Cost')) ? await tile('cost') : null };
+    measurements.push(`${theme} /analytics wasted probes gap ${JSON.stringify({ gap, tilesGap })}`);
+    for (const [section, neighbour] of [['Cache warming', tilesGap.cacheWarming], ['Cost', tilesGap.cost]]) {
+      for (const what of compare({ gap }, neighbour === null ? null : { gap: neighbour }, ['gap'], `the wasted probe reasons' gap under their tiles against the ${section} tiles row's`)) failures.push(`${theme} /analytics: ${what}`);
+    }
   } finally {
     await tabTo(theme, 'Traffic');
   }

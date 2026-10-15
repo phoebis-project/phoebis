@@ -584,7 +584,8 @@ Traffic reads `{n} requests, {pct} errors` and draws Requests by outcome (OK, Ra
 Exhausted), Errors by code, Failovers, Migration rewrites with its moves (one bar per move reason, stacked by the
 destination's fit, `fits`, `rewrite only`, `least bad` or `unknown`, each segment titled `{fit} {n}` and the bar labeled
 with the reason's total), Requests by speed, Effort levels, and the table Traffic by the chosen group with Requests, OK,
-Rate limited, Failed, Incomplete, Exhausted, Rejected, Error rate, Failovers, Search and Fetch.
+Rate limited, Failed, Incomplete, Exhausted, Rejected, Error rate, Failovers, Search and Fetch. Under the model grouping
+the requests the router rejected before routing group under "no model", which the Cache by model table leaves out.
 
 Burn follows the page's grouping, and "Session (Burn only)" groups it by session while every other section keeps the key
 grouping, since no rollup carries a session. Of the filters, the Accounts filter and the user agent groups alone apply

@@ -187,15 +187,22 @@ export async function readBurn(
   return { accounts, answer };
 }
 
+/**
+ * A group's label under the page's grouping: "no model" for the model grouping's empty key (the requests the router
+ * rejected before routing), else the label the route answered.
+ */
+export const modelGroupLabel = (g: Pick<AnalyticsGroup, 'key' | 'label'>, groupBy: BurnGroup): string => (groupBy === 'model' && g.key === '' ? 'no model' : g.label);
+
 /** An earlier holder of a key id groups under `<id>@<generation>`, which the breakdown labels by its creation. */
 const EARLIER_HOLDER = /^(.+)@(\d+)$/;
 /**
- * A burn group's label: the breakdown's for an earlier key holder, `unattributed` for what the router never attributed.
+ * A burn group's label: the breakdown's for an earlier key holder and for the group without a model, `unattributed` for
+ * what the router never attributed.
  */
 function burnLabelOf(groupBy: BurnGroup, key: string): string {
   if (key === '-') return 'unattributed';
   const holder = groupBy === 'key' ? EARLIER_HOLDER.exec(key) : null;
-  return holder === null ? key : earlierHolderLabel(holder[1], Number(holder[2]));
+  return holder === null ? modelGroupLabel({ key, label: key }, groupBy) : earlierHolderLabel(holder[1], Number(holder[2]));
 }
 
 /**
@@ -429,15 +436,15 @@ export function costHeadOf(unit: UnitPosition, totals: AnalyticsGroup): CostHead
 /**
  * Per group the 7-day share (solid) and the model week's (dashed) per bucket as `<group>:7d` and `<group>:week`, the
  * 5-hour share beside them as `<group>:5h` for the tooltip, a gap (null) where a bucket has none, per group the key its
- * model week is charted under (`weeks`), undefined where no bucket names one, and the group's label, which names the
- * line under the page's grouping. The groups are the ones carrying a share map: each account under the account
- * grouping, an API key account drawing no line, or each group of the one account the Accounts filter names.
+ * model week is charted under (`weeks`), undefined where no bucket names one, and the group's label under `groupBy`,
+ * which names the line under the page's grouping. The groups are the ones carrying a share map: each account under the
+ * account grouping, an API key account drawing no line, or each group of the one account the Accounts filter names.
  */
-export function shareLines(points: AnalyticsPoint[]): { accounts: string[]; data: Record<string, number | null>[]; labels: Record<string, string>; weeks: Record<string, string | undefined> } {
+export function shareLines(points: AnalyticsPoint[], groupBy: BurnGroup): { accounts: string[]; data: Record<string, number | null>[]; labels: Record<string, string>; weeks: Record<string, string | undefined> } {
   const accounts = [...new Set(points.flatMap((p) => p.groups.filter((g) => g.costShares !== null).map((g) => g.key)))].sort((a, b) => a.localeCompare(b));
   const weeks: Record<string, string | undefined> = Object.fromEntries(accounts.map((a) => [a, undefined]));
   const labels: Record<string, string> = {};
-  for (const p of points) for (const g of p.groups) if (g.costShares !== null) labels[g.key] ??= g.label;
+  for (const p of points) for (const g of p.groups) if (g.costShares !== null) labels[g.key] ??= modelGroupLabel(g, groupBy);
   const data = points.map((p) => {
     const row: Record<string, number | null> = { at: Date.parse(p.at) };
     for (const a of accounts) for (const w of ['5h', '7d', 'week']) row[`${a}:${w}`] = null;

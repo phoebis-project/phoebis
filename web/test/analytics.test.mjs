@@ -720,6 +720,21 @@ test('a share line with one priced bucket between two gaps marks it as an isolat
   assert.deepEqual(d.isolatedSlots(edge.map((r) => r['primary:7d'])), [true, false], "the range's edge counts as a gap");
 });
 
+test('under the model grouping the group without a model reads "no model", and every other group its own label', () => {
+  assert.equal(d.modelGroupLabel({ key: '', label: '' }, 'model'), 'no model', 'the requests the router rejected before routing');
+  assert.equal(d.modelGroupLabel({ key: 'claude-haiku-4-5', label: 'claude-haiku-4-5' }, 'model'), 'claude-haiku-4-5', 'a named model reads the label the route answered');
+  assert.equal(d.modelGroupLabel({ key: '', label: '' }, 'pool'), '', 'another grouping keeps the label the route answered');
+});
+
+test('a share line and a burn line by model name the group without a model "no model"', () => {
+  const at = new Date(Date.UTC(2026, 8, 16, 11)).toISOString();
+  const modelless = accountGroup({ costShares: { five_hour: 0.1, seven_day: 0.05 }, key: '', label: '' });
+  assert.deepEqual(d.shareLines([{ at, groups: [modelless] }], 'model').labels, { '': 'no model' }, 'the share line under the model grouping');
+  assert.deepEqual(d.shareLines([{ at, groups: [modelless] }], 'pool').labels, { '': '' }, 'the share line under another grouping');
+  const { lines } = d.foldBurn([point(0, 'claude-haiku-4-5', { uncachedTokens: 60 }), point(0, '')], 'model', 60, NONE);
+  assert.deepEqual(lines.map((l) => l.label), ['claude-haiku-4-5', 'no model'], 'the burn line under the model grouping');
+});
+
 test('the session and non-session views agree on the share averages over one mixed-funding request set', () => {
   const plan = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
   const attempt = plan.attempts[plan.attempts.length - 1];

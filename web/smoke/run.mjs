@@ -13117,6 +13117,13 @@ await tab(m, 'Latency');
 expect('/analytics latency tab', m.text(), ['Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key']);
 await tab(m, 'Cache');
 expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'expired between turns', 'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h']);
+{
+  // A request the router rejected before routing read no cache, so Cache by model lists it under no name, neither the
+  // empty label the route answers for it nor the name the breakdowns by model give it.
+  const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cache by model');
+  const labels = [...(table?.querySelectorAll('tbody tr') ?? [])].filter((tr) => tr.children.length > 1).map((tr) => tr.children[0]?.textContent?.trim() ?? '');
+  results.push({ name: '/analytics cache tab: Cache by model lists no row for the requests without a model', ok: labels.length > 0 && !labels.includes('') && !labels.includes('no model'), missing: labels.map((l) => JSON.stringify(l)) });
+}
 await tab(m, 'Cost');
 expect('/analytics cost tab', m.text(), ['Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read']);
 await tab(m, 'Cache warming');
@@ -15084,6 +15091,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     };
 
     await groupBy('Model');
+    {
+      // The story's revoked key sends one request the router rejects before routing, so it carries no model. Its row
+      // counts the request as an error, with no answer.
+      const row = trafficRows('model').find((cells) => cells[0] === 'no model') ?? [];
+      const figure = (i) => Number((row[i] ?? '').replace(/,/g, ''));
+      results.push({
+        name: '/analytics grouped by model the Traffic table names the requests the router rejected before routing "no model", with their figures',
+        ok: row.length === 12 && figure(1) > 0 && figure(2) === 0 && row[8] === '100.0%',
+        missing: row.length ? row : trafficRows('model').map((cells) => JSON.stringify(cells[0])),
+      });
+    }
     const heads = [...(traffic('model')?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
     results.push({ name: '/analytics the traffic table ends with the server-tool calls', ok: JSON.stringify(heads.slice(-3)) === JSON.stringify(['Failovers', 'Search', 'Fetch']), missing: heads });
     const fable = trafficRows('model').find((row) => row[0] === 'claude-fable-5-1') ?? [];
