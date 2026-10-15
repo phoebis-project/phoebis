@@ -1703,7 +1703,9 @@ textarea.input {
 /* Stat tiles */
 /*
  * The dashboard's attention line. A badge row is 22 px (18 px of line and 2 px of padding each side), and the line
- * holds that one row in every state, so the tiles below never move. The badges past the row fold behind "+N more".
+ * holds one row of items in every state, so the tiles below hold still. The badges past the row fold behind "+N more",
+ * and the Replay button with its answer takes a second row only where the lead, the fold badge and the button alone
+ * do not fit.
  */
 .attention-line {
   display: flex;
@@ -1711,6 +1713,11 @@ textarea.input {
   gap: 6px 8px;
   align-items: center;
   height: 22px;
+}
+
+.attention-line.is-wrapped {
+  flex-wrap: wrap;
+  height: auto;
 }
 
 .attention-line__lead {
@@ -1722,9 +1729,26 @@ textarea.input {
 /* The fold reads each part at its own width, which a part shrunk to fit the line would hide. */
 .attention-line__lead,
 .attention-line__more,
-.attention-line > .pill,
+.attention-line__tail,
+.attention-line__tail > .pill,
 .attention-line__replay {
   flex: none;
+}
+
+.attention-line__tail {
+  display: flex;
+  gap: 6px 8px;
+  align-items: center;
+}
+
+/* On its own row the tail spans the line, and an answer too long for that row wraps under the button. */
+.attention-line.is-wrapped > .attention-line__tail {
+  flex-basis: 100%;
+  flex-wrap: wrap;
+}
+
+.attention-line.is-wrapped .attention-line__replay {
+  max-width: 100%;
 }
 
 .attention-line__items {
@@ -1784,7 +1808,7 @@ textarea.input {
 }
 
 /* The Replay button sits in a badge row, so it takes the badges' 22 px and the row keeps its height. */
-.attention-line > .pill {
+.attention-line__tail > .pill {
   height: 22px;
   padding-block: 0;
 }

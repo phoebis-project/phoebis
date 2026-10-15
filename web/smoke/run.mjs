@@ -629,6 +629,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
       ['attention-line__more', 70],
       ['pill', 150],
     ];
+    let room = 700;
     window.HTMLElement.prototype.getBoundingClientRect = function () {
       const width = widths.find(([c]) => this.classList.contains(c))?.[1];
       return width === undefined ? measure.call(this) : { bottom: 22, height: 22, left: 0, right: width, top: 0, width, x: 0, y: 0 };
@@ -636,7 +637,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     Object.defineProperty(window.HTMLElement.prototype, 'clientWidth', {
       configurable: true,
       get() {
-        return this.classList.contains('attention-line') ? 700 : 0;
+        return this.classList.contains('attention-line') ? room : 0;
       },
     });
     const page = await mount('/');
@@ -644,14 +645,15 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     const rowBadges = [...(narrow?.querySelectorAll('.attention-line__items .badge') ?? [])];
     const shown = rowBadges.filter((b) => b.closest('[hidden]') === null).map((b) => b.textContent?.trim());
     const fold = narrow?.querySelector('button.attention-line__more') ?? null;
-    const foldRead = [fold?.textContent?.trim(), fold?.getAttribute('title'), fold?.className, fold?.getAttribute('aria-haspopup'), fold?.getAttribute('aria-expanded')];
+    const foldRead = [fold?.textContent?.trim(), fold?.getAttribute('title'), fold?.className, fold?.getAttribute('aria-haspopup'), fold?.getAttribute('aria-expanded'), fold?.getAttribute('aria-controls') ?? null];
+    const oneRow = [narrow?.className, fold?.nextElementSibling?.className, narrow?.querySelector('.attention-line__tail')?.firstElementChild?.textContent?.trim()];
     const box = () => document.querySelector('.attention-line__list');
     fold?.click();
     await page.settle(200);
     const entries = [...(box()?.children ?? [])].map((entry) => entry.querySelector('.badge'));
     const listed = entries.map((b) => [b?.textContent?.trim(), [...(b?.classList ?? [])].find((c) => c.startsWith('badge--')), target(b?.getAttribute('href'))]);
     const sameTitles = entries.length === rowBadges.length && entries.every((b, i) => b?.getAttribute('title') === rowBadges[i].getAttribute('title'));
-    const opened = [box()?.getAttribute('role'), box()?.getAttribute('aria-label'), fold?.getAttribute('aria-expanded'), box()?.contains(document.activeElement) ?? false];
+    const opened = [box()?.getAttribute('role'), box()?.getAttribute('aria-label'), fold?.getAttribute('aria-expanded'), box()?.contains(document.activeElement) ?? false, box() !== null && fold?.getAttribute('aria-controls') === box()?.id];
     await escapeOn(page);
     const closed = [box() === null, fold?.getAttribute('aria-expanded'), document.activeElement === fold];
     fold?.click();
@@ -661,20 +663,39 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     await page.settle(300);
     const went = [page.location().pathname, box() === null];
     page.unmount();
+    // At 300 px the lead, the fold badge and the pill alone need 340, so the pill takes a second row and the first holds
+    // the lead, one badge and the fold badge.
+    room = 300;
+    const tight = await mount('/');
+    const tightLine = tight.container.querySelector('.attention-line');
+    const wrapped = [
+      tightLine?.className,
+      [...(tightLine?.querySelectorAll('.attention-line__items .badge') ?? [])].filter((b) => b.closest('[hidden]') === null).map((b) => b.textContent?.trim()),
+      tightLine?.querySelector('.attention-line__more')?.textContent?.trim(),
+      [...(tightLine?.querySelector('.attention-line__tail')?.children ?? [])].map((c) => c.textContent?.trim()),
+    ];
+    tight.unmount();
     window.HTMLElement.prototype.getBoundingClientRect = measure;
     delete window.HTMLElement.prototype.clientWidth;
     const texts = want.map(([text]) => text);
     results.push({
-      name: "/ an attention line too narrow for its fourteen items shows the four that fit and folds the other ten behind \"+10 more\" titled with their words, whose list holds all fourteen worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
+      name: "/ an attention line too narrow for its fourteen items shows the four that fit and folds the other ten behind \"+10 more\" titled with their words one per line, whose list holds all fourteen worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
       ok:
         JSON.stringify(shown) === JSON.stringify(texts.slice(0, 4)) &&
-        JSON.stringify(foldRead) === JSON.stringify(['+10 more', `Folded: ${texts.slice(4).join(', ')}`, 'badge badge--neutral attention-line__more', 'dialog', 'false']) &&
+        JSON.stringify(foldRead) === JSON.stringify(['+10 more', ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
         JSON.stringify(listed) === JSON.stringify(want.map(([text, tone, href]) => [text, tone, href])) &&
         sameTitles &&
-        JSON.stringify(opened) === JSON.stringify(['dialog', 'Needs attention', 'true', true]) &&
+        JSON.stringify(opened) === JSON.stringify(['dialog', 'Needs attention', 'true', true, true]) &&
         JSON.stringify(closed) === JSON.stringify([true, 'false', true]) &&
         JSON.stringify(went) === JSON.stringify(['/accounts/legacy', true]),
       missing: [JSON.stringify(shown), JSON.stringify(foldRead), ...listed.map((l) => JSON.stringify(l)), `same titles ${sameTitles}`, JSON.stringify(opened), JSON.stringify(closed), JSON.stringify(went)],
+    });
+    results.push({
+      name: "/ the Replay button stands on the badges' row while the lead, the fold badge and the button fit beside each other, and takes a second row of its own where they do not",
+      ok:
+        JSON.stringify(oneRow) === JSON.stringify(['attention-line', 'attention-line__tail', 'Replay parked records']) &&
+        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+13 more', ['Replay parked records']]),
+      missing: [JSON.stringify(oneRow), JSON.stringify(wrapped)],
     });
   }
 }
@@ -688,13 +709,14 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   const button = () => [...(line()?.querySelectorAll('button.pill') ?? [])].find((b) => b.textContent?.trim() === 'Replay parked records');
   const slot = () => line()?.querySelector('.attention-line__replay')?.textContent ?? null;
   const parked = async () => (await attentionItems(dash)).some((b) => b.text.startsWith('Priced record parked'));
-  // The pill follows the badges' row, or the fold badge where one draws.
+  // The pill leads the part after the badges' row, or after the fold badge where one draws.
   const before = line()?.querySelector('.attention-line__more') ?? line()?.querySelector('.attention-line__items');
+  const tail = line()?.querySelector('.attention-line__tail') ?? null;
   const parkedFirst = await parked();
   results.push({
     name: '/ the attention line carries the Replay button after its badges while a parked record shows, and no answer yet',
-    ok: parkedFirst && button() !== undefined && button()?.disabled === false && before !== null && before?.nextElementSibling === button() && slot() === null,
-    missing: [`parked ${parkedFirst}`, button()?.outerHTML.slice(0, 160) ?? 'no button', `after ${before?.className ?? 'no row'}`, `slot ${JSON.stringify(slot())}`],
+    ok: parkedFirst && button() !== undefined && button()?.disabled === false && before !== null && tail !== null && before?.nextElementSibling === tail && tail.firstElementChild === button() && slot() === null,
+    missing: [`parked ${parkedFirst}`, button()?.outerHTML.slice(0, 160) ?? 'no button', `after ${before?.className ?? 'no row'}: ${before?.nextElementSibling?.className ?? 'nothing'}`, `slot ${JSON.stringify(slot())}`],
   });
   localStorage.setItem('phoebis.mockHeldWriter', '1');
   button()?.click();

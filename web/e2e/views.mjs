@@ -591,7 +591,10 @@ async function attentionLine(theme) {
   const folded = Number(/^\+(\d+) more$/.exec(read.more?.text ?? '')?.[1] ?? 0);
   if (mock) {
     if (read.lead !== '14 need attention' || texts.length + folded !== 14 || folded === 0 || read.more?.border !== 'dashed') say(`reads ${read.lead} over ${JSON.stringify(texts)} and ${JSON.stringify(read.more?.text ?? null)}, not the story's fourteen items folded behind a dashed "+N more" at 1280 by 800`);
-    else await attentionList(theme);
+    else {
+      await attentionList(theme);
+      await attentionLineNarrow(theme);
+    }
   } else if (theme === 'light') {
     if (read.lead === null || !texts.includes('Pool exhausted: Main')) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the seeded exhaustion`);
   } else if (read.lead === null ? JSON.stringify(texts) !== '["Nothing needs attention"]' : !texts.includes('Pool exhausted: Main')) {
@@ -647,6 +650,61 @@ async function attentionList(theme) {
   const after = await page.evaluate(() => ({ focus: document.activeElement?.classList.contains('attention-line__more') ?? false, open: document.querySelector('.attention-line__list') !== null }));
   if (after.open || !after.focus) say(`after Escape reads ${JSON.stringify(after)}, not closed with the focus on "+N more"`);
   await atRest();
+}
+
+/**
+ * The attention line at 400 by 800 with the story's Replay button: the lead, the fold badge and the button need more
+ * than the line's width, so the button takes a second row. The first row stays one 22 px row of the lead, the badges
+ * that fit and the fold badge, the button stands under it inside the content box, and the line ends above the tiles.
+ * Back at 1280 by 800 the line is one 22 px row again.
+ */
+async function attentionLineNarrow(theme) {
+  const say = (what) => failures.push(`${theme} /: at 400 px the attention line ${what}`);
+  const read = () =>
+    page.evaluate(() => {
+      const line = document.querySelector('.attention-line');
+      const grid = document.querySelector('.stat-grid');
+      if (!line || !grid) return null;
+      const top = line.getBoundingClientRect().top;
+      const box = (el) => {
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { height: Math.round(r.height * 10) / 10, left: Math.round(r.left * 10) / 10, middle: Math.round(r.top + r.height / 2 - top), right: Math.round(r.right * 10) / 10, top: Math.round(r.top - top) };
+      };
+      const r = line.getBoundingClientRect();
+      return {
+        badges: [...line.querySelectorAll('.attention-line__item:not([hidden]) > .badge')].map(box),
+        bottom: Math.round(r.bottom),
+        gridTop: Math.round(grid.getBoundingClientRect().top),
+        height: Math.round(r.height * 10) / 10,
+        lead: box(line.querySelector('.attention-line__lead')),
+        left: Math.round(r.left * 10) / 10,
+        more: box(line.querySelector('.attention-line__more')),
+        pill: box(line.querySelector('.attention-line__tail > .pill')),
+        right: Math.round(r.right * 10) / 10,
+        wrapped: line.classList.contains('is-wrapped'),
+      };
+    });
+  await page.setViewportSize({ height: 800, width: 400 });
+  await settle();
+  const narrow = await read();
+  measurements.push(`${theme} / attention line at 400 px ${JSON.stringify(narrow)}`);
+  if (!narrow?.more || !narrow.pill || !narrow.lead) say(`draws ${JSON.stringify(narrow)}, not the lead, the fold badge and the Replay button`);
+  else {
+    if (!narrow.wrapped || Math.abs(narrow.height - 50) > 0.5) say(`is ${narrow.height} px tall, wrapped ${narrow.wrapped}, not a 22 px row with the button on a second one`);
+    if (narrow.more.height !== 22 || narrow.more.middle !== 11) say(`draws its fold badge ${narrow.more.height} px tall at ${narrow.more.middle} px, not on a 22 px first row`);
+    failures.push(...compare(narrow.lead, narrow.more, ['middle'], `${theme} /: at 400 px the attention line's lead against its fold badge`));
+    for (const b of narrow.badges) failures.push(...compare(b, narrow.more, ['height', 'middle'], `${theme} /: at 400 px the attention line's badge against its fold badge`));
+    if (narrow.pill.top < narrow.more.top + narrow.more.height) say(`draws the Replay button at ${narrow.pill.top} px, on the badges' row`);
+    for (const part of [narrow.lead, narrow.more, narrow.pill, ...narrow.badges]) {
+      if (part.left < narrow.left - 0.5 || part.right > narrow.right + 0.5) say(`draws a part at ${part.left} to ${part.right}, outside its box at ${narrow.left} to ${narrow.right}`);
+    }
+    if (narrow.bottom > narrow.gridTop) say('reaches into the tiles');
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  const wide = await read();
+  if (!wide || wide.wrapped || Math.abs(wide.height - 22) > 0.5) failures.push(`${theme} /: back at 1280 px the attention line reads ${JSON.stringify(wide)}, not one 22 px row`);
 }
 
 /** The top bar's controls under the one control height: "Log out" and the theme control at 32 px, one top edge. */
@@ -1178,7 +1236,7 @@ async function poolCardLayout(theme) {
   else if (wide.tableBottom > wide.cardBottom) say(`the serving table ends at ${wide.tableBottom}, past the card's bottom at ${wide.cardBottom}`);
   if (JSON.stringify(rowsOf(wide.tops)) !== '[3,3,1]') say(`the tiles stand in rows of ${JSON.stringify(rowsOf(wide.tops))}, not rows of three, then one`);
   if (JSON.stringify(wide.lefts) !== JSON.stringify(['0px', '1px', '1px', '0px', '1px', '1px', '0px'])) say(`the tiles' left hairlines read ${wide.lefts.join(' ')}`);
-  await poolCardAges(theme, say);
+  await poolCardAges(theme, say, "at the pass's viewport");
   await page.setViewportSize({ height: 800, width: 720 });
   await settle();
   const narrow = await read();
@@ -1214,6 +1272,7 @@ async function poolCardLayout(theme) {
       if (card.wider && !card.clips) say(`at ${width} px the ${card.name} card's serving table is wider than its wrapper and paints past the card`);
     }
     if (tables.overflow > 0) say(`at ${width} px the page overflows its width by ${tables.overflow} px`);
+    if (width === 400) await poolCardAges(theme, say, 'at 400 px');
   }
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
@@ -1221,12 +1280,13 @@ async function poolCardLayout(theme) {
 }
 
 /**
- * At the pass's viewport, every pool card's attention rows end with the age: the row's last cell is `.attention__age`,
- * after the detail and on the middle of the row the badge and the subject stand on, in the detail's ink and size, uncut
- * and inside the card's box. The count says how many rows the read saw, since a router pass whose seeded exhaustion
- * cleared draws none.
+ * Every pool card's attention rows end with the age: the row's last cell is `.attention__age`, at the row's end after
+ * the detail and on its line, in the detail's ink and size, uncut, and every cell inside the card's box. A row on one
+ * line holds the badge and the subject on the age's line too. A row a narrow card stacks holds the badge and the
+ * subject on a line of their own above the detail and the age. The count says how many rows the read saw, since a
+ * router pass whose seeded exhaustion cleared draws none.
  */
-async function poolCardAges(theme, say) {
+async function poolCardAges(theme, say, where) {
   const rows = await page.evaluate(() =>
     [...document.querySelectorAll('.pool')].flatMap((card) => {
       const box = card.getBoundingClientRect();
@@ -1237,34 +1297,42 @@ async function poolCardAges(theme, say) {
           if (!el) return null;
           const at = el.getBoundingClientRect();
           const style = getComputedStyle(el);
-          return { color: style.color, inside: at.left >= box.left - 0.5 && at.right <= box.right + 0.5, left: Math.round(at.left * 10) / 10, middle: Math.round(at.top + at.height / 2 - (r.top + r.height / 2)), right: Math.round(at.right * 10) / 10, size: style.fontSize };
+          return { color: style.color, inside: at.left >= box.left - 0.5 && at.right <= box.right + 0.5, left: Math.round(at.left * 10) / 10, middle: Math.round(at.top + at.height / 2 - r.top), right: Math.round(at.right * 10) / 10, size: style.fontSize };
         };
         const last = row.lastElementChild;
         return {
-          age: last?.classList.contains('attention__age') ? { ...cell(last), cut: last.scrollWidth > last.clientWidth, text: last.textContent } : null,
+          age: last?.classList.contains('attention__age') ? { ...cell(last), cut: last.scrollWidth > last.clientWidth, end: Math.abs(last.getBoundingClientRect().right - r.right) <= 0.5, text: last.textContent } : null,
           badge: cell(row.querySelector('.badge')),
           card: name,
           detail: cell(row.querySelector('.attention__detail')),
           label: row.querySelector('.badge')?.textContent ?? '',
+          stacked: getComputedStyle(row).gridTemplateColumns.split(' ').length === 3,
           subject: cell(row.children[1] ?? null),
         };
       });
     }),
   );
-  measurements.push(`${theme} /pools card attention rows ${JSON.stringify({ count: rows.length, rows })}`);
-  if (mock && rows.length === 0) say('no card draws an attention row');
+  measurements.push(`${theme} /pools card attention rows ${where} ${JSON.stringify({ count: rows.length, rows })}`);
+  if (mock && rows.length === 0) say(`${where} no card draws an attention row`);
   for (const row of rows) {
-    const what = `the ${row.card} card's ${row.label} row`;
+    const what = `${where} the ${row.card} card's ${row.label} row`;
     if (!row.age) {
       say(`${what} ends with no age cell`);
       continue;
     }
     if (!row.age.inside) say(`${what} draws its age past the card's box`);
+    if (!row.age.end) say(`${what} draws its age short of the row's end`);
     if (row.age.cut) say(`${what} cuts its age`);
     if (row.detail && row.age.left < row.detail.right - 0.5) say(`${what} draws its age before the detail's end`);
-    failures.push(...compare(row.age, row.badge, ['inside', 'middle'], `${theme} /pools card: ${what}'s age against its badge`));
-    failures.push(...compare(row.age, row.subject, ['inside', 'middle'], `${theme} /pools card: ${what}'s age against its subject`));
     failures.push(...compare(row.age, row.detail, ['color', 'inside', 'middle', 'size'], `${theme} /pools card: ${what}'s age against its detail`));
+    if (row.stacked) {
+      failures.push(...compare(row.subject, row.badge, ['inside', 'middle'], `${theme} /pools card: ${what}'s subject against its badge`));
+      failures.push(...compare(row.age, row.badge, ['inside'], `${theme} /pools card: ${what}'s age against its badge`));
+      if (row.badge && row.detail && row.detail.middle <= row.badge.middle) say(`${what} stacks its detail beside its badge rather than under it`);
+    } else {
+      failures.push(...compare(row.age, row.badge, ['inside', 'middle'], `${theme} /pools card: ${what}'s age against its badge`));
+      failures.push(...compare(row.age, row.subject, ['inside', 'middle'], `${theme} /pools card: ${what}'s age against its subject`));
+    }
   }
 }
 

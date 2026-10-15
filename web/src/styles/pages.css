@@ -1520,6 +1520,28 @@
   white-space: nowrap;
 }
 
+.pool {
+  container: pool-card / inline-size;
+}
+
+/*
+ * A card under 480 px has no room for the badge, the subject and the age on one line, so the row takes two: the badge
+ * and the subject, then the detail cut to the rest with the age at the row's end.
+ */
+@container pool-card (width < 480px) {
+  .attention__row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .attention__row > :nth-child(2) {
+    grid-column: 2 / -1;
+  }
+
+  .attention__detail {
+    grid-column: 1 / 3;
+  }
+}
+
 /* The serving table: the caption names the strategy, the next account's row takes the accent tint. */
 .serving caption {
   padding: 0 0 8px;

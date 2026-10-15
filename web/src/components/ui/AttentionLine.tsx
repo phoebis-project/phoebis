@@ -10,9 +10,10 @@ const widthOf = (el: Element | null): number => el?.getBoundingClientRect().widt
 
 /**
  * The dashboard's line above the tiles: what needs the operator, worst first, each a badge that opens where it is
- * fixed. The line keeps one row in every state, the loading, quiet and failed ones included, and folds the badges past
- * the row behind "+N more", whose popover lists every item, so the tiles never move with the router's state. A failed
- * read never draws the quiet line, which would claim a health the read did not see.
+ * fixed. The line keeps one row of items in every state, the loading, quiet and failed ones included, and folds the
+ * badges past the row behind "+N more", whose popover lists every item, so the tiles hold still as the router's state
+ * changes. Only where the lead, the fold badge and the Replay button alone pass the row's width do the button and its
+ * answer take a second row. A failed read never draws the quiet line, which would claim a health the read did not see.
  *
  * While a parked record shows, the line carries the Replay button after its badges. Its answer, or the route's
  * refusal, reads in the slot beside it rather than a toast, and an answer reads the list again through `refresh`, so
@@ -37,6 +38,7 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
   const lineRef = useRef<HTMLDivElement>(null);
   const rowRef = useRef<HTMLSpanElement>(null);
   const [fit, setFit] = useState(Number.POSITIVE_INFINITY);
+  const [wrapped, setWrapped] = useState(false);
   const [open, setOpen] = useState(false);
   // Held in state through the ref callback, since the hooks lint refuses a ref read while rendering.
   const [fold, setFold] = useState<HTMLButtonElement | null>(null);
@@ -64,6 +66,7 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
     // A line no layout measured (jsdom, the smoke) shows every badge, so the checks read them all on the row.
     if (width === 0) {
       setFit(Number.POSITIVE_INFINITY);
+      setWrapped(false);
       return;
     }
     const wraps = [...row.children].filter((el): el is HTMLElement => el instanceof HTMLElement);
@@ -73,16 +76,23 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
     wraps.forEach((el, i) => {
       el.hidden = hidden[i];
     });
+    const lead = widthOf(line.querySelector(':scope > .attention-line__lead'));
     const more = widthOf(line.querySelector(':scope > .attention-line__more'));
-    const beside = [...line.children].filter((el) => el !== row && !el.classList.contains('attention-line__more')).map(widthOf);
+    const tail = line.querySelector(':scope > .attention-line__tail');
+    // Its parts' own widths, since on a second row the tail spans the line.
+    const tailParts = tail === null ? [] : [...tail.children].map(widthOf);
+    const tailWidth = tailParts.reduce((sum, w) => sum + w, 0) + (tail === null ? 0 : (parseFloat(getComputedStyle(tail).columnGap) || 0) * Math.max(0, tailParts.length - 1));
     const gap = parseFloat(getComputedStyle(line).columnGap) || 0;
     const rowGap = parseFloat(getComputedStyle(row).columnGap) || 0;
-    const fits = (count: number) => {
-      const parts = [widths.slice(0, count).reduce((sum, w) => sum + w, 0) + rowGap * Math.max(0, count - 1), ...beside, ...(count < widths.length ? [more] : [])];
+    const fits = (count: number, withTail: boolean) => {
+      const parts = [lead, widths.slice(0, count).reduce((sum, w) => sum + w, 0) + rowGap * Math.max(0, count - 1), ...(count < widths.length ? [more] : []), ...(withTail && tail !== null ? [tailWidth] : [])];
       return parts.reduce((sum, w) => sum + w, 0) + gap * (parts.length - 1) <= width;
     };
+    // The tail takes a second row only where it cannot stand beside the lead and the fold badge with every badge folded.
+    const wrap = tail !== null && !fits(0, true);
     let count = widths.length;
-    while (count > 0 && !fits(count)) count -= 1;
+    while (count > 0 && !fits(count, !wrap)) count -= 1;
+    setWrapped(wrap);
     setFit(count);
   };
   const measureRef = useRef(measure);
@@ -135,8 +145,9 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
         {b.text}
       </Badge>
     );
+  const parked = items.some((item) => item.kind === 'ledger_record_parked');
   return (
-    <div ref={lineRef} className="attention-line">
+    <div ref={lineRef} className={wrapped ? 'attention-line is-wrapped' : 'attention-line'}>
       <span className="attention-line__lead">
         {items.length} {items.length === 1 ? 'needs' : 'need'} attention
       </span>
@@ -148,16 +159,30 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
         ))}
       </span>
       {folded.length > 0 && (
-        <button ref={setFold} type="button" className="badge badge--neutral attention-line__more" title={`Folded: ${folded.map((b) => b.text).join(', ')}`} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <button
+          ref={setFold}
+          type="button"
+          className="badge badge--neutral attention-line__more"
+          // One item per line, since a routing condition's words carry commas of their own.
+          title={['Folded:', ...folded.map((b) => b.text)].join('\n')}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-controls={open ? listId : undefined}
+          onClick={() => setOpen((v) => !v)}
+        >
           {`+${folded.length} more`}
         </button>
       )}
-      {items.some((item) => item.kind === 'ledger_record_parked') && (
-        <Pill onClick={() => void replay()} disabled={replaying}>
-          Replay parked records
-        </Pill>
+      {(parked || slot !== null) && (
+        <span className="attention-line__tail">
+          {parked && (
+            <Pill onClick={() => void replay()} disabled={replaying}>
+              Replay parked records
+            </Pill>
+          )}
+          {slot}
+        </span>
       )}
-      {slot}
       <Popover anchor={fold} className="attention-line__list" id={listId} label="Needs attention" onClose={() => setOpen(false)} open={open} role="dialog">
         {badges.map((b) => (
           <span key={b.key} className="attention-line__item" onClick={b.href ? () => setOpen(false) : undefined}>
