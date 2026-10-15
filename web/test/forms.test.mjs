@@ -499,7 +499,7 @@ test("the warnings mirror reads the pool routes' ten checks on a pool's settings
   assert.deepEqual(codes({ shedCap: 0.2 }), [['cap_under_quarter', ['shed_cap']]]);
   assert.deepEqual(codes({ windowCeiling: 0.75 }), [['ceiling_low', ['window_ceiling']]]);
   assert.deepEqual(codes({ windowCeiling: 1 }), [['ceiling_without_margin', ['window_ceiling']]]);
-  assert.deepEqual(codes({ loadShedding: false }), [['shedding_off', ['load_shedding']]]);
+  assert.deepEqual(codes({ loadShedding: false }), [['shedding_off', ['load_shedding', 'slow_down']]], 'the check reads both switches, and the dialog opens the first');
   assert.deepEqual(codes({ migrateWhenSpent: false }), [['spent_moves_off', ['migrate_when_spent']]]);
   assert.deepEqual(codes({ warmSessions: 'never' }), [['warm_never', ['warm_sessions']]]);
   const sentence = (patch) => d.poolWarnings({ ...quiet, ...patch }, 0).map((w) => [w.code, w.fields, w.text]);

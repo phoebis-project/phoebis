@@ -1202,6 +1202,9 @@ export function PoolDialog({
   const [revoking, setRevoking] = useState<ApiKey | null>(null);
   // Held apart from the form so a priority keystroke cannot move the row under the cursor.
   const [memberOrder, setMemberOrder] = useState<string[]>([]);
+  // A refused return dwell under When cold or Never stays editable while it holds the focus, so the keystroke that
+  // clears the refusal does not disable the field under the cursor.
+  const [dwellFocused, setDwellFocused] = useState(false);
   // The reset reads the accounts through a ref: the parent hands down a fresh array on every render, and reacting to
   // that would wipe the form mid-edit.
   const accountsNow = useRef(accounts);
@@ -2132,8 +2135,10 @@ export function PoolDialog({
               max={ENGINE_BOUNDS.returnToPlanDwellSeconds.max}
               value={form.engine.returnToPlanDwellSeconds}
               onChange={(e) => setEngine('returnToPlanDwellSeconds', Number(e.target.value))}
+              onFocus={() => setDwellFocused(true)}
+              onBlur={() => setDwellFocused(false)}
               // A refused dwell stays editable whatever the mode, or its hold on the save could not be cleared.
-              disabled={form.engine.returnToPlan !== 'always' && !refusedFields.has(ENGINE_FIELD_LABELS.returnToPlanDwellSeconds)}
+              disabled={form.engine.returnToPlan !== 'always' && !refusedFields.has(ENGINE_FIELD_LABELS.returnToPlanDwellSeconds) && !dwellFocused}
               aria-invalid={invalid(ENGINE_FIELD_LABELS.returnToPlanDwellSeconds)}
             />
           </Field>

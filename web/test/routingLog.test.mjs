@@ -872,10 +872,11 @@ const DETAIL_EVENTS = {
   router_started: [{ affinity_entries_loaded: 34, down_since: ms(6, 11, 58), holds_lost: true, pins_loaded: 10, shedding_marks_loaded: 0, shedding_rounds_stale: 0, version: '0.1.0', windows_loaded: 5 }, ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests']],
   shedding_round: [
     {
-      burn_average_seconds: 1_800, burn_sum: 0.12, ceiling: 0.95, dwell_seconds: 900, dwell_until: ms(14, 15), excess: 0.06, horizon: ms(16, 0), marks: [{ agent_id: 'c21e', key_id: 'desktop', model: 'claude-sonnet-5', session_id: 's1' }],
+      burn_average_seconds: 1_800, burn_sum: 0.12, ceiling: 0.95, dwell_seconds: 900, dwell_until: ms(14, 15), excess: 0.06, factor: null, horizon: ms(16, 0),
+      marks: [{ agent_id: 'c21e', key_id: 'desktop', model: 'claude-sonnet-5', session_id: 's1' }],
       outcome: 'marked 1', persisted: true,
       pins: [{ agent_id: 'c21e', burn: 0.07, cold: true, key_id: 'desktop', last_input_tokens: 48_100, marked: true, model: 'claude-sonnet-5', note: null, per_rewrite: 0.004, planned: 'secondary', rewrite: 0.005, runway_ms: null, session_id: 's1', skip: null }],
-      projection: 0.99, reason: null, removed: 0.07, shed_cap: 0.2, factor: null, stretch_ms: null, target: 0.024, threshold_ms: null, trigger: 'projection', unit: 'window_share', utilization: 0.71, warm_sessions: 'when_needed',
+      projection: 0.99, reason: null, removed: 0.07, shed_cap: 0.2, stretch_ms: null, target: 0.024, threshold_ms: null, trigger: 'projection', unit: 'window_share', utilization: 0.71, warm_sessions: 'when_needed',
       window: 'five_hour',
     },
     ['Started by', 'Trigger', 'Fired by', 'Excess', 'Cap', 'Unit', 'Burn average', 'Warm sessions', 'Pins', 'Planned destinations', 'Outcome', 'Next round after', 'Dwell', 'Survive a restart'],

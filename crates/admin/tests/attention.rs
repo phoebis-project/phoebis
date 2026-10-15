@@ -145,7 +145,7 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
         .attention
         .observe(&complete("r-drift", Outcome::Rejected, Some("hash"), later));
     common::park_unreadable(&parts.db, "main", "business", later - 1_000);
-    // The three routing conditions as the ledger's fold writes them, each older than everything above, which they
+    // The four routing conditions as the ledger's fold writes them, each older than everything above, which they
     // still rank after: none of them stops traffic.
     let condition = |kind: &str, subject_kind: &str, subject: &str, pool: Option<&str>, detail| {
         phoebis_ledger::RoutingCondition {

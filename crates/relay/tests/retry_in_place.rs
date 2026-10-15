@@ -1137,7 +1137,8 @@ fn reasons(waits: &[(String, u64)]) -> Vec<&str> {
 async fn a_slow_down_hold_is_cut_at_the_request_deadline_and_a_slot_wait_after_it_keeps_the_retry_bound(
 ) {
     // 31 s is one second past the margin, so the request's deadline is one second after its admission. a reads at its
-    // ceiling, where the factor is zero whatever the demand, so the hold is the two-second cap and the deadline cuts it.
+    // ceiling, where the factor is zero whatever the demand, so the hold is the two-second cap and the deadline cuts
+    // it.
     let up = FakeUpstream::start(messages(json_200())).await;
     let h = harness_with_limits(
         &up,

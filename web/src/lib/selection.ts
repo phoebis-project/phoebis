@@ -70,8 +70,11 @@ export function windingDownBadge(end: number, now: number): StandingBadge {
   return end > now ? { text: `winding down ${fmtDuration(end - now)}`, title: `Winding down to the plan's end at ${at}` } : { text: 'winding down', title: `Winding down past the plan's end at ${at}` };
 }
 
-/** A speed factor as its chip reads it: `0.5x`, `0.35x`, `0.95x`, two decimals with a trailing zero dropped. */
-export const speedWord = (factor: number): string => `${Number(factor.toFixed(2))}x`;
+/**
+ * A speed factor as its chip reads it: `0.5x`, `0.35x`, `0.95x`, two decimals with a trailing zero dropped. A factor
+ * under 1 reads `0.99x` at most, since the chip draws under 1 alone and a rounded `1x` would read as no slow-down.
+ */
+export const speedWord = (factor: number): string => `${factor < 1 ? Math.min(Number(factor.toFixed(2)), 0.99) : Number(factor.toFixed(2))}x`;
 
 /**
  * `slowed since 17:40: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min
@@ -89,7 +92,8 @@ export function speedHover(slowDown: AccountSlowDown | null, now: number): strin
 /**
  * A serving member's speed chip: its account's slow-down with the hover where the account is loaded, else the factor
  * the pools route serves on the member with no hover. A loaded account draws none, whatever the member carries, where
- * `slowedOf` reads no slow-down: none in force, a factor of 1, or a 5-hour window reset since the read.
+ * `slowedOf` reads no slow-down: none in force, a factor of 1, no 5-hour window at all, or a 5-hour window reset since
+ * the read.
  */
 export function memberSpeed(member: Pick<PoolMember, 'speed'>, account: Account | null, now: number): { factor: number | null; hover: string | null } {
   if (account === null) return { factor: member.speed, hover: null };

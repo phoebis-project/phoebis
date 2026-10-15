@@ -135,7 +135,8 @@ pub struct SelectRequest {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FailedOver {
     pub from_account_id: String,
-    /// `cooldown`, `fast_lane` or `mark`, the move's reason on the record and the event.
+    /// `cooldown`, `fast_lane` or `mark`, mirroring the word of the invalidated entry the landing reads. The record and
+    /// the event take theirs from that entry.
     pub reason: &'static str,
     /// The row the invalidation took, whose burn the landing prices and the new pin carries.
     pub row: PinRow,
@@ -241,7 +242,8 @@ pub enum MigrateReason {
     Drain,
     /// A subscription account in overage handed its session back to plan quota.
     Overage,
-    /// A pin on an api_key account returned to plan quota once cold or past the dwell.
+    /// A pin on an api_key account returned to plan quota as `return_to_plan` says: cold, or warm past the return dwell
+    /// under `always`.
     ReturnToPlan,
     /// A shedding round marked the pin.
     Shed,
@@ -723,7 +725,8 @@ pub(crate) enum Figures<'a> {
     /// A live pin's own: its last context and its decayed burn.
     Pin(&'a PinRow),
     /// A fresh session's: the body and the median burn of the pool's warm pins, which `fresh_prior` collects once per
-    /// walk since every candidate of the walk reads the same set.
+    /// walk since every candidate of the walk reads the same set. A failed-over request's landing reads the burn of the
+    /// row its source lost here instead of the median.
     Fresh(&'a [PinRow]),
 }
 
@@ -1718,7 +1721,9 @@ fn run(
     // placement reads every candidate with the fresh prior, and one inside the wind-down never fits. It
     // keeps the read of each candidate that fits, so a fall-through to the whole set carries no runway to break a tie.
     // A failed-over request falls through the gate's orders before the whole set, so a session that has to land
-    // somewhere lands where its burn runs longest. The rung that kept the set is the `ladder` fact.
+    // somewhere still lands: the runway breaks the strategy's tie among the fitting candidates, the longest runway
+    // takes the `rewrite_only` rung, and the strategy alone picks on the `least_bad` and `every` rungs. The rung that
+    // kept the set is the `ladder` fact.
     let mut ladder = None;
     let fitting: Vec<&Candidate> = if moving.is_some() {
         selection_set.clone()
@@ -2967,7 +2972,7 @@ fn move_of<'a>(
     let (now, fallback_ms) = (request.now, request.fallback_ms);
     // Every shed line below carries the account's pace whichever rule answered. A probe reads no pace, so its line
     // carries none of it.
-    let pace_facts = if request.probe {
+    let slow_down_facts = if request.probe {
         Vec::new()
     } else {
         slow_down_facts(state, pool, &current.account_id, slowed)
@@ -3040,7 +3045,7 @@ fn move_of<'a>(
                     Fact::int("wait_ms", wait_ms).unit("ms"),
                 ],
             );
-            not_run_after(rec, 0, &pace_facts);
+            not_run_after(rec, 0, &slow_down_facts);
             return MoveVerdict::Wait { until };
         }
         let gate = gate(
@@ -3061,10 +3066,10 @@ fn move_of<'a>(
         );
         let facts = vec![Fact::bool("holds_allowance", false)];
         if !gate.set.is_empty() {
-            let (set, reads) = fired(rec, 0, facts, gate, &pace_facts);
+            let (set, reads) = fired(rec, 0, facts, gate, &slow_down_facts);
             return MoveVerdict::Move(MigrateReason::Spent, set, reads);
         }
-        no_destination(rec, 0, facts, gate, &pace_facts);
+        no_destination(rec, 0, facts, gate, &slow_down_facts);
     }
 
     // A subscription account in overage hands the session back to plan quota, warm or cold, onto a plan-funded
@@ -3112,10 +3117,10 @@ fn move_of<'a>(
                     rec,
                 );
                 if !gate.set.is_empty() {
-                    let (set, reads) = fired(rec, 1, facts, gate, &pace_facts);
+                    let (set, reads) = fired(rec, 1, facts, gate, &slow_down_facts);
                     return MoveVerdict::Move(MigrateReason::Overage, set, reads);
                 }
-                no_destination(rec, 1, facts, gate, &pace_facts);
+                no_destination(rec, 1, facts, gate, &slow_down_facts);
             }
         }
     }
@@ -3176,10 +3181,10 @@ fn move_of<'a>(
                 rec,
             );
             if !gate.set.is_empty() {
-                let (set, reads) = fired(rec, 2, facts, gate, &pace_facts);
+                let (set, reads) = fired(rec, 2, facts, gate, &slow_down_facts);
                 return MoveVerdict::Move(MigrateReason::ReturnToPlan, set, reads);
             }
-            no_destination(rec, 2, facts, gate, &pace_facts);
+            no_destination(rec, 2, facts, gate, &slow_down_facts);
         }
     }
 
@@ -3209,10 +3214,10 @@ fn move_of<'a>(
         );
         let facts = vec![Fact::bool("cold", true), Fact::bool("winding_down", true)];
         if !gate.set.is_empty() {
-            let (set, reads) = fired(rec, 3, facts, gate, &pace_facts);
+            let (set, reads) = fired(rec, 3, facts, gate, &slow_down_facts);
             return MoveVerdict::Move(MigrateReason::Drain, set, reads);
         }
-        no_destination(rec, 3, facts, gate, &pace_facts);
+        no_destination(rec, 3, facts, gate, &slow_down_facts);
     }
 
     // The switch turns the round off and nothing else: the rules above, the fit gate and the reservations ran as they
@@ -3223,7 +3228,7 @@ fn move_of<'a>(
             4,
             "not_run",
             vec![Fact::text("round", "off")],
-            &pace_facts,
+            &slow_down_facts,
         );
         return MoveVerdict::Stay;
     }
@@ -3347,7 +3352,7 @@ fn move_of<'a>(
             facts.push(Fact::text("round", "within_dwell"));
         }
     } else if waiting.is_empty() && stretch_waits.is_none() {
-        rule_line(rec, 4, "no", facts, &pace_facts);
+        rule_line(rec, 4, "no", facts, &slow_down_facts);
         return MoveVerdict::Stay;
     }
     // A pin on an account cooled for this model is not renewed at step 5, so the fresh placement replaces it:
@@ -3363,7 +3368,7 @@ fn move_of<'a>(
         .is_some()
     {
         facts.push(Fact::bool("cooldown", true));
-        rule_line(rec, 4, "no", facts, &pace_facts);
+        rule_line(rec, 4, "no", facts, &slow_down_facts);
         return MoveVerdict::Stay;
     }
     // A pin moves only when its session asks, so an unmarked pin never moves for utilization and a marked one
@@ -3372,7 +3377,7 @@ fn move_of<'a>(
     let marked = state.shed_marked(&current.key());
     facts.push(Fact::bool("marked", marked));
     if !marked {
-        rule_line(rec, 4, "no", facts, &pace_facts);
+        rule_line(rec, 4, "no", facts, &slow_down_facts);
         return MoveVerdict::Stay;
     }
     if request.fast
@@ -3380,7 +3385,7 @@ fn move_of<'a>(
             == BurnUnit::WindowShare
     {
         facts.push(Fact::bool("window_share_fast", true));
-        rule_line(rec, 4, "no", facts, &pace_facts);
+        rule_line(rec, 4, "no", facts, &slow_down_facts);
         return MoveVerdict::Stay;
     }
     // The shed rule's keep is the no-return test alone: a pin never returns inside the dwell to the account that
@@ -3402,10 +3407,10 @@ fn move_of<'a>(
         rec,
     );
     if gate.set.is_empty() {
-        no_destination(rec, 4, facts, gate, &pace_facts);
+        no_destination(rec, 4, facts, gate, &slow_down_facts);
         return MoveVerdict::Stay;
     }
-    let (set, reads) = fired(rec, 4, facts, gate, &pace_facts);
+    let (set, reads) = fired(rec, 4, facts, gate, &slow_down_facts);
     MoveVerdict::Move(MigrateReason::Shed, set, reads)
 }
 
@@ -3474,7 +3479,8 @@ fn slow_down_facts(
         Fact::int("stretch_ms", read.stretch_ms).unit("ms"),
         Fact::int("threshold_ms", read.threshold_ms).unit("ms"),
         Fact::number("factor", read.factor),
-        Fact::number("speed", read.speed),
+        // The speed this read's plan realizes, the one the hold's outcome names, so the line and the card read one.
+        Fact::number("speed", read.realized),
         Fact::number("demand_five_hour", read.demand * 3_600.0).unit("percent_per_hour"),
     ];
     if let Some(since) = state
@@ -3566,7 +3572,7 @@ fn slow_down_answer(
         None => {
             let read = rec.slow_down.as_ref().filter(|read| read.factor < 1.0)?;
             let plan = slow_down_hold(request, current, read)?;
-            state.stand_slow_down_deadline(&key, plan.until, &request.request_id);
+            state.stand_slow_down_deadline(&key, plan.until);
             state.add_slow_down_held(&pool.id, &current.account_id, plan.hold_ms);
             plan
         }
@@ -5557,7 +5563,11 @@ fn pin_facts(
         cycle_ms: pace
             .and_then(|p| p.cycle_ms)
             .map(|cycle| cycle.round() as i64),
-        slow_down_until: pace.and_then(|p| p.deadline),
+        // A deadline at or before the decision stands no longer, as `slow_down_answer` reads it, though it stays on
+        // the pace until the pin ends.
+        slow_down_until: pace
+            .and_then(|p| p.deadline)
+            .filter(|deadline| *deadline > now),
     }
 }
 
@@ -6171,12 +6181,12 @@ impl Readings<'_> {
                 // The wait explains the placement more than where it landed: the row names the hold it followed
                 // and how long it lasted.
                 Some(hold) => {
-                    let place = if hold.reason == "reset" {
-                        "reset"
-                    } else if hold.cohort.is_some() {
-                        "cohort"
-                    } else {
-                        "strategy_pick"
+                    // A reset wait and a slow-down hold are named by their reason, as the renewal names the
+                    // slow-down, so `strategy_pick` stays the cap wait's word.
+                    let place = match hold.reason {
+                        "reset" | "slow_down" => hold.reason,
+                        _ if hold.cohort.is_some() => "cohort",
+                        _ => "strategy_pick",
                     };
                     (by("hold", place), vec![held_fact(hold)])
                 }

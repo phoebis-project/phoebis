@@ -520,8 +520,8 @@ const END_FRESH = 1.9;
 // which stands past the label's edges, so two partitions stand at least this far apart to keep the pill clear of a
 // neighbor's 58 px label.
 const PARTITION_GAP = 61;
-// The shortest run from a line's last station to the termini, in units, which keeps the Held and Refused ways out
-// clear of that station's label.
+// The shortest run from a line's last station to the termini, in units, so the termini stand past the last station at
+// any width.
 const END_MIN = 1;
 const END_PINNED = 2.2;
 const LEFT = 36;

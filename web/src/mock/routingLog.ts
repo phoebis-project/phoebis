@@ -524,11 +524,11 @@ const longestOf = <T extends Pick<RecordCandidate, 'runwayMs'>>(list: T[]): T[] 
 
 /**
  * The router's fit of a pin on a candidate, over the plan windows the model draws: each window's runway is the time
- * until the prediction with the pin's rewrite, rising at the account's and the pin's burn, reaches the ceiling, zero
- * where the rewrite alone does and unbounded with no burn. `fits` reaches the horizon on every window, `rewrite_only`
- * lands the rewrite but falls short on one, and `least_bad` is the rest, as is a window a move cannot read. An account
- * inside the pool's wind-down before its end reads `ending`, and an API-key account fits while its worst bucket has
- * room.
+ * until the prediction with the pin's rewrite, rising at the account's burn (its demand on the 5-hour window) and the
+ * pin's, reaches the ceiling, zero where the rewrite alone does and unbounded with no burn. `fits` reaches the horizon
+ * on every window, `rewrite_only` lands the rewrite but falls short on one, and `least_bad` is the rest, as is a window
+ * a move cannot read. An account inside the pool's wind-down before its end reads `ending`, and an API-key account fits
+ * while its worst bucket has room.
  */
 function fitOf(c: RecordCandidate, at: number, pool: Pick<PoolSeed, 'windDownMinutes' | 'windowCeiling'>, model: string, tokens: number, pinBurn: Record<string, number>, move: boolean): FitRead {
   const ceiling = pool.windowCeiling;
@@ -559,7 +559,9 @@ function fitOf(c: RecordCandidate, at: number, pool: Pick<PoolSeed, 'windDownMin
     rewrites.push(fact(`rewrite_${w}`, rewrite[w] ?? 0, 'percent'));
     reserved.push(fact(`reserved_${w}`, x.reserved, 'percent'));
     const predicted = x.utilization + (x.reserved ?? 0);
-    const burn = (c.burn[w] ?? 0) + (pinBurn[w] ?? 0);
+    // The 5-hour window reads the demand, the burn over the account's speed, so a slowed account's holds lend it no
+    // room. It reads the burn itself where no slow-down stands.
+    const burn = (w === 'five_hour' && x.demand !== null ? x.demand : (c.burn[w] ?? 0)) + (pinBurn[w] ?? 0);
     const landed = predicted + (rewrite[w] ?? 0) < ceiling;
     lands = lands && landed;
     const runway = !landed ? 0 : burn <= 0 ? null : Math.round(((ceiling - predicted - (rewrite[w] ?? 0)) / burn) * HOUR);
@@ -1565,6 +1567,8 @@ function storySpecs(): Spec[] {
     at('req_b72e9d05-c14', 1, 1, t(14, 1, 30), 'placed', 'secondary'),
     at('req_c90d3f61-a28', 1, 1, t(14, 1, 35), 'placed', 'secondary'),
     at('req_d4e8a7b2-916', 1, 1, t(14, 1, 40), 'placed', 'secondary'),
+    // A token count follows its subagent's pin without walking the rules, to secondary before its window is spent.
+    at('req_3b8e51f4-0a9', 1, 1, t(14, 1, 50), 'renewed', 'secondary', { pin: live('count', 20_000, 'untouched') }),
     at('req_1d9c3e55-0b2', 1, 1, t(14, 2, 10), 'renewed', 'secondary', { pin: live('continues_pin', 120_000) }),
     at('req_1d9c3e55-0b2', 2, 2, t(14, 2, 11), 'placed', 'primary', {
       attempted: ['secondary'],
@@ -1586,10 +1590,6 @@ function storySpecs(): Spec[] {
     }),
     // The keepalive's probe walks the move rules like any request on its pin, so the spent rule moves it too.
     at('req_c41d0311-200', 1, 1, t(14, 6, 30), 'moved', 'primary', { from: 'secondary', pin: live('probe', 290_000, 'untouched'), rule: 'spent' }),
-    // A token count follows its pin without walking the rules, to the spent secondary, whose 429 cools it until the
-    // window resets. The count fails over to primary and writes no pin there.
-    at('req_3b8e51f4-0a9', 1, 1, t(14, 9, 30), 'renewed', 'secondary', { pin: live('count', 480_000, 'untouched') }),
-    at('req_3b8e51f4-0a9', 2, 2, t(14, 9, 31), 'placed', 'primary', { attempted: ['secondary'], failover: 'cooldown', from: 'secondary', pin: live('count', 1_000, 'untouched') }),
     at('req_ef099b34-453', 1, 1, t(14, 9, 41), 'placed', 'primary'),
     // The member placed by its static prefix holds a deeper entry the rung refused as expired beside the one it took.
     // A sibling's entry reads the gate that refused it.
@@ -1663,34 +1663,34 @@ function storySpecs(): Spec[] {
     // its first turn after the placement, which reads the factor at 0.91 in the last 77 minutes of the window that
     // resets at 10:29.
     at('req_5c7e2a9d-b14', 1, 1, t(9, 11, 24), 'placed', 'studio'),
-    at('req_a3d8f1b6-c25', 1, 1, t(9, 12), 'renewed', 'studio', { pin: live('continues_pin', 30_000) }),
+    at('req_a3d8f1b6-c25', 1, 1, t(9, 12), 'renewed', 'studio', { pin: live('continues_pin', 36_000) }),
     // The morning session's first turn after its placement sets its pin's dispatch, and the next one, 24 s later,
     // gives the pin its cycle: at 0.40 it waits 36 s, and the renewal after the wait reads 0.35 and runs no round,
     // since the stretch reads under the threshold. Its turns after the reset read 1, and the second, past the wait,
     // ends the span. Each turn after the hold folds its gap into the cycle over the pool's burn average.
     at('req_3d7b9e2f-a41', 1, 1, t(10, 11), 'placed', 'studio'),
-    at('req_2b9e4c7f-d36', 1, 1, t(10, 11, 36), 'renewed', 'studio', { pin: live('continues_pin', 30_000) }),
+    at('req_2b9e4c7f-d36', 1, 1, t(10, 11, 36), 'renewed', 'studio', { pin: live('continues_pin', 36_000) }),
     at('req_8e1c4a6d-b52', 1, 1, t(10, 12), 'held', 'studio', {
       hold: { cohort: null, place: 'slow_down', until: t(10, 12, 36) },
-      pin: live('continues_pin', 19_000),
+      pin: live('continues_pin', 24_000),
       pinPace: { cycleMs: 24_000, slowDownUntil: t(10, 12, 36) },
       readings: studioAt(t(10, 12), 0.9354),
     }),
     at('req_8e1c4a6d-b52', 2, 1, t(10, 12, 36), 'renewed', 'studio', {
       heldBefore: { cohort: null, heldMs: 36_000, waitedOn: ['studio'], waits: [{ heldMs: 36_000, reason: 'slow_down' }] },
       holds: [{ accountId: 'studio', attempt: 1, cohort: null, heldMs: 36_000, ranOut: false }],
-      pin: live('continues_pin', 55_000),
+      pin: live('continues_pin', 60_000),
       pinPace: { cycleMs: 24_000, slowDownUntil: t(10, 12, 36) },
     }),
-    at('req_f6a1d3e8-e47', 1, 1, t(10, 38, 20), 'renewed', 'studio', { pin: live('continues_pin', 1_538_600), pinPace: { cycleMs: foldCycle(24_000, t(10, 38, 20) - t(10, 12, 36)), slowDownUntil: null } }),
+    at('req_f6a1d3e8-e47', 1, 1, t(10, 38, 20), 'renewed', 'studio', { pin: live('continues_pin', 1_544_000), pinPace: { cycleMs: foldCycle(24_000, t(10, 38, 20) - t(10, 12, 36)), slowDownUntil: null } }),
     at('req_8d4b7f2c-f58', 1, 1, t(10, 40, 36), 'renewed', 'studio', {
-      pin: live('continues_pin', 130_400),
+      pin: live('continues_pin', 136_000),
       pinPace: { cycleMs: foldCycle(foldCycle(24_000, t(10, 38, 20) - t(10, 12, 36)), t(10, 40, 36) - t(10, 38, 20)), slowDownUntil: null },
     }),
     // Studio's open span: a session placed at 13:47:24 opens it at its first turn after the placement, under the
     // threshold at 0.73, and the sessions placed after it are the round's other four pins.
     at('req_b1e7c4a9-a69', 1, 1, t(13, 47, 24), 'placed', 'studio'),
-    at('req_4f2a8d6e-b7a', 1, 1, t(13, 48), 'renewed', 'studio', { pin: live('continues_pin', 29_100) }),
+    at('req_4f2a8d6e-b7a', 1, 1, t(13, 48), 'renewed', 'studio', { pin: live('continues_pin', 36_000) }),
     at('req_6b3e8d1a-c73', 1, 1, t(13, 50, 30), 'placed', 'studio'),
     at('req_2f9a6c4e-d84', 1, 1, t(13, 53, 10), 'placed', 'studio'),
     at('req_c5d8e2b7-e95', 1, 1, t(13, 58, 40), 'placed', 'studio'),

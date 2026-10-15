@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // the host's zone; `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { accountSlots } = await import('./dist/api.js');
+const { accountSlots, slowedLongOf } = await import('./dist/api.js');
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -172,6 +172,28 @@ function freshFitOf(d, c, r, pool) {
   }
   return every ? 'fits' : lands ? 'rewrite_only' : 'least_bad';
 }
+
+test("the mock's slowed-account fold reads its bar from the start rows and the spans standing at the day's cutoff", () => {
+  const now = Date.parse('2026-09-16T14:30:00Z');
+  const cutoff = now - DAY;
+  const MINUTE = 60_000;
+  // A pool whose threshold is 40 minutes, above the 30 whose bar the floor of an hour would also give.
+  const started = (at, factor) => ({ accountId: 'studio', at: iso(at), detail: { factor, threshold_ms: 40 * MINUTE }, kind: 'slow_down_started', poolId: 'wide' });
+  const ended = (at, since, durationMs, factorMin) => ({ accountId: 'studio', at: iso(at), detail: { duration_ms: durationMs, factor_min: factorMin, since }, kind: 'slow_down_ended', poolId: 'wide' });
+  const rows = [
+    // A span standing at the cutoff, 50 of its 80 minutes inside the day, and an hour's span later in the day.
+    started(cutoff - 30 * MINUTE, 0.6),
+    ended(cutoff + 52 * MINUTE, cutoff - 30 * MINUTE, 80 * MINUTE, 0.5),
+    started(now - 2 * HOUR, 0.4),
+    ended(now - HOUR + 2 * MINUTE, now - 2 * HOUR, HOUR, 0.4),
+  ];
+  assert.deepEqual(slowedLongOf(rows, 'studio', now), {
+    detail: { bar_ms: 80 * MINUTE, factor_min: 0.4, open: false, setting: ['slow_down_stretch_seconds'], slowed_ms: 110 * MINUTE, spans: 2 },
+    since: iso(cutoff - 30 * MINUTE),
+  });
+  // Without the span from before the cutoff the hour stays under the bar of twice 40 minutes.
+  assert.equal(slowedLongOf(rows.slice(2), 'studio', now), null);
+});
 
 // One load at a time, since each pins the clock its bundle reads while it loads.
 let loading = Promise.resolve();
@@ -1126,13 +1148,21 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const rounds = day.filter((e) => e.kind === 'shedding_round' && e.detail.outcome === 'nothing_to_mark' && e.detail.reason === 'no_runway');
     const firsts = (kind, events, subject) => [...new Set(events.map(subject))].map((id) => [kind, id, Date.parse(events.find((e) => subject(e) === id).at)]);
     // A slow-down span runs from its start to the next end or restart of its account and pool, an open one to now, each
-    // clamped to the day, and an account slowed past its bar holds from the own start of its oldest span. The bar is
-    // twice the threshold the newest span's start row read, at least an hour. An ended span's slowest factor is its
-    // end's, a span still open its start's.
+    // clamped to the day, a span with no part inside it not counted, and an account slowed past its bar holds from the
+    // own start of its oldest span. The bar is twice the threshold the newest span's start row read, at least an hour.
+    // An ended span's slowest factor is its end's, a span still open its start's.
     const spans = new Map();
-    const count = (account, start, end, factor) =>
-      spans.set(account, [...(spans.get(account) ?? []), { factor, since: start.since, slowedMs: Math.max(0, end - Math.max(start.since, s.now - DAY)), thresholdMs: start.thresholdMs }]);
-    const standing = new Map();
+    const count = (account, start, end, factor) => {
+      const slowedMs = Math.min(end, s.now) - Math.max(start.since, s.now - DAY);
+      if (slowedMs > 0) spans.set(account, [...(spans.get(account) ?? []), { factor, since: start.since, slowedMs, thresholdMs: start.thresholdMs }]);
+    };
+    // The spans standing at the cutoff: an account and pool whose newest start or end before the day is a start newer
+    // than the newest restart before it.
+    const before = (await logOf(s)).filter((row) => row.type === 'event' && Date.parse(row.at) < s.now - DAY).sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
+    const restart = Math.max(Number.NEGATIVE_INFINITY, ...before.filter((e) => e.kind === 'router_started').map((e) => Date.parse(e.at)));
+    const newest = new Map();
+    for (const e of before) if (e.kind === 'slow_down_started' || e.kind === 'slow_down_ended') newest.set(`${e.accountId}|${e.poolId}`, e);
+    const standing = new Map([...newest].filter(([, e]) => e.kind === 'slow_down_started' && Date.parse(e.at) > restart).map(([key, e]) => [key, { factor: e.detail.factor, since: Date.parse(e.at), thresholdMs: e.detail.threshold_ms }]));
     for (const e of day) {
       const key = `${e.accountId}|${e.poolId}`;
       if (e.kind === 'router_started') {

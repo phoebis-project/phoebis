@@ -661,14 +661,14 @@ pin's next request. The weekly windows keep the projection trigger on the achiev
 The two switches are independent. With `slow_down` on and `load_shedding` off no round runs on any window and the
 slow-down holds the line to the cap, where the ceiling's margin absorbs what the cap cannot. The chain of last resorts
 on the 5-hour window then reads: the slow-down, the round (with `load_shedding` on), `migrate_when_spent` on a spent
-window, and the wall, where the failover lands the session as a move
-([Cooldowns and failover](#cooldowns-and-failover)). With `slow_down` off the engine is the one the sections above
-describe, and with both off nothing proactive runs on the 5-hour window. The end state at the ceiling is a factor of
-zero: every held request of the account waits the full cap, so an account at the ceiling serves one request per pin
-every cycle plus the cap until the reset while its probes, counts and compactions pass unheld. The `shedding_off`
-warning fires for a pool with both switches off alone. The account's factor, its stretch against the threshold, each
-hold and the two events that bracket a slowed span, `slow_down_started` and `slow_down_ended`, are on the console's
-[Pools](console.md#pools), [Quota](console.md#quota) and [Routing log](console.md#routing-log) views.
+window, and the wall, where the failover lands the session as a move ([Cooldowns and
+failover](#cooldowns-and-failover)). With `slow_down` off the engine is the one the sections above describe, and with
+both off nothing proactive runs on the 5-hour window. The end state at the ceiling is a factor of zero: every held
+request of the account waits the full cap, so an account at the ceiling serves one request per pin every cycle plus the
+cap until the reset while its probes, counts and compactions pass unheld. The `shedding_off` warning fires for a pool
+with both switches off alone. The account's factor, its stretch against the threshold, each hold and the two events that
+bracket a slowed span, `slow_down_started` and `slow_down_ended`, are on the console's [Pools](console.md#pools),
+[Quota](console.md#quota) and [Routing log](console.md#routing-log) views.
 
 ## Cooldowns and failover
 

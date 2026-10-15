@@ -3781,6 +3781,12 @@ async fn a_slowed_account_answers_its_slow_down_on_the_account_route_and_its_fac
             .is_some_and(|stretch| stretch > 600_000),
         "{slow_down}"
     );
+    let direct = json(get(&parts.app, "/admin/accounts/direct", Some(&cookie)).await).await;
+    assert_eq!(
+        direct.get("slow_down"),
+        Some(&serde_json::Value::Null),
+        "an api_key account has no 5-hour window to slow, whatever its pool's switch reads: {direct}"
+    );
     let pools = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await;
     assert_eq!(
         (

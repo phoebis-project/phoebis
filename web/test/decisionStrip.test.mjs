@@ -610,6 +610,7 @@ test("at the strip's 640 px floor the failover landing keeps its termini past it
   const layout = d.layoutStrip(m, 640);
   const { lead, unit } = terminiLead(m, layout);
   assert.ok(unit > 0 && lead >= unit - 1e-9, `Chosen stands ${lead} px past the last station at a unit of ${unit}`);
+  assert.ok(layout.termini.chosen.x <= 640 - 150 + 1e-9, `Chosen at ${layout.termini.chosen.x} px keeps the 150 px the termini take at the right`);
   assert.ok(Math.abs(layout.stations['partitions:no_fit'].x - layout.stations['partitions:at_cap'].x - 61) < 1e-9, 'the partitions keep their 61 px');
 });
 
@@ -621,6 +622,7 @@ test("at the strip's 640 px floor a version 1 placement with five partitions kee
   const layout = d.layoutStrip(m, 640);
   const { lead, unit } = terminiLead(m, layout);
   assert.ok(unit > 0 && lead >= unit - 1e-9, `Chosen stands ${lead} px past the last station at a unit of ${unit}`);
+  assert.ok(layout.termini.chosen.x <= 640 - 150 + 1e-9, `Chosen at ${layout.termini.chosen.x} px keeps the 150 px the termini take at the right`);
 });
 
 test("the layout spaces by weight and keeps the surface's height", async () => {
@@ -800,8 +802,8 @@ test("a short walk's line moves right so its leaves keep inside the strip, and a
 
 /** The story's decisions, and the holds and the exhaustion after a hold its cards are read beside. */
 const STORY = [
-  ...['e5a1c093-4d7', 'f3b6d218-85a', '0b7c2d94-e61', '1eaa9bc1-a18', '868264bc-611', 'a1f04c2e-7b3', 'b72e9d05-c14', 'c90d3f61-a28', 'd4e8a7b2-916', 'da52d141-a5a', 'c41d0311-200', 'ef099b34-453', 'b2bed817-a58', '6c3a9e27-5b1', 'e0a4c6f2-118', '51d0e2b8-7a0', '31f0b7c2-6e1', '9a07c4e1-d55', 'f8085653-422'].map((id) => `req_${id}/1`),
-  ...['1d9c3e55-0b2', '3b8e51f4-0a9', '69e30548-32e', '2e7c90a1-6d4', '4b0e9d17-c31'].flatMap((id) => [`req_${id}/1`, `req_${id}/2`]),
+  ...['e5a1c093-4d7', 'f3b6d218-85a', '0b7c2d94-e61', '1eaa9bc1-a18', '868264bc-611', 'a1f04c2e-7b3', 'b72e9d05-c14', 'c90d3f61-a28', 'd4e8a7b2-916', '3b8e51f4-0a9', 'da52d141-a5a', 'c41d0311-200', 'ef099b34-453', 'b2bed817-a58', '6c3a9e27-5b1', 'e0a4c6f2-118', '51d0e2b8-7a0', '31f0b7c2-6e1', '9a07c4e1-d55', 'f8085653-422'].map((id) => `req_${id}/1`),
+  ...['1d9c3e55-0b2', '69e30548-32e', '2e7c90a1-6d4', '4b0e9d17-c31'].flatMap((id) => [`req_${id}/1`, `req_${id}/2`]),
   'req_e8b7eb13-060/1',
   'req_e8b7eb13-060/2',
   'req_77634945-72b/2',
@@ -857,6 +859,9 @@ const INVENTORY = [
   ['the other four rules', (x) => x.station?.step.startsWith('move:') === true, 'list'],
 ];
 
+/** The account's slow-down facts the router adds to every shed line, a line a fired rule cut short among them. */
+const SLOW_DOWN_KEYS = new Set(['demand_five_hour', 'factor', 'over_since', 'slow_down', 'speed', 'stretch_ms', 'threshold_ms']);
+
 /** The labels a fact's rows read: its word, "on" for the account a step acted on, the lane's three parts. */
 const labelsOf = (f) => (f.key === 'account_id' ? ['on'] : f.key === 'lane' ? ['speed', 'thinking', 'effort'] : [d.keyWord(f.key)]);
 
@@ -874,8 +879,9 @@ test("every popover of the story's records takes the inventory's renderer and pl
       assert.equal(plan.renderer, row[2], `${where} is ${row[0]}`);
       assert.equal(plan.head.word, x.word, `${where} heads with its word`);
       // A rung draws its hash from the entry, a Reserve that booked nothing reads its sentence in place of the account,
-      // and a shed rule a fired rule cut short reads the rules that did not run in place of the account's slow-down.
-      const aside = (u) => (u.key === 'hash' && plan.renderer === 'rung') || (u.key === 'account_id' && plan.renderer === 'sentence' && x.station?.step === 'reserve') || (x.cut === true && plan.renderer === 'chips');
+      // and a shed rule a fired rule cut short reads the rules that did not run in place of the account's slow-down,
+      // the only facts the router writes on such a line.
+      const aside = (u) => (u.key === 'hash' && plan.renderer === 'rung') || (u.key === 'account_id' && plan.renderer === 'sentence' && x.station?.step === 'reserve') || (x.cut === true && plan.renderer === 'chips' && SLOW_DOWN_KEYS.has(u.key));
       assert.ok(plan.unplaced.every((u) => aside(u) && u.reason !== ''), `${where} sets aside only a rung's hash, an unbooked account or a cut-short rule's facts: ${JSON.stringify(plan.unplaced)}`);
       const set = new Set(plan.unplaced.map((u) => u.key));
       for (const f of x.step?.facts ?? []) {

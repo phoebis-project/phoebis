@@ -253,7 +253,7 @@ export function poolWarnings(pool: WarnedSettings, cohort: number): PoolWarning[
   }
   // With the slow-down on, a session over the ceiling is slowed toward the reset rather than left to spend its window.
   if (!pool.loadShedding && !pool.slowDown) {
-    warn('shedding_off', ['load_shedding'], 'With load shedding off no round marks sessions on a member whose window would pass the ceiling, so a session stays until its window is spent or its account refuses it.');
+    warn('shedding_off', ['load_shedding', 'slow_down'], 'With load shedding off no round marks sessions on a member whose window would pass the ceiling, so a session stays until its window is spent or its account refuses it.');
   }
   if (!pool.migrateWhenSpent) {
     warn('spent_moves_off', ['migrate_when_spent'], 'With spent moves off a session stays on a spent account until the upstream refuses it, so the destination gate never runs for that move.');

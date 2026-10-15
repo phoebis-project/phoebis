@@ -4530,11 +4530,17 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       await type(dwell(), '90000');
       await choose('Never');
       const refusedNever = [dwell()?.disabled, dwell()?.getAttribute('aria-invalid')];
+      // The keystroke that brings the value back in bounds leaves the field editable while it holds the focus, and it
+      // draws disabled once the focus leaves it.
+      dwell()?.focus();
       await type(dwell(), '900');
+      const typedNever = dwell()?.disabled;
+      dwell()?.blur();
+      await m.settle(120);
       const clearedNever = dwell()?.disabled;
       await choose('Always');
       results.push({
-        name: '/pools Return to plan offers Always, When cold and Never with their words and its hint, and Return dwell is drawn disabled unless Always or refused',
+        name: '/pools Return to plan offers Always, When cold and Never with their words and its hint, and Return dwell is drawn disabled unless Always or refused, a refused one staying editable until it loses the focus',
         ok:
           JSON.stringify(choices) ===
             JSON.stringify(['Always: at once when cold, after the dwell when warm', 'When cold: only when the move is free: a compaction, a restart or a lane change', 'Never: the session stays until the member refuses it']) &&
@@ -4544,10 +4550,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
           JSON.stringify(cold) === '[[false,true,false],true]' &&
           JSON.stringify(never) === '[[false,false,true],true]' &&
           JSON.stringify(refusedNever) === '[false,"true"]' &&
+          typedNever === false &&
           clearedNever === true &&
           dwell()?.value === '900' &&
           dwell()?.disabled === false,
-        missing: [...choices.map(String), String(hintOf('Overage and plan end', 'Return to plan')), String(hintOf('Overage and plan end', 'Return dwell (s)')), JSON.stringify(atAlways), JSON.stringify(cold), JSON.stringify(never), JSON.stringify(refusedNever), String(clearedNever)],
+        missing: [...choices.map(String), String(hintOf('Overage and plan end', 'Return to plan')), String(hintOf('Overage and plan end', 'Return dwell (s)')), JSON.stringify(atAlways), JSON.stringify(cold), JSON.stringify(never), JSON.stringify(refusedNever), String(typedNever), String(clearedNever)],
       });
     }
     // Pool all runs the Pace strategy, so the Strategy field draws its hint. The Accounts page link carries its
@@ -12167,8 +12174,8 @@ m.unmount();
         id: 'req_9f2e7c5a-c49',
         seq: 1,
         terminus: ['held_slow_down', 'Held for the slow-down', 'held'],
-        // The hold waits for the pin's deadline at half speed, which its chips, its Hold row and its row's facts name one
-        // value a chip.
+        // The hold waits for the pin's deadline at half speed, which its chips, its Hold row and its row's facts name
+        // one value a chip.
         own: (card, record, page) => {
           const at = `for the slow-down until ${new Date(record.outcome.hold.until).toISOString().slice(11, 16)}`;
           const row = rowOf(page, `${record.requestId}/1`);
@@ -12201,12 +12208,11 @@ m.unmount();
           const detail = e === undefined ? null : ((await openRow(page, `event/${e.id}`))?.querySelector('.event-detail') ?? null);
           scan('round fired by the stretch', detail);
           const pairs = Object.fromEntries(kvRows(detail?.querySelector(':scope > .kv')).map((p) => [p.label, ddWords(p.dd)]));
-          const reset = e === undefined ? '' : new Date(e.detail.horizon + e.detail.threshold_ms).toISOString().slice(11, 16);
           return (
             named &&
             (popoverRowOf(round, 'fired by') ?? []).includes('fired by slow-down') && (popoverRowOf(round, 'stretch') ?? []).includes('stretch 42 min') && (popoverRowOf(round, 'round') ?? []).includes('round ran') &&
             e?.detail.trigger === 'slow_down' &&
-            JSON.stringify([pairs.Trigger, pairs.Demand, pairs['Fired by']]) === JSON.stringify([['5h stretch 42 min over the threshold 30 min'], [`12.9 %/h to the reset at ${reset}`], ['the slow-down']])
+            JSON.stringify([pairs.Trigger, pairs.Demand, pairs['Fired by']]) === JSON.stringify([['5h stretch 42 min over the threshold 30 min'], ['12.9 %/h to the reset at 15:29'], ['the slow-down']])
           );
         },
         what: 'round fired by the stretch',
@@ -12216,8 +12222,8 @@ m.unmount();
         id: 'req_b8c3e9d4-e61',
         seq: 2,
         terminus: ['chosen', 'Chosen', 'placed'],
-        // The failover lands as a placement that carries the 429 it failed over on, which the card's Outcome names in the
-        // words the move's own row reads below.
+        // The failover lands as a placement that carries the 429 it failed over on, which the card's Outcome names in
+        // the words the move's own row reads below.
         own: (card) => JSON.stringify(outcomeOf(card).Cause) === JSON.stringify(['429 on 5h']),
         what: 'failover landing',
       },

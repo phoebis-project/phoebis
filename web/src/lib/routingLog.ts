@@ -7,6 +7,9 @@ import type { ChipText } from './filterBar';
 import { fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, shortModel } from './format';
 import { planLabel, POLL_OUTCOME_LABEL } from './quota';
 import { speedWord } from './selection';
+import { ageWord, HOUR, MINUTE, span } from './time';
+
+export { ageWord };
 
 // The routing log's words. The routes answer structured values and no English, so a label change touches this module
 // alone and never a route or a fixture.
@@ -277,20 +280,6 @@ export function verdictTone(verdict: string, stepId?: string): VerdictTone {
 
 export const words = (name: string) => name.replace(/_/g, ' ');
 const wordOf = (map: Record<string, string>, name: string) => (own(map, name) ? map[name] : words(name));
-
-const HOUR = 3_600_000;
-const MINUTE = 60_000;
-
-/** A span the way the Fact cell reads one: `2.0 s`, `2 min 41 s`, `1 h 2 min`, `1 d 4 h`. */
-function span(ms: number): string {
-  const abs = Math.abs(ms);
-  if (abs < 1_000) return `${Math.round(abs)} ms`;
-  if (abs < MINUTE) return `${(abs / 1_000).toFixed(abs >= 10_000 ? 0 : 1)} s`;
-  const pair = (major: number, majorUnit: string, minor: number, minorUnit: string) => (minor > 0 ? `${major} ${majorUnit} ${minor} ${minorUnit}` : `${major} ${majorUnit}`);
-  if (abs < HOUR) return pair(Math.floor(abs / MINUTE), 'min', Math.floor((abs % MINUTE) / 1_000), 's');
-  if (abs < 24 * HOUR) return pair(Math.floor(abs / HOUR), 'h', Math.floor((abs % HOUR) / MINUTE), 'min');
-  return pair(Math.floor(abs / (24 * HOUR)), 'd', Math.floor((abs % (24 * HOUR)) / HOUR), 'h');
-}
 
 const msOf = (value: number | string) => (typeof value === 'number' ? value : Date.parse(value));
 
@@ -1179,8 +1168,6 @@ export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip
 }
 
 const WINDOWS = ['five_hour', 'seven_day', 'seven_day_fable'];
-/** A reading's age, whole seconds under a minute. */
-export const ageWord = (ms: number) => (ms < MINUTE ? `${Math.round(ms / 1_000)} s` : span(ms));
 const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`;
 const VERDICT_BADGE: Record<string, string> = { held_on: 'held on', not_needed: 'not needed' };
 const PARTITION_WORD: Record<string, string> = { above_ceiling: 'above the ceiling', at_cap: 'at its cap', floor: 'at the Pace floor', spent: 'window spent', winding_down: 'winding down' };

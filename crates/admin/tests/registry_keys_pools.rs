@@ -3102,7 +3102,7 @@ async fn the_pool_answer_lists_each_warning_that_holds_and_none_that_does_not() 
             r#""load_shedding":false"#,
             r#"{"load_shedding":true}"#,
             "shedding_off",
-            &["load_shedding"][..],
+            &["load_shedding", "slow_down"][..],
             "With load shedding off no round marks sessions on a member whose window would pass the ceiling, so a \
              session stays until its window is spent or its account refuses it.",
         ),
@@ -3161,7 +3161,7 @@ async fn the_pool_answer_lists_each_warning_that_holds_and_none_that_does_not() 
     let shedding_off = || {
         serde_json::json!([warning(
             "shedding_off",
-            &["load_shedding"],
+            &["load_shedding", "slow_down"],
             "With load shedding off no round marks sessions on a member whose window would pass the ceiling, so a \
              session stays until its window is spent or its account refuses it."
         )])

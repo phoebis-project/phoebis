@@ -195,7 +195,7 @@ pub(crate) struct PoolInput {
     /// `0` to `10080`, a week, default `30`.
     #[serde(default)]
     wind_down_minutes: Option<u32>,
-    /// `always`, `when_cold` or `never`, default `always`. When a session on an API-key member returns to a
+    /// `always`, `never`, or `when_cold`, default `always`. When a session on an API-key member returns to a
     /// subscription member.
     #[serde(default)]
     #[schema(example = "always")]
@@ -1143,9 +1143,10 @@ fn warnings_of(row: &PoolRow, cohort: usize) -> Vec<PoolWarning> {
     // With the slow-down on, a session over the ceiling is slowed toward the reset rather than left to spend its
     // window, so the sentence holds only while both switches are off.
     if !row.shedding.load_shedding && !row.slow_down.slow_down {
+        // Both switches, since the check reads both: the console's dialog opens the group of the first.
         warnings.push(warning(
             "shedding_off",
-            &["load_shedding"],
+            &["load_shedding", "slow_down"],
             "With load shedding off no round marks sessions on a member whose window would pass the ceiling, so a \
              session stays until its window is spent or its account refuses it."
                 .into(),

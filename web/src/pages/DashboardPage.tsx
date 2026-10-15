@@ -285,7 +285,7 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
         {/* The compact 5-hour bar has no room for the speed chip beside its label, so the chip stands by the status, the
             two kept together at the head's far end. */}
         {slowed ? (
-          <span className="row">
+          <span className="account-mini__status">
             <SpeedChip factor={slowed.factor} hover={speedHover(slowed, now)} />
             {status}
           </span>

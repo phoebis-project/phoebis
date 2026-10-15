@@ -663,9 +663,11 @@ pub struct SlowDownState {
     pub read_at: i64,
     /// When the stretch first read over the threshold, cleared once it reads at or under it.
     pub over_since: Option<i64>,
-    /// When the factor first read under 1 since it last read 1.
+    /// When the factor first read under 1 since the span last closed. A return to 1 keeps it through the
+    /// `SLOW_DOWN_WAIT_MS` wait, so a dip back under 1 inside the wait continues the span.
     pub slowed_since: Option<i64>,
-    /// When the factor last returned to 1.
+    /// When the factor last returned to 1 inside the span. A dip back under 1 clears it, and the span's close keeps
+    /// it as the instant the factor returned.
     pub clear_since: Option<i64>,
     /// The lowest factor read since `slowed_since`, 1 outside a span.
     pub factor_min: f64,
@@ -710,8 +712,6 @@ pub struct PinPace {
     pub cycle_ms: Option<f64>,
     /// The end of the slow-down hold standing on the pin.
     pub deadline: Option<i64>,
-    /// The request the deadline was set for.
-    pub request_id: Option<String>,
 }
 
 /// The `window_ceiling` a pool is created with.
@@ -1996,9 +1996,9 @@ impl RoutingState {
 
     /// The span edges to announce at `now`: those the writes and the purge recorded, in the order they were recorded,
     /// then one end per span whose factor has read 1 for `SLOW_DOWN_WAIT_MS`, its length from `slowed_since` to
-    /// `clear_since`. A closed span leaves the entry unslowed with its figures reset and
-    /// `clear_since` the instant the factor last returned to 1. Every entry is read, so an account that returned to
-    /// 1 and went quiet ends its span at the next purge tick without a selection.
+    /// `clear_since`. A closed span leaves the entry unslowed with its figures reset and `clear_since` the instant the
+    /// factor last returned to 1. Every entry is read, so an account that returned to 1 and went quiet ends its span at
+    /// the next purge tick without a selection.
     pub fn take_slow_down_edges(&mut self, now: i64) -> Vec<(String, String, SlowDownEdge)> {
         let mut edges = std::mem::take(&mut self.slow_down_edges);
         let mut closed: Vec<(String, String, SlowDownEdge)> = self
@@ -2076,7 +2076,6 @@ impl RoutingState {
                     dispatched_at: received_at,
                     cycle_ms: None,
                     deadline: None,
-                    request_id: None,
                 },
             );
             return;
@@ -2108,12 +2107,11 @@ impl RoutingState {
         }
     }
 
-    /// The slow-down hold's deadline stands on the pin under `key` for `request_id`, which the pin's next requests
-    /// rejoin until it passes, and the request is dispatched there. Nothing for a key with no pace.
-    pub(crate) fn stand_slow_down_deadline(&mut self, key: &PinKey, until: i64, request_id: &str) {
+    /// The slow-down hold's deadline stands on the pin under `key`, which the pin's next requests rejoin until it
+    /// passes, and the request is dispatched there. Nothing for a key with no pace.
+    pub(crate) fn stand_slow_down_deadline(&mut self, key: &PinKey, until: i64) {
         if let Some(pace) = self.pin_paces.get_mut(key) {
             pace.deadline = Some(until);
-            pace.request_id = Some(request_id.to_string());
         }
         self.pace_held_until(key, until);
     }
@@ -4277,6 +4275,100 @@ mod tests {
         assert_eq!(
             (entry.slowed_since, entry.clear_since, entry.factor_min),
             (Some(dip), None, 0.5)
+        );
+    }
+
+    /// A registry that holds no pool, so the purge drops every slow-down entry.
+    fn no_pools() -> RegistrySnapshot {
+        RegistrySnapshot::from_load(phoebis_store::RegistryLoad::default(), [0; 32], 0, 1)
+    }
+
+    /// A read of `factor` with nothing over the threshold, for the cases that write an entry and read it back.
+    fn read_of(factor: f64) -> SlowDownRead {
+        SlowDownRead {
+            utilization: 0.9,
+            horizon: 3_600_000,
+            reset: Some(3_600_000),
+            demand: 0.1 / 3_600.0,
+            stretch_ms: 600_000,
+            threshold_ms: 1_800_000,
+            factor,
+            speed: 1.0,
+            plan: Vec::new(),
+            realized: 1.0,
+        }
+    }
+
+    #[test]
+    fn the_speed_folds_toward_the_realized_speed_by_the_time_since_the_last_read_over_the_burn_average(
+    ) {
+        const AVERAGE_MS: i64 = 1_800_000;
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        let first = state.write_slow_down("p", "a", &read_of(0.5), 0.5, 0, AVERAGE_MS);
+        assert_eq!(
+            first.speed, 0.5,
+            "the first write takes the realized speed whole"
+        );
+        let speed = state
+            .write_slow_down("p", "a", &read_of(0.5), 1.0, AVERAGE_MS / 2, AVERAGE_MS)
+            .speed;
+        let w = (-0.5_f64).exp();
+        assert!(
+            (speed - (0.5 * w + 1.0 * (1.0 - w))).abs() < 1e-12,
+            "half a burn average after the last read keeps e^-0.5 of the old speed: {speed}"
+        );
+    }
+
+    #[test]
+    fn a_span_the_purge_drops_after_a_return_to_one_ends_at_the_return() {
+        const MINUTE: i64 = 60_000;
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        // The factor returns to 1 a minute in and reads 1 again half a minute later, inside the wait.
+        for (at, factor) in [(0, 0.6), (MINUTE, 1.0), (90_000, 1.0)] {
+            state.write_slow_down("p", "a", &read_of(factor), 1.0, at, 1_800_000);
+        }
+        // The pool left the registry, so the purge drops the entry before the wait closes the span.
+        state.purge_slow_downs(&no_pools(), 100_000);
+        let ended: Vec<SlowDownEdge> = state
+            .take_slow_down_edges(100_000)
+            .into_iter()
+            .map(|(_, _, edge)| edge)
+            .filter(|edge| matches!(edge, SlowDownEdge::Ended { .. }))
+            .collect();
+        assert_eq!(
+            ended,
+            [SlowDownEdge::Ended {
+                since: 0,
+                duration_ms: MINUTE,
+                factor_min: 0.6,
+                held_ms: 0,
+            }],
+            "the span ends at the return, not at the last read"
+        );
+    }
+
+    #[test]
+    fn a_span_the_purge_drops_while_the_factor_reads_under_one_ends_at_the_last_read() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        for (at, factor) in [(0, 0.6), (30_000, 0.5)] {
+            state.write_slow_down("p", "a", &read_of(factor), 1.0, at, 1_800_000);
+        }
+        state.purge_slow_downs(&no_pools(), 40_000);
+        let ended: Vec<SlowDownEdge> = state
+            .take_slow_down_edges(40_000)
+            .into_iter()
+            .map(|(_, _, edge)| edge)
+            .filter(|edge| matches!(edge, SlowDownEdge::Ended { .. }))
+            .collect();
+        assert_eq!(
+            ended,
+            [SlowDownEdge::Ended {
+                since: 0,
+                duration_ms: 30_000,
+                factor_min: 0.5,
+                held_ms: 0,
+            }],
+            "the factor never returned, so the span ends at the entry's last read"
         );
     }
 

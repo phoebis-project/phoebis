@@ -367,7 +367,7 @@ pub(crate) struct DecisionRecord {
     /// name, each `utilization`, `reset`, `source` (`head`, `poll`, `predicted` or `stored`), `observed_at`,
     /// `age_ms`, `ahead`, `projection` and `horizon` (the projection at the window's horizon, a plan window's alone),
     /// `demand` (the 5-hour window's demand of a subscription member, the pins' burn over the account's realized speed
-    /// in share per hour, null on every other window),
+    /// with the live bookings' burn added undivided, in share per hour, null on every other window),
     /// `reserved` (the live bookings' rewrite the prediction carries)), `allowance_known`, `pace` (`remaining`,
     /// `reset`, `end`, `deadline`, `hours`, `score`, `window` (the window the score read, `seven_day` or the model's
     /// week such as `seven_day_fable`, null for an API key member), `burn` (the burn the score subtracts, share per

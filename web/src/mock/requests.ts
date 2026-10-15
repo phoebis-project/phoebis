@@ -281,7 +281,7 @@ export const HAIKU = 'claude-haiku-4-5-20251001';
 /**
  * Whether an account could take a request at `atMs` by the story's own account facts, so no attempt lands where the
  * decision card would show the account out: secondary, which serves Sonnet 4.6 alone, reads its 5-hour window spent
- * from 14:02:11 and cools on it from 14:09:31 to 15:42. Primary's fast lane cools from 14:27:00 to 14:42 and it
+ * from 14:02:11 and cools on it from 14:07:51 to 15:42. Primary's fast lane cools from 14:27:00 to 14:42 and it
  * rejects Haiku from 14:24:10 to 15:24. Nightly's usage credits take a fast request once its spend cap is raised at
  * 11:30:12. The Overflow workspace needs funding from 11:30:12, and research spends its day's budget at 12:41:07.
  */
@@ -612,8 +612,6 @@ function buildRequests(): RequestLog[] {
         poolId: 'work',
         responseTruncated: false,
       });
-      // The key's last use is its one request; its counts derive from the rollups with every other key's.
-      keyById.get('notebook')!.lastUsedAt = moved.at;
     }
   }
   // The routing log's story writes its hour by hand, so the draws inside it give way to the story's own rows, and a
@@ -1024,15 +1022,12 @@ function storyRequests(): RequestLog[] {
     { agentId: 'main', at: t(14, 11, 44), attempts: [{ accountId: 'primary', at: t(14, 11, 44), ms: 8_300, status: 200 }], id: 'req_b2bed817-a58', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 30_900, cacheWrite1h: 21_400, input: 1_900, output: 1_480 } },
     // The model takes no inference geography parameter, so its answer reports the geography as not available.
     { agentId: 'main', at: t(14, 9, 41), attempts: [{ accountId: 'primary', at: t(14, 9, 41), ms: 4_800, status: 200 }], geo: 'not_available', id: 'req_ef099b34-453', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 31_000, input: 9_800, output: 2_100 } },
-    // A token count follows its pin to the spent secondary, whose head rejects the 5-hour window: the 429 starts the
-    // cooldown secondary carries, and the count fails over to primary.
+    // A token count follows its subagent's pin to secondary before its window is spent, so it never meets the cooldown
+    // the 429 at 14:07:50 starts.
     {
       agentId: 'e90b',
-      at: t(14, 9, 30),
-      attempts: [
-        { accountId: 'secondary', at: t(14, 9, 30), cooldown: rateLimited(t(15, 42)), head5h: 1, ms: 1_000, status: 429 },
-        { accountId: 'primary', at: t(14, 9, 31), ms: 300, status: 200 },
-      ],
+      at: t(14, 1, 50),
+      attempts: [{ accountId: 'secondary', at: t(14, 1, 50), ms: 300, status: 200 }],
       id: 'req_3b8e51f4-0a9',
       keyId: 'desktop',
       kind: 'count_tokens',
@@ -1213,6 +1208,9 @@ export const requestById = new Map(REQUESTS.map((r) => [r.id, r]));
 // The ci key's last use is its newest request the key check let through: a send after the revocation is refused as an
 // unknown key and uses nothing.
 keyById.get('ci')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'ci' && r.errorCode !== 'auth_unknown')?.at ?? null;
+// The notebook key's last use is its newest request, a turn of studio's story sessions after its one drawn row. Its
+// counts derive from the rollups with every other key's.
+keyById.get('notebook')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'notebook')?.at ?? null;
 
 /**
  * The head that first read nightly in plan overage: the first attempt the day sent it after its spend cap was raised

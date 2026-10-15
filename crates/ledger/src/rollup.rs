@@ -1354,13 +1354,17 @@ pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), Led
         match event.kind.as_str() {
             "slow_down_started" => {
                 let factor = event.detail["factor"].as_f64();
-                // A second start before any end or restart reads the span that stands.
+                // The router emits an end before every next start, so a second start before any end or restart
+                // follows a lost row alone. It lowers the standing span's factor and opens no second span, which would
+                // count the overlap twice.
                 standing
                     .entry(key)
                     .and_modify(|span| span.1 = lowest(span.1, factor))
                     .or_insert((event.at, factor, event.detail["threshold_ms"].as_i64()));
             }
             "slow_down_ended" => {
+                // An end with no span standing closes nothing this fold counts: the state at the cutoff opens a span
+                // only from a start newer than any end or restart, so its start was lost or a restart closed it.
                 let Some((start, factor, threshold_ms)) = standing.remove(&key) else {
                     continue;
                 };

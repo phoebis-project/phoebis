@@ -386,15 +386,19 @@ pub fn spawn(
         clock: clock.clone(),
     };
     let purge_store = store.clone();
+    // The writer answers once the batch that carries the start row has left its hands. With no start row the sender
+    // drops here, and the start's fold runs at once.
+    let (start_landed, start_committed) = oneshot::channel::<()>();
     // Into the empty channel before the mirror exists, so the mirror's first tick lands behind it and the gap the
     // writer dates from its newest row ends at the previous run's last one.
-    if let Some(version) = &config.start_version {
+    let start_landed = config.start_version.as_ref().map(|version| {
         ledger.record(Record::RouterStarted {
             version: version.clone(),
             counts: router.load_counts(),
             at: clock(),
         });
-    }
+        start_landed
+    });
     let mirror = spawn_event_mirror(
         db.clone(),
         ledger.clone(),
@@ -430,7 +434,10 @@ pub fn spawn(
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         tick.tick().await;
         // The conditions read the trailing day of events, so a start folds them at once rather than serving none
-        // until the first tick an hour on.
+        // until the first tick an hour on. The start row closes the slow-down spans the previous run left open, so
+        // the fold waits for its commit, at most one purge interval, since a writer held on a full disk must not keep
+        // the purge that frees room waiting.
+        let _ = tokio::time::timeout(purge_config.purge_interval, start_committed).await;
         fold_conditions(purging.db(), purge_clock()).await;
         purging
             .stats
@@ -470,6 +477,7 @@ pub fn spawn(
         clock,
         config,
         done_tx,
+        start_landed,
     ));
     ledger
 }
@@ -557,6 +565,7 @@ async fn writer(
     clock: Clock,
     config: LedgerConfig,
     done: oneshot::Sender<()>,
+    mut start_landed: Option<oneshot::Sender<()>>,
 ) {
     let mut assembler = Some(assembler);
     // The assembler's handle once the stop was seen: the writer keeps reading while it waits for the
@@ -633,6 +642,9 @@ async fn writer(
                 }
                 Retry::Settled => {
                     stats.retrying.store(0, Ordering::Relaxed);
+                    if let Some(landed) = start_landed.take() {
+                        let _ = landed.send(());
+                    }
                     member_revision = router.snapshot().revision;
                     spend_due = spends.refresh(spend_due, &[]).await;
                 }
@@ -763,6 +775,10 @@ async fn writer(
                 continue;
             }
             Landed::Lost => {}
+        }
+        // The start row is the channel's first record, so the first batch out of the writer's hands carries it.
+        if let Some(landed) = start_landed.take() {
+            let _ = landed.send(());
         }
         // The channel is empty: whatever was dropped since the last report is one gap.
         if rx.is_empty() {

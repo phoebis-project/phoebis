@@ -434,7 +434,7 @@ export const KEYS: ApiKey[] = [
     createdAt: daysAgo(3),
     updatedAt: daysAgo(3),
     expiresAt: null,
-    // The request log's one notebook row sets the last use, since its time is drawn.
+    // The request log's newest notebook row sets the last use.
     lastUsedAt: null,
     retiredSecretLastUsedAt: null,
     sessionsOnRetiredSecret: 0,

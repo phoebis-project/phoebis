@@ -1886,7 +1886,12 @@ async fn a_second_request_of_the_same_pin_joins_the_standing_deadline() {
     tokio::time::pause();
     let mut waiting = Vec::new();
     let mut untils = Vec::new();
-    for _ in 0..2 {
+    for second in [false, true] {
+        // The second request arrives a second later, so a fresh hold of the two-second cap would end a second past the
+        // first one's deadline.
+        if second {
+            h.clock.store(NOW + 21_000, Ordering::SeqCst);
+        }
         let app = h.app.clone();
         waiting.push(tokio::spawn(async move {
             app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap()

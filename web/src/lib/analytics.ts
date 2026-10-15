@@ -2,8 +2,7 @@ import type { Api } from '@/api/client';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, HeldPoint, PinMigrationReason, Placement, PlacementRow, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
 import { tierCapacity, tierRow, type CostWindow } from '@/lib/costs';
 import { earlierHolderLabel, equivalentShort, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtShare, fmtUsd, withEstimate } from '@/lib/format';
-// The routing log imports this module too, and each side reads the other's exports only inside its functions.
-import { ageWord } from '@/lib/routingLog';
+import { ageWord } from '@/lib/time';
 import type { UnitPosition } from '@/lib/unit';
 import { WINDOW_LABEL, windowKeyId } from '@/lib/windows';
 
