@@ -1334,10 +1334,11 @@ pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), Led
     for event in &events {
         if event.kind == "router_started" {
             // The previous run's newest row is the last instant its slow-down can have held, so the downtime before
-            // the restart counts as no slowed time.
+            // the restart counts as no slowed time. A run that stopped right after the start row has that row as its
+            // newest, and the span it closes is of no length.
             let down_since = event.detail["down_since"].as_i64();
             for ((account, pool), (since, factor, threshold_ms)) in std::mem::take(&mut standing) {
-                let end = down_since.filter(|down| *down > since).unwrap_or(event.at);
+                let end = down_since.filter(|down| *down >= since).unwrap_or(event.at);
                 count(&account, &pool, since, end, false, factor, threshold_ms);
             }
             continue;

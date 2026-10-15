@@ -1262,6 +1262,44 @@ fn the_slowed_long_fold_ends_a_span_a_restart_closed_at_the_start_rows_down_sinc
 }
 
 #[test]
+fn the_slowed_long_fold_counts_no_time_for_a_span_whose_restart_down_since_is_its_start() {
+    const MINUTE: i64 = 60_000;
+    const HOUR: i64 = 60 * MINUTE;
+    let now = 1_000 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    let rows = slowed_long_at(
+        &db,
+        &[
+            // A span of two hours closed earlier in the day.
+            slow_down_started(now - 10 * HOUR, "a", "p", 0.5),
+            slow_down_ended(
+                now - 8 * HOUR + 2 * MINUTE,
+                "a",
+                "p",
+                now - 10 * HOUR,
+                2 * HOUR,
+                0.5,
+            ),
+            // The previous run stopped right after this start row, its newest, so the span held for no time.
+            slow_down_started(now - 4 * HOUR, "a", "p", 0.4),
+            router_started_after(now - HOUR, Some(now - 4 * HOUR)),
+        ],
+        now,
+    );
+    assert_eq!(
+        rows,
+        [slowed_row(
+            "a",
+            "p",
+            now - 10 * HOUR,
+            now,
+            (1, 2 * HOUR, HOUR, false, 0.5)
+        )],
+        "the closed span alone counts, where reading the other to the restart would add the three hours of downtime"
+    );
+}
+
+#[test]
 fn the_slowed_long_fold_counts_an_open_span_from_before_the_cutoff_over_the_whole_day() {
     const HOUR: i64 = 3_600_000;
     let now = 1_000 * HOUR;
@@ -2493,7 +2531,8 @@ async fn the_start_fold_waits_for_the_start_row_so_a_span_the_previous_run_left_
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     let dir = tempfile::tempdir().unwrap();
     let db = Arc::new(LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap());
-    // The previous run slowed a for three hours and stopped with the span open.
+    // The previous run's last row opened a span on a three hours ago, so the run stopped with the span open, and the
+    // span held for no time.
     db.insert_event(&slow_down_started(NOW - 3 * HOUR, "a", "p", 0.4))
         .unwrap();
     let clock: phoebis_oauth::Clock = Arc::new(|| NOW);
@@ -2549,14 +2588,9 @@ async fn the_start_fold_waits_for_the_start_row_so_a_span_the_previous_run_left_
         .collect();
     assert_eq!(
         rows,
-        [slowed_row(
-            "a",
-            "p",
-            NOW - 3 * HOUR,
-            NOW,
-            (1, 3 * HOUR, HOUR, false, 0.4)
-        )],
-        "the start's fold reads the span closed at the start row, where reading it open would hold it to the next fold"
+        Vec::new(),
+        "the start's fold reads the span closed at the start row's down_since, its own start, where reading it open \
+         would count the three hours to now"
     );
 }
 
