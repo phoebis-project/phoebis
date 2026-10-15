@@ -66,7 +66,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "observed_at": 1791720900000,
           "projection": null,
           "horizon": null,
-          "burn": null
+          "burn": null,
+          "demand": null
         },
         {
           "id": "seven_day",
@@ -75,7 +76,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "observed_at": 1791720900000,
           "projection": null,
           "horizon": null,
-          "burn": null
+          "burn": null,
+          "demand": null
         },
         {
           "id": "seven_day_fable",
@@ -84,7 +86,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "observed_at": 1791720900000,
           "projection": null,
           "horizon": null,
-          "burn": null
+          "burn": null,
+          "demand": null
         },
         {
           "id": "seven_day_opus",
@@ -93,9 +96,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "observed_at": 1791720900000,
           "projection": null,
           "horizon": null,
-          "burn": null
+          "burn": null,
+          "demand": null
         }
       ],
+      "slow_down": null,
       "fast_lane": {
         "input": {
           "utilization": 0.42,
@@ -340,7 +345,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "observed_at": 1791720900000,
               "projection": null,
               "horizon": null,
-              "burn": null
+              "burn": null,
+              "demand": null
             },
             {
               "id": "seven_day",
@@ -349,7 +355,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "observed_at": 1791720900000,
               "projection": null,
               "horizon": null,
-              "burn": null
+              "burn": null,
+              "demand": null
             },
             {
               "id": "seven_day_fable",
@@ -358,7 +365,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "observed_at": 1791720900000,
               "projection": null,
               "horizon": null,
-              "burn": null
+              "burn": null,
+              "demand": null
             },
             {
               "id": "seven_day_opus",
@@ -367,9 +375,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "observed_at": 1791720900000,
               "projection": null,
               "horizon": null,
-              "burn": null
+              "burn": null,
+              "demand": null
             }
           ],
+          "slow_down": null,
           "fast_lane": {
             "input": {
               "utilization": 0.42,
@@ -433,6 +443,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "profile": null,
           "subscription": null,
           "windows": [],
+          "slow_down": null,
           "fast_lane": null,
           "extra_usage": null,
           "pool": {
@@ -9565,7 +9576,8 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "active_pins": 1,
               "pace_score": 0.005952380952380952,
-              "burn": null
+              "burn": null,
+              "speed": null
             },
             {
               "account_id": "direct",
@@ -9584,14 +9596,15 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "active_pins": 0,
               "pace_score": 1,
-              "burn": null
+              "burn": null,
+              "speed": null
             }
           ],
           "keys": [
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "K48OEyys",
+              "prefix": "XAb8lHy8",
               "enabled": true
             }
           ],
@@ -13352,6 +13365,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "runway_ms": null,
           "runway_bounded": null,
           "cache_ttl_ms": 300000,
+          "speed": null,
+          "cycle_ms": null,
           "last_input_tokens": 0,
           "last_refresh_at": 1791721000000,
           "shed_from": null,
@@ -13391,6 +13406,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "runway_bounded": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
+          "speed": null,
+          "cycle_ms": null,
           "last_refresh_at": null,
           "shed_from": null,
           "historical": false,
@@ -13429,6 +13446,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "runway_bounded": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
+          "speed": null,
+          "cycle_ms": null,
           "last_refresh_at": null,
           "shed_from": null,
           "companion": "reporting",
@@ -13467,6 +13486,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "runway_bounded": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
+          "speed": null,
+          "cycle_ms": null,
           "last_refresh_at": null,
           "shed_from": null,
           "historical": false,
@@ -13505,6 +13526,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "runway_bounded": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
+          "speed": null,
+          "cycle_ms": null,
           "last_refresh_at": null,
           "shed_from": null,
           "historical": true,

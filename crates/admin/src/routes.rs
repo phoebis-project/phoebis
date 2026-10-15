@@ -1850,6 +1850,32 @@ async fn projections_by_account(
     out
 }
 
+/// The pins' demand on an account window as the router reads it, null where `window_projection` answers none.
+fn window_demand(ctx: &AccountContext, account_id: &str, id: &str) -> Option<f64> {
+    let window = if id == FABLE_WINDOW_KEY {
+        SEVEN_DAY_FABLE
+    } else {
+        id
+    };
+    ctx.projections
+        .get(account_id)
+        .and_then(|p| p.windows.get(window))
+        .map(|w| w.demand)
+}
+
+/// The account's slow-down entry in force as its pool's `projections` ask answered it.
+fn slow_down_view(ctx: &AccountContext, account_id: &str) -> Option<AccountSlowDownView> {
+    let entry = ctx.projections.get(account_id)?.slow_down?;
+    Some(AccountSlowDownView {
+        factor: entry.factor,
+        speed: entry.speed,
+        since: entry.since,
+        stretch_ms: entry.stretch_ms,
+        threshold_ms: entry.threshold_ms,
+        hold_ms: entry.hold_ms,
+    })
+}
+
 /// The projection of an account window as the router reads it, its id mapped back to the routing name: `(projection,
 /// horizon, burn)`, all null without one.
 fn window_projection(
@@ -1990,6 +2016,10 @@ pub(crate) struct Account {
     /// cancelled.
     pub subscription: Option<AccountSubscription>,
     pub windows: Vec<AccountWindow>,
+    /// The account's slow-down entry in force as the router reads it, null on an api_key account, an untiered account
+    /// or one with no 5-hour reading, an account in no pool, a pool with the slow-down off, and an account no pinned
+    /// selection has read since the last purge or restart.
+    pub slow_down: Option<AccountSlowDownView>,
     /// The whole object null until an answer to a fast request carried the fast headers.
     pub fast_lane: Option<FastLane>,
     pub extra_usage: Option<ExtraUsage>,
@@ -2091,6 +2121,27 @@ pub(crate) struct AccountWindow {
     pub horizon: Option<i64>,
     /// The pins' burn on the window, in share per hour. Null where `projection` is.
     pub burn: Option<f64>,
+    /// The pins' unpaced demand on the window, in share per hour. Null where `projection` is.
+    pub demand: Option<f64>,
+}
+
+/// The slow-down entry the account's last pinned selection wrote, the figures its holds apply.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AccountSlowDownView {
+    /// The burn the 5-hour window can still carry to its reset over the demand, from 0 to 1: under 1 the account is
+    /// slowed.
+    pub factor: f64,
+    /// The speed the holds realized, which the demand divides the pins' burn by.
+    pub speed: f64,
+    /// Epoch milliseconds: when the factor first read under 1 since it last read 1, null outside a span.
+    pub since: Option<i64>,
+    /// How long before the reset the sessions' unpaced demand would pass the window's ceiling, 0 when it never does.
+    pub stretch_ms: i64,
+    /// The pool's `slow_down_stretch_seconds` at the read, in milliseconds.
+    pub threshold_ms: i64,
+    /// The pool's `slow_down_hold_seconds`, the longest one request waits, in milliseconds.
+    pub hold_ms: i64,
 }
 
 /// The fast lane's input and output buckets as the router last read them off an answer's head.
@@ -2300,6 +2351,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         .filter(|q| q.account_id == row.id)
         .map(|q| {
             let (projection, horizon, burn) = window_projection(ctx, &row.id, &q.window);
+            let demand = window_demand(ctx, &row.id, &q.window);
             AccountWindow {
                 id: q.window.clone(),
                 utilization: q.utilization,
@@ -2308,6 +2360,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 projection,
                 horizon,
                 burn,
+                demand,
             }
         })
         .collect();
@@ -2319,6 +2372,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 .into_iter()
                 .map(|(key, reading)| {
                     let (projection, horizon, burn) = window_projection(ctx, &row.id, &key);
+                    let demand = window_demand(ctx, &row.id, &key);
                     AccountWindow {
                         id: key,
                         utilization: Some(reading.utilization),
@@ -2327,6 +2381,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                         projection,
                         horizon,
                         burn,
+                        demand,
                     }
                 })
                 .collect();
@@ -2414,6 +2469,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         profile,
         subscription,
         windows,
+        slow_down: slow_down_view(ctx, &row.id),
         fast_lane,
         extra_usage: ctx
             .extra

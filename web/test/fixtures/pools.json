@@ -105,7 +105,8 @@
             ],
             "active_pins": 1,
             "pace_score": 0.005952380952380952,
-            "burn": null
+            "burn": null,
+            "speed": null
           },
           {
             "account_id": "direct",
@@ -124,14 +125,15 @@
             ],
             "active_pins": 0,
             "pace_score": 1.0,
-            "burn": null
+            "burn": null,
+            "speed": null
           }
         ],
         "keys": [
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "K48OEyys",
+            "prefix": "XAb8lHy8",
             "enabled": true
           }
         ],

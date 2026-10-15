@@ -59,7 +59,8 @@
             "observed_at": 1791720900000,
             "projection": null,
             "horizon": null,
-            "burn": null
+            "burn": null,
+            "demand": null
           },
           {
             "id": "seven_day",
@@ -68,7 +69,8 @@
             "observed_at": 1791720900000,
             "projection": null,
             "horizon": null,
-            "burn": null
+            "burn": null,
+            "demand": null
           },
           {
             "id": "seven_day_fable",
@@ -77,7 +79,8 @@
             "observed_at": 1791720900000,
             "projection": null,
             "horizon": null,
-            "burn": null
+            "burn": null,
+            "demand": null
           },
           {
             "id": "seven_day_opus",
@@ -86,9 +89,11 @@
             "observed_at": 1791720900000,
             "projection": null,
             "horizon": null,
-            "burn": null
+            "burn": null,
+            "demand": null
           }
         ],
+        "slow_down": null,
         "fast_lane": {
           "input": {
             "utilization": 0.42,
@@ -152,6 +157,7 @@
         "profile": null,
         "subscription": null,
         "windows": [],
+        "slow_down": null,
         "fast_lane": null,
         "extra_usage": null,
         "pool": {

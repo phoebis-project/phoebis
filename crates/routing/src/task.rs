@@ -30,10 +30,10 @@ use crate::select::{
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
-    is_plan_window, mark_holds, plan_windows, shed_dwell_ms, AccountTicket, BurnUnit, CreditsState,
-    EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable,
-    RoutingState, SharePricer, SlowDownEdge, StateWrite, UtilizationSample, WindowReading,
-    WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    is_plan_window, mark_holds, plan_windows, shed_dwell_ms, slow_down_hold_ms, AccountTicket,
+    BurnUnit, CreditsState, EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef,
+    PinUsage, RateTable, RoutingState, SharePricer, SlowDownEdge, StateWrite, UtilizationSample,
+    WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::{resolve, term, window_for, Candidate, KeyRefusal, Presented, RegistrySnapshot};
 
@@ -971,6 +971,23 @@ pub struct AccountProjection {
     /// `pace_of`'s score whatever the account's kind: the spare rate on `seven_day` for an OAuth account, the
     /// remaining worst bucket for an api_key account (whose `windows` is empty).
     pub pace_score: f64,
+    /// The slow-down entry in force for the account at the ask's instant, read through `slow_down_in_force`: `None`
+    /// where the pool's switch is off, the account is an api_key one, an untiered one or one with no 5-hour reading,
+    /// or no pinned selection has read it since the last purge or restart.
+    pub slow_down: Option<AccountSlowDown>,
+}
+
+/// The slow-down entry an account's last pinned selection wrote, with the pool's hold cap: the figures the holds apply.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AccountSlowDown {
+    pub factor: f64,
+    /// The realized speed the demand divides the pins' burn by.
+    pub speed: f64,
+    /// When the factor first read under 1 since it last read 1, `None` outside a span.
+    pub since: Option<i64>,
+    pub stretch_ms: i64,
+    pub threshold_ms: i64,
+    pub hold_ms: i64,
 }
 
 /// One plan window of an account's projection: a window the account holds no reading of has none.
@@ -982,6 +999,8 @@ pub struct WindowProjection {
     pub horizon: i64,
     /// Share per hour, the account's `burn_shares` on the window.
     pub burn: f64,
+    /// The pins' burn over the speed with the live bookings' burn undivided, in share per hour.
+    pub demand: f64,
     /// `remaining / hours - burn` on this window, what Pace scores a candidate by for a model that draws it.
     pub spare_rate: f64,
 }
@@ -999,6 +1018,10 @@ pub struct PinStanding {
     pub runway_bounded: Option<bool>,
     /// The window the runway reads, `None` unless it is bounded.
     pub binding: Option<String>,
+    /// The account's factor from the slow-down entry in force, `None` without one.
+    pub speed: Option<f64>,
+    /// The pin's cycle from its pace, `None` until two requests of the pin have arrived after its placement.
+    pub cycle_ms: Option<f64>,
 }
 
 #[derive(Clone)]
@@ -1309,9 +1332,9 @@ impl RouterHandle {
     pub async fn pins_standing(&self) -> Result<Vec<PinStanding>, RouterGone> {
         self.ask(|reply| Command::PinsStanding { reply }).await
     }
-    /// Every member of `pool_id` with its projections and Pace score under that pool's settings (the pins the pool
-    /// keeps, its burn average, its ceiling), one ask, one instant, by account: an api_key account answers its score
-    /// alone, and a pool the registry does not hold answers none.
+    /// Every member of `pool_id` with its projections, its Pace score and its slow-down entry in force under that
+    /// pool's settings (the pins the pool keeps, its burn average, its ceiling), one ask, one instant, by account: an
+    /// api_key account answers its score alone, and a pool the registry does not hold answers none.
     pub async fn projections(&self, pool_id: &str) -> Result<Vec<AccountProjection>, RouterGone> {
         let pool_id = pool_id.to_string();
         self.ask(|reply| Command::Projections { pool_id, reply })
@@ -2338,9 +2361,10 @@ fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
 }
 
 /// The members of `pool_id` in account order, each with its projection per plan window and its Pace score at `now`
-/// under that pool's settings: the windows from `projection_of` with `pace_of`'s spare rate on each, the score from
-/// `pace_of` on `seven_day`, the window Pace reads for a model without a week of its own. Empty for a pool the snapshot
-/// does not hold.
+/// under that pool's settings: the windows from `projection_of` on the achieved burn and on the demand with `pace_of`'s
+/// spare rate on each, the score from `pace_of` on `seven_day`, the window Pace reads for a model without a week of its
+/// own, and the slow-down entry in force, which the last pinned selection on the account wrote. Empty for a pool the
+/// snapshot does not hold.
 fn projections(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2379,6 +2403,16 @@ fn projections(
                         now,
                         BurnRead::Achieved,
                     )?;
+                    let demand = projection_of(
+                        state,
+                        snapshot,
+                        pool,
+                        account_id,
+                        tier,
+                        window,
+                        now,
+                        BurnRead::Demand,
+                    )?;
                     Some((
                         window.to_string(),
                         WindowProjection {
@@ -2386,6 +2420,7 @@ fn projections(
                             projection: projection.at_horizon,
                             horizon: projection.horizon,
                             burn: projection.burn * 3_600.0,
+                            demand: demand.burn * 3_600.0,
                             spare_rate: pace_of(state, snapshot, pool, &candidate, window, now)
                                 .score,
                         },
@@ -2396,6 +2431,16 @@ fn projections(
                 account_id: account_id.to_string(),
                 windows,
                 pace_score: pace_of(state, snapshot, pool, &candidate, SEVEN_DAY, now).score,
+                slow_down: state.slow_down_in_force(pool, account_id).map(|entry| {
+                    AccountSlowDown {
+                        factor: entry.factor,
+                        speed: entry.speed,
+                        since: entry.slowed_since,
+                        stretch_ms: entry.stretch_ms,
+                        threshold_ms: entry.threshold_ms,
+                        hold_ms: slow_down_hold_ms(pool),
+                    }
+                }),
             }
         })
         .collect()
@@ -2404,7 +2449,8 @@ fn projections(
 /// Every pin with its burn decayed to `now` by its pool's burn average (the default preset's for a key whose pool left
 /// the registry) and its runway on its own account under that pool, read by `standing_runway` once per pool, account
 /// and set of windows, since the account's projection already holds every pin's burn and every pin drawing those
-/// windows there reads the same runway.
+/// windows there reads the same runway. Each pin reads its account's factor from the slow-down entry in force under
+/// that pool and its cycle from its pace.
 fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) -> Vec<PinStanding> {
     type Runway = Option<(Option<i64>, Option<String>)>;
     let mut runways: HashMap<(String, String, Vec<&'static str>), Runway> = HashMap::new();
@@ -2432,11 +2478,17 @@ fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) ->
                 None => (None, None, None),
                 Some((runway_ms, binding)) => (runway_ms, Some(runway_ms.is_some()), binding),
             };
+            let speed = pool
+                .and_then(|pool| state.slow_down_in_force(pool, &pin.account_id))
+                .map(|entry| entry.factor);
+            let cycle_ms = state.pin_pace(&pin.key()).and_then(|pace| pace.cycle_ms);
             PinStanding {
                 pin: decayed(pin, now, average_ms),
                 runway_ms,
                 runway_bounded,
                 binding,
+                speed,
+                cycle_ms,
             }
         })
         .collect()

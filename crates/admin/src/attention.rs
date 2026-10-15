@@ -37,8 +37,9 @@ pub(crate) struct AttentionItem {
     /// Unix milliseconds: the start of the backoff run, the first failed attempt of a refresh run, the first
     /// exhaustion or refusal of a run, the oldest parked row, the refused certificate reload, 30 days before a
     /// certificate's end, the first plan-funded landing of an unweighted model's run, the oldest qualifying event of
-    /// the trailing 24 hours for `wall_reached`, `destination_spent` and `shed_no_runway`, or for the two account
-    /// states and a degraded writer the first read of this process that saw the state.
+    /// the trailing 24 hours for `wall_reached`, `destination_spent` and `shed_no_runway`, the own start of the oldest
+    /// slow-down span counted for `slowed_long`, which can predate the day for a span open from before it, or for the
+    /// two account states and a degraded writer the first read of this process that saw the state.
     pub since: Option<i64>,
     /// `account` and `label`, or `account`, `failures`, `last_error` and `outcome`, or `account`, `backoff_since`,
     /// `next_attempt_at` and `rate_limited_in_a_row`, or `pool` and `key`, or `client_version`, `trigger` and `key`,
@@ -51,9 +52,11 @@ pub(crate) struct AttentionItem {
     /// conditions carry `setting`, the names of the settings they read against: `wall_reached` with `walls`,
     /// `windows` and `projection_error` (one less the projection of the newest shedding round on the account on the
     /// wall's window inside the window's length before the wall, null with none), `destination_spent` with `moves`,
-    /// `fits` (the moves' destination fits with counts) and `windows`, and `shed_no_runway` with `rounds`, `accounts`
-    /// and `setting_values` (the pool's value of each setting `setting` names, present only for a pool the registry
-    /// still holds).
+    /// `fits` (the moves' destination fits with counts) and `windows`, `shed_no_runway` with `rounds` and `accounts`,
+    /// and `slowed_long` with `spans` (the slow-down spans counted), `slowed_ms` (their parts inside the day, summed),
+    /// `open` (whether a span still stands) and `factor_min` (the lowest factor of the spans). `shed_no_runway` and
+    /// `slowed_long` add `setting_values` (the pool's value of each setting `setting` names, present only for a pool
+    /// the registry still holds).
     #[schema(value_type = Object)]
     pub detail: Value,
 }
@@ -86,10 +89,10 @@ pub(crate) struct AttentionLink {
 ///
 /// Answers the operator conditions that hold now, worst first (`pool_exhausted`, `client_drift`, `writer_degraded`,
 /// `certificate_reload_failed`, `reauth_required`, `funding_required`, `refresh_failed`, `certificate_expiring`,
-/// `ledger_record_parked`, `poll_backoff`, `model_unweighted`, `wall_reached`, `destination_spent`, `shed_no_runway`)
-/// and the oldest first within a kind. The last three read the routing log of the trailing 24 hours, which the ledger
-/// folds hourly. The same reader feeds the `phoebis_attention` gauge on the metrics listener, so a scrape and this
-/// answer never disagree.
+/// `ledger_record_parked`, `poll_backoff`, `model_unweighted`, `wall_reached`, `destination_spent`, `shed_no_runway`,
+/// `slowed_long`) and the oldest first within a kind. The last four read the routing log of the trailing 24 hours,
+/// which the ledger folds hourly. The same reader feeds the `phoebis_attention` gauge on the metrics listener, so a
+/// scrape and this answer never disagree.
 #[utoipa::path(
     get,
     path = "/admin/attention",

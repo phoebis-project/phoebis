@@ -9622,6 +9622,173 @@ async fn a_purge_that_drops_a_slowed_entry_ends_its_span() {
     );
 }
 
+/// `account`'s answer among `projections`.
+fn projection_of_account(
+    projections: &[phoebis_routing::AccountProjection],
+    account: &str,
+) -> phoebis_routing::AccountProjection {
+    projections
+        .iter()
+        .find(|p| p.account_id == account)
+        .cloned()
+        .unwrap_or_else(|| panic!("no projection of {account}: {projections:?}"))
+}
+
+#[tokio::test]
+async fn the_projections_ask_answers_the_slow_down_read_and_the_demand_beside_the_projection() {
+    let now = Arc::new(AtomicI64::new(AT));
+    let store = shedding_store(&["a"]);
+    // An api_key member beside the slowed account: it has no 5-hour window to slow.
+    store
+        .insert_account(&AccountRow {
+            id: "d".into(),
+            kind: AccountKind::ApiKey,
+            label: "d".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+            state_cause: StateCause::Operator,
+        })
+        .unwrap();
+    store
+        .set_pool_members(
+            "p",
+            &[("a", 0), ("d", 1)].map(|(id, priority)| MemberWrite {
+                account_id: id.into(),
+                priority,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
+            }),
+            "test",
+        )
+        .unwrap();
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.slow_down.slow_down = true;
+    pool.slow_down.slow_down_stretch_seconds = 900;
+    pool.slow_down.slow_down_hold_seconds = 90;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    with_tier(&store, "a");
+    // `slowed_router`'s figures: s1 burns a tenth of the 5-hour window an hour on `a`, at 0.9 with 40 minutes left.
+    store
+        .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
+        .unwrap();
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(AT, FIVE_HOUR, 0.9, Some(SLOWED_RESET)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    assert_eq!(
+        projection_of_account(&handle.projections("p").await.unwrap(), "a").slow_down,
+        None,
+        "no pinned selection has read the account yet"
+    );
+
+    // The first pinned turn reads the factor under 1. No pin has a cycle yet, so none is held, the realized speed is
+    // 1 and the demand is the achieved burn.
+    handle
+        .select(slowed_turn(&handle, "r-1", AT))
+        .await
+        .unwrap();
+    let first = handle.projections("p").await.unwrap();
+    let a = projection_of_account(&first, "a");
+    let entry = a.slow_down.expect("the pinned read wrote a's entry");
+    assert!(entry.factor > 0.0 && entry.factor < 1.0, "{entry:?}");
+    assert!(entry.stretch_ms > 0, "{entry:?}");
+    assert_eq!(
+        (entry.speed, entry.since, entry.threshold_ms, entry.hold_ms),
+        (1.0, Some(AT), 900_000, 90_000),
+        "the entry's own speed, its span's start and the pool's threshold and hold cap"
+    );
+    let five_hour = a.windows[FIVE_HOUR];
+    assert!(
+        five_hour.burn > 0.0 && five_hour.demand >= five_hour.burn,
+        "{five_hour:?}"
+    );
+    assert_eq!(
+        projection_of_account(&first, "d").slow_down,
+        None,
+        "an api_key account has no 5-hour window to slow"
+    );
+
+    // The second turn plants s1's cycle and waits its part of the slow-down: the speed the plan realizes is under 1,
+    // and the demand divides the pin's burn by it.
+    now.store(AT + 30_000, Ordering::SeqCst);
+    handle
+        .select(slowed_turn(&handle, "r-2", AT + 30_000))
+        .await
+        .unwrap();
+    let a = projection_of_account(&handle.projections("p").await.unwrap(), "a");
+    let entry = a.slow_down.expect("the second read rewrote a's entry");
+    assert!(entry.speed < 1.0, "{entry:?}");
+    let five_hour = a.windows[FIVE_HOUR];
+    assert!(five_hour.demand > five_hour.burn, "{five_hour:?}");
+
+    // The pool's switch off: the entry still stands until the purge tick, and none is in force at once.
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.slow_down.slow_down = false;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    handle.reload().await.unwrap();
+    assert_eq!(
+        projection_of_account(&handle.projections("p").await.unwrap(), "a").slow_down,
+        None,
+        "a pool with the slow-down off answers no entry"
+    );
+}
+
+#[tokio::test]
+async fn pins_standing_answers_the_speed_and_the_cycle_of_a_pin() {
+    use phoebis_routing::FactValue;
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = slowed_router(&now).await;
+    let mut events = handle.subscribe_events();
+    let turn = |session: &str, request_id: &str, at: i64| SelectRequest {
+        request_id: request_id.into(),
+        request_class: Some("main".into()),
+        ..request(&handle, Some(session), at)
+    };
+    // s2 and s3 are placed by their first turns, which fold nothing. Each one's next turn starts its pace, and s2's
+    // third plants its cycle from the gap between its second and third.
+    for (session, request_id, at) in [
+        ("s2", "r-1", AT),
+        ("s3", "r-2", AT + 1_000),
+        ("s2", "r-3", AT + 10_000),
+        ("s3", "r-4", AT + 11_000),
+        ("s2", "r-5", AT + 22_000),
+    ] {
+        now.store(at, Ordering::SeqCst);
+        handle.select(turn(session, request_id, at)).await.unwrap();
+    }
+    // The entry holds the factor the last pinned read wrote.
+    let seen = drained(&mut events).await;
+    let (_, last) = decisions_of(&seen)
+        .into_iter()
+        .find(|(id, _)| id == "r-5")
+        .expect("the last turn's decision");
+    let FactValue::Number(factor) = shed_fact(last, "factor") else {
+        panic!("the last read states its factor");
+    };
+    assert!(factor < 1.0, "{factor}");
+    let standing = handle.pins_standing().await.unwrap();
+    let of = |session: &str| {
+        standing
+            .iter()
+            .find(|p| p.pin.session_id == session)
+            .map(|p| (p.speed, p.cycle_ms))
+            .unwrap_or_else(|| panic!("no pin of {session}: {standing:?}"))
+    };
+    assert_eq!(
+        (of("s2"), of("s3")),
+        ((Some(factor), Some(12_000.0)), (Some(factor), None)),
+        "each pin reads its account's factor, and the cycle stands from a pin's third request on"
+    );
+}
+
 #[tokio::test]
 async fn a_rekeyed_pin_keeps_its_pace_under_the_new_key() {
     const DATED: &str = "claude-sonnet-5-20260929";

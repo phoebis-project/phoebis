@@ -1100,7 +1100,8 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
     }
 }
 
-/// How far back the routing conditions read: a condition holds while one qualifying event lies this close to the fold.
+/// How far back the routing conditions read: a condition holds while one qualifying event lies this close to the fold,
+/// and `slowed_long` holds as well on a slow-down span open from before this cutoff, which no row inside it names.
 const CONDITION_SPAN_MS: i64 = 24 * 3_600_000;
 
 /// How soon after a move a spent window on its destination counts against the move.
@@ -1111,6 +1112,10 @@ const FIVE_HOURS_MS: i64 = 5 * 3_600_000;
 /// The settings each condition names, the ones an operator reads the condition against.
 const CEILING_SETTING: &[&str] = &["window_ceiling"];
 const WALL_SETTINGS: &[&str] = &["shed_cap", "window_ceiling"];
+const SLOW_SETTINGS: &[&str] = &["slow_down_stretch_seconds"];
+
+/// An account slowed for this much of the trailing day has been over its pace twice over at the default threshold.
+const SLOWED_LONG_MS: i64 = 3_600_000;
 
 /// One condition of the fold before it is written.
 struct Held {
@@ -1120,13 +1125,15 @@ struct Held {
     detail: serde_json::Value,
 }
 
-/// The three conditions over the trailing 24 hours of events, written whole into `routing_conditions`:
+/// The four conditions over the trailing 24 hours of events, written whole into `routing_conditions`:
 /// `shed_no_runway` per pool from its rounds that marked nothing for want of a destination with runway,
 /// `destination_spent` per account from the moves onto it that a spent window of any source followed within the hour,
-/// and `wall_reached` per account from its spent windows of any source, a predicted wall among them. `since` is the
-/// oldest qualifying event's time. A wall's `projection_error` is one less the projection of the newest round on the
-/// account's newest wall's window inside that window's length before the wall, null with none. The ledger reads no
-/// registry, so a detail names its settings and the reader adds a pool's values.
+/// `wall_reached` per account from its spent windows of any source, a predicted wall among them, and `slowed_long` per
+/// account from its slow-down spans, summed across its pools, once their parts inside the day pass `SLOWED_LONG_MS`.
+/// `since` is the oldest qualifying event's time, and for `slowed_long` the own start of the oldest span counted, which
+/// a span open from before the cutoff dates before the day. A wall's `projection_error` is one less the projection of
+/// the newest round on the account's newest wall's window inside that window's length before the wall, null with none.
+/// The ledger reads no registry, so a detail names its settings and the reader adds a pool's values.
 pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), LedgerError> {
     struct Row {
         at: i64,
@@ -1138,7 +1145,8 @@ pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), Led
     let events: Vec<Row> = tx
         .prepare(
             "SELECT at, kind, account_id, pool_id, detail FROM events \
-             WHERE kind IN ('shedding_round', 'pin_migrated', 'window_spent') AND at >= ?1 AND at <= ?2 \
+             WHERE kind IN ('shedding_round', 'pin_migrated', 'window_spent', 'router_started', \
+             'slow_down_ended', 'slow_down_started') AND at >= ?1 AND at <= ?2 \
              ORDER BY at, rowid",
         )?
         .query_map(params![now - CONDITION_SPAN_MS, now], |r| {
@@ -1287,6 +1295,96 @@ pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), Led
         );
     }
 
+    // Each start pairs with the next end of its account and pool or the next restart, whichever comes first: a restart
+    // loses the memory-only state and emits no end, so it closes every span standing at it.
+    let cutoff = now - CONDITION_SPAN_MS;
+    let mut standing = slow_down_open_at(tx, cutoff)?;
+    let mut counted: BTreeMap<String, Vec<SlowSpan>> = BTreeMap::new();
+    let mut count =
+        |account: &str, pool: &str, since: i64, end: i64, open: bool, factor: Option<f64>| {
+            // Only the part inside the trailing day counts, and a span with none there is not counted at all.
+            let slowed_ms = end.min(now) - since.max(cutoff);
+            if slowed_ms > 0 {
+                counted
+                    .entry(account.to_string())
+                    .or_default()
+                    .push(SlowSpan {
+                        pool: pool.to_string(),
+                        since,
+                        slowed_ms,
+                        open,
+                        factor,
+                    });
+            }
+        };
+    for event in &events {
+        if event.kind == "router_started" {
+            for ((account, pool), (since, factor)) in std::mem::take(&mut standing) {
+                count(&account, &pool, since, event.at, false, factor);
+            }
+            continue;
+        }
+        let (Some(account), Some(pool)) = (event.account_id.as_deref(), event.pool_id.as_deref())
+        else {
+            continue;
+        };
+        let key = (account.to_string(), pool.to_string());
+        match event.kind.as_str() {
+            "slow_down_started" => {
+                let factor = event.detail["factor"].as_f64();
+                // A second start before any end or restart reads the span that stands.
+                standing
+                    .entry(key)
+                    .and_modify(|span| span.1 = lowest(span.1, factor))
+                    .or_insert((event.at, factor));
+            }
+            "slow_down_ended" => {
+                let Some((start, factor)) = standing.remove(&key) else {
+                    continue;
+                };
+                // The end row lands after the wait that closed the span, so the span's own start and length come
+                // from the detail rather than the row's time.
+                let since = event.detail["since"].as_i64().unwrap_or(start);
+                let end = event.detail["duration_ms"]
+                    .as_i64()
+                    .map_or(event.at, |duration| since + duration);
+                let factor = event.detail["factor_min"].as_f64().or(factor);
+                count(account, pool, since, end, false, factor);
+            }
+            _ => {}
+        }
+    }
+    for ((account, pool), (since, factor)) in &standing {
+        count(account, pool, *since, now, true, *factor);
+    }
+    for (account, spans) in counted {
+        let slowed_ms: i64 = spans.iter().map(|span| span.slowed_ms).sum();
+        if slowed_ms <= SLOWED_LONG_MS {
+            continue;
+        }
+        let (Some(oldest), Some(newest)) = (
+            spans.iter().map(|span| span.since).min(),
+            spans.iter().max_by_key(|span| span.since),
+        ) else {
+            continue;
+        };
+        held.insert(
+            ("slowed_long", "account", account),
+            Held {
+                pool_id: Some(newest.pool.clone()),
+                since: oldest,
+                count: spans.len() as u64,
+                detail: serde_json::json!({
+                    "factor_min": spans.iter().fold(None, |min, span| lowest(min, span.factor)),
+                    "open": spans.iter().any(|span| span.open),
+                    "setting": setting(SLOW_SETTINGS),
+                    "slowed_ms": slowed_ms,
+                    "spans": spans.len(),
+                }),
+            },
+        );
+    }
+
     tx.execute("DELETE FROM routing_conditions", [])?;
     for ((kind, subject_kind, subject_id), row) in &held {
         tx.execute(
@@ -1305,6 +1403,69 @@ pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), Led
         )?;
     }
     Ok(())
+}
+
+/// One slow-down span the fold counts: its pool, its own start, its part inside the trailing day, whether it still
+/// stands and its lowest factor.
+struct SlowSpan {
+    pool: String,
+    since: i64,
+    slowed_ms: i64,
+    open: bool,
+    factor: Option<f64>,
+}
+
+fn lowest(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
+
+/// The slow-down spans standing at a point of the fold, by account and pool: each one's own start and the factor its
+/// start read.
+type OpenSpans = BTreeMap<(String, String), (i64, Option<f64>)>;
+
+/// The spans standing at `cutoff`, per account and pool, with each one's own start and the factor its start read: the
+/// newest `slow_down_started` or `slow_down_ended` row before the cutoff where that row is a start newer than the
+/// newest `router_started` row before it.
+fn slow_down_open_at(tx: &Transaction<'_>, cutoff: i64) -> Result<OpenSpans, LedgerError> {
+    let restart: Option<(i64, i64)> = tx
+        .query_row(
+            "SELECT at, rowid FROM events WHERE kind = 'router_started' AND at < ?1 \
+             ORDER BY at DESC, rowid DESC LIMIT 1",
+            params![cutoff],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let mut stmt = tx.prepare(
+        "SELECT at, id, account_id, pool_id, detail FROM ( \
+           SELECT at, rowid AS id, kind, account_id, pool_id, detail, ROW_NUMBER() OVER ( \
+             PARTITION BY account_id, pool_id ORDER BY at DESC, rowid DESC) AS newest \
+           FROM events WHERE kind IN ('slow_down_ended', 'slow_down_started') AND at < ?1 \
+             AND account_id IS NOT NULL AND pool_id IS NOT NULL) \
+         WHERE newest = 1 AND kind = 'slow_down_started'",
+    )?;
+    let starts = stmt
+        .query_map(params![cutoff], |r| {
+            Ok((
+                (r.get::<_, i64>(0)?, r.get::<_, i64>(1)?),
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, Option<String>>(4)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(starts
+        .into_iter()
+        .filter(|(start, ..)| restart.is_none_or(|restart| restart < *start))
+        .map(|((at, _), account, pool, detail)| {
+            let factor = detail
+                .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
+                .and_then(|d| d["factor"].as_f64());
+            ((account, pool), (at, factor))
+        })
+        .collect())
 }
 
 pub fn fold_account(tx: &Transaction<'_>, delta: &AccountRollupRow) -> Result<(), LedgerError> {

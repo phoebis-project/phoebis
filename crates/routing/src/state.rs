@@ -672,6 +672,10 @@ pub struct SlowDownState {
     /// The new holds answered since `slowed_since`, each from its arrival to its deadline, summed, 0 outside a span. A
     /// request rejoining a standing deadline adds nothing, since its wait is the hold already counted.
     pub held_ms: i64,
+    /// The read's stretch, kept beside its factor so the pages read the figures the holds apply.
+    pub stretch_ms: i64,
+    /// The threshold the read compared the stretch to, the pool's `slow_down_stretch_seconds` at the read.
+    pub threshold_ms: i64,
 }
 
 /// One edge of an account's slow-down span, which the task announces as an event.
@@ -1893,7 +1897,7 @@ impl RoutingState {
     /// leaves the span open, so a dip back under 1 inside `SLOW_DOWN_WAIT_MS` continues it and
     /// `take_slow_down_edges` closes it once the factor has read 1 for the wait. A span that opens records its start
     /// from this read, after the end of a span whose wait ran out before any drain closed it. Answers the entry as
-    /// written.
+    /// written, the read's stretch and threshold beside its factor.
     pub fn write_slow_down(
         &mut self,
         pool_id: &str,
@@ -1919,6 +1923,8 @@ impl RoutingState {
                 let w = (-((now - entry.read_at).max(0) as f64) / average_ms.max(1) as f64).exp();
                 entry.speed = entry.speed * w + realized * (1.0 - w);
                 entry.factor = read.factor;
+                entry.stretch_ms = read.stretch_ms;
+                entry.threshold_ms = read.threshold_ms;
                 entry.read_at = now;
                 entry.over_since = over.then(|| entry.over_since.unwrap_or(now));
                 // A span whose factor has read 1 for the wait ended at the return, though no drain has closed it yet: a
@@ -1963,6 +1969,8 @@ impl RoutingState {
                 clear_since: None,
                 factor_min: read.factor.min(1.0),
                 held_ms: 0,
+                stretch_ms: read.stretch_ms,
+                threshold_ms: read.threshold_ms,
             });
         if let Some(edge) = ended {
             self.slow_down_edges
@@ -2032,13 +2040,11 @@ impl RoutingState {
         }
     }
 
-    /// The account's entry while `pool` slows its pins: a pool whose slow-down is off reads no entry at once, whatever
-    /// lingers until the purge tick drops it.
-    pub(crate) fn slow_down_in_force(
-        &self,
-        pool: &PoolRow,
-        account_id: &str,
-    ) -> Option<&SlowDownState> {
+    /// The entry in force for the account on the pool: `None` at once for a pool whose switch is off, whatever lingers
+    /// until the purge tick drops it, and `None` where no entry stands, an api_key account, an untiered account or one
+    /// with no 5-hour reading (which writes no entry) and an account no pinned selection has read since the last purge
+    /// or restart.
+    pub fn slow_down_in_force(&self, pool: &PoolRow, account_id: &str) -> Option<&SlowDownState> {
         slow_down(pool)
             .then(|| self.slow_down_state(&pool.id, account_id))
             .flatten()

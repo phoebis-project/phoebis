@@ -3968,9 +3968,10 @@ pub fn moves_by_reason_and_fit(
     Ok(out)
 }
 
-/// One routing condition the hourly fold wrote: the kind, its subject, the oldest qualifying event's time, the count
-/// and the kind's detail. `pool_id` is the pool the condition's events name, null for an account's condition, whose
-/// events name none.
+/// One routing condition the hourly fold wrote: the kind, its subject, the oldest qualifying event's time (for
+/// `slowed_long` the own start of the oldest span counted), the count and the kind's detail. `pool_id` is the pool the
+/// condition's events name, which an account's `slowed_long` carries as the pool of its newest span, and null for an
+/// account's condition whose events name none.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RoutingCondition {
     pub kind: String,
