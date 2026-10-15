@@ -898,8 +898,20 @@ fn a_weekly_wall_reads_no_projection_error_from_a_round_on_the_five_hour_window(
     );
 }
 
-/// A slow-down span's start as the router's mirror writes it, with the factor the read opened it at.
+/// A slow-down span's start as the router's mirror writes it, with the factor the read opened it at, under a pool whose
+/// threshold puts the bar at the floor.
 fn slow_down_started(at: i64, account: &str, pool: &str, factor: f64) -> EventRecord {
+    slow_down_started_under(at, account, pool, factor, 1_800_000)
+}
+
+/// A slow-down span's start under a pool whose stretch threshold is `threshold_ms`.
+fn slow_down_started_under(
+    at: i64,
+    account: &str,
+    pool: &str,
+    factor: f64,
+    threshold_ms: i64,
+) -> EventRecord {
     EventRecord {
         at,
         kind: "slow_down_started".into(),
@@ -909,7 +921,7 @@ fn slow_down_started(at: i64, account: &str, pool: &str, factor: f64) -> EventRe
             serde_json::json!({
                 "factor": factor,
                 "stretch_ms": 600_000,
-                "threshold_ms": 1_800_000,
+                "threshold_ms": threshold_ms,
                 "demand": 0.1,
                 "reset": null,
             })
@@ -980,13 +992,14 @@ fn slowed_long_at(
         .collect()
 }
 
-/// The condition of a slowed account folded at `now`: `spans`, `slowed_ms`, `open` and `factor_min`, in that order.
+/// The condition of a slowed account folded at `now`: `spans`, `slowed_ms`, `bar_ms`, `open` and `factor_min`, in that
+/// order.
 fn slowed_row(
     account: &str,
     pool: &str,
     since: i64,
     now: i64,
-    (spans, slowed_ms, open, factor_min): (u64, i64, bool, f64),
+    (spans, slowed_ms, bar_ms, open, factor_min): (u64, i64, i64, bool, f64),
 ) -> phoebis_ledger::RoutingCondition {
     phoebis_ledger::RoutingCondition {
         kind: "slowed_long".into(),
@@ -996,6 +1009,7 @@ fn slowed_row(
         since,
         count: spans,
         detail: serde_json::json!({
+            "bar_ms": bar_ms,
             "factor_min": factor_min,
             "open": open,
             "setting": ["slow_down_stretch_seconds"],
@@ -1055,17 +1069,19 @@ fn a_slow_down_that_summed_past_an_hour_of_the_day_folds_the_slowed_long_conditi
                 20 * MINUTE,
                 0.5,
             ),
-            // `d` slowed for 35 minutes under `p` and, once moved, 35 under `q`: one account, one row.
-            slow_down_started(now - 6 * HOUR, "d", "p", 0.5),
+            // `d` slowed for 35 minutes under `r` and, once moved, 35 under `q`: one account, one row. `r`'s threshold
+            // of 150 minutes would put the bar at five hours, `q`'s of 2000 seconds puts it at 4000, and the newest
+            // span's start row is `q`'s.
+            slow_down_started_under(now - 6 * HOUR, "d", "r", 0.5, 9_000_000),
             slow_down_ended(
                 now - 6 * HOUR + 37 * MINUTE,
                 "d",
-                "p",
+                "r",
                 now - 6 * HOUR,
                 35 * MINUTE,
                 0.4,
             ),
-            slow_down_started(now - 2 * HOUR, "d", "q", 0.6),
+            slow_down_started_under(now - 2 * HOUR, "d", "q", 0.6, 2_000_000),
             slow_down_ended(
                 now - 2 * HOUR + 37 * MINUTE,
                 "d",
@@ -1080,11 +1096,23 @@ fn a_slow_down_that_summed_past_an_hour_of_the_day_folds_the_slowed_long_conditi
     assert_eq!(
         rows,
         [
-            slowed_row("a", "p", now - 5 * HOUR, now, (3, 6_000_000, true, 0.25)),
-            slowed_row("d", "q", now - 6 * HOUR, now, (2, 70 * MINUTE, false, 0.4)),
+            slowed_row(
+                "a",
+                "p",
+                now - 5 * HOUR,
+                now,
+                (3, 6_000_000, 3_600_000, true, 0.25)
+            ),
+            slowed_row(
+                "d",
+                "q",
+                now - 6 * HOUR,
+                now,
+                (2, 70 * MINUTE, 4_000_000, false, 0.4)
+            ),
         ],
-        "an account's spans sum across its pools past the hour, dated by the oldest and named by the newest span's \
-         pool, and 50 minutes raise nothing"
+        "an account's spans sum across its pools past the bar of the newest span's start row, dated by the oldest \
+         and named by the newest span's pool, and 50 minutes raise nothing"
     );
     // The open span ends 22 minutes after it opened, and a day later the trailing 24 hours hold none of the spans.
     assert_eq!(
@@ -1121,7 +1149,13 @@ fn the_slowed_long_fold_closes_an_open_span_at_the_next_router_started_row() {
     );
     assert_eq!(
         rows,
-        [slowed_row("a", "p", now - 3 * HOUR, now, (1, 7_200_000, false, 0.4))],
+        [slowed_row(
+            "a",
+            "p",
+            now - 3 * HOUR,
+            now,
+            (1, 7_200_000, 3_600_000, false, 0.4)
+        )],
         "the span runs the two hours to the restart, where reading it open to now would count three"
     );
 }
@@ -1136,14 +1170,21 @@ fn the_slowed_long_fold_counts_an_open_span_from_before_the_cutoff_over_the_whol
         &[
             // A restart older than the start closes nothing of it.
             router_started(now - 40 * HOUR),
-            slow_down_started(now - 30 * HOUR, "a", "p", 0.5),
+            slow_down_started_under(now - 30 * HOUR, "a", "p", 0.5, 9_000_000),
         ],
         now,
     );
     assert_eq!(
         rows,
-        [slowed_row("a", "p", now - 30 * HOUR, now, (1, 86_400_000, true, 0.5))],
-        "the newest row before the cutoff is the start, so the span opens at the cutoff and is dated by its own start"
+        [slowed_row(
+            "a",
+            "p",
+            now - 30 * HOUR,
+            now,
+            (1, 86_400_000, 18_000_000, true, 0.5)
+        )],
+        "the newest row before the cutoff is the start, so the span opens at the cutoff, is dated by its own start and \
+         is held to its start row's bar"
     );
 }
 
@@ -1155,7 +1196,7 @@ fn the_slowed_long_fold_clamps_a_closed_span_crossing_the_cutoff_to_the_trailing
     let rows = slowed_long_at(
         &db,
         &[
-            slow_down_started(now - 25 * HOUR, "a", "p", 0.6),
+            slow_down_started_under(now - 25 * HOUR, "a", "p", 0.6, 2_400_000),
             slow_down_ended(now - 22 * HOUR, "a", "p", now - 25 * HOUR, 9_000_000, 0.45),
         ],
         now,
@@ -1167,9 +1208,10 @@ fn the_slowed_long_fold_clamps_a_closed_span_crossing_the_cutoff_to_the_trailing
             "p",
             now - 25 * HOUR,
             now,
-            (1, 5_400_000, false, 0.45)
+            (1, 5_400_000, 4_800_000, false, 0.45)
         )],
-        "the two and a half hours count only the hour and a half after the cutoff"
+        "the two and a half hours count only the hour and a half after the cutoff, past the bar of twice the start \
+         row's 40 minutes"
     );
 }
 
@@ -1219,9 +1261,120 @@ fn the_slowed_long_fold_counts_nothing_of_a_span_closed_before_the_cutoff() {
             "p",
             now - 3 * HOUR,
             now,
-            (1, 61 * MINUTE, false, 0.55)
+            (1, 61 * MINUTE, 3_600_000, false, 0.55)
         )],
         "counting either of a's old spans would pass the hour"
+    );
+}
+
+#[test]
+fn a_pool_at_the_default_holds_slowed_long_past_five_hours() {
+    const MINUTE: i64 = 60_000;
+    const HOUR: i64 = 60 * MINUTE;
+    const THRESHOLD_MS: i64 = 9_000_000;
+    let now = 1_000 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    let rows = slowed_long_at(
+        &db,
+        &[
+            // `a` slowed for 170 and then 120 minutes, 4 h 50 min in all.
+            slow_down_started_under(now - 12 * HOUR, "a", "p", 0.5, THRESHOLD_MS),
+            slow_down_ended(
+                now - 12 * HOUR + 172 * MINUTE,
+                "a",
+                "p",
+                now - 12 * HOUR,
+                170 * MINUTE,
+                0.4,
+            ),
+            slow_down_started_under(now - 6 * HOUR, "a", "p", 0.5, THRESHOLD_MS),
+            slow_down_ended(
+                now - 6 * HOUR + 122 * MINUTE,
+                "a",
+                "p",
+                now - 6 * HOUR,
+                120 * MINUTE,
+                0.45,
+            ),
+            // `b` slowed for 180 minutes and has stood slowed for the last 130, 5 h 10 min in all.
+            slow_down_started_under(now - 10 * HOUR, "b", "p", 0.6, THRESHOLD_MS),
+            slow_down_ended(
+                now - 10 * HOUR + 182 * MINUTE,
+                "b",
+                "p",
+                now - 10 * HOUR,
+                180 * MINUTE,
+                0.5,
+            ),
+            slow_down_started_under(now - 130 * MINUTE, "b", "p", 0.3, THRESHOLD_MS),
+        ],
+        now,
+    );
+    assert_eq!(
+        rows,
+        [slowed_row(
+            "b",
+            "p",
+            now - 10 * HOUR,
+            now,
+            (2, 310 * MINUTE, 18_000_000, true, 0.3)
+        )],
+        "twice a threshold of two and a half hours puts the bar at five hours, so 4 h 50 min raise nothing"
+    );
+}
+
+#[test]
+fn a_pool_under_half_an_hour_holds_slowed_long_past_the_floor() {
+    const MINUTE: i64 = 60_000;
+    const HOUR: i64 = 60 * MINUTE;
+    const THRESHOLD_MS: i64 = 60_000;
+    let now = 1_000 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    let rows = slowed_long_at(
+        &db,
+        &[
+            // `a` slowed for 55 minutes, many times twice the threshold.
+            slow_down_started_under(now - 4 * HOUR, "a", "p", 0.5, THRESHOLD_MS),
+            slow_down_ended(
+                now - 4 * HOUR + 57 * MINUTE,
+                "a",
+                "p",
+                now - 4 * HOUR,
+                55 * MINUTE,
+                0.5,
+            ),
+            // `b` slowed for 40 and then 25 minutes, 1 h 5 min in all.
+            slow_down_started_under(now - 5 * HOUR, "b", "p", 0.7, THRESHOLD_MS),
+            slow_down_ended(
+                now - 5 * HOUR + 42 * MINUTE,
+                "b",
+                "p",
+                now - 5 * HOUR,
+                40 * MINUTE,
+                0.6,
+            ),
+            slow_down_started_under(now - 2 * HOUR, "b", "p", 0.7, THRESHOLD_MS),
+            slow_down_ended(
+                now - 2 * HOUR + 27 * MINUTE,
+                "b",
+                "p",
+                now - 2 * HOUR,
+                25 * MINUTE,
+                0.65,
+            ),
+        ],
+        now,
+    );
+    assert_eq!(
+        rows,
+        [slowed_row(
+            "b",
+            "p",
+            now - 5 * HOUR,
+            now,
+            (2, 65 * MINUTE, 3_600_000, false, 0.6)
+        )],
+        "twice a threshold of one minute falls under the floor, so the bar is the hour and 55 minutes raise nothing"
     );
 }
 

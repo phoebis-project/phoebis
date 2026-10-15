@@ -54,9 +54,10 @@ pub(crate) struct AttentionItem {
     /// wall's window inside the window's length before the wall, null with none), `destination_spent` with `moves`,
     /// `fits` (the moves' destination fits with counts) and `windows`, `shed_no_runway` with `rounds` and `accounts`,
     /// and `slowed_long` with `spans` (the slow-down spans counted), `slowed_ms` (their parts inside the day, summed),
-    /// `open` (whether a span still stands) and `factor_min` (the lowest factor of the spans). `shed_no_runway` and
-    /// `slowed_long` add `setting_values` (the pool's value of each setting `setting` names, present only for a pool
-    /// the registry still holds).
+    /// `bar_ms` (the bar the sum passed, twice the stretch threshold of the newest counted span's start and at least
+    /// an hour), `open` (whether a span still stands) and `factor_min` (the lowest factor of the spans).
+    /// `shed_no_runway` and `slowed_long` add `setting_values` (the pool's value of each setting `setting` names,
+    /// present only for a pool the registry still holds).
     #[schema(value_type = Object)]
     pub detail: Value,
 }

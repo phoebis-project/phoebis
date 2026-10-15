@@ -57,7 +57,8 @@ const RELEASE_VERSION_MAX_BYTES: usize = 32;
 /// lands them, windows that read stale, and a model whose window share is an estimate while nothing is broken. The
 /// four routing conditions stop no traffic and rank under every kind that does, worst first among themselves: an
 /// account that reached its wall, a move whose destination was spent within the hour, a pool whose rounds found no
-/// destination with runway, and an account slowed for over an hour of the day, a slow-down that worked for long.
+/// destination with runway, and an account slowed past twice its pool's stretch threshold in the day, a slow-down that
+/// worked for long.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     PoolExhausted,
@@ -801,6 +802,7 @@ fn routing_conditions(
             (
                 Kind::SlowedLong,
                 json!({
+                    "bar_ms": null,
                     "factor_min": null,
                     "open": false,
                     "setting": ["slow_down_stretch_seconds"],

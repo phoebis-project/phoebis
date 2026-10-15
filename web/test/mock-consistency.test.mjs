@@ -1126,24 +1126,27 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const rounds = day.filter((e) => e.kind === 'shedding_round' && e.detail.outcome === 'nothing_to_mark' && e.detail.reason === 'no_runway');
     const firsts = (kind, events, subject) => [...new Set(events.map(subject))].map((id) => [kind, id, Date.parse(events.find((e) => subject(e) === id).at)]);
     // A slow-down span runs from its start to the next end or restart of its account and pool, an open one to now, each
-    // clamped to the day, and an account slowed past an hour of it holds from the own start of its oldest span. An ended
-    // span's slowest factor is its end's, a span still open its start's.
+    // clamped to the day, and an account slowed past its bar holds from the own start of its oldest span. The bar is
+    // twice the threshold the newest span's start row read, at least an hour. An ended span's slowest factor is its
+    // end's, a span still open its start's.
     const spans = new Map();
-    const count = (account, since, end, factor) => spans.set(account, [...(spans.get(account) ?? []), { factor, since, slowedMs: Math.max(0, end - Math.max(since, s.now - DAY)) }]);
+    const count = (account, start, end, factor) =>
+      spans.set(account, [...(spans.get(account) ?? []), { factor, since: start.since, slowedMs: Math.max(0, end - Math.max(start.since, s.now - DAY)), thresholdMs: start.thresholdMs }]);
     const standing = new Map();
     for (const e of day) {
       const key = `${e.accountId}|${e.poolId}`;
       if (e.kind === 'router_started') {
-        for (const [open, start] of standing) count(open.split('|')[0], start.since, Date.parse(e.at), start.factor);
+        for (const [open, start] of standing) count(open.split('|')[0], start, Date.parse(e.at), start.factor);
         standing.clear();
-      } else if (e.kind === 'slow_down_started' && !standing.has(key)) standing.set(key, { factor: e.detail.factor, since: Date.parse(e.at) });
+      } else if (e.kind === 'slow_down_started' && !standing.has(key)) standing.set(key, { factor: e.detail.factor, since: Date.parse(e.at), thresholdMs: e.detail.threshold_ms });
       else if (e.kind === 'slow_down_ended' && standing.has(key)) {
-        count(e.accountId, e.detail.since, e.detail.since + e.detail.duration_ms, e.detail.factor_min);
+        count(e.accountId, { ...standing.get(key), since: e.detail.since }, e.detail.since + e.detail.duration_ms, e.detail.factor_min);
         standing.delete(key);
       }
     }
-    for (const [open, start] of standing) count(open.split('|')[0], start.since, s.now, start.factor);
-    const slowed = [...spans].filter(([, list]) => sum(list, (x) => x.slowedMs) > HOUR).map(([id, list]) => ['slowed_long', id, Math.min(...list.map((x) => x.since))]);
+    for (const [open, start] of standing) count(open.split('|')[0], start, s.now, start.factor);
+    const barOf = (list) => Math.max(2 * list.reduce((a, b) => (b.since > a.since ? b : a)).thresholdMs, HOUR);
+    const slowed = [...spans].filter(([, list]) => sum(list, (x) => x.slowedMs) > barOf(list)).map(([id, list]) => ['slowed_long', id, Math.min(...list.map((x) => x.since))]);
     const kinds = ['wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'];
     const want = [...firsts('wall_reached', spent, (e) => e.accountId), ...firsts('destination_spent', landed, (e) => e.accountId), ...firsts('shed_no_runway', rounds, (e) => e.poolId), ...slowed].sort(
       (x, y) => kinds.indexOf(x[0]) - kinds.indexOf(y[0]) || x[2] - y[2] || x[1].localeCompare(y[1]),
@@ -1153,11 +1156,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(read.map((x) => `${x[0]} ${x[1]}`), ['wall_reached nightly', 'wall_reached secondary', 'destination_spent nightly', 'shed_no_runway all', 'slowed_long studio']);
     const item = s.attention.find((i) => i.kind === 'slowed_long');
     assert.deepEqual(
-      [item.detail.spans, item.detail.open, item.detail.slowed_ms, item.detail.factor_min, item.detail.setting, item.detail.setting_values],
-      [spans.get('studio').length, true, sum(spans.get('studio'), (x) => x.slowedMs), Math.min(...spans.get('studio').map((x) => x.factor)), ['slow_down_stretch_seconds'], { slow_down_stretch_seconds: s.pools.find((p) => p.id === 'work').slowDownStretchSeconds }],
-      "studio's two spans in work, the closed one's slowest factor and the pool's stretch",
+      [item.detail.spans, item.detail.open, item.detail.slowed_ms, item.detail.bar_ms, item.detail.factor_min, item.detail.setting, item.detail.setting_values],
+      [spans.get('studio').length, true, sum(spans.get('studio'), (x) => x.slowedMs), barOf(spans.get('studio')), Math.min(...spans.get('studio').map((x) => x.factor)), ['slow_down_stretch_seconds'], { slow_down_stretch_seconds: s.pools.find((p) => p.id === 'work').slowDownStretchSeconds }],
+      "studio's two spans in work, their bar, the closed one's slowest factor and the pool's stretch",
     );
-    assert.deepEqual([item.detail.slowed_ms, item.detail.factor_min], [7_700_000, 0.35], 'the closed span of 86 min 20 s and the open one since 13:48');
+    assert.deepEqual([item.detail.slowed_ms, item.detail.bar_ms, item.detail.factor_min], [7_700_000, 3_600_000, 0.35], "the closed span of 86 min 20 s and the open one since 13:48, past twice work's 30 minutes");
   });
 
   test(`the slow-down's story: the slowed request's hold and renewal on work, the round its stretch fired for the annex, the failover's cause on all and studio's span rows, at ${at}`, async () => {

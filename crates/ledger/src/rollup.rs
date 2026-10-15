@@ -1114,8 +1114,14 @@ const CEILING_SETTING: &[&str] = &["window_ceiling"];
 const WALL_SETTINGS: &[&str] = &["shed_cap", "window_ceiling"];
 const SLOW_SETTINGS: &[&str] = &["slow_down_stretch_seconds"];
 
-/// An account slowed for this much of the trailing day has been over its pace twice over at the default threshold.
-const SLOWED_LONG_MS: i64 = 3_600_000;
+/// How many stretch thresholds of slow-down in the trailing day raise `slowed_long`. The slow-down holds an account
+/// while its demand runs ahead of its window, and the threshold is how long the pool lets it hold before a round moves
+/// sessions, so two thresholds' worth in a day says the pool's load exceeds the account's windows under any threshold:
+/// the pool's membership, its ceiling or its threshold rather than one long turn.
+const SLOWED_LONG_STRETCHES: i64 = 2;
+
+/// The bar's floor, so a pool near the threshold's own floor raises nothing on a few minutes of slow-down.
+const SLOWED_LONG_FLOOR_MS: i64 = 3_600_000;
 
 /// One condition of the fold before it is written.
 struct Held {
@@ -1129,11 +1135,13 @@ struct Held {
 /// `shed_no_runway` per pool from its rounds that marked nothing for want of a destination with runway,
 /// `destination_spent` per account from the moves onto it that a spent window of any source followed within the hour,
 /// `wall_reached` per account from its spent windows of any source, a predicted wall among them, and `slowed_long` per
-/// account from its slow-down spans, summed across its pools, once their parts inside the day pass `SLOWED_LONG_MS`.
-/// `since` is the oldest qualifying event's time, and for `slowed_long` the own start of the oldest span counted, which
-/// a span open from before the cutoff dates before the day. A wall's `projection_error` is one less the projection of
-/// the newest round on the account's newest wall's window inside that window's length before the wall, null with none.
-/// The ledger reads no registry, so a detail names its settings and the reader adds a pool's values.
+/// account from its slow-down spans, summed across its pools, once their parts inside the day pass the bar:
+/// `SLOWED_LONG_STRETCHES` times the `threshold_ms` of the newest counted span's start row, at least
+/// `SLOWED_LONG_FLOOR_MS`. `since` is the oldest qualifying event's time, and for `slowed_long` the own start of the
+/// oldest span counted, which a span open from before the cutoff dates before the day. A wall's `projection_error` is
+/// one less the projection of the newest round on the account's newest wall's window inside that window's length
+/// before the wall, null with none. The ledger reads no registry, so a detail names its settings and the reader adds a
+/// pool's values.
 pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), LedgerError> {
     struct Row {
         at: i64,
@@ -1300,27 +1308,41 @@ pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), Led
     let cutoff = now - CONDITION_SPAN_MS;
     let mut standing = slow_down_open_at(tx, cutoff)?;
     let mut counted: BTreeMap<String, Vec<SlowSpan>> = BTreeMap::new();
-    let mut count =
-        |account: &str, pool: &str, since: i64, end: i64, open: bool, factor: Option<f64>| {
-            // Only the part inside the trailing day counts, and a span with none there is not counted at all.
-            let slowed_ms = end.min(now) - since.max(cutoff);
-            if slowed_ms > 0 {
-                counted
-                    .entry(account.to_string())
-                    .or_default()
-                    .push(SlowSpan {
-                        pool: pool.to_string(),
-                        since,
-                        slowed_ms,
-                        open,
-                        factor,
-                    });
-            }
-        };
+    let mut count = |account: &str,
+                     pool: &str,
+                     since: i64,
+                     end: i64,
+                     open: bool,
+                     factor: Option<f64>,
+                     threshold_ms: Option<i64>| {
+        // Only the part inside the trailing day counts, and a span with none there is not counted at all.
+        let slowed_ms = end.min(now) - since.max(cutoff);
+        if slowed_ms > 0 {
+            counted
+                .entry(account.to_string())
+                .or_default()
+                .push(SlowSpan {
+                    pool: pool.to_string(),
+                    since,
+                    slowed_ms,
+                    open,
+                    factor,
+                    threshold_ms,
+                });
+        }
+    };
     for event in &events {
         if event.kind == "router_started" {
-            for ((account, pool), (since, factor)) in std::mem::take(&mut standing) {
-                count(&account, &pool, since, event.at, false, factor);
+            for ((account, pool), (since, factor, threshold_ms)) in std::mem::take(&mut standing) {
+                count(
+                    &account,
+                    &pool,
+                    since,
+                    event.at,
+                    false,
+                    factor,
+                    threshold_ms,
+                );
             }
             continue;
         }
@@ -1336,10 +1358,10 @@ pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), Led
                 standing
                     .entry(key)
                     .and_modify(|span| span.1 = lowest(span.1, factor))
-                    .or_insert((event.at, factor));
+                    .or_insert((event.at, factor, event.detail["threshold_ms"].as_i64()));
             }
             "slow_down_ended" => {
-                let Some((start, factor)) = standing.remove(&key) else {
+                let Some((start, factor, threshold_ms)) = standing.remove(&key) else {
                     continue;
                 };
                 // The end row lands after the wait that closed the span, so the span's own start and length come
@@ -1349,25 +1371,31 @@ pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), Led
                     .as_i64()
                     .map_or(event.at, |duration| since + duration);
                 let factor = event.detail["factor_min"].as_f64().or(factor);
-                count(account, pool, since, end, false, factor);
+                count(account, pool, since, end, false, factor, threshold_ms);
             }
             _ => {}
         }
     }
-    for ((account, pool), (since, factor)) in &standing {
-        count(account, pool, *since, now, true, *factor);
+    for ((account, pool), (since, factor, threshold_ms)) in &standing {
+        count(account, pool, *since, now, true, *factor, *threshold_ms);
     }
     for (account, spans) in counted {
         let slowed_ms: i64 = spans.iter().map(|span| span.slowed_ms).sum();
-        if slowed_ms <= SLOWED_LONG_MS {
-            continue;
-        }
         let (Some(oldest), Some(newest)) = (
             spans.iter().map(|span| span.since).min(),
             spans.iter().max_by_key(|span| span.since),
         ) else {
             continue;
         };
+        let bar_ms = newest
+            .threshold_ms
+            .map_or(0, |threshold| {
+                threshold.saturating_mul(SLOWED_LONG_STRETCHES)
+            })
+            .max(SLOWED_LONG_FLOOR_MS);
+        if slowed_ms <= bar_ms {
+            continue;
+        }
         held.insert(
             ("slowed_long", "account", account),
             Held {
@@ -1375,6 +1403,7 @@ pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), Led
                 since: oldest,
                 count: spans.len() as u64,
                 detail: serde_json::json!({
+                    "bar_ms": bar_ms,
                     "factor_min": spans.iter().fold(None, |min, span| lowest(min, span.factor)),
                     "open": spans.iter().any(|span| span.open),
                     "setting": setting(SLOW_SETTINGS),
@@ -1406,13 +1435,14 @@ pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), Led
 }
 
 /// One slow-down span the fold counts: its pool, its own start, its part inside the trailing day, whether it still
-/// stands and its lowest factor.
+/// stands, its lowest factor and the stretch threshold its start row read.
 struct SlowSpan {
     pool: String,
     since: i64,
     slowed_ms: i64,
     open: bool,
     factor: Option<f64>,
+    threshold_ms: Option<i64>,
 }
 
 fn lowest(a: Option<f64>, b: Option<f64>) -> Option<f64> {
@@ -1422,13 +1452,13 @@ fn lowest(a: Option<f64>, b: Option<f64>) -> Option<f64> {
     }
 }
 
-/// The slow-down spans standing at a point of the fold, by account and pool: each one's own start and the factor its
-/// start read.
-type OpenSpans = BTreeMap<(String, String), (i64, Option<f64>)>;
+/// The slow-down spans standing at a point of the fold, by account and pool: each one's own start and the factor and
+/// the stretch threshold its start read.
+type OpenSpans = BTreeMap<(String, String), (i64, Option<f64>, Option<i64>)>;
 
-/// The spans standing at `cutoff`, per account and pool, with each one's own start and the factor its start read: the
-/// newest `slow_down_started` or `slow_down_ended` row before the cutoff where that row is a start newer than the
-/// newest `router_started` row before it.
+/// The spans standing at `cutoff`, per account and pool, with each one's own start and the factor and the stretch
+/// threshold its start read: the newest `slow_down_started` or `slow_down_ended` row before the cutoff where that row
+/// is a start newer than the newest `router_started` row before it.
 fn slow_down_open_at(tx: &Transaction<'_>, cutoff: i64) -> Result<OpenSpans, LedgerError> {
     let restart: Option<(i64, i64)> = tx
         .query_row(
@@ -1460,10 +1490,12 @@ fn slow_down_open_at(tx: &Transaction<'_>, cutoff: i64) -> Result<OpenSpans, Led
         .into_iter()
         .filter(|(start, ..)| restart.is_none_or(|restart| restart < *start))
         .map(|((at, _), account, pool, detail)| {
-            let factor = detail
+            let detail = detail
                 .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
-                .and_then(|d| d["factor"].as_f64());
-            ((account, pool), (at, factor))
+                .unwrap_or(serde_json::Value::Null);
+            let (factor, threshold_ms) =
+                (detail["factor"].as_f64(), detail["threshold_ms"].as_i64());
+            ((account, pool), (at, factor, threshold_ms))
         })
         .collect())
 }

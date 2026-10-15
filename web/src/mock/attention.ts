@@ -92,46 +92,53 @@ function roundsWithoutRunway(poolId: string): Pick<AttentionItem, 'detail' | 'si
   return { detail: { accounts: sorted(rounds.map((e) => e.accountId)), rounds: rounds.length, setting: ['window_ceiling'], setting_values: { window_ceiling: ceiling } }, since: rounds[0].at };
 }
 
-/** The slowed time past which an account's slow-down is the pool's load rather than one turn's, the reader's own. */
-const SLOWED_LONG_MS = HOUR;
+/** The slowed-account bar in stretch thresholds and its floor, the reader's own. */
+const SLOWED_LONG_STRETCHES = 2;
+const SLOWED_LONG_FLOOR_MS = HOUR;
 
 /**
  * An account's slow-down spans over the day as the reader pairs them: each start with the next end of its account and
  * pool or the next restart, whichever comes first, a start with neither open to now, each span clamped to the day. It
- * holds once the spans sum past an hour, from the own start of the oldest, with the lowest factor any span read and
- * the stretch threshold of the newest span's pool. Null where it does not hold.
+ * holds once the spans sum past the bar, twice the stretch threshold the newest span's start row read and at least an
+ * hour, from the own start of the oldest, with the lowest factor any span read and the stretch threshold of the newest
+ * span's pool. Null where it does not hold.
  */
 function slowed(accountId: string): Pick<AttentionItem, 'detail' | 'since'> | null {
   const from = NOW - DAY;
-  const spans: { factor: number | null; open: boolean; pool: string; since: number; slowedMs: number }[] = [];
-  const count = (pool: string, since: number, end: number, open: boolean, factor: number | null) => spans.push({ factor, open, pool, since, slowedMs: Math.max(0, end - Math.max(since, from)) });
+  const spans: { factor: number | null; open: boolean; pool: string; since: number; slowedMs: number; thresholdMs: number | null }[] = [];
+  const count = (pool: string, since: number, end: number, open: boolean, factor: number | null, thresholdMs: number | null) =>
+    spans.push({ factor, open, pool, since, slowedMs: Math.max(0, end - Math.max(since, from)), thresholdMs });
   const lowest = (a: number | null, b: unknown) => (typeof b !== 'number' ? a : a === null ? b : Math.min(a, b));
-  const standing = new Map<string, { factor: number | null; since: number }>();
+  const standing = new Map<string, { factor: number | null; since: number; thresholdMs: number | null }>();
   const rows = ROUTING_EVENTS.filter((e) => Date.parse(e.at) >= from && Date.parse(e.at) <= NOW && (e.kind === 'router_started' || (e.accountId === accountId && e.poolId !== null)));
   for (const e of rows) {
     const pool = e.poolId ?? '';
     if (e.kind === 'router_started') {
-      for (const [open, span] of standing) count(open, span.since, Date.parse(e.at), false, span.factor);
+      for (const [open, span] of standing) count(open, span.since, Date.parse(e.at), false, span.factor, span.thresholdMs);
       standing.clear();
     } else if (e.kind === 'slow_down_started') {
       const span = standing.get(pool);
-      standing.set(pool, span ? { ...span, factor: lowest(span.factor, e.detail.factor) } : { factor: lowest(null, e.detail.factor), since: Date.parse(e.at) });
+      const thresholdMs = typeof e.detail.threshold_ms === 'number' ? e.detail.threshold_ms : null;
+      standing.set(pool, span ? { ...span, factor: lowest(span.factor, e.detail.factor) } : { factor: lowest(null, e.detail.factor), since: Date.parse(e.at), thresholdMs });
     } else if (e.kind === 'slow_down_ended') {
       const span = standing.get(pool);
       if (!span) continue;
       standing.delete(pool);
       const since = typeof e.detail.since === 'number' ? e.detail.since : span.since;
       const end = typeof e.detail.duration_ms === 'number' ? since + e.detail.duration_ms : Date.parse(e.at);
-      count(pool, since, end, false, typeof e.detail.factor_min === 'number' ? e.detail.factor_min : span.factor);
+      count(pool, since, end, false, typeof e.detail.factor_min === 'number' ? e.detail.factor_min : span.factor, span.thresholdMs);
     }
   }
-  for (const [pool, span] of standing) count(pool, span.since, NOW, true, span.factor);
+  for (const [pool, span] of standing) count(pool, span.since, NOW, true, span.factor, span.thresholdMs);
+  if (spans.length === 0) return null;
   const slowedMs = spans.reduce((n, x) => n + x.slowedMs, 0);
-  if (slowedMs <= SLOWED_LONG_MS) return null;
   const newest = spans.reduce((a, b) => (b.since > a.since ? b : a));
+  const barMs = Math.max(SLOWED_LONG_STRETCHES * (newest.thresholdMs ?? 0), SLOWED_LONG_FLOOR_MS);
+  if (slowedMs <= barMs) return null;
   const stretch = POOLS.find((p) => p.id === newest.pool)?.slowDownStretchSeconds;
   return {
     detail: {
+      bar_ms: barMs,
       factor_min: spans.reduce<number | null>((n, x) => lowest(n, x.factor), null),
       open: spans.some((x) => x.open),
       setting: ['slow_down_stretch_seconds'],

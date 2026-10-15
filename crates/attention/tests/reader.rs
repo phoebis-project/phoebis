@@ -1430,7 +1430,8 @@ async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_wi
 }
 
 #[tokio::test]
-async fn an_account_slowed_for_over_an_hour_of_the_day_holds_the_condition_on_that_account() {
+async fn an_account_slowed_past_twice_its_pools_threshold_in_the_day_holds_the_condition_on_that_account(
+) {
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
     // The pool's own threshold, so the value the condition carries beside the setting is the case's.
@@ -1471,7 +1472,8 @@ async fn an_account_slowed_for_over_an_hour_of_the_day_holds_the_condition_on_th
             }),
         )
     };
-    // A span of 50 minutes closed inside the day and one open since 20 minutes before the fold: 70 minutes.
+    // A span of 50 minutes closed inside the day and one open since 50 minutes before the fold: 100 minutes, past the
+    // bar of twice the pool's 45 minutes.
     started(NOW - 2 * HOUR, 0.5);
     ended(
         NOW - 2 * HOUR + 52 * MINUTE,
@@ -1479,7 +1481,7 @@ async fn an_account_slowed_for_over_an_hour_of_the_day_holds_the_condition_on_th
         50 * MINUTE,
         0.4,
     );
-    started(NOW - 20 * MINUTE, 0.35);
+    started(NOW - 50 * MINUTE, 0.35);
     fold_at(&rig, NOW).await;
     let conditions = read(&attention, NOW);
     let held = find(&conditions, Kind::SlowedLong, "business").unwrap();
@@ -1502,15 +1504,17 @@ async fn an_account_slowed_for_over_an_hour_of_the_day_holds_the_condition_on_th
                 id: "business".into()
             }),
             &json!({
+                "bar_ms": 5_400_000,
                 "factor_min": 0.35,
                 "open": true,
                 "setting": ["slow_down_stretch_seconds"],
                 "setting_values": { "slow_down_stretch_seconds": 2_700 },
-                "slowed_ms": 70 * MINUTE,
+                "slowed_ms": 100 * MINUTE,
                 "spans": 2,
             })
         ),
-        "the condition dates from the oldest span's start, opens the account and carries the pool's threshold"
+        "the condition dates from the oldest span's start, opens the account and carries the bar and the pool's \
+         threshold"
     );
     assert!(
         Kind::ShedNoRunway < Kind::SlowedLong,
@@ -1523,7 +1527,7 @@ async fn an_account_slowed_for_over_an_hour_of_the_day_holds_the_condition_on_th
         "{text}"
     );
     // The open span ends, and a day later the trailing 24 hours hold none of the spans.
-    ended(NOW + 10 * MINUTE, NOW - 20 * MINUTE, 28 * MINUTE, 0.35);
+    ended(NOW + 10 * MINUTE, NOW - 50 * MINUTE, 58 * MINUTE, 0.35);
     fold_at(&rig, NOW + 25 * HOUR).await;
     let cleared = find(
         &read(&attention, NOW + 25 * HOUR),
@@ -1538,6 +1542,7 @@ async fn an_account_slowed_for_over_an_hour_of_the_day_holds_the_condition_on_th
             false,
             None,
             &json!({
+                "bar_ms": null,
                 "factor_min": null,
                 "open": false,
                 "setting": ["slow_down_stretch_seconds"],
@@ -1545,7 +1550,7 @@ async fn an_account_slowed_for_over_an_hour_of_the_day_holds_the_condition_on_th
                 "spans": 0,
             })
         ),
-        "the condition clears once the trailing day holds no span"
+        "the condition clears once the trailing day holds no span, with no start row to read a bar from"
     );
 }
 

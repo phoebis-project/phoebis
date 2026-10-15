@@ -528,10 +528,10 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     // Studio's two slow-down spans in work: the closed one from 09:12 until its factor read 1 at 10:38:20, and the open
     // one from 13:48.
     [
-      'studio: slowed 2 h 8 min of the last 24 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12',
+      'studio: slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12',
       'badge--warning',
       '/routing-log',
-      ['factor_min: 0.35', 'open: true', 'setting: ["slow_down_stretch_seconds"]', 'setting_values: {"slow_down_stretch_seconds":1800}', 'slowed_ms: 7700000', 'spans: 2'],
+      ['bar_ms: 3600000', 'factor_min: 0.35', 'open: true', 'setting: ["slow_down_stretch_seconds"]', 'setting_values: {"slow_down_stretch_seconds":1800}', 'slowed_ms: 7700000', 'spans: 2'],
     ],
   ];
   const ages = badges().map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
@@ -3354,7 +3354,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // The story's items: jobs is exhausted and holds a parked record. all draws the laptop key's client drift, the
   // Overflow workspace out of funding, secondary's poll backoff and the three routing conditions (the walls on nightly
   // and secondary, nightly spent within the hour of a move, and all's round without a destination). work draws studio
-  // slowed for over an hour, and the routing state writer belongs to no pool's card.
+  // slowed past twice the stretch, and the routing state writer belongs to no pool's card.
   const workDetail = [...(card('work')?.querySelectorAll('ul.attention .attention__detail') ?? [])].map((x) => x.textContent);
   results.push({
     name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, and an account's slow-down as the words without the subject",
@@ -3370,8 +3370,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
           ['Destination spent within the hour', 'nightly', '/routing-log'],
           ['Rounds without a destination', 'all', '/routing-log'],
         ]) &&
-      JSON.stringify(attentionRows('work')) === JSON.stringify([['Slowed for over an hour', 'studio', '/routing-log']]) &&
-      JSON.stringify(workDetail) === JSON.stringify(['slowed 2 h 8 min of the last 24 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12']),
+      JSON.stringify(attentionRows('work')) === JSON.stringify([['Slowed past twice the stretch', 'studio', '/routing-log']]) &&
+      JSON.stringify(workDetail) === JSON.stringify(['slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12']),
     missing: [...['jobs', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))}`), ...workDetail],
   });
   {
