@@ -20758,6 +20758,100 @@ fn a_slow_down_read_folds_the_capped_pins_realized_speed_once() {
     );
 }
 
+/// `s1` burning a tenth of 0.15 of `a`'s 5-hour window an hour and back every two minutes, the cap of
+/// `held_pools(120)`, and `s2` burning the rest with no cycle yet, on `a` at `five_hour` with its reset two hours after
+/// `T`, and `b` at 0.1. Held at the cap, `s1` runs at half its pace.
+fn a_tenth_with_a_cycle(off: &RegistrySnapshot, five_hour: f64) -> RoutingState {
+    let mut st = rounding(vec![
+        burning("s1", "a", 1.5, true, T),
+        burning("s2", "a", 13.5, true, T),
+    ]);
+    reading(&mut st, "a", five_hour, 2 * HOUR, T);
+    reading(&mut st, "b", 0.1, 2 * HOUR, T);
+    cycled(&mut st, off, "s1", 120 * SECOND, T + 120 * SECOND);
+    st
+}
+
+#[test]
+fn a_pin_without_a_cycle_runs_at_full_speed_and_the_held_pins_cover_its_burn() {
+    let (off, on) = held_pools(120);
+    let mut st = a_tenth_with_a_cycle(&off, 0.80);
+    let at = T + 240 * SECOND;
+    let req = main_turn(&on, "s1", at);
+    let d = decide(&mut st, &on, &req, &mut rng());
+    let shed = line(&d.record, "move:shed");
+    let factor = number(fact(shed, "factor"));
+    assert!(factor < 0.95, "the factor slows the account: {factor}");
+    // s2's nine tenths run unheld, so s1 alone would have to run under nothing to bring the account to the factor: it
+    // waits the cap, one cycle, and the account runs at 0.1 x 0.5 + 0.9 x 1.
+    let speed = number(fact(shed, "speed"));
+    assert!(
+        (speed - 0.95).abs() < 1e-6,
+        "the pin without a cycle counts at full speed with its burn: {speed}"
+    );
+    assert_eq!(
+        held_on(&d).1.until,
+        Some(req.received_at + 120_000),
+        "the held pin covers the unheld burn up to the cap"
+    );
+    assert!(
+        (st.slow_down_state("p", "a").expect("an entry").speed - 0.95).abs() < 1e-6,
+        "the entry holds the account's speed"
+    );
+
+    // s2's turn at the same instant reads the demand over that speed: the burn the pins would carry unslowed.
+    let next = decide(&mut st, &on, &main_turn(&on, "s2", at), &mut rng());
+    assert_eq!(
+        landed(next.result.clone()),
+        ("a".into(), None),
+        "a pin without a cycle is never held"
+    );
+    let achieved = number(fact(shed, "demand_five_hour"));
+    let demand = number(fact(line(&next.record, "move:shed"), "demand_five_hour"));
+    assert!(
+        (demand * 0.95 / achieved - 1.0).abs() < 1e-6,
+        "the demand is the achieved burn over the account's speed: {demand} against {achieved}"
+    );
+}
+
+#[test]
+fn the_stretch_read_over_an_unheld_pins_full_speed_stays_under_the_threshold() {
+    let (off, on) = held_pools(120);
+    // At 0.74 the factor reads above 0.8, so the stretch starts under the half hour threshold.
+    let mut st = a_tenth_with_a_cycle(&off, 0.74);
+    let at = T + 240 * SECOND;
+    let d = decide(&mut st, &on, &main_turn(&on, "s1", at), &mut rng());
+    assert_eq!(held_on(&d).1.reason, "slow_down");
+    let shed = line(&d.record, "move:shed");
+    let (stretch, factor) = (
+        number(fact(shed, "stretch_ms")),
+        number(fact(shed, "factor")),
+    );
+    assert!(stretch <= 1_800_000.0, "{stretch}");
+    // The stretch is the time to the reset times one less the factor, and the factor scales with the speed the demand
+    // divides by: over the held pin's half pace alone, the next read's stretch would pass the threshold.
+    let to_reset = stretch / (1.0 - factor);
+    assert!(to_reset * (1.0 - factor * 0.5) > 1_800_000.0);
+
+    let next = decide(&mut st, &on, &main_turn(&on, "s2", at), &mut rng());
+    let shed = line(&next.record, "move:shed");
+    let stretch = number(fact(shed, "stretch_ms"));
+    assert!(
+        (stretch / (to_reset * (1.0 - factor * 0.95)) - 1.0).abs() < 1e-3,
+        "the next read divides the demand by the account's speed: {stretch}"
+    );
+    assert!(
+        stretch <= 1_800_000.0 && no_fact(shed, "over_since"),
+        "the trigger stays quiet: {:?}",
+        shed.facts
+    );
+    assert_eq!(
+        st.slow_down_state("p", "a")
+            .and_then(|entry| entry.over_since),
+        None
+    );
+}
+
 #[test]
 fn an_exempt_request_passes_a_standing_deadline_unheld_and_folds_nothing() {
     let (off, on) = held_pools(120);

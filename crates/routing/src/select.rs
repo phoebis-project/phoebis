@@ -2338,14 +2338,15 @@ pub struct SlowDownRead {
     pub threshold_ms: i64,
     pub factor: f64,
     pub speed: f64,
-    /// The holds of the pool's pins on the account whose pace has a cycle, each weighted by its priced decayed rate
-    /// on `five_hour`: a pin whose cycle is too long for the cap is held at the cap and the rest share the remaining
-    /// reduction at one speed, so the pins with a cycle realize the factor together. Empty while no pin on the account
-    /// has a cycle.
+    /// The holds of the pool's pins on the account whose pace has a cycle, every kept pin weighted by its priced
+    /// decayed rate on `five_hour`: a pin without a cycle runs unheld and a pin whose cycle is too long for the cap is
+    /// held at the cap, and the rest share the remaining reduction at one speed, so the account's pins realize the
+    /// factor together as far as the cap lets them. Empty while no pin on the account has a cycle.
     pub plan: Vec<PinHold>,
-    /// The speed the plan realizes, `sum(b x s) / sum(b)` with `s = c / (c + h)`, or 1 while the plan is empty, since
-    /// a pin without a cycle is never held: the one figure the selection folds into the entry's speed. Positive once a
-    /// pin has a cycle, so the demand never divides by zero.
+    /// The speed the account's pins realize under the plan, `sum(b x s) / sum(b)` over every kept pin with
+    /// `s = c / (c + h)` and `s = 1` for a pin without a cycle, so 1 while the plan is empty: the one figure the
+    /// selection folds into the entry's speed. The demand divides every kept pin's burn by it, so an unheld pin's burn
+    /// reads at the pace it runs. Positive, so the demand never divides by zero.
     pub realized: f64,
 }
 
@@ -2411,21 +2412,22 @@ pub(crate) fn slow_down_of(
             ((limit - utilization) / (to_horizon * demand)).clamp(0.0, 1.0),
         )
     };
-    // The pins with a cycle, each weighted by its own priced burn on the window: a pin without one is never held.
+    // Every kept pin, each weighted by its own priced burn on the window: a pin without a cycle is never held, but its
+    // burn runs at full speed and weighs in the speed the demand divides by.
     let average_ms = burn_average_ms(pool);
-    let pins: Vec<(PinKey, f64, f64)> = state
+    let pins: Vec<(PinKey, Option<f64>, f64)> = state
         .pins_on(account_id, &in_pool(snapshot, pool))
         .into_iter()
-        .filter_map(|p| {
+        .map(|p| {
             let cycle = state
                 .pin_pace(&p.key())
                 .and_then(|pace| pace.cycle_ms)
-                .filter(|cycle| *cycle > 0.0)?;
+                .filter(|cycle| *cycle > 0.0);
             let weight = state
                 .share()
                 .rate(FIVE_HOUR, tier, &p.model, &p.burn, now)
                 .map_or(0.0, |rate| burn_decayed(rate, p.burn_at, now, average_ms));
-            Some((p.key(), cycle, weight))
+            (p.key(), cycle, weight)
         })
         .collect();
     let (plan, realized) = water_fill(&pins, factor, slow_down_hold_ms(pool));
@@ -3594,13 +3596,17 @@ fn slow_down_answer(
     Some(hold)
 }
 
-/// The holds of the account's pins with a cycle at `factor` under the cap, and the speed they realize together. Each
-/// pin `(key, cycle, weight)` wants `c x (1 / f - 1)`. A pin that wants more than the cap waits the cap and runs at
-/// `c / (c + cap)`, above the factor, and the rest share what is left of the reduction at one speed, the step repeated
-/// until no pin crosses the cap, so one speed per account holds as far as the cap lets it. A pin whose hold reads
-/// under the floor is not held and counts at full speed. Weights that all read zero (nothing priced) weigh the pins
-/// equally.
-fn water_fill(pins: &[(PinKey, f64, f64)], factor: f64, cap_ms: i64) -> (Vec<PinHold>, f64) {
+/// The holds of the account's pins with a cycle at `factor` under the cap, and the speed every kept pin realizes
+/// together. Each pin `(key, cycle, weight)` with a cycle wants `c x (1 / f - 1)`. A pin without a cycle is never held
+/// and runs at full speed, and a pin that wants more than the cap waits the cap and runs at `c / (c + cap)`, both above
+/// the factor, so the rest share what is left of the reduction at one speed, the step repeated until no pin crosses the
+/// cap, and one speed per account holds as far as the cap lets it. A pin whose hold reads under the floor is not held
+/// and counts at full speed. Weights that all read zero (nothing priced) weigh the pins equally.
+fn water_fill(
+    pins: &[(PinKey, Option<f64>, f64)],
+    factor: f64,
+    cap_ms: i64,
+) -> (Vec<PinHold>, f64) {
     if pins.is_empty() {
         return (Vec::new(), 1.0);
     }
@@ -3612,6 +3618,12 @@ fn water_fill(pins: &[(PinKey, f64, f64)], factor: f64, cap_ms: i64) -> (Vec<Pin
         pins.iter().map(|(_, _, weight)| weight.max(0.0)).collect()
     };
     let total: f64 = weights.iter().sum();
+    let unheld: f64 = pins
+        .iter()
+        .zip(&weights)
+        .filter(|((_, cycle, _), _)| cycle.is_none())
+        .map(|(_, weight)| weight)
+        .sum();
     let wanted = |cycle: f64, speed: f64| {
         if speed > 0.0 {
             cycle * (1.0 / speed - 1.0)
@@ -3626,22 +3638,26 @@ fn water_fill(pins: &[(PinKey, f64, f64)], factor: f64, cap_ms: i64) -> (Vec<Pin
             .iter()
             .zip(&weights)
             .zip(&capped)
-            .filter(|(_, capped)| **capped)
-            .map(|(((_, cycle, _), weight), _)| weight * cycle / (cycle + cap))
+            .filter_map(|(((_, cycle, _), weight), capped)| {
+                (*cycle)
+                    .filter(|_| *capped)
+                    .map(|cycle| weight * cycle / (cycle + cap))
+            })
             .sum();
-        let rest_weight: f64 = weights
+        let rest_weight: f64 = pins
             .iter()
+            .zip(&weights)
             .zip(&capped)
-            .filter(|(_, capped)| !**capped)
-            .map(|(weight, _)| weight)
+            .filter(|(((_, cycle, _), _), capped)| cycle.is_some() && !**capped)
+            .map(|((_, weight), _)| weight)
             .sum();
         if rest_weight <= 0.0 {
             break;
         }
-        rest_speed = ((factor * total - capped_share) / rest_weight).clamp(0.0, 1.0);
+        rest_speed = ((factor * total - unheld - capped_share) / rest_weight).clamp(0.0, 1.0);
         let mut crossed = false;
         for ((_, cycle, _), capped) in pins.iter().zip(capped.iter_mut()) {
-            if !*capped && wanted(*cycle, rest_speed) > cap {
+            if cycle.is_some_and(|cycle| !*capped && wanted(cycle, rest_speed) > cap) {
                 *capped = true;
                 crossed = true;
             }
@@ -3650,16 +3666,19 @@ fn water_fill(pins: &[(PinKey, f64, f64)], factor: f64, cap_ms: i64) -> (Vec<Pin
             break;
         }
     }
-    let mut realized = 0.0;
+    let mut realized = unheld;
     let plan = pins
         .iter()
         .zip(&weights)
         .zip(&capped)
-        .map(|(((key, cycle, _), weight), capped)| {
+        .filter_map(|(((key, cycle, _), weight), capped)| {
+            let cycle = (*cycle)?;
+            // The cap bounds a pin of no weight too, which the loop leaves at the factor when no weighted pin is left
+            // to share the reduction.
             let hold = if *capped {
                 cap
             } else {
-                wanted(*cycle, rest_speed)
+                wanted(cycle, rest_speed).min(cap)
             };
             let hold_ms = hold.round() as i64;
             realized += weight
@@ -3668,11 +3687,11 @@ fn water_fill(pins: &[(PinKey, f64, f64)], factor: f64, cap_ms: i64) -> (Vec<Pin
                 } else {
                     cycle / (cycle + hold)
                 };
-            PinHold {
+            Some(PinHold {
                 key: key.clone(),
                 cycle_ms: cycle.round() as i64,
                 hold_ms,
-            }
+            })
         })
         .collect();
     (plan, realized / total)
