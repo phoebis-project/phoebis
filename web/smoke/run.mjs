@@ -1606,6 +1606,18 @@ await readsAgain('/', 'getOverview', 30_000);
   });
   page.unmount();
 }
+{
+  // A page loaded as its own chunk answers a load that fails again after the reload with its own element, drawn in the
+  // shell's outlet, and every other route keeps the router's default screen for a render error.
+  const { PageLoadFailed, routes } = await import('./dist/entry.js');
+  const children = routes.find((r) => r.path === '/')?.children ?? [];
+  const carried = children.filter((r) => r.errorElement !== undefined).map((r) => [r.path, PageLoadFailed !== undefined && r.errorElement?.type === PageLoadFailed]);
+  results.push({
+    name: "the lazy pages' routes, and no other, carry the page load's error element",
+    ok: JSON.stringify(carried) === JSON.stringify([['accounts', true], ['accounts/:accountId', true], ['analytics', true], ['pools', true]]) && routes.every((r) => r.errorElement === undefined),
+    missing: [JSON.stringify(carried), `${children.length} child routes`],
+  });
+}
 
 // The memory router exposes no location, so the page in place is read off what the route drew: the heading, the
 // active nav link, and the selected row's link.
@@ -9858,7 +9870,7 @@ m.unmount();
 }
 
 // A dimension fed by a list that did not load offers nothing to pick, so its Add filter row is disabled and says why on
-// its title, and a click on it leaves the list where it is. The rows beside it stay as they are.
+// its title and its description, and a click on it leaves the list where it is. The rows beside it stay as they are.
 {
   const sentence = 'The key list did not load: the registry is unavailable';
   failNextCall('listKeys', '/admin/keys', 'the registry is unavailable');
@@ -9868,14 +9880,15 @@ m.unmount();
   const rowOf = (label) => filterRows().find((r) => r.firstElementChild?.textContent?.trim() === label);
   const keyRow = rowOf('Key');
   const poolRow = rowOf('Pool');
-  const read = { disabled: keyRow?.getAttribute('aria-disabled') ?? null, pool: [poolRow?.getAttribute('aria-disabled') ?? null, poolRow?.getAttribute('title') ?? null], title: keyRow?.getAttribute('title') ?? null };
+  const described = document.getElementById(keyRow?.getAttribute('aria-describedby') ?? '')?.textContent ?? null;
+  const read = { described, disabled: keyRow?.getAttribute('aria-disabled') ?? null, pool: [poolRow?.getAttribute('aria-disabled') ?? null, poolRow?.getAttribute('title') ?? null], title: keyRow?.getAttribute('title') ?? null };
   keyRow?.click();
   await page.settle(100);
   const stayed = filterBox()?.querySelector('.add-filter__search') !== null && filterBox()?.querySelector('[aria-label="Back to the filter list"]') === null;
   await closeBoxes(page);
   results.push({
     name: '/requests a failed keys read disables the Key row of Add filter and names the failure',
-    ok: read.disabled === 'true' && read.title === sentence && stayed && read.pool[0] === null && read.pool[1] === null,
+    ok: read.disabled === 'true' && read.title === sentence && read.described === sentence && stayed && read.pool[0] === null && read.pool[1] === null,
     missing: [JSON.stringify(read), `stayed on the list ${stayed}`],
   });
   page.unmount();
@@ -10249,7 +10262,7 @@ m.unmount();
   }
   {
     // A chip's body opens its dimension's values with Back, the label and Remove, and Remove clears the value, closes
-    // the box and leaves the focus on Add filter once no chip stands. A dimension whose list did not load is skipped by
+    // the box and leaves the focus on Add filter once no chip stands. A dimension whose list did not load is a stop for
     // the keys and says why on its row's title.
     const [model] = (await api.listCatalog()).map((c) => c.id);
     const page = await mount(`/requests?models=${encodeURIComponent(model ?? '')}`, { now: CLOCK_ORIGIN });
@@ -10288,7 +10301,7 @@ m.unmount();
         JSON.stringify(removed) === JSON.stringify({ chip: 'no model chip', focus: true, models: null, open: false }) &&
         pool?.getAttribute('aria-disabled') === 'true' &&
         pool.getAttribute('title') === 'The pool list did not load: the registry is unavailable' &&
-        JSON.stringify(walked) === JSON.stringify(['Account', 'Key', 'Model', 'Cache miss reason']),
+        JSON.stringify(walked) === JSON.stringify(['Account', 'Key', 'Model', 'Pool']),
       missing: [String(model), JSON.stringify(opened), JSON.stringify(removed), `${pool?.getAttribute('aria-disabled')} ${pool?.getAttribute('title')}`, JSON.stringify(walked)],
     });
   }
@@ -19283,6 +19296,29 @@ m.unmount();
   const press = (key, at = document.activeElement) => at?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key }));
   const named = (el) => (el === document.body ? 'the body' : `${el?.tagName.toLowerCase()} ${el?.className} ${el?.textContent?.trim().slice(0, 30)}`);
 
+  // A dimension whose list did not load is a stop for the keys, so a reader who walks the rows reaches its reason, and
+  // the row stays shut: its Enter is held and a click opens no step. The Key row is the second stop after the field.
+  failNextCall('listKeys', '/admin/keys', 'the registry is unavailable');
+  const shut = await mount('/requests');
+  addFilterButton(shut)?.click();
+  await shut.settle(100);
+  const rowAt = () => (document.activeElement?.classList.contains('add-filter__row') ? document.activeElement.firstElementChild?.textContent?.trim() : named(document.activeElement));
+  const toDisabled = [];
+  for (let i = 0; i < 2; i += 1) {
+    press('ArrowDown');
+    await shut.settle(50);
+    toDisabled.push(rowAt());
+  }
+  const disabledRow = document.activeElement;
+  const enterHeld = press('Enter') === false;
+  await shut.settle(50);
+  disabledRow?.click();
+  await shut.settle(50);
+  const firstStep = filterBox()?.querySelector('.add-filter__search') != null && filterBox()?.querySelector('[aria-label="Back to the filter list"]') == null;
+  const disabledRead = { disabled: disabledRow?.getAttribute('aria-disabled') ?? null, enterHeld, firstStep, walk: toDisabled };
+  await closeBoxes(shut);
+  shut.unmount();
+
   let page = await mount('/requests');
   // Each list opens in Add filter's values step, anchored to Add filter, which takes the focus back on Escape.
   const agentType = await addFilter(page, 'Agent type');
@@ -19305,9 +19341,16 @@ m.unmount();
   const tabbedOut = filterBox() === null;
   const wanted = [labels[0], labels[1], labels[0], labels.at(-1), labels[0]];
   results.push({
-    name: 'the Agent type filter opens onto its Select all row and the keys move, close and return focus',
-    ok: labels.length > 2 && labels[0] === 'Select all' && JSON.stringify(moves) === JSON.stringify(wanted) && escaped.every(Boolean) && reopened && tabbedOut,
-    missing: [`moves ${JSON.stringify(moves)} against ${JSON.stringify(wanted)}`, `Escape closed ${escaped[0]}, on Add filter ${escaped[1]}`, `reopened ${reopened}, a Tab out closed ${tabbedOut}`],
+    name: 'the Agent type filter opens onto its Select all row and the keys move, close and return focus, and reach a disabled row that stays shut',
+    ok:
+      labels.length > 2 &&
+      labels[0] === 'Select all' &&
+      JSON.stringify(moves) === JSON.stringify(wanted) &&
+      escaped.every(Boolean) &&
+      reopened &&
+      tabbedOut &&
+      JSON.stringify(disabledRead) === JSON.stringify({ disabled: 'true', enterHeld: true, firstStep: true, walk: ['Account', 'Key'] }),
+    missing: [`moves ${JSON.stringify(moves)} against ${JSON.stringify(wanted)}`, `Escape closed ${escaped[0]}, on Add filter ${escaped[1]}`, `reopened ${reopened}, a Tab out closed ${tabbedOut}`, `disabled row ${JSON.stringify(disabledRead)}`],
   });
 
   // A list past twelve options opens with its search field: on this story the status codes, past the six models.

@@ -361,7 +361,7 @@ function bar(initial, { dimensions = DIMENSIONS, disabled, options = OPTIONS, pr
   return { ...page, button, chipBody, rowOf, rows, writes };
 }
 
-test('Add filter opens step one with the Filter by field focused, the groups and their rows with each value, and a disabled row the keys skip', () => {
+test('Add filter opens step one with the Filter by field focused, the groups and their rows with each value, and a disabled row the keys land on', () => {
   const b = bar({ accounts: ['acc_1'], held: true }, { disabled: { keys: 'The key list did not load: offline' } });
   const button = b.button();
   assert.deepEqual([button.className.includes('btn--sm'), button.textContent, button.querySelector('svg')?.getAttribute('width'), button.getAttribute('aria-haspopup'), button.getAttribute('aria-expanded')], [true, 'Add filter', '14', 'dialog', 'false']);
@@ -382,7 +382,7 @@ test('Add filter opens step one with the Filter by field focused, the groups and
     press(k);
     return document.activeElement === field ? 'field' : document.activeElement.firstElementChild?.textContent;
   });
-  assert.deepEqual(walk, ['Account', 'Held only', 'Account', 'field'], 'the keys walk the field and the rows past the disabled one');
+  assert.deepEqual(walk, ['Account', 'Key', 'Account', 'field'], 'the keys walk the field and the rows, the disabled one among them');
   click(key);
   assert.ok(box().querySelector('.add-filter__search'), 'a click on the disabled row opens nothing');
   type(field, 'us');

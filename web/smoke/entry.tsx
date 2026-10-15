@@ -15,6 +15,9 @@ import { SETTINGS_SAMPLE } from '@/mock/samples';
 import { fakeClock } from './clock';
 
 export { api, decodeSettings, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, planLabel, SessionNotKept, SETTINGS_WIRE };
+// The console's routes and the page load's error element, so a check reads which routes carry it.
+export { routes };
+export { PageLoadFailed } from '@/components/ui/primitives';
 // The transport itself, for the check that needs its 401 path, which no mock call takes.
 export { call };
 // The fold the Cost section sums its groups by, so a check reads the totals the page draws from one derivation.

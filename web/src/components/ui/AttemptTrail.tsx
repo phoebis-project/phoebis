@@ -47,7 +47,7 @@ export function AttemptTrail({ attempts }: { attempts: TrailAttempt[] }) {
         ))}
       </span>
       {described?.sibling && (
-        <span id={described.id} className="sr-only" data-descriptions="">
+        <span id={described.id} hidden data-descriptions="">
           {title}
         </span>
       )}
@@ -117,7 +117,7 @@ export function AttemptCount({ attempts }: { attempts: TrailAttempt[] }) {
         {attempts.length} attempts
       </span>
       {described?.sibling && (
-        <span id={described.id} className="sr-only" data-descriptions="">
+        <span id={described.id} hidden data-descriptions="">
           {lines}
         </span>
       )}

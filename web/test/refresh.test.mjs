@@ -322,6 +322,14 @@ test('a confirmation replaces a showing one, and a failure on screen keeps its t
   assert.deepEqual(queueToast(failing, toast(6, '/admin/pools failed: ledger locked', 6_000, '/admin/pools')).map((t) => t.id), [3, 6], 'a failure of another route queues behind');
 });
 
+test('a confirmation lands behind the failure on screen, ahead of the failures queued, and the next one replaces it there', () => {
+  let queue = [];
+  for (const [id, path] of [[1, '/admin/keys'], [2, '/admin/pools'], [3, '/admin/models']]) queue = queueToast(queue, toast(id, `${path} failed: ledger locked`, 6_000, path));
+  const saved = queueToast(queue, toast(4, 'Key saved', 2_400));
+  assert.deepEqual(saved.map((t) => t.id), [1, 4, 2, 3], 'the confirmation takes the slot behind the failure on screen');
+  assert.deepEqual(queueToast(saved, toast(5, 'Key revoked', 2_400)).map((t) => t.id), [1, 5, 2, 3], 'a second confirmation replaces it in that slot');
+});
+
 test('an identical text is dropped, and so is a failure of a route already queued', () => {
   const showing = queueToast([], toast(1, 'Key saved', 2_400));
   assert.equal(queueToast(showing, toast(2, 'Key saved', 2_400)), showing, 'the same confirmation again keeps the one showing and its dwell');

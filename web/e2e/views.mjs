@@ -6172,6 +6172,67 @@ async function poolFormTables(theme) {
 }
 
 /**
+ * The document holds still behind a modal dialog. On the Pools page scrolled 300 px down, the first pool's dialog
+ * opens, a wheel over the backdrop leaves the document's scroll where the open found it and the content's box where it
+ * stood before the open, and Escape closes the dialog onto the same scroll. The box is read at both edges: the shell
+ * anchors the content on the left, so the scrollbar a lock without its gutter takes away widens the content to the
+ * right. A page too short to scroll 300 px is recorded and not read.
+ */
+async function dialogScrollLock(theme) {
+  const say = (what) => failures.push(`${theme} /pools dialog scroll lock: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  const read = () =>
+    page.evaluate(() => {
+      const root = document.scrollingElement;
+      const box = document.querySelector('.content')?.getBoundingClientRect();
+      const style = getComputedStyle(root);
+      return { gutter: style.scrollbarGutter, left: box?.left ?? null, overflow: style.overflowY, right: box?.right ?? null, room: root.scrollHeight - root.clientHeight, scroll: root.scrollTop };
+    });
+  const rest = await read();
+  if (rest.room < 300) {
+    measurements.push(`${theme} /pools dialog scroll lock skipped: the page scrolls ${rest.room} px, short of 300 ${JSON.stringify(rest)}`);
+    return;
+  }
+  await page.evaluate(() => window.scrollTo(0, 300));
+  await settle();
+  const before = await read();
+  // The opener's own click, since a Playwright click scrolls its target into view first and would move the document.
+  const clicked = await page.evaluate(() => {
+    const opener = document.querySelector('.pool button[aria-label^="Edit pool"]');
+    opener?.click();
+    return opener !== null;
+  });
+  try {
+    if (!clicked) throw new Error('no Edit pool button');
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await settle();
+  } catch (error) {
+    say(`the first pool's dialog never opened (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  const open = await read();
+  const frame = await dialog.boundingBox();
+  // Halfway between the viewport's left edge and the dialog's, on the backdrop.
+  await page.mouse.move(Math.max(4, Math.round((frame?.x ?? 120) / 2)), 400);
+  await page.mouse.wheel(0, 400);
+  // The wheel's scroll runs on the compositor in real time, which the paused clock does not hold.
+  await page.waitForTimeout(500);
+  await advance(CLOCK_STEP_MS);
+  const wheeled = await read();
+  await closeByEscape(dialog, `${theme} /pools dialog after the scroll lock's read`, say);
+  await advance(CLOCK_STEP_MS);
+  const closed = await read();
+  measurements.push(`${theme} /pools dialog scroll lock ${JSON.stringify({ before, closed, open, wheeled })}`);
+  if (before.scroll !== 300) say(`the page stands ${before.scroll} px down, not 300, before the dialog opens`);
+  for (const what of compare(wheeled, open, ['scroll'], 'the wheel over the backdrop against the open dialog')) say(what);
+  for (const what of compare(open, before, ['left', 'right'], "the content's box with the dialog open against it before")) say(what);
+  for (const what of compare(wheeled, before, ['left', 'right'], "the content's box after the wheel against it before")) say(what);
+  for (const what of compare(closed, open, ['scroll'], 'the closed dialog against the open one')) say(what);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await atRest();
+}
+
+/**
  * The cost reference from Sessions, walked tab by tab at 1280 by 800 and at 1440 by 900: no table runs past its wrap,
  * every second model sits on --stripe against --surface with its sub-rows on its shade, the older models' fold row
  * sits on --surface-3 with the stripes running on through it, and the footer's Revision select draws on one line
@@ -7090,6 +7151,20 @@ try {
     await advance(LOAD_MS);
     await page.waitForSelector('.card--table tbody tr', { timeout: 15_000 });
     await keysPageMenus('light (scrollbars shown)');
+    // The scroll lock keeps the gutter of a scrollbar the hidden ones never draw, so its read runs here alone, on the
+    // mock's Pools page, which its story draws tall enough to scroll.
+    if (mock) {
+      for (const theme of ['light', 'dark']) {
+        at = `${theme} /pools dialog scroll lock with scrollbars shown`;
+        await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+        await page.clock.setSystemTime(clockOrigin);
+        await page.goto(`${base}/pools`);
+        await booted();
+        await advance(LOAD_MS);
+        await page.waitForSelector('.pool .serving', { timeout: 15_000 });
+        await dialogScrollLock(theme);
+      }
+    }
   } finally {
     await shown.close().catch((error) => failures.push(`closing the browser that shows scrollbars: ${error.message}`));
   }

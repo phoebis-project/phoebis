@@ -117,10 +117,39 @@ test("each Pace cell is described by its hover through the host the card sits un
   for (const td of cells) {
     const title = td.getAttribute('title');
     assert.ok(title, `a Pace cell carries its hover: ${td.textContent}`);
-    assert.equal(document.getElementById(td.getAttribute('aria-describedby') ?? '')?.textContent, title, `the cell's description is its hover: ${td.textContent}`);
+    const entry = document.getElementById(td.getAttribute('aria-describedby') ?? '');
+    assert.equal(entry?.textContent, title, `the cell's description is its hover: ${td.textContent}`);
+    assert.equal(entry?.closest('[data-descriptions]')?.hasAttribute('hidden'), true, `the cell's description sits in a hidden host: ${td.textContent}`);
   }
   // The spare rate's hover names the share left, the hours, the burn already on the account and the rate.
   assert.equal(cells[0].getAttribute('title'), '100% of the 7-day window left over 168 h with no reset read, less 0.10 %/h of burn: 0.50 %/h. Inside its tier, the highest spare rate wins.');
+});
+
+test("a long hover's description id is its host's base and eight hex digits, and two cells with one hover share it", async () => {
+  const mock = new MockApi();
+  const page = await mock.listRoutingLog({ from: new Date(0).toISOString(), limit: 200, to: new Date(Date.now() + 86_400_000).toISOString() });
+  const row = page.rows.find((r) => r.type === 'decision' && r.kind === 'placed');
+  assert.ok(row, 'the mock holds a placement');
+  const placed = await mock.getDecision(row.requestId, row.seq);
+  const [first] = placed.candidates;
+  const pace = { burn: 0.001, deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168 - 0.001, window: 'seven_day' };
+  const key = { ...first, accountId: 'overflow', kind: 'api_key', pace: { ...pace, burn: null, hours: null, score: 1, window: null }, planTier: null, windows: {} };
+  api.getDecision = async () => ({ ...placed, candidates: [{ ...first, accountId: 'primary', kind: 'oauth', pace }, { ...first, accountId: 'secondary', kind: 'oauth', pace }, key] });
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  act(() => root.render(h(MemoryRouter, null, h(Descriptions, null, h(DecisionCard, { now: Date.parse(row.at), onWiden() {}, row })))));
+  await settled();
+  const cells = [...container.querySelectorAll('.decision-card__candidates tbody tr')].map((tr) => tr.children[tr.children.length - 3]);
+  assert.equal(cells.length, 3);
+  const [one, two, other] = cells.map((td) => ({ id: td.getAttribute('aria-describedby') ?? '', title: td.getAttribute('title') ?? '' }));
+  assert.ok(one.title.length > 100 && one.title === two.title && other.title !== one.title, `two cells share a long hover and the key's differs: ${one.title}`);
+  const parts = [one, other].map(({ id }) => /^(.+)-([0-9a-f]{8})$/.exec(id));
+  assert.ok(parts.every(Boolean), `each id is a base and eight hex digits: ${one.id}, ${other.id}`);
+  assert.deepEqual([parts[0][1] === parts[1][1], parts[0][2] === parts[1][2]], [true, false], "the host's base leads both ids, and the texts hash apart");
+  assert.equal(two.id, one.id, 'two cells with one hover point at one id');
+  assert.equal(container.querySelectorAll(`[data-descriptions] [id="${one.id}"]`).length, 1, 'the host draws the shared hover once');
 });
 
 test("the card draws the strip in the walk's place", async () => {
