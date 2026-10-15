@@ -590,7 +590,7 @@ test('the session-pin cap exemption is decided by its hold after the pick', asyn
   assert.deepEqual(terminiOf(m), THREE_TERMINI(['chosen', 'placed']));
 });
 
-test("a group's stations sit far enough apart that a badge pill wider than its label clears its neighbors' labels", async () => {
+test("two partitions sit far enough apart that a badge pill wider than its label clears its neighbors' labels", async () => {
   // The failover landing's No fit station reads `fell through`, which wraps at the label's width, and its pill around
   // `through` (63 px in Chromium) stands past the label's edges. Half of it and half of a neighbor's 58 px label take
   // 60.5 px.
@@ -599,6 +599,28 @@ test("a group's stations sit far enough apart that a badge pill wider than its l
   const layout = d.layoutStrip(m, 958);
   const [atCap, noFit, windingDown] = ['partitions:at_cap', 'partitions:no_fit', 'partitions:winding_down'].map((id) => layout.stations[id].x);
   assert.ok(noFit - atCap >= 60.5 && windingDown - noFit >= 60.5, `the partitions sit ${noFit - atCap} and ${windingDown - noFit} px apart`);
+});
+
+/** The chosen terminus's lead over the line's last station, and the unit it is read against. */
+const terminiLead = (m, layout) => ({ lead: layout.termini.chosen.x - Math.max(...m.stations.map((s) => layout.stations[s.id].x)), unit: layout.unit });
+
+test("at the strip's 640 px floor the failover landing keeps its termini past its last station", async () => {
+  // The run to the termini gives the partitions' floor its room down to one unit, and the unit gives the rest.
+  const m = modelOf(await recordOf('req_b8c3e9d4-e61/2'));
+  const layout = d.layoutStrip(m, 640);
+  const { lead, unit } = terminiLead(m, layout);
+  assert.ok(unit > 0 && lead >= unit - 1e-9, `Chosen stands ${lead} px past the last station at a unit of ${unit}`);
+  assert.ok(Math.abs(layout.stations['partitions:no_fit'].x - layout.stations['partitions:at_cap'].x - 61) < 1e-9, 'the partitions keep their 61 px');
+});
+
+test("at the strip's 640 px floor a version 1 placement with five partitions keeps its termini past its last station", async () => {
+  const base = await recordOf('req_ef099b34-453/1');
+  const partitions = step('partitions', 'match', [fact('spent', 'off'), fact('at_cap', 0, 'count'), fact('above_ceiling', 0, 'count'), fact('winding_down', 0, 'count'), fact('floor', 0, 'count')]);
+  const m = modelOf({ ...base, version: 1, walk: base.walk.filter((s) => s.step !== 'reserve').map((s) => (s.step === 'partitions' ? partitions : s)) });
+  assert.equal(m.stations.filter((s) => s.group === 'partitions').length, 5);
+  const layout = d.layoutStrip(m, 640);
+  const { lead, unit } = terminiLead(m, layout);
+  assert.ok(unit > 0 && lead >= unit - 1e-9, `Chosen stands ${lead} px past the last station at a unit of ${unit}`);
 });
 
 test("the layout spaces by weight and keeps the surface's height", async () => {
@@ -610,7 +632,7 @@ test("the layout spaces by weight and keeps the surface's height", async () => {
   assert.ok(xs.every((x, i) => i === 0 || x > xs[i - 1]), 'every x increases');
   assert.ok(freshModel.stations.every((s) => fresh.stations[s.id].y === 104));
   const parts = freshModel.stations.filter((s) => s.id.startsWith('partitions:')).map((s) => fresh.stations[s.id].x);
-  // The partitions stand 61 px apart where a unit is narrower, and the way to the termini gives up the room.
+  // The partitions stand 61 px apart where a unit is narrower, the room coming out of the run to the termini.
   const gap = Math.max(fresh.unit, 61);
   assert.ok(parts.every((x, i) => i === 0 || Math.abs(x - parts[i - 1] - gap) < 1e-9), `the partitions sit ${gap} px apart`);
   assert.ok(Math.abs(fresh.stations.eligible.x - fresh.stations.pin.x - 1.45 * fresh.unit) < 1e-9, 'two stations of no group sit 1.45 units apart');

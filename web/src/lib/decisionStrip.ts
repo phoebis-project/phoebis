@@ -520,6 +520,9 @@ const END_FRESH = 1.9;
 // which stands past the label's edges, so two partitions stand at least this far apart to keep the pill clear of a
 // neighbor's 58 px label.
 const PARTITION_GAP = 61;
+// The shortest run from a line's last station to the termini, in units, which keeps the Held and Refused ways out
+// clear of that station's label.
+const END_MIN = 1;
 const END_PINNED = 2.2;
 const LEFT = 36;
 const RIGHT = 150;
@@ -725,11 +728,18 @@ function layoutLine(model: StripModel, width: number, measured: LabelHeights | u
   const line = model.stations;
   const weights = line.slice(1).map((s, i) => (sameGroup(line[i], s) ? IN_GROUP : BETWEEN));
   const end = model.shape === 'pinned' ? END_PINNED : END_FRESH;
-  const unit = Math.min(UNIT_MAX, (width - LEFT - RIGHT) / (sum(weights) + end));
-  // The way on to the termini gives up the room the partitions take past their unit, so every other gap keeps its
-  // weight and its labels their room.
-  const gaps = line.slice(1).map((s, i) => Math.max(weights[i] * unit, s.group === 'partitions' && sameGroup(line[i], s) ? PARTITION_GAP : 0));
-  const taken = sum(gaps) - sum(weights) * unit;
+  const available = width - LEFT - RIGHT;
+  const partition = line.slice(1).map((s, i) => s.group === 'partitions' && sameGroup(line[i], s));
+  const floored = partition.filter(Boolean).length;
+  const free = Math.min(UNIT_MAX, available / (sum(weights) + end));
+  // The room the partitions' floor takes past their unit comes out of the run to the termini while that run keeps a
+  // unit, so the gaps between groups keep their width: a tight card's widest pill (an exhausted decision's 79 px
+  // `exhausted`) needs every pixel of them. Past that, the floor comes out of the unit inside the width with the run
+  // held at a unit, so every station stays left of the termini at any width.
+  const extra = (u: number) => floored * Math.max(0, PARTITION_GAP - IN_GROUP * u);
+  const unit = extra(free) <= (end - END_MIN) * free ? free : (available - floored * PARTITION_GAP) / (sum(weights) - floored * IN_GROUP + END_MIN);
+  const gaps = weights.map((w, i) => (partition[i] ? Math.max(w * unit, PARTITION_GAP) : w * unit));
+  const run = Math.max(END_MIN * unit, end * unit - extra(unit));
   const y0 = (model.branch?.kind === 'rung' ? Y0_RUNG : Y0) + dy;
   const yu = YU + dy;
   const points: Record<string, Point> = {};
@@ -738,7 +748,7 @@ function layoutLine(model: StripModel, width: number, measured: LabelHeights | u
     if (i > 0) x += gaps[i - 1];
     points[s.id] = { x, y: y0 };
   });
-  let xEnd = x + end * unit - taken;
+  let xEnd = x + run;
   // A leaf runs left from its host, so a short line moves right until the widest leaf fits there, as far as the
   // termini's margin allows.
   const host = model.host !== null && model.leaves.length > 0 ? points[model.host] : undefined;
