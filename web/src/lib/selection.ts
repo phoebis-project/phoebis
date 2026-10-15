@@ -1,6 +1,6 @@
 import type { Account, AccountSlowDown, MemberEligibility, Pool, PoolMember, PoolStrategy } from '@/api/types';
 import { fmtAbsolute, fmtDuration, fmtPeriodEnd, fmtRelative, fmtShortTime, instant } from './format';
-import { endOf, minuteSpan } from './quota';
+import { endOf, minuteSpan, slowedOf } from './quota';
 
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { pace: 'Pace', priority: 'Priority, then random', round_robin: 'Round robin' };
 /** The kind tiers, in the order selection walks them. */
@@ -88,12 +88,12 @@ export function speedHover(slowDown: AccountSlowDown | null, now: number): strin
 
 /**
  * A serving member's speed chip: its account's slow-down with the hover where the account is loaded, else the factor
- * the pools route serves on the member with no hover. A loaded account without a slow-down draws none, whatever the
- * member carries.
+ * the pools route serves on the member with no hover. A loaded account draws none, whatever the member carries, where
+ * `slowedOf` reads no slow-down: none in force, a factor of 1, or a 5-hour window reset since the read.
  */
 export function memberSpeed(member: Pick<PoolMember, 'speed'>, account: Account | null, now: number): { factor: number | null; hover: string | null } {
   if (account === null) return { factor: member.speed, hover: null };
-  const slowDown = account.slowDown ?? null;
+  const slowDown = slowedOf(account, now);
   return slowDown === null ? { factor: null, hover: null } : { factor: slowDown.factor, hover: speedHover(slowDown, now) };
 }
 

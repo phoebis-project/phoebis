@@ -322,20 +322,30 @@ test('a speed word and its hover read the factor, the since, the stretch against
   assert.equal(d.speedHover(null, NOW), null, 'nor one the router has not read');
 });
 
+/** A 5-hour window read an hour ago that resets at `resetsAt`, the window a slow-down entry is read from. */
+const window5h = (resetsAt) => [{ id: '5h', label: '5-hour', observedAt: new Date(NOW - HOUR).toISOString(), periodHours: 5, resetsAt, utilization: 0.86 }];
+
 test('a serving member reads the chip from its account\'s slow-down, from its own speed when the account is not loaded, and none when neither is set', () => {
   const read = slowDown(0.5, 42);
-  const studio = account('studio', { slowDown: read });
+  const studio = account('studio', { slowDown: read, windows: window5h(hoursFromNow(1)) });
   assert.deepEqual(d.memberSpeed({ speed: 0.5 }, studio, NOW), { factor: 0.5, hover: d.speedHover(read, NOW) }, 'a loaded account reads its own slow-down');
   const unheld = { ...read, speed: 1 };
-  assert.deepEqual(d.memberSpeed({ speed: 0.5 }, account('studio', { slowDown: unheld }), NOW), { factor: 0.5, hover: d.speedHover(unheld, NOW) }, 'the chip reads the factor, never the speed the holds realized, which reads 1 until a pin there has a cycle');
+  assert.deepEqual(d.memberSpeed({ speed: 0.5 }, account('studio', { slowDown: unheld, windows: window5h(hoursFromNow(1)) }), NOW), { factor: 0.5, hover: d.speedHover(unheld, NOW) }, 'the chip reads the factor, never the speed the holds realized, which reads 1 until a pin there has a cycle');
   // The card passes the account only on a pool whose switch is on, so a pool that holds nobody draws no chip for an
   // entry the purge has not yet dropped: the pools route serves its members no speed.
   assert.deepEqual(d.memberSpeed({ speed: 0.4 }, studio, NOW), { factor: 0.5, hover: d.speedHover(read, NOW) }, "on a pool with the switch on, the account's entry wins over the member's figure");
   assert.deepEqual(d.memberSpeed({ speed: null }, null, NOW), { factor: null, hover: null }, 'on a pool with the switch off, the card passes no account and the member serves no speed');
   assert.deepEqual(d.memberSpeed({ speed: 0.5 }, account('plain', { slowDown: null }), NOW), { factor: null, hover: null }, 'a loaded account with no slow-down draws none');
-  assert.deepEqual(d.memberSpeed({ speed: null }, account('full', { slowDown: slowDown(1, 0) }), NOW), { factor: 1, hover: null }, 'an account at full speed carries its factor and no hover');
+  assert.deepEqual(d.memberSpeed({ speed: null }, account('full', { slowDown: slowDown(1, 0), windows: window5h(hoursFromNow(1)) }), NOW), { factor: null, hover: null }, 'an account at full speed draws none');
   assert.deepEqual(d.memberSpeed({ speed: 0.4 }, null, NOW), { factor: 0.4, hover: null }, "a member whose account is not loaded reads the pool's own figure");
   assert.deepEqual(d.memberSpeed({ speed: null }, null, NOW), { factor: null, hover: null }, 'and none when neither is set');
+});
+
+test("a loaded account whose 5-hour window reset after the slow-down's read draws no chip, its entry as stale as the window", () => {
+  const read = slowDown(0.5, 42);
+  const reset = account('studio', { slowDown: read, windows: window5h(new Date(NOW - 5 * MINUTE).toISOString()) });
+  assert.deepEqual(d.memberSpeed({ speed: 0.5 }, reset, NOW), { factor: null, hover: null });
+  assert.deepEqual(d.memberSpeed({ speed: 0.5 }, account('studio', { slowDown: read }), NOW), { factor: null, hover: null }, 'nor one with no 5-hour window to read it from');
 });
 
 test('a member at its budget is skipped with the reason the serving table names', () => {
