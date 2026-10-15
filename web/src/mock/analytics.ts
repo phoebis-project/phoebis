@@ -1,5 +1,5 @@
 import type {
-  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, PinMigrationReason, PlacementRow, RequestKind, RequestLog, RewritePoint, RewritesAnswer,
+  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, HeldPoint, LatencyHistograms, PinMigrationReason, PlacementRow, RequestKind, RequestLog, RewritePoint, RewritesAnswer,
   WastedProbeReason,
 } from '@/api/types';
 import { bucketShare } from '@/lib/analytics';
@@ -572,9 +572,11 @@ const FIT_TURNS = ['fits', 'fits', 'rewrite_only', 'fits', 'least_bad', 'fits', 
 
 /**
  * The account rollups' moves into each account by reason and by the destination's fit, with the cache the first
- * request after each one wrote again. `moves` is each reason's sum over its fits, as the route answers it.
+ * request after each one wrote again. `moves` is each reason's sum over its fits, as the route answers it. The held
+ * time per bucket folds the request rows as the ledger folds the completions, since no account rollup the console
+ * reads carries it: the slow-down waits of the bucket's requests summed, and the requests that waited one.
  */
-export function rewritesOf(rollups: AccountRollup[], range: Range): RewritesAnswer {
+export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], range: Range): RewritesAnswer {
   const { bucketMs, starts } = bucketsOf(range);
   const movesByReasonAndFit: Record<string, Record<string, number>> = {};
   const points = starts.map((at): RewritePoint => {
@@ -592,7 +594,19 @@ export function rewritesOf(rollups: AccountRollup[], range: Range): RewritesAnsw
     return { at: iso(at), rewriteTokens };
   });
   const moves = Object.fromEntries(Object.entries(movesByReasonAndFit).map(([reason, fits]) => [reason, Object.values(fits).reduce((n, x) => n + x, 0)]));
-  return { moves, movesByReasonAndFit, points };
+  const held = starts.map((at): HeldPoint => {
+    let heldMs = 0;
+    let waited = 0;
+    for (const r of requests) {
+      const t = Date.parse(r.at);
+      const slowed = t >= at && t < at + bucketMs ? (r.held?.waits ?? []).filter((w) => w.reason === 'slow_down') : [];
+      if (slowed.length === 0) continue;
+      heldMs += slowed.reduce((n, w) => n + w.heldMs, 0);
+      waited += 1;
+    }
+    return { at: iso(at), heldMs, requests: waited };
+  });
+  return { held, moves, movesByReasonAndFit, points };
 }
 
 /**

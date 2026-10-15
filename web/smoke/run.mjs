@@ -525,12 +525,19 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
       '/routing-log',
       ['accounts: ["primary"]', 'rounds: 1', 'setting: ["window_ceiling"]', 'setting_values: {"window_ceiling":0.75}'],
     ],
+    // Studio's two slow-down spans in work: the closed one from 09:12 to 12:22 and the open one from 13:48.
+    [
+      'studio: slowed 3 h 52 min of the last 24 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12',
+      'badge--warning',
+      '/routing-log',
+      ['factor_min: 0.35', 'open: true', 'setting: ["slow_down_stretch_seconds"]', 'setting_values: {"slow_down_stretch_seconds":1800}', 'slowed_ms: 13920000', 'spans: 2'],
+    ],
   ];
   const ages = badges().map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
     name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log and an unweighted model's the Models page, and titled with its detail and age, its sentence first where no pool card draws it",
     ok:
-      lead() === '14 need attention' &&
+      lead() === '15 need attention' &&
       unweighted !== undefined &&
       JSON.stringify(read) === JSON.stringify(want) &&
       /^started 1[34]m ago$/.test(ages[0] ?? '') &&
@@ -597,7 +604,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   results.push({ name: '/ the window regaining focus reads the attention list again, and an answer clears the failure', ok: reads === 1 && quiet(), missing: [`reads ${reads}`, line()?.textContent ?? 'no line'] });
   localStorage.removeItem('phoebis.mockEmpty');
   await tick();
-  results.push({ name: '/ the story back, the next tick draws its fourteen items again', ok: lead() === '14 need attention', missing: [lead() ?? 'no lead'] });
+  results.push({ name: '/ the story back, the next tick draws its fifteen items again', ok: lead() === '15 need attention', missing: [lead() ?? 'no lead'] });
   dash.unmount();
 }
 
@@ -679,11 +686,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: 'the theme buttons carry their names', ok: JSON.stringify(named) === JSON.stringify([['Light', 'Light'], ['Dark', 'Dark'], ['System', 'System']]), missing: named.map((n) => n.join(' / ')) });
 }
 {
-  // The story's pools hold 20, 0 and 0 pins, one per key, session, agent and model under their keys, all on primary or
-  // nightly, over 12 pinned rows, so a hero counting the pinned rows or a note counting every row's account reads
-  // otherwise.
+  // The story's pools hold 20, 0 and 4 pins, one per key, session, agent and model under their keys, on primary,
+  // nightly and studio, over 15 pinned rows, so a hero counting the pinned rows or a note counting every row's account
+  // reads otherwise.
   const hero = m.container.querySelector('.sess-summary__hero');
-  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '20' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 2 accounts', missing: [hero?.textContent ?? 'absent'] });
+  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '24' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 3 accounts', missing: [hero?.textContent ?? 'absent'] });
   // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
   // the tier match reads in camelCase.
   const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
@@ -3135,7 +3142,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       JSON.stringify(linked('all')) === '["/accounts/primary"]' &&
       sentence('jobs') === `Exhausted: no member can take a request until Research workspace's daily budget resets at ${dayEnd}.` &&
       JSON.stringify(linked('jobs')) === '["/accounts/research"]' &&
-      sentence('work') === 'Active: studio takes every fresh session.',
+      sentence('work') === 'Active: all 2 members take fresh sessions, and the next one goes to studio.',
     missing: [sentence('all'), sentence('jobs'), sentence('work')].map(String),
   });
   // The head totals the day from the hour a full day back, where the bars start, so the head reads the bars' sum.
@@ -3205,7 +3212,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
     // Under Window shares a card whose one member is a subscription account reads that account's own 7-day share of
     // the pool's day, as the breakdown route prices it when the request names the account, so the check reads the
-    // page's own read through the wrapper. Every other card and the tile name no one account and read dashes.
+    // page's own read through the wrapper. Every other card and the tile name no one account and read dashes. Each of
+    // the story's pools holds more than one member, so these checks read work with its subscription member alone, the
+    // page above held still meanwhile, since its own reads would take the staged membership in.
+    await chooseInterval(m, 'Off');
+    const poolsRead = api.listPools;
+    api.listPools = async (...args) => (await poolsRead.apply(api, args)).map((p) => (p.id === 'work' ? { ...p, members: p.members.filter((x) => x.kind === 'oauth') } : p));
+    const alone = await api.listPools();
+    const shared = await mount('/pools');
     const breakdownOf = api.getAnalyticsBreakdown;
     const reads = [];
     api.getAnalyticsBreakdown = async (q) => {
@@ -3213,25 +3227,26 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       reads.push({ groups, q });
       return groups;
     };
-    await chooseUnit(m, 'share');
-    const shareTile = tileRead(m);
-    const single = listed.filter((p) => p.members.length === 1 && p.members[0].kind === 'oauth');
-    const shareCells = listed.map((p) => {
+    await chooseUnit(shared, 'share');
+    const shareTile = tileRead(shared);
+    const single = alone.filter((p) => p.members.length === 1 && p.members[0].kind === 'oauth');
+    const shareCells = alone.map((p) => {
       const read = reads.find((r) => JSON.stringify(r.q.poolIds) === JSON.stringify([p.id]));
       const group = read?.groups.find((g) => g.key === p.id);
       const seven = group?.costShares?.seven_day;
       const want = single.includes(p) ? (typeof seven === 'number' ? `${group.estimated ? '~' : ''}${shareLabel('seven_day', seven)}` : '-') : '-';
-      return { id: p.id, priced: typeof seven === 'number', query: read?.q ?? null, read: costRead(m, p.name), want };
+      return { id: p.id, priced: typeof seven === 'number', query: read?.q ?? null, read: costRead(shared, p.name), want };
     });
-    const dayLong = (q) => q !== null && JSON.stringify(q.accountIds) === JSON.stringify([listed.find((p) => p.id === q.poolIds[0]).members[0].accountId]) && q.groupBy === 'pool' && Date.parse(q.to) - Date.parse(q.from) === 24 * 3_600_000;
+    const dayLong = (q) => q !== null && JSON.stringify(q.accountIds) === JSON.stringify([alone.find((p) => p.id === q.poolIds[0]).members[0].accountId]) && q.groupBy === 'pool' && Date.parse(q.to) - Date.parse(q.from) === 24 * 3_600_000;
     const wrongShares = shareCells.filter((c) => c.read.text !== c.want || (c.want === '-' && !c.read.title) || (single.some((p) => p.id === c.id) ? !dayLong(c.query) : c.query !== null));
     results.push({
       name: "/pools under Window shares the Cost, 24h tile reads a dash titled with the share note, a card of one subscription member reads that account's 7-day share of the pool's last day as the breakdown route answers it, and every other card a dash that says why",
-      ok: shellUnit(m)?.value === 'share' && shareTile.value === '-' && shareTile.title === SHARE_NOTE && single.length > 0 && shareCells.some((c) => c.priced && c.want !== '-') && reads.length === single.length && wrongShares.length === 0,
+      ok: shellUnit(shared)?.value === 'share' && shareTile.value === '-' && shareTile.title === SHARE_NOTE && single.length > 0 && shareCells.some((c) => c.priced && c.want !== '-') && reads.length === single.length && wrongShares.length === 0,
       missing: [JSON.stringify(shareTile), `${reads.length} breakdown reads for ${single.length} cards`, ...shareCells.map((c) => JSON.stringify(c))],
     });
     delete api.getAnalyticsBreakdown;
-    await chooseUnit(m, 'native');
+    await chooseUnit(shared, 'native');
+    shared.unmount();
     localStorage.removeItem('phoebis.unit');
     // The share is the route's, priced row by row at the account tier each row recorded, so the card reads it as
     // answered: a wired figure the pool's equivalent times no tier's capacity ratio reaches, and an answer with no
@@ -3241,7 +3256,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       api.getAnalyticsBreakdown = async (q) => {
         const groups = await breakdownOf.call(api, q);
         if (q.groupBy !== 'pool' || q.accountIds?.length !== 1) return groups;
-        const pool = listed.find((p) => p.id === q.poolIds?.[0]);
+        const pool = alone.find((p) => p.id === q.poolIds?.[0]);
         wired = shares(pool);
         return groups.map((g) => ({ ...g, costShares: wired }));
       };
@@ -3285,6 +3300,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         missing: [JSON.stringify(held)],
       });
     }
+    delete api.listPools;
+    await chooseInterval(m, '5 s');
     // The same day with every plan row weighted, so nothing the tile and the cards draw is an estimate.
     const poolsOf = api.listPools;
     api.listPools = async () => (await poolsOf.call(api)).map((p) => ({ ...p, estimated24h: false }));
@@ -3324,7 +3341,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       name: '/pools while the accounts load the status sentence counts the members that take fresh sessions, then names the next one',
       ok:
         held.calls.length > 0 &&
-        JSON.stringify(waiting) === JSON.stringify([['Degraded: 2 of 4 members take fresh sessions.', 0], ['Exhausted: no member can take a request.', 0], ["Active: the pool's one member takes every fresh session.", 0]]) &&
+        JSON.stringify(waiting) === JSON.stringify([['Degraded: 2 of 4 members take fresh sessions.', 0], ['Exhausted: no member can take a request.', 0], ['Active: all 2 members take fresh sessions.', 0]]) &&
         JSON.stringify(landed) === JSON.stringify([[sentence('all'), 1], [sentence('jobs'), 1], [sentence('work'), 1]]),
       missing: [`held ${held.calls.length}`, ...waiting, ...landed].map((x) => JSON.stringify(x)),
     });
@@ -3335,10 +3352,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.children[1]?.textContent?.trim(), li.children[1]?.getAttribute('href')?.split('?')[0] ?? null]);
   // The story's items: jobs is exhausted and holds a parked record. all draws the laptop key's client drift, the
   // Overflow workspace out of funding, secondary's poll backoff and the three routing conditions (the walls on nightly
-  // and secondary, nightly spent within the hour of a move, and all's round without a destination). work draws
-  // nothing, since its one member and one key carry no item, and the routing state writer belongs to no pool's card.
+  // and secondary, nightly spent within the hour of a move, and all's round without a destination). work draws studio
+  // slowed for over an hour, and the routing state writer belongs to no pool's card.
+  const workDetail = [...(card('work')?.querySelectorAll('ul.attention .attention__detail') ?? [])].map((x) => x.textContent);
   results.push({
-    name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, and a card with none draws no list",
+    name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, and an account's slow-down as the words without the subject",
     ok:
       JSON.stringify(attentionRows('jobs')) === JSON.stringify([['Pool exhausted', 'jobs', '/routing-log'], ['Priced record parked', 'jobs', null]]) &&
       JSON.stringify(attentionRows('all')) ===
@@ -3351,8 +3369,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
           ['Destination spent within the hour', 'nightly', '/routing-log'],
           ['Rounds without a destination', 'all', '/routing-log'],
         ]) &&
-      card('work')?.querySelector('.attention') === null,
-    missing: ['jobs', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))}`),
+      JSON.stringify(attentionRows('work')) === JSON.stringify([['Slowed for over an hour', 'studio', '/routing-log']]) &&
+      JSON.stringify(workDetail) === JSON.stringify(['slowed 3 h 52 min of the last 24 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12']),
+    missing: [...['jobs', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))}`), ...workDetail],
   });
   {
     const parkedRow = [...(card('jobs')?.querySelectorAll('ul.attention > li.attention__row') ?? [])].find((li) => li.querySelector('.badge')?.textContent?.trim() === 'Priced record parked');
@@ -3457,12 +3476,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [...spend('jobs', 'Research workspace'), ...research.badges.map((b) => b.join(' | ')), research.why],
   });
   const tiles = (name) => [...(card(name)?.querySelectorAll('.pool__stats > div') ?? [])].map((d) => [d.querySelector('dt')?.textContent?.trim(), d.querySelector('dd')?.textContent?.trim(), d.querySelector('dd')?.getAttribute('title')]);
-  // The story's pool all moved two sessions by the spent rule, two by a failover and one by its fast lane cooling.
+  // The story's pool all moved two sessions by the spent rule, three by a failover and one by its fast lane cooling.
   const allTitle = [
     'Rule moves in the last hour',
     'window spent 2',
     'Failovers left out of the count',
-    'failed over 2',
+    'failed over 3',
     'fast lane cooling 1',
     "Opens the Routing log on pool all and the moved kind for the last hour, which lists a keepalive probe's move only with probe decisions chosen",
   ].join('\n');
@@ -3782,8 +3801,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 }
 {
   // The card reads the router's figures in whole hours, floored, right after the keepalive chip, and a pool that keeps
-  // no caches warm draws no line. The story's `work` holds one plan member on the hour, so it reads one figure each,
-  // while `all` mixes plan members with the API-key `overflow` on five minutes and reads both ends.
+  // no caches warm draws no line. With its plan member alone on the hour `work` reads one figure each, while `all` mixes
+  // plan members with the API-key `overflow` on five minutes and reads both ends. The story's `work` holds the API-key
+  // annex too, so the checks of one figure read it with its plan member alone.
+  const storyWork = (await api.listPools()).find((p) => p.id === 'work');
+  const memberOf = (x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority });
+  await api.updatePool('work', { ...storyWork, members: storyWork.members.filter((x) => x.kind === 'oauth').map(memberOf) });
+  m.unmount();
+  m = await mount('/pools');
   const cards = [...m.container.querySelectorAll('.pool')];
   const ceilingsOf = (id) => cards.find((c) => c.id === id)?.querySelector('.pool__ceilings') ?? null;
   const work = ceilingsOf('work');
@@ -3854,6 +3879,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
     await cancel(dlg);
   }
+  await api.updatePool('work', { ...storyWork, members: storyWork.members.map(memberOf) });
   // The story's `all` resolves to a range: the card and the dialog read both ends.
   const allLine = ceilingsOf('all')?.textContent;
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
@@ -4348,7 +4374,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
       await emailLines('/pools dialog reads each member\'s email beside its label, and nothing beside one without', memberRows().map((tr) => [byLabel.get(tr.querySelector('td:first-child span')?.textContent ?? '') ?? '', tr.querySelector('td:first-child span.mono')?.textContent ?? null]));
     }
-    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio'];
+    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio', 'Studio annex'];
     results.push({ name: '/pools dialog lists members by priority then label', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     const prio = dlg?.querySelector('input[aria-label="Priority for primary"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -4358,7 +4384,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: '/pools priority keystrokes leave the row where it is', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     prio?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await m.settle(150);
-    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'legacy', 'Research workspace', 'studio']), missing: memberLabels() });
+    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'legacy', 'Research workspace', 'studio', 'Studio annex']), missing: memberLabels() });
     setter.call(prio, '0');
     dlg?.querySelector('input[aria-label="Priority for primary"]')?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(150);
@@ -4923,6 +4949,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   }
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);
+  // The page read work with its plan member alone, so the next checks read the story's membership afresh.
+  m.unmount();
+  m = await mount('/pools');
 }
 {
   // A refused save may come from lists that are out of date: a dialog closed after a refused save reads the lists
@@ -5489,12 +5518,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // A round counts the triggering pool's pins alone: with primary moved from all into work and laptop moved into work,
   // work's two primary pins (the busy laptop sessions) are its slice, so its preview reads them alone, whatever
   // desktop, still all's key, holds there. Their Sonnet 4.6 burns at its model tier's latest weight, so the round marks
-  // one of them, and no pin stays unpriced.
+  // one of them, and no pin stays unpriced. Studio, whose sessions project it past any ceiling under 95 %, leaves work
+  // for the check, and the annex is the sibling with runway.
   const pools = await api.listPools();
   const story = (id) => pools.find((p) => p.id === id);
   const written = (p, members) => ({ ...p, members: members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
   await api.updatePool('all', written(story('all'), story('all').members.filter((x) => x.accountId !== 'primary')));
-  await api.updatePool('work', written(story('work'), [...story('work').members, { accountId: 'primary', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }]));
+  await api.updatePool('work', written(story('work'), [...story('work').members.filter((x) => x.accountId !== 'studio'), { accountId: 'primary', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }]));
   const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
   const moveLaptop = (poolId) =>
     api.updateKey('laptop', {
@@ -5516,8 +5546,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  // primary projects 81 % at its 5-hour reset, so a ceiling of 80 % makes it the one member over the ceiling, and
-  // studio, a sibling under it on every window, has runway for its pins.
+  // primary projects 81 % at its 5-hour reset, so a ceiling of 80 % makes it the one member over the ceiling, and the
+  // annex, an API-key sibling, has runway for its pins.
   const ceiling = dlg?.querySelector('input[aria-label="Window ceiling (%)"]');
   if (ceiling) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(ceiling, '80');
   ceiling?.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -5642,7 +5672,7 @@ m.unmount();
       held.startsWith('Save is held: the account list did not load, so the members cannot be checked.') &&
       held.includes('Go to Members') &&
       unchecked &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio', 'Studio annex']) &&
       status() === 'Every group saves together.',
     missing: [...failed.map(String), retry ? 'Try again' : 'no Try again', held, unchecked ? '' : 'a member refusal or a table while the read failed', ...labels.map(String), status()],
   });
@@ -5671,7 +5701,7 @@ m.unmount();
     ok:
       JSON.stringify(early) === JSON.stringify([['nightly', true, true], ['overflow', true, true], ['primary', true, true], ['secondary', true, true]]) &&
       before === 'Every group saves together.' &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio', 'Studio annex']) &&
       status() === 'Every group saves together.',
     missing: [JSON.stringify(early), before, ...labels.map(String), status()],
   });
@@ -6494,9 +6524,15 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   results.push({ name: '/keys the status filter offers disabled', ok: statuses.includes('Disabled'), missing: statuses });
 }
 {
-  // The story gives notebook one request in its life, so its bar takes the singular.
-  const bar = [...m.container.querySelectorAll('.hbars li')].find((li) => li.querySelector('.hbars__head > span')?.firstChild?.textContent?.trim() === 'notebook');
+  // A key with one request in its life takes the singular. The story's notebook holds the slow-down's turns beside its
+  // one drawn request, so the check reads it with a life of one request.
+  const keysRead = api.listKeys;
+  api.listKeys = async (...args) => (await keysRead.apply(api, args)).map((k) => (k.id === 'notebook' ? { ...k, lifetime: { ...k.lifetime, requests: 1 } } : k));
+  const page = await mount('/keys');
+  const bar = [...page.container.querySelectorAll('.hbars li')].find((li) => li.querySelector('.hbars__head > span')?.firstChild?.textContent?.trim() === 'notebook');
   const count = bar?.querySelector('.hbars__head .num .muted')?.textContent?.trim();
+  page.unmount();
+  delete api.listKeys;
   results.push({ name: '/keys a key with one lifetime request reads 1 request', ok: count === '1 request', missing: [count ?? 'no notebook bar'] });
 }
 {
@@ -12329,7 +12365,7 @@ m.unmount();
       overage_started: ['Effect'],
       pin_created: ['Key', 'Session', 'Agent', 'Model', 'Epoch'],
       pin_expired: ['Key', 'Session', 'Agent', 'Model', 'Reasons', 'Found by'],
-      pin_migrated: ['From', 'To', 'Reason', 'Moved by', 'Key', 'Session', 'Agent', 'Model'],
+      pin_migrated: ['From', 'To', 'Reason', 'Cause', 'Moved by', 'Key', 'Session', 'Agent', 'Model'],
       pin_released: ['Actor', 'Key', 'Session', 'Agent', 'Model'],
       poll_backoff_ended: ['Backed off', 'Attempts', 'Resumed'],
       poll_backoff_started: ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect'],
@@ -12493,13 +12529,16 @@ m.unmount();
     pager('Next page')?.click();
     await page.settle(300);
     const third = await openAll();
+    pager('Next page')?.click();
+    await page.settle(300);
+    const fourth = await openAll();
     [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'First page')?.click();
     await page.settle(300);
     const firstPage = await openAll();
     results.push({
       name: '/routing-log every row of a page opens to its card or its detail',
-      ok: [second, third, firstPage].every((p) => p.rows > 0 && p.panels === p.rows && p.drawn === p.rows) && second.rows + third.rows + firstPage.rows === hour.rows.length,
-      missing: [JSON.stringify({ firstPage, second, third }), `${hour.rows.length} rows in the hour`],
+      ok: [second, third, fourth, firstPage].every((p) => p.rows > 0 && p.panels === p.rows && p.drawn === p.rows) && second.rows + third.rows + fourth.rows + firstPage.rows === hour.rows.length,
+      missing: [JSON.stringify({ firstPage, fourth, second, third }), `${hour.rows.length} rows in the hour`],
     });
     page.unmount();
   }
@@ -16990,7 +17029,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     ok: heads()[0] === '' && heads()[1] === 'Session' && rows().length > 0 && rows().every((r) => r.lastElementChild?.querySelector('.menu__trigger') !== null && r.lastElementChild?.textContent?.trim() === '···'),
     missing: [JSON.stringify(heads().slice(0, 2)), ...rows().slice(0, 3).map((r) => r.lastElementChild?.innerHTML ?? 'no cell')],
   });
-  results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 19, missing: [String(rows().length)] });
+  results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 22, missing: [String(rows().length)] });
   {
     // The session the mod released whole keeps its row and reads main's released state, though its expanded detail
     // draws no line.
@@ -17020,7 +17059,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const badges = [...m.container.querySelectorAll('.srow__account .badge')].map((b) => b.textContent?.trim() ?? '');
     results.push({
       name: '/sessions account cells carry the account kind on their title and description rather than a badge',
-      ok: kinds.length === 18 && kinds.includes('oauth') && kinds.includes('api_key') && undescribed.length === 0 && badges.every((b) => /^\+\d+$/.test(b)),
+      ok: kinds.length === 21 && kinds.includes('oauth') && kinds.includes('api_key') && undescribed.length === 0 && badges.every((b) => /^\+\d+$/.test(b)),
       missing: [...new Set(kinds), ...badges, ...undescribed.map((c) => `${c.getAttribute('aria-describedby') ?? 'no aria-describedby'} for ${c.getAttribute('title')}`)],
     });
   }
@@ -17076,7 +17115,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
 
   // Expiry now rides under the last-used time rather than in a column of its own.
   const expiries = rows().map((r) => cell(r, 'Last used')?.querySelector('.sub')?.textContent?.trim() ?? '');
-  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 19 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 17, missing: expiries.slice(0, 3) });
+  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 22 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 20, missing: expiries.slice(0, 3) });
   const counts = rows().map((r) => Number(cell(r, 'Requests')?.textContent?.trim()));
   results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length >= 12 && counts.includes(0), missing: counts.map(String) });
 
@@ -17447,7 +17486,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   expandAll?.click();
   await m.settle(250);
   const open = m.container.querySelectorAll('.srow__detail').length;
-  results.push({ name: '/sessions Expand all opens every row', ok: open === 19, missing: [String(open)] });
+  results.push({ name: '/sessions Expand all opens every row', ok: open === 22, missing: [String(open)] });
   results.push({ name: '/sessions a session with no creation time says so', ok: m.text().includes('Created: unknown'), missing: [] });
   expect('/sessions states and causes', m.text(), ['retained', 'held', 'paused', 'not retained', 'ended', 'probing', 'scheduled', 'affinity too short', 'awaiting cache evidence', 'entry expired', 'idle limit', 'cold probes', 'overage', 'pool exhausted', 'unsupported shape']);
   results.push({ name: '/sessions no reason reads session bound any more', ok: !m.text().includes('session bound'), missing: [m.text().includes('session bound') ? 'still there' : ''] });
@@ -17734,7 +17773,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
     await m.settle(600);
     const released = rows().filter((r) => cell(r, 'Session')?.getAttribute('title') === id);
-    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 18, missing: [String(rows().length)] });
+    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 21, missing: [String(rows().length)] });
     results.push({
       name: '/sessions releasing the live holder leaves the earlier one in the ledger',
       ok: released.length === 1 && cell(released[0], 'Key')?.querySelector('.sub')?.textContent?.trim() === 'deleted holder',

@@ -12,6 +12,11 @@ export type WindowId = KnownWindowId | (string & {});
 export interface RateLimitWindow {
   /** The share of the window the sessions on the account burn per hour, null where nothing is projected. */
   burn: number | null;
+  /**
+   * The share per hour the sessions would burn unpaced, the burn over the speed the slow-down realized: equal to `burn`
+   * on an account no slow-down holds, null where nothing is projected.
+   */
+  demand: number | null;
   /** The instant the projection runs to: the reset, the account's end, or five hours out on a weekly window. */
   horizon: string | null;
   id: WindowId;
@@ -82,6 +87,22 @@ export interface FastLaneReading {
   utilization: number;
 }
 
+/** The slow-down entry in force on an account, as the router last read it at a pinned selection. */
+export interface AccountSlowDown {
+  /** The burn the 5-hour window can still carry to its reset over the demand, from 0 to 1: under 1 the account is slowed. */
+  factor: number;
+  /** The pool's `slow_down_hold_seconds`, the longest one request waits, in milliseconds. */
+  holdMs: number;
+  /** When the factor first read under 1 since it last read 1, null outside a span. */
+  since: string | null;
+  /** The speed the holds realized, which the demand divides the pins' burn by. */
+  speed: number;
+  /** How long before the reset the sessions' unpaced demand would pass the window's ceiling, 0 when it never does. */
+  stretchMs: number;
+  /** The pool's `slow_down_stretch_seconds` at the read, in milliseconds. */
+  thresholdMs: number;
+}
+
 export interface Account {
   /** Set only on an OAuth account; an api_key account always reads false. */
   cancelled: boolean;
@@ -106,6 +127,11 @@ export interface Account {
    * under its id never answers one its predecessor did. */
   revision: number;
   routingEnabled: boolean;
+  /**
+   * Null on an api_key account, an untiered account or one with no 5-hour reading, an account in no pool, a pool with
+   * the slow-down off, and an account no pinned selection has read since the last purge or restart.
+   */
+  slowDown: AccountSlowDown | null;
   status: AccountStatus;
   subscription: Subscription | null;
   /** The poll's standing and its last snapshot's error and instant, as the usage route answers them; null for an
@@ -240,7 +266,7 @@ export interface QuotaSnapshot {
  * The conditions that need the operator, worst first: the order the route ranks by and the dashboard's line draws,
  * so not alphabetical.
  */
-export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'model_unweighted', 'wall_reached', 'destination_spent', 'shed_no_runway'] as const;
+export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'model_unweighted', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'] as const;
 export type AttentionKind = (typeof ATTENTION_KIND_VALUES)[number];
 
 /** One condition that holds now, as `GET /admin/attention` answers it. */
@@ -360,6 +386,8 @@ export interface PoolMember {
    */
   paceScore: number | null;
   priority: number;
+  /** The account's factor under the pool's slow-down, null where the account route answers no `slowDown`. */
+  speed: number | null;
   /** One report per budgeted period the ledger has summed; empty until it reports. */
   spends: { period: BudgetPeriod; periodEnd: string | null; spentUsd: number }[];
 }
@@ -371,6 +399,9 @@ export interface PoolKey {
   label: string;
   prefix: string;
 }
+
+/** When a session on an API-key member returns to a subscription member: at once when cold and after the dwell when warm, only when cold, or never. */
+export type ReturnToPlan = 'always' | 'never' | 'when_cold';
 
 /** Whether a shedding round may mark a warm session: never, only once the cold ones fall short, or by burn alone. */
 export type WarmSessions = 'always' | 'never' | 'when_needed';
@@ -435,6 +466,9 @@ export interface Pool {
   requests24h: number;
   /** The longest throttle a request waits out on its own member before it fails over. */
   retryInPlaceSeconds: number;
+  returnToPlan: ReturnToPlan;
+  /** Under `always`, how long a warm session stays on the API-key member before it returns, 0 at once. */
+  returnToPlanDwellSeconds: number;
   /** The row's edit token, which an edit sends back as `expected_revision`. A pool deleted and created again under
    * its id never answers one its predecessor did. */
   revision: number;
@@ -443,6 +477,12 @@ export interface Pool {
   shedCap: number;
   /** Seconds a member that shed waits before its next round, and a session shed off it stays away. */
   shedDwellSeconds: number;
+  /** Holds each request of a held class before it is forwarded, so a member whose window would pass the ceiling reaches its reset under it. */
+  slowDown: boolean;
+  /** The longest one request waits for the slow-down. */
+  slowDownHoldSeconds: number;
+  /** The time the slow-down may add to a session before a shedding round moves sessions off the member. */
+  slowDownStretchSeconds: number;
   /** `active` and `disabled` are set by hand; the rest are observed. */
   status: 'active' | 'degraded' | 'disabled' | 'exhausted';
   strategy: PoolStrategy;
@@ -574,6 +614,8 @@ export interface CohortHold {
   /** The holds' waits summed, in milliseconds, whether a slot freed or the bound ran out. */
   heldMs: number;
   waitedOn: string[];
+  /** Each wait with its reason (`cap`, `reset`, `slow_down`), oldest first, and none on a row from before the member. */
+  waits: { heldMs: number; reason: string }[];
 }
 
 /** Why a selection landed where it did, as the router stored it on the attempt. */
@@ -987,6 +1029,8 @@ export interface RecordRequest {
 export interface RecordPin {
   accountId: string | null;
   createdAt: string | null;
+  /** The pin's cycle the slow-down sizes its hold from, null without one or on a record from before the member. */
+  cycleMs: number | null;
   epoch: number | null;
   /** `live`, `expired_idle`, `left_pool` or `none`. */
   found: string;
@@ -1005,14 +1049,16 @@ export interface RecordPin {
   refreshAgeMs: number | null;
   released: string[];
   shed: { at: string; from: string } | null;
+  /** The slow-down deadline standing on the pin, null without one or on a record from before the member. */
+  slowDownUntil: string | null;
   warmth: string | null;
   warmthCause: string | null;
 }
 
 /**
- * The twenty values that entered the decision, each named as the pool row names the field it was read
+ * The twenty-five values that entered the decision, each named as the pool row names the field it was read
  * from. A version 1 record read the cap, the average and the dwell under their old names and carried neither the
- * switch nor the ceiling.
+ * switch nor the ceiling. The slow-down's three and the return-to-plan's two read null on a record from before them.
  */
 export interface RecordSettings {
   affinityMode: string;
@@ -1030,9 +1076,14 @@ export interface RecordSettings {
   poolUpdatedAt: string;
   preferSubscription: boolean;
   retryInPlaceSeconds: number;
+  returnToPlan: string | null;
+  returnToPlanDwellSeconds: number | null;
   sessionPlacement: string;
   shedCap: number;
   shedDwellSeconds: number;
+  slowDown: boolean | null;
+  slowDownHoldSeconds: number | null;
+  slowDownStretchSeconds: number | null;
   strategy: string;
   subagentPlacement: string;
   warmSessions: string;
@@ -1092,6 +1143,8 @@ export interface RecordCandidate {
   cooldowns: RecordCooldown[];
   credits: RecordCredits | null;
   enabled: boolean;
+  /** The account's slow-down factor from its entry in force, null with none or on a record from before the member. */
+  factor: number | null;
   /** `fits`, `rewrite_only`, `least_bad` or `ending` where the gate or the no-fit partition read the candidate. */
   fit: string | null;
   inFlight: number;
@@ -1124,9 +1177,10 @@ export interface RecordCandidate {
   verdict: string;
   /**
    * `projection` and `horizon` are null where nothing is projected, and `reserved` sums the live reservations, null on
-   * a version 1 record, which booked none.
+   * a version 1 record, which booked none. `demand` is the 5-hour window's unpaced burn per hour on an OAuth candidate,
+   * null elsewhere and on a record from before the member.
    */
-  windows: Record<string, { ageMs: number; ahead: number | null; horizon: string | null; observedAt: string; projection: number | null; reserved: number | null; reset: string | null; source: string; utilization: number }>;
+  windows: Record<string, { ageMs: number; ahead: number | null; demand: number | null; horizon: string | null; observedAt: string; projection: number | null; reserved: number | null; reset: string | null; source: string; utilization: number }>;
 }
 
 /** One step of the rule walk in the engine's order, with the facts it read. */
@@ -1157,17 +1211,42 @@ export interface RecordCompletion {
   status: number | null;
 }
 
-/** A hold: `cap` waits for a slot, `reset` for the spent window's reset at `until`. */
+/**
+ * A hold: `cap` waits for a slot, `reset` for the spent window's reset at `until`, `slow_down` for the pin's deadline at
+ * `until`. The slow-down's figures are set under `slow_down` alone and read null on a record from before them.
+ */
 export interface RecordHold {
   accountId: string;
   boundMs: number;
   cohort: string | null;
+  /** The pin's cycle the hold was sized from. */
+  cycleMs: number | null;
+  /** The account's factor the hold was read under. */
+  factor: number | null;
   reason: string;
+  /** The speed the account's holds realize together. */
+  speed: number | null;
+  stretchMs: number | null;
+  thresholdMs: number | null;
   until: string | null;
+}
+
+/**
+ * Why a failover moved its session: a cooldown's `scope`, `reason` and `window`, or a mark's account `state` and its
+ * `cause`. The members the other shape carries read null.
+ */
+export interface MoveCause {
+  cause: string | null;
+  reason: string | null;
+  scope: string | null;
+  state: string | null;
+  window: string | null;
 }
 
 export interface RecordOutcome {
   accountId: string | null;
+  /** Set on a failover's landing, null for a rule's move and on a record from before the member. */
+  cause: MoveCause | null;
   cohortHold: CohortHold | null;
   completion: RecordCompletion | null;
   exhaustion: { deadline: string | null; kind: string; obstacle: string | null; reason: string | null; window: string | null } | null;
@@ -1448,8 +1527,17 @@ export interface RewritePoint {
   rewriteTokens: number;
 }
 
+/** The slow-down's held time per bucket: the bucket's slow-down waits summed and the requests that waited. */
+export interface HeldPoint {
+  at: string;
+  heldMs: number;
+  requests: number;
+}
+
 /** The rewrites route's answer: the moves by reason, and by reason and destination fit, over the range. */
 export interface RewritesAnswer {
+  /** One point per bucket as `points` has, empty on an answer from before the member. */
+  held: HeldPoint[];
   moves: Record<string, number>;
   /** Each reason's moves by the fit of the destination they landed on (`fits`, `rewrite_only`, `least_bad`, `unknown`). */
   movesByReasonAndFit: Record<string, Record<string, number>>;
@@ -1490,6 +1578,8 @@ export interface Session {
   /** When the companion last reported; set only while `companion` is `silent`. */
   companionSince: string | null;
   createdAt: string | null;
+  /** The pin's cycle, null until two requests of the pin have arrived after its placement and on a row with no pin. */
+  cycleMs: number | null;
   epoch: number | null;
   /** True when the pin's burn priced through the model tier's fallback weight. */
   estimated: boolean;
@@ -1535,6 +1625,8 @@ export interface Session {
   /** The account a shed round marked this pin's session to leave, kept off until the session moves; null off a
    *  pin never marked, or with no pin. */
   shedFrom: string | null;
+  /** The pin's account's factor from the slow-down entry in force, null on a row with no pin and where none is in force. */
+  speed: number | null;
 }
 
 /** The Sessions row's one word for an agent's recipe, read off the engine's cause and its pause. */

@@ -27,9 +27,14 @@ const input = {
   overagePolicy: pool.overagePolicy,
   preferSubscription: pool.preferSubscription,
   retryInPlaceSeconds: pool.retryInPlaceSeconds,
+  returnToPlan: pool.returnToPlan,
+  returnToPlanDwellSeconds: pool.returnToPlanDwellSeconds,
   sessionPlacement: pool.sessionPlacement,
   shedCap: pool.shedCap,
   shedDwellSeconds: pool.shedDwellSeconds,
+  slowDown: pool.slowDown,
+  slowDownHoldSeconds: pool.slowDownHoldSeconds,
+  slowDownStretchSeconds: pool.slowDownStretchSeconds,
   status: 'active',
   strategy: pool.strategy,
   subagentPlacement: pool.subagentPlacement,
@@ -105,7 +110,10 @@ test('a pool input holds every engine bound', () => {
     inFlightCap: [1, 4_294_967_295],
     overageMoveGraceMinutes: [0, 300],
     retryInPlaceSeconds: [0, 300],
+    returnToPlanDwellSeconds: [0, 86_400],
     shedDwellSeconds: [300, 7_200],
+    slowDownHoldSeconds: [1, 300],
+    slowDownStretchSeconds: [60, 18_000],
     windDownMinutes: [0, 10_080],
   };
   for (const [field, [min, max]] of Object.entries(whole)) {
@@ -124,6 +132,18 @@ test('a pool input holds every engine bound', () => {
   for (const mode of ['always', 'never', 'when_needed']) assert.equal(d.validatePoolInput({ ...input, warmSessions: mode }, accounts), true);
   assert.equal(d.validatePoolInput({ ...input, warmSessions: 'sometimes' }, accounts), false);
   assert.equal(d.validatePoolInput({ ...input, migrateWhenSpent: false }, accounts), true);
+  for (const mode of ['always', 'never', 'when_cold']) assert.equal(d.validatePoolInput({ ...input, returnToPlan: mode }, accounts), true);
+  assert.deepEqual(d.poolRefusals({ ...input, returnToPlan: 'sometimes' }, accounts), [{ field: 'Return to plan', group: 'overage', text: 'Return to plan is one of its listed choices.' }]);
+  assert.equal(d.validatePoolInput({ ...input, slowDown: true }, accounts), true, 'the slow-down is a toggle with no bound');
+  assert.deepEqual(
+    d.poolRefusals({ ...input, returnToPlanDwellSeconds: 86_401, slowDownHoldSeconds: 0, slowDownStretchSeconds: 59 }, accounts).map((r) => [r.group, r.field, r.text]),
+    [
+      ['shedding', 'Stretch (s)', 'Stretch (s) is a whole number from 60 to 18,000.'],
+      ['shedding', 'Hold (s)', 'Hold (s) is a whole number from 1 to 300.'],
+      ['overage', 'Return dwell (s)', 'Return dwell (s) is a whole number from 0 to 86,400.'],
+    ],
+    'the slow-down fields refuse beside shedding, the return dwell in the overage group',
+  );
 });
 
 test('a pool input carries the store defaults for the pin and placement fields, and each unknown spelling is refused', () => {
@@ -444,10 +464,23 @@ test('the form admits and refuses the values the routes do', () => {
   }
 });
 
-test("the warnings mirror reads the pool routes' eight checks on a pool's settings, sorted by code", () => {
+test("the warnings mirror reads the pool routes' ten checks on a pool's settings, sorted by code", () => {
   const row = fixture('pools').pools[0];
   assert.deepEqual(d.poolWarnings(d.decodePool(row), 0), d.decodePool(row).warnings, 'the captured pool reads the warnings the route answered');
-  const quiet = { affinityTtlSeconds: 3_600, cacheTtl: { ...input.cacheTtl, enabled: true, injectWhenAbsent: true }, inFlightCap: 16, loadShedding: true, migrateWhenSpent: true, shedCap: 0.5, warmSessions: 'when_needed', windowCeiling: 0.95 };
+  const quiet = {
+    affinityTtlSeconds: 3_600,
+    cacheTtl: { ...input.cacheTtl, enabled: true, injectWhenAbsent: true },
+    inFlightCap: 16,
+    loadShedding: true,
+    migrateWhenSpent: true,
+    returnToPlan: 'always',
+    returnToPlanDwellSeconds: 900,
+    shedCap: 0.5,
+    slowDown: false,
+    slowDownHoldSeconds: 120,
+    warmSessions: 'when_needed',
+    windowCeiling: 0.95,
+  };
   assert.deepEqual(d.poolWarnings(quiet, 16), [], 'a pool inside every check reads none');
   const codes = (patch, cohort = 0) => d.poolWarnings({ ...quiet, ...patch }, cohort).map((w) => [w.code, w.fields]);
   assert.deepEqual(codes({ affinityTtlSeconds: 600 }), [['affinity_under_cache_ttl', ['affinity_ttl_seconds', 'cache_ttl']]], 'an affinity under the hour the plan main TTL injects');
@@ -460,7 +493,17 @@ test("the warnings mirror reads the pool routes' eight checks on a pool's settin
   assert.deepEqual(codes({ loadShedding: false }), [['shedding_off', ['load_shedding']]]);
   assert.deepEqual(codes({ migrateWhenSpent: false }), [['spent_moves_off', ['migrate_when_spent']]]);
   assert.deepEqual(codes({ warmSessions: 'never' }), [['warm_never', ['warm_sessions']]]);
-  const every = d.poolWarnings({ ...quiet, affinityTtlSeconds: 600, loadShedding: false, migrateWhenSpent: false, shedCap: 0.2, warmSessions: 'never', windowCeiling: 0.75 }, 17);
-  assert.deepEqual(every.map((w) => w.code), ['affinity_under_cache_ttl', 'cap_under_cohort', 'cap_under_quarter', 'ceiling_low', 'shedding_off', 'spent_moves_off', 'warm_never'], 'sorted by code');
+  const sentence = (patch) => d.poolWarnings({ ...quiet, ...patch }, 0).map((w) => [w.code, w.fields, w.text]);
+  assert.deepEqual(sentence({ slowDownHoldSeconds: 151 }), [
+    ['hold_over_window', ['slow_down_hold_seconds'], "A hold over 150 seconds leaves under 30 seconds of the client's first-byte window for the upstream's head, so a slowed request can time out at the client and be sent again."],
+  ]);
+  assert.deepEqual(codes({ slowDownHoldSeconds: 150 }), [], 'a hold of 150 seconds leaves the window its 30 seconds');
+  assert.deepEqual(sentence({ returnToPlanDwellSeconds: 0 }), [
+    ['return_at_once', ['return_to_plan_dwell_seconds'], "A return dwell of zero returns every warm session on its first request at the metered member, so the member serves one turn per session and the move's rewrite is paid each time."],
+  ]);
+  assert.deepEqual(codes({ returnToPlan: 'when_cold', returnToPlanDwellSeconds: 0 }), [], 'a mode that reads no dwell returns no warm session at once');
+  assert.deepEqual(codes({ loadShedding: false, slowDown: true }), [], 'with the slow-down on a session over the ceiling is slowed rather than left to spend its window');
+  const every = d.poolWarnings({ ...quiet, affinityTtlSeconds: 600, loadShedding: false, migrateWhenSpent: false, returnToPlanDwellSeconds: 0, shedCap: 0.2, slowDownHoldSeconds: 300, warmSessions: 'never', windowCeiling: 0.75 }, 17);
+  assert.deepEqual(every.map((w) => w.code), ['affinity_under_cache_ttl', 'cap_under_cohort', 'cap_under_quarter', 'ceiling_low', 'hold_over_window', 'return_at_once', 'shedding_off', 'spent_moves_off', 'warm_never'], 'sorted by code');
   assert.equal(every.find((w) => w.code === 'cap_under_cohort').text, 'The in-flight cap is under the largest live cohort of 17 agents, so subagents of one session wait for a slot they share.');
 });

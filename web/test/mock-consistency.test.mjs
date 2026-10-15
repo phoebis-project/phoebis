@@ -109,8 +109,9 @@ async function logOf(s) {
 /** The members the store's `pool_diff` writes on a pool edit: the whole row after the save. */
 const POOL_DIFF_MEMBERS = [
   'affinity_mode', 'affinity_ttl_seconds', 'auto_mode_server', 'body_capture_hours', 'burn_average_seconds', 'cache_diagnostics', 'cache_ttl', 'enabled', 'in_flight_cap', 'label', 'load_shedding',
-  'migrate_when_spent', 'min_shared_prefix_tokens', 'model_rules', 'overage_move_grace_minutes', 'overage_policy', 'prefer_subscription', 'retry_in_place_seconds',
-  'session_placement', 'shed_cap', 'shed_dwell_seconds', 'strategy', 'subagent_placement', 'warm_sessions', 'wind_down_minutes', 'window_ceiling',
+  'migrate_when_spent', 'min_shared_prefix_tokens', 'model_rules', 'overage_move_grace_minutes', 'overage_policy', 'prefer_subscription', 'retry_in_place_seconds', 'return_to_plan',
+  'return_to_plan_dwell_seconds', 'session_placement', 'shed_cap', 'shed_dwell_seconds', 'slow_down', 'slow_down_hold_seconds', 'slow_down_stretch_seconds', 'strategy', 'subagent_placement',
+  'warm_sessions', 'wind_down_minutes', 'window_ceiling',
 ];
 
 /** Whether one tier ranks before another, compared member by member as the engine orders them. */
@@ -146,15 +147,15 @@ function fitReadOf(set, pool, r) {
 }
 
 /**
- * A fresh session's fit on a member as a placement reads it: an account ending inside five hours never fits, an
- * API-key member fits while its worst bucket has room, and on every plan window the model draws the body's rewrite
- * must land under the ceiling and the account's burn with the fresh prior must not carry it there before the
- * horizon. The story's hand-written placements price the prior, a drawn one none.
+ * A fresh session's fit on a member as a placement reads it: an account inside the pool's wind-down before its end
+ * never fits, an API-key member fits while its worst bucket has room, and on every plan window the model draws the
+ * body's rewrite must land under the ceiling and the account's burn with the fresh prior must not carry it there
+ * before the horizon. The story's hand-written placements price the prior, a drawn one none.
  */
 function freshFitOf(d, c, r, pool) {
   const at = Date.parse(r.request.at);
   const end = c.term?.endsAt ? Date.parse(c.term.endsAt) : null;
-  if (end !== null && end < at + 5 * HOUR) return 'ending';
+  if (end !== null && end - at <= pool.windDownMinutes * 60_000) return 'ending';
   if (c.kind === 'api_key') return (c.windows.worst_bucket?.utilization ?? 0) < 1 ? 'fits' : 'least_bad';
   const prior = d.STORY_IDS.has(r.requestId) ? d.PRIOR_BURN : {};
   let lands = true;
@@ -481,7 +482,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const poolOf = new Map(s.keys.map((k) => [k.id, k.poolId]));
     const live = pinnedRecipesOf(s, await s.api.listKeepaliveRecipes());
-    const pins = (poolId, accountId) => new Set(live.filter((r) => poolOf.get(r.keyId) === poolId && (accountId === undefined || r.accountId === accountId)).map(pinOf)).size;
+    // A pinned session no recipe warms holds one pin per agent all the same.
+    const unwarmed = (poolId, accountId) => sum(s.sessions.filter((x) => x.pinned && x.keepalive.state === null && poolOf.get(x.keyId) === poolId && (accountId === undefined || x.accountId === accountId)), (x) => x.agents);
+    const pins = (poolId, accountId) => new Set(live.filter((r) => poolOf.get(r.keyId) === poolId && (accountId === undefined || r.accountId === accountId)).map(pinOf)).size + unwarmed(poolId, accountId);
     for (const p of s.pools) {
       assert.equal(p.activePins, pins(p.id), `${p.id}'s active pins`);
       for (const m of p.members) assert.equal(m.activePins, pins(p.id, m.accountId), `${p.id}'s ${m.accountId}`);
@@ -507,10 +510,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(pool.activePins >= member.activePins, "and the pool's figure holds the member's");
   });
 
-  test(`the key with one request in its life reads one, at ${at}`, async () => {
+  test(`a key created inside the rollups' month reads its own rows as its life and its week, at ${at}`, async () => {
     const s = await story;
     const notebook = s.keys.find((k) => k.id === 'notebook');
-    assert.deepEqual([notebook.lifetime.requests, notebook.usage7d.requests], [1, 1]);
+    const rows = s.requests.filter((r) => r.keyId === 'notebook' && r.kind !== 'probe').length;
+    assert.ok(rows > 1, `notebook's rows: ${rows}`);
+    assert.deepEqual([notebook.lifetime.requests, notebook.usage7d.requests], [rows, rows]);
   });
 
   test(`the written session holds an agent in each lifecycle word, three released records and a seventeen-character id, listed out of the view's order, at ${at}`, async () => {
@@ -815,7 +820,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const records = await decisionsOf(s);
     assert.ok(records.length > 20);
-    const seen = { exhausted: 0, held: 0, ranOut: 0, reset: 0 };
+    const seen = { exhausted: 0, held: 0, ranOut: 0, reset: 0, slowDown: 0 };
     for (const r of records) {
       const id = `${r.requestId}/${r.seq}`;
       const steps = r.walk.map((w) => w.step);
@@ -828,6 +833,17 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       if (r.outcome.hold?.reason === 'reset') {
         seen.reset += 1;
         assert.deepEqual([steps.indexOf('move:spent') >= 0 && r.walk[steps.indexOf('move:spent')].verdict, steps.includes('partitions'), steps[steps.length - 1]], ['held', false, 'reserve'], walk);
+        continue;
+      }
+      // A slow-down hold waits on the live pin the move rules left in place, before its renewal: no partitions, no rung
+      // and no pick.
+      if (r.outcome.hold?.reason === 'slow_down') {
+        seen.slowDown += 1;
+        assert.deepEqual(
+          [r.pin?.found, steps.indexOf('move:shed') > steps.indexOf('pin'), steps.includes('partitions'), firstRung, steps.includes('pick'), steps[steps.length - 1]],
+          ['live', true, false, -1, false, 'reserve'],
+          walk,
+        );
         continue;
       }
       assert.ok(firstRung >= 0, walk);
@@ -859,7 +875,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         assert.equal(pick?.verdict, r.outcome.rung === null ? 'chosen' : undefined, walk);
       }
     }
-    assert.ok(seen.exhausted > 0 && seen.held > 0 && seen.ranOut > 0 && seen.reset > 0, JSON.stringify(seen));
+    assert.ok(seen.exhausted > 0 && seen.held > 0 && seen.ranOut > 0 && seen.reset > 0 && seen.slowDown > 0, JSON.stringify(seen));
     assert.ok(records.some((r) => r.requestId === 'req_51d0e2b8-7a0' && r.walk.some((w) => w.step === 'partitions')), 'the empty-eligible exhaustion walks the partitions');
   });
 
@@ -1038,7 +1054,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(shapes.size > 1, `the reasons read ${[...shapes].join(', ')}`);
   });
 
-  test(`a fired rule's destinations are its gate's answer in the set's order, the shed rule's narrowed to the longest runway, at ${at}`, async () => {
+  test(`a fired rule's destinations are its gate's answer in the set's order, the shed rule's fitting set whole for the strategy to rank with the runway breaking its tie, at ${at}`, async () => {
     const s = await story;
     const records = await decisionsOf(s);
     const destinationsOf = (r) => r.walk.find((w) => w.step.startsWith('move:') && w.verdict === 'fired')?.facts.find((f) => f.key === 'destinations')?.value;
@@ -1054,13 +1070,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const fits = read.filter((c) => c.fit === 'fits' && free(c));
       const rewriteOnly = read.filter((c) => c.fit === 'rewrite_only' && free(c));
       const shed = line.step === 'move:shed';
-      const want = fits.length > 0 ? (shed ? longest(fits) : fits) : shed ? [] : rewriteOnly.length > 0 ? longest(rewriteOnly) : read.filter((c) => c.fit !== 'ending');
+      const want = fits.length > 0 ? fits : shed ? [] : rewriteOnly.length > 0 ? longest(rewriteOnly) : read.filter((c) => c.fit !== 'ending');
       assert.deepEqual(destinationsOf(r), want.map((c) => c.accountId), `${r.requestId}/${r.seq}`);
       seen[shed ? 'shed' : 'other'] += 1;
     }
     assert.ok(seen.shed > 0 && seen.other > 0, JSON.stringify(seen));
-    // The Overflow workspace fits with no end to its runway, the longest of all, but sits at its cap through the round
-    // and the move, so both take primary.
+    // The Overflow workspace fits with no end to its runway and sits at its cap through the round and the move, so the
+    // gate answers primary alone.
     const move = records.find((r) => r.requestId === 'req_868264bc-611');
     const overflow = move.candidates.find((c) => c.accountId === 'overflow');
     assert.deepEqual([destinationsOf(move), overflow.fit, overflow.runwayMs, overflow.inFlight === overflow.inFlightCap], [['primary'], 'fits', null, true]);
@@ -1101,7 +1117,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(new Set(read.map((x) => x[3])).size > 1, `the causes read ${[...new Set(read.map((x) => x[3]))].join(', ')}`);
   });
 
-  test(`the three routing conditions are the trailing day's fold of the routing log, one item per subject in the route's order, at ${at}`, async () => {
+  test(`the four routing conditions are the trailing day's fold of the routing log, one item per subject in the route's order, at ${at}`, async () => {
     const s = await story;
     const day = (await logOf(s)).filter((row) => row.type === 'event' && Date.parse(row.at) >= s.now - DAY && Date.parse(row.at) <= s.now).sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
     const oauth = new Set(s.accounts.filter((a) => a.kind === 'oauth').map((a) => a.id));
@@ -1109,13 +1125,95 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const landed = day.filter((e) => e.kind === 'pin_migrated' && oauth.has(e.accountId) && spent.some((w) => w.accountId === e.accountId && Date.parse(w.at) >= Date.parse(e.at) && Date.parse(w.at) - Date.parse(e.at) <= HOUR));
     const rounds = day.filter((e) => e.kind === 'shedding_round' && e.detail.outcome === 'nothing_to_mark' && e.detail.reason === 'no_runway');
     const firsts = (kind, events, subject) => [...new Set(events.map(subject))].map((id) => [kind, id, Date.parse(events.find((e) => subject(e) === id).at)]);
-    const kinds = ['wall_reached', 'destination_spent', 'shed_no_runway'];
-    const want = [...firsts('wall_reached', spent, (e) => e.accountId), ...firsts('destination_spent', landed, (e) => e.accountId), ...firsts('shed_no_runway', rounds, (e) => e.poolId)].sort(
+    // A slow-down span runs from its start to the next end or restart of its account and pool, an open one to now, each
+    // clamped to the day, and an account slowed past an hour of it holds from the own start of its oldest span.
+    const spans = new Map();
+    const count = (account, since, end) => spans.set(account, [...(spans.get(account) ?? []), { since, slowedMs: Math.max(0, end - Math.max(since, s.now - DAY)) }]);
+    const standing = new Map();
+    for (const e of day) {
+      const key = `${e.accountId}|${e.poolId}`;
+      if (e.kind === 'router_started') {
+        for (const [open, since] of standing) count(open.split('|')[0], since, Date.parse(e.at));
+        standing.clear();
+      } else if (e.kind === 'slow_down_started' && !standing.has(key)) standing.set(key, Date.parse(e.at));
+      else if (e.kind === 'slow_down_ended' && standing.has(key)) {
+        count(e.accountId, e.detail.since, e.detail.since + e.detail.duration_ms);
+        standing.delete(key);
+      }
+    }
+    for (const [open, since] of standing) count(open.split('|')[0], since, s.now);
+    const slowed = [...spans].filter(([, list]) => sum(list, (x) => x.slowedMs) > HOUR).map(([id, list]) => ['slowed_long', id, Math.min(...list.map((x) => x.since))]);
+    const kinds = ['wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'];
+    const want = [...firsts('wall_reached', spent, (e) => e.accountId), ...firsts('destination_spent', landed, (e) => e.accountId), ...firsts('shed_no_runway', rounds, (e) => e.poolId), ...slowed].sort(
       (x, y) => kinds.indexOf(x[0]) - kinds.indexOf(y[0]) || x[2] - y[2] || x[1].localeCompare(y[1]),
     );
     const read = s.attention.filter((i) => kinds.includes(i.kind)).map((i) => [i.kind, i.subject.id, Date.parse(i.since)]);
     assert.deepEqual(read, want);
-    assert.deepEqual(read.map((x) => `${x[0]} ${x[1]}`), ['wall_reached nightly', 'wall_reached secondary', 'destination_spent nightly', 'shed_no_runway all']);
+    assert.deepEqual(read.map((x) => `${x[0]} ${x[1]}`), ['wall_reached nightly', 'wall_reached secondary', 'destination_spent nightly', 'shed_no_runway all', 'slowed_long studio']);
+    const item = s.attention.find((i) => i.kind === 'slowed_long');
+    assert.deepEqual(
+      [item.detail.spans, item.detail.open, item.detail.slowed_ms, item.detail.factor_min, item.detail.setting, item.detail.setting_values],
+      [spans.get('studio').length, true, sum(spans.get('studio'), (x) => x.slowedMs), 0.35, ['slow_down_stretch_seconds'], { slow_down_stretch_seconds: s.pools.find((p) => p.id === 'work').slowDownStretchSeconds }],
+      "studio's two spans in work, the closed one's slowest factor and the pool's stretch",
+    );
+  });
+
+  test(`the slow-down's story: the slowed request's hold and renewal on work, the round its stretch fired for the annex, the failover's cause on all and studio's span rows, at ${at}`, async () => {
+    const s = await story;
+    const records = await decisionsOf(s);
+    const log = await logOf(s);
+    const record = (id, seq) => records.find((r) => r.requestId === id && r.seq === seq);
+    const slowWaits = (rows) => rows.flatMap((r) => r.held?.waits ?? []).filter((w) => w.reason === 'slow_down');
+
+    // The slowed request waits its pin's cycle at half speed on studio's pin, then renews on it and runs the round.
+    const row = s.requests.find((r) => r.id === 'req_9f2e7c5a-c49');
+    assert.deepEqual([row.poolId, row.keyId, row.accountId, row.held.waits], ['work', 'notebook', 'studio', [{ heldMs: 42_000, reason: 'slow_down' }]]);
+    const held = record(row.id, 1);
+    const until = iso(Date.parse(row.at) + 42_000);
+    assert.deepEqual(
+      [held.outcome.kind, held.outcome.hold.reason, held.outcome.hold.factor, held.outcome.hold.cycleMs, held.outcome.hold.until, held.pin.slowDownUntil, held.outcome.hold.boundMs],
+      ['held', 'slow_down', 0.5, 42_000, until, until, 120_000],
+    );
+    const renewal = record(row.id, 2);
+    assert.deepEqual([renewal.outcome.kind, renewal.request.at, renewal.outcome.cohortHold], ['renewed', until, row.held], 'the renewal after the wait carries the hold the row names');
+    const summaries = log.filter((x) => x.type === 'decision' && x.requestId === row.id).sort((x, y) => x.seq - y.seq);
+    assert.deepEqual(summaries.map((x) => [x.by.kind, x.by.value, x.fact.map((f) => f.key)]), [['hold', 'slow_down', ['until', 'factor']], ['hold', 'slow_down', ['held']]]);
+    const morning = record('req_8e1c4a6d-b52', 1);
+    assert.deepEqual([morning.outcome.hold.reason, morning.outcome.hold.factor, record('req_8e1c4a6d-b52', 2).outcome.shedMarks], ['slow_down', 0.4, null], 'the morning hold renews with no round');
+
+    // The stretch fires studio's round once the safety wait has passed, and its two marks plan the annex.
+    const rounds = log.filter((x) => x.type === 'event' && x.kind === 'shedding_round');
+    const stretched = rounds.find((e) => e.requestId === row.id);
+    assert.deepEqual(
+      [stretched.poolId, stretched.accountId, stretched.detail.trigger, stretched.detail.stretch_ms, stretched.detail.threshold_ms, stretched.detail.factor, stretched.detail.pins.filter((p) => p.marked).map((p) => p.planned)],
+      ['work', 'studio', 'slow_down', 2_520_000, 1_800_000, 0.5, ['annex', 'annex']],
+    );
+    assert.deepEqual(renewal.outcome.shedMarks.length, 2);
+    for (const e of rounds.filter((x) => x !== stretched)) assert.deepEqual([e.detail.trigger, e.detail.stretch_ms, e.detail.threshold_ms, e.detail.factor], ['projection', null, null, null], `${e.requestId}'s round`);
+    assert.equal(rounds.reduce((a, b) => (Date.parse(b.at) > Date.parse(a.at) ? b : a)).detail.trigger, 'projection', 'the newest round is a projection round');
+    assert.ok(Date.parse(held.request.at) < Date.parse(stretched.at), 'the hold comes before the round');
+
+    // The failover on all lands with the 429 on the spent 5-hour window that caused it.
+    const cause = { reason: 'rate_limit', scope: 'account', window: 'five_hour' };
+    const landing = record('req_b8c3e9d4-e61', 2);
+    assert.deepEqual([landing.request.poolId, landing.outcome.kind, landing.outcome.fromAccountId, landing.outcome.cause], ['all', 'placed', 'secondary', { cause: null, ...cause, state: null }]);
+
+    // Studio's two spans in work: the closed one's held time is its rows' slow-down waits, the open one stands.
+    const spans = log.filter((x) => x.type === 'event' && x.kind.startsWith('slow_down_')).sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
+    assert.deepEqual(spans.map((e) => [e.kind, e.accountId, e.poolId]), [['slow_down_started', 'studio', 'work'], ['slow_down_ended', 'studio', 'work'], ['slow_down_started', 'studio', 'work']]);
+    const [first, ended, open] = spans;
+    const within = s.requests.filter((r) => r.poolId === 'work' && Date.parse(r.at) >= Date.parse(first.at) && Date.parse(r.at) <= Date.parse(ended.at));
+    assert.deepEqual([ended.detail.since, ended.detail.duration_ms, ended.detail.factor_min, ended.detail.held_ms], [Date.parse(first.at), 11_400_000, 0.35, sum(slowWaits(within), (w) => w.heldMs)]);
+    assert.equal(ended.detail.held_ms, 36_000);
+    const studio = s.accounts.find((a) => a.id === 'studio');
+    assert.deepEqual([studio.slowDown.since, studio.slowDown.factor], [open.at, open.detail.factor], "the account's entry is the open span's");
+
+    // The held chart folds the same waits per bucket.
+    const range = { from: iso(s.now - DAY), to: iso(s.now) };
+    const { held: points } = await s.api.getAnalyticsRewrites(range);
+    const inRange = s.requests.filter((r) => Date.parse(r.at) >= startOfHour(s.now - DAY) && Date.parse(r.at) < s.now + HOUR);
+    assert.deepEqual([sum(points, (p) => p.heldMs), sum(points, (p) => p.requests)], [sum(slowWaits(inRange), (w) => w.heldMs), inRange.filter((r) => slowWaits([r]).length > 0).length]);
+    assert.deepEqual([sum(points, (p) => p.heldMs), sum(points, (p) => p.requests)], [78_000, 2]);
   });
 
   test(`every plan-funded row of a weighted model tier carries non-null shares and equivalents, estimated where the model has no weight of its own, and no API key, overage or fast row carries one, at ${at}`, async () => {

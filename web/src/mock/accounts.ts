@@ -12,13 +12,15 @@ const PROJECTED: readonly string[] = ['5h', '7d', '7d_fable'];
  * A window as the account routes answer it: `burn` is the share of the window the sessions on the account burn per
  * hour, and the projection runs it to the horizon, the reset on the 5-hour window and the earlier of the reset and five
  * hours out on a weekly one. A null burn is a window the router holds no reading of, which projects nothing, and any
- * other window, which the router does not project, carries none either.
+ * other window, which the router does not project, carries none either. The demand is the burn the sessions would
+ * reach unslowed, which equals the burn on an account no slow-down holds.
  */
 function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoMs = 40_000, given: number | null = 0): RateLimitWindow {
   const burn = PROJECTED.includes(id) ? given : null;
   const horizonInMs = id === '5h' ? resetsInMs : Math.min(5 * HOUR, resetsInMs);
   return {
     burn,
+    demand: burn,
     horizon: burn === null ? null : ahead(horizonInMs),
     id,
     label: WINDOW_LABEL[id] ?? id,
@@ -156,7 +158,9 @@ export const ACCOUNTS: Account[] = ([
     requests: { last24h: 0, last7d: 0, lifetime: 7_420 },
     cooldowns: [],
   },
-  // The work pool's one member, a Max 5x login paired a fortnight ago.
+  // The work pool's Max 5x login, paired a fortnight ago. Its 5-hour window reads 0.62 with 2 h 51 min to the reset,
+  // ahead of its pace of 0.43, and its sessions' unpaced demand would pass the ceiling 42 min before the reset, so the
+  // pool's slow-down holds them at half speed since 13:48 and their burn is half their demand.
   {
     ...ACCOUNT_SAMPLE,
     id: 'studio',
@@ -165,7 +169,7 @@ export const ACCOUNTS: Account[] = ([
     email: 'operator+studio@example.com',
     status: 'ready',
     routingEnabled: true,
-    windows: [win('5h', 0.34, 2 * HOUR + 51 * MINUTE), win('7d', 0.27, 4 * DAY + 9 * HOUR + 20 * MINUTE)],
+    windows: [{ ...win('5h', 0.62, 2 * HOUR + 51 * MINUTE, 40_000, 0.115), demand: 0.23 }, win('7d', 0.27, 4 * DAY + 9 * HOUR + 20 * MINUTE)],
     fableWindow: win('7d_fable', 0.19, 4 * DAY + 9 * HOUR + 20 * MINUTE),
     extraUsage: null,
     fastLane: null,
@@ -178,6 +182,25 @@ export const ACCOUNTS: Account[] = ([
     },
     subscription: { billingType: 'monthly', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'default_claude_max_5x', since: ago(16 * DAY), trialEndsAt: null, endsAt: null, derivedEndsAt: ahead(14 * DAY) },
     requests: { last24h: 0, last7d: 0, lifetime: 48 },
+    cooldowns: [],
+    slowDown: { factor: 0.5, holdMs: 120_000, since: ago(42 * MINUTE), speed: 0.5, stretchMs: 2_520_000, thresholdMs: 1_800_000 },
+  },
+  // The work pool's API-key member, which takes the sessions a round moves off studio.
+  {
+    ...ACCOUNT_SAMPLE,
+    id: 'annex',
+    kind: 'api_key',
+    label: 'Studio annex',
+    email: null,
+    status: 'ready',
+    routingEnabled: true,
+    windows: [],
+    fableWindow: null,
+    extraUsage: null,
+    fastLane: null,
+    credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
+    subscription: null,
+    requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
   {

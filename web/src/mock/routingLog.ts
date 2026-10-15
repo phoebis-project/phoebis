@@ -1,11 +1,11 @@
 import type {
-  Account, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordOutcome,
+  Account, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordOutcome,
   RecordPin, RecordRequest, RecordSettings, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
 import { aheadOf, endOf } from '@/lib/quota';
 import { ACCOUNTS } from './accounts';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, SHED_ROUND, STORY_HOUR_FROM, STORY_IDS, clock, failsOver, oauthWindows, requestById } from './requests';
+import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, clock, failsOver, oauthWindows, requestById } from './requests';
 import { createRng } from './rng';
 import { DAY, HOUR, MINUTE, NOW, iso } from './time';
 
@@ -89,7 +89,7 @@ interface Spec {
   /** The holds before this attempt's placement, summed as the placement's row names them. */
   heldBefore?: CohortHold;
   /** A hold for a slot names its place, and one for a spent window's reset the reset it waits for. */
-  hold?: { cohort: string | null; place: 'cohort' | 'reset' | 'session_pin' | 'strategy_pick'; until?: number };
+  hold?: { cohort: string | null; place: 'cohort' | 'reset' | 'session_pin' | 'slow_down' | 'strategy_pick'; until?: number };
   /** The holds the request waited through before this decision, each with the attempt that waited. */
   holds?: RecordRequest['holds'];
   /** The slots the story fills where a hold reads every member at its cap. */
@@ -99,6 +99,8 @@ interface Spec {
   pin: { cause: string; idleMs: number; warmth: 'cold' | 'refresh' | 'untouched' } | 'none' | PinReason;
   /** The moving pin's last prompt, which its rewrite is priced from, and its burn per hour by plan window. */
   pinFigures?: { burn: Record<string, number>; tokens: number };
+  /** The pin's pace entry where its turns gave it a cycle or the slow-down stood a deadline on it. */
+  pinPace?: { cycleMs: number | null; slowDownUntil: number | null };
   /** Per member, the deepest entry per rung and its match, where the story sets a deeper refused entry beside one. */
   prefix?: Record<string, Partial<RecordCandidate['prefix']>>;
   /** The windows a member reads where the story's own readings are not the walk back's. */
@@ -149,9 +151,14 @@ function settingsOf(pool: PoolSeed): RecordSettings {
     poolUpdatedAt: pool.updatedAt,
     preferSubscription: pool.preferSubscription,
     retryInPlaceSeconds: pool.retryInPlaceSeconds,
+    returnToPlan: pool.returnToPlan,
+    returnToPlanDwellSeconds: pool.returnToPlanDwellSeconds,
     sessionPlacement: pool.sessionPlacement,
     shedCap: pool.shedCap,
     shedDwellSeconds: pool.shedDwellSeconds,
+    slowDown: pool.slowDown,
+    slowDownHoldSeconds: pool.slowDownHoldSeconds,
+    slowDownStretchSeconds: pool.slowDownStretchSeconds,
     strategy: pool.strategy,
     subagentPlacement: pool.subagentPlacement,
     warmSessions: pool.warmSessions,
@@ -184,6 +191,14 @@ function readingsOf(spec: Spec, accountId: string): AttemptWindow[] {
 
 /** The window a 429's cooldown names: the spent plan window its head read, else the retry-after. */
 const windowOfReason = (reason: string) => (reason.startsWith('429 on 5h') ? 'five_hour' : reason.startsWith('429 on 7d') ? 'seven_day' : 'retry_after');
+
+/** A failover's cause from the cooldown that failed it over, in the words its cooldown row carries. */
+const causeOf = (reason: string, model: string): MoveCause =>
+  reason === 'model_rejected'
+    ? { cause: null, reason, scope: `model:${model}`, state: null, window: 'model_rejection' }
+    : reason === 'fast_rate_limit'
+      ? { cause: null, reason, scope: 'fast', state: null, window: 'fast' }
+      : { cause: null, reason: 'rate_limit', scope: 'account', state: null, window: windowOfReason(reason) };
 
 /** A cooldown row as the routing state holds it: the accounts' own rows and every row an attempt's answer set. */
 interface CooldownRow {
@@ -330,6 +345,56 @@ function horizonOf(name: string, resetsAt: string | null, end: number | null, at
   return Math.max(at, Math.min(...bounds.filter((x): x is number => x !== null)));
 }
 
+/**
+ * A read of an account's slow-down entry: its factor, the speed its holds realize, its stretch, and when the stretch
+ * first read over the threshold while it stays over.
+ */
+interface SlowRead {
+  factor: number;
+  overSince: number | null;
+  speed: number;
+  stretchMs: number;
+}
+
+const studioSlowed = accountOf.get('studio')?.slowDown ?? null;
+/** The safety wait, the router's `SLOW_DOWN_WAIT_MS`: the stretch reads over the threshold this long before a round. */
+const SLOW_DOWN_WAIT_MS = 120_000;
+
+/**
+ * The reads of studio's entry in work, each standing from its instant until the next: the closed span's under the
+ * threshold, 0.4 by the time its slowed request reads it at 10:40, and the open span's under the threshold from its
+ * start and past it from the turn at 14:02:30, the read the account route answers now. Between the spans the entry
+ * reads none.
+ */
+const SLOW_READS: { accountId: string; from: number; poolId: string; read: SlowRead | null }[] = [
+  { accountId: 'studio', from: clock(9, 12), poolId: 'work', read: { factor: 0.5, overSince: null, speed: 0.5, stretchMs: 1_200_000 } },
+  { accountId: 'studio', from: clock(10, 30), poolId: 'work', read: { factor: 0.4, overSince: null, speed: 0.4, stretchMs: 1_500_000 } },
+  { accountId: 'studio', from: clock(12, 22), poolId: 'work', read: null },
+  { accountId: 'studio', from: clock(13, 48), poolId: 'work', read: { factor: 0.5, overSince: null, speed: 0.5, stretchMs: 1_620_000 } },
+  ...(studioSlowed === null
+    ? []
+    : [{ accountId: 'studio', from: clock(14, 2, 30), poolId: 'work', read: { factor: studioSlowed.factor, overSince: clock(14, 2, 30), speed: studioSlowed.speed, stretchMs: studioSlowed.stretchMs } }]),
+];
+
+/** The account's slow-down read on the shed line, on a pool that slows its pins and for an account it has read. */
+function slowFactsOf(source: RecordCandidate | undefined, pool: PoolSeed, at: number): WalkFact[] {
+  const read = source ? slowReadAt(source.accountId, pool, at) : null;
+  if (!source || read === null) return [];
+  return [
+    fact('slow_down', 'on'),
+    fact('stretch_ms', read.stretchMs, 'ms'),
+    fact('threshold_ms', pool.slowDownStretchSeconds * 1_000, 'ms'),
+    fact('factor', read.factor),
+    fact('speed', read.speed),
+    fact('demand_five_hour', source.windows.five_hour?.demand ?? 0, 'percent_per_hour'),
+    ...(read.overSince === null ? [] : [fact('over_since', read.overSince, 'time')]),
+  ];
+}
+
+/** The account's slow-down read standing at `at`: none on a pool with the switch off or for an account it never slowed. */
+const slowReadAt = (accountId: string, pool: PoolSeed, at: number): SlowRead | null =>
+  pool.slowDown ? (SLOW_READS.filter((x) => x.accountId === accountId && x.poolId === pool.id && x.from <= at).pop()?.read ?? null) : null;
+
 /** Every pool member's standing at the decision's time, eligible or not. */
 function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
   const r = spec.request;
@@ -340,6 +405,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     const overage = inOverageAt(a.id, at);
     const windows: RecordCandidate['windows'] = {};
     const burn = a.kind === 'oauth' ? burnsOf(spec, a.id) : {};
+    const entry = a.kind === 'oauth' ? slowReadAt(a.id, pool, at) : null;
     if (a.kind === 'oauth') {
       const head = r.attempts.some((x) => x.accountId === a.id) || a.id === 'primary';
       const ageMs = head ? 4_000 : 120_000;
@@ -350,12 +416,15 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
         const ahead = aheadOf({ resetsAt: w.resetsAt, utilization: w.utilization }, WINDOW_MS[name], at, end);
         const horizon = horizonOf(name, w.resetsAt, end, at);
         windows[name] = {
-          ageMs, ahead: name === 'seven_day_fable' ? null : Math.round(ahead * 1000) / 1000, horizon: iso(horizon), observedAt: iso(at - ageMs),
+          ageMs, ahead: name === 'seven_day_fable' ? null : Math.round(ahead * 1000) / 1000,
+          // The 5-hour window's burn over the speed the account's holds realize, 1 with no entry in force.
+          demand: name === 'five_hour' ? round5((burn[name] ?? 0) / (entry?.speed ?? 1)) : null,
+          horizon: iso(horizon), observedAt: iso(at - ageMs),
           projection: round3(w.utilization + ((burn[name] ?? 0) * (horizon - at)) / HOUR), reserved: 0, reset: w.resetsAt, source: head ? 'head' : 'poll', utilization: w.utilization,
         };
       }
     } else {
-      windows.worst_bucket = { ageMs: 4_000, ahead: null, horizon: null, observedAt: iso(at - 4_000), projection: null, reserved: 0, reset: iso(at + 40_000), source: 'head', utilization: WORST_BUCKET[a.id] ?? 0.1 };
+      windows.worst_bucket = { ageMs: 4_000, ahead: null, demand: null, horizon: null, observedAt: iso(at - 4_000), projection: null, reserved: 0, reset: iso(at + 40_000), source: 'head', utilization: WORST_BUCKET[a.id] ?? 0.1 };
     }
     const cooldowns: RecordCooldown[] = COOLDOWNS.filter((c) => c.accountId === a.id && c.setAt <= at && at < c.until)
       .map((c) => ({ blocking: holds(c, r.canonicalModel, fast), reason: c.reason, scope: c.scope, until: iso(c.until), window: c.window }))
@@ -386,6 +455,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
       cooldowns,
       credits: fast ? creditsAt(a.id, at) : null,
       enabled: a.routingEnabled,
+      factor: entry?.factor ?? null,
       fit: null,
       inFlight: spec.inFlight?.[a.id] ?? drawnInFlight,
       inFlightCap: pool.inFlightCap,
@@ -416,8 +486,10 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
 
 /** Primary's afternoon round, which finds no sibling with runway for either of its two pins. */
 const NO_RUNWAY_ROUND = { accountId: 'primary', at: clock(14, 12, 30) };
-/** The story's two rounds, which a later decision on the account reads as within the dwell. */
-const ROUNDS = [SHED_ROUND, NO_RUNWAY_ROUND];
+/** Studio's round fired by the stretch, at the renewal its slowed request's hold led to. */
+const STRETCH_ROUND = { accountId: 'studio', at: clock(14, 5) };
+/** The story's three rounds, which a later decision on the account reads as within the dwell. */
+const ROUNDS = [SHED_ROUND, NO_RUNWAY_ROUND, STRETCH_ROUND];
 
 /** What the gate read of one candidate for a pin: the verdict, the runway and its window, and the fit table's row. */
 interface FitRead {
@@ -436,9 +508,11 @@ const longestOf = <T extends Pick<RecordCandidate, 'runwayMs'>>(list: T[]): T[] 
  * until the prediction with the pin's rewrite, rising at the account's and the pin's burn, reaches the ceiling, zero
  * where the rewrite alone does and unbounded with no burn. `fits` reaches the horizon on every window, `rewrite_only`
  * lands the rewrite but falls short on one, and `least_bad` is the rest, as is a window a move cannot read. An account
- * ending inside the next five hours reads `ending`, and an API-key account fits while its worst bucket has room.
+ * inside the pool's wind-down before its end reads `ending`, and an API-key account fits while its worst bucket has
+ * room.
  */
-function fitOf(c: RecordCandidate, at: number, ceiling: number, model: string, tokens: number, pinBurn: Record<string, number>, move: boolean): FitRead {
+function fitOf(c: RecordCandidate, at: number, pool: Pick<PoolSeed, 'windDownMinutes' | 'windowCeiling'>, model: string, tokens: number, pinBurn: Record<string, number>, move: boolean): FitRead {
+  const ceiling = pool.windowCeiling;
   const read = (facts: WalkFact[], verdict: string, runwayMs: number | null = null, binding: string | null = null): FitRead => ({
     binding,
     facts: [...facts, fact('verdict', verdict)].map((f) => ({ ...f, accountId: c.accountId })),
@@ -446,7 +520,7 @@ function fitOf(c: RecordCandidate, at: number, ceiling: number, model: string, t
     verdict,
   });
   const endsAt = c.term?.endsAt ? Date.parse(c.term.endsAt) : null;
-  if (endsAt !== null && endsAt < at + FIVE_HOURS) return read([fact('end', endsAt, 'time')], 'ending');
+  if (endsAt !== null && endsAt - at <= pool.windDownMinutes * MINUTE) return read([fact('end', endsAt, 'time')], 'ending');
   if (c.kind === 'api_key') return read([], (c.windows.worst_bucket?.utilization ?? 0) < 1 ? 'fits' : 'least_bad');
   const rewrite = rewriteOf(tokens, model);
   const projections: WalkFact[] = [];
@@ -504,15 +578,15 @@ interface Move {
  * whose reason holds with no sibling to take the pin says so and the walk goes on. A destination is an eligible
  * sibling holding allowance, and the gate answers the fitting ones, else those whose rewrite lands with the longest
  * runway, else the whole set, a member at its cap in neither of the first two, each in the set's order for the
- * strategy to pick from. The shed rule takes the fitting destinations with the longest runway alone, and the spent
- * rule holds a request whose spent window resets within the retry bound.
+ * strategy to pick from, the longest runway breaking the strategy's tie among the fitting ones. The shed rule takes the
+ * fitting destinations alone, and the spent rule holds a request whose spent window resets within the retry bound.
  */
 function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, source: RecordCandidate | undefined, pin: RecordPin): Move {
   const r = spec.request;
   const at = spec.at;
   const fast = r.shape.requestedSpeed === 'fast';
   const preferPlan = pool.overagePolicy === 'prefer_plan';
-  const dwellMs = pool.shedDwellSeconds * 1_000;
+  const dwellMs = pool.returnToPlanDwellSeconds * 1_000;
   const windows = drawnWindows(r.canonicalModel);
   const holdsAllowance = (c: RecordCandidate) => c.kind === 'api_key' || windows.every((w) => (c.windows[w]?.utilization ?? 0) < 1);
   const allowanceKnown = (c: RecordCandidate) => c.kind === 'api_key' || windows.every((w) => c.windows[w] !== undefined);
@@ -524,7 +598,7 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   const pinBurn = spec.pinFigures?.burn ?? (spec.story ? PRIOR_BURN : {});
   const gate = (reached: RecordCandidate[], fitsOnly: boolean): { answered: RecordCandidate[]; step: WalkStep } => {
     const reads = reached.map((c) => {
-      const read = fitOf(c, at, pool.windowCeiling, r.canonicalModel, tokens, pinBurn, true);
+      const read = fitOf(c, at, pool, r.canonicalModel, tokens, pinBurn, true);
       c.fit = read.verdict;
       c.runwayMs = read.runwayMs;
       c.binding = read.binding;
@@ -535,16 +609,17 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
     const chosen = spec.kind === 'moved' ? reached.find((c) => c.accountId === spec.accountId) : undefined;
     if (chosen) {
       const order = (c: RecordCandidate) => (c.fit === 'fits' ? 0 : c.fit === 'rewrite_only' ? 1 : 2);
-      const narrows = (c: RecordCandidate) => order(c) === 1 || (order(c) === 0 && fitsOnly);
+      const narrows = (c: RecordCandidate) => order(c) === 1;
       for (const c of reached) if (c !== chosen && (order(c) < order(chosen) || (order(c) === order(chosen) && narrows(c) && runwayOf(c) > runwayOf(chosen)))) c.inFlight = c.inFlightCap;
     }
     const open = (c: RecordCandidate) => c.inFlight < c.inFlightCap;
-    // Each order keeps the set's order for the strategy to pick from. The shed rule and the rewrite-only order narrow
-    // to the longest runway, ties kept.
+    // Each order keeps the set's order for the strategy to pick from. The fitting set goes on whole, the shed rule's
+    // too, since the strategy ranks it and the runway only breaks its tie. The rewrite-only order narrows to the longest
+    // runway, ties kept.
     const fits = reached.filter((c) => c.fit === 'fits' && open(c));
     const rewriteOnly = longestOf(reached.filter((c) => c.fit === 'rewrite_only' && open(c)));
     const left = reached.filter((c) => c.fit !== 'ending');
-    const [verdict, answered] = fits.length ? ['fits', fitsOnly ? longestOf(fits) : fits] : fitsOnly ? ['none', []] : rewriteOnly.length ? ['rewrite_only', rewriteOnly] : left.length ? ['least_bad', left] : ['none', []];
+    const [verdict, answered] = fits.length ? ['fits', fits] : fitsOnly ? ['none', []] : rewriteOnly.length ? ['rewrite_only', rewriteOnly] : left.length ? ['least_bad', left] : ['none', []];
     return { answered, step: step('fit', verdict, reads.flatMap((x) => x.facts)) };
   };
   // The rule fires where the gate answers a sibling it keeps holding allowance. Otherwise its line says it found
@@ -599,11 +674,16 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   }
 
   const cold = typeof spec.pin === 'object' && spec.pin.warmth === 'cold';
-  if (source?.kind !== 'api_key') no(2, [fact('kind', source?.kind ?? 'unknown')]);
+  // The mode reads on every line: `never` keeps the pin with no age read, `when_cold` moves a cold pin alone, and
+  // `always` moves a warm one too once it has stayed the return dwell.
+  const mode = pool.returnToPlan;
+  if (source?.kind !== 'api_key') no(2, [fact('kind', source?.kind ?? 'unknown'), fact('mode', mode)]);
   else {
     const dwellAge = at - Date.parse(pin.createdAt ?? iso(at));
-    const facts = [fact('cold', cold), fact('dwell_age_ms', dwellAge, 'ms')];
-    if (!(cold || dwellAge >= dwellMs)) no(2, facts);
+    const read = [fact('mode', mode), fact('cold', cold), fact('dwell_age_ms', dwellAge, 'ms')];
+    const facts = mode === 'never' ? [fact('mode', mode)] : mode === 'when_cold' ? read : [...read, fact('dwell_ms', dwellMs, 'ms')];
+    const returns = mode === 'never' ? false : mode === 'when_cold' ? cold : cold || dwellAge >= dwellMs;
+    if (!returns) no(2, facts);
     else {
       const move = tryRule(2, facts, (c) => c.kind === 'oauth' && !c.inOverage);
       if (move) return move;
@@ -626,7 +706,8 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
     return none;
   }
   // The one trigger: the first plan window, in the windows' order, whose projection at its horizon reads over the
-  // ceiling. The line names every projection it read.
+  // ceiling, or on a pool that slows its pins the 5-hour window's stretch past the threshold once the safety wait has
+  // passed. The line names every projection it read, and how long the stretch has read over while the wait holds.
   const facts: WalkFact[] = [];
   for (const w of windows) {
     const x = source.windows[w];
@@ -634,16 +715,21 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
     facts.push(fact(`projection_${w}`, x.projection, 'percent'), fact(`horizon_${w}`, Date.parse(x.horizon), 'time'));
   }
   facts.push(fact('ceiling', pool.windowCeiling, 'percent'));
-  const trigger = triggerOf(source, windows, pool.windowCeiling, at);
-  if (trigger === null) {
+  const overSince = slowReadAt(source.accountId, pool, at)?.overSince ?? null;
+  const waiting = overSince !== null && at - overSince < SLOW_DOWN_WAIT_MS;
+  if (waiting) facts.push(fact('over_ms', at - overSince, 'ms'));
+  const trigger = pool.slowDown ? (stretchTriggerOf(source, pool, at) ?? triggerOf(source, windows.filter((w) => w !== 'five_hour'), pool.windowCeiling, at)) : triggerOf(source, windows, pool.windowCeiling, at);
+  if (trigger === null && !waiting) {
     no(4, facts);
     return none;
   }
-  facts.push(fact('trigger', trigger.window), fact('excess', trigger.excess, 'percent_per_hour'));
-  if (spec.round) {
-    const round = roundOf(spec.round, trigger.excess, pool);
-    facts.push(fact('round', 'ran'), fact('target', round.target, 'percent_per_hour'), fact('marks', spec.round.marks.map(pinText)), fact('skipped', round.skipped));
-  } else facts.push(fact('round', 'within_dwell'));
+  if (trigger !== null) {
+    facts.push(fact('trigger', trigger.window), ...(trigger.slowed ? [fact('fired_by', 'slow_down')] : []), fact('excess', trigger.excess, 'percent_per_hour'));
+    if (spec.round) {
+      const round = roundOf(spec.round, trigger.excess, pool);
+      facts.push(fact('round', 'ran'), fact('target', round.target, 'percent_per_hour'), fact('marks', spec.round.marks.map(pinText)), fact('skipped', round.skipped));
+    } else facts.push(fact('round', 'within_dwell'));
+  }
   if (source.cooldowns.some((c) => c.blocking)) {
     no(4, [...facts, fact('cooldown', true)]);
     return none;
@@ -658,8 +744,21 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   return tryRule(4, facts, () => true, true) ?? none;
 }
 
+/**
+ * The 5-hour round under the slow-down: the stretch has read over the threshold for the safety wait, and the horizon
+ * moved to the reset less the threshold lies ahead. The excess is the demand's past the ceiling there, per hour to it.
+ */
+function stretchTriggerOf(source: RecordCandidate, pool: PoolSeed, at: number): { excess: number; slowed: true; window: string } | null {
+  const overSince = slowReadAt(source.accountId, pool, at)?.overSince ?? null;
+  const x = source.windows.five_hour;
+  if (overSince === null || at - overSince < SLOW_DOWN_WAIT_MS || x?.reset === null || x?.reset === undefined || x.demand === null) return null;
+  const hours = (Date.parse(x.reset) - pool.slowDownStretchSeconds * 1_000 - at) / HOUR;
+  const excess = round5((x.utilization + x.demand * hours - pool.windowCeiling) / hours);
+  return hours > 0 && excess > 0 ? { excess, slowed: true, window: 'five_hour' } : null;
+}
+
 /** The window a round on `source` fires on, and the excess per hour that lands its projection on the ceiling. */
-function triggerOf(source: RecordCandidate, windows: string[], ceiling: number, at: number): { excess: number; window: string } | null {
+function triggerOf(source: RecordCandidate, windows: string[], ceiling: number, at: number): { excess: number; slowed?: true; window: string } | null {
   for (const w of windows) {
     const x = source.windows[w];
     if (x?.projection === null || x?.projection === undefined || x.horizon === null || x.projection <= ceiling) continue;
@@ -743,7 +842,7 @@ function capTheRivals(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed)
 const priorOf = (spec: Spec) => (spec.story ? PRIOR_BURN : {});
 
 /** A fresh session's fit on a member, the body's rewrite with the prior's burn. */
-const freshFitOf = (spec: Spec, c: RecordCandidate, pool: PoolSeed) => fitOf(c, spec.at, pool.windowCeiling, spec.request.canonicalModel, bodyTokensOf(spec.request), priorOf(spec), false);
+const freshFitOf = (spec: Spec, c: RecordCandidate, pool: PoolSeed) => fitOf(c, spec.at, pool, spec.request.canonicalModel, bodyTokensOf(spec.request), priorOf(spec), false);
 
 /**
  * The no-fit partition's reading of a placement's members, drawn or written by hand, as the engine reads it: every
@@ -868,8 +967,10 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
   const candidates = spec.kind === 'refused' ? [] : candidatesOf(spec, pool);
   // A hold for a spent window's reset ends the walk at the spent rule, so it reads no placement's partitions.
   const resetHold = spec.kind === 'held' && spec.hold?.place === 'reset';
+  // A slow-down hold waits on the pin the move rules left in place, before its renewal, so it reads no placement either.
+  const slowHold = spec.kind === 'held' && spec.hold?.place === 'slow_down';
   if (spec.kind === 'placed' || spec.kind === 'moved') capTheRivals(spec, candidates, pool);
-  if ((spec.kind === 'placed' || spec.kind === 'held' || spec.kind === 'exhausted') && !resetHold) readPlacementFits(spec, candidates, pool);
+  if ((spec.kind === 'placed' || spec.kind === 'held' || spec.kind === 'exhausted') && !resetHold && !slowHold) readPlacementFits(spec, candidates, pool);
   const portable = r.client !== 'other';
   const pinKey = pinKeyOf(r);
   const pinning = pool.affinityTtlSeconds > 0 && r.sessionId !== null && (typeof spec.pin === 'object' || spec.pin === 'none');
@@ -881,7 +982,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     pinReason = spec.pin;
     if (spec.kind !== 'refused') walk.push(step('pin', 'none', [fact('reason', spec.pin)]));
   } else if (spec.pin === 'none') {
-    pin = { accountId: null, createdAt: null, epoch: null, found: 'none', idleMs: null, incarnation: null, lane: null, lastRefreshAt: null, lastUsedAt: null, marked: false, markedAt: null, markedOn: null, markedWindow: null, refreshAgeMs: null, released: [], shed: null, warmth: null, warmthCause: null };
+    pin = { accountId: null, createdAt: null, cycleMs: null, epoch: null, found: 'none', idleMs: null, incarnation: null, lane: null, lastRefreshAt: null, lastUsedAt: null, marked: false, markedAt: null, markedOn: null, markedWindow: null, refreshAgeMs: null, released: [], shed: null, slowDownUntil: null, warmth: null, warmthCause: null };
     walk.push(step('pin', 'none', [fact('found', 'none')]));
   } else {
     const on = spec.from ?? spec.accountId ?? '';
@@ -895,8 +996,9 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     // A shed move's pin carries the mark the round on its account wrote.
     const mark = spec.rule === 'shed' ? markOf(found.accountId, spec.at) : null;
     pin = {
-      accountId: found.accountId, createdAt: iso(found.createdAt), epoch: found.epoch, found: 'live', idleMs, incarnation: 1, lane: laneOf(r), lastRefreshAt: iso(spec.at - idleMs), lastUsedAt: iso(spec.at - idleMs),
-      marked: mark !== null, markedAt: mark === null ? null : iso(mark.at), markedOn: mark?.on ?? null, markedWindow: mark?.window ?? null, refreshAgeMs: idleMs, released, shed: null, warmth: spec.pin.warmth, warmthCause: spec.pin.cause,
+      accountId: found.accountId, createdAt: iso(found.createdAt), cycleMs: spec.pinPace?.cycleMs ?? null, epoch: found.epoch, found: 'live', idleMs, incarnation: 1, lane: laneOf(r), lastRefreshAt: iso(spec.at - idleMs), lastUsedAt: iso(spec.at - idleMs),
+      marked: mark !== null, markedAt: mark === null ? null : iso(mark.at), markedOn: mark?.on ?? null, markedWindow: mark?.window ?? null, refreshAgeMs: idleMs, released, shed: null,
+      slowDownUntil: spec.pinPace?.slowDownUntil === null || spec.pinPace?.slowDownUntil === undefined ? null : iso(spec.pinPace.slowDownUntil), warmth: spec.pin.warmth, warmthCause: spec.pin.cause,
     };
     walk.push(step('pin', 'match', [fact('found', 'live'), fact('account_id', found.accountId, null, found.accountId), fact('epoch', found.epoch, 'count'), fact('idle_ms', idleMs, 'ms'), fact('refresh_age_ms', idleMs, 'ms'), fact('warmth', spec.pin.warmth), fact('cause', spec.pin.cause), fact('marked', pin.marked)]));
   }
@@ -917,7 +1019,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
   // count follows its pin, since it writes none a move could leave, and a pin past its account's end is released at
   // renewal instead.
   let movedAmong: string[] | undefined;
-  if (pin?.found === 'live' && portable && !spec.failover && (spec.kind === 'renewed' || spec.kind === 'moved' || resetHold)) {
+  if (pin?.found === 'live' && portable && !spec.failover && (spec.kind === 'renewed' || spec.kind === 'moved' || resetHold || slowHold)) {
     const source = member(pin.accountId);
     const endsAt = source?.term?.endsAt ? Date.parse(source.term.endsAt) : null;
     const skip = r.kind === 'count_tokens' ? 'count' : endsAt !== null && endsAt <= spec.at ? 'subscription_ended' : null;
@@ -931,7 +1033,9 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
         for (const c of move.reached) c.inFlight = c.inFlightCap;
         move = moveOf(spec, candidates, pool, source, pin);
       }
-      walk.push(...move.lines);
+      // On a pool that slows its pins the shed line carries the account's read, whichever rule answered.
+      const pace = slowFactsOf(source, pool, spec.at);
+      walk.push(...move.lines.map((line) => (line.step === 'move:shed' ? { ...line, facts: [...line.facts, ...pace] } : line)));
       if (move.fired !== null) {
         walk.push(step('cap_filter', move.destinations.some((c) => c.inFlight < c.inFlightCap) ? 'passed' : 'dropped', move.destinations.map((c) => fact('in_flight', `${c.inFlight}/${c.inFlightCap}`, 'count', c.accountId))));
         if (spec.kind === 'moved') {
@@ -950,7 +1054,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
   }
   let pick: ReturnType<typeof pickOf> = { runnerUp: null, score: null, tierSize: 0 };
   let tierSize = 0;
-  const placing = (spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted') && !resetHold;
+  const placing = (spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted') && !resetHold && !slowHold;
   if (placing) {
     const set = candidates.filter((c) => (movedAmong ? movedAmong.includes(c.accountId) : c.obstacle === null));
     const partitions = narrowed(set, pool, r, movedAmong !== undefined);
@@ -987,7 +1091,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
       walk.push(step('pick', 'chosen', [fact('strategy', pool.strategy), fact('tier', tier.join('/')), ...scores]));
     }
   }
-  if (spec.kind === 'held' && spec.hold && !resetHold) {
+  if (spec.kind === 'held' && spec.hold && !resetHold && !slowHold) {
     walk.push(step('hold', 'held', [fact('place', spec.hold.place), fact('account_id', spec.accountId, null, spec.accountId), fact('bound_ms', pool.retryInPlaceSeconds * 1_000, 'ms')]));
   }
   const exhaustion = spec.kind === 'exhausted' ? (spec.exhaustion ?? exhaustionOf(candidates)) : null;
@@ -1043,12 +1147,28 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
         status: attempt?.upstreamStatus ?? null,
       }
     : null;
+  // A slow-down hold copies the read it was answered from, its bound the pool's longest wait for the slow-down.
+  const slowed = slowHold ? slowReadAt(spec.accountId ?? '', pool, spec.at) : null;
   const hold =
     spec.kind === 'held' && spec.hold
-      ? { accountId: spec.accountId ?? '', boundMs: pool.retryInPlaceSeconds * 1_000, cohort: spec.hold.cohort, reason: resetHold ? 'reset' : 'cap', until: resetHold && spec.hold.until !== undefined ? iso(spec.hold.until) : null }
+      ? {
+          accountId: spec.accountId ?? '',
+          boundMs: (slowHold ? pool.slowDownHoldSeconds : pool.retryInPlaceSeconds) * 1_000,
+          cohort: spec.hold.cohort,
+          cycleMs: slowHold ? (spec.pinPace?.cycleMs ?? null) : null,
+          factor: slowed?.factor ?? null,
+          reason: resetHold ? 'reset' : slowHold ? 'slow_down' : 'cap',
+          speed: slowed?.speed ?? null,
+          stretchMs: slowed?.stretchMs ?? null,
+          thresholdMs: slowed ? pool.slowDownStretchSeconds * 1_000 : null,
+          until: (resetHold || slowHold) && spec.hold.until !== undefined ? iso(spec.hold.until) : null,
+        }
       : null;
+  // The decision that lands a failover's session on a pin names the cooldown that failed it over.
+  const failedOver = spec.failover && pinWritten !== null ? r.attempts[spec.attempt - 2]?.cooldownSet : undefined;
   const outcome: RecordOutcome = {
     accountId: spec.accountId,
+    cause: failedOver ? causeOf(failedOver.reason, r.canonicalModel) : null,
     cohortHold: spec.heldBefore ?? null,
     completion,
     exhaustion,
@@ -1190,6 +1310,10 @@ function byAndFact(spec: Spec, record: DecisionRecord, pick: ReturnType<typeof p
   };
   switch (spec.kind) {
     case 'renewed': {
+      // The wait explains the renewal more than the pin's idle age does: the row names the slow-down it followed and
+      // how long it lasted.
+      const slowWait = spec.heldBefore?.waits.find((w) => w.reason === 'slow_down');
+      if (slowWait) return { by: by('hold', 'slow_down'), fact: [summaryFact('held', slowWait.heldMs, 'ms')] };
       if (r.kind === 'probe') return { by: by('none', ''), fact: [summaryFact('epoch', record.pin?.epoch ?? 0, 'count')] };
       if (record.pin?.warmth === 'cold') return { by: by('none', ''), fact: [summaryFact('cause', record.pin.warmthCause ?? '', 'text')] };
       // The first window, in the trigger's order, whose projection at its horizon reaches the ceiling names its reading.
@@ -1210,6 +1334,11 @@ function byAndFact(spec: Spec, record: DecisionRecord, pick: ReturnType<typeof p
       if (spec.heldBefore) return { by: by('hold', spec.heldBefore.cohort ? 'cohort' : 'strategy_pick'), fact: [summaryFact('held', spec.heldBefore.heldMs, 'ms')] };
       return { by: record.outcome.rung ? by('rung', record.outcome.rung.rung) : by('strategy', pool.strategy, record.outcome.tier), fact: placementFact() };
     case 'held':
+      // A slowed pin's wait names its end and the factor it was sized under: no slot, pick or reset explains it.
+      if (spec.hold?.place === 'slow_down' && record.outcome.hold?.until) {
+        const factor = record.outcome.hold.factor;
+        return { by: by('hold', 'slow_down'), fact: [summaryFact('until', Date.parse(record.outcome.hold.until), 'time'), ...(factor === null ? [] : [{ entity: null, key: 'factor', unit: null, value: factor }])] };
+      }
       // A wait for a reset names its end, since no slot and no pick explain it.
       if (spec.hold?.place === 'reset' && spec.hold.until !== undefined) return { by: by('hold', 'reset'), fact: [summaryFact('until', spec.hold.until, 'time')] };
       return { by: by('hold', spec.hold?.place ?? 'strategy_pick'), fact: inFlight() };
@@ -1304,7 +1433,7 @@ function derivedSpecs(r: RequestLog): Spec[] {
       const found = entry(boundary, { at: start, depth: rung.depth, prefixTokens: rung.prefixTokens, ttlMs: ttl, writtenAt: start - 2 * MINUTE });
       prefix[a.accountId] = rung.rung === 'static' ? { static: found, staticMatch: found } : { content: found, contentMatch: found };
     }
-    const heldBefore = holds.length ? { cohort: holds[holds.length - 1].cohort, heldMs: holds.reduce((n, h) => n + h.heldMs, 0), waitedOn: holds.map((h) => h.accountId) } : undefined;
+    const heldBefore = holds.length ? { cohort: holds[holds.length - 1].cohort, heldMs: holds.reduce((n, h) => n + h.heldMs, 0), waitedOn: holds.map((h) => h.accountId), waits: holds.map((h) => ({ heldMs: h.heldMs, reason: 'cap' })) } : undefined;
     specs.push({ ...base, accountId: a.accountId, at: start, attempt: i + 1, attempted, failover, from: from ?? pinOn ?? undefined, heldBefore: hold ? heldBefore : undefined, holds: [...holds], kind, pin: pinSpec, prefix, rule, rung, seq });
     pinOn = a.accountId;
   });
@@ -1343,6 +1472,19 @@ const ROUND_PINS: RoundPin[] = [
 const NO_RUNWAY_PINS: RoundPin[] = [
   { agentId: 'main', burn: 0.052, cold: true, keyId: 'desktop', lastInputTokens: 43_000, marked: false, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('bcc805b6'), skip: 'no_runway' },
   { agentId: 'main', burn: 0.033, cold: false, keyId: 'desktop', lastInputTokens: 52_300, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: sessionId('d7167642'), skip: 'no_runway' },
+];
+
+/**
+ * Studio's round fired by the stretch, its four pins in the round's order: the warm ones by their demand over their
+ * prompt, each burn the pin's rate over the account's speed, which sum to its demand. The first is marked by the order,
+ * since the target is more than any one pin's burn, and the rest is less than each pin left, so the pick marks the
+ * covering pin whose move rewrites least, the first among equals on the API-key annex, and the walk ends there.
+ */
+const STRETCH_PINS: RoundPin[] = [
+  { agentId: 'main', burn: 0.055, cold: false, keyId: 'notebook', lastInputTokens: 30_000, marked: true, model: 'claude-sonnet-5-5', note: null, sessionId: MARKED_SESSION_IDS[1], skip: null },
+  { agentId: 'main', burn: 0.06, cold: false, keyId: 'notebook', lastInputTokens: 40_000, marked: true, model: 'claude-sonnet-5-5', note: 'cheapest', sessionId: MARKED_SESSION_IDS[0], skip: null },
+  { agentId: '7b2e', burn: 0.055, cold: false, keyId: 'notebook', lastInputTokens: 48_000, marked: false, model: HAIKU, note: null, sessionId: SLOWED_SESSION_ID, skip: null },
+  { agentId: 'main', burn: 0.06, cold: false, keyId: 'notebook', lastInputTokens: 72_000, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: SLOWED_SESSION_ID, skip: null },
 ];
 
 const roundOfPins = (pins: RoundPin[]): ShedRound => ({ marks: pins.filter((p) => p.marked).map((p) => ({ agentId: p.agentId, keyId: p.keyId, model: p.model, sessionId: p.sessionId })), pins });
@@ -1433,7 +1575,7 @@ function storySpecs(): Spec[] {
     // A subagent request that carries no cache marker of its own pins nothing. Its cohort's static entry places it.
     at('req_69e30548-32e', 1, 1, t(14, 21, 12), 'held', 'primary', { hold: { cohort: 'primary', place: 'cohort' }, inFlight: { nightly: 16, primary: 16 }, pin: 'pinning_off', prefix: { primary: { static: cohort(t(14, 21, 12), 'at_cap'), staticMatch: null } } }),
     at('req_69e30548-32e', 2, 1, t(14, 21, 14), 'placed', 'primary', {
-      heldBefore: { cohort: 'primary', heldMs: 2_000, waitedOn: ['primary'] },
+      heldBefore: { cohort: 'primary', heldMs: 2_000, waitedOn: ['primary'], waits: [{ heldMs: 2_000, reason: 'cap' }] },
       holds: [{ accountId: 'primary', attempt: 1, cohort: 'primary', heldMs: 2_000, ranOut: false }],
       inFlight: { nightly: 16, primary: 15 },
       pin: 'pinning_off',
@@ -1478,6 +1620,40 @@ function storySpecs(): Spec[] {
     at('req_7a3f0c26-d81', 1, 1, t(13, 41, 15), 'placed', 'primary'),
     // Primary projects past the ceiling, so this renewal runs a round, which finds no sibling with runway.
     at('req_6e1f3b98-a24', 1, 1, t(14, 12, 30), 'renewed', 'primary', { pin: live('continues_pin', 46_000), round: roundOfPins(NO_RUNWAY_PINS) }),
+    // A session placed on secondary before its spent edge. Its next turn finds the spent rule's one destination full,
+    // so it renews on secondary, whose 429 on the spent 5-hour window fails it over to primary once a slot frees.
+    at('req_d2a8f6c1-d50', 1, 1, t(14, 1, 45), 'placed', 'secondary'),
+    at('req_b8c3e9d4-e61', 1, 1, t(14, 7, 50), 'renewed', 'secondary', { pin: live('continues_pin', 365_000) }),
+    at('req_b8c3e9d4-e61', 2, 2, t(14, 7, 51), 'placed', 'primary', { attempted: ['secondary'], failover: 'cooldown', from: 'secondary', pin: live() }),
+    // Studio's morning session in work, slowed inside the closed span: its pin's 24 s cycle at 0.4 waits 36 s, and the
+    // renewal after the wait runs no round, since the stretch reads under the threshold.
+    at('req_3d7b9e2f-a41', 1, 1, t(10, 38, 20), 'placed', 'studio'),
+    at('req_8e1c4a6d-b52', 1, 1, t(10, 40), 'held', 'studio', { hold: { cohort: null, place: 'slow_down', until: t(10, 40, 36) }, pin: live('continues_pin', 100_000), pinPace: { cycleMs: 24_000, slowDownUntil: t(10, 40, 36) } }),
+    at('req_8e1c4a6d-b52', 2, 1, t(10, 40, 36), 'renewed', 'studio', {
+      heldBefore: { cohort: null, heldMs: 36_000, waitedOn: ['studio'], waits: [{ heldMs: 36_000, reason: 'slow_down' }] },
+      holds: [{ accountId: 'studio', attempt: 1, cohort: null, heldMs: 36_000, ranOut: false }],
+      pin: live('continues_pin', 136_000),
+      pinPace: { cycleMs: 24_000, slowDownUntil: t(10, 40, 36) },
+    }),
+    // Studio's sessions of the open span placed on its pins, the round's four.
+    at('req_6b3e8d1a-c73', 1, 1, t(13, 50, 30), 'placed', 'studio'),
+    at('req_2f9a6c4e-d84', 1, 1, t(13, 53, 10), 'placed', 'studio'),
+    at('req_c5d8e2b7-e95', 1, 1, t(13, 58, 40), 'placed', 'studio'),
+    at('req_7e4f1a9c-f16', 1, 1, t(13, 59, 5), 'placed', 'studio'),
+    // The first turns after the placements: no pin has a cycle yet, so neither is held, and the first reads the stretch
+    // past the threshold, which starts the safety wait.
+    at('req_4a9c3e7b-a27', 1, 1, t(14, 2, 30), 'renewed', 'studio', { pin: live('continues_pin', 720_000) }),
+    at('req_e1b6d4f8-b38', 1, 1, t(14, 3, 36), 'renewed', 'studio', { pin: live('continues_pin', 296_000) }),
+    // The slowed request: its pin's 42 s cycle at half speed waits 42 s inside the safety wait, and the renewal after
+    // it, past the wait, runs the round the stretch fires, which marks two of studio's pins for the annex.
+    at('req_9f2e7c5a-c49', 1, 1, t(14, 4, 18), 'held', 'studio', { hold: { cohort: null, place: 'slow_down', until: t(14, 5) }, pin: live('continues_pin', 42_000), pinPace: { cycleMs: 42_000, slowDownUntil: t(14, 5) } }),
+    at('req_9f2e7c5a-c49', 2, 1, t(14, 5), 'renewed', 'studio', {
+      heldBefore: { cohort: null, heldMs: 42_000, waitedOn: ['studio'], waits: [{ heldMs: 42_000, reason: 'slow_down' }] },
+      holds: [{ accountId: 'studio', attempt: 1, cohort: null, heldMs: 42_000, ranOut: false }],
+      pin: live('continues_pin', 84_000),
+      pinPace: { cycleMs: 42_000, slowDownUntil: t(14, 5) },
+      round: roundOfPins(STRETCH_PINS),
+    }),
   ];
 }
 
@@ -1577,9 +1753,14 @@ function poolDiff(p: PoolSeed): Record<string, unknown> {
     overage_policy: p.overagePolicy,
     prefer_subscription: p.preferSubscription,
     retry_in_place_seconds: p.retryInPlaceSeconds,
+    return_to_plan: p.returnToPlan,
+    return_to_plan_dwell_seconds: p.returnToPlanDwellSeconds,
     session_placement: p.sessionPlacement,
     shed_cap: p.shedCap,
     shed_dwell_seconds: p.shedDwellSeconds,
+    slow_down: p.slowDown,
+    slow_down_hold_seconds: p.slowDownHoldSeconds,
+    slow_down_stretch_seconds: p.slowDownStretchSeconds,
     strategy: p.strategy,
     subagent_placement: p.subagentPlacement,
     warm_sessions: p.warmSessions,
@@ -1604,28 +1785,37 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
   const pool = poolById.get(record.request.poolId)!;
   const source = record.candidates.find((c) => c.accountId === accountId)?.windows[window];
   const round = roundOf(roundOfPins(pins), Number(value('excess')), pool);
+  // A round the stretch fired reads the demand to the reset less the threshold, the horizon the slow-down moved.
+  const slowed = value('fired_by') === 'slow_down' ? slowReadAt(accountId, pool, at) : null;
+  const threshold = pool.slowDownStretchSeconds * 1_000;
+  const moved = slowed && source?.reset ? Date.parse(source.reset) - threshold : null;
+  const horizon = moved ?? (source?.horizon ? Date.parse(source.horizon) : null);
+  const projection = moved !== null && source ? round3(source.utilization + (source.demand ?? 0) * ((moved - at) / HOUR)) : (source?.projection ?? null);
   // A planned move books its rewrite and its burn on the destination for the rest of the walk, as the router's plan does.
   const planned = new Map<string, RecordCandidate>();
   const scoreOf = (c: RecordCandidate) => c.pace?.score ?? 0;
   // A mark's destination as its own move would read it: a free eligible sibling holding allowance that the pin fits
-  // to the horizon, narrowed to the longest runway, the pool's strategy breaking a tie by tier and then by score.
+  // to the horizon, ranked by the pool's strategy, by tier and under Pace by score, the longest runway breaking the
+  // strategy's tie. Round robin's cursor names one turn, so the runway never speaks there.
   const read = (p: RoundPin) => {
     if (!p.marked) return { planned: null, rewrite: null, runway: null };
     const windows = drawnWindows(p.model);
     const siblings = record.candidates.filter((c) => c.obstacle === null && c.accountId !== accountId && c.inFlight < c.inFlightCap && (c.kind === 'api_key' || windows.every((w) => (c.windows[w]?.utilization ?? 0) < 1)));
     const reads = siblings.map((c) => {
       const base = planned.get(c.accountId) ?? structuredClone(c);
-      return { base, fit: fitOf(base, at, pool.windowCeiling, p.model, p.lastInputTokens, { [window]: p.burn }, true) };
+      return { base, fit: fitOf(base, at, pool, p.model, p.lastInputTokens, { [window]: p.burn }, true) };
     });
-    const tied = longestOf(reads.filter((x) => x.fit.verdict === 'fits').map((x) => ({ ...x, runwayMs: x.fit.runwayMs })));
-    const ranked = [...tied].sort((x, y) => (tierBefore(x.base.tier, y.base.tier) ? -1 : tierBefore(y.base.tier, x.base.tier) ? 1 : pool.strategy === 'pace' ? scoreOf(y.base) - scoreOf(x.base) : 0));
-    const chosen = ranked[0];
+    const fitting = reads.filter((x) => x.fit.verdict === 'fits').map((x) => ({ ...x, runwayMs: x.fit.runwayMs }));
+    const ranked = [...fitting].sort((x, y) => (tierBefore(x.base.tier, y.base.tier) ? -1 : tierBefore(y.base.tier, x.base.tier) ? 1 : pool.strategy === 'pace' ? scoreOf(y.base) - scoreOf(x.base) : 0));
+    const ties = ranked.filter((x) => tierKey(x.base.tier) === tierKey(ranked[0].base.tier) && (pool.strategy !== 'pace' || scoreOf(x.base) === scoreOf(ranked[0].base)));
+    const chosen = pool.strategy === 'round_robin' ? ranked[0] : longestOf(ties)[0];
     if (!chosen) return { planned: null, rewrite: null, runway: null };
     const rewrite = rewriteOf(p.lastInputTokens, p.model);
     for (const [w, x] of Object.entries(rewrite)) if (chosen.base.windows[w]) chosen.base.windows[w].reserved = round5((chosen.base.windows[w].reserved ?? 0) + x);
     chosen.base.burn = { ...chosen.base.burn, [window]: (chosen.base.burn[window] ?? 0) + p.burn };
     planned.set(chosen.base.accountId, chosen.base);
-    return { planned: chosen.base.accountId, rewrite: rewrite[window] ?? null, runway: chosen.fit.runwayMs };
+    // An API-key destination bills the rewrite in dollars, so it costs no share of the window that fired.
+    return { planned: chosen.base.accountId, rewrite: chosen.base.kind === 'api_key' ? null : (rewrite[window] ?? null), runway: chosen.fit.runwayMs };
   };
   return {
     accountId,
@@ -1638,7 +1828,8 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
       dwell_seconds: pool.shedDwellSeconds,
       dwell_until: at + pool.shedDwellSeconds * 1_000,
       excess: Number(value('excess')),
-      horizon: source?.horizon ? Date.parse(source.horizon) : null,
+      factor: slowed?.factor ?? null,
+      horizon,
       marks: pins.filter((p) => p.marked).map((p) => ({ agent_id: p.agentId, key_id: p.keyId, model: p.model, session_id: p.sessionId })),
       outcome: round.outcome,
       persisted: true,
@@ -1649,11 +1840,14 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
           planned: figures.planned, rewrite: figures.rewrite, runway_ms: figures.runway, session_id: p.sessionId, skip: p.skip,
         };
       }),
-      projection: source?.projection ?? null,
+      projection,
       reason: round.reason,
       removed: round.removed,
       shed_cap: pool.shedCap,
+      stretch_ms: slowed?.stretchMs ?? null,
       target: round.target,
+      threshold_ms: slowed ? threshold : null,
+      trigger: slowed ? 'slow_down' : 'projection',
       unit: 'window_share',
       utilization: source?.utilization ?? null,
       warm_sessions: pool.warmSessions,
@@ -1675,6 +1869,37 @@ function markCleared(): EventSeed[] {
     const detail = { agent_id: record.request.agentId, marked_at: Date.parse(m.markedAt), marked_on: m.markedOn, marked_window: m.markedWindow, projection: m.projection, reason: m.reason };
     return [{ accountId: m.markedOn, agentId: record.request.agentId, at: record.request.at, detail, keyId: record.request.keyId, kind: 'mark_cleared', model: record.request.canonicalModel }];
   });
+}
+
+/**
+ * Studio's two slow-down spans in work: the closed one, which ended a minute after the 5-hour window it slowed reset,
+ * and the open one the afternoon's slowed request and its round stand in. Each start reads the entry its span opened
+ * with, the demand the 5-hour burn over its speed, and the ended row's held time is the span's slow-down waits on the
+ * request rows, as the router sums the holds it answered.
+ */
+function slowDownSpans(): EventSeed[] {
+  const t = clock;
+  const work = poolById.get('work')!;
+  const studio = accountOf.get('studio');
+  const five = studio?.windows.find((w) => w.id === '5h');
+  const reset = Date.parse(five?.resetsAt ?? '');
+  const closed = { end: t(12, 22), since: t(9, 12) };
+  const open = Date.parse(studio?.slowDown?.since ?? '');
+  const started = (at: number, resetAt: number): EventSeed[] => {
+    const read = slowReadAt('studio', work, at);
+    if (read === null) return [];
+    const detail = { demand: round5((five?.burn ?? 0) / read.speed), factor: read.factor, reset: resetAt, stretch_ms: read.stretchMs, threshold_ms: work.slowDownStretchSeconds * 1_000 };
+    return [{ accountId: 'studio', at: iso(at), detail, kind: 'slow_down_started', poolId: 'work' }];
+  };
+  const heldMs = REQUESTS.filter((r) => r.poolId === 'work' && Date.parse(r.at) >= closed.since && Date.parse(r.at) <= closed.end)
+    .flatMap((r) => r.held?.waits ?? [])
+    .filter((w) => w.reason === 'slow_down')
+    .reduce((n, w) => n + w.heldMs, 0);
+  return [
+    ...started(closed.since, reset - FIVE_HOURS),
+    { accountId: 'studio', at: iso(closed.end), detail: { duration_ms: closed.end - closed.since, factor_min: 0.35, held_ms: heldMs, since: closed.since }, kind: 'slow_down_ended', poolId: 'work' },
+    ...(Number.isNaN(open) ? [] : started(open, reset)),
+  ];
 }
 
 /**
@@ -1770,6 +1995,10 @@ function buildEvents(): RoutingEvent[] {
     if (epoch !== undefined && epoch !== null) seed.detail.epoch = epoch;
     const landed = record?.outcome.kind === 'moved' ? record.candidates.find((c) => c.accountId === record.outcome.accountId) : undefined;
     if (landed?.fit) Object.assign(seed.detail, { binding: landed.binding, fit: landed.fit, runway_ms: landed.runwayMs });
+    // A failover's event carries the cooldown that caused it, in the shape the router serializes, and a rule's move
+    // none.
+    const cause = record?.outcome.cause;
+    if (record) seed.detail.cause = cause ? { reason: cause.reason, scope: cause.scope, window: cause.window } : null;
   }
 
   const primary = accountOf.get('primary')!;
@@ -1783,9 +2012,10 @@ function buildEvents(): RoutingEvent[] {
   const pool = poolById.get('all')!;
   const beforeReset = oauthWindows('primary', fiveHourReset - 1, () => OLDER_FACTOR).find((w) => w.id === '5h')?.utilization ?? null;
   seeds.push(
-    ...[roundEvent('req_1eaa9bc1-a18/1', ROUND_PINS), roundEvent('req_6e1f3b98-a24/1', NO_RUNWAY_PINS)].flatMap((e) => (e === null ? [] : [e])),
+    ...[roundEvent('req_1eaa9bc1-a18/1', ROUND_PINS), roundEvent('req_9f2e7c5a-c49/2', STRETCH_PINS), roundEvent('req_6e1f3b98-a24/1', NO_RUNWAY_PINS)].flatMap((e) => (e === null ? [] : [e])),
     ...markCleared(),
     ...expiredReservations(),
+    ...slowDownSpans(),
     // The story hour.
     ...expiries(),
     { accountId: 'secondary', at: iso(t(13, 48, 20)), detail: { attempts: 1, endpoint: 'usage', last_clean_poll_at: t(13, 43), next_attempt_at: t(13, 53), reason: '429' }, kind: 'poll_backoff_started' },
@@ -1839,7 +2069,8 @@ const DECISION_KINDS: readonly string[] = ['exhausted', 'held', 'moved', 'placed
 const EVENT_KINDS: readonly string[] = [
   'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
   'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
-  'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset', 'window_spent',
+  'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'warm_prefix_expired', 'wind_down_started',
+  'window_reset', 'window_spent',
 ];
 
 /** The route's merged order: newest first, a decision before an event at one instant. */

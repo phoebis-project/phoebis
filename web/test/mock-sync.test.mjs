@@ -174,8 +174,11 @@ test('the mock refuses the affinity and the keepalive values the route refuses',
   await refused({ ...poolInputOf(all), keepalive: { ...all.keepalive, scheduledHorizonSeconds: 604_801 } }, 'keepalive.scheduled_horizon_seconds must be between 60 and 604800, not 604801');
   await refused({ ...poolInputOf(all), affinityTtlSeconds: 120 }, 'keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed');
   assert.equal((await api.listPools()).find((p) => p.id === 'all').affinityTtlSeconds, all.affinityTtlSeconds, 'a refused save stores nothing');
-  const saved = await api.updatePool('all', { ...poolInputOf(all), windowCeiling: 0.8, keepalive: { ...all.keepalive, enabled: false } });
+  const saved = await api.updatePool('all', { ...poolInputOf(all), windowCeiling: 0.8, keepalive: { ...all.keepalive, enabled: false }, returnToPlan: 'when_cold', slowDown: true, slowDownStretchSeconds: 2_400 });
   assert.deepEqual([saved.windowCeiling, saved.keepalive.enabled], [0.8, false]);
+  // The save goes back to the route as the body the dialog sends, and the route's answer through the decoder.
+  const read = d.decodePool({ ...fixture('pools').pools[0], ...d.encodePool({ ...poolInputOf(saved), status: 'active' }) });
+  assert.deepEqual([read.slowDown, read.slowDownStretchSeconds, read.returnToPlan], [true, 2_400, 'when_cold'], 'the slow-down, its stretch and the return mode read back as saved');
 });
 
 test('a null ceiling is the break-even, which the mock admits as the route does', async () => {

@@ -4,10 +4,10 @@ import { accountById } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById } from './pools';
-import { CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS } from './requests';
+import { CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, HAIKU, MARKED_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
-import { MINUTE, NOW, ago, ahead } from './time';
+import { HOUR, MINUTE, NOW, ago, ahead } from './time';
 
 const rng = createRng(2_024);
 
@@ -371,6 +371,62 @@ for (const pin of SESSIONS) {
   pin.keepalive.cause = main?.cause ?? null;
 }
 
+/**
+ * Studio's notebook sessions in work, pinned there while the slow-down holds it: the slowed one with its subagent, whose
+ * main pin has the cycle its turns since the placement give, and the two the round marked, whose pins have none yet. No
+ * recipe warms them. They are written after the recipes rather than rolled, so every drawn row and recipe keeps its
+ * rolls.
+ */
+const SLOWED_PINS: { agents: { agentId: string; model: string }[]; burn: number; cycleMs: number | null; sessionId: string }[] = [
+  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }, { agentId: '7b2e', model: HAIKU }], burn: 0.03, cycleMs: 42_000, sessionId: SLOWED_SESSION_ID },
+  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }], burn: 0.03, cycleMs: null, sessionId: MARKED_SESSION_IDS[0] },
+  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }], burn: 0.0275, cycleMs: null, sessionId: MARKED_SESSION_IDS[1] },
+];
+for (const pin of SLOWED_PINS) {
+  // The rows run newest first, and the main agent's newest turn is the pin's last use.
+  const rows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'notebook' && r.sessionId === pin.sessionId);
+  const main = rows.filter((r) => r.agentId === 'main');
+  const last = main[0];
+  const lastAttempt = last.attempts[last.attempts.length - 1];
+  SESSIONS.push({
+    ...SESSION_SAMPLE,
+    accountId: 'studio',
+    agentId: 'main',
+    agents: pin.agents.length,
+    burn: pin.burn,
+    burnAt: lastAttempt.startedAt,
+    burnEquivalent: burnEquivalentOf(pin.burn, 'studio'),
+    burnUnit: 'window_share',
+    cacheTtlMs: HOUR,
+    companion: 'none',
+    companionSince: null,
+    createdAt: main[main.length - 1].at,
+    cycleMs: pin.cycleMs,
+    epoch: 1,
+    estimated: false,
+    forkDepth: null,
+    forkedFrom: null,
+    historical: false,
+    keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
+    keyGeneration: Date.parse(keyById.get('notebook')!.createdAt),
+    keyId: 'notebook',
+    lastInputTokens: last.usage.input + last.usage.cacheRead + last.usage.cacheWrite5m + last.usage.cacheWrite1h,
+    lastRefreshAt: lastAttempt.startedAt,
+    lastRequestAt: rows[0].at,
+    lastUsedAt: lastAttempt.startedAt,
+    model: 'claude-sonnet-5-5',
+    pinned: true,
+    presenceAgeSeconds: null,
+    requests: rows.length,
+    // Studio's window reaches the ceiling at its burn just past the reset, so the runway outlasts the horizon.
+    runwayBounded: true,
+    runwayMs: 10_330_000,
+    sessionId: pin.sessionId,
+    shedFrom: null,
+    speed: accountById.get('studio')?.slowDown?.factor ?? null,
+  });
+}
+
 // The earlier holder of the `desktop` key id, which the analytics story draws as `desktop (deleted, created ...)`
 // with the creation minute in the viewer's zone: the router lists a holder's session while its last request is inside
 // the session expiry, with that holder's own requests and no pin or recipe. The holder's last request ran on the
@@ -425,6 +481,10 @@ for (const r of RECIPES) {
   if (poolId === undefined || (r.agentState === 'released' && !ROUTED_PINS.has(pin))) continue;
   const member = `${poolId}|${r.accountId}`;
   PINS.set(member, (PINS.get(member) ?? new Set()).add(pin));
+}
+for (const pin of SLOWED_PINS) {
+  const member = `${keyById.get('notebook')!.poolId}|studio`;
+  for (const a of pin.agents) PINS.set(member, (PINS.get(member) ?? new Set()).add(`notebook|${pin.sessionId}|${a.agentId}|${a.model}`));
 }
 /** The pins under a pool's keys on one member's account. */
 export const memberPins = (poolId: string, accountId: string): number => PINS.get(`${poolId}|${accountId}`)?.size ?? 0;

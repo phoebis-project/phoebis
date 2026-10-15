@@ -1,5 +1,5 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
-import { AFFINITY_MODE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeSettings } from '@/api/decode';
+import { AFFINITY_MODE_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeSettings } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, MemberEligibility,
@@ -85,7 +85,7 @@ const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'modelRules' | 'modelRule
   return null;
 };
 
-/** The ceiling, shedding and failover refusals, in the order and words of the pool routes. */
+/** The ceiling, shedding, failover, slow-down and return-to-plan refusals, in the order and words of the pool routes. */
 const engineRefusal = (input: PoolInput): string | null => {
   const whole = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
   if (!(input.windowCeiling >= 0.5 && input.windowCeiling <= 1)) return 'window_ceiling is between 0.5 and 1.0';
@@ -97,6 +97,10 @@ const engineRefusal = (input: PoolInput): string | null => {
   if (!whole(input.inFlightCap, 1, 4_294_967_295)) return 'in_flight_cap is at least 1';
   if (!whole(input.overageMoveGraceMinutes, 0, 300)) return 'overage_move_grace_minutes is 0 to 300';
   if (!whole(input.windDownMinutes, 0, 10_080)) return 'wind_down_minutes is at most 10080 (one week)';
+  if (!whole(input.slowDownStretchSeconds, 60, 18_000)) return 'slow_down_stretch_seconds is between 60 and 18000';
+  if (!whole(input.slowDownHoldSeconds, 1, 300)) return 'slow_down_hold_seconds is between 1 and 300';
+  if (!RETURN_TO_PLAN_VALUES.some((mode) => mode === input.returnToPlan)) return 'return_to_plan must be always, when_cold, or never';
+  if (!whole(input.returnToPlanDwellSeconds, 0, 86_400)) return 'return_to_plan_dwell_seconds is between 0 and 86400';
   return null;
 };
 
@@ -275,12 +279,12 @@ const eligibilityOf = (a: Account | undefined, policy: PoolInput['overagePolicy'
 };
 
 /**
- * A written member as the route answers it: the kind, the burn and the Pace score read off the account, and no spend,
- * since the mock keeps no ledger to price one from. A member sent without a budget field has no budget over that
- * period. A save moves no pin, so a member the pool held keeps its pins and one it gains holds none yet.
+ * A written member as the route answers it: the kind, the burn, the Pace score and the speed read off the account, and
+ * no spend, since the mock keeps no ledger to price one from. A member sent without a budget field has no budget over
+ * that period. A save moves no pin, so a member the pool held keeps its pins and one it gains holds none yet.
  */
-const writtenMember = (m: PoolInput['members'][number], account: Account | undefined, eligible: (member: Omit<PoolMember, 'eligible'>) => MemberEligibility, activePins = 0): PoolMember => {
-  const member = { accountId: m.accountId, activePins, budgetDailyUsd: m.budgetDailyUsd ?? null, budgetMonthlyUsd: m.budgetMonthlyUsd ?? null, budgetUntil: null, kind: account?.kind ?? 'oauth', priority: m.priority, spends: [], ...servedFigures(m.accountId, Date.now()) };
+const writtenMember = (m: PoolInput['members'][number], account: Account | undefined, slowDown: boolean, eligible: (member: Omit<PoolMember, 'eligible'>) => MemberEligibility, activePins = 0): PoolMember => {
+  const member = { accountId: m.accountId, activePins, budgetDailyUsd: m.budgetDailyUsd ?? null, budgetMonthlyUsd: m.budgetMonthlyUsd ?? null, budgetUntil: null, kind: account?.kind ?? 'oauth', priority: m.priority, spends: [], ...servedFigures(m.accountId, Date.now(), slowDown) };
   return { ...member, eligible: eligible(member) };
 };
 
@@ -372,7 +376,7 @@ export class MockApi implements Api {
     revision: stampToken(1, p.updatedAt),
     members: p.members.map((m) => {
       const account = this.accounts.find((a) => a.id === m.accountId);
-      return { ...m, activePins: memberPins(p.id, m.accountId), budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth', ...servedFigures(m.accountId, Date.now()) };
+      return { ...m, activePins: memberPins(p.id, m.accountId), budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth', ...servedFigures(m.accountId, Date.now(), p.slowDown) };
     }),
   }));
   private secretRng = createRng(MOCK_SEED);
@@ -570,7 +574,7 @@ export class MockApi implements Api {
       keepaliveResolved: resolvedFor(composedFor(input.members.map((m) => this.accounts.find((a) => a.id === m.accountId)?.kind ?? 'oauth'), input.cacheTtl), input.keepalive),
       members: input.members.map((m) => {
         const account = this.accounts.find((a) => a.id === m.accountId);
-        return writtenMember(m, account, (member) => eligibilityOf(account, input.overagePolicy, member));
+        return writtenMember(m, account, input.slowDown, (member) => eligibilityOf(account, input.overagePolicy, member));
       }),
       // The route starts a pool with no list when the body leaves it out, whatever the sample row holds.
       modelRules: input.modelRules ?? [],
@@ -636,7 +640,7 @@ export class MockApi implements Api {
   }
 
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>) {
-    return latency(rewritesOf(emptyStore() ? [] : ACCOUNT_ROLLUPS, range));
+    return latency(rewritesOf(emptyStore() ? [] : ACCOUNT_ROLLUPS, emptyStore() ? [] : REQUESTS, range));
   }
 
   getAnalyticsSeries(query: AnalyticsQuery) {
@@ -984,7 +988,7 @@ export class MockApi implements Api {
       members: input.members.map((m) => {
         const account = this.accounts.find((a) => a.id === m.accountId);
         const kept = verdict.get(m.accountId) ?? 'eligible';
-        return writtenMember(m, account, (member) => (kept === 'budget' ? eligibilityOf(account, input.overagePolicy, member) : kept), pinned.get(m.accountId));
+        return writtenMember(m, account, input.slowDown, (member) => (kept === 'budget' ? eligibilityOf(account, input.overagePolicy, member) : kept), pinned.get(m.accountId));
       }),
       ...restamp(current),
     };

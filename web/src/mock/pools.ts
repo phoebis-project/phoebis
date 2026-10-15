@@ -6,31 +6,33 @@ import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NOW, ago, ahead, daysAgo, iso } from './time';
 
 /**
- * A member as the story seeds it. The mock reads its kind, its eligibility, its burn and its Pace score off the
- * account, as the route does, and its pins off the recipes once they are drawn.
+ * A member as the story seeds it. The mock reads its kind, its eligibility, its burn, its Pace score and its speed off
+ * the account, as the route does, and its pins off the recipes once they are drawn.
  */
-type MemberSeed = Omit<PoolMember, 'activePins' | 'budgetUntil' | 'burn' | 'eligible' | 'kind' | 'paceScore'>;
+type MemberSeed = Omit<PoolMember, 'activePins' | 'budgetUntil' | 'burn' | 'eligible' | 'kind' | 'paceScore' | 'speed'>;
 
 /** The worst live bucket of each API-key account, which the router reads as its room. */
-export const WORST_BUCKET: Readonly<Record<string, number>> = { overflow: 0.04, research: 0.1 };
+export const WORST_BUCKET: Readonly<Record<string, number>> = { annex: 0.02, overflow: 0.04, research: 0.1 };
 
 /**
- * A member's two figures as the pools route serves them: the 7-day window's burn, and the router's Pace score, the
- * spare rate on the 7-day window for an OAuth member (its remaining share per hour to the earlier of the reset and the
- * end, less the burn) and the remaining worst bucket for an API-key member, which burns no plan window.
+ * A member's three figures as the pools route serves them: the 7-day window's burn, the router's Pace score, the spare
+ * rate on the 7-day window for an OAuth member (its remaining share per hour to the earlier of the reset and the end,
+ * less the burn) and the remaining worst bucket for an API-key member, which burns no plan window, and the factor of
+ * the account's slow-down where the member's pool has the switch on.
  */
-export function servedFigures(accountId: string, now: number): Pick<PoolMember, 'burn' | 'paceScore'> {
+export function servedFigures(accountId: string, now: number, slowDown: boolean): Pick<PoolMember, 'burn' | 'paceScore' | 'speed'> {
   const account = accountById.get(accountId);
-  if (account === undefined) return { burn: null, paceScore: null };
-  if (account.kind === 'api_key') return { burn: null, paceScore: 1 - (WORST_BUCKET[accountId] ?? 0) };
+  if (account === undefined) return { burn: null, paceScore: null, speed: null };
+  if (account.kind === 'api_key') return { burn: null, paceScore: 1 - (WORST_BUCKET[accountId] ?? 0), speed: null };
+  const speed = slowDown ? (account.slowDown?.factor ?? null) : null;
   const week = account.windows.find((w) => w.id === '7d');
-  if (week === undefined) return { burn: null, paceScore: null };
+  if (week === undefined) return { burn: null, paceScore: null, speed };
   const end = endOf(account, now);
   const reset = week.resetsAt === null ? null : Date.parse(week.resetsAt);
   const deadline = [reset, end].filter((x): x is number => x !== null).reduce<number | null>((min, x) => (min === null || x < min ? x : min), null);
   const hours = deadline === null ? 168 : Math.max(1, (deadline - now) / HOUR);
   const burn = week.burn ?? 0;
-  return { burn: week.burn, paceScore: Math.round(((1 - week.utilization) / hours - burn) * 100_000) / 100_000 };
+  return { burn: week.burn, paceScore: Math.round(((1 - week.utilization) / hours - burn) * 100_000) / 100_000, speed };
 }
 /**
  * The route lists a pool's keys from the key registry, so the story seeds none on the pool itself. Its pins are its
@@ -141,6 +143,13 @@ const POOL_ROWS: PoolSeed[] = [
     shedCap: 0.5,
     burnAverageSeconds: 1_800,
     shedDwellSeconds: 900,
+    // The slow-down off, so its 5-hour rounds fire on the projection. The return dwell is the shed dwell's, as the
+    // registry's migration copied it.
+    slowDown: false,
+    slowDownStretchSeconds: 1_800,
+    slowDownHoldSeconds: 120,
+    returnToPlan: 'always',
+    returnToPlanDwellSeconds: 900,
     affinityTtlSeconds: 600,
     // Pins only for a request that caches, and a fresh session placed where its static prefix is warm.
     affinityMode: 'when_cached',
@@ -192,8 +201,8 @@ const POOL_ROWS: PoolSeed[] = [
     // The 09:05:12 edit that set its ceiling, the registry change the routing log records.
     updatedAt: iso(NOW - (5 * HOUR + 24 * MINUTE + 48_000)),
     // The sample's failover settings are the store's defaults, so this pool reads balanced on both groups. The last
-    // hour's moves are the routing log's story: two failovers, a fast lane's and two by the spent rule.
-    movesPerHour: { cooldown: 2, fast_lane: 1, spent: 2 },
+    // hour's moves are the routing log's story: three failovers, a fast lane's and two by the spent rule.
+    movesPerHour: { cooldown: 3, fast_lane: 1, spent: 2 },
   },
   {
     ...POOL_SAMPLE,
@@ -212,6 +221,13 @@ const POOL_ROWS: PoolSeed[] = [
     shedDwellSeconds: 1_800,
     migrateWhenSpent: false,
     warmSessions: 'never',
+    // Its one member is an API-key account, which the slow-down never holds. The return dwell is the shed dwell's, as
+    // the registry's migration copied it.
+    slowDown: false,
+    slowDownStretchSeconds: 1_800,
+    slowDownHoldSeconds: 120,
+    returnToPlan: 'always',
+    returnToPlanDwellSeconds: 1_800,
     inFlightCap: 4,
     retryInPlaceSeconds: 30,
     overageMoveGraceMinutes: 0,
@@ -242,6 +258,8 @@ const POOL_ROWS: PoolSeed[] = [
   },
   {
     ...POOL_SAMPLE,
+    // A subscription member and the API-key annex a round moves studio's sessions to, behind a key that admits any
+    // client.
     id: 'work',
     name: 'work',
     status: 'active',
@@ -252,18 +270,26 @@ const POOL_ROWS: PoolSeed[] = [
     loadShedding: true,
     // Its own cap at the balanced preset's, where the sample's captured pool sets one under a quarter.
     shedCap: 0.5,
+    // The slow-down on at the store's defaults, so studio's sessions are held once they would pass the ceiling before
+    // the reset, and a round moves sessions off it once the stretch passes 30 minutes.
+    slowDown: true,
+    slowDownStretchSeconds: 1_800,
+    slowDownHoldSeconds: 120,
+    returnToPlan: 'always',
+    returnToPlanDwellSeconds: 900,
     affinityTtlSeconds: 3_600,
     movesPerHour: {},
-    // Warming on with the plan's main turns on the hour, so its one plan member reads one figure each.
+    // Warming on with the plan's main turns on the hour, and the annex on the metered five minutes, which brings the
+    // low end.
     keepalive: { ...KEEPALIVE_DEFAULTS, enabled: true },
-    keepaliveResolved: FIGURES.plan['1h'],
+    keepaliveResolved: merged(FIGURES.plan['1h'], FIGURES.dollars['5m']),
     // Off, so the pool card's badge and the key dialog's Inherit label each read both states in the story.
     autoModeServer: false,
     cacheDiagnostics: false,
     cacheTtl: { ...CACHE_TTL_DEFAULTS, enabled: true },
     bodyCaptureHours: 0,
     modelRules: [],
-    members: [unbudgeted('studio', 0)],
+    members: [unbudgeted('studio', 0), unbudgeted('annex', 1)],
     ...UNTIL_DRAWN,
     updatedAt: daysAgo(40),
   },

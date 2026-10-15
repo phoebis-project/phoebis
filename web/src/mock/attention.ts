@@ -92,12 +92,63 @@ function roundsWithoutRunway(poolId: string): Pick<AttentionItem, 'detail' | 'si
   return { detail: { accounts: sorted(rounds.map((e) => e.accountId)), rounds: rounds.length, setting: ['window_ceiling'], setting_values: { window_ceiling: ceiling } }, since: rounds[0].at };
 }
 
-const CONDITION_ORDER: AttentionItem['kind'][] = ['wall_reached', 'destination_spent', 'shed_no_runway'];
+/** The slowed time past which an account's slow-down is the pool's load rather than one turn's, the reader's own. */
+const SLOWED_LONG_MS = HOUR;
 
 /**
- * The three routing conditions as the reader builds them, one per subject the fold holds: every OAuth account for the
- * walls and the spent destinations, every pool for the rounds without runway. The route lists them by kind, then by
- * when each began, then by subject.
+ * An account's slow-down spans over the day as the reader pairs them: each start with the next end of its account and
+ * pool or the next restart, whichever comes first, a start with neither open to now, each span clamped to the day. It
+ * holds once the spans sum past an hour, from the own start of the oldest, with the lowest factor any span read and
+ * the stretch threshold of the newest span's pool. Null where it does not hold.
+ */
+function slowed(accountId: string): Pick<AttentionItem, 'detail' | 'since'> | null {
+  const from = NOW - DAY;
+  const spans: { factor: number | null; open: boolean; pool: string; since: number; slowedMs: number }[] = [];
+  const count = (pool: string, since: number, end: number, open: boolean, factor: number | null) => spans.push({ factor, open, pool, since, slowedMs: Math.max(0, end - Math.max(since, from)) });
+  const lowest = (a: number | null, b: unknown) => (typeof b !== 'number' ? a : a === null ? b : Math.min(a, b));
+  const standing = new Map<string, { factor: number | null; since: number }>();
+  const rows = ROUTING_EVENTS.filter((e) => Date.parse(e.at) >= from && Date.parse(e.at) <= NOW && (e.kind === 'router_started' || (e.accountId === accountId && e.poolId !== null)));
+  for (const e of rows) {
+    const pool = e.poolId ?? '';
+    if (e.kind === 'router_started') {
+      for (const [open, span] of standing) count(open, span.since, Date.parse(e.at), false, span.factor);
+      standing.clear();
+    } else if (e.kind === 'slow_down_started') {
+      const span = standing.get(pool);
+      standing.set(pool, span ? { ...span, factor: lowest(span.factor, e.detail.factor) } : { factor: lowest(null, e.detail.factor), since: Date.parse(e.at) });
+    } else if (e.kind === 'slow_down_ended') {
+      const span = standing.get(pool);
+      if (!span) continue;
+      standing.delete(pool);
+      const since = typeof e.detail.since === 'number' ? e.detail.since : span.since;
+      const end = typeof e.detail.duration_ms === 'number' ? since + e.detail.duration_ms : Date.parse(e.at);
+      count(pool, since, end, false, typeof e.detail.factor_min === 'number' ? e.detail.factor_min : span.factor);
+    }
+  }
+  for (const [pool, span] of standing) count(pool, span.since, NOW, true, span.factor);
+  const slowedMs = spans.reduce((n, x) => n + x.slowedMs, 0);
+  if (slowedMs <= SLOWED_LONG_MS) return null;
+  const newest = spans.reduce((a, b) => (b.since > a.since ? b : a));
+  const stretch = POOLS.find((p) => p.id === newest.pool)?.slowDownStretchSeconds;
+  return {
+    detail: {
+      factor_min: spans.reduce<number | null>((n, x) => lowest(n, x.factor), null),
+      open: spans.some((x) => x.open),
+      setting: ['slow_down_stretch_seconds'],
+      ...(stretch === undefined ? {} : { setting_values: { slow_down_stretch_seconds: stretch } }),
+      slowed_ms: slowedMs,
+      spans: spans.length,
+    },
+    since: iso(Math.min(...spans.map((x) => x.since))),
+  };
+}
+
+const CONDITION_ORDER: AttentionItem['kind'][] = ['wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'];
+
+/**
+ * The four routing conditions as the reader builds them, one per subject the fold holds: every OAuth account for the
+ * walls, the spent destinations and the slow-downs, every pool for the rounds without runway. The route lists them by
+ * kind, then by when each began, then by subject.
  */
 const CONDITIONS: AttentionItem[] = [
   ...ACCOUNTS.filter((a) => a.kind === 'oauth').flatMap((a) => {
@@ -112,6 +163,10 @@ const CONDITIONS: AttentionItem[] = [
     const held = roundsWithoutRunway(p.id);
     return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...held, kind: 'shed_no_runway' as const, link: { id: p.id, page: 'pools' as const }, pools: [p.id], subject: { id: p.id, label: p.name, type: 'pool' as const } }] : [];
   }),
+  ...ACCOUNTS.filter((a) => a.kind === 'oauth').flatMap((a) => {
+    const held = slowed(a.id);
+    return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), ...held, kind: 'slowed_long' as const }] : [];
+  }),
 ].sort((x, y) => CONDITION_ORDER.indexOf(x.kind) - CONDITION_ORDER.indexOf(y.kind) || Date.parse(x.since) - Date.parse(y.since) || x.subject.id.localeCompare(y.subject.id));
 
 /**
@@ -122,8 +177,8 @@ const CONDITIONS: AttentionItem[] = [
  * legacy's refreshes failing, the proxy listener's certificate 12 days from its end, a priced record of the jobs pool's
  * one member parked in the ledger file, the backoff secondary's poll is in, Sonnet 4.6 priced at its model tier's
  * weight, nightly's wall at 12:01 and secondary's after the 11:00 round, nightly spent after the least-bad move onto
- * it, and the all pool's round that found no destination with runway. The three routing conditions read the routing
- * log's events as the ledger folds them.
+ * it, the all pool's round that found no destination with runway, and studio slowed in work for nearly four hours of
+ * the day. The four routing conditions read the routing log's events as the ledger folds them.
  */
 export const ATTENTION: AttentionItem[] = [
   ...(jobsExhausted
