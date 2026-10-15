@@ -1,12 +1,31 @@
 import { effectiveLabel } from '@/api/decode';
-import type { RequestLog, Settings } from '@/api/types';
+import type { CohortHold, RequestLog, Settings } from '@/api/types';
+import { own } from '@/lib/analytics';
 import { type Funding, fundingOf, nativeOf, revisionAt } from '@/lib/costs';
 import { equivalentShort, fmtEquivalent, fmtUsd, shareLabel, shareShort, withEstimate } from '@/lib/format';
+import { ageWord } from '@/lib/routingLog';
 import type { UnitPosition } from '@/lib/unit';
 
 /** The words under a dollar figure for who paid: the funding of a request billed in dollars. */
 export const FUNDING_WORD: Record<Exclude<Funding, 'plan'>, string> = { api_key: 'API key', fast: 'fast mode', overage: 'overage' };
 export const NO_SHARE_TITLE = 'The cost model prices no share for this request';
+
+/** A wait's reason as a held row's hover names it: `cap` waited for a slot the in-flight cap freed. */
+const WAIT_REASON_WORD: Record<string, string> = { cap: 'for a slot', reset: 'for the reset', slow_down: 'for the slow-down' };
+/** Where a hold waited: its cohort's account, else the last one it waited on. */
+const heldOn = (held: CohortHold) => held.cohort ?? held.waitedOn[held.waitedOn.length - 1] ?? 'an account';
+// Whole seconds round a wait under half a second to `0 s`, which would read as no wait at all.
+const waitWord = (ms: number) => ageWord(Math.max(1_000, ms));
+
+/**
+ * A held row's badge, `waited 42 s`, and its hover, each wait with its reason in the row's order and the account it
+ * waited on: `waited for the slow-down 42 s, for a slot 3 s on acct-a`. A row from before the waits names no reason, a
+ * reason the console has no words for reads as the router sent it, and a wait under a second reads `1 s`.
+ */
+export function heldWords(held: CohortHold): { badge: string; title: string } {
+  const waits = held.waits.map((w) => `${own(WAIT_REASON_WORD, w.reason) ? WAIT_REASON_WORD[w.reason] : `for ${w.reason}`} ${waitWord(w.heldMs)}`);
+  return { badge: `waited ${waitWord(held.heldMs)}`, title: `waited ${waits.length > 0 ? waits.join(', ') : waitWord(held.heldMs)} on ${heldOn(held)}` };
+}
 
 /** The two windows every subscription shares, drawn first in this order, and a model's own week follows them. */
 const SHARED_WINDOWS = ['five_hour', 'seven_day'];

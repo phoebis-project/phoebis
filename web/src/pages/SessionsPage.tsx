@@ -7,6 +7,7 @@ import { HELD_PROBE_HINT, MIGRATED_PROBE_HINT } from '@/components/charts/theme'
 import { FilterBar } from '@/components/FilterBar';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { CostReferenceLink } from '@/components/ui/CostReference';
+import { SpeedChip } from '@/components/ui/SpeedChip';
 import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useDescription } from '@/components/ui/primitives';
@@ -16,7 +17,8 @@ import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRel
 import { CAUSE_HINT, CAUSE_LABEL, isReleasedLine, orderRecipes, releasedCount, requestsRange, WARNING_CAUSES } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
-import { aroundSubject, logHref } from '@/lib/routingLog';
+import { ageWord, aroundSubject, logHref } from '@/lib/routingLog';
+import { memberSpeed } from '@/lib/selection';
 
 // The optional columns: the Session column is the row's identity and the table's fill column, so it is always drawn.
 const SESSION_COLUMNS = [
@@ -608,11 +610,17 @@ function SessionRows({
                   {session.accountId}
                 </Link>
               )}
+              {/* An unpinned row on a slowed account carries no speed, so the row's own speed gates the account's chip. */}
+              {session.speed !== null && <SpeedChip {...memberSpeed(session, account, now)} />}
               <OtherPins agents={otherAccounts} />
             </span>
           </td>
         )}
-        {visible.has('runway') && <td className="col-fit">{runwayWord(session) ?? <span className="muted">-</span>}</td>}
+        {visible.has('runway') && (
+          <td className="col-fit" title={session.pinned && session.cycleMs !== null ? `cycle ${ageWord(session.cycleMs)}` : undefined}>
+            {runwayWord(session) ?? <span className="muted">-</span>}
+          </td>
+        )}
         {/* Expiry rides under the last-used time rather than in a column of its own, which is 90px the 1600px window did not have. */}
         {visible.has('lastUsed') && (
           <td className="col-fit" title={fmtAbsolute(lastUsed)}>

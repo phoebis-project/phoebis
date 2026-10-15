@@ -208,6 +208,30 @@ const drawerChips = (row) =>
   }));
 /** A wait as the TTFB column reads a duration, spelled out here so the checks hold the console's formatter to it. */
 const waitText = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
+/** A wait under an hour as a held row and a cycle read it: whole seconds under a minute, else minutes and seconds. */
+const ageText = (ms) => (ms < 60_000 ? `${Math.round(ms / 1000)} s` : ms % 60_000 >= 1000 ? `${Math.floor(ms / 60_000)} min ${Math.floor((ms % 60_000) / 1000)} s` : `${Math.floor(ms / 60_000)} min`);
+/**
+ * studio's slow-down and the hover its speed chip reads, the clock as the page writes a time of day in the zone the run
+ * pins: the story slows the work pool's subscription member to half its speed, 42 min over its 30 min threshold.
+ */
+const studioSpeed = async () => {
+  const slowDown = (await api.listAccounts()).find((a) => a.id === 'studio')?.slowDown ?? null;
+  const since = slowDown?.since ? new Date(slowDown.since).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit' }) : 'no since';
+  return { factor: slowDown?.factor ?? null, hover: `slowed since ${since}: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min threshold` };
+};
+/**
+ * The speed chips under `root`: where each sits by `whereOf`, what it stands beside (a bar's label by its words where
+ * the chip follows it in the bar's head, `status` where the chip precedes a card's status badge in the card's head),
+ * and its badge's word, tone and hover.
+ */
+const speedChips = (root, whereOf) =>
+  [...root.querySelectorAll('.speed-chip')].map((chip) => {
+    const badge = chip.querySelector('.badge');
+    const before = chip.previousElementSibling;
+    const after = chip.nextElementSibling;
+    const beside = before?.classList.contains('wbar__label') ? before.textContent : after?.classList.contains('badge') && after.querySelector('.badge__dot') !== null ? 'status' : null;
+    return [whereOf(chip), beside, badge?.textContent?.trim() ?? '', badge?.className.replace('badge ', '') ?? '', badge?.getAttribute('title') ?? ''];
+  });
 /**
  * A Sessions row's cell under the header that reads `header`, so a check names its column whatever the control hides.
  */
@@ -741,6 +765,17 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: '/ account strip greys missing Fable windows', ok: fableAbsent >= 2, missing: [String(fableAbsent)] });
   const triples = [...m.container.querySelectorAll('.account-mini .wbars--3')].filter((el) => el.querySelectorAll('.wbar').length === 3).length;
   results.push({ name: '/ account chips draw three bars', ok: triples >= 4, missing: [String(triples)] });
+  {
+    // studio, the work pool's slowed member, wears the speed chip in its card's head before the status badge, with its
+    // slow-down in the hover, since the compact 5-hour bar has no room for it, and no other card or bar wears one.
+    const want = await studioSpeed();
+    const chips = speedChips(m.container, (chip) => (chip.closest('a.account-mini') ? idOf(chip.closest('a.account-mini')) : 'elsewhere'));
+    results.push({
+      name: "/ studio's card draws its speed chip in its head before the status badge with its slow-down in the hover, and no other card draws one",
+      ok: want.factor === 0.5 && JSON.stringify(chips) === JSON.stringify([['studio', 'status', '0.5x', 'badge--warning', want.hover]]),
+      missing: [String(want.factor), ...chips.map((c) => c.join(' | '))],
+    });
+  }
   await emailLines('/ each account card reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-mini')].map((c) => [idOf(c), c.querySelector('.account-mini__sub')?.textContent ?? null]));
   // primary cools on its fast lane, the first of its rows and the sooner to lift, and on one model.
   const primary = [...m.container.querySelectorAll('a.account-mini')].find((c) => idOf(c) === 'primary');
@@ -995,6 +1030,28 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   results.push({ name: '/quota every window share on the cards reads N% left', ok: shares.some((t) => /\d+% left/.test(t)) && off.length === 0, missing: [...new Set(off)] });
 }
 {
+  // studio, the work pool's slowed member, closes its 5-hour window's reset cell with the speed chip, its slow-down in
+  // the hover, and no other window or card draws one.
+  const want = await studioSpeed();
+  const chips = [...m.container.querySelectorAll('.qcard .speed-chip')].map((chip) => {
+    const cell = chip.parentElement;
+    const badge = chip.querySelector('.badge');
+    return [
+      chip.closest('.qcard')?.querySelector('.qcard__name')?.textContent?.trim() ?? '',
+      cell?.previousElementSibling?.previousElementSibling?.querySelector('.qchip__name')?.textContent ?? '',
+      cell?.classList.contains('qwin__reset') === true && cell.lastElementChild === chip,
+      badge?.textContent?.trim() ?? '',
+      badge?.className.replace('badge ', '') ?? '',
+      badge?.getAttribute('title') ?? '',
+    ];
+  });
+  results.push({
+    name: "/quota studio's 5-hour window closes its reset cell with the speed chip, its slow-down in the hover, and no other window draws one",
+    ok: want.factor === 0.5 && JSON.stringify(chips) === JSON.stringify([['studio', '5h', true, '0.5x', 'badge--warning', want.hover]]),
+    missing: [String(want.factor), ...chips.map((c) => c.join(' | '))],
+  });
+}
+{
   // The story's legacy was last read two days ago, before its 5-hour window reset, so that window has no reading since.
   const legacy = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'legacy');
   const [chip, meter, reset] = [...(legacy?.querySelector('.qcard__windows')?.children ?? [])];
@@ -1027,7 +1084,9 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
     const card = [...q.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
     const chip = [...(card?.querySelectorAll('.qcard__windows .qwin__chip') ?? [])].find((c) => c.querySelector('.qchip__name')?.textContent === name);
     const reset = chip?.nextElementSibling?.nextElementSibling ?? null;
-    return { parts: [...(reset?.querySelectorAll('.qwin__part') ?? [])].map((p) => p.textContent ?? ''), text: reset?.textContent ?? '', title: reset?.getAttribute('title') ?? '' };
+    // A slowed window's cell closes with its speed chip, which the label's words leave out.
+    const words = [...(reset?.childNodes ?? [])].filter((n) => !(n.nodeType === 1 && n.classList.contains('speed-chip'))).map((n) => n.textContent).join('').trimEnd();
+    return { parts: [...(reset?.querySelectorAll('.qwin__part') ?? [])].map((p) => p.textContent ?? ''), text: words, title: reset?.getAttribute('title') ?? '' };
   };
   const windowsOf = (a) => [['5h', a.windows.find((w) => w.id === '5h') ?? null], ['7d', a.windows.find((w) => w.id === '7d') ?? null], ['Fable', a.fableWindow]];
   const live = accounts.flatMap((a) => windowsOf(a).filter(([, w]) => w !== null && !(w.resetsAt !== null && Date.parse(w.resetsAt) < at)).map(([name, w]) => ({ account: a.label, name, w, ...cellOf(a.label, name) })));
@@ -1842,6 +1901,30 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     name: '/accounts usage card draws the three known windows, then a week no family row names under its key',
     ok: JSON.stringify(usageBars) === JSON.stringify(['5-hour', '7-day', 'Fable', 'seven_day_opus']),
     missing: usageBars,
+  });
+}
+{
+  // studio, the work pool's slowed member, wears the speed chip before the status badge in its list row's head, where
+  // the compact 5-hour bar has no room for it, and right after the 5-hour bar's label in its Usage card, with its
+  // slow-down in the hover, and no other row or bar wears one.
+  const want = await studioSpeed();
+  const page = await mount('/accounts/studio');
+  const whereOf = (chip) => {
+    const row = chip.closest('a.account-row');
+    return row ? `row ${new URL(row.getAttribute('href') ?? '/', 'http://127.0.0.1').pathname.split('/').pop()}` : chip.closest('.detail') ? 'detail' : 'elsewhere';
+  };
+  const chips = speedChips(page.container, whereOf);
+  page.unmount();
+  results.push({
+    name: "/accounts studio's row draws the speed chip before its status badge and its Usage card right after the 5-hour bar's label, with its slow-down in the hover, and no other row or bar draws one",
+    ok:
+      want.factor === 0.5 &&
+      JSON.stringify(chips) ===
+        JSON.stringify([
+          ['row studio', 'status', '0.5x', 'badge--warning', want.hover],
+          ['detail', '5-hour', '0.5x', 'badge--warning', want.hover],
+        ]),
+    missing: [String(want.factor), ...chips.map((c) => c.join(' | '))],
   });
 }
 {
@@ -8005,7 +8088,8 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   await m.settle(300);
 
   // The marker follows the trail on a row held and served and on a row held with nothing dispatched, and the
-  // switch keeps the held rows alone; the wait reads as the TTFB column reads a duration.
+  // switch keeps the held rows alone. The wait reads in whole seconds under a minute, and the hover names each wait's
+  // reason in its order and the account it waited on.
   const servedHeld = requests.find((r) => r.held?.heldMs === 1250 && r.attempts.length === 1);
   const heldAtCap = requests.find((r) => r.held !== null && r.attempts.length === 0 && r.errorCode === 'accounts_at_cap');
   results.push({ name: 'fixture: a request served after a hold and one held with nothing dispatched', ok: servedHeld !== undefined && heldAtCap !== undefined, missing: [String(servedHeld?.id), String(heldAtCap?.id)] });
@@ -8030,14 +8114,33 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
     const waitedOn = servedHeld.held.cohort ?? servedHeld.held.waitedOn.at(-1);
     results.push({
       name: '/requests a request served after a hold draws the held marker with its wait after its attempts',
-      ok: served.marker === 'held 1.3 s' && served.title === `waited 1,250 ms on ${waitedOn}` && served.bare && served.text === served.marker,
+      ok: served.marker === 'waited 1 s' && served.title === `waited for a slot 1 s on ${waitedOn}` && served.bare && served.text === served.marker,
       missing: [served.text, served.marker, String(served.title), `bare ${served.bare}`],
     });
     const atCap = await attemptsCellOf(heldAtCap.id);
     results.push({
       name: '/requests a request held with nothing dispatched draws no attempt and the held marker',
-      ok: atCap.bare && atCap.text === atCap.marker && atCap.marker === `held ${waitText(heldAtCap.held.heldMs)}`,
+      ok: atCap.bare && atCap.text === atCap.marker && atCap.marker === `waited ${ageText(heldAtCap.held.heldMs)}`,
       missing: [atCap.text, atCap.marker, `bare ${atCap.bare}`],
+    });
+  }
+  {
+    // The story holds one request for the slow-down on studio and one for the reset, each with its one wait.
+    const onlyWait = (reason) => requests.find((r) => r.held?.waits.length === 1 && r.held.waits[0].reason === reason);
+    const read = [];
+    for (const [reason, words] of [
+      ['slow_down', 'for the slow-down'],
+      ['reset', 'for the reset'],
+    ]) {
+      const r = onlyWait(reason);
+      const cell = r ? await attemptsCellOf(r.id) : null;
+      const span = r ? ageText(r.held.heldMs) : '';
+      read.push({ cell, reason, want: r ? { marker: `waited ${span}`, title: `waited ${words} ${span} on ${r.held.cohort ?? r.held.waitedOn.at(-1)}` } : null });
+    }
+    results.push({
+      name: "/requests a held row's marker reads waited, and its hover each wait's reason with its span and the account it waited on",
+      ok: read.every((x) => x.want !== null && x.cell?.marker === x.want.marker && x.cell.title === x.want.title) && read[0].want?.title.endsWith(' on studio') === true,
+      missing: read.map((x) => `${x.reason}: ${JSON.stringify(x.cell)} against ${JSON.stringify(x.want)}`),
     });
   }
   // Under native, the shell's default, the Cost cell reads a row in the unit its funding pays in: dollars over the
@@ -8256,7 +8359,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   }
   await m.navigate('/requests');
   await m.settle(300);
-  const heldCheck = '/requests the Held only filter keeps the requests that waited for a slot';
+  const heldCheck = '/requests the Held only filter keeps the requests that waited';
   // A flag has no values to choose, so its row writes the filter at once and closes the box.
   await addFilter(m, 'Held only');
   await m.settle(700);
@@ -8268,10 +8371,10 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   const heldDay = (await api.listRequests({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), held: true, limit: 25, to: new Date().toISOString() })).requests.length;
   results.push({
     name: heldCheck,
-    ok: heldChip === 'held only' && flagged === '1' && closed && heldRows.length > 0 && heldRows.length === heldDay && heldRows.every((t) => t.startsWith('held ')),
+    ok: heldChip === 'held only' && flagged === '1' && closed && heldRows.length > 0 && heldRows.length === heldDay && heldRows.every((t) => t.startsWith('waited ') && t !== 'waited 0 s'),
     missing: [`${heldRows.length} rows against ${heldDay}`, heldChip, `held=${flagged}`, `box closed ${closed}`, ...new Set(heldRows)],
   });
-  const heldMarkers = [...m.container.querySelectorAll('.requests__table tbody .requests__attempts > .badge')].filter((b) => b.textContent?.trim().startsWith('held '));
+  const heldMarkers = [...m.container.querySelectorAll('.requests__table tbody .requests__attempts > .badge')].filter((b) => b.textContent?.trim().startsWith('waited '));
   results.push({
     name: '/requests the held marker reads in the warning tone',
     ok: heldMarkers.length > 0 && heldMarkers.every((b) => b.classList.contains('badge--warning')),
@@ -14529,6 +14632,55 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     });
     page.unmount();
   }
+  {
+    // Under the moves the card draws the slow-down's held time: a legend line naming the chart with the range's sum and
+    // the requests behind it on its hover, a bar for each bucket that held a request, and a bar's hover its requests and
+    // their time, read against the answer the page drew. jsdom lays nothing out, so the chart containers read a
+    // browser's size here, and the hover walks the chart a bucket at a time.
+    const { getAnalyticsRewrites } = api;
+    let answer = null;
+    api.getAnalyticsRewrites = async (...args) => (answer = await getAnalyticsRewrites.apply(api, args));
+    const measure = window.HTMLElement.prototype.getBoundingClientRect;
+    window.HTMLElement.prototype.getBoundingClientRect = function () {
+      return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
+    };
+    const page = await mount('/analytics', { now: Date.now() });
+    api.getAnalyticsRewrites = getAnalyticsRewrites;
+    const rewrites = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Migration rewrites');
+    const held = rewrites?.querySelector('.held-chart') ?? null;
+    const legend = [...(held?.querySelectorAll('.legend li') ?? [])].map((li) => [
+      [...li.childNodes]
+        .filter((n) => n.nodeType === 3)
+        .map((n) => n.textContent?.trim())
+        .join(''),
+      li.querySelector('.legend__value')?.textContent?.trim() ?? '',
+      li.getAttribute('title') ?? '',
+    ]);
+    const points = answer?.held ?? [];
+    const words = (ms, n) => (n === 0 ? 'no request held' : `${fmtInt(n)} ${n === 1 ? 'request' : 'requests'} held ${ageText(Math.max(1000, ms))} in all`);
+    const sumMs = points.reduce((n, p) => n + p.heldMs, 0);
+    const sumRequests = points.reduce((n, p) => n + p.requests, 0);
+    const bars = held?.querySelectorAll('path.recharts-rectangle').length ?? 0;
+    const tips = new Set();
+    for (let i = 0; i < points.length; i += 1) {
+      held?.querySelector('.recharts-wrapper')?.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: Math.round(((i + 0.5) * 600) / points.length), clientY: 60 }));
+      await page.settle(50);
+      for (const label of held?.querySelectorAll('.chart-tip .chart-tip__label') ?? []) tips.add(label.textContent?.trim() ?? '');
+    }
+    window.HTMLElement.prototype.getBoundingClientRect = measure;
+    page.unmount();
+    const wantTips = new Set(points.filter((p) => p.requests > 0).map((p) => words(p.heldMs, p.requests)));
+    results.push({
+      name: "/analytics the rewrites card draws the held time under its moves, a bar per bucket that held a request, the range's sum on its legend line and each bar's requests and time on its hover",
+      ok:
+        sumRequests > 0 &&
+        rewrites?.querySelector('.hbars--moves')?.compareDocumentPosition(held ?? rewrites) === window.Node.DOCUMENT_POSITION_FOLLOWING &&
+        JSON.stringify(legend) === JSON.stringify([['Held by the slow-down', '', ''], ['Held time', ageText(Math.max(1000, sumMs)), words(sumMs, sumRequests)]]) &&
+        bars === points.filter((p) => p.heldMs > 0).length &&
+        [...wantTips].every((t) => tips.has(t)),
+      missing: [JSON.stringify(legend), `${bars} bars of ${points.length} points`, `tips ${JSON.stringify([...tips])} against ${JSON.stringify([...wantTips])}`],
+    });
+  }
 
   await tab(m, 'Burn');
   await burnGroup('account');
@@ -17312,11 +17464,36 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       const entry = document.getElementById(c.getAttribute('aria-describedby') ?? '');
       return entry === null || entry.closest('[data-descriptions]') === null || entry.textContent !== c.getAttribute('title');
     });
-    const badges = [...m.container.querySelectorAll('.srow__account .badge')].map((b) => b.textContent?.trim() ?? '');
+    // A slowed session's speed chip is the cell's other badge, read by the check after this one.
+    const badges = [...m.container.querySelectorAll('.srow__account .badge')].filter((b) => !b.closest('.speed-chip')).map((b) => b.textContent?.trim() ?? '');
     results.push({
       name: '/sessions account cells carry the account kind on their title and description rather than a badge',
       ok: kinds.length === 22 && kinds.includes('oauth') && kinds.includes('api_key') && undescribed.length === 0 && badges.every((b) => /^\+\d+$/.test(b)),
       missing: [...new Set(kinds), ...badges, ...undescribed.map((c) => `${c.getAttribute('aria-describedby') ?? 'no aria-describedby'} for ${c.getAttribute('title')}`)],
+    });
+  }
+  {
+    // studio's notebook sessions are slowed: each draws the speed chip right after the account's name with the
+    // account's slow-down in its hover, and the Runway cell of a pinned row whose pin has a cycle names the cycle on
+    // its hover. No other row draws either.
+    const want = await studioSpeed();
+    const listed = await api.listSessions();
+    const idOfRow = (s) => `session-${encodeURIComponent(`${s.keyId}:${s.keyGeneration}:${s.sessionId}`)}`;
+    const read = rows().map((tr) => {
+      const s = listed.find((x) => idOfRow(x) === tr.id);
+      const chip = cell(tr, 'Account')?.querySelector('.speed-chip') ?? null;
+      const badge = chip?.querySelector('.badge');
+      return {
+        got: { chip: chip ? [chip.previousElementSibling?.textContent?.trim() ?? '', badge?.textContent?.trim() ?? '', badge?.className.replace('badge ', '') ?? '', badge?.getAttribute('title') ?? ''] : null, runway: cell(tr, 'Runway')?.getAttribute('title') ?? null },
+        row: tr.id.slice(0, 40),
+        want: { chip: s?.speed != null && s.speed < 1 ? [s.accountId, '0.5x', 'badge--warning', want.hover] : null, runway: s?.pinned && s.cycleMs !== null ? `cycle ${ageText(s.cycleMs)}` : null },
+      };
+    });
+    const off = read.filter((r) => JSON.stringify(r.got) !== JSON.stringify(r.want));
+    results.push({
+      name: "/sessions a slowed session draws the speed chip after its account's name with the slow-down in its hover, and a pinned row with a cycle names it on its Runway hover",
+      ok: want.factor === 0.5 && off.length === 0 && read.filter((r) => r.want.chip !== null).length === 4 && read.filter((r) => r.want.runway === 'cycle 42 s').length === 1,
+      missing: [String(want.factor), ...off.slice(0, 6).map((r) => JSON.stringify(r)), `${read.filter((r) => r.want.chip !== null).length} slowed rows`],
     });
   }
   {

@@ -19,7 +19,7 @@ import { FilterBar } from '@/components/FilterBar';
 import { GroupBy, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress, RANGE_PRESETS } from '@/lib/address';
-import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, isolatedSlots, moveLabel, nativeCellOf, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, moveLabel, nativeCellOf, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -1991,6 +1991,7 @@ function RewritesCard({ answer, axis, error, loading, unfiltered }: { answer: Re
               })}
             </ul>
           )}
+          {answer && <HeldChart answer={answer} axis={axis} />}
         </>
       }
     >
@@ -2002,6 +2003,46 @@ function RewritesCard({ answer, axis, error, loading, unfiltered }: { answer: Re
         <Bar dataKey="rewriteTokens" fill={ink.series[1]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />
       </BarChart>
     </ChartCard>
+  );
+}
+
+type HeldRow = { at: number; heldMs: number; requests: number };
+
+/**
+ * The slow-down's held time per bucket, which the rewrites card draws under its moves: a bar per bucket in the
+ * warning tone a held request's marker wears, its hover the requests that waited and their time, and its legend line
+ * the range's sum. A range that held nothing says so on the legend line and draws no chart.
+ */
+function HeldChart({ answer, axis }: { answer: RewritesAnswer; axis: TimeAxis }) {
+  const ink = useChartInk();
+  const held = useMemo(() => heldBars(answer), [answer]);
+  const data = useMemo(() => held.bars.map((b): HeldRow => ({ at: Date.parse(b.at), heldMs: b.heldMs, requests: b.requests })), [held]);
+  return (
+    <div className="held-chart">
+      <ul className="legend" aria-label="Held by the slow-down">
+        <li className="muted">Held by the slow-down</li>
+        {held.totalRequests === 0 ? (
+          <li className="muted">none in range</li>
+        ) : (
+          <li title={heldHover({ heldMs: held.totalMs, requests: held.totalRequests })}>
+            <span className="legend__swatch legend__swatch--rect" style={{ background: ink.warning }} />
+            Held time
+            <span className="legend__value num">{heldSpan(held.totalMs)}</span>
+          </li>
+        )}
+      </ul>
+      {held.totalRequests > 0 && (
+        <ResponsiveContainer width="100%" height={120}>
+          <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+            <CartesianGrid vertical={false} stroke={ink.grid} />
+            <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+            <YAxis tickFormatter={(v: number) => fmtMs(v)} tickLine={false} axisLine={false} width={44} />
+            <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<HeldRow>((p) => [{ color: ink.warning, label: heldHover(p), value: null }])} />
+            <Bar dataKey="heldMs" fill={ink.warning} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+    </div>
   );
 }
 

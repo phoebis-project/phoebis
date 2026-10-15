@@ -1,7 +1,9 @@
 import type { Api } from '@/api/client';
-import type { Account, AccountRollup, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, PinMigrationReason, Placement, PlacementRow, SubscriptionCosts, WindowSample } from '@/api/types';
+import type { Account, AccountRollup, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, HeldPoint, PinMigrationReason, Placement, PlacementRow, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
 import { tierCapacity, tierRow, type CostWindow } from '@/lib/costs';
 import { earlierHolderLabel, equivalentShort, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtShare, fmtUsd, withEstimate } from '@/lib/format';
+// The routing log imports this module too, and each side reads the other's exports only inside its functions.
+import { ageWord } from '@/lib/routingLog';
 import type { UnitPosition } from '@/lib/unit';
 import { WINDOW_LABEL, windowKeyId } from '@/lib/windows';
 
@@ -30,6 +32,19 @@ export const FAILOVER_MOVE_REASONS: readonly PinMigrationReason[] = ['cooldown',
 export const own = (map: object, key: string): boolean => Object.prototype.hasOwnProperty.call(map, key);
 /** A reason the console has no label for reads as the router sent it. */
 export const moveLabel = (reason: string): string => (own(PIN_MIGRATION_LABEL, reason) ? PIN_MIGRATION_LABEL[reason as PinMigrationReason] : reason);
+
+/** The held bars: one per bucket with its milliseconds and request count, and the range's sum for the legend. */
+export function heldBars(answer: RewritesAnswer): { bars: HeldPoint[]; totalMs: number; totalRequests: number } {
+  const bars = answer.held.map((p) => ({ at: p.at, heldMs: p.heldMs, requests: p.requests }));
+  return { bars, totalMs: bars.reduce((n, b) => n + b.heldMs, 0), totalRequests: bars.reduce((n, b) => n + b.requests, 0) };
+}
+
+/** The held time of a bucket or a range as its hover and legend read it, at least a second where a request waited. */
+export const heldSpan = (ms: number): string => ageWord(Math.max(1_000, ms));
+
+/** A held bar's hover, `12 requests held 14 min in all`, and `no request held` for a bucket that held none. */
+export const heldHover = (bar: Pick<HeldPoint, 'heldMs' | 'requests'>): string =>
+  bar.requests === 0 ? 'no request held' : `${fmtInt(bar.requests)} ${bar.requests === 1 ? 'request' : 'requests'} held ${heldSpan(bar.heldMs)} in all`;
 
 /** The classes that refresh a pin's warmth, the routing crate's `REFRESHING_CLASSES`: the conversation itself. */
 export const CONVERSATION_CLASSES = ['compaction', 'main', 'subagent'] as const;

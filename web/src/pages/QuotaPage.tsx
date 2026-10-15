@@ -1,16 +1,18 @@
 import { useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
-import type { Account, ExtraUsage, QuotaPoll, QuotaSnapshot, RateLimitWindow } from '@/api/types';
+import type { Account, AccountSlowDown, ExtraUsage, QuotaPoll, QuotaSnapshot, RateLimitWindow } from '@/api/types';
 import { accountColor, accountSlots } from '@/components/charts/theme';
 import { FilterBar } from '@/components/FilterBar';
 import { SectionBar } from '@/components/SectionBar';
 import { useChartInk } from '@/components/charts/useChartInk';
+import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinute, fmtPct, fmtRelative, fmtShortTime, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, isExpired, isSubscription, meterTone, paceWords, planChip, pollReading, projectionWords, remainingOf, remainingTimeShare, soonestReset, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, isExpired, isSubscription, meterTone, paceWords, planChip, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { speedHover } from '@/lib/selection';
 
 type Sort = 'default' | 'soonest';
 
@@ -224,7 +226,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
           <p className="qcard__note muted">No quota windows reported yet.</p>
         ) : (
           <div className="qcard__windows">
-            <QuotaWindow name="5h" window={w5} end={end} now={now} soon={soonest === '5h'} />
+            <QuotaWindow name="5h" window={w5} end={end} now={now} soon={soonest === '5h'} slowDown={slowedOf(account, now)} />
             <QuotaWindow name="7d" window={w7} end={end} now={now} soon={soonest === '7d'} />
             <QuotaWindow name="Fable" window={account.fableWindow} end={end} now={now} soon={soonest === '7d_fable'} />
           </div>
@@ -304,9 +306,10 @@ function WindowChip({ name, window: w, className, now }: { className: string; na
  * at the window's horizon after the reset, breaking between the two where its column is too narrow, and names the burn
  * behind it on its hover. The grid sizes the chip and the reset to their content and hands the meter the rest, and
  * `qwin__chip` names the chip's cell for the checks that read a row by its cells. Under 900 px the reset label takes a
- * row of its own under the meter.
+ * row of its own under the meter. A slowed account's 5-hour window, passed its `slowDown`, closes its reset label with
+ * the speed chip.
  */
-function QuotaWindow({ end, name, window: w, now, soon }: { end: number | null; name: string; now: number; soon: boolean; window: RateLimitWindow | null }) {
+function QuotaWindow({ end, name, window: w, now, slowDown = null, soon }: { end: number | null; name: string; now: number; slowDown?: AccountSlowDown | null; soon: boolean; window: RateLimitWindow | null }) {
   // The last reading describes a window that has since reset, so its share says nothing until the next one.
   const live = w && !isExpired(w, now) ? w : null;
   const pace = live ? paceWords(live, now, end) : null;
@@ -331,6 +334,13 @@ function QuotaWindow({ end, name, window: w, now, soon }: { end: number | null; 
             </>
           ) : (
             `resets ${fmtRelative(live.resetsAt, now)}`
+          )}
+          {/* The space parts the chip from the label and lets a split label break before it. */}
+          {slowDown && (
+            <>
+              {' '}
+              <SpeedChip factor={slowDown.factor} hover={speedHover(slowDown, now)} />
+            </>
           )}
         </span>
       ) : w ? (
