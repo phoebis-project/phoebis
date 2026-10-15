@@ -379,7 +379,8 @@ function exhaustionWord(row: DecisionSummary): string {
 
 function decisionBy(row: DecisionSummary): Chip {
   const { kind, value } = row.by;
-  if (row.kind === 'renewed') return { value: row.probe ? 'keepalive' : 'no rule fired' };
+  // A renewal after a slow-down hold names the hold, since the wait explains the row more than the renewal does.
+  if (row.kind === 'renewed' && !(kind === 'hold' && value === 'slow_down')) return { value: row.probe ? 'keepalive' : 'no rule fired' };
   switch (kind) {
     case 'exhaustion':
       return { value: exhaustionWord(row) };
@@ -1504,9 +1505,22 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
     rows.push({ chips: [accountChip(o.hold.accountId, 'on'), plain(wordOf(PLACE_WORD, place)), plain(span(o.hold.boundMs), 'bound'), ...ranOutChip], label: 'Hold', title: HOLD_HINT });
   } else if (o.cohortHold !== null) {
     const h = o.cohortHold;
-    const on = h.cohort ?? h.waitedOn[h.waitedOn.length - 1] ?? null;
-    const held = c?.heldMs ?? h.heldMs;
-    rows.push({ chips: [...(on === null ? [] : [accountChip(on, 'on')]), plain(h.cohort !== null ? 'cohort' : 'strategy pick'), plain(span(held), c?.freed ? 'freed after' : 'held'), ...ranOutChip], label: 'Hold', title: HOLD_HINT });
+    const account = h.cohort ?? h.waitedOn[h.waitedOn.length - 1] ?? null;
+    const on = account === null ? [] : [accountChip(account, 'on')];
+    const slot = plain(h.cohort !== null ? 'cohort' : 'strategy pick');
+    const ended = (ms: number) => plain(span(ms), c?.freed ? 'freed after' : 'held');
+    if (h.waits.length === 0) {
+      // A row written before the waits carries their sum alone.
+      rows.push({ chips: [...on, slot, ended(c?.heldMs ?? h.heldMs), ...ranOutChip], label: 'Hold', title: HOLD_HINT });
+    } else {
+      // A wait for a reset or the slow-down is no slot's, so the in-flight cap's hover titles a slot's wait alone.
+      h.waits.forEach((w, i) => {
+        const final = i === h.waits.length - 1;
+        const reason = w.reason === 'cap' ? slot : plain(w.reason === 'slow_down' ? 'for the slow-down' : w.reason === 'reset' ? 'for the reset' : words(w.reason));
+        const chips = [...on, reason, final ? ended(w.heldMs) : plain(span(w.heldMs), 'held'), ...(final ? ranOutChip : [])];
+        rows.push({ chips, label: 'Hold', ...(w.reason === 'cap' ? { title: HOLD_HINT } : {}) });
+      });
+    }
   } else if (o.exhaustion !== null && last !== undefined && last.attempt === record.request.attempt) {
     // The relay keeps every hold across a failover, and an earlier attempt's hold is no part of this decision.
     rows.push({ chips: [accountChip(last.accountId, 'on'), plain(last.cohort !== null ? 'cohort' : 'strategy pick'), plain(span(last.heldMs), 'held'), ...ranOutChip], label: 'Hold', title: HOLD_HINT });

@@ -12083,9 +12083,15 @@ m.unmount();
         id: 'req_9f2e7c5a-c49',
         seq: 2,
         terminus: ['chosen', 'Chosen', 'renewed'],
-        // The renewal after the hold runs the round the stretch fires, which its shed rule's Round group names, and the
+        // The renewal after the hold names the hold it followed on its row and its verdict line, and its Hold row the
+        // wait's reason and span. It runs the round the stretch fires, which its shed rule's Round group names, and the
         // round's own row on the request's page reads the stretch, the demand to the reset and the source.
         own: async (card, record, page) => {
+          const row = rowOf(page, `${record.requestId}/2`);
+          const facts = [...(row?.querySelectorAll('.fact__pair') ?? [])].map((p) => `${p.querySelector('.fact__label')?.textContent} ${p.querySelector('.fact__value')?.textContent}`);
+          const named =
+            row?.querySelector('td.routing-log__by .chip')?.textContent === 'slow-down' && JSON.stringify(facts) === JSON.stringify(['held 42 s']) && verdictChipsOf(card).includes('slow-down') &&
+            JSON.stringify(outcomeOf(card).Hold) === JSON.stringify(['on studio', 'for the slow-down', 'freed after 42 s']);
           const round = groupOfPopover(await popoverOf(page, stationButton(card, 'move:shed')), 'Round');
           const at = Date.parse(record.request.at);
           const e = (await api.listRoutingLog({ from: iso(at - MINUTE), kinds: ['shedding_round'], limit: 25, request: record.requestId, to: iso(at + MINUTE) })).rows[0];
@@ -12094,6 +12100,7 @@ m.unmount();
           const pairs = Object.fromEntries(kvRows(detail?.querySelector(':scope > .kv')).map((p) => [p.label, ddWords(p.dd)]));
           const reset = e === undefined ? '' : new Date(e.detail.horizon + e.detail.threshold_ms).toISOString().slice(11, 16);
           return (
+            named &&
             (popoverRowOf(round, 'fired by') ?? []).includes('fired by slow-down') && (popoverRowOf(round, 'stretch') ?? []).includes('stretch 42 min') && (popoverRowOf(round, 'round') ?? []).includes('round ran') &&
             e?.detail.trigger === 'slow_down' &&
             JSON.stringify([pairs.Trigger, pairs.Demand, pairs['Fired by']]) === JSON.stringify([['5h stretch 42 min over the threshold 30 min'], [`12.9 %/h to the reset at ${reset}`], ['the slow-down']])

@@ -710,7 +710,7 @@ test('the outcome rows read the cache tier off the deepest map entry and pending
   assert.deepEqual(rows(promised).find(([label]) => label === 'Cache read'), ['Cache read', ['hit', 'read 31K of 31.2K promised', 'tier 5 min']]);
   const held = record({ outcome: { hold: { accountId: 'primary', boundMs: 10_000, cohort: 'primary' }, kind: 'held' }, walk: [wstep('hold', 'held', [wfact('place', 'cohort')])] });
   assert.deepEqual(rows(held), [['Hold', ['on primary', 'cohort', 'bound 10 s']]]);
-  const freed = record({ outcome: { cohortHold: { cohort: 'primary', heldMs: 2_000, waitedOn: ['primary'] }, completion: completion({ completedAt: iso(NOW), freed: true, heldMs: 2_000, status: 200 }) } });
+  const freed = record({ outcome: { cohortHold: { cohort: 'primary', heldMs: 2_000, waitedOn: ['primary'], waits: [] }, completion: completion({ completedAt: iso(NOW), freed: true, heldMs: 2_000, status: 200 }) } });
   assert.deepEqual(rows(freed).find(([label]) => label === 'Hold'), ['Hold', ['on primary', 'cohort', 'freed after 2.0 s']]);
   const exhausted = record({ outcome: { accountId: null, exhaustion: { deadline: iso(ms(15, 42)), kind: 'timed', obstacle: null, reason: null, window: 'five_hour' }, kind: 'exhausted', upstreamModel: null } });
   assert.deepEqual(rows(exhausted), [['Answer', ['status 429', 'window 5h', 'retry after 15:42']]]);
@@ -787,6 +787,29 @@ test("a held outcome's verdict chips and Hold row read the slow-down's figures o
   // The routing log's row reads the deadline and the factor as the chips print it.
   assert.deepEqual(read(row), { by: 'slow-down', facts: ['until 18:20', 'speed 0.5x'] });
   assert.deepEqual(read(decision({ ...row, fact: [fact('until', ms(18, 20), 'time'), fact('factor', 0.4, null)] })).facts, ['until 18:20', 'speed 0.4x']);
+});
+
+test("a renewal after a slow-down hold reads the hold's label and one Hold row per wait with its reason", () => {
+  // The router names the hold the renewal followed, as a placement after a hold names its own.
+  assert.deepEqual(read(decision({ by: by('hold', 'slow_down'), fact: [fact('held', 42_000, 'ms')], kind: 'renewed' })), { by: 'slow-down', facts: ['held 42 s'] });
+  assert.deepEqual([read(decision({ kind: 'renewed' })).by, read(decision({ kind: 'renewed', probe: true })).by], ['no rule fired', 'keepalive'], 'every other renewal keeps its words');
+  const rows = (cohortHold, freed = true) =>
+    d
+      .outcomeRows(record({ outcome: { cohortHold, completion: completion({ completedAt: iso(NOW), freed, heldMs: cohortHold.heldMs, status: 200 }), kind: 'renewed' } }), NOW)
+      .filter((line) => line.label === 'Hold')
+      .map((line) => [texts(line.chips), line.title]);
+  // Each wait reads its reason and its own span, oldest first, and the last the form its end took.
+  assert.deepEqual(rows({ cohort: null, heldMs: 81_000, waitedOn: ['studio'], waits: [{ heldMs: 39_000, reason: 'reset' }, { heldMs: 42_000, reason: 'slow_down' }] }), [
+    [['on studio', 'for the reset', 'held 39 s'], undefined],
+    [['on studio', 'for the slow-down', 'freed after 42 s'], undefined],
+  ]);
+  // A slot's wait keeps its place and the in-flight cap's hover, which speaks of no other wait.
+  assert.deepEqual(rows({ cohort: 'primary', heldMs: 44_000, waitedOn: ['primary'], waits: [{ heldMs: 2_000, reason: 'cap' }, { heldMs: 42_000, reason: 'slow_down' }] }, false), [
+    [['on primary', 'cohort', 'held 2.0 s'], d.HOLD_HINT],
+    [['on primary', 'for the slow-down', 'held 42 s'], undefined],
+  ]);
+  // A row written before the waits reads one row of the summed wait.
+  assert.deepEqual(rows({ cohort: null, heldMs: 2_000, waitedOn: ['primary'], waits: [] }), [[['on primary', 'strategy pick', 'freed after 2.0 s'], d.HOLD_HINT]]);
 });
 
 test("an outcome with a cause reads it in the event card's words", () => {
