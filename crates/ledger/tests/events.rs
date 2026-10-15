@@ -975,6 +975,18 @@ fn router_started(at: i64) -> EventRecord {
     }
 }
 
+/// A start row carrying `down_since`, the previous run's newest row, null where the ledger held none.
+fn router_started_after(at: i64, down_since: Option<i64>) -> EventRecord {
+    EventRecord {
+        at,
+        kind: "router_started".into(),
+        detail: Some(
+            serde_json::json!({ "version": "test", "down_since": down_since }).to_string(),
+        ),
+        ..Default::default()
+    }
+}
+
 /// Inserts `rows`, folds the routing conditions at `now` and answers the `slowed_long` rows the fold wrote.
 fn slowed_long_at(
     db: &LedgerDb,
@@ -1199,6 +1211,53 @@ fn the_slowed_long_fold_closes_an_open_span_at_the_next_router_started_row() {
             (1, 7_200_000, 3_600_000, false, 0.4)
         )],
         "the span runs the two hours to the restart, where reading it open to now would count three"
+    );
+}
+
+#[test]
+fn the_slowed_long_fold_ends_a_span_a_restart_closed_at_the_start_rows_down_since() {
+    const HOUR: i64 = 3_600_000;
+    let now = 1_000 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    let rows = slowed_long_at(
+        &db,
+        &[
+            // The previous run wrote its newest row an hour before the restart, and its slow-down held no later.
+            slow_down_started(now - 4 * HOUR, "a", "p", 0.4),
+            router_started_after(now - HOUR, Some(now - 2 * HOUR)),
+        ],
+        now,
+    );
+    assert_eq!(
+        rows,
+        [slowed_row(
+            "a",
+            "p",
+            now - 4 * HOUR,
+            now,
+            (1, 2 * HOUR, HOUR, false, 0.4)
+        )],
+        "the span runs the two hours to down_since and leaves out the hour the router was down"
+    );
+    let db = LedgerDb::open_in_memory().unwrap();
+    let rows = slowed_long_at(
+        &db,
+        &[
+            slow_down_started(now - 4 * HOUR, "a", "p", 0.4),
+            router_started_after(now - HOUR, None),
+        ],
+        now,
+    );
+    assert_eq!(
+        rows,
+        [slowed_row(
+            "a",
+            "p",
+            now - 4 * HOUR,
+            now,
+            (1, 3 * HOUR, HOUR, false, 0.4)
+        )],
+        "a start row without down_since keeps the restart as the span's end"
     );
 }
 
