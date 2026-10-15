@@ -5,14 +5,15 @@ use std::time::Duration;
 use fake_upstream::{stays_for, wait_for, wait_for_async};
 use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
-    credits_from_usage, decide, lane_key, resolve, sample_from_usage, spawn, AffinityReport,
-    BandWeight, BurnRates, BurnUnit, ClientClass, ConversationLookup, CreditsState, DecisionRecord,
-    DecisionSummary, Exhaustion, KeyRefusal, LongContextRates, MemberSpend, MoveCause,
-    PinRef, PinUsage, PredecessorQuery, Presented, RateTable, Rates, Refusal, RefusalFacts,
-    RefusedRequest, ReloadError, Report, ResolveError, RouterConfig, RouterHandle, RoutingState,
-    SelectRequest, SelectResult, SharePricer, UtilizationSample, WindowReading, WindowSource,
-    WriterStatus, COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
-    IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
+    credits_from_usage, decide, lane_key, resolve, sample_from_usage, shed_dwell_ms, spawn,
+    AffinityReport, BandWeight, BurnRates, BurnUnit, ClientClass, ConversationLookup, CreditsState,
+    DecisionRecord, DecisionSummary, Exhaustion, KeyRefusal, LongContextRates,
+    MemberSpend, MoveCause, PinRef, PinUsage, PredecessorQuery, Presented, RateTable, Rates,
+    Refusal, RefusalFacts, RefusedRequest, ReloadError, Report, ResolveError, RouterConfig,
+    RouterHandle, RoutingState, SelectRequest, SelectResult, SharePricer, UtilizationSample,
+    WindowReading, WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
+    FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE,
+    WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
@@ -6910,6 +6911,7 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
     // Ten minutes on, `s2`'s cache has lapsed. `s1`'s is the one this request refreshes, so it reads warm.
     let at = 1_000 + 600_000;
     now.store(at, Ordering::SeqCst);
+    past_the_wait(&handle, &store, "a", at).await;
     handle
         .select(request(&handle, Some("s1"), at))
         .await
@@ -7243,6 +7245,16 @@ fn no_round(events: &[phoebis_routing::RouterEvent]) -> bool {
         .any(|event| matches!(event, phoebis_routing::RouterEvent::SheddingRound { .. }))
 }
 
+/// Stamps the 5-hour window of `account` on the pool `p` as over the ceiling since a dwell of the pool before `now`,
+/// so the selection at `now` finds it past its wait and a round case reads its round at its first selection over the
+/// ceiling.
+async fn past_the_wait(handle: &RouterHandle, store: &Store, account: &str, now: i64) {
+    let dwell = shed_dwell_ms(&store.pool("p").unwrap().expect("the pool"));
+    handle
+        .stamp_projection_over("p", account, FIVE_HOUR, now - dwell)
+        .await;
+}
+
 #[tokio::test]
 async fn the_marks_and_the_dwell_gate_survive_a_restart() {
     use phoebis_routing::MigrateReason;
@@ -7260,7 +7272,9 @@ async fn the_marks_and_the_dwell_gate_survive_a_restart() {
     store.replace_shed_round("p", "a", 1, AT - 60_000).unwrap();
     let now = Arc::new(AtomicI64::new(AT));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    // a reads over the ceiling with nothing burning, so the trigger fires and the loaded round's dwell holds it.
+    // a reads over the ceiling with nothing burning and its window past its wait, so the trigger fires and the loaded
+    // round's dwell holds it.
+    past_the_wait(&handle, &store, "a", AT).await;
     handle.report(windows("a", 0.96, 0.3, AT)).await;
     handle.report(windows("b", 0.1, 0.1, AT)).await;
     handle.samples().await.unwrap();
@@ -7331,6 +7345,7 @@ async fn a_pin_that_moved_away_and_returned_inside_the_dwell_is_not_shed_again_a
     handle.report(windows("b", 0.1, 0.1, AT)).await;
     handle.report(windows("c", 0.92, 0.1, AT)).await;
     handle.samples().await.unwrap();
+    past_the_wait(&handle, &store, "a", AT).await;
     assert_eq!(
         landed_on(
             handle
@@ -7363,6 +7378,8 @@ async fn a_pin_that_moved_away_and_returned_inside_the_dwell_is_not_shed_again_a
     // c now fits, so a mark that outlived the move would find it a destination.
     handle.report(windows("c", 0.1, 0.1, AT + 2_000)).await;
     handle.samples().await.unwrap();
+    // The stamps live in memory, so the restart starts a's wait afresh.
+    past_the_wait(&handle, &store, "a", AT + 2_000).await;
     let mut events = handle.subscribe_events();
     assert_eq!(
         landed_on(
@@ -7402,6 +7419,7 @@ async fn a_released_and_recreated_pin_s_mark_does_not_survive_a_restart() {
     handle.report(windows("a", 0.9, 0.3, AT)).await;
     handle.report(windows("b", 0.1, 0.1, AT)).await;
     handle.samples().await.unwrap();
+    past_the_wait(&handle, &store, "a", AT).await;
     let mut events = handle.subscribe_events();
     // s0's request runs a's round, which marks s1, the heavier, and leaves s0 where it is.
     assert_eq!(
@@ -7463,6 +7481,7 @@ async fn a_released_and_recreated_pin_s_mark_does_not_survive_a_restart() {
     handle.report(windows("a", 0.93, 0.3, AT + 2_000)).await;
     handle.report(windows("b", 0.1, 0.1, AT + 2_000)).await;
     handle.samples().await.unwrap();
+    past_the_wait(&handle, &store, "a", AT + 2_000).await;
     let mut events = handle.subscribe_events();
     assert_eq!(
         landed_on(
@@ -7764,6 +7783,7 @@ async fn a_mark_a_round_makes_on_the_requests_own_pin_is_released_with_it_in_the
     handle.report(windows("a", 0.9, 0.3, AT)).await;
     handle.report(windows("b", 0.1, 0.1, AT)).await;
     handle.samples().await.unwrap();
+    past_the_wait(&handle, &store, "a", AT).await;
     let mut events = handle.subscribe_events();
     assert_eq!(
         landed_on(

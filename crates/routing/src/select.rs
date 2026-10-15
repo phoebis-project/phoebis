@@ -2207,6 +2207,9 @@ pub(crate) struct Projection {
     pub burn: f64,
     pub horizon: i64,
     pub at_horizon: f64,
+    /// The window's reset as the reading names it, a passed weekly reset rolled forward, `None` for a 5-hour window
+    /// past its reset or a reading that names none.
+    pub reset: Option<i64>,
 }
 
 /// The pins the account's pool keeps: a pin under a key of a pool the account left is retained until it ends and
@@ -2290,6 +2293,7 @@ fn projections_of(
                 burn,
                 horizon,
                 at_horizon: reading.utilization + burn * seconds(horizon - now),
+                reset: reading.reset,
             },
         );
     }
@@ -2633,6 +2637,12 @@ fn fit_key(kind: &str, window: &str) -> Option<&'static str> {
         ("burn", FIVE_HOUR) => "burn_five_hour",
         ("burn", SEVEN_DAY) => "burn_seven_day",
         ("burn", SEVEN_DAY_FABLE) => "burn_seven_day_fable",
+        ("over_since", FIVE_HOUR) => "over_since_five_hour",
+        ("over_since", SEVEN_DAY) => "over_since_seven_day",
+        ("over_since", SEVEN_DAY_FABLE) => "over_since_seven_day_fable",
+        ("wait", FIVE_HOUR) => "wait_five_hour",
+        ("wait", SEVEN_DAY) => "wait_seven_day",
+        ("wait", SEVEN_DAY_FABLE) => "wait_seven_day_fable",
         _ => return None,
     })
 }
@@ -3219,12 +3229,52 @@ fn move_of<'a>(
     }
     // The shed rule's trigger, tested on every plan window the pool's pins on the account draw, in the windows' order,
     // one round per selection at most: on a pool that slows its pins the 5-hour window's is the stretch over the
-    // threshold after the safety wait, every other window's the projection at its horizon over the ceiling. The line
-    // names every projection it read whether or not one fired.
+    // threshold after the safety wait, every other window's the projection at its horizon over the ceiling after the
+    // projection's wait, a window inside its wait yielding to the next. A wait holds back the round alone, so a
+    // standing mark moves below while a window waits as it does under a fired one. The line names every projection it
+    // read whether or not one fired, with the stamp and the wait of each window inside its wait.
     let source = current.account_id.as_str();
     let tier = snapshot.tier(source).unwrap_or_default();
     let projections = projections_of(state, snapshot, pool, source, tier, now, BurnRead::Achieved);
     let windows = trigger_windows(state, snapshot, pool, source);
+    // A window with no reading this selection says nothing of its projection, so its stamp stands.
+    for window in &windows {
+        let Some(projection) = projections
+            .get(*window)
+            .filter(|_| projection_tested(pool, window))
+        else {
+            continue;
+        };
+        let length = if window.starts_with(SEVEN_DAY) {
+            WEEK_MS
+        } else {
+            FIVE_HOUR_MS
+        };
+        state.note_projection(
+            &pool.id,
+            source,
+            window,
+            projection.at_horizon > ceiling(pool, window),
+            projection.reset.map(|reset| reset - length),
+            now,
+        );
+    }
+    let over_since = slowed
+        .and(state.slow_down_state(&pool.id, source))
+        .and_then(|entry| entry.over_since);
+    let TriggerRead {
+        fired: trigger,
+        waiting,
+    } = trigger_of(
+        pool,
+        &projections,
+        slowed,
+        over_since,
+        &windows,
+        &|window| state.projection_over_since(&pool.id, source, window),
+        dwell_ms,
+        now,
+    );
     let mut facts = Vec::new();
     for window in &windows {
         let (Some(projection), Some(at), Some(until)) = (
@@ -3236,67 +3286,73 @@ fn move_of<'a>(
         };
         facts.push(Fact::number(at, projection.at_horizon).unit("percent"));
         facts.push(Fact::int(until, projection.horizon).unit("time"));
+        if let (Some(waits), Some(since), Some(wait)) = (
+            waiting.iter().find(|waits| waits.window == *window),
+            fit_key("over_since", window),
+            fit_key("wait", window),
+        ) {
+            facts.push(Fact::int(since, waits.over_since).unit("time"));
+            facts.push(Fact::int(wait, waits.wait_ms).unit("ms"));
+        }
     }
     facts.push(Fact::number("ceiling", ceiling(pool, FIVE_HOUR)).unit("percent"));
-    let over_since = slowed
-        .and(state.slow_down_state(&pool.id, source))
-        .and_then(|entry| entry.over_since);
+    let stretch_waits = over_since.filter(|since| now - since < SLOW_DOWN_WAIT_MS);
     // A decision inside the safety wait says how long the stretch has read over the threshold.
-    if let Some(since) = over_since.filter(|since| now - since < SLOW_DOWN_WAIT_MS) {
+    if let Some(since) = stretch_waits {
         facts.push(Fact::int("over_ms", now - since).unit("ms"));
     }
-    let trigger = trigger_of(pool, &projections, slowed, over_since, &windows, now);
     rec.trigger_windows = windows;
-    let Some(trigger) = trigger else {
+    if let Some(trigger) = trigger {
+        facts.push(Fact::text("trigger", trigger.window));
+        facts.push(Fact::text("fired_by", trigger.source));
+        facts.push(Fact::number("excess", trigger.excess * 3_600.0).unit("percent_per_hour"));
+        if state
+            .last_shed(&pool.id, source)
+            .is_none_or(|at| now - at >= dwell_ms)
+        {
+            let round = shed_round(
+                state,
+                snapshot,
+                pool,
+                request,
+                eligible,
+                current,
+                cold,
+                fast,
+                now,
+                fallback_ms,
+                &trigger,
+            );
+            facts.push(Fact::text("round", "ran"));
+            facts.push(Fact::number("target", round.facts.target).unit("percent_per_hour"));
+            facts.push(Fact::list(
+                "marks",
+                round
+                    .marks
+                    .iter()
+                    .map(|mark| pin_key_text(&mark.key))
+                    .collect(),
+            ));
+            facts.push(Fact::list("skipped", round.skipped));
+            for mark in &round.marks {
+                state.mark_pin(&mark.key, now, trigger.window);
+            }
+            rec.shed_round = Some(ShedRoundRecord {
+                account_id: source.to_string(),
+                pin: pin_key_facts(&current.key()),
+                facts: round.facts,
+            });
+            state.record_shed(&pool.id, source, now);
+        } else {
+            facts.push(Fact::text("round", "within_dwell"));
+        }
+    } else if waiting.is_empty() && stretch_waits.is_none() {
         rule_line(rec, 4, "no", facts, &pace_facts);
         return MoveVerdict::Stay;
-    };
-    facts.push(Fact::text("trigger", trigger.window));
-    facts.push(Fact::text("fired_by", trigger.source));
-    facts.push(Fact::number("excess", trigger.excess * 3_600.0).unit("percent_per_hour"));
-    if state
-        .last_shed(&pool.id, source)
-        .is_none_or(|at| now - at >= dwell_ms)
-    {
-        let round = shed_round(
-            state,
-            snapshot,
-            pool,
-            request,
-            eligible,
-            current,
-            cold,
-            fast,
-            now,
-            fallback_ms,
-            &trigger,
-        );
-        facts.push(Fact::text("round", "ran"));
-        facts.push(Fact::number("target", round.facts.target).unit("percent_per_hour"));
-        facts.push(Fact::list(
-            "marks",
-            round
-                .marks
-                .iter()
-                .map(|mark| pin_key_text(&mark.key))
-                .collect(),
-        ));
-        facts.push(Fact::list("skipped", round.skipped));
-        for mark in &round.marks {
-            state.mark_pin(&mark.key, now, trigger.window);
-        }
-        rec.shed_round = Some(ShedRoundRecord {
-            account_id: source.to_string(),
-            pin: pin_key_facts(&current.key()),
-            facts: round.facts,
-        });
-        state.record_shed(&pool.id, source, now);
-    } else {
-        facts.push(Fact::text("round", "within_dwell"));
     }
     // A pin on an account cooled for this model is not renewed at step 5, so the fresh placement replaces it:
     // the release names the cooldown and the mark leaves with the pin, where a shed would name a move the
-    // cooldown forced. The round above still runs, since a cooldown can hold one model alone.
+    // cooldown forced. A round that fired above has run, since a cooldown can hold one model alone.
     if state
         .blocking_cooldown(
             &current.account_id,
@@ -3648,8 +3704,8 @@ fn burn_unit(
     BurnUnit::of(kind, state.in_overage(account_id, now, fallback_ms))
 }
 
-/// What fired a round: the first plan window, in the trigger's order, whose test read over. `excess` is share per
-/// second on `window`.
+/// What fired a round: the first plan window, in the trigger's order, whose test read over past its wait. `excess` is
+/// share per second on `window`.
 pub(crate) struct Trigger {
     pub window: &'static str,
     /// The prediction at the round's instant.
@@ -3713,8 +3769,30 @@ fn trigger_windows(
         .collect()
 }
 
-/// What fires a round, if anything: the first of `windows` whose test reads over. The excess is share per second on
-/// that window: the burn that, removed now, lands the projection on the ceiling at the horizon.
+/// Whether the projection test reads `window` on `pool`: every window but the 5-hour one on a pool that slows its pins,
+/// whose test there is the stretch.
+fn projection_tested(pool: &PoolRow, window: &str) -> bool {
+    !(window == FIVE_HOUR && slow_down(pool))
+}
+
+/// What `trigger_of` read: the window that fired, if one did, and the windows of the projection test inside their wait,
+/// in the order it tested them.
+struct TriggerRead {
+    fired: Option<Trigger>,
+    waiting: Vec<Waiting>,
+}
+
+/// A window of the projection test that reads over the ceiling and has not read over for its wait yet.
+struct Waiting {
+    window: &'static str,
+    /// When the window first read over the ceiling.
+    over_since: i64,
+    wait_ms: i64,
+}
+
+/// What fires a round, if anything: the first of `windows` whose test reads over past its wait, with the windows of the
+/// projection test that read over inside their wait before it. The excess is share per second on the fired window: the
+/// burn that, removed now, lands the projection on the ceiling at the horizon.
 ///
 /// On a pool that slows its pins the 5-hour window's test is the stretch: it fires once `over_since`, the instant the
 /// stretch first read over the threshold, is `SLOW_DOWN_WAIT_MS` past, with the horizon at the reset less the
@@ -3722,16 +3800,23 @@ fn trigger_windows(
 /// demand's stretch to the threshold, so the round takes what the slow-down cannot cover. A reset nearer than the
 /// threshold puts that horizon at or before `now` and fires nothing, since the slow-down alone holds the window to its
 /// reset, and an account with no read fires nothing on the window. Every other window's test is the projection at its
-/// horizon over the window's ceiling, strictly, on the achieved burn.
+/// horizon over the window's ceiling, strictly, on the achieved burn, and it fires once the window has read over since
+/// `stamp` names for `min((horizon - over_since) / 4, dwell_ms)`: a quarter of the time from the first reading over to
+/// the horizon read now, at most the dwell, so one large turn's charge, which moves the prediction before the burn
+/// average has absorbed it, does not fire a round on its own. A window inside its wait yields to the next.
+#[allow(clippy::too_many_arguments)]
 fn trigger_of(
     pool: &PoolRow,
     projections: &BTreeMap<String, Projection>,
     read: Option<&SlowDownRead>,
     over_since: Option<i64>,
     windows: &[&'static str],
+    stamp: &dyn Fn(&str) -> Option<i64>,
+    dwell_ms: i64,
     now: i64,
-) -> Option<Trigger> {
-    windows.iter().find_map(|window| {
+) -> TriggerRead {
+    let mut waiting = Vec::new();
+    let fired = windows.iter().find_map(|window| {
         let limit = ceiling(pool, window);
         if *window == FIVE_HOUR && slow_down(pool) {
             let read = read?;
@@ -3760,6 +3845,17 @@ fn trigger_of(
         let projection = projections
             .get(*window)
             .filter(|projection| projection.at_horizon > limit)?;
+        // The shed rule stamped every window over the ceiling before the test, so a missing stamp starts the wait now.
+        let since = stamp(window).unwrap_or(now);
+        let wait_ms = ((projection.horizon - since) / 4).min(dwell_ms);
+        if now - since < wait_ms {
+            waiting.push(Waiting {
+                window,
+                over_since: since,
+                wait_ms,
+            });
+            return None;
+        }
         Some(Trigger {
             window,
             utilization: projection.predicted,
@@ -3774,7 +3870,8 @@ fn trigger_of(
             factor: read.map(|read| read.factor),
             speed: read.map(|read| read.speed),
         })
-    })
+    });
+    TriggerRead { fired, waiting }
 }
 
 /// What the heal check read when it cleared a mark: the healing projection, with the stretch and the threshold where

@@ -821,6 +821,14 @@ enum Command {
     ReleaseReports {
         reply: oneshot::Sender<()>,
     },
+    #[cfg(any(test, feature = "debug-hooks"))]
+    StampProjectionOver {
+        pool_id: String,
+        account_id: String,
+        window: String,
+        at: i64,
+        reply: oneshot::Sender<()>,
+    },
     Resolve {
         spelling: String,
         dated_id: String,
@@ -1371,7 +1379,8 @@ impl RouterHandle {
 }
 
 /// Compiled only under the `debug-hooks` feature, which a dependent's dev-dependency turns on, so a release build
-/// carries no way to stall the task's reports or to put an event of its own on the task's broadcast.
+/// carries no way to stall the task's reports, to put an event of its own on the task's broadcast or to stamp a
+/// window of the projection test.
 #[cfg(any(test, feature = "debug-hooks"))]
 impl RouterHandle {
     /// Answers once the task parks every affinity report it receives, unapplied and with the watermark behind
@@ -1383,6 +1392,27 @@ impl RouterHandle {
         ReportHold {
             handle: self.clone(),
         }
+    }
+
+    /// Stamps `window` of the projection test on the account as over the ceiling since `at`, as
+    /// `RoutingState::stamp_projection_over` does, answering once the task has the stamp, so a selection sent after it
+    /// reads it.
+    pub async fn stamp_projection_over(
+        &self,
+        pool_id: &str,
+        account_id: &str,
+        window: &str,
+        at: i64,
+    ) {
+        self.ask(|reply| Command::StampProjectionOver {
+            pool_id: pool_id.to_string(),
+            account_id: account_id.to_string(),
+            window: window.to_string(),
+            at,
+            reply,
+        })
+        .await
+        .expect("the router task is running");
     }
 
     /// Parks the loop before its next command until the guard drops, so a test can fill the queue.
@@ -2927,6 +2957,18 @@ impl Task {
                 let _ = reply.send(());
                 // Awaited inside the loop, so no command is taken until the guard drops.
                 let _ = release.await;
+            }
+            #[cfg(any(test, feature = "debug-hooks"))]
+            Command::StampProjectionOver {
+                pool_id,
+                account_id,
+                window,
+                at,
+                reply,
+            } => {
+                self.state
+                    .stamp_projection_over(&pool_id, &account_id, &window, at);
+                let _ = reply.send(());
             }
             Command::Resolve {
                 spelling,

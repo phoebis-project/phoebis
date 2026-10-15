@@ -993,6 +993,9 @@ pub struct RoutingState {
     /// under the same key, and the session's pace does not change with its account. Memory only, so the first request
     /// of a pin after a restart reads none.
     pin_paces: HashMap<PinKey, PinPace>,
+    /// When each window of the projection test first read over the ceiling at a pinned selection, keyed by pool id,
+    /// account id and window. Memory only: a restart starts from none.
+    projection_over: HashMap<(String, String, String), i64>,
     /// The ledger's tables, which this crate cannot name, handed in by the task; unit tables until then, so a
     /// burn read through them is a token count.
     rates: BurnRates,
@@ -1094,6 +1097,7 @@ impl RoutingState {
                 .collect(),
             pins: load.pins.into_iter().map(|p| (p.key(), p)).collect(),
             pin_paces: HashMap::new(),
+            projection_over: HashMap::new(),
             rates: BurnRates::default(),
             renewed: HashSet::new(),
             reservations: HashMap::new(),
@@ -2253,6 +2257,73 @@ impl RoutingState {
             .insert((pool_id.to_string(), account_id.to_string()), at);
     }
 
+    /// When `window` of the projection test first read over the ceiling on the account under `pool_id`, `None` while it
+    /// reads at or under the ceiling or no selection has read it.
+    pub fn projection_over_since(
+        &self,
+        pool_id: &str,
+        account_id: &str,
+        window: &str,
+    ) -> Option<i64> {
+        self.projection_over
+            .get(&(
+                pool_id.to_string(),
+                account_id.to_string(),
+                window.to_string(),
+            ))
+            .copied()
+    }
+
+    /// Sets the stamp at the first reading over the ceiling, clears it at a reading at or under, and replaces a stamp
+    /// older than the window's start (`window_start`: the window's reset less its length, where the reading has a
+    /// reset).
+    pub fn note_projection(
+        &mut self,
+        pool_id: &str,
+        account_id: &str,
+        window: &str,
+        over: bool,
+        window_start: Option<i64>,
+        now: i64,
+    ) {
+        let key = (
+            pool_id.to_string(),
+            account_id.to_string(),
+            window.to_string(),
+        );
+        if !over {
+            self.projection_over.remove(&key);
+            return;
+        }
+        let stamp = self.projection_over.entry(key).or_insert(now);
+        // A stamp belongs to one window: a quiet account's stamp from before the reset would fire the new window's
+        // first reading over the ceiling at once.
+        if window_start.is_some_and(|start| *stamp < start) {
+            *stamp = now;
+        }
+    }
+
+    /// Stamps `window` on the account as over the ceiling since `at`, so a test reaches a window past its wait without
+    /// a selection a wait before its instant. No production path stamps but the note, so it is compiled under `test`
+    /// and the `debug-hooks` feature alone.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    pub fn stamp_projection_over(
+        &mut self,
+        pool_id: &str,
+        account_id: &str,
+        window: &str,
+        at: i64,
+    ) {
+        self.projection_over.insert(
+            (
+                pool_id.to_string(),
+                account_id.to_string(),
+                window.to_string(),
+            ),
+            at,
+        );
+    }
+
     /// A late failure from account A must not remove a newer pin on account B, so both have to match. Answers the row
     /// the invalidation took, whose figures the failover's landing reads, `None` when nothing matched.
     pub fn invalidate_pin(&mut self, pin: &PinRef, account_id: &str) -> Option<PinRow> {
@@ -2523,6 +2594,7 @@ impl RoutingState {
         let held = &self.pins;
         self.pin_paces.retain(|key, _| held.contains_key(key));
         let slow_downs = self.purge_slow_downs(snapshot, now);
+        self.purge_projection_over(snapshot);
         // None of these needs a deletion written: the overage rows cascade with the account and the next holder's
         // first reading replaces one left under another incarnation, the window and credits rows cascade too and
         // the purge tick drops one of another incarnation, and charges and round-robin cursors are held in memory
@@ -2612,6 +2684,30 @@ impl RoutingState {
         gone.into_iter()
             .filter_map(|key| self.slow_downs.remove(&key).map(|entry| (key, entry)))
             .collect()
+    }
+
+    /// The projection stamps no test reads: every stamp of a pool whose shedding is off or that left the registry, the
+    /// 5-hour stamps of a pool that slows its pins, whose 5-hour test is the stretch, and the stamps of an account that
+    /// holds no pin of the pool, so a flipped switch or a quiet account starts its wait afresh. No age drops a stamp,
+    /// since a window that reads over for hours keeps the stamp of its first reading over and the round after the
+    /// dwell waits no second time.
+    fn purge_projection_over(&mut self, snapshot: &RegistrySnapshot) {
+        let pins = &self.pins;
+        self.projection_over
+            .retain(|(pool_id, account_id, window), _| {
+                let Some(pool) = snapshot.pool(pool_id).filter(|pool| load_shedding(pool)) else {
+                    return false;
+                };
+                if window == FIVE_HOUR && slow_down(pool) {
+                    return false;
+                }
+                pins.values().any(|pin| {
+                    pin.account_id == *account_id
+                        && snapshot
+                            .key(&pin.key_id)
+                            .is_some_and(|key| key.pool_id == *pool_id)
+                })
+            });
     }
 }
 
