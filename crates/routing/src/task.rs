@@ -32,8 +32,8 @@ use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
     is_plan_window, mark_holds, plan_windows, shed_dwell_ms, AccountTicket, BurnUnit, CreditsState,
     EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable,
-    RoutingState, SharePricer, StateWrite, UtilizationSample, WindowReading, WindowSource,
-    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    RoutingState, SharePricer, SlowDownEdge, StateWrite, UtilizationSample, WindowReading,
+    WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::{resolve, term, window_for, Candidate, KeyRefusal, Presented, RegistrySnapshot};
 
@@ -219,6 +219,30 @@ pub enum RouterEvent {
         model: String,
         /// Boxed: the round's facts carry every pin of the round, and the broadcast copies the enum whole.
         round: Box<ShedRoundFacts>,
+        at: i64,
+    },
+    /// The account's factor on the pool read under 1 for the first time since it last read 1: the read's factor,
+    /// stretch and threshold, its demand in share of the 5-hour window per hour and the window's reset.
+    SlowDownStarted {
+        account_id: String,
+        pool_id: String,
+        factor: f64,
+        stretch_ms: i64,
+        threshold_ms: i64,
+        demand: f64,
+        reset: Option<i64>,
+        at: i64,
+    },
+    /// The factor read 1 for the safety wait, or the purge dropped the entry: the span from `since` to the instant the
+    /// factor returned to 1 (or the entry's last read, where it never did), with the lowest factor read in it and the
+    /// time its new holds waited.
+    SlowDownEnded {
+        account_id: String,
+        pool_id: String,
+        since: i64,
+        duration_ms: i64,
+        factor_min: f64,
+        held_ms: i64,
         at: i64,
     },
     /// `blocked()` answered differently before and after a credits reading landed.
@@ -2499,6 +2523,45 @@ impl Task {
         let _ = self.events.send(event);
     }
 
+    /// The slow-down span edges the state recorded, one event each, and the spans whose factor has read 1 for the
+    /// wait by `now`.
+    fn slow_down_edges(&mut self, now: i64) {
+        for (pool_id, account_id, edge) in self.state.take_slow_down_edges(now) {
+            self.emit(match edge {
+                SlowDownEdge::Started {
+                    factor,
+                    stretch_ms,
+                    threshold_ms,
+                    demand,
+                    reset,
+                } => RouterEvent::SlowDownStarted {
+                    account_id,
+                    pool_id,
+                    factor,
+                    stretch_ms,
+                    threshold_ms,
+                    demand,
+                    reset,
+                    at: now,
+                },
+                SlowDownEdge::Ended {
+                    since,
+                    duration_ms,
+                    factor_min,
+                    held_ms,
+                } => RouterEvent::SlowDownEnded {
+                    account_id,
+                    pool_id,
+                    since,
+                    duration_ms,
+                    factor_min,
+                    held_ms,
+                    at: now,
+                },
+            });
+        }
+    }
+
     /// The decision of a request the relay refused before asking for a selection, built on the current snapshot.
     fn record_refusal(&self, request: &RefusedRequest, refusal: &RefusalFacts) {
         let snapshot = self
@@ -2881,6 +2944,7 @@ impl Task {
                 for event in pin_events.into_iter().chain(mark).chain(round) {
                     self.emit(event);
                 }
+                self.slow_down_edges(request.now);
                 if let Some((account_id, rewrite)) = booked {
                     for (window, share) in rewrite {
                         let Some(after) = self.state.predicted(&account_id, &window, request.now)
@@ -4050,6 +4114,7 @@ impl Task {
             .map(|p| (p.key(), p))
             .collect();
         let purged = self.state.purge(&snapshot, now);
+        self.slow_down_edges(now);
         tracing::debug!(
             affinity = purged.affinity.len(),
             cooldowns = purged.cooldowns.len(),

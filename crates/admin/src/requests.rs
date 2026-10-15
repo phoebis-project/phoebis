@@ -147,8 +147,10 @@ pub(crate) struct RequestSummary {
     pub tier: Option<String>,
     pub phases: RequestPhases,
     pub attempts: Vec<Attempt>,
-    /// `{waited_on, cohort, held_ms}` for the holds the request waited through, with the wait in milliseconds,
-    /// whether or not an attempt followed. Null for a request never held.
+    /// `{waited_on, cohort, held_ms, waits}` for the holds the request waited through, `held_ms` every wait summed in
+    /// milliseconds and `waits` each wait apart, oldest first, with its `reason` (`cap` for a slot, `reset` for a spent
+    /// window about to reset, `slow_down` for a slowed pin's wait before its head) and its `held_ms`, whether or not an
+    /// attempt followed. A row from before the waits were kept carries no `waits`. Null for a request never held.
     #[schema(value_type = Option<Object>)]
     pub held: Option<Value>,
     /// `client` when the client's body carried its own `diagnostics` member, `router` when the relay inserted it,
@@ -341,6 +343,13 @@ pub(crate) struct Event {
     ///   with its lead over pace, the elapsed share and the margin over the threshold, the pool's pins on that
     ///   account in the round's order with their burns, and the pins it marked. The marks and the dwell are the
     ///   pool's on that account, while a move's cool reading counts a round any pool ran on its destination.
+    /// - `slow_down_ended`: the account's slow-down on the pool ended, its factor back at 1 for the safety wait or
+    ///   its entry dropped at the purge, with the span's `since`, `duration_ms` (to the factor's return, or to the
+    ///   entry's last read where it never returned), `factor_min`, the lowest factor of the span, and `held_ms`, the
+    ///   time its new holds waited.
+    /// - `slow_down_started`: the account's factor on the pool read under 1 for the first time since it last read 1,
+    ///   with the read's `factor`, `stretch_ms`, `threshold_ms`, `demand` (share of the 5-hour window per hour) and
+    ///   the window's `reset`.
     /// - `warm_prefix_expired`: the cache-map entries the purge removed for one conversation root on one account,
     ///   with the largest of them and the cause, `ttl` or `incarnation`.
     /// - `wind_down_started`: a pool member entered its wind-down before its subscription ends, `cancelled` or
@@ -727,7 +736,7 @@ pub(crate) struct RequestsQuery {
     /// A comma list of `fast`, `standard`, read off the serving attempt, else `fast` for a request that asked for
     /// it and `standard` otherwise.
     pub speeds: Option<String>,
-    /// `true`/`1`: the requests that waited for a slot, one that answered without a dispatch included.
+    /// `true`/`1`: the requests that waited through a hold, one that answered without a dispatch included.
     pub held: Option<bool>,
     /// `true`/`1`.
     pub include_probes: Option<bool>,

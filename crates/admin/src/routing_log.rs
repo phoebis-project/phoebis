@@ -230,10 +230,12 @@ pub(crate) struct SummaryHold {
     pub account_id: String,
     pub cohort: Option<String>,
     pub bound_ms: i64,
-    /// `cap` for a hold on a slot, `reset` for a spent window about to reset.
+    /// `cap` for a hold on a slot, `reset` for a spent window about to reset, `slow_down` for a slowed pin's wait
+    /// before its head.
     #[schema(example = "cap")]
     pub reason: String,
-    /// The instant a `reset` hold waits for, null under `cap`.
+    /// The instant the request waits for: under `reset` the later of the spent window's reset and the end of the
+    /// account's cooldown, under `slow_down` the pin's deadline. Null under `cap`.
     pub until: Option<i64>,
     /// The account's factor the hold was read under. Set under `slow_down`, null otherwise.
     pub factor: Option<f64>,
@@ -319,14 +321,17 @@ pub(crate) struct DecisionRecord {
     pub seq: u32,
     /// 2.
     pub version: u32,
-    /// `request_id`, `attempt`, `seq`, `at`, `key_id`, `key_generation`, `pool_id`, `routing_session_id`,
-    /// `agent_id`, `parent_agent_id`, `client_class`, `request_class`, `canonical_model`, `lane` (`speed`,
-    /// `thinking`, `effort`), `flags` (`fast`, `count`, `probe`, `portable`, `marker`, `context_compacted`),
-    /// `identity` (`rung`, `root`, `depth`, `account_id`), `chain` (`static_boundaries` and `boundaries`, the
-    /// chains' lengths, and `static_hash`), `attempted` (the accounts already tried), `holds` (each `account_id`,
-    /// `cohort`, `held_ms`, `attempt`, `seq` (the decision that held), `ran_out` (the wait's bound ran out with no
-    /// slot freed)), `registry_revision`, `body_tokens` (the relay's estimate of the body's prompt tokens, which a
-    /// fresh session's rewrite reads, null on a refusal).
+    /// `request_id`, `attempt`, `seq`, `at`, `received_at` (when the relay received the request, the same on every
+    /// selection of it, a refusal's `at`), `key_id`, `key_generation`, `pool_id`, `routing_session_id`, `agent_id`,
+    /// `parent_agent_id`, `client_class`, `request_class`, `canonical_model`, `lane` (`speed`, `thinking`,
+    /// `effort`), `flags` (`fast`, `count`, `probe`, `portable`, `marker`, `context_compacted`), `identity` (`rung`,
+    /// `root`, `depth`, `account_id`), `chain` (`static_boundaries` and `boundaries`, the chains' lengths, and
+    /// `static_hash`), `attempted` (the accounts already tried), `holds` (each `account_id`, `cohort`, `held_ms`,
+    /// `attempt`, `seq` (the decision that held), `ran_out` (the wait's bound ran out with no slot freed), `reason`
+    /// (`cap` for a slot, `reset` for a spent window about to reset, `slow_down` for a slowed pin's wait before its
+    /// head), `until` (the instant the wait ends: a reset's, or the pin's slow-down deadline, null under `cap`)),
+    /// `registry_revision`, `body_tokens` (the relay's estimate of the body's prompt tokens, which a fresh session's
+    /// rewrite reads, null on a refusal).
     ///
     /// A refusal's `request` block reads what the refusal site held. A refusal of the router's own carries the
     /// request's `parent_agent_id`, `request_class`, `lane`, `flags` (a keepalive probe's `flags.probe` among
@@ -338,7 +343,9 @@ pub(crate) struct DecisionRecord {
     /// `epoch`, `incarnation`, `created_at`, `last_used_at`, `last_refresh_at`, `idle_ms`, `refresh_age_ms`,
     /// `lane`, `shed` (`from`, `at`), `marked`, `warmth` (`refresh`, `cold` or `untouched`), `warmth_cause`,
     /// `released` (the reasons a pin was let go), `marked_at`, `marked_on` and `marked_window` (the shedding mark the
-    /// row carries: when it was made, the account and the window whose trigger made it, null without one). Null for a
+    /// row carries: when it was made, the account and the window whose trigger made it, null without one), `cycle_ms`
+    /// (the pin's cycle, the time-weighted average of the gaps between a dispatch and the next arrival, null before its
+    /// first gap), `slow_down_until` (the end of the slow-down hold standing on the pin, null with none). Null for a
     /// request that pins nothing, with `pin_reason` beside it.
     #[schema(value_type = Option<Object>)]
     pub pin: Option<Value>,
@@ -359,6 +366,8 @@ pub(crate) struct DecisionRecord {
     /// `overage` (`since`, `reset`, `source`, `observed_at`), `in_flight`, `in_flight_cap`, `windows` (by window
     /// name, each `utilization`, `reset`, `source` (`head`, `poll`, `predicted` or `stored`), `observed_at`,
     /// `age_ms`, `ahead`, `projection` and `horizon` (the projection at the window's horizon, a plan window's alone),
+    /// `demand` (the 5-hour window's demand of a subscription member, the pins' burn over the account's realized speed
+    /// in share per hour, null on every other window),
     /// `reserved` (the live bookings' rewrite the prediction carries)), `allowance_known`, `pace` (`remaining`,
     /// `reset`, `end`, `deadline`, `hours`, `score`, `window` (the window the score read, `seven_day` or the model's
     /// week such as `seven_day_fable`, null for an API key member), `burn` (the burn the score subtracts, share per
@@ -374,7 +383,9 @@ pub(crate) struct DecisionRecord {
     /// `partition`, `rank`, `score`, `verdict` (`chosen`, `renewed`, `held_on`, `source`, `destination`,
     /// `eligible`, `ranked`, `out` or `not_needed`), `runway_ms`, `fit` (`ending`, `fits`, `least_bad` or
     /// `rewrite_only`) and `binding` (the request's fit where a move's gate or the `no_fit` partition read it, the
-    /// runway null when unbounded), `burn` (the pins' burn by plan window, share per hour).
+    /// runway null when unbounded), `burn` (the pins' burn by plan window, share per hour), `factor` (the member's
+    /// slow-down factor as the last pinned selection on it read it, null with no read or on a pool whose slow-down is
+    /// off).
     #[schema(value_type = Vec<Object>)]
     pub candidates: Vec<Value>,
     /// The steps in the order the engine ran them, each `step`, `verdict` and `facts`, each fact `key`, `value`,
@@ -384,11 +395,17 @@ pub(crate) struct DecisionRecord {
     /// `kind`, `account_id`, `from_account_id`, `upstream_model`, `tier`, `strategy`, `rule`, `rung` (`rung`,
     /// `depth`, `prefix_tokens`), `in_overage`, `pin_written` (`action`, `epoch`, `lane`, `refresh_stamped`,
     /// `hashes_stamped`), `pin_events` (each `kind`, `reason`), `hold` (`account_id`, `cohort`, `bound_ms`,
-    /// `reason` (`cap` or `reset`), `until` (the end of a reset's wait)), `exhaustion` (`kind`, `deadline`, `window`,
-    /// `reason`, `obstacle`), `refusal` (`kind`, `code`, `reason`), `cohort_hold`, `shed_marks`, `mark_cleared`
-    /// (`reason`, `marked_at`, `marked_on`, `marked_window`, `projection`), `reservation` (`account_id`, `rewrite` and
-    /// `burn` by plan window, the burn per hour, `expires_at`, null for a decision that booked nothing),
-    /// `completion`.
+    /// `reason` (`cap`, `reset` or `slow_down`), `until` (the end of a reset's wait, or the pin's slow-down deadline),
+    /// and under `slow_down` the read the hold was sized from, null otherwise: `factor`, `speed` (the speed the
+    /// account's holds realize together), `stretch_ms`, `threshold_ms` and `cycle_ms` (the pin's cycle)),
+    /// `exhaustion` (`kind`, `deadline`, `window`, `reason`, `obstacle`), `refusal` (`kind`, `code`, `reason`),
+    /// `cohort_hold` (`waited_on`, `cohort`, `held_ms` (every wait summed), `waits` (each `reason`, `cap`, `reset` or
+    /// `slow_down`, and its `held_ms`)), `shed_marks`, `mark_cleared` (`reason`, `marked_at`, `marked_on`,
+    /// `marked_window`, `projection`, `stretch_ms` and `threshold_ms` (the stretch and the threshold the heal read
+    /// where the stretch made the mark)), `reservation` (`account_id`, `rewrite` and `burn` by plan window, the burn
+    /// per hour, `expires_at`, null for a decision that booked nothing), `cause` (why the failover this decision lands
+    /// moved the session: a cooldown's `scope`, `reason` and `window`, or a mark's `state` and `cause`, null for every
+    /// other decision), `completion`.
     ///
     /// A refusal's `code` is its structured word beside the display `reason`: `disabled`, `expired`,
     /// `pool_disabled`, `pool_missing`, `replaced`, `revoked` or `unknown` for a key refusal, `model_not_allowed`
@@ -403,10 +420,10 @@ pub(crate) struct DecisionRecord {
     /// `status`, `cache_read_tokens` and `input_tokens` (null until the attempt has usage), `promised_tokens` (the
     /// matched rung's prefix, null without a rung), `hit` (as `GET /admin/analytics/placements` counts it: a
     /// `content` rung reads up to its promise, any other decision reads anything, null until the attempt has
-    /// usage), `held_ms` (the request's waits for a slot, summed, null for a request never held), `freed`
-    /// (whether the request waited on the account this decision placed on, so its wait ended in that slot),
-    /// `cache_map_written` (the cache-map entries the answer wrote, each `tier`, `depth`, `prefix_tokens`,
-    /// `ttl_ms`, `account_id`, null until the answer ends), and `completed_at`.
+    /// usage), `held_ms` (every wait of the request, for a slot, a reset or the slow-down, summed, null for a request
+    /// never held), `freed` (whether the request waited on the account this decision placed on, so its wait ended in
+    /// that slot), `cache_map_written` (the cache-map entries the answer wrote, each `tier`, `depth`,
+    /// `prefix_tokens`, `ttl_ms`, `account_id`, null until the answer ends), and `completed_at`.
     #[schema(value_type = Object)]
     pub outcome: Value,
 }

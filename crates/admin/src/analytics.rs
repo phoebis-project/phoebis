@@ -8,10 +8,11 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{
-    breakdown_paged, bucket_seconds, burn_groups_paged, hour_ceil, hour_of, hourly_window_samples,
-    lead_over_pace, moves_by_reason_and_fit, names_one_account, parse_range, read_account_rollups,
-    rewrite_series, series_paged, session_burn_series, AccountRollupRow, FundingFilter,
-    HourlyWindowSample, LedgerError, LiveKeys, RollupFilter, SeriesFilter, SharePricing, GROUP_BYS,
+    breakdown_paged, bucket_seconds, burn_groups_paged, held_series, hour_ceil, hour_of,
+    hourly_window_samples, lead_over_pace, moves_by_reason_and_fit, names_one_account, parse_range,
+    read_account_rollups, rewrite_series, series_paged, session_burn_series, AccountRollupRow,
+    FundingFilter, HourlyWindowSample, LedgerError, LiveKeys, RollupFilter, SeriesFilter,
+    SharePricing, GROUP_BYS,
 };
 use phoebis_routing::{term, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountKind, SubscriptionTerm};
@@ -960,7 +961,7 @@ pub(crate) async fn burn(
     .into_response()
 }
 
-/// The rewrite tokens per bucket and the moves over the range.
+/// The rewrite tokens per bucket, the moves over the range and the slow-down's held time per bucket.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Rewrites {
@@ -973,6 +974,18 @@ pub(crate) struct Rewrites {
     /// Move counts by reason, then by the destination's fit (`fits`, `rewrite_only`, `least_bad`, or `unknown` for a
     /// move the fit gate did not read), summed over the range.
     pub moves_by_reason_and_fit: BTreeMap<String, BTreeMap<String, u64>>,
+    /// The slow-down's held time per bucket: the milliseconds the requests of the bucket waited and how many waited.
+    pub held: Vec<HeldPoint>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct HeldPoint {
+    pub at: i64,
+    /// The bucket's slow-down waits summed, the waits for a slot or a reset left out.
+    pub held_ms: u64,
+    /// The requests of the bucket that waited through a slow-down hold.
+    pub requests: u64,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -991,7 +1004,7 @@ pub(crate) struct RewritePoint {
     tag = "Analytics",
     params(RangeQuery),
     responses(
-        (status = 200, description = "The points and the moves over the range.", body = Rewrites),
+        (status = 200, description = "The points, the moves and the slow-down's held time over the range.", body = Rewrites),
         (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, response = LedgerFailure),
     ),
@@ -1018,10 +1031,11 @@ pub(crate) async fn rewrites(
             Ok((
                 rewrite_series(c, &filter)?,
                 moves_by_reason_and_fit(c, &filter)?,
+                held_series(c, &filter)?,
             ))
         })
         .await;
-    let (series, moves_by_reason_and_fit) = match read {
+    let (series, moves_by_reason_and_fit, held) = match read {
         Ok(x) => x,
         Err(e) => return ledger_failure(e),
     };
@@ -1040,6 +1054,14 @@ pub(crate) async fn rewrites(
             .collect(),
         moves,
         moves_by_reason_and_fit,
+        held: held
+            .into_iter()
+            .map(|(at, held_ms, requests)| HeldPoint {
+                at,
+                held_ms,
+                requests,
+            })
+            .collect(),
     })
     .into_response()
 }

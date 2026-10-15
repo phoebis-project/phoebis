@@ -19508,8 +19508,8 @@ fn a_window_at_the_ceiling_reads_a_stretch_of_at_least_the_time_to_the_reset_and
     let until = T + MINUTE + 120_000;
     assert_eq!(held_on(&d).1.until, Some(until));
 
-    // Under the ceiling with nothing priced the window carries the sessions to its reset: the stretch reads zero, the
-    // factor returns to 1 and the span closes. The pin's next turn arrives inside the standing deadline and rejoins it.
+    // Under the ceiling with nothing priced the window carries the sessions to its reset: the stretch reads zero and
+    // the factor returns to 1. The pin's next turn arrives inside the standing deadline and rejoins it.
     reading(&mut st, "a", 0.5, 25 * MINUTE, T + 2 * MINUTE);
     let d = decide(
         &mut st,
@@ -19533,8 +19533,8 @@ fn a_window_at_the_ceiling_reads_a_stretch_of_at_least_the_time_to_the_reset_and
             entry.held_ms,
             entry.over_since
         ),
-        (1.0, None, Some(T + 2 * MINUTE), 1.0, 0, None),
-        "the span closed with its figures reset"
+        (1.0, Some(T), Some(T + 2 * MINUTE), 0.0, 120_000, None),
+        "the span stays open through the wait"
     );
 }
 

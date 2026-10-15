@@ -255,6 +255,56 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             request_id: Some(request_id.clone()),
             ..Default::default()
         },
+        RouterEvent::SlowDownStarted {
+            account_id,
+            pool_id,
+            factor,
+            stretch_ms,
+            threshold_ms,
+            demand,
+            reset,
+            at,
+        } => EventRecord {
+            at: *at,
+            kind: "slow_down_started".into(),
+            account_id: Some(account_id.clone()),
+            detail: Some(
+                json!({
+                    "factor": factor,
+                    "stretch_ms": stretch_ms,
+                    "threshold_ms": threshold_ms,
+                    "demand": demand,
+                    "reset": reset,
+                })
+                .to_string(),
+            ),
+            pool_id: Some(pool_id.clone()),
+            ..Default::default()
+        },
+        RouterEvent::SlowDownEnded {
+            account_id,
+            pool_id,
+            since,
+            duration_ms,
+            factor_min,
+            held_ms,
+            at,
+        } => EventRecord {
+            at: *at,
+            kind: "slow_down_ended".into(),
+            account_id: Some(account_id.clone()),
+            detail: Some(
+                json!({
+                    "since": since,
+                    "duration_ms": duration_ms,
+                    "factor_min": factor_min,
+                    "held_ms": held_ms,
+                })
+                .to_string(),
+            ),
+            pool_id: Some(pool_id.clone()),
+            ..Default::default()
+        },
         RouterEvent::FastCreditsChanged {
             account_id,
             before,
@@ -1034,6 +1084,31 @@ mod tests {
                 },
                 "pin_released",
             ),
+            (
+                RouterEvent::SlowDownStarted {
+                    account_id: "a".into(),
+                    pool_id: "p".into(),
+                    factor: 0.5,
+                    stretch_ms: 1,
+                    threshold_ms: 2,
+                    demand: 0.1,
+                    reset: None,
+                    at: 1,
+                },
+                "slow_down_started",
+            ),
+            (
+                RouterEvent::SlowDownEnded {
+                    account_id: "a".into(),
+                    pool_id: "p".into(),
+                    since: 0,
+                    duration_ms: 1,
+                    factor_min: 0.5,
+                    held_ms: 0,
+                    at: 1,
+                },
+                "slow_down_ended",
+            ),
         ] {
             assert_eq!(event_of(&event).map(|row| row.kind), Some(kind.to_string()));
         }
@@ -1499,6 +1574,72 @@ mod tests {
         assert_eq!(
             detail_of(&row),
             json!({"ends_at": 9_000, "wind_down_minutes": 30, "end_source": "cancelled"})
+        );
+
+        let row = event_of(&RouterEvent::SlowDownStarted {
+            account_id: "a".into(),
+            pool_id: "p".into(),
+            factor: 0.5,
+            stretch_ms: 2_520_000,
+            threshold_ms: 1_800_000,
+            demand: 0.12,
+            reset: Some(9_000_000),
+            at: 8_000,
+        })
+        .expect("a slow-down row");
+        assert_eq!(
+            (row.at, columns(&row)),
+            (
+                8_000,
+                (
+                    "slow_down_started",
+                    Some("a"),
+                    Some("p"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None
+                )
+            )
+        );
+        assert_eq!(
+            detail_of(&row),
+            json!({
+                "factor": 0.5, "stretch_ms": 2_520_000, "threshold_ms": 1_800_000, "demand": 0.12,
+                "reset": 9_000_000
+            })
+        );
+
+        let row = event_of(&RouterEvent::SlowDownEnded {
+            account_id: "a".into(),
+            pool_id: "p".into(),
+            since: 8_000,
+            duration_ms: 2_700_000,
+            factor_min: 0.35,
+            held_ms: 600_000,
+            at: 2_828_000,
+        })
+        .expect("a slow-down row");
+        assert_eq!(
+            (row.at, columns(&row)),
+            (
+                2_828_000,
+                (
+                    "slow_down_ended",
+                    Some("a"),
+                    Some("p"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None
+                )
+            )
+        );
+        assert_eq!(
+            detail_of(&row),
+            json!({"since": 8_000, "duration_ms": 2_700_000, "factor_min": 0.35, "held_ms": 600_000})
         );
     }
 

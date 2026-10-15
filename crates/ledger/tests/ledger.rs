@@ -1229,6 +1229,82 @@ async fn a_probe_the_relay_refused_at_admission_folds_as_held_and_not_as_failed_
     up.shutdown().await;
 }
 
+/// A request's `held` names each of its waits with the reason: the hourly row sums the `slow_down` waits under
+/// `slow_down_held_ms` and counts the request once under `slow_down_held`, a request that waited for a slot alone
+/// counts under neither, and a replaced request takes its waits back out of its row.
+#[test]
+fn a_requests_slow_down_waits_count_into_its_hourly_row() {
+    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let request = |id: &str, key_id: &str, held: &str| RequestRecord {
+        id: id.into(),
+        received_at: 3_600_000,
+        key_id: Some(key_id.into()),
+        pool_id: Some("main".into()),
+        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        status: Some(200),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        held: Some(held.into()),
+        ..Default::default()
+    };
+    let attempt = |id: &str| AttemptRecord {
+        request_id: id.into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: "oauth".into(),
+        outcome: "succeeded".into(),
+        output_tokens: Some(5),
+        ..Default::default()
+    };
+    let slowed = r#"{"waited_on":["a","a"],"cohort":null,"held_ms":2500,"waits":[{"reason":"cap","held_ms":500},{"reason":"slow_down","held_ms":2000}]}"#;
+    let at_cap = r#"{"waited_on":["a"],"cohort":null,"held_ms":500,"waits":[{"reason":"cap","held_ms":500}]}"#;
+    db.insert_request(
+        &request("slowed", "desktop", slowed),
+        &[attempt("slowed")],
+        None,
+    )
+    .unwrap();
+    db.insert_request(
+        &request("at-cap", "laptop", at_cap),
+        &[attempt("at-cap")],
+        None,
+    )
+    .unwrap();
+    let row = |key_id: &str| {
+        db.read_blocking(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
+        .unwrap()
+        .into_iter()
+        .find(|r| r.key_id == key_id)
+        .map(|r| (r.requests, r.slow_down_held_ms, r.slow_down_held))
+    };
+    assert_eq!(
+        row("desktop"),
+        Some((1, 2_000, 1)),
+        "the slow-down's wait counts, the slot's beside it does not"
+    );
+    assert_eq!(
+        row("laptop"),
+        Some((1, 0, 0)),
+        "a wait for a slot alone is no slow-down"
+    );
+    db.insert_request(
+        &request("slowed", "desktop", at_cap),
+        &[attempt("slowed")],
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        row("desktop"),
+        Some((1, 0, 0)),
+        "the replaced request's slow-down wait left its row"
+    );
+}
+
 /// The row `list_requests` hands back, the same query `/admin/requests` runs.
 async fn listed(h: &Harness, id: &str) -> RequestRecord {
     wait_for_async(Duration::from_secs(5), || async {
@@ -2453,7 +2529,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 35);
+    assert_eq!(db.schema_version().await.unwrap(), 36);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -2568,7 +2644,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 35);
+    assert_eq!(db.schema_version().await.unwrap(), 36);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         (
@@ -2645,7 +2721,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 35);
+    assert_eq!(db.schema_version().await.unwrap(), 36);
     let columns = db
         .read_blocking(|c| {
             let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -2734,7 +2810,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 35);
+    assert_eq!(db.schema_version().await.unwrap(), 36);
     let speeds = |ledger: &phoebis_ledger::LedgerDb| {
         ledger
             .read_blocking(|c| {
@@ -2817,7 +2893,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 35);
+    assert_eq!(db.schema_version().await.unwrap(), 36);
     let mut rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -2895,7 +2971,7 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 35);
+    assert_eq!(db.schema_version().await.unwrap(), 36);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         row.held, None,
@@ -2959,7 +3035,7 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 35);
+    assert_eq!(db.schema_version().await.unwrap(), 36);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -3028,7 +3104,7 @@ async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_a
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 35);
+    assert_eq!(db.schema_version().await.unwrap(), 36);
     let rows: Vec<(i64, String, Option<f64>, String)> = db
         .quota_samples("a", 0, i64::MAX)
         .await
@@ -3105,7 +3181,7 @@ async fn a_ledger_below_the_held_column_migrates_and_a_fresh_file_carries_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 35);
+    assert_eq!(db.schema_version().await.unwrap(), 36);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -3134,6 +3210,91 @@ async fn a_ledger_below_the_held_column_migrates_and_a_fresh_file_carries_it() {
         held_columns(&phoebis_ledger::LedgerDb::open_in_memory().unwrap()),
         1,
         "a fresh file carries it"
+    );
+}
+
+#[tokio::test]
+async fn a_ledger_below_the_slow_down_columns_migrates_and_a_fresh_file_carries_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    {
+        let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
+        db.insert_request(
+            &RequestRecord {
+                id: "r0".into(),
+                received_at: 3_600_000,
+                key_id: Some("desktop".into()),
+                pool_id: Some("main".into()),
+                canonical_model: "claude-sonnet-5".into(),
+                model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            &[AttemptRecord {
+                request_id: "r0".into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "oauth".into(),
+                outcome: "succeeded".into(),
+                output_tokens: Some(5),
+                ..Default::default()
+            }],
+            None,
+        )
+        .unwrap();
+        db.write(|c| {
+            c.execute_batch(
+                "ALTER TABLE rollups_hourly DROP COLUMN slow_down_held_ms; \
+                 ALTER TABLE rollups_hourly DROP COLUMN slow_down_held; \
+                 UPDATE meta SET value = '35' WHERE key = 'schema_version';",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+    let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
+    assert_eq!(db.schema_version().await.unwrap(), 36);
+    let rows = db
+        .read_blocking(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (
+                r.requests,
+                r.succeeded,
+                r.slow_down_held_ms,
+                r.slow_down_held
+            ))
+            .collect::<Vec<_>>(),
+        vec![(1, 1, 0, 0)],
+        "a rollup row from before the columns keeps its counts and counts no slow-down wait"
+    );
+    let slow_down_columns = |ledger: &phoebis_ledger::LedgerDb| {
+        ledger
+            .read_blocking(|c| {
+                Ok(c.query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('rollups_hourly') \
+                     WHERE name IN ('slow_down_held_ms', 'slow_down_held')",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+            .unwrap()
+    };
+    assert_eq!(
+        slow_down_columns(&db),
+        2,
+        "the migration added both columns"
+    );
+    assert_eq!(
+        slow_down_columns(&phoebis_ledger::LedgerDb::open_in_memory().unwrap()),
+        2,
+        "a fresh file carries them"
     );
 }
 
@@ -3188,7 +3349,7 @@ async fn a_ledger_below_the_phase_columns_migrates_and_a_fresh_file_carries_them
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 35);
+    assert_eq!(db.schema_version().await.unwrap(), 36);
     let (row, attempts) = db
         .read_blocking(|c| phoebis_ledger::request_by_id(c, "r0"))
         .unwrap()
@@ -3271,7 +3432,7 @@ async fn a_requests_diagnostics_source_round_trips_and_a_ledger_at_version_31_re
         .unwrap();
     }
     let db = Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 35);
+    assert_eq!(db.schema_version().await.unwrap(), 36);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         row.diagnostics_source, None,
@@ -3302,7 +3463,7 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
     let event_indexes = "SELECT name FROM pragma_index_list('events') ORDER BY name";
     {
         let fresh = Arc::new(LedgerDb::open(&path).unwrap());
-        assert_eq!(fresh.schema_version().await.unwrap(), 35);
+        assert_eq!(fresh.schema_version().await.unwrap(), 36);
         assert_eq!(
             names(
                 &fresh,
@@ -3364,7 +3525,7 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
         );
     }
     let existing = Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(existing.schema_version().await.unwrap(), 35);
+    assert_eq!(existing.schema_version().await.unwrap(), 36);
     assert_eq!(
         names(&existing, event_columns),
         [

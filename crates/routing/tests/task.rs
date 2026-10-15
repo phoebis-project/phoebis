@@ -9356,6 +9356,272 @@ async fn a_quiet_accounts_slow_down_entry_and_a_gone_pins_pace_leave_at_the_purg
     assert!(state.pin_pace(&s1.key()).is_none(), "no pin holds the key");
 }
 
+/// Pool `p` slowing its pins over the tiered account `a` alone, its session `s1` pinned there burning ten input tokens
+/// a second, a tenth of the 5-hour window an hour through `priced_config`, and the window at 0.9 with its reset 40
+/// minutes after `AT`: the room under the ceiling lasts half an hour at that burn, so the sessions would pass it ten
+/// minutes before the reset, a factor of about 0.75 and a stretch under the pool's half-hour threshold. The purge
+/// ticks every 50 ms.
+async fn slowed_router(now: &Arc<AtomicI64>) -> RouterHandle {
+    let store = shedding_store(&["a"]);
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.slow_down.slow_down = true;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    with_tier(&store, "a");
+    store
+        .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
+        .unwrap();
+    let handle = spawn(
+        store,
+        clock(now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..priced_config()
+        },
+    )
+    .unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(AT, FIVE_HOUR, 0.9, Some(SLOWED_RESET)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    handle
+}
+
+/// The 5-hour reset `slowed_router` seeds on `a`.
+const SLOWED_RESET: i64 = AT + 40 * 60_000;
+
+/// Session `s1`'s main turn at `at` under its own request id.
+fn slowed_turn(handle: &RouterHandle, request_id: &str, at: i64) -> SelectRequest {
+    SelectRequest {
+        request_id: request_id.into(),
+        request_class: Some("main".into()),
+        ..request(handle, Some("s1"), at)
+    }
+}
+
+/// The value of `key` on the decision's shed line, where the slow-down read states its figures.
+fn shed_fact(record: &DecisionRecord, key: &str) -> phoebis_routing::FactValue {
+    record
+        .walk
+        .iter()
+        .find(|step| step.step == "move:shed")
+        .and_then(|step| step.facts.iter().find(|fact| fact.key == key))
+        .map(|fact| fact.value.clone())
+        .unwrap_or_else(|| panic!("no {key} on the shed line"))
+}
+
+/// The decisions among `events`, by request id, with their records.
+fn decisions_of(events: &[phoebis_routing::RouterEvent]) -> Vec<(String, &DecisionRecord)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            phoebis_routing::RouterEvent::Decision { record, .. } => {
+                Some((record.request.request_id.clone(), record.as_ref()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_factor_under_one_emits_slow_down_started_once_and_a_return_to_one_ends_it_after_the_wait(
+) {
+    use phoebis_routing::{FactValue, RouterEvent, SLOW_DOWN_WAIT_MS};
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = slowed_router(&now).await;
+    let mut events = handle.subscribe_events();
+    // The first turn reads the factor under 1 and opens the span. The second, 30 s on, gives the pin its cycle and
+    // waits its part of the slow-down.
+    handle
+        .select(slowed_turn(&handle, "r-1", AT))
+        .await
+        .unwrap();
+    let t2 = AT + 30_000;
+    now.store(t2, Ordering::SeqCst);
+    let hold = match handle
+        .select(slowed_turn(&handle, "r-2", t2))
+        .await
+        .unwrap()
+        .result
+    {
+        SelectResult::Held { hold, .. } => hold,
+        other => panic!("the pin with a cycle waits: {other:?}"),
+    };
+    assert_eq!(hold.reason, "slow_down");
+    let until = hold
+        .until
+        .expect("a slow-down hold names the pin's deadline");
+    let seen = drained(&mut events).await;
+    let started: Vec<usize> = seen
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| matches!(event, RouterEvent::SlowDownStarted { .. }))
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(
+        started.len(),
+        1,
+        "the second read under 1 continues the span: {seen:?}"
+    );
+    let decisions = decisions_of(&seen);
+    let first = match &seen[started[0] - 1] {
+        RouterEvent::Decision { record, .. } => record,
+        other => panic!("the start follows the decision whose read opened the span, not {other:?}"),
+    };
+    assert_eq!(first.request.request_id, "r-1");
+    match &seen[started[0]] {
+        RouterEvent::SlowDownStarted {
+            account_id,
+            pool_id,
+            factor,
+            stretch_ms,
+            threshold_ms,
+            demand,
+            reset,
+            at,
+        } => {
+            assert_eq!(
+                (account_id.as_str(), pool_id.as_str(), *reset, *at),
+                ("a", "p", Some(SLOWED_RESET), AT)
+            );
+            assert!(*factor > 0.0 && *factor < 1.0, "{factor}");
+            assert_eq!(
+                (
+                    FactValue::Number(*factor),
+                    FactValue::Int(*stretch_ms),
+                    FactValue::Int(*threshold_ms),
+                    FactValue::Number(*demand)
+                ),
+                (
+                    shed_fact(first, "factor"),
+                    shed_fact(first, "stretch_ms"),
+                    shed_fact(first, "threshold_ms"),
+                    shed_fact(first, "demand_five_hour")
+                ),
+                "the start carries the read's figures, the demand in share per hour"
+            );
+            assert_eq!(*threshold_ms, 1_800_000);
+        }
+        _ => unreachable!(),
+    }
+    let lowest = decisions
+        .iter()
+        .map(|(_, record)| match shed_fact(record, "factor") {
+            FactValue::Number(factor) => factor,
+            other => panic!("{other:?}"),
+        })
+        .fold(f64::INFINITY, f64::min);
+
+    // The window reads far under the ceiling a minute after the hold's deadline: the factor returns to 1, and the span
+    // stays open through the wait.
+    let t3 = until + 60_000;
+    now.store(t3, Ordering::SeqCst);
+    handle
+        .report(observed(
+            "a",
+            sample_with(t3, FIVE_HOUR, 0.1, Some(SLOWED_RESET)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    assert!(matches!(
+        handle
+            .select(slowed_turn(&handle, "r-3", t3))
+            .await
+            .unwrap()
+            .result,
+        SelectResult::Selected(_)
+    ));
+    let seen = drained(&mut events).await;
+    let (_, record) = decisions_of(&seen)
+        .into_iter()
+        .find(|(id, _)| id == "r-3")
+        .expect("the third turn's decision");
+    assert_eq!(shed_fact(record, "factor"), FactValue::Number(1.0));
+    assert!(
+        !seen.iter().any(|event| matches!(
+            event,
+            RouterEvent::SlowDownStarted { .. } | RouterEvent::SlowDownEnded { .. }
+        )),
+        "a return shorter than the wait closes no span: {seen:?}"
+    );
+
+    // Once the factor has read 1 for the wait, the purge tick closes the span at the return.
+    now.store(t3 + SLOW_DOWN_WAIT_MS, Ordering::SeqCst);
+    let ended = loop {
+        if let ended @ RouterEvent::SlowDownEnded { .. } = next_event(&mut events).await {
+            break ended;
+        }
+    };
+    assert_eq!(
+        ended,
+        RouterEvent::SlowDownEnded {
+            account_id: "a".into(),
+            pool_id: "p".into(),
+            since: AT,
+            duration_ms: t3 - AT,
+            factor_min: lowest,
+            held_ms: until - t2,
+            at: t3 + SLOW_DOWN_WAIT_MS,
+        },
+        "the span runs from the first read under 1 to the return, with the hold it answered"
+    );
+    assert!(
+        !drained(&mut events)
+            .await
+            .iter()
+            .any(|event| matches!(event, RouterEvent::SlowDownEnded { .. })),
+        "the span ends once"
+    );
+}
+
+#[tokio::test]
+async fn a_purge_that_drops_a_slowed_entry_ends_its_span() {
+    use phoebis_routing::RouterEvent;
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = slowed_router(&now).await;
+    let mut events = handle.subscribe_events();
+    handle
+        .select(slowed_turn(&handle, "r-1", AT))
+        .await
+        .unwrap();
+    let factor = drained(&mut events)
+        .await
+        .into_iter()
+        .find_map(|event| match event {
+            RouterEvent::SlowDownStarted { factor, .. } => Some(factor),
+            _ => None,
+        })
+        .expect("the read under 1 opened a span");
+    // The session ends and the account goes quiet: the purge drops the entry, and the span, whose factor never returned
+    // to 1, ends at the entry's last read.
+    handle.release_session("k", "s1").await.unwrap();
+    now.store(AT + IN_FLIGHT_RECLAIM_MS + 1_000, Ordering::SeqCst);
+    let ended = loop {
+        if let RouterEvent::SlowDownEnded {
+            account_id,
+            pool_id,
+            since,
+            duration_ms,
+            factor_min,
+            held_ms,
+            ..
+        } = next_event(&mut events).await
+        {
+            break (account_id, pool_id, since, duration_ms, factor_min, held_ms);
+        }
+    };
+    assert_eq!(ended, ("a".into(), "p".into(), AT, 0, factor, 0));
+    assert!(
+        !drained(&mut events)
+            .await
+            .iter()
+            .any(|event| matches!(event, RouterEvent::SlowDownEnded { .. })),
+        "the dropped entry's span ends once"
+    );
+}
+
 #[tokio::test]
 async fn a_rekeyed_pin_keeps_its_pace_under_the_new_key() {
     const DATED: &str = "claude-sonnet-5-20260929";

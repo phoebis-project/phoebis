@@ -287,8 +287,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(35), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that adds the routing conditions' table"
+        (Some(36), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that adds the rollups' slow-down columns"
     );
     assert_eq!(
         (
@@ -2934,6 +2934,10 @@ async fn the_rewrites_route_answers_the_series_and_the_moves_by_reason_and_by_fi
             status: Some(200),
             outcome: "succeeded".into(),
             attempts: 1,
+            held: Some(
+                r#"{"waited_on":["business","business"],"cohort":null,"held_ms":2500,"waits":[{"reason":"cap","held_ms":500},{"reason":"slow_down","held_ms":2000}]}"#
+                    .into(),
+            ),
             ..Default::default()
         },
         attempts: vec![AttemptRecord {
@@ -3012,6 +3016,24 @@ async fn the_rewrites_route_answers_the_series_and_the_moves_by_reason_and_by_fi
         rewrites["moves_by_reason_and_fit"],
         serde_json::json!({ "shed": { "least_bad": 1 }, "spent": { "fits": 1 } }),
         "each reason keeps its destinations' own fits"
+    );
+    let points = rewrites["points"].as_array().unwrap();
+    let held = rewrites["held"]
+        .as_array()
+        .expect("the held time per bucket");
+    assert_eq!(
+        held.iter().map(|p| &p["at"]).collect::<Vec<_>>(),
+        points.iter().map(|p| &p["at"]).collect::<Vec<_>>(),
+        "one held point per bucket, at the rewrite points' edges"
+    );
+    let waited: Vec<&serde_json::Value> = held.iter().filter(|p| p["requests"] != 0).collect();
+    assert_eq!(
+        waited
+            .iter()
+            .map(|p| (p["held_ms"].as_u64(), p["requests"].as_u64()))
+            .collect::<Vec<_>>(),
+        [(Some(2_000), Some(1))],
+        "the request's slow-down wait alone, in its bucket: {held:?}"
     );
 }
 

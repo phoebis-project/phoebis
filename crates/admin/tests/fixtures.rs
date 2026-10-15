@@ -1935,8 +1935,8 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
     assert!(matches!(refused.result, SelectResult::Refused(_)));
 
     // The kinds no report or route of this harness writes, each as its writer builds it: the harness's router prices
-    // no burn, so it marks no pin and books no reservation, and the round, its mark leaving with the pin's move and a
-    // booking its request ended without usage are seeded here.
+    // no burn, so it marks no pin, books no reservation and slows no account, and the round, its mark leaving with the
+    // pin's move, a booking its request ended without usage and a slow-down's span are seeded here.
     let at = |minute: i64| hour_ago + minute * 60_000;
     let routed = [
         RouterEvent::SheddingRound {
@@ -2056,6 +2056,25 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             observed: "sample",
             restored: false,
             at: at(5),
+        },
+        RouterEvent::SlowDownStarted {
+            account_id: "business".into(),
+            pool_id: "main".into(),
+            factor: 0.5,
+            stretch_ms: 2_520_000,
+            threshold_ms: 1_800_000,
+            demand: 0.12,
+            reset: Some(at(12) + 5_040_000),
+            at: at(12),
+        },
+        RouterEvent::SlowDownEnded {
+            account_id: "business".into(),
+            pool_id: "main".into(),
+            since: at(12),
+            duration_ms: 1_080_000,
+            factor_min: 0.35,
+            held_ms: 240_000,
+            at: at(32),
         },
     ];
     for event in &routed {

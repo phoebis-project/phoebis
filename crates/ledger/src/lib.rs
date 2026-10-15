@@ -52,7 +52,7 @@ pub use query::{apply_filter, breakdown, burn_rows, burn_series, series};
 pub mod test_tables;
 pub use query::{
     breakdown_paged, bucket_seconds, burn_groups_paged, burn_series_over, dashboard,
-    decision_record, group_of, hour_ceil, hourly_window_samples, key_request_totals,
+    decision_record, group_of, held_series, hour_ceil, hourly_window_samples, key_request_totals,
     latest_extra_usage, latest_quota, list_requests, list_routing_log, literal_like, member_spends,
     moves_by_reason, moves_by_reason_and_fit, names_one_account, parked_count, parked_summary,
     parse_range, pin_migrations_by_reason, placements, pool_traffic, recent_events_of_kind,

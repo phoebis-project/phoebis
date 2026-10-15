@@ -6,12 +6,12 @@ use std::sync::LazyLock;
 use phoebis_ledger::{
     apply_filter, breakdown, breakdown_paged, bucket_index, bucket_seconds, burn_groups_paged,
     burn_rows, burn_series, burn_series_over, deltas_of, fold_account, fold_event, fold_keepalive,
-    hour_ceil, hour_of, key_request_totals, list_requests, member_spends, moves_by_reason,
-    placements, price_equivalent, price_shares, read_account_rollups, read_rollups, request_totals,
-    rewrite_series, run_retention_blocking, series, series_paged, session_identities,
-    AttemptRecord, BudgetedMember, CostRevisions, EventRecord, FundingFilter, GroupRow, Histogram,
-    KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, PlanTables,
-    PriceRevisions, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow,
+    held_series, hour_ceil, hour_of, key_request_totals, list_requests, member_spends,
+    moves_by_reason, placements, price_equivalent, price_shares, read_account_rollups,
+    read_rollups, request_totals, rewrite_series, run_retention_blocking, series, series_paged,
+    session_identities, AttemptRecord, BudgetedMember, CostRevisions, EventRecord, FundingFilter,
+    GroupRow, Histogram, KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow,
+    PlanTables, PriceRevisions, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow,
     RollupSelect, SeriesFilter, SharePricing, Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING,
     NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
 };
@@ -4582,6 +4582,67 @@ fn the_rewrite_series_and_the_moves_by_reason_read_the_account_rollups() {
             BTreeMap::from([("unknown".to_string(), 1)])
         )]),
         "a move without a fit reads under the fit unknown"
+    );
+}
+
+#[test]
+fn the_held_series_reads_the_slow_down_columns_per_bucket() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    // Two rows of `a` in the second hour, apart by their key, and one of `b`, which the filter leaves out.
+    let held = |id: &str, key_id: &str, account_id: &str, held_ms: u64| {
+        let request = RequestRecord {
+            id: id.into(),
+            received_at: 3_600_500,
+            key_id: Some(key_id.into()),
+            pool_id: Some("p".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            held: Some(format!(
+                r#"{{"waited_on":["{account_id}"],"cohort":null,"held_ms":{held_ms},"waits":[{{"reason":"slow_down","held_ms":{held_ms}}}]}}"#
+            )),
+            ..Default::default()
+        };
+        let attempt = AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: account_id.into(),
+            account_kind: "oauth".into(),
+            outcome: "succeeded".into(),
+            output_tokens: Some(5),
+            ..Default::default()
+        };
+        db.insert_request(&request, &[attempt], None).unwrap();
+    };
+    held("r1", "desktop", "a", 2_000);
+    held("r2", "laptop", "a", 3_000);
+    held("r3", "desktop", "b", 7_000);
+    let filter = SeriesFilter {
+        from: 0,
+        to: 7_200_000,
+        bucket_seconds: 3_600,
+        accounts: vec!["a".into()],
+        ..SeriesFilter::default()
+    };
+    let series = db.read_blocking(|c| held_series(c, &filter)).unwrap();
+    assert_eq!(
+        series,
+        vec![(0, 0, 0), (3_600_000, 5_000, 2)],
+        "one point per bucket, at its millisecond edge: the two rows' waits summed and their requests counted"
+    );
+    let pools = SeriesFilter {
+        pools: vec!["q".into()],
+        accounts: Vec::new(),
+        ..filter
+    };
+    assert_eq!(
+        db.read_blocking(|c| held_series(c, &pools)).unwrap(),
+        vec![(0, 0, 0), (3_600_000, 0, 0)],
+        "a pool the rows are not under reads nothing"
     );
 }
 

@@ -129,7 +129,7 @@ pub struct RequestFilter {
     /// `fast`, `standard`: the serving attempt's `speed`, else `fast` for a request that asked for it and
     /// `standard` otherwise.
     pub speeds: Vec<String>,
-    /// Keep the requests that waited for a slot (`held` on the request row).
+    /// Keep the requests that waited through a hold (`held` on the request row).
     pub held: bool,
     pub from: Option<i64>,
     pub to: Option<i64>,
@@ -618,6 +618,8 @@ pub const EVENT_KINDS: &[&str] = &[
     "reservation_expired",
     "router_started",
     "shedding_round",
+    "slow_down_ended",
+    "slow_down_started",
     "warm_prefix_expired",
     "wind_down_started",
     "window_reset",
@@ -3884,6 +3886,46 @@ pub fn rewrite_series(
             .map(|r| r.rewrite_tokens)
             .sum();
         points.push((at * 1_000, sum));
+        at += filter.bucket_seconds;
+    }
+    Ok(points)
+}
+
+/// The slow-down's held time per bucket over the filter's pools and accounts: `(at, held_ms, requests)`, the hourly
+/// rollups' slow-down waits summed and the requests that waited, the bucket's `at` in milliseconds as `rewrite_series`
+/// answers it. The sums are SQLite's, so the read carries no row of the table into memory.
+pub fn held_series(
+    conn: &Connection,
+    filter: &SeriesFilter,
+) -> Result<Vec<(i64, u64, u64)>, LedgerError> {
+    let (first, last) = bucket_range(filter)?;
+    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(first), Box::new(last)];
+    let mut clauses = vec!["hour >= ?1 AND hour < ?2".to_string()];
+    in_list("pool_id", &filter.pools, &mut args, &mut clauses);
+    in_list("account_id", &filter.accounts, &mut args, &mut clauses);
+    let mut stmt = conn.prepare(&format!(
+        "SELECT hour, SUM(slow_down_held_ms), SUM(slow_down_held) FROM rollups_hourly WHERE {} GROUP BY hour",
+        clauses.join(" AND ")
+    ))?;
+    let hours = stmt
+        .query_map(params_from_iter(args.iter().map(|a| a.as_ref())), |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)? as u64,
+                r.get::<_, i64>(2)? as u64,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut points = Vec::new();
+    let mut at = first;
+    while at < last {
+        let (held_ms, requests) = hours
+            .iter()
+            .filter(|(hour, _, _)| *hour >= at && *hour < at + filter.bucket_seconds)
+            .fold((0, 0), |(ms, n), (_, held_ms, requests)| {
+                (ms + held_ms, n + requests)
+            });
+        points.push((at * 1_000, held_ms, requests));
         at += filter.bucket_seconds;
     }
     Ok(points)

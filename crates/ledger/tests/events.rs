@@ -931,7 +931,7 @@ fn two_agents_pin_created_rows_differ_in_their_detail() {
 fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically() {
     use phoebis_ledger::EVENT_KINDS;
     use phoebis_routing::{CacheMapEntry, CreditsState, PinKeyFacts, ShedRoundFacts, WindowSource};
-    const KINDS: [&str; 30] = [
+    const KINDS: [&str; 32] = [
         "account_state_changed",
         "budget_period_ended",
         "budget_reached",
@@ -958,6 +958,8 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
         "reservation_expired",
         "router_started",
         "shedding_round",
+        "slow_down_ended",
+        "slow_down_started",
         "warm_prefix_expired",
         "wind_down_started",
         "window_reset",
@@ -1131,6 +1133,25 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             }),
             at: 1,
         },
+        RouterEvent::SlowDownStarted {
+            account_id: "a".into(),
+            pool_id: "p".into(),
+            factor: 0.5,
+            stretch_ms: 2_520_000,
+            threshold_ms: 1_800_000,
+            demand: 0.12,
+            reset: None,
+            at: 1,
+        },
+        RouterEvent::SlowDownEnded {
+            account_id: "a".into(),
+            pool_id: "p".into(),
+            since: 0,
+            duration_ms: 1,
+            factor_min: 0.5,
+            held_ms: 0,
+            at: 1,
+        },
         RouterEvent::WarmPrefixExpired {
             account_id: "a".into(),
             key_id: "k".into(),
@@ -1188,7 +1209,12 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             "{kind} is written but not listed"
         );
     }
-    for kind in ["mark_cleared", "reservation_expired"] {
+    for kind in [
+        "mark_cleared",
+        "reservation_expired",
+        "slow_down_ended",
+        "slow_down_started",
+    ] {
         assert!(
             answered.iter().any(|answered| answered == kind),
             "{kind} has no row: {answered:?}"

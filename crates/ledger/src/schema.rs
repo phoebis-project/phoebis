@@ -299,6 +299,10 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// Version 35: the routing conditions an hourly fold reads off the trailing day of events, one row per kind and
 /// subject, so a scrape or a console poll reads a lookup rather than scanning the events. The fold writes the table
 /// whole, so it holds what the last fold found and nothing older.
+///
+/// Version 36: an hourly rollup row counts the slow-down's waits of its requests, the milliseconds summed and the
+/// requests that waited, read off each request's `held` waits under `slow_down`, so the held time reads per bucket by
+/// pool and account without the request rows. No backfill: a row from before reads 0.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -942,5 +946,10 @@ CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, acc
   since INTEGER NOT NULL, count INTEGER NOT NULL, detail_json TEXT NOT NULL, computed_at INTEGER NOT NULL,
   PRIMARY KEY (kind, subject_kind, subject_id)
 );",
+    ),
+    (
+        36,
+        "ALTER TABLE rollups_hourly ADD COLUMN slow_down_held_ms INTEGER NOT NULL DEFAULT 0; \
+         ALTER TABLE rollups_hourly ADD COLUMN slow_down_held INTEGER NOT NULL DEFAULT 0;",
     ),
 ];
