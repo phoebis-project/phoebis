@@ -447,7 +447,7 @@ test('a pool decodes its slow-down and return-to-plan fields and encodes them ba
   assert.deepEqual([...d.RETURN_TO_PLAN_VALUES], ['always', 'never', 'when_cold']);
   const bare = { ...row };
   for (const f of SLOW_FIELDS) delete bare[f];
-  assert.deepEqual(slow(d.decodePool(bare)), ['always', 900, false, 120, 1_800], 'a row without the fields reads the store defaults');
+  assert.deepEqual(slow(d.decodePool(bare)), ['always', 900, false, 120, 9_000], 'a row without the fields reads the store defaults');
 });
 
 test("a pool body carries none of the six names the route refuses as unknown fields", () => {

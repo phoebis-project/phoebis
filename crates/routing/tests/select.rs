@@ -19350,11 +19350,12 @@ fn a_placement_or_a_move_that_books_nothing_records_reserve_none_with_the_accoun
     none_on("move", &st, &d, "b");
 }
 
-/// `pool` with the slow-down on at its shipped stretch and hold.
+/// `pool` with the slow-down on at a half-hour stretch threshold and the shipped hold.
 fn slowing(pool: Pool) -> Pool {
     Pool {
         slow_down: SlowDown {
             slow_down: true,
+            slow_down_stretch_seconds: 1800,
             ..SlowDown::default()
         },
         ..pool

@@ -9365,6 +9365,7 @@ async fn slowed_router(now: &Arc<AtomicI64>) -> RouterHandle {
     let store = shedding_store(&["a"]);
     let mut pool = store.pool("p").unwrap().unwrap();
     pool.slow_down.slow_down = true;
+    pool.slow_down.slow_down_stretch_seconds = 1800;
     store.update_pool(&pool, pool.updated_at, "test").unwrap();
     with_tier(&store, "a");
     store

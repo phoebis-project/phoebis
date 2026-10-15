@@ -146,7 +146,7 @@ const POOL_ROWS: PoolSeed[] = [
     // The slow-down off, so its 5-hour rounds fire on the projection. The return dwell is the shed dwell's, as the
     // registry's migration copied it.
     slowDown: false,
-    slowDownStretchSeconds: 1_800,
+    slowDownStretchSeconds: 9_000,
     slowDownHoldSeconds: 120,
     returnToPlan: 'always',
     returnToPlanDwellSeconds: 900,
@@ -224,7 +224,7 @@ const POOL_ROWS: PoolSeed[] = [
     // Its one member is an API-key account, which the slow-down never holds. The return dwell is the shed dwell's, as
     // the registry's migration copied it.
     slowDown: false,
-    slowDownStretchSeconds: 1_800,
+    slowDownStretchSeconds: 9_000,
     slowDownHoldSeconds: 120,
     returnToPlan: 'always',
     returnToPlanDwellSeconds: 1_800,
@@ -270,8 +270,9 @@ const POOL_ROWS: PoolSeed[] = [
     loadShedding: true,
     // Its own cap at the balanced preset's, where the sample's captured pool sets one under a quarter.
     shedCap: 0.5,
-    // The slow-down on at the store's defaults, so studio's sessions are held once they would pass the ceiling before
-    // the reset, and a round moves sessions off it once the stretch passes 30 minutes.
+    // The slow-down on at the store's hold, so studio's sessions are held once they would pass the ceiling before the
+    // reset. Its own stretch threshold of 30 minutes lets a round move sessions off studio while the store's two and a
+    // half hours would still leave them to the slow-down alone.
     slowDown: true,
     slowDownStretchSeconds: 1_800,
     slowDownHoldSeconds: 120,

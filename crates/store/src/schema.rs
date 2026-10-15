@@ -799,7 +799,7 @@ UPDATE pools SET burn_average_seconds = MIN(MAX(burn_average_seconds, 600), 7200
 // is logged.
 const V55: &str = r#"
 ALTER TABLE pools ADD COLUMN slow_down INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE pools ADD COLUMN slow_down_stretch_seconds INTEGER NOT NULL DEFAULT 1800;
+ALTER TABLE pools ADD COLUMN slow_down_stretch_seconds INTEGER NOT NULL DEFAULT 9000;
 ALTER TABLE pools ADD COLUMN slow_down_hold_seconds INTEGER NOT NULL DEFAULT 120;
 ALTER TABLE pools ADD COLUMN return_to_plan TEXT NOT NULL DEFAULT 'always';
 ALTER TABLE pools ADD COLUMN return_to_plan_dwell_seconds INTEGER NOT NULL DEFAULT 900;

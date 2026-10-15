@@ -176,7 +176,7 @@ pub(crate) struct PoolInput {
     /// compactions, the fast lane, probes and token counts are never held.
     #[serde(default)]
     slow_down: Option<bool>,
-    /// `60` to `18000`, default `1800`. The time the slow-down may add to a session before a shedding round moves
+    /// `60` to `18000`, default `9000`. The time the slow-down may add to a session before a shedding round moves
     /// sessions off the account.
     #[serde(default)]
     slow_down_stretch_seconds: Option<u32>,

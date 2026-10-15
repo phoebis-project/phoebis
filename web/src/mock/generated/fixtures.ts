@@ -8423,7 +8423,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "shed_dwell_seconds": 900,
         "warm_sessions": "when_needed",
         "slow_down": false,
-        "slow_down_stretch_seconds": 1800,
+        "slow_down_stretch_seconds": 9000,
         "slow_down_hold_seconds": 120,
         "in_flight_cap": 16,
         "retry_in_place_seconds": 60,
@@ -9499,7 +9499,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "migrate_when_spent": true,
           "warm_sessions": "when_needed",
           "slow_down": false,
-          "slow_down_stretch_seconds": 1800,
+          "slow_down_stretch_seconds": 9000,
           "slow_down_hold_seconds": 120,
           "retry_in_place_seconds": 60,
           "in_flight_cap": 16,
@@ -9604,7 +9604,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "XAb8lHy8",
+              "prefix": "Zqfm0OlX",
               "enabled": true
             }
           ],
@@ -12774,7 +12774,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "migrate_when_spent": true,
               "warm_sessions": "when_needed",
               "slow_down": false,
-              "slow_down_stretch_seconds": 1800,
+              "slow_down_stretch_seconds": 9000,
               "slow_down_hold_seconds": 120,
               "retry_in_place_seconds": 60,
               "in_flight_cap": 16,

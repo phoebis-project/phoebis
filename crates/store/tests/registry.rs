@@ -1644,7 +1644,7 @@ fn migration_55_adds_the_slow_down_and_return_to_plan_columns_and_copies_the_dwe
             },
         )
         .unwrap(),
-        (0, 1_800, 120, "always".to_string(), 1_200),
+        (0, 9_000, 120, "always".to_string(), 1_200),
         "the slow-down lands off at its defaults, the mode at always and the return dwell at the shed dwell"
     );
     assert_eq!(
@@ -1763,6 +1763,46 @@ fn a_pool_round_trips_its_slow_down_and_return_to_plan_fields() {
             ),
         ],
         "the change log names the five fields on the create and the edit"
+    );
+}
+
+#[test]
+fn a_pool_created_without_the_stretch_reads_two_and_a_half_hours() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &key).unwrap();
+    store
+        .insert_pool(
+            &PoolRow {
+                slow_down: SlowDown::default(),
+                ..pool("built")
+            },
+            "test",
+        )
+        .unwrap();
+    let stretch_of = |store: &Store, id: &str| {
+        store
+            .pool(id)
+            .unwrap()
+            .unwrap()
+            .slow_down
+            .slow_down_stretch_seconds
+    };
+    let built = stretch_of(&store, "built");
+    drop(store);
+    // Every store insert names the column, so only a raw row reads the column's own default.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "INSERT INTO pools (id, label, enabled, strategy, overage_policy, keepalive_json, cache_ttl_json, cache_diagnostics, created_at, updated_at) VALUES ('raw', 'raw', 1, 'priority', 'prefer_plan', '{}', '{}', 0, 1, 1);",
+    )
+    .unwrap();
+    drop(conn);
+    let reopened = Store::open(&path, &key).unwrap();
+    assert_eq!(
+        (built, stretch_of(&reopened, "raw")),
+        (9_000, 9_000),
+        "the row builder's default and the column's default"
     );
 }
 

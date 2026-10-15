@@ -1068,7 +1068,7 @@ mod tests {
                 shed_dwell_seconds: 900,
                 warm_sessions: "stop_after_cold",
                 slow_down: false,
-                slow_down_stretch_seconds: 1_800,
+                slow_down_stretch_seconds: 9_000,
                 slow_down_hold_seconds: 120,
                 in_flight_cap: 8,
                 retry_in_place_seconds: 10,

@@ -165,7 +165,7 @@ impl Default for SlowDown {
     fn default() -> Self {
         SlowDown {
             slow_down: false,
-            slow_down_stretch_seconds: 1800,
+            slow_down_stretch_seconds: 9000,
             slow_down_hold_seconds: 120,
         }
     }

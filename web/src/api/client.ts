@@ -114,7 +114,7 @@ export const POOL_ENGINE_DEFAULTS: PoolEngineFields = {
   returnToPlanDwellSeconds: 900,
   slowDown: false,
   slowDownHoldSeconds: 120,
-  slowDownStretchSeconds: 1_800,
+  slowDownStretchSeconds: 9_000,
   warmSessions: 'when_needed',
   windDownMinutes: 30,
   windowCeiling: 0.95,
