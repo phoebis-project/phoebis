@@ -1545,8 +1545,8 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   const laneOf = (label) => [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === label);
   const accounts = await api.listAccounts();
   const expired = (w) => w.resetsAt !== null && Date.parse(w.resetsAt) < Date.now();
-  // A fill draws in its account's color when it carries no class but its own and reads `--lane-color` from the lane
-  // whose dot, the account's swatch, reads it too: the nearest element that sets the color is the same for both.
+  // jsdom computes no color, so the read is the variable: a fill that carries no class but its own reads `--lane-color`
+  // from the lane whose dot, the account's swatch, reads it too, the nearest element that sets it the same for both.
   const carrierOf = (el) => {
     for (let at = el ?? null; at !== null; at = at.parentElement) if (at.style?.getPropertyValue('--lane-color')) return at;
     return null;
@@ -1574,8 +1574,8 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
     return { classes: bar?.querySelector('.lane__used')?.className ?? null, color: inLaneColor(bar?.querySelector('.lane__used'), l), fills: bar?.querySelectorAll('.lane__used').length ?? null, label, share: w !== null && !expired(w), utilization: w?.utilization ?? null, width: bar?.querySelector('.lane__used')?.style.width ?? null };
   });
   const withShare = lanes.filter((l) => l.share);
-  const fillOff = withShare.filter((l) => !l.color).map((l) => `${l.label}: ${l.classes ?? 'no fill'}, not in its lane's color`);
-  results.push({ name: "/quota each live bar's fill on the weekly zoom draws in its account's color, the one its lane's dot draws, with no meter tone", ok: withShare.length > 0 && fillOff.length === 0, missing: fillOff });
+  const fillOff = withShare.filter((l) => !l.color).map((l) => `${l.label}: ${l.classes ?? 'no fill'}, not on its lane's color variable`);
+  results.push({ name: "/quota each live bar's fill on the weekly zoom carries no meter tone and takes its lane's color variable, the one its lane's dot reads", ok: withShare.length > 0 && fillOff.length === 0, missing: fillOff });
   const alike = withShare.flatMap((a) => withShare.filter((b) => a.label < b.label && a.utilization !== b.utilization && a.width === b.width).map((b) => `${a.label} and ${b.label} at ${a.width}`));
   results.push({
     name: '/quota no two live bars of windows at different shares fill alike',
@@ -1590,7 +1590,7 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   zoom('Weekly');
   await m.settle();
   results.push({ name: "/quota the live bar of primary's lane fills to its window's used share on the 5-hour zoom", ok: session.fills === 1 && Math.abs(session.drawn - session.want) <= 0.5, missing: [JSON.stringify(session)] });
-  results.push({ name: "/quota the fill of primary's 5-hour bar draws in its account's color, the one its lane's dot draws, with no meter tone", ok: session.color, missing: [String(session.classes)] });
+  results.push({ name: "/quota the fill of primary's 5-hour bar carries no meter tone and takes its lane's color variable, the one its lane's dot reads", ok: session.color, missing: [String(session.classes)] });
 }
 {
   // secondary is cancelled with its saved end five days after the anchor, inside the weekly zoom's current period, so

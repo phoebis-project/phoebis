@@ -184,11 +184,12 @@ Weekly or 5-hour, an "Account" axis and a now marker. Each lane carries the chip
 current bar filled from the window's start by its used share in a stronger tone, so a fill past the now line is ahead of
 pace and one short of it behind, the upcoming window dashed and the elapsed ones muted. The current bar is labeled with
 the share left and its reset, `59% left · Sep 19 20:10`, or with the share alone where the bar is too narrow for both,
-and a bar too narrow for its label keeps it on hover. On a narrow screen each lane stacks its account above its bars and
-the day axis prints short labels. An account marked canceled with a saved end shows the end on its lane: no window opens
-after it, and the window that spans it stops there. The legend reads current window, upcoming, used, past window, now
-and plan ends, and the note "Each bar is one full quota window, drawn from when it opened to when it resets, and labeled
-with the instant it resets. Lanes ending together compete for the same days."
+and a bar too narrow for its label keeps it on hover. On a narrow screen each lane stacks its account and its chips
+above its bars, the now marker crosses the bars alone with its pill under the day labels, and the day axis prints short
+labels. An account marked canceled with a saved end shows the end on its lane: no window opens after it, and the window
+that spans it stops there. The legend reads current window, upcoming, used, past window, now and plan ends, and the note
+"Each bar is one full quota window, drawn from when it opened to when it resets, and labeled with the instant it resets.
+Lanes ending together compete for the same days."
 
 ## Accounts
 

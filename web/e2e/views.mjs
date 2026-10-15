@@ -2430,10 +2430,11 @@ async function quotaChips(theme) {
  * chip fits its fixed column on one line, and a chip with a share draws the background and ink of the card chip of the
  * same tone. Every live bar draws its account's color at two strengths, read against the dot that names the lane: its
  * body and its used fill are each the dot's color mixed into `--surface`, the body at one strength and the fill at a
- * stronger one on every lane, and the label's ink reads at 4.5:1 or better over both. Primary's fill lays out at the
- * share the page computed, within a pixel, and its end stands past the now line where its weekly window answers a lead
- * ahead of pace and short of it where the lead is behind, as the card's meter words the pace. Only the mock pass draws
- * the section.
+ * stronger one on every lane, and the label's ink reads at 4.5:1 or better over both. The same holds for every color a
+ * lane can take, each series color and the muted one, read off a bar drawn through the bar's own rules off screen.
+ * Primary's fill lays out at the share the page computed, within a pixel, and its end stands past the now line where its
+ * weekly window answers a lead ahead of pace and short of it where the lead is behind, as the card's meter words the
+ * pace. Only the mock pass draws the section.
  */
 async function quotaLaneChips(theme) {
   const say = (what) => failures.push(`${theme} /quota#quota-windows: ${what}`);
@@ -2447,6 +2448,17 @@ async function quotaLaneChips(theme) {
     document.body.append(probe);
     const surface = getComputedStyle(probe).backgroundColor;
     probe.remove();
+    // A live bar for each color an account can take, the label over its fill and its body as a lane draws them.
+    const series = [...Array.from({ length: 8 }, (_, i) => `--series-${i + 1}`), '--series-muted'].map((name) => {
+      const lane = document.createElement('div');
+      lane.className = 'lane';
+      lane.style.cssText = `--lane-color: var(${name}); left: -10000px; position: absolute; top: 0`;
+      lane.innerHTML = '<div class="lane__track"><div class="lane__bar lane__bar--live"><span class="lane__clip"><span class="lane__used" style="width: 50%"></span></span><span class="lane__label">50% left</span></div></div>';
+      document.body.append(lane);
+      const drawn = { body: getComputedStyle(lane.querySelector('.lane__bar')).backgroundColor, fill: getComputedStyle(lane.querySelector('.lane__used')).backgroundColor, ink: getComputedStyle(lane.querySelector('.lane__label')).color, name };
+      lane.remove();
+      return drawn;
+    });
     return {
       chips: [...document.querySelectorAll('.tl-chip')].map((el) => ({ background: getComputedStyle(el).backgroundColor, client: el.clientWidth, color: getComputedStyle(el).color, scroll: el.scrollWidth, text: el.textContent?.trim() ?? '', tone: [...el.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? null })),
       fill: bar && used ? { bar: bar.getBoundingClientRect().width, end: Math.round(used.getBoundingClientRect().right * 10) / 10, now: now ? Math.round((now.left + now.width / 2) * 10) / 10 : null, share: parseFloat(used.style.width), width: used.getBoundingClientRect().width } : null,
@@ -2457,6 +2469,7 @@ async function quotaLaneChips(theme) {
         const dot = row?.querySelector('.lane__dot');
         return { body: getComputedStyle(el).backgroundColor, fill: fill ? getComputedStyle(fill).backgroundColor : null, ink: getComputedStyle(el.querySelector('.lane__label') ?? el).color, name: row?.querySelector('.lane__name')?.textContent?.trim() ?? '', swatch: dot ? getComputedStyle(dot).backgroundColor : null };
       }),
+      series,
       surface,
     };
   });
@@ -2482,6 +2495,11 @@ async function quotaLaneChips(theme) {
   const pace = reading === null ? null : /ahead of pace/.test(reading) ? 1 : /behind pace/.test(reading) ? -1 : 0;
   measurements.push(`${theme} /quota#quota-windows lane chips ${JSON.stringify(lanes.map((c) => [c.text, c.client]))} primary's used fill ${JSON.stringify({ ...read.fill, reading })}`);
   measurements.push(`${theme} /quota#quota-windows live bars over ${read.surface} ${JSON.stringify(live.map((b) => [b.name, b.swatch, b.body, b.bodyPct, b.bodyRatio, b.fill, b.fillPct, b.fillRatio, b.ink]))}`);
+  const series = read.series.map((s) => ({ ...s, bodyRatio: contrastOf(colorChannels(s.ink).rgb, colorChannels(s.body).rgb), fillRatio: contrastOf(colorChannels(s.ink).rgb, colorChannels(s.fill).rgb) }));
+  measurements.push(`${theme} /quota#quota-windows every lane color ${JSON.stringify(series.map((s) => [s.name, s.bodyRatio, s.fillRatio]))}`);
+  for (const s of series) {
+    if (s.bodyRatio < 4.5 || s.fillRatio < 4.5) say(`the label reads ${s.ink} at ${s.bodyRatio}:1 over a live bar in ${s.name} and ${s.fillRatio}:1 over its fill, under 4.5:1`);
+  }
   if (mock && live.length === 0) say('the story has current windows, yet no live bar is drawn');
   if (mock && !live.some((b) => b.fill !== null)) say('the story has current windows with a share, yet no live bar draws a used fill');
   const first = live.find((b) => b.fill !== null);
@@ -2522,12 +2540,13 @@ const TIMELINE_PHONES = [
  * The Quota windows timeline in two phone windows under the shell's 900 px breakpoint, in either zoom: the axis and
  * every lane one column, the chart's left column and its gap at 0px and the chips without their indent, so each lane's
  * head and track start at the lane's content left and the day cells and the raster over the tracks' left, within a
- * pixel. The now line stands where its calc places the chart's now share on the lanes' box, within a pixel, which is up
- * to the lanes' 12 px padding off the same share of a track, recorded beside it. Every lane stacks its head above its
- * track, every chip stays inside its lane, every day cell prints its short labels whole with the full words on its
- * title, no bar's label is cut, the chart's content fits its box and the document its window, and the legend stays
- * inside the card. Then it puts the pass's window and the Weekly zoom back, so the view's shot reads the desktop chart.
- * Only the mock pass draws the section.
+ * pixel. The now line crosses each lane's track at the chart's now share of the track, within a pixel, and no lane's
+ * head, and its "now" pill stands in the axis row under the day cells' labels at the same share, clear of every head.
+ * Every lane stacks its head above its track, its chips wrap by their width (two rows at 400 px) inside the lane with
+ * none cut, every day cell prints its short labels whole with the full words on its title (a 5-hour cell its day number
+ * on the day's first cell alone), no bar's label is cut, the chart's content fits its box and the document its window,
+ * and the legend stays inside the card. Then it puts the pass's window and the Weekly zoom back, so the view's shot
+ * reads the desktop chart. Only the mock pass draws the section.
  */
 async function timelinePhone(theme) {
   const say = (what) => failures.push(`${theme} /quota#quota-windows: ${what}`);
@@ -2541,8 +2560,6 @@ async function timelinePhone(theme) {
       const box = (el) => el.getBoundingClientRect();
       const contentLeft = (el) => tenth(box(el).left + el.clientLeft + parseFloat(getComputedStyle(el).paddingLeft));
       const style = getComputedStyle(chart);
-      const tlLeft = parseFloat(style.getPropertyValue('--tl-left'));
-      const tlGap = parseFloat(style.getPropertyValue('--tl-gap'));
       const now = document.querySelector('.timeline__now');
       // The page writes the now share as the last factor of the line's calc.
       const share = now ? Number(/\*\s*([-\d.e]+)\)\s*$/.exec(now.style.left)?.[1] ?? NaN) : null;
@@ -2550,6 +2567,14 @@ async function timelinePhone(theme) {
       const cells = document.querySelector('.timeline__cells');
       const legend = document.querySelector('.timeline__legend');
       const inside = (inner, outer) => inner.left >= outer.left - 0.5 && inner.right <= outer.right + 0.5 && inner.top >= outer.top - 0.5 && inner.bottom <= outer.bottom + 0.5;
+      const overlap = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5;
+      const visible = (el) => el.getClientRects().length > 0;
+      // Every drawn piece of the now line and its pill, whichever shape the chart takes.
+      const lines = [...document.querySelectorAll('.timeline__now, .lane__now')].filter(visible).map(box);
+      const pills = [...document.querySelectorAll('.timeline__now-label, .timeline__now-pill')].filter(visible).map(box);
+      const heads = [...document.querySelectorAll('.lane__head')].map(box);
+      const subs = [...document.querySelectorAll('.timeline__cell-sub')].map(box);
+      const axisBox = box(document.querySelector('.timeline__axis'));
       return {
         axis: getComputedStyle(document.querySelector('.timeline__axis')).gridTemplateColumns,
         cells: [...document.querySelectorAll('.timeline__cell')].map((cell) => {
@@ -2568,28 +2593,27 @@ async function timelinePhone(theme) {
           const head = lane.querySelector('.lane__head');
           const row = lane.querySelector('.lane__track');
           const outer = box(lane);
+          const chips = [...lane.querySelectorAll('.tl-chip')];
           return {
-            chipsOut: [...lane.querySelectorAll('.tl-chip')].filter((chip) => !inside(box(chip), outer)).map((chip) => chip.textContent?.trim() ?? ''),
+            chipRows: new Set(chips.map((chip) => Math.round(box(chip).top))).size,
+            chipsCut: chips.filter((chip) => chip.scrollWidth > chip.clientWidth).map((chip) => chip.textContent?.trim() ?? ''),
+            chipsOut: chips.filter((chip) => !inside(box(chip), outer)).map((chip) => chip.textContent?.trim() ?? ''),
             columns: getComputedStyle(lane).gridTemplateColumns,
             content: contentLeft(lane),
             head: head ? tenth(box(head).left) : null,
             headBottom: head ? tenth(box(head).bottom) : null,
             name: lane.querySelector('.lane__name')?.textContent?.trim() ?? '',
+            // Where the line crosses this lane's track, and where the chart's now share of the track lies.
+            nowAt: row ? [...row.querySelectorAll('.lane__now')].filter(visible).map((mark) => tenth(box(mark).left + box(mark).width / 2)) : [],
+            nowOnHead: head !== null && lines.some((line) => overlap(line, box(head))),
+            nowWant: row && share !== null ? tenth(box(row).left + box(row).width * share) : null,
             track: row ? tenth(box(row).left) : null,
             trackTop: row ? tenth(box(row).top) : null,
           };
         }),
         legendInside: legend ? inside(box(legend), box(card)) : null,
-        now:
-          now && share !== null
-            ? {
-                drawn: tenth(box(now).left + box(now).width / 2),
-                share,
-                // Where the line's calc puts it, on the lanes' padding box, and where the same share of a track lies.
-                tracked: track ? tenth(box(track).left + box(track).width * share) : null,
-                want: tenth(box(lanes).left + lanes.clientLeft + tlLeft + tlGap + (lanes.clientWidth - tlLeft - tlGap) * share),
-              }
-            : null,
+        now: share === null ? null : { chartWide: now !== null && visible(now), share },
+        pills: pills.map((pill) => ({ at: tenth(pill.left + pill.width / 2), inAxis: inside(pill, axisBox), onCells: subs.some((sub) => overlap(pill, sub)), onHead: heads.some((head) => overlap(pill, head)), want: cells && share !== null ? tenth(box(cells).left + box(cells).width * share) : null })),
         raster: (() => {
           const raster = document.querySelector('.timeline__raster');
           return raster ? tenth(box(raster).left) : null;
@@ -2621,16 +2645,29 @@ async function timelinePhone(theme) {
       if (lane.track === null || Math.abs(lane.track - lane.content) > 1) say(`${where} ${lane.name}'s track starts at ${lane.track}px, not its lane's content left ${lane.content}px`);
       if (lane.headBottom === null || lane.trackTop === null || lane.headBottom > lane.trackTop + 0.5) say(`${where} ${lane.name}'s head ends at ${lane.headBottom}px, below its track's top ${lane.trackTop}px, so the lane does not stack`);
       if (lane.chipsOut.length > 0) say(`${where} ${lane.name}'s chips ${JSON.stringify(lane.chipsOut)} stand outside its lane`);
+      if (lane.chipsCut.length > 0) say(`${where} ${lane.name}'s chips ${JSON.stringify(lane.chipsCut)} are cut`);
+      if (where.startsWith('at 400 ') && lane.chipRows !== 2) say(`${where} ${lane.name}'s three chips take ${lane.chipRows} rows, where two share the first`);
+      if (lane.nowOnHead) say(`${where} the now line crosses ${lane.name}'s head`);
+      if (got.now !== null && (lane.nowAt.length !== 1 || Math.abs(lane.nowAt[0] - lane.nowWant) > 1)) say(`${where} the now line crosses ${lane.name}'s track at ${JSON.stringify(lane.nowAt)}, not once at ${lane.nowWant}px where the chart's now share ${got.now.share} of the track lies`);
     }
     if (got.trackLeft !== null) {
       if (got.raster === null || Math.abs(got.raster - got.trackLeft) > 1) say(`${where} the raster starts at ${got.raster}px, not the tracks' left ${got.trackLeft}px`);
       if (got.cellsLeft === null || Math.abs(got.cellsLeft - got.trackLeft) > 1 || Math.abs(got.cellsRight - got.trackRight) > 1) say(`${where} the day cells span ${got.cellsLeft}px to ${got.cellsRight}px over tracks from ${got.trackLeft}px to ${got.trackRight}px`);
     }
     if (mock && got.now === null) say(`${where} the current period draws no now line`);
-    if (got.now && Math.abs(got.now.drawn - got.now.want) > 1) say(`${where} the now line stands at ${got.now.drawn}px, not ${got.now.want}px where the chart's now share ${got.now.share} places it`);
+    if (got.now?.chartWide) say(`${where} the now line runs down the whole chart, over the lanes' heads`);
+    if (got.now !== null && got.pills.length !== 1) say(`${where} the now line draws ${got.pills.length} pills, not one`);
+    for (const pill of got.pills) {
+      if (!pill.inAxis || pill.onCells || pill.onHead) say(`${where} the now pill stands ${pill.onHead ? 'over a lane head' : pill.onCells ? "over the day cells' labels" : 'outside the axis row'}, not in the axis row under the cells' labels`);
+      if (pill.want === null || Math.abs(pill.at - pill.want) > 1) say(`${where} the now pill stands at ${pill.at}px, not at ${pill.want}px over the line`);
+    }
+    // A 5-hour cell whose title carries its date is the day's first, which alone prints the day number.
+    const dayOf = (cell) => /^[A-Z][a-z]{2} (\d{1,2}) /.exec(cell.title)?.[1] ?? null;
+    if (where.includes('5-hour') && !got.cells.some((cell) => dayOf(cell) !== null)) say(`${where} no day cell opens a day`);
     for (const cell of got.cells) {
       if (cell.width >= 40) say(`${where} a day cell is ${cell.width}px wide, where the phone window leaves it under 40 px`);
-      const short = where.includes('5-hour') ? /^(\d{1,2})?$/.test(cell.head) && /^\d{2}$/.test(cell.sub) : /^[A-Z]$/.test(cell.head) && /^\d{1,2}$/.test(cell.sub);
+      const day = dayOf(cell);
+      const short = where.includes('5-hour') ? (day === null ? cell.head === '' : /^\d{1,2}$/.test(cell.head) && Number(cell.head) === Number(day)) && /^\d{2}$/.test(cell.sub) : /^[A-Z]$/.test(cell.head) && /^\d{1,2}$/.test(cell.sub);
       if (!short) say(`${where} a day cell prints ${JSON.stringify([cell.head, cell.sub])}, not its short labels`);
       if (cell.title === '' || !cell.title.includes(cell.sub) || (cell.head !== '' && !cell.title.includes(cell.head))) say(`${where} a day cell prints ${JSON.stringify([cell.head, cell.sub])} under the title ${JSON.stringify(cell.title)}, which does not carry its full words`);
       if (cell.cut) say(`${where} the day cell ${JSON.stringify(cell.title)} cuts its short labels`);
@@ -2648,7 +2685,7 @@ async function timelinePhone(theme) {
       if (mode === '5-hour') await zoom('5-hour');
       const where = `at ${size.width} by ${size.height} in the ${mode} zoom`;
       const got = await read();
-      measurements.push(`${theme} /quota#quota-windows timeline ${where} ${JSON.stringify(got === null ? null : { ...got, cells: got.cells.map((c) => [c.head, c.sub, c.title, c.width]) })}`);
+      measurements.push(`${theme} /quota#quota-windows timeline ${where} ${JSON.stringify(got === null ? null : { ...got, cells: got.cells.map((c) => [c.head, c.sub, c.title, c.width]), lanes: got.lanes.map(({ chipsCut, chipsOut, ...lane }) => ({ ...lane, chipsCut: chipsCut.length, chipsOut: chipsOut.length })) })}`);
       check(got, where);
     }
     await zoom('Weekly');

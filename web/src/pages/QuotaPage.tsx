@@ -521,12 +521,20 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
                 <span className="timeline__cell-sub">{narrow ? c.shortSub : c.sub}</span>
               </div>
             ))}
+            {/* The now line's pill in the stacked shape, in the axis row above every lane's head. */}
+            {nowPct !== null && (
+              <span className="timeline__now-pill" style={{ left: `${nowPct}%` }}>
+                now
+              </span>
+            )}
           </div>
         </div>
 
         <div className="timeline__lanes">
           {/* One raster and one now line for the whole chart rather than a copy
-              per lane, so both read as a single ruler down the rows. */}
+              per lane, so both read as a single ruler down the rows. Under
+              900 px the stacked heads cross the chart, so each track draws its
+              own piece of the line there (`lane__now`). */}
           <div className="timeline__raster" aria-hidden>
             {cells.map((c) => (
               <span key={c.at} className={c.weekend ? 'is-weekend' : ''} />
@@ -617,6 +625,7 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
                     );
                   })}
                   {endPct !== null && <span className="lane__end" style={{ left: `${endPct}%` }} title={`${account.label} ends ${fmtAbsolute(endsAt)}`} aria-hidden />}
+                  {nowPct !== null && <span className="lane__now" style={{ left: `${nowPct}%` }} aria-hidden />}
                 </div>
               </div>
             );
