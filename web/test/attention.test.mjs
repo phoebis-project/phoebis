@@ -88,8 +88,8 @@ test("a row reads each kind's detail as one sentence", () => {
     `claude-opus-99 has no measured weight, so its 1 plan-funded request since ${since} priced at the weight of the latest weighted model of its model tier`,
     'a detail missing its tier and its donor names neither',
   );
-  const slowed = { factor_min: 0.35, open: true, setting: ['slow_down_stretch_seconds'], setting_values: { slow_down_stretch_seconds: 1800 }, slowed_ms: 13_920_000, spans: 2 };
-  assert.equal(sentence('slowed_long', slowed), `slowed 3 h 52 min of the last 24 h, slowest 0.35x, slow_down_stretch_seconds 1800, since ${fmtShortTime(item('slowed_long').since)}`);
+  const slowed = { factor_min: 0.35, open: true, setting: ['slow_down_stretch_seconds'], setting_values: { slow_down_stretch_seconds: 1800 }, slowed_ms: 7_700_000, spans: 2 };
+  assert.equal(sentence('slowed_long', slowed), `slowed 2 h 8 min of the last 24 h, slowest 0.35x, slow_down_stretch_seconds 1800, since ${fmtShortTime(item('slowed_long').since)}`);
 });
 
 test("a listener's certificate items read the listener, the file, the date and what to do", () => {
@@ -204,10 +204,10 @@ test('the four routing conditions read the count, the setting and the start on t
   assert.equal(words('wall_reached', account, { projection_error: 0.04, setting: ['shed_cap', 'window_ceiling'], walls: 1, windows: ['five_hour'] }), `primary: 1 wall reached on the 5h window, the last round projected 96 %, shed_cap and window_ceiling, since ${at}`);
   assert.equal(words('wall_reached', account, { projection_error: null, setting: ['shed_cap', 'window_ceiling'], walls: 2, windows: ['seven_day', 'seven_day_fable'] }), `primary: 2 walls reached on the 7d and Fable windows, shed_cap and window_ceiling, since ${at}`, 'a wall no round projected names no error');
   const studio = { ...account, link: { id: 'studio', page: 'accounts' }, pools: ['work'], subject: { id: 'studio', label: 'studio', type: 'account' } };
-  const slowed = { factor_min: 0.35, open: true, setting: ['slow_down_stretch_seconds'], setting_values: { slow_down_stretch_seconds: 1800 }, slowed_ms: 13_920_000, spans: 2 };
-  assert.equal(words('slowed_long', studio, slowed), `studio: slowed 3 h 52 min of the last 24 h, slowest 0.35x, slow_down_stretch_seconds 1800, since ${at}`);
+  const slowed = { factor_min: 0.35, open: true, setting: ['slow_down_stretch_seconds'], setting_values: { slow_down_stretch_seconds: 1800 }, slowed_ms: 7_700_000, spans: 2 };
+  assert.equal(words('slowed_long', studio, slowed), `studio: slowed 2 h 8 min of the last 24 h, slowest 0.35x, slow_down_stretch_seconds 1800, since ${at}`);
   assert.equal(words('slowed_long', studio, { ...slowed, factor_min: 0.5, open: false, slowed_ms: 3_720_000, spans: 1 }), `studio: slowed 1 h 2 min of the last 24 h, slowest 0.5x, slow_down_stretch_seconds 1800, since ${at}`, 'the factor drops a trailing zero');
-  assert.equal(words('slowed_long', studio, { ...slowed, factor_min: null, setting_values: undefined }), `studio: slowed 3 h 52 min of the last 24 h, slow_down_stretch_seconds, since ${at}`, 'a span with no factor read and a pool the registry lost name neither');
+  assert.equal(words('slowed_long', studio, { ...slowed, factor_min: null, setting_values: undefined }), `studio: slowed 2 h 8 min of the last 24 h, slow_down_stretch_seconds, since ${at}`, 'a span with no factor read and a pool the registry lost name neither');
   assert.equal(attentionWords(item('pool_exhausted', { detail: { pool: 'jobs' } }), NOW), null, 'another kind keeps its label and subject');
   for (const kind of ['wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long']) assert.equal(attentionDetail(item(kind, { ...account, detail: {} }), NOW), attentionWords(item(kind, { ...account, detail: {} }), NOW).replace(/^primary: /, ''), `${kind}'s row reads the words without the subject`);
 });

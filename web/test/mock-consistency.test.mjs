@@ -1126,22 +1126,23 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const rounds = day.filter((e) => e.kind === 'shedding_round' && e.detail.outcome === 'nothing_to_mark' && e.detail.reason === 'no_runway');
     const firsts = (kind, events, subject) => [...new Set(events.map(subject))].map((id) => [kind, id, Date.parse(events.find((e) => subject(e) === id).at)]);
     // A slow-down span runs from its start to the next end or restart of its account and pool, an open one to now, each
-    // clamped to the day, and an account slowed past an hour of it holds from the own start of its oldest span.
+    // clamped to the day, and an account slowed past an hour of it holds from the own start of its oldest span. An ended
+    // span's slowest factor is its end's, a span still open its start's.
     const spans = new Map();
-    const count = (account, since, end) => spans.set(account, [...(spans.get(account) ?? []), { since, slowedMs: Math.max(0, end - Math.max(since, s.now - DAY)) }]);
+    const count = (account, since, end, factor) => spans.set(account, [...(spans.get(account) ?? []), { factor, since, slowedMs: Math.max(0, end - Math.max(since, s.now - DAY)) }]);
     const standing = new Map();
     for (const e of day) {
       const key = `${e.accountId}|${e.poolId}`;
       if (e.kind === 'router_started') {
-        for (const [open, since] of standing) count(open.split('|')[0], since, Date.parse(e.at));
+        for (const [open, start] of standing) count(open.split('|')[0], start.since, Date.parse(e.at), start.factor);
         standing.clear();
-      } else if (e.kind === 'slow_down_started' && !standing.has(key)) standing.set(key, Date.parse(e.at));
+      } else if (e.kind === 'slow_down_started' && !standing.has(key)) standing.set(key, { factor: e.detail.factor, since: Date.parse(e.at) });
       else if (e.kind === 'slow_down_ended' && standing.has(key)) {
-        count(e.accountId, e.detail.since, e.detail.since + e.detail.duration_ms);
+        count(e.accountId, e.detail.since, e.detail.since + e.detail.duration_ms, e.detail.factor_min);
         standing.delete(key);
       }
     }
-    for (const [open, since] of standing) count(open.split('|')[0], since, s.now);
+    for (const [open, start] of standing) count(open.split('|')[0], start.since, s.now, start.factor);
     const slowed = [...spans].filter(([, list]) => sum(list, (x) => x.slowedMs) > HOUR).map(([id, list]) => ['slowed_long', id, Math.min(...list.map((x) => x.since))]);
     const kinds = ['wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'];
     const want = [...firsts('wall_reached', spent, (e) => e.accountId), ...firsts('destination_spent', landed, (e) => e.accountId), ...firsts('shed_no_runway', rounds, (e) => e.poolId), ...slowed].sort(
@@ -1153,9 +1154,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const item = s.attention.find((i) => i.kind === 'slowed_long');
     assert.deepEqual(
       [item.detail.spans, item.detail.open, item.detail.slowed_ms, item.detail.factor_min, item.detail.setting, item.detail.setting_values],
-      [spans.get('studio').length, true, sum(spans.get('studio'), (x) => x.slowedMs), 0.35, ['slow_down_stretch_seconds'], { slow_down_stretch_seconds: s.pools.find((p) => p.id === 'work').slowDownStretchSeconds }],
+      [spans.get('studio').length, true, sum(spans.get('studio'), (x) => x.slowedMs), Math.min(...spans.get('studio').map((x) => x.factor)), ['slow_down_stretch_seconds'], { slow_down_stretch_seconds: s.pools.find((p) => p.id === 'work').slowDownStretchSeconds }],
       "studio's two spans in work, the closed one's slowest factor and the pool's stretch",
     );
+    assert.deepEqual([item.detail.slowed_ms, item.detail.factor_min], [7_700_000, 0.35], 'the closed span of 86 min 20 s and the open one since 13:48');
   });
 
   test(`the slow-down's story: the slowed request's hold and renewal on work, the round its stretch fired for the annex, the failover's cause on all and studio's span rows, at ${at}`, async () => {
@@ -1198,15 +1200,49 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const landing = record('req_b8c3e9d4-e61', 2);
     assert.deepEqual([landing.request.poolId, landing.outcome.kind, landing.outcome.fromAccountId, landing.outcome.cause], ['all', 'placed', 'secondary', { cause: null, ...cause, state: null }]);
 
-    // Studio's two spans in work: the closed one's held time is its rows' slow-down waits, the open one stands.
+    // Every read of studio's entry is a pinned selection's, its stretch the time to the reset less the time the demand
+    // takes from the utilization to the ceiling, and its factor one less the stretch over the time to the reset.
+    const work = s.pools.find((p) => p.id === 'work');
+    const reads = records
+      .filter((r) => r.request.poolId === 'work' && r.pin?.accountId === 'studio' && r.walk.some((w) => w.step === 'move:shed' && w.facts.some((f) => f.key === 'slow_down' && f.value === 'on')))
+      .map((r) => {
+        const facts = r.walk.find((w) => w.step === 'move:shed').facts;
+        const value = (key) => facts.find((f) => f.key === key)?.value;
+        return { at: Date.parse(r.request.at), demand: value('demand_five_hour'), factor: value('factor'), found: r.pin.found, stretchMs: value('stretch_ms'), window: r.candidates.find((c) => c.accountId === 'studio').windows.five_hour };
+      })
+      .sort((x, y) => x.at - y.at);
+    for (const x of reads) {
+      const leftMs = Date.parse(x.window.reset) - x.at;
+      const stretchMs = Math.max(0, leftMs - ((work.windowCeiling - x.window.utilization) / x.demand) * HOUR);
+      assert.ok(x.found === 'live' && x.demand === x.window.demand, `${iso(x.at)}: the read is a pinned selection's on the demand its window reads`);
+      assert.ok(Math.abs(x.stretchMs - stretchMs) <= 60_000, `${iso(x.at)}: the stretch reads ${x.stretchMs}, not ${Math.round(stretchMs)}`);
+      assert.ok(Math.abs(x.factor - (1 - stretchMs / leftMs)) <= 0.01, `${iso(x.at)}: the factor reads ${x.factor}, not ${1 - stretchMs / leftMs}`);
+    }
+
+    // Studio's two spans in work, each opened by a read under 1 with that read's figures. The closed one runs to the
+    // first read back at 1, its slowest factor the lowest read in between and its held time its rows' slow-down waits,
+    // and it ends at the first read once the factor has read 1 for the safety wait. The open one stands.
     const spans = log.filter((x) => x.type === 'event' && x.kind.startsWith('slow_down_')).sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
     assert.deepEqual(spans.map((e) => [e.kind, e.accountId, e.poolId]), [['slow_down_started', 'studio', 'work'], ['slow_down_ended', 'studio', 'work'], ['slow_down_started', 'studio', 'work']]);
     const [first, ended, open] = spans;
-    const within = s.requests.filter((r) => r.poolId === 'work' && Date.parse(r.at) >= Date.parse(first.at) && Date.parse(r.at) <= Date.parse(ended.at));
-    assert.deepEqual([ended.detail.since, ended.detail.duration_ms, ended.detail.factor_min, ended.detail.held_ms], [Date.parse(first.at), 11_400_000, 0.35, sum(slowWaits(within), (w) => w.heldMs)]);
-    assert.equal(ended.detail.held_ms, 36_000);
+    for (const start of [first, open]) {
+      const read = reads.find((x) => x.at === Date.parse(start.at));
+      assert.deepEqual(
+        [start.detail.factor, start.detail.stretch_ms, start.detail.demand, start.detail.reset, start.detail.threshold_ms],
+        [read?.factor, read?.stretchMs, read?.window.demand, Date.parse(read?.window.reset), work.slowDownStretchSeconds * 1_000],
+        `the start at ${start.at} carries its own read`,
+      );
+    }
+    const since = Date.parse(first.at);
+    const cleared = reads.find((x) => x.at > since && x.factor === 1).at;
+    const within = s.requests.filter((r) => r.poolId === 'work' && Date.parse(r.at) >= since && Date.parse(r.at) < cleared);
+    assert.deepEqual(
+      [ended.detail.since, ended.detail.duration_ms, ended.detail.factor_min, ended.detail.held_ms, Date.parse(ended.at)],
+      [since, cleared - since, Math.min(...reads.filter((x) => x.at >= since && x.at < cleared).map((x) => x.factor)), sum(slowWaits(within), (w) => w.heldMs), reads.find((x) => x.at - cleared >= 120_000).at],
+    );
+    assert.deepEqual([ended.detail.duration_ms, ended.detail.factor_min, ended.detail.held_ms], [5_180_000, 0.35, 36_000]);
     const studio = s.accounts.find((a) => a.id === 'studio');
-    assert.deepEqual([studio.slowDown.since, studio.slowDown.factor], [open.at, open.detail.factor], "the account's entry is the open span's");
+    assert.deepEqual([studio.slowDown.since, studio.slowDown.factor, studio.slowDown.stretchMs], [open.at, reads.at(-1).factor, reads.at(-1).stretchMs], "the account's entry is the open span's newest read");
 
     // The held chart folds the same waits per bucket.
     const range = { from: iso(s.now - DAY), to: iso(s.now) };

@@ -158,9 +158,11 @@ export const ACCOUNTS: Account[] = ([
     requests: { last24h: 0, last7d: 0, lifetime: 7_420 },
     cooldowns: [],
   },
-  // The work pool's Max 5x login, paired a fortnight ago. Its 5-hour window reads 0.62 with 2 h 51 min to the reset,
-  // ahead of its pace of 0.43, and its sessions' unpaced demand would pass the ceiling 42 min before the reset, so the
-  // pool's slow-down holds them at half speed since 13:48 and their burn is half their demand.
+  // The work pool's Max 5x login, paired a fortnight ago. At 14:05 its 5-hour window read 0.86 with 84 min to the
+  // reset at 15:29, where the pace stood at 0.72, and its sessions' demand of 0.1286 an hour would pass the ceiling 42
+  // min before the reset, so the pool's slow-down, slowing them since 13:48, holds them at half speed: their burn is
+  // half their demand, and the window reads 0.887 now, the burn since 14:05 added, which lands it on the ceiling at the
+  // reset.
   {
     ...ACCOUNT_SAMPLE,
     id: 'studio',
@@ -169,7 +171,7 @@ export const ACCOUNTS: Account[] = ([
     email: 'operator+studio@example.com',
     status: 'ready',
     routingEnabled: true,
-    windows: [{ ...win('5h', 0.62, 2 * HOUR + 51 * MINUTE, 40_000, 0.115), demand: 0.23 }, win('7d', 0.27, 4 * DAY + 9 * HOUR + 20 * MINUTE)],
+    windows: [{ ...win('5h', 0.887, 59 * MINUTE, 40_000, 0.0643), demand: 0.1286 }, win('7d', 0.27, 4 * DAY + 9 * HOUR + 20 * MINUTE)],
     fableWindow: win('7d_fable', 0.19, 4 * DAY + 9 * HOUR + 20 * MINUTE),
     extraUsage: null,
     fastLane: null,

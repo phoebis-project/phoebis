@@ -525,12 +525,13 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
       '/routing-log',
       ['accounts: ["primary"]', 'rounds: 1', 'setting: ["window_ceiling"]', 'setting_values: {"window_ceiling":0.75}'],
     ],
-    // Studio's two slow-down spans in work: the closed one from 09:12 to 12:22 and the open one from 13:48.
+    // Studio's two slow-down spans in work: the closed one from 09:12 until its factor read 1 at 10:38:20, and the open
+    // one from 13:48.
     [
-      'studio: slowed 3 h 52 min of the last 24 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12',
+      'studio: slowed 2 h 8 min of the last 24 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12',
       'badge--warning',
       '/routing-log',
-      ['factor_min: 0.35', 'open: true', 'setting: ["slow_down_stretch_seconds"]', 'setting_values: {"slow_down_stretch_seconds":1800}', 'slowed_ms: 13920000', 'spans: 2'],
+      ['factor_min: 0.35', 'open: true', 'setting: ["slow_down_stretch_seconds"]', 'setting_values: {"slow_down_stretch_seconds":1800}', 'slowed_ms: 7700000', 'spans: 2'],
     ],
   ];
   const ages = badges().map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
@@ -686,11 +687,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: 'the theme buttons carry their names', ok: JSON.stringify(named) === JSON.stringify([['Light', 'Light'], ['Dark', 'Dark'], ['System', 'System']]), missing: named.map((n) => n.join(' / ')) });
 }
 {
-  // The story's pools hold 20, 0 and 4 pins, one per key, session, agent and model under their keys, on primary,
-  // nightly and studio, over 15 pinned rows, so a hero counting the pinned rows or a note counting every row's account
+  // The story's pools hold 20, 0 and 5 pins, one per key, session, agent and model under their keys, on primary,
+  // nightly and studio, over 16 pinned rows, so a hero counting the pinned rows or a note counting every row's account
   // reads otherwise.
   const hero = m.container.querySelector('.sess-summary__hero');
-  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '24' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 3 accounts', missing: [hero?.textContent ?? 'absent'] });
+  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '25' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 3 accounts', missing: [hero?.textContent ?? 'absent'] });
   // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
   // the tier match reads in camelCase.
   const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
@@ -3370,7 +3371,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
           ['Rounds without a destination', 'all', '/routing-log'],
         ]) &&
       JSON.stringify(attentionRows('work')) === JSON.stringify([['Slowed for over an hour', 'studio', '/routing-log']]) &&
-      JSON.stringify(workDetail) === JSON.stringify(['slowed 3 h 52 min of the last 24 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12']),
+      JSON.stringify(workDetail) === JSON.stringify(['slowed 2 h 8 min of the last 24 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12']),
     missing: [...['jobs', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))}`), ...workDetail],
   });
   {
@@ -17029,7 +17030,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     ok: heads()[0] === '' && heads()[1] === 'Session' && rows().length > 0 && rows().every((r) => r.lastElementChild?.querySelector('.menu__trigger') !== null && r.lastElementChild?.textContent?.trim() === '···'),
     missing: [JSON.stringify(heads().slice(0, 2)), ...rows().slice(0, 3).map((r) => r.lastElementChild?.innerHTML ?? 'no cell')],
   });
-  results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 22, missing: [String(rows().length)] });
+  results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 23, missing: [String(rows().length)] });
   {
     // The session the mod released whole keeps its row and reads main's released state, though its expanded detail
     // draws no line.
@@ -17059,7 +17060,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const badges = [...m.container.querySelectorAll('.srow__account .badge')].map((b) => b.textContent?.trim() ?? '');
     results.push({
       name: '/sessions account cells carry the account kind on their title and description rather than a badge',
-      ok: kinds.length === 21 && kinds.includes('oauth') && kinds.includes('api_key') && undescribed.length === 0 && badges.every((b) => /^\+\d+$/.test(b)),
+      ok: kinds.length === 22 && kinds.includes('oauth') && kinds.includes('api_key') && undescribed.length === 0 && badges.every((b) => /^\+\d+$/.test(b)),
       missing: [...new Set(kinds), ...badges, ...undescribed.map((c) => `${c.getAttribute('aria-describedby') ?? 'no aria-describedby'} for ${c.getAttribute('title')}`)],
     });
   }
@@ -17115,7 +17116,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
 
   // Expiry now rides under the last-used time rather than in a column of its own.
   const expiries = rows().map((r) => cell(r, 'Last used')?.querySelector('.sub')?.textContent?.trim() ?? '');
-  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 22 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 20, missing: expiries.slice(0, 3) });
+  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 23 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 21, missing: expiries.slice(0, 3) });
   const counts = rows().map((r) => Number(cell(r, 'Requests')?.textContent?.trim()));
   results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length >= 12 && counts.includes(0), missing: counts.map(String) });
 
@@ -17486,7 +17487,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   expandAll?.click();
   await m.settle(250);
   const open = m.container.querySelectorAll('.srow__detail').length;
-  results.push({ name: '/sessions Expand all opens every row', ok: open === 22, missing: [String(open)] });
+  results.push({ name: '/sessions Expand all opens every row', ok: open === 23, missing: [String(open)] });
   results.push({ name: '/sessions a session with no creation time says so', ok: m.text().includes('Created: unknown'), missing: [] });
   expect('/sessions states and causes', m.text(), ['retained', 'held', 'paused', 'not retained', 'ended', 'probing', 'scheduled', 'affinity too short', 'awaiting cache evidence', 'entry expired', 'idle limit', 'cold probes', 'overage', 'pool exhausted', 'unsupported shape']);
   results.push({ name: '/sessions no reason reads session bound any more', ok: !m.text().includes('session bound'), missing: [m.text().includes('session bound') ? 'still there' : ''] });
@@ -17773,7 +17774,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
     await m.settle(600);
     const released = rows().filter((r) => cell(r, 'Session')?.getAttribute('title') === id);
-    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 21, missing: [String(rows().length)] });
+    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 22, missing: [String(rows().length)] });
     results.push({
       name: '/sessions releasing the live holder leaves the earlier one in the ledger',
       ok: released.length === 1 && cell(released[0], 'Key')?.querySelector('.sub')?.textContent?.trim() === 'deleted holder',

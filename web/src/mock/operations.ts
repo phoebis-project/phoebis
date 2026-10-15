@@ -3,8 +3,8 @@ import { anchorTier, tierCapacity, weightOrFallback } from '@/lib/costs';
 import { accountById } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE } from './catalog';
 import { FIXTURES } from './generated/fixtures';
-import { keyById } from './pools';
-import { CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, HAIKU, MARKED_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID } from './requests';
+import { keyById, poolById } from './pools';
+import { CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
 import { HOUR, MINUTE, NOW, ago, ahead } from './time';
@@ -373,15 +373,19 @@ for (const pin of SESSIONS) {
 
 /**
  * Studio's notebook sessions in work, pinned there while the slow-down holds it: the slowed one with its subagent, whose
- * main pin has the cycle its turns since the placement give, and the two the round marked, whose pins have none yet. No
- * recipe warms them. They are written after the recipes rather than rolled, so every drawn row and recipe keeps its
- * rolls.
+ * main pin has the cycle its turns since the placement give, the two the round marked and the one whose turn opened the
+ * span, whose pins have none yet. Each burn is the main pin's demand at the account's half speed. No recipe warms them.
+ * They are written after the recipes rather than rolled, so every drawn row and recipe keeps its rolls.
  */
 const SLOWED_PINS: { agents: { agentId: string; model: string }[]; burn: number; cycleMs: number | null; sessionId: string }[] = [
-  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }, { agentId: '7b2e', model: HAIKU }], burn: 0.03, cycleMs: 42_000, sessionId: SLOWED_SESSION_ID },
-  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }], burn: 0.03, cycleMs: null, sessionId: MARKED_SESSION_IDS[0] },
-  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }], burn: 0.0275, cycleMs: null, sessionId: MARKED_SESSION_IDS[1] },
+  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }, { agentId: '7b2e', model: HAIKU }], burn: 0.0125, cycleMs: 42_000, sessionId: SLOWED_SESSION_ID },
+  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }], burn: 0.0135, cycleMs: null, sessionId: MARKED_SESSION_IDS[0] },
+  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }], burn: 0.014, cycleMs: null, sessionId: MARKED_SESSION_IDS[1] },
+  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }], burn: 0.0113, cycleMs: null, sessionId: OPENING_SESSION_IDS[1] },
 ];
+// Every pin of the account reads the window's runway: until its burn carries the utilization to the pool's ceiling.
+const studioFive = accountById.get('studio')?.windows.find((w) => w.id === '5h');
+const studioRunwayMs = studioFive?.burn ? Math.round(((poolById.get('work')!.windowCeiling - studioFive.utilization) / studioFive.burn) * HOUR) : null;
 for (const pin of SLOWED_PINS) {
   // The rows run newest first, and the main agent's newest turn is the pin's last use.
   const rows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'notebook' && r.sessionId === pin.sessionId);
@@ -418,9 +422,8 @@ for (const pin of SLOWED_PINS) {
     pinned: true,
     presenceAgeSeconds: null,
     requests: rows.length,
-    // Studio's window reaches the ceiling at its burn just past the reset, so the runway outlasts the horizon.
-    runwayBounded: true,
-    runwayMs: 10_330_000,
+    runwayBounded: studioRunwayMs !== null,
+    runwayMs: studioRunwayMs,
     sessionId: pin.sessionId,
     shedFrom: null,
     speed: accountById.get('studio')?.slowDown?.factor ?? null,

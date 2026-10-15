@@ -5,7 +5,7 @@ import type {
 import { aheadOf, endOf } from '@/lib/quota';
 import { ACCOUNTS } from './accounts';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, clock, failsOver, oauthWindows, requestById } from './requests';
+import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, clock, failsOver, oauthWindows, requestById } from './requests';
 import { createRng } from './rng';
 import { DAY, HOUR, MINUTE, NOW, iso } from './time';
 
@@ -346,34 +346,47 @@ function horizonOf(name: string, resetsAt: string | null, end: number | null, at
 }
 
 /**
- * A read of an account's slow-down entry: its factor, the speed its holds realize, its stretch, and when the stretch
- * first read over the threshold while it stays over.
+ * A read of an account's slow-down entry: its factor, the speed its holds realize, its stretch, when the stretch first
+ * read over the threshold while it stays over, and the demand and the 5-hour reset it was read from.
  */
 interface SlowRead {
+  demand: number;
   factor: number;
   overSince: number | null;
+  reset: number;
   speed: number;
   stretchMs: number;
 }
 
 const studioSlowed = accountOf.get('studio')?.slowDown ?? null;
+const studioDemand = accountOf.get('studio')?.windows.find((w) => w.id === '5h')?.demand ?? 0;
 /** The safety wait, the router's `SLOW_DOWN_WAIT_MS`: the stretch reads over the threshold this long before a round. */
 const SLOW_DOWN_WAIT_MS = 120_000;
 
 /**
- * The reads of studio's entry in work, each standing from its instant until the next: the closed span's under the
- * threshold, 0.4 by the time its slowed request reads it at 10:40, and the open span's under the threshold from its
- * start and past it from the turn at 14:02:30, the read the account route answers now. Between the spans the entry
- * reads none.
+ * The reads of studio's entry in work, each standing from its instant until the next. Each is a pinned selection's on
+ * studio, its stretch the time to the reset less the time the demand takes from the utilization its decision reads to
+ * the ceiling, and its factor one less the stretch over the time to the reset. The closed span reads under the
+ * threshold in the last part of the window that resets at 10:29, its factor falling to 0.35 by the renewal after the
+ * morning's hold, and the first turns after the reset read 1. The purge drops the entry an hour after the morning
+ * session's last turn. The open span starts under the threshold at 13:48 and reads past it from the turn at 14:02:30,
+ * and the renewal at 14:05 writes the read the account route answers now.
  */
 const SLOW_READS: { accountId: string; from: number; poolId: string; read: SlowRead | null }[] = [
-  { accountId: 'studio', from: clock(9, 12), poolId: 'work', read: { factor: 0.5, overSince: null, speed: 0.5, stretchMs: 1_200_000 } },
-  { accountId: 'studio', from: clock(10, 30), poolId: 'work', read: { factor: 0.4, overSince: null, speed: 0.4, stretchMs: 1_500_000 } },
-  { accountId: 'studio', from: clock(12, 22), poolId: 'work', read: null },
-  { accountId: 'studio', from: clock(13, 48), poolId: 'work', read: { factor: 0.5, overSince: null, speed: 0.5, stretchMs: 1_620_000 } },
+  { accountId: 'studio', from: clock(9, 12), poolId: 'work', read: { demand: 0.1286, factor: 0.91, overSince: null, reset: clock(10, 29), speed: 0.91, stretchMs: 420_000 } },
+  { accountId: 'studio', from: clock(10, 11, 36), poolId: 'work', read: { demand: 0.1286, factor: 0.42, overSince: null, reset: clock(10, 29), speed: 0.42, stretchMs: 610_000 } },
+  { accountId: 'studio', from: clock(10, 12), poolId: 'work', read: { demand: 0.1286, factor: 0.4, overSince: null, reset: clock(10, 29), speed: 0.4, stretchMs: 612_000 } },
+  { accountId: 'studio', from: clock(10, 12, 36), poolId: 'work', read: { demand: 0.1286, factor: 0.35, overSince: null, reset: clock(10, 29), speed: 0.35, stretchMs: 639_600 } },
+  { accountId: 'studio', from: clock(10, 38, 20), poolId: 'work', read: { demand: 0.1286, factor: 1, overSince: null, reset: clock(15, 29), speed: 1, stretchMs: 0 } },
+  { accountId: 'studio', from: clock(10, 40, 36), poolId: 'work', read: { demand: 0.1286, factor: 1, overSince: null, reset: clock(15, 29), speed: 1, stretchMs: 0 } },
+  { accountId: 'studio', from: clock(11, 41), poolId: 'work', read: null },
+  { accountId: 'studio', from: clock(13, 48), poolId: 'work', read: { demand: 0.1, factor: 0.73, overSince: null, reset: clock(15, 29), speed: 0.73, stretchMs: 1_620_000 } },
+  { accountId: 'studio', from: clock(14, 2, 30), poolId: 'work', read: { demand: 0.1286, factor: 0.5, overSince: clock(14, 2, 30), reset: clock(15, 29), speed: 0.5, stretchMs: 2_592_000 } },
+  { accountId: 'studio', from: clock(14, 3, 36), poolId: 'work', read: { demand: 0.1286, factor: 0.5, overSince: clock(14, 2, 30), reset: clock(15, 29), speed: 0.5, stretchMs: 2_560_000 } },
+  { accountId: 'studio', from: clock(14, 4, 18), poolId: 'work', read: { demand: 0.1286, factor: 0.5, overSince: clock(14, 2, 30), reset: clock(15, 29), speed: 0.5, stretchMs: 2_538_000 } },
   ...(studioSlowed === null
     ? []
-    : [{ accountId: 'studio', from: clock(14, 2, 30), poolId: 'work', read: { factor: studioSlowed.factor, overSince: clock(14, 2, 30), speed: studioSlowed.speed, stretchMs: studioSlowed.stretchMs } }]),
+    : [{ accountId: 'studio', from: clock(14, 5), poolId: 'work', read: { demand: studioDemand, factor: studioSlowed.factor, overSince: clock(14, 2, 30), reset: clock(15, 29), speed: studioSlowed.speed, stretchMs: studioSlowed.stretchMs } }]),
 ];
 
 /** The account's slow-down read on the shed line, on a pool that slows its pins and for an account it has read. */
@@ -404,8 +417,10 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     const a = accountOf.get(m.accountId)!;
     const overage = inOverageAt(a.id, at);
     const windows: RecordCandidate['windows'] = {};
-    const burn = a.kind === 'oauth' ? burnsOf(spec, a.id) : {};
     const entry = a.kind === 'oauth' ? slowReadAt(a.id, pool, at) : null;
+    // Where an entry stands, the sessions burn the 5-hour window at the demand it read times the speed its holds
+    // realize, so the window's demand reads the entry's own.
+    const burn: Record<string, number> = a.kind === 'oauth' ? { ...burnsOf(spec, a.id), ...(spec.story && entry ? { five_hour: round5(entry.demand * entry.speed) } : {}) } : {};
     if (a.kind === 'oauth') {
       const head = r.attempts.some((x) => x.accountId === a.id) || a.id === 'primary';
       const ageMs = head ? 4_000 : 120_000;
@@ -1331,7 +1346,13 @@ function byAndFact(spec: Spec, record: DecisionRecord, pick: ReturnType<typeof p
       return { by: by('rule', record.outcome.rule ?? ''), fact: [runwayFact, ...verdict] };
     }
     case 'placed':
-      if (spec.heldBefore) return { by: by('hold', spec.heldBefore.cohort ? 'cohort' : 'strategy_pick'), fact: [summaryFact('held', spec.heldBefore.heldMs, 'ms')] };
+      // The hold the placement followed names its reason, a slot's wait its cohort or the pick it waited on.
+      if (spec.heldBefore) {
+        const { waits } = spec.heldBefore;
+        const reason = waits[waits.length - 1]?.reason;
+        const place = reason === 'slow_down' || reason === 'reset' ? reason : spec.heldBefore.cohort ? 'cohort' : 'strategy_pick';
+        return { by: by('hold', place), fact: [summaryFact('held', spec.heldBefore.heldMs, 'ms')] };
+      }
       return { by: record.outcome.rung ? by('rung', record.outcome.rung.rung) : by('strategy', pool.strategy, record.outcome.tier), fact: placementFact() };
     case 'held':
       // A slowed pin's wait names its end and the factor it was sized under: no slot, pick or reset explains it.
@@ -1475,16 +1496,17 @@ const NO_RUNWAY_PINS: RoundPin[] = [
 ];
 
 /**
- * Studio's round fired by the stretch, its four pins in the round's order: the warm ones by their demand over their
- * prompt, each burn the pin's rate over the account's speed, which sum to its demand. The first is marked by the order,
- * since the target is more than any one pin's burn, and the rest is less than each pin left, so the pick marks the
- * covering pin whose move rewrites least, the first among equals on the API-key annex, and the walk ends there.
+ * Studio's round fired by the stretch, its five pins in the round's order: the warm ones by their demand over their
+ * prompt, each burn the pin's rate over the account's speed, which sum to its demand. The target is more than any one
+ * pin's burn, so the order marks the first, and the rest is less than each pin left, so the pick marks the covering pin
+ * whose move rewrites least, the first among equals on the API-key annex, and the walk ends there.
  */
 const STRETCH_PINS: RoundPin[] = [
-  { agentId: 'main', burn: 0.055, cold: false, keyId: 'notebook', lastInputTokens: 30_000, marked: true, model: 'claude-sonnet-5-5', note: null, sessionId: MARKED_SESSION_IDS[1], skip: null },
-  { agentId: 'main', burn: 0.06, cold: false, keyId: 'notebook', lastInputTokens: 40_000, marked: true, model: 'claude-sonnet-5-5', note: 'cheapest', sessionId: MARKED_SESSION_IDS[0], skip: null },
-  { agentId: '7b2e', burn: 0.055, cold: false, keyId: 'notebook', lastInputTokens: 48_000, marked: false, model: HAIKU, note: null, sessionId: SLOWED_SESSION_ID, skip: null },
-  { agentId: 'main', burn: 0.06, cold: false, keyId: 'notebook', lastInputTokens: 72_000, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: SLOWED_SESSION_ID, skip: null },
+  { agentId: 'main', burn: 0.028, cold: false, keyId: 'notebook', lastInputTokens: 30_000, marked: true, model: 'claude-sonnet-5-5', note: null, sessionId: MARKED_SESSION_IDS[1], skip: null },
+  { agentId: 'main', burn: 0.027, cold: false, keyId: 'notebook', lastInputTokens: 40_000, marked: true, model: 'claude-sonnet-5-5', note: 'cheapest', sessionId: MARKED_SESSION_IDS[0], skip: null },
+  { agentId: '7b2e', burn: 0.026, cold: false, keyId: 'notebook', lastInputTokens: 48_000, marked: false, model: HAIKU, note: null, sessionId: SLOWED_SESSION_ID, skip: null },
+  { agentId: 'main', burn: 0.0226, cold: false, keyId: 'notebook', lastInputTokens: 52_000, marked: false, model: 'claude-sonnet-5-5', note: null, sessionId: OPENING_SESSION_IDS[1], skip: null },
+  { agentId: 'main', burn: 0.025, cold: false, keyId: 'notebook', lastInputTokens: 72_000, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: SLOWED_SESSION_ID, skip: null },
 ];
 
 const roundOfPins = (pins: RoundPin[]): ShedRound => ({ marks: pins.filter((p) => p.marked).map((p) => ({ agentId: p.agentId, keyId: p.keyId, model: p.model, sessionId: p.sessionId })), pins });
@@ -1508,6 +1530,14 @@ function storySpecs(): Spec[] {
   const overflowFull = { overflow: 16 };
   // Nightly's last minute before its spent window resets, as the reset hold reads it.
   const spentNightly = (when: number) => oauthWindows('nightly', when, () => OLDER_FACTOR).map((w) => (w.id === '5h' ? { ...w, utilization: 1 } : w));
+  // Studio's 5-hour reading where a hold reads it before any answer's head: the utilization the slow-down read.
+  const studioAt = (when: number, utilization: number) => ({ studio: oauthWindows('studio', when, () => OLDER_FACTOR).map((w) => (w.id === '5h' ? { ...w, utilization } : w)) });
+  // A pin's cycle after one more gap, the time-weighted average over the work pool's burn average.
+  const averageMs = poolById.get('work')!.burnAverageSeconds * 1_000;
+  const foldCycle = (cycleMs: number, gapMs: number) => {
+    const w = Math.exp(-gapMs / averageMs);
+    return Math.round(cycleMs * w + gapMs * (1 - w));
+  };
   return [
     // Two of the round's sessions placed on secondary just before it. Every pin a beat renews or moves is a request's.
     at('req_e5a1c093-4d7', 1, 1, t(10, 58, 59), 'placed', 'secondary'),
@@ -1625,17 +1655,38 @@ function storySpecs(): Spec[] {
     at('req_d2a8f6c1-d50', 1, 1, t(14, 1, 45), 'placed', 'secondary'),
     at('req_b8c3e9d4-e61', 1, 1, t(14, 7, 50), 'renewed', 'secondary', { pin: live('continues_pin', 365_000) }),
     at('req_b8c3e9d4-e61', 2, 2, t(14, 7, 51), 'placed', 'primary', { attempted: ['secondary'], failover: 'cooldown', from: 'secondary', pin: live() }),
-    // Studio's morning session in work, slowed inside the closed span: its pin's 24 s cycle at 0.4 waits 36 s, and the
-    // renewal after the wait runs no round, since the stretch reads under the threshold.
-    at('req_3d7b9e2f-a41', 1, 1, t(10, 38, 20), 'placed', 'studio'),
-    at('req_8e1c4a6d-b52', 1, 1, t(10, 40), 'held', 'studio', { hold: { cohort: null, place: 'slow_down', until: t(10, 40, 36) }, pin: live('continues_pin', 100_000), pinPace: { cycleMs: 24_000, slowDownUntil: t(10, 40, 36) } }),
-    at('req_8e1c4a6d-b52', 2, 1, t(10, 40, 36), 'renewed', 'studio', {
+    // Studio's closed span in work: a placement reads no entry, so the session placed at 09:11:24 opens the span at
+    // its first turn after the placement, which reads the factor at 0.91 in the last 77 minutes of the window that
+    // resets at 10:29.
+    at('req_5c7e2a9d-b14', 1, 1, t(9, 11, 24), 'placed', 'studio'),
+    at('req_a3d8f1b6-c25', 1, 1, t(9, 12), 'renewed', 'studio', { pin: live('continues_pin', 30_000) }),
+    // The morning session's first turn after its placement sets its pin's dispatch, and the next one, 24 s later,
+    // gives the pin its cycle: at 0.40 it waits 36 s, and the renewal after the wait reads 0.35 and runs no round,
+    // since the stretch reads under the threshold. Its turns after the reset read 1, and the second, past the wait,
+    // ends the span. Each turn after the hold folds its gap into the cycle over the pool's burn average.
+    at('req_3d7b9e2f-a41', 1, 1, t(10, 11), 'placed', 'studio'),
+    at('req_2b9e4c7f-d36', 1, 1, t(10, 11, 36), 'renewed', 'studio', { pin: live('continues_pin', 30_000) }),
+    at('req_8e1c4a6d-b52', 1, 1, t(10, 12), 'held', 'studio', {
+      hold: { cohort: null, place: 'slow_down', until: t(10, 12, 36) },
+      pin: live('continues_pin', 19_000),
+      pinPace: { cycleMs: 24_000, slowDownUntil: t(10, 12, 36) },
+      readings: studioAt(t(10, 12), 0.9354),
+    }),
+    at('req_8e1c4a6d-b52', 2, 1, t(10, 12, 36), 'renewed', 'studio', {
       heldBefore: { cohort: null, heldMs: 36_000, waitedOn: ['studio'], waits: [{ heldMs: 36_000, reason: 'slow_down' }] },
       holds: [{ accountId: 'studio', attempt: 1, cohort: null, heldMs: 36_000, ranOut: false }],
-      pin: live('continues_pin', 136_000),
-      pinPace: { cycleMs: 24_000, slowDownUntil: t(10, 40, 36) },
+      pin: live('continues_pin', 55_000),
+      pinPace: { cycleMs: 24_000, slowDownUntil: t(10, 12, 36) },
     }),
-    // Studio's sessions of the open span placed on its pins, the round's four.
+    at('req_f6a1d3e8-e47', 1, 1, t(10, 38, 20), 'renewed', 'studio', { pin: live('continues_pin', 1_538_600), pinPace: { cycleMs: foldCycle(24_000, t(10, 38, 20) - t(10, 12, 36)), slowDownUntil: null } }),
+    at('req_8d4b7f2c-f58', 1, 1, t(10, 40, 36), 'renewed', 'studio', {
+      pin: live('continues_pin', 130_400),
+      pinPace: { cycleMs: foldCycle(foldCycle(24_000, t(10, 38, 20) - t(10, 12, 36)), t(10, 40, 36) - t(10, 38, 20)), slowDownUntil: null },
+    }),
+    // Studio's open span: a session placed at 13:47:24 opens it at its first turn after the placement, under the
+    // threshold at 0.73, and the sessions placed after it are the round's other four pins.
+    at('req_b1e7c4a9-a69', 1, 1, t(13, 47, 24), 'placed', 'studio'),
+    at('req_4f2a8d6e-b7a', 1, 1, t(13, 48), 'renewed', 'studio', { pin: live('continues_pin', 29_100) }),
     at('req_6b3e8d1a-c73', 1, 1, t(13, 50, 30), 'placed', 'studio'),
     at('req_2f9a6c4e-d84', 1, 1, t(13, 53, 10), 'placed', 'studio'),
     at('req_c5d8e2b7-e95', 1, 1, t(13, 58, 40), 'placed', 'studio'),
@@ -1646,7 +1697,12 @@ function storySpecs(): Spec[] {
     at('req_e1b6d4f8-b38', 1, 1, t(14, 3, 36), 'renewed', 'studio', { pin: live('continues_pin', 296_000) }),
     // The slowed request: its pin's 42 s cycle at half speed waits 42 s inside the safety wait, and the renewal after
     // it, past the wait, runs the round the stretch fires, which marks two of studio's pins for the annex.
-    at('req_9f2e7c5a-c49', 1, 1, t(14, 4, 18), 'held', 'studio', { hold: { cohort: null, place: 'slow_down', until: t(14, 5) }, pin: live('continues_pin', 42_000), pinPace: { cycleMs: 42_000, slowDownUntil: t(14, 5) } }),
+    at('req_9f2e7c5a-c49', 1, 1, t(14, 4, 18), 'held', 'studio', {
+      hold: { cohort: null, place: 'slow_down', until: t(14, 5) },
+      pin: live('continues_pin', 42_000),
+      pinPace: { cycleMs: 42_000, slowDownUntil: t(14, 5) },
+      readings: studioAt(t(14, 4, 18), 0.8591),
+    }),
     at('req_9f2e7c5a-c49', 2, 1, t(14, 5), 'renewed', 'studio', {
       heldBefore: { cohort: null, heldMs: 42_000, waitedOn: ['studio'], waits: [{ heldMs: 42_000, reason: 'slow_down' }] },
       holds: [{ accountId: 'studio', attempt: 1, cohort: null, heldMs: 42_000, ranOut: false }],
@@ -1872,34 +1928,55 @@ function markCleared(): EventSeed[] {
 }
 
 /**
- * Studio's two slow-down spans in work: the closed one, which ended a minute after the 5-hour window it slowed reset,
- * and the open one the afternoon's slowed request and its round stand in. Each start reads the entry its span opened
- * with, the demand the 5-hour burn over its speed, and the ended row's held time is the span's slow-down waits on the
- * request rows, as the router sums the holds it answered.
+ * The slow-down spans the reads of each account's entry open and close, as the router emits them from its reads: a
+ * start where the factor first reads under 1 with the read's own figures, and an end at the read that finds it back at
+ * 1 for the safety wait, its span running from the start to the read that first found 1, its slowest factor the lowest
+ * read in between and its held time the slow-down waits of the requests that arrived in it, as the router sums the
+ * holds it answered. Studio's closed span ended in the window after the one it slowed, and its open one is the one the
+ * afternoon's slowed request and its round stand in.
  */
 function slowDownSpans(): EventSeed[] {
-  const t = clock;
-  const work = poolById.get('work')!;
-  const studio = accountOf.get('studio');
-  const five = studio?.windows.find((w) => w.id === '5h');
-  const reset = Date.parse(five?.resetsAt ?? '');
-  const closed = { end: t(12, 22), since: t(9, 12) };
-  const open = Date.parse(studio?.slowDown?.since ?? '');
-  const started = (at: number, resetAt: number): EventSeed[] => {
-    const read = slowReadAt('studio', work, at);
-    if (read === null) return [];
-    const detail = { demand: round5((five?.burn ?? 0) / read.speed), factor: read.factor, reset: resetAt, stretch_ms: read.stretchMs, threshold_ms: work.slowDownStretchSeconds * 1_000 };
-    return [{ accountId: 'studio', at: iso(at), detail, kind: 'slow_down_started', poolId: 'work' }];
-  };
-  const heldMs = REQUESTS.filter((r) => r.poolId === 'work' && Date.parse(r.at) >= closed.since && Date.parse(r.at) <= closed.end)
-    .flatMap((r) => r.held?.waits ?? [])
-    .filter((w) => w.reason === 'slow_down')
-    .reduce((n, w) => n + w.heldMs, 0);
-  return [
-    ...started(closed.since, reset - FIVE_HOURS),
-    { accountId: 'studio', at: iso(closed.end), detail: { duration_ms: closed.end - closed.since, factor_min: 0.35, held_ms: heldMs, since: closed.since }, kind: 'slow_down_ended', poolId: 'work' },
-    ...(Number.isNaN(open) ? [] : started(open, reset)),
-  ];
+  const seeds: EventSeed[] = [];
+  const keys = [...new Set(SLOW_READS.map((x) => `${x.accountId}|${x.poolId}`))];
+  for (const key of keys) {
+    const [accountId, poolId] = key.split('|');
+    const pool = poolById.get(poolId)!;
+    let span: { factorMin: number; since: number } | null = null;
+    let clearSince: number | null = null;
+    let readAt = 0;
+    const close = (at: number, end: number) => {
+      if (span === null) return;
+      const since = span.since;
+      const heldMs = REQUESTS.filter((r) => r.poolId === poolId && r.accountId === accountId && Date.parse(r.at) >= since && Date.parse(r.at) < end)
+        .flatMap((r) => r.held?.waits ?? [])
+        .filter((w) => w.reason === 'slow_down')
+        .reduce((n, w) => n + w.heldMs, 0);
+      seeds.push({ accountId, at: iso(at), detail: { duration_ms: end - since, factor_min: span.factorMin, held_ms: heldMs, since }, kind: 'slow_down_ended', poolId });
+      span = null;
+      clearSince = null;
+    };
+    for (const { from, read } of SLOW_READS.filter((x) => x.accountId === accountId && x.poolId === poolId).sort((x, y) => x.from - y.from)) {
+      // A dropped entry closes its span at once, at the instant the factor last returned to 1, else at its last read.
+      if (read === null) {
+        close(from, clearSince ?? readAt);
+        continue;
+      }
+      readAt = from;
+      if (read.factor < 1) {
+        if (span === null) {
+          span = { factorMin: read.factor, since: from };
+          const detail = { demand: read.demand, factor: read.factor, reset: read.reset, stretch_ms: read.stretchMs, threshold_ms: pool.slowDownStretchSeconds * 1_000 };
+          seeds.push({ accountId, at: iso(from), detail, kind: 'slow_down_started', poolId });
+        } else span.factorMin = Math.min(span.factorMin, read.factor);
+        clearSince = null;
+        continue;
+      }
+      if (span === null) continue;
+      clearSince ??= from;
+      if (from - clearSince >= SLOW_DOWN_WAIT_MS) close(from, clearSince);
+    }
+  }
+  return seeds;
 }
 
 /**
