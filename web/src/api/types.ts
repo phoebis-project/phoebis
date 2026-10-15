@@ -16,6 +16,9 @@ export interface RateLimitWindow {
   horizon: string | null;
   id: WindowId;
   label: string;
+  /** The router's lead over pace at the answer's instant: the utilization less the share of the window elapsed toward
+   *  the earlier of its reset and the account's end. Null while the utilization is unknown. */
+  lead: number | null;
   periodHours: number;
   /** Observed as of `observedAt`; may be stale for accounts that cannot refresh. */
   observedAt: string;
@@ -55,9 +58,6 @@ export interface Credential {
 
 export interface Subscription {
   billingType: string;
-  /** The account form's prefill: the anchor derived from `since` and the trial, carried forward to the next
-   *  occurrence after now; null with no `since` to derive from. */
-  derivedEndsAt: string | null;
   /** The operator's saved end, standing only while `Account.cancelled` is set; null otherwise. */
   endsAt: string | null;
   organizationType: string;
@@ -1318,7 +1318,8 @@ export interface AnalyticsGroup {
   fromRequests?: true;
   histograms: LatencyHistograms;
   incomplete: number;
-  keptWarm: { requests: number; tokens: number } | null;
+  /** The kept-warm requests and the tokens they read warm, booked per TTL. */
+  keptWarm: { requests: number; tokens1h: number; tokens5m: number } | null;
   key: string;
   /**
    * An earlier holder's creation in Unix milliseconds under the key grouping, 0 for one with no creation time. Null
@@ -1344,6 +1345,14 @@ export interface AnalyticsGroup {
   rateLimited: number;
   rejected: number;
   requests: number;
+  /** The kept-warm saving in the 20x window equivalent by window key, empty without one. */
+  savingEquivalent: Record<string, number>;
+  /** The kept-warm saving as a share of the one account's windows by window key, null under the rules `probeShares`
+   *  follows. */
+  savingShares: Record<string, number> | null;
+  /** The kept-warm requests' saving in dollars, gross of the probes: the writes they avoided less the reads they
+   *  paid. */
+  savingUsd: number;
   succeeded: number;
   /** The routes answer every key but `plainOutput`, which a view derives where it splits the output into its
    * thinking share and the rest. */

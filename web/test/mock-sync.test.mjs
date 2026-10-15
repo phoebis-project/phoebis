@@ -27,6 +27,12 @@ const admin = async () => {
 const factValue = (f) => ({ ...f, value: typeof f.value === 'number' || typeof f.value === 'string' ? 'number or string' : f.value });
 /** The merged page split by row type, so each of the two shapes meets the fixture's own rows of that type. */
 const byType = (page) => ({ decisions: page.rows.filter((r) => r.type === 'decision').map((r) => ({ ...r, fact: r.fact.map(factValue) })), events: page.rows.filter((r) => r.type === 'event') });
+/**
+ * A group's saving maps are keyed by window, data rather than schema, and the captured groups hold no credit, so their
+ * maps are empty and give the mock's entries no shape to meet: each reads as a map, the shares null where the route
+ * answers none.
+ */
+const savingMaps = (path) => (path.endsWith('.savingEquivalent') ? ['object'] : path.endsWith('.savingShares') ? ['object', 'null'] : false);
 const recordShape = (r) => r && { ...r, candidates: r.candidates.map((c) => ({ ...c, burn: Object.values(c.burn), windows: Object.values(c.windows) })), walk: r.walk.map((w) => ({ ...w, facts: w.facts.map((f) => ({ ...f, value: 'any' })) })) };
 
 /**
@@ -43,17 +49,17 @@ const SYNC = {
   account_usage: { decode: (b) => d.decodeSnapshot('business', b), mock: async (api) => (await api.listAccounts()).find((a) => a.id === 'primary').usage },
   accounts: { decode: (b) => b.accounts.map(d.decodeAccount), mock: (api) => api.listAccounts() },
   analytics_accounts: { decode: (b) => d.decodeAccountRollups(b), mock: (api) => api.listAccountRollups(day, now) },
-  analytics_breakdown: { decode: (b) => b.rows.map(d.decodeAnalyticsGroup), mock: (api) => api.getAnalyticsBreakdown(query) },
-  analytics_breakdown_accounts: { decode: (b) => b.rows.map(d.decodeAnalyticsGroup), mock: (api) => api.getAnalyticsBreakdown({ ...query, groupBy: 'account' }) },
-  analytics_breakdown_speed: { decode: (b) => b.rows.map(d.decodeAnalyticsGroup), mock: (api) => api.getAnalyticsBreakdown({ ...query, groupBy: 'speed' }) },
+  analytics_breakdown: { decode: (b) => b.rows.map(d.decodeAnalyticsGroup), mock: (api) => api.getAnalyticsBreakdown(query), opaque: savingMaps },
+  analytics_breakdown_accounts: { decode: (b) => b.rows.map(d.decodeAnalyticsGroup), mock: (api) => api.getAnalyticsBreakdown({ ...query, groupBy: 'account' }), opaque: savingMaps },
+  analytics_breakdown_speed: { decode: (b) => b.rows.map(d.decodeAnalyticsGroup), mock: (api) => api.getAnalyticsBreakdown({ ...query, groupBy: 'speed' }), opaque: savingMaps },
   analytics_budgets: { decode: (b) => b.members.map(d.decodeMemberBudget), mock: (api) => api.analyticsBudgets() },
   analytics_burn: { decode: (b) => d.decodeBurn(b), mock: (api) => api.getAnalyticsBurn(query, 'account') },
   analytics_placements: { decode: (b) => b.rows.map(d.decodePlacementRow), mock: (api) => api.analyticsPlacements(query) },
   // Its moves by reason and fit are a map of maps keyed by data on both levels, which the mock's consistency test holds
   // to the moves.
   analytics_rewrites: { decode: (b) => d.decodeRewrites(b), mock: (api) => api.getAnalyticsRewrites(query), opaque: (path) => (path === '.movesByReasonAndFit' ? ['object'] : false) },
-  analytics_series: { decode: (b) => b.points.filter((p) => p.groups.length).map(d.decodeAnalyticsPoint), mock: async (api) => (await api.getAnalyticsSeries(query)).filter((p) => p.groups.length) },
-  analytics_series_accounts: { decode: (b) => b.points.filter((p) => p.groups.length).map(d.decodeAnalyticsPoint), mock: async (api) => (await api.getAnalyticsSeries({ ...query, groupBy: 'account' })).filter((p) => p.groups.length) },
+  analytics_series: { decode: (b) => b.points.filter((p) => p.groups.length).map(d.decodeAnalyticsPoint), mock: async (api) => (await api.getAnalyticsSeries(query)).filter((p) => p.groups.length), opaque: savingMaps },
+  analytics_series_accounts: { decode: (b) => b.points.filter((p) => p.groups.length).map(d.decodeAnalyticsPoint), mock: async (api) => (await api.getAnalyticsSeries({ ...query, groupBy: 'account' })).filter((p) => p.groups.length), opaque: savingMaps },
   attention: { decode: (b) => b.items.map(d.decodeAttention), mock: (api) => api.getAttention() },
   dashboard: { decode: (b) => d.decodeDashboard(b), mock: (api) => api.getOverview() },
   // The story's static placement, whose `raw` is the record the mock answers where the fixture's is the route's body.

@@ -217,7 +217,10 @@ pub struct RollupRow {
     pub web_search_requests: u64,
     pub web_fetch_requests: u64,
     pub kept_warm_requests: u64,
-    pub kept_warm_tokens: u64,
+    /// The kept-warm requests' cache reads, booked under each request's own TTL: an hour's in `kept_warm_1h_tokens`,
+    /// any other in `kept_warm_5m_tokens`, which also holds the whole count of a row folded before the split.
+    pub kept_warm_5m_tokens: u64,
+    pub kept_warm_1h_tokens: u64,
     pub probe_migrated: u64,
     pub wasted_probes: u64,
     /// The wasted probes' own five token counts, priced when read at the cells the row's band names.
@@ -296,7 +299,8 @@ impl RollupRow {
             web_search_requests: 0,
             web_fetch_requests: 0,
             kept_warm_requests: 0,
-            kept_warm_tokens: 0,
+            kept_warm_5m_tokens: 0,
+            kept_warm_1h_tokens: 0,
             probe_migrated: 0,
             wasted_probes: 0,
             wasted_input_tokens: 0,
@@ -338,7 +342,8 @@ impl RollupRow {
         self.web_search_requests += o.web_search_requests;
         self.web_fetch_requests += o.web_fetch_requests;
         self.kept_warm_requests += o.kept_warm_requests;
-        self.kept_warm_tokens += o.kept_warm_tokens;
+        self.kept_warm_5m_tokens += o.kept_warm_5m_tokens;
+        self.kept_warm_1h_tokens += o.kept_warm_1h_tokens;
         self.probe_migrated += o.probe_migrated;
         self.wasted_probes += o.wasted_probes;
         self.wasted_input_tokens += o.wasted_input_tokens;
@@ -379,11 +384,22 @@ impl RollupRow {
         }
     }
 
+    /// The kept-warm counts as the usage their saving prices: each count as the write it avoided at its TTL, and the
+    /// two together as the read the requests paid instead.
+    pub fn kept_warm_usage(&self) -> PinUsage {
+        PinUsage {
+            cache_read: self.kept_warm_5m_tokens + self.kept_warm_1h_tokens,
+            write_5m: self.kept_warm_5m_tokens,
+            write_1h: self.kept_warm_1h_tokens,
+            ..PinUsage::default()
+        }
+    }
+
     /// Whether every count the fold adds is zero: the request counters (`requests`, `probes_held`), `attempts`, the
     /// five token counts, `thinking_tokens`, `web_search_requests`, `web_fetch_requests`, the keepalive counters
-    /// (`kept_warm_requests`, `kept_warm_tokens`, `probe_migrated`, `probes_skipped`, `wasted_probes`) and the five
-    /// wasted counts. `fold_request` deletes a row it subtracted from only when this holds: a non-serving band row
-    /// has `requests == 0` while another request's attempts still sit in it.
+    /// (`kept_warm_requests`, `kept_warm_5m_tokens`, `kept_warm_1h_tokens`, `probe_migrated`, `probes_skipped`,
+    /// `wasted_probes`) and the five wasted counts. `fold_request` deletes a row it subtracted from only when this
+    /// holds: a non-serving band row has `requests == 0` while another request's attempts still sit in it.
     pub fn holds_nothing(&self) -> bool {
         let usage = self.usage();
         let wasted = self.wasted_usage();
@@ -400,7 +416,8 @@ impl RollupRow {
             self.web_search_requests,
             self.web_fetch_requests,
             self.kept_warm_requests,
-            self.kept_warm_tokens,
+            self.kept_warm_5m_tokens,
+            self.kept_warm_1h_tokens,
             self.probe_migrated,
             self.probes_skipped,
             self.wasted_probes,
@@ -446,7 +463,12 @@ impl RollupRow {
             .saturating_sub(o.web_search_requests);
         self.web_fetch_requests = self.web_fetch_requests.saturating_sub(o.web_fetch_requests);
         self.kept_warm_requests = self.kept_warm_requests.saturating_sub(o.kept_warm_requests);
-        self.kept_warm_tokens = self.kept_warm_tokens.saturating_sub(o.kept_warm_tokens);
+        self.kept_warm_5m_tokens = self
+            .kept_warm_5m_tokens
+            .saturating_sub(o.kept_warm_5m_tokens);
+        self.kept_warm_1h_tokens = self
+            .kept_warm_1h_tokens
+            .saturating_sub(o.kept_warm_1h_tokens);
         self.probe_migrated = self.probe_migrated.saturating_sub(o.probe_migrated);
         self.wasted_probes = self.wasted_probes.saturating_sub(o.wasted_probes);
         self.wasted_input_tokens = self
@@ -931,7 +953,8 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
     );
     let mut row = read_rollup(tx, &key)?.unwrap_or(key);
     row.kept_warm_requests += delta.kept_warm_requests;
-    row.kept_warm_tokens += delta.kept_warm_tokens;
+    row.kept_warm_5m_tokens += delta.kept_warm_5m_tokens;
+    row.kept_warm_1h_tokens += delta.kept_warm_1h_tokens;
     row.probe_migrated += delta.probe_migrated;
     row.probes_skipped += delta.probes_skipped;
     row.wasted_probes += delta.wasted_probes;
@@ -1420,7 +1443,7 @@ fn take_segments(
     Ok(segments)
 }
 
-const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held";
+const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, kept_warm_1h_tokens";
 const ACCOUNT_SELECT: &str = "SELECT hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json FROM account_rollups_hourly";
 
 pub(crate) fn read_rollup(
@@ -1448,18 +1471,19 @@ pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), Ledge
     let counts =
         |m: &BTreeMap<String, u64>| serde_json::to_string(m).unwrap_or_else(|_| "{}".into());
     conn.execute(
-        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53)"),
+        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54)"),
         params![
             r.hour, r.key_id, r.key_generation, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.client, r.effort, r.request_class, r.speed, r.funding, r.band, r.tier,
             r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
             r.exhausted as i64, r.rejected as i64, r.attempts as i64, r.failovers as i64, r.cache_hits as i64, r.cache_misses as i64, r.uncached_requests as i64,
             r.input_tokens as i64, r.cache_read_tokens as i64, r.cache_write_5m_tokens as i64, r.cache_write_1h_tokens as i64, r.output_tokens as i64,
             r.thinking_tokens as i64, r.web_search_requests as i64, r.web_fetch_requests as i64,
-            r.kept_warm_requests as i64, r.kept_warm_tokens as i64, r.probe_migrated as i64, r.wasted_probes as i64, counts(&r.wasted_probe_reasons),
+            r.kept_warm_requests as i64, r.kept_warm_5m_tokens as i64, r.probe_migrated as i64, r.wasted_probes as i64, counts(&r.wasted_probe_reasons),
             r.probes_skipped as i64, r.wasted_input_tokens as i64, r.wasted_cache_read_tokens as i64, r.wasted_cache_write_5m_tokens as i64,
             r.wasted_cache_write_1h_tokens as i64, r.wasted_output_tokens as i64,
             r.ttfb_hist.to_le_bytes(), r.ttfc_hist.to_le_bytes(), r.duration_hist.to_le_bytes(), r.output_tps_hist.to_le_bytes(), counts(&r.errors), counts(&r.cache_miss_reasons),
             r.incomplete as i64, r.probes_held as i64,
+            r.kept_warm_1h_tokens as i64,
         ],
     )?;
     Ok(())
@@ -1515,7 +1539,7 @@ fn row_to_rollup_at(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Ro
         web_search_requests: u(32)?,
         web_fetch_requests: u(33)?,
         kept_warm_requests: u(34)?,
-        kept_warm_tokens: u(35)?,
+        kept_warm_5m_tokens: u(35)?,
         probe_migrated: u(36)?,
         wasted_probes: u(37)?,
         wasted_probe_reasons: counts(38)?,
@@ -1533,6 +1557,7 @@ fn row_to_rollup_at(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Ro
         cache_miss_reasons: counts(50)?,
         incomplete: u(51)?,
         probes_held: u(52)?,
+        kept_warm_1h_tokens: u(53)?,
     })
 }
 
@@ -1853,8 +1878,8 @@ mod tests {
         "wasted_output_tokens",
     ];
 
-    /// The rollup table at the newest version: no dollar column, the five wasted counts, and the band and the tier
-    /// as the last two of fifteen key parts.
+    /// The rollup table at the newest version: no dollar column, the five wasted counts, the kept-warm tokens per TTL,
+    /// and the band and the tier as the last two of fifteen key parts.
     fn assert_rollups_carry_counts_and_no_dollars(conn: &Connection) {
         let (_, _, rollups) = shape(conn);
         for dropped in DROPPED_ROLLUP_COLUMNS {
@@ -1869,6 +1894,12 @@ mod tests {
                 "migration 34 added {added}: {rollups:?}"
             );
         }
+        assert!(
+            rollups.iter().any(|c| c == "kept_warm_5m_tokens")
+                && rollups.iter().any(|c| c == "kept_warm_1h_tokens")
+                && !rollups.iter().any(|c| c == "kept_warm_tokens"),
+            "migration 37 split the kept-warm count by TTL: {rollups:?}"
+        );
         let mut stmt = conn
             .prepare(
                 "SELECT name FROM pragma_table_info('rollups_hourly') WHERE pk > 0 ORDER BY pk",
@@ -2049,7 +2080,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 35);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 37);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
@@ -2113,7 +2144,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 35);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 37);
         let columns: Vec<String> = db
             .read_blocking(|c| {
                 let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -2209,7 +2240,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 35);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 37);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -3510,7 +3541,14 @@ mod tests {
             row.holds_nothing()
         };
         assert!(!with(|r| r.wasted_cache_read_tokens = 1), "a wasted count");
-        assert!(!with(|r| r.kept_warm_tokens = 1), "a kept-warm count");
+        assert!(
+            !with(|r| r.kept_warm_5m_tokens = 1),
+            "a five-minute kept-warm count"
+        );
+        assert!(
+            !with(|r| r.kept_warm_1h_tokens = 1),
+            "an hour's kept-warm count"
+        );
         assert!(
             !with(|r| {
                 r.attempts = 1;
@@ -3561,7 +3599,8 @@ mod tests {
         r.web_search_requests = 2;
         r.web_fetch_requests = 1;
         r.kept_warm_requests = 33;
-        r.kept_warm_tokens = 34;
+        r.kept_warm_5m_tokens = 34;
+        r.kept_warm_1h_tokens = 35;
         r.probe_migrated = 37;
         r.wasted_probes = 38;
         r.wasted_input_tokens = 50;
@@ -3699,6 +3738,7 @@ mod tests {
         old.wasted_cache_write_5m_tokens = 0;
         old.wasted_cache_write_1h_tokens = 0;
         old.wasted_output_tokens = 0;
+        old.kept_warm_1h_tokens = 0;
         {
             let mut conn = Connection::open(&path).unwrap();
             conn.execute_batch(crate::schema::SCHEMA).unwrap();
@@ -3765,7 +3805,7 @@ mod tests {
                     31.5,
                     32.5,
                     old.kept_warm_requests as i64,
-                    old.kept_warm_tokens as i64,
+                    old.kept_warm_5m_tokens as i64,
                     35.5,
                     36.5,
                     old.probe_migrated as i64,
@@ -3785,7 +3825,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 35);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 37);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
@@ -3798,8 +3838,9 @@ mod tests {
         expected.funding = PLAN_FUNDING.into();
         assert_eq!(
             rows[0], expected,
-            "every old value is where it was, effort is none, the three sums, the incomplete count, the held count \
-             and the wasted counts are zero, and the row files under the standard band and the reserved tier"
+            "every old value is where it was, the kept-warm count under five minutes, effort is none, the three sums, \
+             the incomplete count, the held count, the wasted counts and the hour's kept-warm count are zero, and the \
+             row files under the standard band and the reserved tier"
         );
     }
 }

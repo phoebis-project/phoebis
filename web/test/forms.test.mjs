@@ -192,25 +192,24 @@ test('the key dialog starts from the stored key and builds the edit from it', ()
 });
 
 
-test('ticking cancelled prefills the derived end, unticking clears it, and the form refuses what the route refuses', () => {
+test('ticking cancelled leaves the end as typed, unticking clears it, and the form refuses what the route refuses', () => {
   const body = fixture('account');
-  const derived = '2026-10-19T09:15:00.000Z';
-  const account = d.decodeAccount({ ...body, subscription: { ...body.subscription, derived_ends_at: Date.parse(derived) } });
+  const account = d.decodeAccount(body);
   const form = d.subscriptionEndFormOf(account);
   assert.deepEqual(form, { cancelled: false, endsAt: '', revision: account.revision }, 'an account never cancelled opens unticked with no end');
-  const ticked = d.tickCancelled(form, true, account.subscription.derivedEndsAt);
-  assert.equal(ticked.cancelled, true);
-  assert.equal(new Date(ticked.endsAt).toISOString(), derived, 'the field holds the derived end in local time');
-  const corrected = { ...ticked, endsAt: '2026-10-05T12:00' };
-  assert.equal(d.tickCancelled({ ...corrected, cancelled: false }, true, derived).endsAt, '2026-10-05T12:00', 'a date already in the field is kept');
-  assert.deepEqual(d.tickCancelled(corrected, false, derived), { cancelled: false, endsAt: '', revision: account.revision }, 'unticking clears the end with the flag');
-  assert.equal(d.subscriptionEndRefusal(ticked), null);
+  const ticked = d.tickCancelled(form, true);
+  assert.deepEqual(ticked, { cancelled: true, endsAt: '', revision: account.revision }, 'the tick copies nothing into the field');
+  assert.equal(d.subscriptionEndRefusal(ticked), 'A cancelled plan needs the date it ends.', 'so the form asks for the date the billing page shows');
+  const typed = { ...ticked, endsAt: '2026-10-05T12:00' };
+  assert.equal(d.tickCancelled({ ...typed, cancelled: false }, true).endsAt, '2026-10-05T12:00', 'a date already in the field is kept');
+  assert.deepEqual(d.tickCancelled(typed, false), { cancelled: false, endsAt: '', revision: account.revision }, 'unticking clears the end with the flag');
+  assert.equal(d.subscriptionEndRefusal(typed), null);
   assert.equal(d.subscriptionEndRefusal({ cancelled: false, endsAt: '' }), null);
   assert.equal(d.subscriptionEndRefusal({ cancelled: true, endsAt: '' }), 'A cancelled plan needs the date it ends.', 'a ticked box whose date was cleared');
   assert.equal(d.subscriptionEndRefusal({ cancelled: false, endsAt: '2026-10-05T12:00' }), 'An end is saved only with Cancelled ticked.');
-  assert.deepEqual(d.accountPatchOf(ticked), { cancelled: true, subscriptionEndsAt: derived });
+  assert.deepEqual(d.accountPatchOf(typed), { cancelled: true, subscriptionEndsAt: new Date('2026-10-05T12:00').toISOString() });
   assert.deepEqual(d.accountPatchOf({ cancelled: false, endsAt: '' }), { cancelled: false, subscriptionEndsAt: null });
-  const saved = d.decodeAccount({ ...body, cancelled: true, subscription: { ...body.subscription, ends_at: Date.parse('2026-10-05T12:00:00.000Z'), derived_ends_at: Date.parse(derived) } });
+  const saved = d.decodeAccount({ ...body, cancelled: true, subscription: { ...body.subscription, ends_at: Date.parse('2026-10-05T12:00:00.000Z') } });
   const reopened = d.subscriptionEndFormOf(saved);
   assert.equal(reopened.cancelled, true);
   assert.equal(new Date(reopened.endsAt).toISOString(), '2026-10-05T12:00:00.000Z', 'a cancelled account opens with the end it was saved with');

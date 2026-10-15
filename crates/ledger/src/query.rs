@@ -1320,7 +1320,8 @@ pub struct Percentiles {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct KeptWarm {
     pub requests: u64,
-    pub tokens: u64,
+    pub tokens_5m: u64,
+    pub tokens_1h: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -1494,6 +1495,15 @@ pub struct GroupRow {
     pub cache_equivalent: IndexMap<&'static str, CacheEquivalent>,
     /// The plan-funded probe rows and their wasted counts in the equivalent, keyed and latched as `cost_equivalent`.
     pub probe_equivalent: IndexMap<&'static str, ProbeEquivalent>,
+    /// The kept-warm requests' saving, gross of the probes: the write each count avoided at its TTL's rate less the
+    /// read it paid, summed over the group's rows.
+    pub saving_usd: f64,
+    /// The saving as a share of the account tier's windows, under the rules `probe_shares` follows (the account
+    /// grouping, or the one named account), else `None`.
+    pub saving_shares: Option<IndexMap<&'static str, f64>>,
+    /// The saving in the 20x window equivalent per window, under every grouping, a window absent where a row could not
+    /// be priced on it.
+    pub saving_equivalent: IndexMap<&'static str, f64>,
     /// The dollars of the billed rows alone (`fast`, `overage`, `billed`).
     pub billed_usd: f64,
     pub billed: CostSplitJson,
@@ -1855,7 +1865,8 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
         },
         kept_warm: KeptWarm {
             requests: sum.kept_warm_requests,
-            tokens: sum.kept_warm_tokens,
+            tokens_5m: sum.kept_warm_5m_tokens,
+            tokens_1h: sum.kept_warm_1h_tokens,
         },
         // Derived from the group's probe rows alone: a probe's own request row carries its outcome, and the
         // engine's deltas carry what never ran.
@@ -1883,6 +1894,9 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
         cost_equivalent: equivalent.cost,
         cache_equivalent: equivalent.cache,
         probe_equivalent: equivalent.probe,
+        saving_usd: dollars.saving_usd,
+        saving_shares: shares.saving_shares,
+        saving_equivalent: equivalent.saving,
         billed_usd: dollars.billed.total(),
         billed: cost_split_json(&dollars.billed),
         equivalent_split: plan.split.finish(),
@@ -1916,19 +1930,21 @@ struct CacheSum {
     unpriced: bool,
 }
 
-/// The three share members of a `GroupRow`, folded from a group's `ShareSums` or all `None`.
+/// The four share members of a `GroupRow`, folded from a group's `ShareSums` or all `None`.
 #[derive(Default)]
 struct GroupShares {
     cost_shares: Option<IndexMap<&'static str, f64>>,
     cache_shares: Option<IndexMap<&'static str, CacheShare>>,
     probe_shares: Option<IndexMap<&'static str, ProbeShare>>,
+    saving_shares: Option<IndexMap<&'static str, f64>>,
 }
 
-/// The three equivalent members of a `GroupRow`, folded from a group's `ShareSums` priced in the 20x equivalent.
+/// The four equivalent members of a `GroupRow`, folded from a group's `ShareSums` priced in the 20x equivalent.
 struct GroupEquivalent {
     cost: Equivalent,
     cache: IndexMap<&'static str, CacheEquivalent>,
     probe: IndexMap<&'static str, ProbeEquivalent>,
+    saving: IndexMap<&'static str, f64>,
 }
 
 /// A group's shares, or its 20x equivalent, summed row by row as the rows arrive: the summed keys of `GroupSum`
@@ -1946,6 +1962,9 @@ struct ShareSums {
     /// The wasted probes the group's plan-funded rows count: while none is recorded, `ProbeShare.wasted` reads `None`
     /// rather than a zero no settlement stands behind.
     plan_wasted_probes: u64,
+    /// The kept-warm counts' saving on each window, the write they avoided less the read they paid, both halves
+    /// priced under the one tier, model and hour as the cache halves are.
+    saving: IndexMap<&'static str, WindowSum>,
 }
 
 impl ShareSums {
@@ -1990,6 +2009,26 @@ impl ShareSums {
                 for (window, share) in price(wasted) {
                     self.wasted.entry(window).or_default().add(share);
                 }
+            }
+        }
+        // Priced ahead of the return below: a credit's row carries no request token, since it keys the reserved agent,
+        // class and effort apart from its request's own row.
+        let kept = row.kept_warm_usage();
+        if tokens_of(kept) > 0 {
+            let read = price(PinUsage {
+                cache_read: kept.cache_read,
+                ..PinUsage::default()
+            });
+            let write = price(PinUsage {
+                write_5m: kept.write_5m,
+                write_1h: kept.write_1h,
+                ..PinUsage::default()
+            });
+            for ((window, read), (_, write)) in read.into_iter().zip(write) {
+                self.saving
+                    .entry(window)
+                    .or_default()
+                    .add(read.zip(write).map(|(read, write)| write - read));
             }
         }
         // A failed request books a row with no token and an accounting row carries the wasted counts alone, while the
@@ -2078,6 +2117,13 @@ impl ShareSums {
                     })
                     .collect(),
             ),
+            saving_shares: Some(
+                self.saving
+                    .into_iter()
+                    .filter(|(_, s)| !s.unpriced)
+                    .map(|(w, s)| (w, s.sum))
+                    .collect(),
+            ),
         }
     }
 
@@ -2089,6 +2135,7 @@ impl ShareSums {
             cache,
             probe_cost,
             wasted,
+            saving,
             ..
         } = self;
         GroupEquivalent {
@@ -2127,6 +2174,11 @@ impl ShareSums {
                         },
                     ))
                 })
+                .collect(),
+            saving: saving
+                .into_iter()
+                .filter(|(_, s)| !s.unpriced)
+                .map(|(w, s)| (w, s.sum))
                 .collect(),
         }
     }
@@ -2231,13 +2283,14 @@ fn tokens_of(usage: PinUsage) -> u64 {
 }
 
 /// A group's dollars, each row priced at its own key as it joins: the counted rows' split, the billed rows' part of
-/// it, the probe rows' total and the wasted counts' total.
+/// it, the probe rows' total, the wasted counts' total and the kept-warm counts' saving.
 #[derive(Default)]
 struct GroupDollars {
     usd: CostSplit,
     billed: CostSplit,
     probe_usd: f64,
     wasted_usd: f64,
+    saving_usd: f64,
 }
 
 /// One group's running sums. Rows join one at a time, so a paged read folds each page in as it arrives.
@@ -2300,6 +2353,12 @@ impl GroupSums {
             let wasted = price_row(prices, costs, &row_key(row), row.wasted_usage());
             entry.dollars.wasted_usd += wasted.usd.map_or(0.0, |usd| usd.total());
             entry.plan.estimated |= plan && wasted.estimated;
+        }
+        if tokens_of(row.kept_warm_usage()) > 0 {
+            let kept = price_row(prices, costs, &row_key(row), row.kept_warm_usage());
+            entry.dollars.saving_usd += kept
+                .usd
+                .map_or(0.0, |usd| usd.cache_write_usd - usd.cache_read_usd);
         }
         if plan {
             entry.plan.add(row, row_priced, costs, counted);

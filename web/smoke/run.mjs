@@ -1765,8 +1765,8 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     results.push({ name: '/accounts/primary the identity card draws no Trial ends row for a profile without a trial', ok: labels.join('|') === 'Type|Plan|Rate-limit tier|Organization|Billing type', missing: labels });
   }
   {
-    // The subscription end edits in place on the identity card: ticking prefills the derived end, a cleared date is
-    // refused, and a saved end reads as a countdown row until the flag is cleared again.
+    // The subscription end edits in place on the identity card: ticking leaves the date to the operator and the editor
+    // refuses the empty field, and a typed end saves and reads as a countdown row until the flag is cleared again.
     const identity = () => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
     const labels = () => [...(identity()?.querySelectorAll('.kv__row dt') ?? [])].map((d) => d.textContent?.trim() ?? '');
     const button = (text) => [...(identity()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === text);
@@ -1777,17 +1777,16 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     expect('/accounts/primary the subscription end editor', identity()?.textContent ?? '', [
       'Cancelled',
       'Ends',
-      "Prefilled from the plan's start and its monthly renewal. Correct it from the date the plan's billing settings show. An annual plan is marked cancelled in its final month only.",
+      "The date the plan's billing settings show as its end. An annual plan is marked cancelled in its final month only.",
     ]);
     const before = field()?.value;
     box()?.click();
     await m.settle(100);
-    const derived = (await api.listAccounts()).find((a) => a.id === 'primary')?.subscription?.derivedEndsAt ?? '';
-    // The smoke runs in UTC, so the field's local value is the instant's own minute.
+    const asked = identity()?.querySelector('[role="alert"]')?.textContent ?? '';
     results.push({
-      name: '/accounts/primary ticking Cancelled prefills the end the plan derives',
-      ok: before === '' && box()?.checked === true && derived !== '' && field()?.value === derived.slice(0, 16),
-      missing: [String(before), String(box()?.checked), field()?.value ?? 'no field', derived],
+      name: '/accounts/primary ticking Cancelled leaves the Ends field empty and the refusal names the date',
+      ok: before === '' && box()?.checked === true && field()?.value === '' && asked.includes('A cancelled plan needs the date it ends.'),
+      missing: [String(before), String(box()?.checked), field()?.value ?? 'no field', asked || 'no callout'],
     });
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
     setter.call(field(), '');
@@ -1799,10 +1798,17 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
       ok: refusal.includes('A cancelled plan needs the date it ends.') && button('Save')?.disabled === true,
       missing: [refusal || 'no callout', String(button('Save')?.disabled)],
     });
+    setter.call(field(), new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 16));
+    field()?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(80);
     box()?.click();
     await m.settle(80);
     const cleared = field()?.value;
     box()?.click();
+    await m.settle(80);
+    // The smoke runs in UTC, so the field's local value is the instant's own minute.
+    setter.call(field(), new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 16));
+    field()?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(80);
     button('Save')?.click();
     await m.settle(600);

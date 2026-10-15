@@ -352,12 +352,12 @@ export function subscriptionEndFormOf(
 }
 
 /**
- * Ticking fills an empty field with the derived end, so the form sends an end whenever the box is ticked; unticking
- * clears the field, since the route keeps no end without the flag.
+ * Ticking leaves the field as it stands, since the end is the date the provider's billing page shows and nothing the
+ * console can work out. Unticking clears it, since the route keeps no end without the flag.
  */
-export function tickCancelled(form: SubscriptionEndForm, cancelled: boolean, derivedEndsAt: string | null): SubscriptionEndForm {
+export function tickCancelled(form: SubscriptionEndForm, cancelled: boolean): SubscriptionEndForm {
   if (!cancelled) return { ...form, cancelled: false, endsAt: '' };
-  return { ...form, cancelled: true, endsAt: form.endsAt || (derivedEndsAt ? toLocalInput(Date.parse(derivedEndsAt)) : '') };
+  return { ...form, cancelled: true };
 }
 
 /** Why the account route would refuse the pair, or null. */

@@ -338,18 +338,20 @@ used, and a high parked-limit or horizon share says the parked ceilings do.
 ## What the ledger records
 
 Every probe is a row of the request ledger, of kind `probe`, priced as any request is. Per pool and per hour, the
-ledger's rollup carries the keepalive fields the console reads. `kept_warm_requests` and `kept_warm_tokens` count the
-requests and tokens a probe kept off a cache miss on any model the request named. A probe's cost is its own request
-row's counts priced when read, at the dearest listed cells for a model the price table does not know, and
-`probe_migrated` counts a probe that landed on a different account than the recipe's. `wasted_probes` counts the probes
-settled wasted by one of the reasons above, and `wasted_probe_reasons` counts them by the reason. The wasted probes'
-five token counts sit on the hourly rollup beside their count, priced the same way. Each wasted probe files beside its
-own cost row, in the hour the relay received the probe and under the funding that row took (the kind of the account
-that served it, the speed its answer reported and whether its answer reported overage in use), so the wasted part of a
-probe share reads the plan-funded probes' waste against their own cost. `probes_skipped` counts a due probe a gate or a
-lapsed entry withheld rather than sending, for example because a cooldown already held the recipe. `probes_held` counts
-a probe the router refused with `503 ledger_behind` while its ledger caught up and sent again, outside the failed probes
-since no account answered it.
+ledger's rollup carries the keepalive fields the console reads. `kept_warm_requests`, `kept_warm_5m_tokens` and
+`kept_warm_1h_tokens` count the requests a probe kept off a cache miss on any model the request named and the tokens
+they read warm, booked under the observation's TTL. The ledger's analytics read prices the saving from the two counts at
+read time, and the console reads it: the write each count avoided at its TTL's rate less the read it paid. A probe's
+cost is its own request row's counts priced when read, at the dearest listed cells for a model the price table does not
+know, and `probe_migrated` counts a probe that landed on a different account than the recipe's. `wasted_probes` counts
+the probes settled wasted by one of the reasons above, and `wasted_probe_reasons` counts them by the reason. The wasted
+probes' five token counts sit on the hourly rollup beside their count, priced the same way. Each wasted probe files
+beside its own cost row, in the hour the relay received the probe and under the funding that row took (the kind of the
+account that served it, the speed its answer reported and whether its answer reported overage in use), so the wasted
+part of a probe share reads the plan-funded probes' waste against their own cost. `probes_skipped` counts a due probe a
+gate or a lapsed entry withheld rather than sending, for example because a cooldown already held the recipe.
+`probes_held` counts a probe the router refused with `503 ledger_behind` while its ledger caught up and sent again,
+outside the failed probes since no account answered it.
 
 `GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`failed`, `held`, `migrated`, `ok`,
 `skipped`), and per pool into the probes served, the requests they kept warm and the wasted probes by reason, beside the

@@ -1178,18 +1178,6 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
         (Some(1), Some(2))
     );
     assert_eq!(listed["profile"]["display_name"], "Biz");
-    // Computed rather than a literal, so the assertion holds whichever anchor day `derived_end` settles on.
-    let derived = phoebis_routing::term::derived_end(
-        &phoebis_store::SubscriptionTerm {
-            account_id: "business".into(),
-            since: Some(1_773_482_400_000),
-            trial_ends_at: Some(1_790_899_200_000),
-            cancelled: false,
-            ends_at: None,
-            tier: None,
-        },
-        now,
-    );
     assert_eq!(
         listed["subscription"],
         serde_json::json!({
@@ -1198,7 +1186,6 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
             "since": 1_773_482_400_000_i64,
             "trial_ends_at": 1_790_899_200_000_i64,
             "ends_at": null,
-            "derived_ends_at": derived,
         }),
         "never cancelled, so the stored end is null"
     );
@@ -1234,7 +1221,7 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
     let second = json(get(&parts.app, "/admin/accounts/second", Some(&cookie)).await).await;
     assert_eq!(
         second["subscription"],
-        serde_json::json!({"plan": null, "tier": null, "since": null, "trial_ends_at": null, "ends_at": null, "derived_ends_at": null})
+        serde_json::json!({"plan": null, "tier": null, "since": null, "trial_ends_at": null, "ends_at": null})
     );
     assert_eq!(second["cancelled"], false);
     // An OAuth account that has never paired (no profile document at all) answers `subscription: null`
@@ -1261,9 +1248,110 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
     );
 }
 
+/// The reset of the five-hour sample the lead cases seed: an hour on, so four of the window's five hours have run.
+const FIVE_HOUR_RESET: i64 = common::NOW + 3_600_000;
+
+/// Seeds one five-hour sample of `business` at `utilization`, resetting at `FIVE_HOUR_RESET`.
+fn seed_five_hour(parts: &common::Full, utilization: Option<f64>) {
+    parts
+        .db
+        .insert_samples(
+            &[phoebis_ledger::QuotaSampleRecord {
+                account_id: "business".into(),
+                bucket: phoebis_ledger::bucket_of(common::NOW - 60_000),
+                window: "five_hour".into(),
+                utilization,
+                reset_at: Some(FIVE_HOUR_RESET),
+                source: "poll".into(),
+                observed_at: None,
+            }],
+            None,
+        )
+        .unwrap();
+}
+
+/// The `five_hour` window of `business` as its own route answers it.
+async fn five_hour_of(parts: &common::Full, cookie: &str) -> serde_json::Value {
+    let account = json(get(&parts.app, "/admin/accounts/business", Some(cookie)).await).await;
+    account["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == "five_hour")
+        .unwrap_or_else(|| panic!("no five_hour window: {account}"))
+        .clone()
+}
+
 #[tokio::test]
-async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_the_derived_one_to_prefill(
+async fn a_window_sampled_without_an_end_leads_by_its_utilization_less_the_share_elapsed_to_its_reset(
 ) {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    seed_five_hour(&parts, Some(0.62));
+    let window = five_hour_of(&parts, &cookie).await;
+    let elapsed =
+        phoebis_routing::elapsed_share_at("five_hour", Some(FIVE_HOUR_RESET), None, common::NOW);
+    assert_eq!(
+        window["lead"].as_f64(),
+        Some(0.62 - elapsed),
+        "the paced share runs to the reset: {window}"
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_end_inside_the_window_answers_a_smaller_lead() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    seed_five_hour(&parts, Some(0.62));
+    let to_reset = five_hour_of(&parts, &cookie).await["lead"]
+        .as_f64()
+        .expect("a lead to the reset");
+    let end = common::NOW + 1_800_000;
+    assert_eq!(
+        patch(
+            &parts.app,
+            "/admin/accounts/business",
+            &format!(r#"{{"cancelled":true,"subscription_ends_at":{end}}}"#),
+            Some(&cookie),
+        )
+        .await
+        .status(),
+        200
+    );
+    let window = five_hour_of(&parts, &cookie).await;
+    let elapsed = phoebis_routing::elapsed_share_at(
+        "five_hour",
+        Some(FIVE_HOUR_RESET),
+        Some(end),
+        common::NOW,
+    );
+    let lead = window["lead"].as_f64().expect("a lead to the end");
+    assert_eq!(
+        lead,
+        0.62 - elapsed,
+        "the paced share runs to the end, half an hour before the reset: {window}"
+    );
+    assert!(
+        lead < to_reset,
+        "an end before the reset leaves less time to spend the window in: {lead} against {to_reset}"
+    );
+}
+
+#[tokio::test]
+async fn a_window_sampled_without_a_utilization_answers_a_null_lead() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    seed_five_hour(&parts, None);
+    let window = five_hour_of(&parts, &cookie).await;
+    assert_eq!(
+        window.as_object().unwrap().get("lead"),
+        Some(&serde_json::Value::Null),
+        "the member is present and null while the utilization is unknown: {window}"
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_it_back() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     parts
@@ -1297,24 +1385,6 @@ async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_the_de
         ),
         (Some(true), Some(end)),
         "the route answers exactly the end it was saved with"
-    );
-    // The saved end is not the anchor the console prefills the form with next time; the derivation is its own
-    // question, read from `since` and the trial alone.
-    let derived = phoebis_routing::term::derived_end(
-        &phoebis_store::SubscriptionTerm {
-            account_id: "business".into(),
-            since: Some(1_000_000),
-            trial_ends_at: None,
-            cancelled: true,
-            ends_at: Some(end),
-            tier: None,
-        },
-        common::NOW,
-    );
-    assert_eq!(
-        cancelled["subscription"]["derived_ends_at"].as_i64(),
-        derived,
-        "a start is on file, so the prefill derives an end of its own"
     );
     // An end alone is accepted on the resulting row: the account is already cancelled, so the flag needs no
     // repeating.
@@ -1384,10 +1454,9 @@ async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_the_de
         (
             unpaired_cancelled["cancelled"].as_bool(),
             unpaired_cancelled["subscription"]["ends_at"].as_i64(),
-            unpaired_cancelled["subscription"]["derived_ends_at"].as_i64(),
         ),
-        (Some(true), Some(end), None),
-        "no since to derive from, but the flag and the stored end round-trip regardless"
+        (Some(true), Some(end)),
+        "no profile on file, but the flag and the stored end round-trip regardless"
     );
     // Cancelling off drops the stored end, per `set_cancelled`'s own rule.
     let restored = json(
@@ -2101,7 +2170,7 @@ async fn the_account_view_warns_on_a_tier_it_cannot_read_and_answers_without_it(
     assert_eq!(viewed.status(), 200);
     assert_eq!(
         json(viewed).await["subscription"],
-        serde_json::json!({"plan": null, "tier": null, "since": null, "trial_ends_at": null, "ends_at": null, "derived_ends_at": null}),
+        serde_json::json!({"plan": null, "tier": null, "since": null, "trial_ends_at": null, "ends_at": null}),
         "the view answers as for an account with no subscription stored"
     );
     let text = captured.text();

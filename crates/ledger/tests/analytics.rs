@@ -744,7 +744,7 @@ fn a_group_of_keepalive_credits_alone_stays_in_the_default_breakdown() {
                 kind: "inference".into(),
                 kept_warm_request_id: Some("r1".into()),
                 kept_warm_requests: 1,
-                kept_warm_tokens: 2_000,
+                kept_warm_5m_tokens: 2_000,
                 ..Default::default()
             },
         )?;
@@ -774,11 +774,99 @@ fn a_group_of_keepalive_credits_alone_stays_in_the_default_breakdown() {
         .find(|g| g.key == UNATTRIBUTED)
         .expect("a group of keepalive credits alone stays in the default breakdown");
     assert_eq!(group.kept_warm.requests, 1);
-    // The group a route answers carries no savings figure.
+    // The group a route answers carries the saving's three members beside its probe cost.
     let answered = serde_json::to_value(group).unwrap();
     assert!(
-        answered.get("savings").is_none() && !answered.to_string().contains("gross"),
+        ["saving_equivalent", "saving_shares", "saving_usd"]
+            .iter()
+            .all(|member| answered.get(member).is_some()),
         "{answered}"
+    );
+}
+
+/// A credit's saving prices at read time from its two counts, at the revision in force at the row's hour: each count
+/// written at its own TTL's rate less the read the two paid instead. A credit on a model the revision lacks adds
+/// nothing.
+#[test]
+fn the_saving_prices_each_kept_warm_count_at_its_ttls_write_rate_less_the_read() {
+    const LISTED: &str = "claude-saving-1";
+    let per_m = |rate_per_token: f64| rate_per_token * 1_000_000.0;
+    let prices = one_entry(
+        LISTED,
+        ModelRow {
+            standard: ModelPrice {
+                input: per_m(1.0),
+                cache_read: per_m(0.5),
+                cache_write_5m: per_m(3.0),
+                cache_write_1h: per_m(5.0),
+                output: per_m(7.0),
+            },
+            fast: None,
+            long_context: None,
+        },
+    );
+    let at = ms(2026, 1, 15, 10, 0);
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        for (model, five_minutes, hour) in [
+            (LISTED, 2_000, 0),
+            (LISTED, 0, 300),
+            ("claude-unlisted-1", 1_000, 1_000),
+        ] {
+            fold_keepalive(
+                &tx,
+                &KeepaliveDelta {
+                    at,
+                    key_id: "desktop".into(),
+                    pool_id: "main".into(),
+                    account_id: "a".into(),
+                    canonical_model: model.into(),
+                    kind: "inference".into(),
+                    kept_warm_requests: 1,
+                    kept_warm_5m_tokens: five_minutes,
+                    kept_warm_1h_tokens: hour,
+                    ..Default::default()
+                },
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let saving = |group_by: &str, key: &str| {
+        breakdown(
+            &rows,
+            group_by,
+            false,
+            &LiveKeys::default(),
+            &[],
+            None,
+            &prices,
+            &COSTS,
+        )
+        .iter()
+        .find(|g| g.key == key)
+        .unwrap_or_else(|| panic!("a {key} group"))
+        .saving_usd
+    };
+    let listed = 2_000.0 * 3.0 + 300.0 * 5.0 - 2_300.0 * 0.5;
+    assert!(
+        (saving("model", LISTED) - listed).abs() < 1e-9,
+        "the five-minute write and the hour's write less the read of both: {}",
+        saving("model", LISTED)
+    );
+    assert_eq!(
+        saving("model", "claude-unlisted-1"),
+        0.0,
+        "a model the revision lacks prices no saving"
+    );
+    assert!(
+        (saving("all", "all") - listed).abs() < 1e-9,
+        "and adds nothing beside a priced one"
     );
 }
 
@@ -797,7 +885,7 @@ fn a_keepalive_credits_row_files_under_the_reserved_class() {
                 canonical_model: "claude-sonnet-5".into(),
                 kind: "inference".into(),
                 kept_warm_requests: 1,
-                kept_warm_tokens: 2_000,
+                kept_warm_5m_tokens: 2_000,
                 ..Default::default()
             },
         )?;

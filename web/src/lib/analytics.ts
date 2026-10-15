@@ -275,7 +275,11 @@ export const oneAccountGroupOf = (totals: AnalyticsGroup, groups: AnalyticsGroup
   cacheShares: oneAccountShares(groups, (g) => g.cacheShares, addReadWrite, planRowsRequired),
   costShares: oneAccountShares(groups, (g) => g.costShares, (a, b) => a + b, planRowsRequired),
   probeShares: oneAccountShares(groups, (g) => g.probeShares, (a, b) => ({ cost: a.cost + b.cost, wasted: a.wasted === null || b.wasted === null ? null : a.wasted + b.wasted }), probesRequired),
+  savingShares: oneAccountShares(groups, (g) => g.savingShares, (a, b) => a + b, probesRequired),
 });
+
+/** The two counts summed, the one figure the charts and the by-pool table print per group. */
+export const keptWarmTokens = (k: { tokens1h: number; tokens5m: number }): number => k.tokens1h + k.tokens5m;
 
 /** The model week's key in a share map, the one key beside the two shared windows, undefined where the map has none. */
 export const weekKeyOf = (shares: Record<string, unknown>): string | undefined => Object.keys(shares).find((k) => !SHARED_WINDOWS.includes(k));

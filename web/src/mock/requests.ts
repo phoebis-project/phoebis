@@ -1,6 +1,6 @@
 import type {
   AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
-  QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
+  PriceCells, QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
 } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
@@ -11,7 +11,7 @@ import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { aheadOf, endOf } from '@/lib/quota';
 import { ACCOUNTS, QUOTA_HISTORY, accountById } from './accounts';
 import type { HourlyRollup } from './analytics';
-import { cellsFor } from './catalog';
+import { cellsFor, priceFor } from './catalog';
 import { keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';
 import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE, TABLES } from './samples';
@@ -199,6 +199,29 @@ export function costOf(model: string, u: Usage, fast: boolean, at: string | numb
   const c = costSplitOf(model, u, fast, at);
   return c.input + c.cacheRead + c.cacheWrite + c.output;
 }
+
+/** The cells a prompt of `prompt` tokens selects, as `cellsFor` selects an answer's. Null for a model the entry
+ *  lacks. */
+function cellsAtPrompt(model: string, prompt: number, fast: boolean, at: string | number): PriceCells | null {
+  const row = priceFor(model, at);
+  if (row === null) return null;
+  if (fast && row.fast) return row.fast;
+  return row.longContext && prompt > row.longContext.over ? row.longContext : row;
+}
+
+/**
+ * A kept-warm credit's saving in dollars, the write each count avoided at its TTL's rate less the read the two paid, at
+ * the cells the credited requests' own prompt of `prompt` tokens selects, as the ledger keys the credit by its
+ * request's band. The saving's tokens select nothing themselves: the read and the writes count the kept tokens twice.
+ */
+function savingUsdOf(model: string, kept: { tokens1h: number; tokens5m: number }, prompt: number, fast: boolean, at: string | number): number {
+  const p = cellsAtPrompt(model, prompt, fast, at);
+  if (p === null) return 0;
+  return (kept.tokens5m * p.cacheWrite5mPerM + kept.tokens1h * p.cacheWrite1hPerM - (kept.tokens1h + kept.tokens5m) * p.cacheReadPerM) / 1_000_000;
+}
+
+/** A kept request's read under the TTL its own write took, five minutes for a request that wrote none. */
+const keptOf = (r: RequestLog) => (r.usage.cacheWrite1h > 0 ? { tokens1h: r.usage.cacheRead, tokens5m: 0 } : { tokens1h: 0, tokens5m: r.usage.cacheRead });
 
 const sumSplit = (parts: CostSplit[]): CostSplit => parts.reduce((s, c) => ({ cacheRead: s.cacheRead + c.cacheRead, cacheWrite: s.cacheWrite + c.cacheWrite, input: s.input + c.input, output: s.output + c.output }), { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 });
 
@@ -1833,7 +1856,8 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         ...hourShares(accountId, partRows[0].canonicalModel, partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage }))),
         tier: accountTier(accountId),
         histograms: histogramsOf(partRows),
-        keptWarm: { requests: keptHere.length, tokens: keptHere.reduce((s, r) => s + r.usage.cacheRead, 0) },
+        keptWarm: { requests: keptHere.length, tokens1h: keptHere.reduce((s, r) => s + keptOf(r).tokens1h, 0), tokens5m: keptHere.reduce((s, r) => s + keptOf(r).tokens5m, 0) },
+        savingUsd: keptHere.reduce((s, r) => s + savingUsdOf(r.model, keptOf(r), r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h, r.attempts[r.attempts.length - 1]?.response.speed === 'fast', r.at), 0),
         probes: probes ?? { ok: 0, failed: 0, held: 0, skipped: 0 },
         probeMigrated,
         probeCostUsd,
@@ -1938,6 +1962,10 @@ function historicalRollups(): HourlyRollup[] {
       const duration = sampled(h, ok, big ? 14_000 : 6_000, 0.6);
       const keptRequests = warmsCaches(lane.keyId, lane.poolId) ? Math.round(ok * h.float(0.2, 0.45)) : 0;
       const keptTokens = Math.round((cacheRead / Math.max(1, ok)) * keptRequests);
+      // The hour's requests are one aggregate, so its kept tokens split by the share its hour entries wrote.
+      const written = tokens.cacheWrite1h + tokens.cacheWrite5m;
+      const kept1h = written === 0 ? 0 : Math.round((keptTokens * tokens.cacheWrite1h) / written);
+      const keptSplit = { tokens1h: kept1h, tokens5m: keptTokens - kept1h };
       // Six days back, so the hour sits well inside the week and the month the console offers rather than on
       // the edge of the synthesized month, where a range bound would cut it.
       const takesMaxEffort = lane.keyId === 'laptop' && maxEffortOwed && t >= startOfHour(NOW) - 6 * DAY;
@@ -1977,7 +2005,9 @@ function historicalRollups(): HourlyRollup[] {
           ttfbMs: histogramOf(ttfb),
           ttftMs: histogramOf(ttft),
         },
-        keptWarm: { requests: keptRequests, tokens: keptTokens },
+        keptWarm: { requests: keptRequests, ...keptSplit },
+        // A synthesized hour's kept requests carry its mean prompt, which selects the cells their saving prices at.
+        savingUsd: savingUsdOf(model, keptSplit, ok === 0 ? 0 : (usage.input + usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h) / ok, fast, t),
         probes: { ok: 0, failed: 0, held: 0, skipped: 0 },
         probeMigrated: 0,
         probeCostUsd: 0,
@@ -2023,7 +2053,8 @@ function historicalRollups(): HourlyRollup[] {
           ...hourShares(accountId, model, [{ at: t, usage: probeUsage }]),
           tier: accountTier(accountId),
           histograms: { durationMs: histogramOf(sampled(h, probes, 600, 0.3)), outputTps: emptyHistogram(), ttfbMs: histogramOf(sampled(h, probes, 320, 0.3)), ttftMs: emptyHistogram() },
-          keptWarm: { requests: 0, tokens: 0 },
+          keptWarm: { requests: 0, tokens1h: 0, tokens5m: 0 },
+          savingUsd: 0,
           probes: { ok: probes, failed, held: heldRng.chance(0.04) ? 1 : 0, skipped: h.int(0, 2) },
           probeMigrated: h.chance(0.3) ? 1 : 0,
           probeCostUsd: probeCost,

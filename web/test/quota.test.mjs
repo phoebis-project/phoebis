@@ -110,12 +110,12 @@ test('the end a pace reads is the saved end while cancelled, else a trial end st
   const iso = (ms) => new Date(ms).toISOString();
   const saved = now + 5 * 86_400_000;
   const trial = now + 8 * 86_400_000;
-  const term = (over) => ({ derivedEndsAt: iso(now + 30 * 86_400_000), endsAt: null, trialEndsAt: null, ...over });
+  const term = (over) => ({ endsAt: null, trialEndsAt: null, ...over });
   assert.equal(d.endOf({ cancelled: true, subscription: term({ endsAt: iso(saved), trialEndsAt: iso(trial) }) }, now), saved, 'the saved end while cancelled');
   assert.equal(d.endOf({ cancelled: true, subscription: term({ trialEndsAt: iso(trial) }) }, now), null, 'a cancelled account with no saved end has none, its trial aside');
   assert.equal(d.endOf({ cancelled: false, subscription: term({ endsAt: iso(saved), trialEndsAt: iso(trial) }) }, now), trial, 'a trial still ahead, the saved end standing only while cancelled');
   assert.equal(d.endOf({ cancelled: false, subscription: term({ trialEndsAt: iso(now - 1) }) }, now), null, 'a trial that has passed');
-  assert.equal(d.endOf({ cancelled: false, subscription: term({}) }, now), null, 'the derived end is a prefill, not an end');
+  assert.equal(d.endOf({ cancelled: false, subscription: term({}) }, now), null, 'an account neither cancelled nor on a trial has no end');
   assert.equal(d.endOf({ cancelled: false, subscription: null }, now), null, 'an API-key account');
 });
 

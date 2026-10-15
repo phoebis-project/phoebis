@@ -878,10 +878,9 @@ account in overage.
 
 ## Subscription end
 
-An operator can mark an OAuth account cancelled and save the end it stops serving at. The account form prefills that
-end from the profile's start, or a trial end already passed, advanced to the next occurrence of the same day of the
-month and time of day, editable before it is saved. A trial end still ahead counts as an end the same way, even on an
-account nobody has cancelled.
+An operator can mark an OAuth account cancelled and save the end it stops serving at. The account form opens the end
+empty for a running plan, and the operator types the date the provider's billing page shows once the plan is cancelled.
+A trial end still ahead counts as an end the same way, even on an account nobody has cancelled.
 
 Within five hours of its end, an account is no destination for any move and leaves the set a fresh placement keeps for
 its fit, since the end falls inside every horizon ([Moves](#moves)). Inside `wind_down_minutes` (default 30) of its end,

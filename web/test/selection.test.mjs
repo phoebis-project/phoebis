@@ -199,7 +199,7 @@ test('round robin with the subscription preference walks the kind tiers first an
 });
 
 test('pace places a winding-down member last and knows no floor', () => {
-  const subscription = (over) => ({ billingType: 'monthly', derivedEndsAt: null, endsAt: null, organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_5x', since: null, trialEndsAt: null, ...over });
+  const subscription = (over) => ({ billingType: 'monthly', endsAt: null, organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_5x', since: null, trialEndsAt: null, ...over });
   const trio = [
     account('fresh', { windows: window7d(hoursFromNow(24), 0.5) }),
     // Nearly spent, with the lowest served score of the tier: it ranks last among the ranked members and is no last
@@ -258,7 +258,7 @@ test('pace places a winding-down member last and knows no floor', () => {
 });
 
 test("a winding-down placement carries the end it winds down to, and a member that is not winding down none", () => {
-  const subscription = { billingType: 'monthly', derivedEndsAt: null, endsAt: new Date(NOW + 10 * MINUTE).toISOString(), organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_5x', since: null, trialEndsAt: null };
+  const subscription = { billingType: 'monthly', endsAt: new Date(NOW + 10 * MINUTE).toISOString(), organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_5x', since: null, trialEndsAt: null };
   const pair = [account('ending', { cancelled: true, subscription, windows: window7d(hoursFromNow(24), 0.1) }), account('fresh', { windows: window7d(hoursFromNow(24), 0.5) })];
   const [tier] = selectionOrder(pool('pace', 'allow', [member('ending', 0), member('fresh', 0)]), pair, NOW);
   assert.deepEqual(

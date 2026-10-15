@@ -299,6 +299,10 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// Version 35: the routing conditions an hourly fold reads off the trailing day of events, one row per kind and
 /// subject, so a scrape or a console poll reads a lookup rather than scanning the events. The fold writes the table
 /// whole, so it holds what the last fold found and nothing older.
+///
+/// Version 37: a kept-warm credit counts the tokens it read under the TTL its request's observation settled on, so the
+/// one count becomes the five-minute count in place and the hour count joins at zero. A row from before keeps its
+/// whole count under five minutes, since its split was never recorded. The table is not rebuilt.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -942,5 +946,10 @@ CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, acc
   since INTEGER NOT NULL, count INTEGER NOT NULL, detail_json TEXT NOT NULL, computed_at INTEGER NOT NULL,
   PRIMARY KEY (kind, subject_kind, subject_id)
 );",
+    ),
+    (
+        37,
+        "ALTER TABLE rollups_hourly RENAME COLUMN kept_warm_tokens TO kept_warm_5m_tokens;
+ALTER TABLE rollups_hourly ADD COLUMN kept_warm_1h_tokens INTEGER NOT NULL DEFAULT 0;",
     ),
 ];

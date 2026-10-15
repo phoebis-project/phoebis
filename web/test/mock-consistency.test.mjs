@@ -996,6 +996,31 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(lead('secondary', '5h') > 0 && lead('secondary', '7d') > 0, `secondary's windows read ${lead('secondary', '5h')} and ${lead('secondary', '7d')}, not both ahead of pace`);
   });
 
+  test(`every account window answers the lead the router's arithmetic gives its own reading, at ${at}`, async () => {
+    const s = await story;
+    let read = 0;
+    for (const a of s.accounts) {
+      const end = s.lib.endOf(a, s.now);
+      for (const w of [...a.windows, ...(a.fableWindow === null ? [] : [a.fableWindow])]) {
+        const want = s.aheadOf(w, w.periodHours * HOUR, s.now, end);
+        assert.ok(typeof w.lead === 'number' && near(w.lead, want), `${a.id}'s ${w.id} leads ${w.lead}, not ${want}`);
+        read += 1;
+      }
+    }
+    assert.ok(read > 0, 'the story holds windows');
+  });
+
+  test(`the default range's kept-warm saving nets a figure per pool, a saving where the pool keeps caches warm, at ${at}`, async () => {
+    const s = await story;
+    const groups = s.lib.groupsOf(defaultRange(s), { groupBy: 'pool', includeProbes: false });
+    const nets = groups.map((g) => ({ kept: g.keptWarm.tokens1h + g.keptWarm.tokens5m, net: g.savingUsd - g.probeCostUsd, pool: g.key }));
+    assert.ok(nets.every((n) => Number.isFinite(n.net)), `every pool nets a figure: ${JSON.stringify(nets)}`);
+    assert.ok(nets.some((n) => n.kept > 0 && n.net > 0), `a pool that keeps caches warm nets a saving: ${JSON.stringify(nets)}`);
+    assert.ok(nets.every((n) => n.kept > 0 || n.net === 0), `a pool that kept nothing warm nets nothing: ${JSON.stringify(nets)}`);
+    const warmed = groups.filter((g) => g.keptWarm.tokens1h > 0 && g.keptWarm.tokens5m > 0);
+    assert.ok(warmed.length > 0, 'the kept tokens split between the two TTLs');
+  });
+
   test(`every decision record reads a plan window's lead as the console's arithmetic does and projects it to its horizon, at ${at}`, async () => {
     const s = await story;
     let capped = 0;

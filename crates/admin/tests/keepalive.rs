@@ -884,7 +884,7 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
                 &tx,
                 &phoebis_ledger::KeepaliveDelta {
                     kept_warm_requests: 1,
-                    kept_warm_tokens: 2_000,
+                    kept_warm_5m_tokens: 2_000,
                     ..delta("main", "direct", "inference")
                 },
             )?;

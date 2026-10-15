@@ -434,7 +434,8 @@
             },
             "kept_warm": {
               "requests": 0,
-              "tokens": 0
+              "tokens_5m": 0,
+              "tokens_1h": 0
             },
             "probes": {
               "failed": 0,
@@ -479,6 +480,9 @@
               }
             },
             "probe_equivalent": {},
+            "saving_usd": 0.0,
+            "saving_shares": {},
+            "saving_equivalent": {},
             "billed_usd": 0.0071,
             "billed": {
               "cache_read": 0.0001,
@@ -832,7 +836,8 @@
             },
             "kept_warm": {
               "requests": 0,
-              "tokens": 0
+              "tokens_5m": 0,
+              "tokens_1h": 0
             },
             "probes": {
               "failed": 0,
@@ -877,6 +882,9 @@
               }
             },
             "probe_equivalent": {},
+            "saving_usd": 0.0,
+            "saving_shares": {},
+            "saving_equivalent": {},
             "billed_usd": 0.0,
             "billed": {
               "cache_read": 0.0,
@@ -1223,7 +1231,8 @@
             },
             "kept_warm": {
               "requests": 0,
-              "tokens": 0
+              "tokens_5m": 0,
+              "tokens_1h": 0
             },
             "probes": {
               "failed": 0,
@@ -1244,6 +1253,9 @@
             "cost_equivalent": {},
             "cache_equivalent": {},
             "probe_equivalent": {},
+            "saving_usd": 0.0,
+            "saving_shares": null,
+            "saving_equivalent": {},
             "billed_usd": 0.0036,
             "billed": {
               "cache_read": 0.0001,

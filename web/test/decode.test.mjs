@@ -27,7 +27,7 @@ test('an account decodes with its windows, plan, pool, and models', () => {
   assert.equal(a.subscription.rateLimitTier, 'default_claude_max_20x');
   assert.deepEqual(
     Object.keys(a.subscription).sort(),
-    ['billingType', 'derivedEndsAt', 'endsAt', 'organizationType', 'plan', 'rateLimitTier', 'since', 'trialEndsAt'],
+    ['billingType', 'endsAt', 'organizationType', 'plan', 'rateLimitTier', 'since', 'trialEndsAt'],
     'the route answers the profile and subscription fields and nothing more, so the card draws nothing beside them',
   );
   assert.equal(a.subscription.plan, 'max');
@@ -53,14 +53,40 @@ test('an account decodes with its windows, plan, pool, and models', () => {
   );
 });
 
-test('an account decodes its cancelled flag and both ends', () => {
+test('an account decodes its cancelled flag and its saved end', () => {
   const body = fixture('account');
-  const cancelled = d.decodeAccount({ ...body, cancelled: true, subscription: { ...body.subscription, ends_at: 5_000, derived_ends_at: 9_000 } });
-  assert.deepEqual(
-    [cancelled.cancelled, cancelled.subscription.endsAt, cancelled.subscription.derivedEndsAt],
-    [true, d.iso(5_000), d.iso(9_000)],
-  );
+  const cancelled = d.decodeAccount({ ...body, cancelled: true, subscription: { ...body.subscription, ends_at: 5_000 } });
+  assert.deepEqual([cancelled.cancelled, cancelled.subscription.endsAt], [true, d.iso(5_000)]);
   assert.equal(d.decodeAccount(body).cancelled, false, 'a row the wire answers no flag for reads uncancelled');
+});
+
+test("an account's windows read the router's lead over pace, null while the utilization is unknown", () => {
+  const body = fixture('account');
+  const a = d.decodeAccount(body);
+  const wire = (id) => body.windows.find((w) => w.id === id);
+  assert.ok(typeof wire('five_hour').lead === 'number', 'the capture answers a lead on a sampled window');
+  assert.equal(a.windows[0].lead, wire('five_hour').lead, 'the 5-hour window reads the lead the route answered');
+  assert.equal(a.fableWindow.lead, wire('seven_day_fable').lead, 'and so does the Fable week');
+  assert.ok(body.windows.every((w) => typeof w.lead === 'number'), 'every captured window carries one');
+  const unread = d.decodeAccount({ ...body, windows: [{ ...wire('five_hour'), lead: null, utilization: null }] });
+  assert.equal(unread.windows[0].lead, null, 'a window without a utilization reads no lead');
+});
+
+test("a group decodes the kept-warm tokens per TTL and the saving's three members, and a sum adds them", () => {
+  const row = fixture('analytics_breakdown').rows[0];
+  assert.deepEqual(Object.keys(row.kept_warm).sort(), ['requests', 'tokens_1h', 'tokens_5m'], 'the capture answers the two counts and no sum');
+  // The capture reads zeros and empty maps, as a missing field decodes, so nonzero copies prove the wire names.
+  const wire = { ...row, kept_warm: { requests: 2, tokens_1h: 700, tokens_5m: 300 }, saving_equivalent: { five_hour: 0.02, seven_day: 0.004 }, saving_shares: { five_hour: 0.01 }, saving_usd: 0.5 };
+  const group = d.decodeAnalyticsGroup(wire);
+  assert.deepEqual(group.keptWarm, { requests: 2, tokens1h: 700, tokens5m: 300 });
+  assert.deepEqual([group.savingUsd, group.savingShares, group.savingEquivalent], [0.5, { five_hour: 0.01 }, { five_hour: 0.02, seven_day: 0.004 }]);
+  assert.equal(d.decodeAnalyticsGroup({ ...wire, saving_shares: null }).savingShares, null, 'a group that holds no one account answers no share');
+  assert.equal(d.keptWarmTokens(group.keptWarm), 1_000, 'the charts and the by-pool table print the two counts summed');
+  const sum = d.sumGroups([group, d.decodeAnalyticsGroup({ ...wire, saving_equivalent: { five_hour: 0.03 }, saving_usd: 0.25 })]);
+  assert.deepEqual(sum.keptWarm, { requests: 4, tokens1h: 1_400, tokens5m: 600 }, 'each count sums apart');
+  assert.equal(sum.savingUsd, 0.75, 'the dollars sum');
+  assert.equal(sum.savingShares, null, 'a sum of groups carries no share of one account');
+  assert.ok(Math.abs(sum.savingEquivalent.five_hour - 0.05) < 1e-12 && Math.abs(sum.savingEquivalent.seven_day - 0.004) < 1e-12, 'the equivalent adds by window');
 });
 
 test('an account decodes its quarantine flag and the router\'s overage evidence', () => {
