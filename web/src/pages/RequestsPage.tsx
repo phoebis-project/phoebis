@@ -388,7 +388,7 @@ export function RequestsPage() {
               <tbody>
                 {requests.loading && !requests.data
                   ? Array.from({ length: 8 }, (_, i) => (
-                      <tr key={i}>
+                      <tr key={i} className="table__detail">
                         <td colSpan={shown.size + 1}>
                           <Skeleton />
                         </td>
@@ -475,7 +475,7 @@ export function RequestsPage() {
                       </tr>
                     ))}
                 {!requests.loading && rows.length === 0 && (
-                  <tr>
+                  <tr className="table__detail">
                     <td colSpan={shown.size + 1}>
                       {error ? (
                         <ErrorState title="Could not load the request log" body={error} action={<Button onClick={requests.reload}>Try again</Button>} />

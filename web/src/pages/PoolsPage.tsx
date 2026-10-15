@@ -434,7 +434,7 @@ function CacheTtlGrid({ disabled, hint, metered, onChange, plan }: { disabled: b
   return (
     <div className="field">
       <div className="table-wrap">
-        <table className="table ttl-grid">
+        <table className="table ttl-grid table--plain">
           <thead>
             <tr>
               <th />
@@ -494,7 +494,7 @@ function CacheTtlOverrides({
     <Field plain label={label} data-rule-set={name} hint="A model absent here takes the rule above.">
       {rules.models.length > 0 && (
         <div className="table-wrap">
-          <table className="table rules-table">
+          <table className="table rules-table table--plain">
             <thead>
               <tr>
                 <th className="col-fill">Model</th>
@@ -1462,7 +1462,7 @@ export function PoolDialog({
           />
         ) : (
           <div className="table-wrap">
-            <table className="table members-table">
+            <table className="table members-table table--plain">
               <thead>
                 <tr>
                   <th className="col-fill">Account</th>
@@ -1616,7 +1616,7 @@ export function PoolDialog({
             <p className="muted">{pool ? 'No keys belong to this pool yet.' : 'Keys can be created once the pool is saved.'}</p>
           ) : (
             <div className="table-wrap">
-              <table className="table keys-table">
+              <table className="table keys-table table--plain">
                 <thead>
                   <tr>
                     <th className="col-fill">Key</th>

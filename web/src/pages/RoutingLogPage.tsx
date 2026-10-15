@@ -214,13 +214,13 @@ export function RoutingLogPage() {
                       </td>
                     </tr>
                   ))
-                : rows.map((row, i) => {
+                : rows.map((row) => {
                     const id = identityOf(row);
                     return (
                       <Fragment key={id}>
-                        <LogRow row={row} rows={rows} isNew={fresh.has(id)} now={now} open={open.has(id)} striped={i % 2 === 1} onToggle={() => toggle(id)} />
+                        <LogRow row={row} rows={rows} isNew={fresh.has(id)} now={now} open={open.has(id)} onToggle={() => toggle(id)} />
                         {open.has(id) && (
-                          <tr className="routing-log__panel">
+                          <tr className="routing-log__panel table__detail">
                             <td colSpan={9}>{row.type === 'decision' ? <DecisionCard now={now} onWiden={widen} row={row} /> : <EventDetail now={now} row={row} rows={rows} />}</td>
                           </tr>
                         )}
@@ -298,12 +298,12 @@ const modelOf = (row: RoutingLogRow) => {
   return named.length === 1 && typeof named[0] === 'string' ? named[0] : null;
 };
 
-function LogRow({ isNew, now, onToggle, open, row, rows, striped }: { isNew: boolean; now: number; onToggle: () => void; open: boolean; row: RoutingLogRow; rows: RoutingLogRow[]; striped: boolean }) {
+function LogRow({ isNew, now, onToggle, open, row, rows }: { isNew: boolean; now: number; onToggle: () => void; open: boolean; row: RoutingLogRow; rows: RoutingLogRow[] }) {
   const by = byOf(row, rows);
   const described = useDescription(by.title);
   const facts = factsOf(row, now, rows);
   const model = modelOf(row);
-  const className = ['routing-log__row', isNew && 'is-new', open && 'is-open', striped && 'is-striped'].filter(Boolean).join(' ');
+  const className = ['routing-log__row', isNew && 'is-new', open && 'is-open'].filter(Boolean).join(' ');
   // A click on a link or a button inside the row follows it, and anywhere else opens the row.
   const click = (e: MouseEvent<HTMLTableRowElement>) => {
     if (!(e.target as Element).closest('a, button')) onToggle();

@@ -1635,15 +1635,25 @@ textarea.input {
   border-bottom: 0;
 }
 
+/* Every data table alternates its rows on --stripe, a half step between the surfaces, so a hovered row (--surface-2)
+   and a selected one (--accent-soft) still read over it. A row under one of the rows (table__detail) is not counted
+   and takes its parent's tone, and a form table opts out with table--plain. The child combinators make a table nested
+   in a cell its own striping scope. The rule is wrapped in :where() so it stays under the hover, the selected and the
+   open-row rules, which keep their specificity. */
+.table:where(:not(.table--plain)) > tbody > :where(tr:nth-child(even of :not(.table__detail))) > td,
+.table:where(:not(.table--plain)) > tbody > :where(tr:nth-child(even of :not(.table__detail))) + :where(tr.table__detail) > td {
+  background: var(--stripe);
+}
+
 .table--hover tbody tr {
   cursor: pointer;
 }
 
-.table--hover tbody tr:hover td {
+.table--hover > tbody > tr:hover > td {
   background: var(--surface-2);
 }
 
-.table tr.is-selected td {
+.table > tbody > tr.is-selected > td {
   background: var(--accent-soft);
 }
 

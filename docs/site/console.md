@@ -3,7 +3,8 @@
 This page is for the operator reading or using a view of the web console the admin listener serves. It covers the
 shell first (the login screen, the sidebar, the theme switch and the expert view), then one section per view in the
 sidebar's order, each with its screenshot, what the view shows, what each control does and the dialogs it opens. The
-mechanism behind a view lives on its own page, which each section links.
+mechanism behind a view lives on its own page, which each section links. Every data table alternates its row tone, and
+a row's hover or selection reads over it.
 
 Every list view (Accounts, Analytics, Keys, Pools, Quota, Requests, the Routing log and Sessions) opens on one filter
 bar, which draws the slots the view has in one order: the range pills, the search, Add filter, the view's own controls
@@ -346,7 +347,7 @@ runway for the sessions a round would mark, or by `A round there would mark no s
 priced session is the last on its member, which a round never marks, `each is warm.` where Warm sessions is never and
 every priced session is warm, or `none burns.` where the round's target is zero. `{p}` is a whole percent with a space
 before the sign (`99 %`), `{horizon}` `at` a clock time on the 5-hour window and `in` a span on a weekly one
-(`in 5h 0m`), `{window}` the window's label (`5h`, `7d` or `Fable week`), `{excess}` a percent an hour with one decimal
+(`in 5h`), `{window}` the window's label (`5h`, `7d` or `Fable week`), `{excess}` a percent an hour with one decimal
 (`9.5 %/h`), and `{list}` the members in the Members group's order.
 
 The pool routes answer each pool with its warnings on every list, create and save: static checks on settings that work

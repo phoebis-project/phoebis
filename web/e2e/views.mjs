@@ -4857,8 +4857,8 @@ const POPOVER_VIEWPORTS = [
  * its table's heads on at most two lines, nothing in it scrolling sideways, its computed visibility `visible`, since
  * the box stays hidden until its placement reveals it, and its computed transition `none`, since the box is measured
  * at the window's corner and then moved under its anchor. `table` holds that it draws a table, and `striped` that its
- * table's second row takes the candidate table's even-row color and its first row does not. Escape closes it after
- * each reading.
+ * table's second row takes the --stripe tone the candidate table's even row takes and its first row does not. Escape
+ * closes it after each reading.
  */
 async function popoverBounds(theme, what, stationOf, { striped = false, table = false, viewports = POPOVER_VIEWPORTS } = {}) {
   const say = (message) => failures.push(`${theme} /routing-log: ${message}`);
@@ -4890,6 +4890,11 @@ async function popoverBounds(theme, what, stationOf, { striped = false, table = 
         return new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top))).size;
       };
       const fill = (td) => (td ? getComputedStyle(td).backgroundColor : null);
+      const probe = document.createElement('div');
+      probe.style.background = 'var(--stripe)';
+      card.append(probe);
+      const stripe = getComputedStyle(probe).backgroundColor;
+      probe.remove();
       return {
         bound: Math.min(720, Math.max(0, view - 16), Math.max(0, c.width - 16), Math.max(0, shown.right - shown.left - 16)),
         card: { left: c.left, right: c.right, width: c.width },
@@ -4906,6 +4911,7 @@ async function popoverBounds(theme, what, stationOf, { striped = false, table = 
         renderer: [...popover.classList].find((n) => n.startsWith('strip-popover--')) ?? null,
         rows: [...popover.querySelectorAll('.strip-popover__table tbody tr')].slice(0, 2).map((tr) => fill(tr.cells[0])),
         shown,
+        stripe,
         transition: getComputedStyle(popover).transitionProperty,
         visibility: getComputedStyle(popover).visibility,
         wraps: [...popover.querySelectorAll('.table-wrap')].map((w) => ({ client: w.clientWidth, scroll: w.scrollWidth })),
@@ -4926,7 +4932,7 @@ async function popoverBounds(theme, what, stationOf, { striped = false, table = 
     if (got.figuresWrapping.length > 0) say(`${where}: its figures may wrap or run to two lines: ${JSON.stringify(got.figuresWrapping)}`);
     if (got.popover.scroll > got.popover.client || got.wraps.some((w) => w.scroll > w.client)) say(`${where} scrolls sideways (${JSON.stringify({ popover: got.popover, wraps: got.wraps })})`);
     if (table && (got.renderer !== 'strip-popover--table' || got.heads.length === 0)) say(`${where} draws no table to read (${got.renderer}, ${got.heads.length} heads)`);
-    if (striped && (got.rows.length < 2 || got.evenRow === null || got.rows[1] !== got.evenRow || got.rows[0] === got.rows[1])) say(`${where}: its rows read ${JSON.stringify(got.rows)}, not the candidate table's even-row ${got.evenRow} on the second row alone`);
+    if (striped && (got.rows.length < 2 || got.evenRow !== got.stripe || got.rows[1] !== got.stripe || got.rows[0] === got.rows[1])) say(`${where}: its rows read ${JSON.stringify(got.rows)} and the candidate table's even row ${got.evenRow}, not --stripe (${got.stripe}) on the second row alone`);
     if (got.visibility !== 'visible') say(`${where} computes visibility ${got.visibility} once placed, not visible`);
     if (got.transition !== 'none') say(`${where} transitions ${got.transition}, where nothing of the box may animate between where it is measured and where it stands`);
     await page.keyboard.press('Escape');
@@ -5887,9 +5893,287 @@ async function sessionsLead(theme) {
   await atRest();
 }
 
+/** A cell that paints no fill of its own computes to this, and shows the surface under its table. */
+const CLEAR = 'rgba(0, 0, 0, 0)';
+
+/** How many even log rows the Routing log's read opens before it stands down for want of a candidate table to read. */
+const STRIPE_TRIES = 10;
+
+/**
+ * In the page: the tones the stripes read against, off a probe, and every drawn `.table` with the first four of its
+ * data rows that no state of their own paints. A row is placed by its index among the data rows of its `tbody`, which
+ * the stripe counts with every row but a detail row, so a passed-by row still moves the parity of the rows after it.
+ * The states are the pool card's next member, an open, a new or a selected row, the session the address names and a
+ * chosen candidate.
+ */
+function stripeTables() {
+  const tone = (name) => {
+    const probe = document.createElement('div');
+    probe.style.background = `var(${name})`;
+    document.body.append(probe);
+    const color = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return color;
+  };
+  const STATES = ['is-chosen', 'is-new', 'is-next', 'is-open', 'is-selected'];
+  const stated = (tr) => STATES.some((name) => tr.classList.contains(name)) || tr.getAttribute('aria-current') === 'true';
+  const fill = (tr) => {
+    const td = tr.querySelector(':scope > td');
+    return td ? getComputedStyle(td).backgroundColor : null;
+  };
+  const tables = [...document.querySelectorAll('table.table')]
+    .filter((table) => table.getClientRects().length > 0)
+    .map((table) => ({
+      name: [...table.classList].filter((c) => c !== 'table').join(' ') || 'table',
+      plain: table.classList.contains('table--plain'),
+      rows: [...table.tBodies]
+        .flatMap((body) => [...body.rows].filter((tr) => !tr.classList.contains('table__detail')).map((tr, i) => [i + 1, tr]))
+        .filter(([, tr]) => !stated(tr))
+        .slice(0, 4)
+        .map(([n, tr]) => [n, fill(tr)]),
+    }));
+  const tones = { accentSoft: tone('--accent-soft'), stripe: tone('--stripe'), surface: tone('--surface'), surface2: tone('--surface-2'), surface3: tone('--surface-3') };
+  return { tables, tones };
+}
+
+/** The fill and the box of a row's first data cell, read where the row is drawn. */
+const firstCell = (row) =>
+  row.evaluate((tr) => {
+    const td = tr.querySelector(':scope > td');
+    if (!td) return null;
+    const s = getComputedStyle(td);
+    return { background: s.backgroundColor, border: s.borderBottom, height: Math.round(td.getBoundingClientRect().height), padding: s.padding };
+  });
+
+/**
+ * The stripes on a view: every drawn `.table` reads its first four data rows plain, --stripe, plain, --stripe, a row its
+ * own state paints passed by, and a `table--plain` one reads them all plain. The --stripe tone is one of its own, apart
+ * from no fill, the surface, the hover's --surface-2 and the selected row's --accent-soft. Then the rows that read over
+ * a stripe or under it, each on its view: Sessions, the Routing log, Requests and the pool dialog's form tables. Every
+ * state a read opens it shuts again with the pointer away, so the view's shot reads the view as it was.
+ */
+async function tableStripes(theme, path) {
+  const say = (what) => failures.push(`${theme} ${path}: ${what}`);
+  const read = await page.evaluate(stripeTables);
+  const { tones } = read;
+  measurements.push(`${theme} ${path} table stripes ${JSON.stringify(read)}`);
+  if (read.tables.length > 0) {
+    if ([CLEAR, tones.surface, tones.surface2, tones.accentSoft].includes(tones.stripe)) say(`the --stripe tone reads ${tones.stripe}, not one of its own apart from no fill, --surface (${tones.surface}), --surface-2 (${tones.surface2}) and --accent-soft (${tones.accentSoft})`);
+    for (const t of read.tables) {
+      for (const [n, fill] of t.rows) {
+        const want = t.plain || n % 2 === 1 ? CLEAR : tones.stripe;
+        if (fill !== want) say(`the ${t.name} table's data row ${n} reads ${fill}, not ${want === CLEAR ? 'plain' : `--stripe (${want})`}${t.plain ? ', as a table--plain one' : ''}`);
+      }
+    }
+  }
+  if (path === '/sessions') await sessionDetailStripes(theme, tones);
+  if (path === '/routing-log') await routingLogStripes(theme, tones);
+  if (path === '/requests') await requestRowStripes(theme, tones);
+  if (path === '/pools') await poolFormTables(theme);
+}
+
+/**
+ * An expanded session's detail row takes its parent's tone: under the first row, a plain one, it reads plain, and under
+ * the second, a striped one, it reads --stripe. Each row opens from its chevron, is read with the pointer away, since
+ * a hovered row paints itself --surface-2, and shuts again.
+ */
+async function sessionDetailStripes(theme, tones) {
+  const say = (what) => failures.push(`${theme} /sessions: ${what}`);
+  const rows = page.locator('.sessions-table > tbody > tr.srow');
+  const count = await rows.count();
+  if (count < 2) {
+    if (mock) say(`the table draws ${count} session rows, short of the two the detail rows' read opens`);
+    else measurements.push(`${theme} /sessions stripes under an expanded row skipped: the seed draws ${count} session rows, short of the two the read opens`);
+    return;
+  }
+  for (const k of [0, 1]) {
+    const row = rows.nth(k);
+    const shut = (await row.getAttribute('aria-expanded')) !== 'true';
+    if (shut) await row.locator('.srow__chevron').click();
+    await settle();
+    await page.mouse.move(0, 0);
+    await settle();
+    const got = await row.evaluate((tr) => {
+      const fill = (el) => (el ? getComputedStyle(el).backgroundColor : null);
+      const detail = tr.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
+      return {
+        detail: { background: fill(detail?.querySelector(':scope > td')), counted: detail ? !detail.classList.contains('table__detail') : null },
+        index: [...tr.parentElement.rows].filter((r) => !r.classList.contains('table__detail')).indexOf(tr) + 1,
+        parent: { background: fill(tr.querySelector(':scope > td')) },
+      };
+    });
+    measurements.push(`${theme} /sessions stripes under expanded row ${got.index} ${JSON.stringify(got)}`);
+    const want = got.index % 2 === 0 ? tones.stripe : CLEAR;
+    if (got.detail.background === null) say(`row ${got.index} opened to no detail row`);
+    else {
+      if (got.detail.counted) say(`row ${got.index}'s detail row carries no table__detail, so the stripes count it`);
+      failures.push(...compare(got.detail, got.parent, ['background'], `${theme} /sessions: row ${got.index}'s detail row against its parent`));
+      if (got.parent.background !== want) say(`row ${got.index} reads ${got.parent.background} with its detail open, not ${want === CLEAR ? 'plain' : `--stripe (${want})`}`);
+    }
+    if (shut) await row.locator('.srow__chevron').click();
+    await settle();
+  }
+  await atRest();
+}
+
+/**
+ * The open row the view opened before its shot and its panel read --surface-3, and an even log row opened with three
+ * candidates or more, one of them chosen, keeps its own stripes in its panel's candidate table: an unchosen even row on
+ * --stripe, an unchosen odd one with no fill of its own and the chosen one on --accent-soft, while the row and its panel
+ * read --surface-3. The row is the first even log row (counted among the log's own rows) whose decision lists such a
+ * table, and it shuts again before the shot. A router's seed may list no such decision, so there the read stands down.
+ */
+async function routingLogStripes(theme, tones) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const tint = (want) => (want === CLEAR ? 'plain' : want === tones.stripe ? `--stripe (${want})` : want === tones.surface3 ? `--surface-3 (${want})` : `--accent-soft (${want})`);
+  const readOpen = (tr) => {
+    const fill = (el) => (el ? getComputedStyle(el).backgroundColor : null);
+    const panel = tr.nextElementSibling?.classList.contains('routing-log__panel') ? tr.nextElementSibling : null;
+    return {
+      candidates: [...(panel?.querySelectorAll('.decision-card__candidates > tbody > tr') ?? [])].map((c, i) => ({ chosen: c.classList.contains('is-chosen'), fill: fill(c.querySelector(':scope > td')), n: i + 1 })),
+      id: tr.dataset.row,
+      index: [...tr.parentElement.rows].filter((r) => !r.classList.contains('table__detail')).indexOf(tr) + 1,
+      panel: { background: fill(panel?.querySelector(':scope > td')), counted: panel ? !panel.classList.contains('table__detail') : null },
+      row: { background: fill(tr.querySelector(':scope > td')) },
+    };
+  };
+  const held = (got, where) => {
+    if (got.panel.background === null) {
+      say(`${where} draws no panel`);
+      return;
+    }
+    if (got.panel.counted) say(`${where}'s panel carries no table__detail, so the stripes count it`);
+    failures.push(...compare(got.panel, got.row, ['background'], `${theme} /routing-log: ${where}'s panel against its row`));
+    if (got.row.background !== tones.surface3) say(`${where} reads ${got.row.background}, not ${tint(tones.surface3)}`);
+  };
+  const opened = page.locator('.routing-log__table > tbody > tr.routing-log__row.is-open').first();
+  if ((await opened.count()) === 0) say('no open row to read the open tint on');
+  else {
+    const got = await opened.evaluate(readOpen);
+    measurements.push(`${theme} /routing-log stripes on the open row ${JSON.stringify(got)}`);
+    held(got, `the open row ${got.index}`);
+  }
+  const rows = page.locator('.routing-log__table > tbody > tr.routing-log__row');
+  const count = await rows.count();
+  let tried = 0;
+  let found = null;
+  for (let k = 1; k < count && tried < STRIPE_TRIES && found === null; k += 2) {
+    const row = rows.nth(k);
+    if ((await row.getAttribute('data-row'))?.startsWith('event/') || (await row.getAttribute('aria-expanded')) === 'true') continue;
+    tried += 1;
+    await row.locator('td.routing-log__kind').click();
+    await advance(LOAD_MS);
+    await row.locator('xpath=following-sibling::tr[1]').locator('.decision-strip').waitFor({ timeout: 15_000 }).catch(() => {});
+    const got = await row.evaluate(readOpen);
+    const unchosen = got.candidates.filter((c) => !c.chosen);
+    const picks = { chosen: got.candidates.find((c) => c.chosen), even: unchosen.find((c) => c.n % 2 === 0), odd: unchosen.find((c) => c.n % 2 === 1) };
+    if (got.index % 2 === 0 && got.candidates.length >= 3 && picks.chosen && picks.even && picks.odd) found = { got, picks, row };
+    else {
+      await row.locator('td.routing-log__kind').click();
+      await advance(CLOCK_STEP_MS);
+    }
+  }
+  if (found === null) {
+    const why = `none of the first ${tried} even decision rows lists three candidates or more with a chosen one`;
+    if (mock) say(`no even row to read a candidate table's stripes under: ${why}`);
+    else measurements.push(`${theme} /routing-log stripes in an even row's candidate table skipped: the seed draws ${count} log rows and ${why}`);
+    await atRest();
+    return;
+  }
+  const { got, picks, row } = found;
+  measurements.push(`${theme} /routing-log stripes in even row ${got.index} (${got.id}) candidates even ${picks.even.n}, odd ${picks.odd.n}, chosen ${picks.chosen.n} ${JSON.stringify(got)}`);
+  held(got, `the even row ${got.index}`);
+  for (const [what, c, want] of [
+    ['an unchosen even', picks.even, tones.stripe],
+    ['an unchosen odd', picks.odd, CLEAR],
+    ['the chosen', picks.chosen, tones.accentSoft],
+  ]) {
+    if (c.fill !== want) say(`the even row ${got.index}'s candidate table reads ${what} candidate, row ${c.n}, on ${c.fill}, not ${tint(want)}`);
+  }
+  await row.locator('td.routing-log__kind').click();
+  await advance(CLOCK_STEP_MS);
+  if ((await row.getAttribute('aria-expanded')) === 'true') say(`the even row ${got.index} stayed open after a second click`);
+  await atRest();
+}
+
+/**
+ * On Requests the second data row, a striped one, reads --surface-2 under the pointer and --accent-soft once selected,
+ * each in the box it has striped. The pointer moves away after the hover, and the selection closes again by Escape.
+ */
+async function requestRowStripes(theme, tones) {
+  const say = (what) => failures.push(`${theme} /requests: ${what}`);
+  const rows = page.locator('.requests__table > tbody > tr:not(.table__detail)');
+  const count = await rows.count();
+  if (count < 2) {
+    if (mock) say(`the table draws ${count} rows, short of the second row the hover and the selection read`);
+    else measurements.push(`${theme} /requests stripes under the hover and the selection skipped: the seed draws ${count} rows`);
+    return;
+  }
+  const second = rows.nth(1);
+  const striped = await firstCell(second);
+  await second.hover();
+  await settle();
+  const hovered = await firstCell(second);
+  await page.mouse.move(0, 0);
+  await settle();
+  await second.locator(':scope > td').first().click({ position: { x: 4, y: 4 } });
+  await advance(LOAD_MS);
+  await page.mouse.move(0, 0);
+  await settle();
+  const selected = { ...(await firstCell(second)), state: (await second.getAttribute('class')) ?? '' };
+  await page.keyboard.press('Escape');
+  await advance(CLOCK_STEP_MS);
+  const left = { path: new URL(page.url()).pathname, selected: await page.locator('.requests__table > tbody > tr.is-selected').count() };
+  measurements.push(`${theme} /requests stripes under the hover and the selection ${JSON.stringify({ hovered, left, selected, striped, tones })}`);
+  if (striped?.background !== tones.stripe) say(`the second row reads ${striped?.background} at rest, not --stripe (${tones.stripe})`);
+  if (hovered?.background !== tones.surface2) say(`the hovered second row reads ${hovered?.background}, not --surface-2 (${tones.surface2}) over its stripe`);
+  failures.push(...compare(hovered, striped, ['border', 'height', 'padding'], `${theme} /requests: the hovered second row against itself striped`));
+  if (!selected.state.split(' ').includes('is-selected')) say(`a click on the second row left it ${JSON.stringify(selected.state)}, not is-selected`);
+  if (selected.background !== tones.accentSoft) say(`the selected second row reads ${selected.background}, not --accent-soft (${tones.accentSoft}) over its stripe`);
+  failures.push(...compare(selected, striped, ['border', 'padding'], `${theme} /requests: the selected second row against itself striped`));
+  if (left.path !== '/requests' || left.selected !== 0) say(`Escape left ${left.path} with ${left.selected} selected rows, not the bare log`);
+  await atRest();
+}
+
+/**
+ * The pool dialog's form tables (the TTL grid, the rules, the members and the keys) opt out of the stripes, so every row
+ * reads plain. The dialog shows one group at a time and keeps the rest in the page, so each table drawn for the first
+ * pool is read whatever its group. The rules table is drawn only for a pool with model overrides, so the read names the
+ * tables it found.
+ */
+async function poolFormTables(theme) {
+  const say = (what) => failures.push(`${theme} /pools dialog: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  try {
+    await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await settle();
+  } catch (error) {
+    say(`never opened for the form tables' read (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  const read = await dialog.evaluate((el) =>
+    ['ttl-grid', 'rules-table', 'members-table', 'keys-table'].flatMap((name) =>
+      [...el.querySelectorAll(`table.table.${name}`)].map((table) => ({
+        name,
+        plain: table.classList.contains('table--plain'),
+        rows: [...table.tBodies].flatMap((body) => [...body.rows]).map((tr, i) => [i + 1, tr.querySelector(':scope > td') ? getComputedStyle(tr.querySelector(':scope > td')).backgroundColor : null]),
+      })),
+    ),
+  );
+  measurements.push(`${theme} /pools dialog form tables ${JSON.stringify(read)}`);
+  if (read.length === 0) say('draws none of its form tables');
+  for (const t of read) {
+    if (!t.plain) say(`the ${t.name} table carries no table--plain`);
+    for (const [n, fill] of t.rows) if (fill !== CLEAR) say(`the ${t.name} table's row ${n} reads ${fill}, not plain`);
+  }
+  await closeByEscape(dialog, `${theme} /pools dialog after the form tables' read`, say);
+  await atRest();
+}
+
 /**
  * The cost reference from Sessions, walked tab by tab at 1280 by 800 and at 1440 by 900: no table runs past its wrap,
- * every second model sits on --surface-2 against --surface with its sub-rows on its shade, the older models' fold row
+ * every second model sits on --stripe against --surface with its sub-rows on its shade, the older models' fold row
  * sits on --surface-3 with the stripes running on through it, and the footer's Revision select draws on one line
  * inside the dialog. The mock pass writes each tab of the open dialog at 1280 by 800.
  */
@@ -5918,7 +6202,7 @@ async function costReference(theme) {
         probe.remove();
         return color;
       };
-      const tones = { surface: tone('--surface'), surface2: tone('--surface-2'), surface3: tone('--surface-3') };
+      const tones = { stripe: tone('--stripe'), surface: tone('--surface'), surface3: tone('--surface-3') };
       // The color a cell reads on: its own background, else the first ancestor's that paints one.
       const shade = (el) => {
         for (let at = el; at; at = at.parentElement) {
@@ -5940,7 +6224,7 @@ async function costReference(theme) {
             continue;
           }
           if (!row.classList.contains('cost-ref__sub')) n += 1;
-          const want = n % 2 === 1 ? tones.surface2 : tones.surface;
+          const want = n % 2 === 1 ? tones.stripe : tones.surface;
           if (n % 2 === 1) alts += 1;
           if (bg !== want) wrong.push(`${name} on ${bg}, not ${want}`);
         }
@@ -6713,6 +6997,8 @@ try {
         await quotaMeters(theme);
       }
       if (view.path === '/quota#quota-windows') await quotaLaneChips(theme);
+      // After the view's own measures, so the Routing log's first decision is open and its row reads over the stripes.
+      await tableStripes(theme, view.path);
       // A full-page capture paints the fixed header and sidebar at the window's scroll offset, over the content, and
       // the checks above can leave the page scrolled (`keyDialogGeometry`'s click on the revoked row's menu trigger
       // scrolls that row into view).

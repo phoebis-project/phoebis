@@ -534,8 +534,8 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
       unweighted !== undefined &&
       JSON.stringify(read) === JSON.stringify(want) &&
       /^started 1[34]m ago$/.test(ages[0] ?? '') &&
-      ages[6] === 'started 18d 0h ago' &&
-      /^started 1h [01]m ago$/.test(ages[7] ?? '') &&
+      ages[6] === 'started 18d ago' &&
+      /^started 1h( 1m)? ago$/.test(ages[7] ?? '') &&
       /^started 4[23]m ago$/.test(ages[8] ?? '') &&
       ages.every((a) => /^started (\d+[dhm] ?)+ ago$/.test(a ?? '')) &&
       line()?.nextElementSibling?.classList.contains('stat-grid') === true,
@@ -999,7 +999,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   const wanted = {
     chip: ['5h', true, '5-hour: expired, no reading since the reset'],
     meter: true,
-    reset: ['expired 2d 0h ago', true, true],
+    reset: ['expired 2d ago', true, true],
   };
   results.push({
     name: '/quota the expired cell reads ago with the reset on its title',
@@ -1466,7 +1466,7 @@ m.unmount();
   results.push({
     name: '/accounts a fast lane reading past its reset reads refilled, a lane past both says when it refilled, and one beside a reading with no reset says nothing of when',
     ok:
-      /^Fast modeinput 0% used, output 0% used, refilled 2h 0m ago$/.test(lanes.primary.text) &&
+      /^Fast modeinput 0% used, output 0% used, refilled 2h ago$/.test(lanes.primary.text) &&
       /^Fast modeinput 0% used, output 5% used, resets in [45]m$/.test(lanes.overflow.text) &&
       lanes.secondary.text === 'Fast modeinput 50% used, output 0% used',
     missing: [lanes.primary.text || 'no line on primary', lanes.overflow.text || 'no line on overflow', lanes.secondary.text || 'no line on secondary'],
@@ -3638,15 +3638,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const row = (label, tone, subject, href, detail, age, log) => [label, tone, subject, href ? 'A' : 'SPAN', href, detail, `${detail} (${age})${log ? `\n${log}` : ''}`];
   const exhaustedSince = at(1);
   const want = [
-    row('Pool exhausted', 'badge--critical', 'jobs', `/routing-log?${new URLSearchParams({ kinds: 'exhausted', pools: 'jobs', from: exhaustedSince, to: isoAt(now) })}`, 'no member could take a request from key ci', '1h 0m ago', `Opens the Routing log: pool jobs, exhausted, since ${exhaustedSince.slice(11, 16)}`),
-    row('Client drift', 'badge--serious', '2.1.271', '/keys#laptop', 'its billing hash differs from the pinned build, newest refusal from key laptop', '3h 0m ago'),
-    row('Client drift', 'badge--serious', '2.1.272', null, 'its version suffix differs from the pinned build', '2h 0m ago'),
-    row('State writer degraded', 'badge--serious', 'ledger', null, 'ledger batches are being retried, and budgeted members are held back until a batch lands', '1h 0m ago'),
-    row('Re-auth required', 'badge--critical', 'legacy', '/accounts/legacy', 'serves nothing until its credential is renewed', '5h 0m ago'),
-    row('Funding required', 'badge--serious', 'Research workspace', '/accounts/research', 'serves nothing until its organization is funded again', '4h 0m ago'),
-    row('Credential refresh failed', 'badge--critical', 'legacy', '/accounts/legacy', '3 refreshes failed in a row: invalid_grant', '6h 0m ago'),
-    row('Priced record parked', 'badge--serious', 'jobs', null, "2 priced records parked, landing at the next start or on the dashboard's Replay (research, secondary)", '8h 0m ago'),
-    row('Usage poll backing off', 'badge--warning', 'secondary', '/accounts/secondary', '6 rate-limited answers in a row', '2h 0m ago'),
+    row('Pool exhausted', 'badge--critical', 'jobs', `/routing-log?${new URLSearchParams({ kinds: 'exhausted', pools: 'jobs', from: exhaustedSince, to: isoAt(now) })}`, 'no member could take a request from key ci', '1h ago', `Opens the Routing log: pool jobs, exhausted, since ${exhaustedSince.slice(11, 16)}`),
+    row('Client drift', 'badge--serious', '2.1.271', '/keys#laptop', 'its billing hash differs from the pinned build, newest refusal from key laptop', '3h ago'),
+    row('Client drift', 'badge--serious', '2.1.272', null, 'its version suffix differs from the pinned build', '2h ago'),
+    row('State writer degraded', 'badge--serious', 'ledger', null, 'ledger batches are being retried, and budgeted members are held back until a batch lands', '1h ago'),
+    row('Re-auth required', 'badge--critical', 'legacy', '/accounts/legacy', 'serves nothing until its credential is renewed', '5h ago'),
+    row('Funding required', 'badge--serious', 'Research workspace', '/accounts/research', 'serves nothing until its organization is funded again', '4h ago'),
+    row('Credential refresh failed', 'badge--critical', 'legacy', '/accounts/legacy', '3 refreshes failed in a row: invalid_grant', '6h ago'),
+    row('Priced record parked', 'badge--serious', 'jobs', null, "2 priced records parked, landing at the next start or on the dashboard's Replay (research, secondary)", '8h ago'),
+    row('Usage poll backing off', 'badge--warning', 'secondary', '/accounts/secondary', '6 rate-limited answers in a row', '2h ago'),
   ];
   results.push({
     name: "the attention rows keep the route's order, link a subject through the item's link and the pool's exhaustion to the routing log, name the pool's other own row, a keyless drift and a router component alone, and read each detail as one sentence titled with its age",
@@ -3835,7 +3835,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await setIdle('3600');
     results.push({
       name: '/pools an idle window past the break-even, or 0, reads the break-even it runs to beside the saved window\'s share',
-      ok: past === 'Costs 2% of one re-write at the saved 1h 0m · capped at the break-even, 1d 20h' && zero === past && linesOf(dlg)[0] === 'Costs 2% of one re-write',
+      ok: past === 'Costs 2% of one re-write at the saved 1h · capped at the break-even, 1d 20h' && zero === past && linesOf(dlg)[0] === 'Costs 2% of one re-write',
       missing: [String(past), String(zero), String(linesOf(dlg)[0])],
     });
     // The router caps the parked and the scheduled ceilings at the same break-even, so one switched on past it reads
@@ -3871,7 +3871,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await m.settle(120);
     results.push({
       name: '/pools a pool whose combinations differ reads both ends on its card and in its dialog',
-      ok: allLine === 'idle 46m to 1h · parked 46m to 44h · horizon 46m to 44h' && JSON.stringify(linesOf(dlg)) === JSON.stringify(['Costs 2% to 92% of one re-write · capped at the break-even, 46m to 1h 0m', 'Break-even: 46m to 1d 20h', 'Break-even: 46m to 1d 20h']),
+      ok: allLine === 'idle 46m to 1h · parked 46m to 44h · horizon 46m to 44h' && JSON.stringify(linesOf(dlg)) === JSON.stringify(['Costs 2% to 92% of one re-write · capped at the break-even, 46m to 1h', 'Break-even: 46m to 1d 20h', 'Break-even: 46m to 1d 20h']),
       missing: [String(allLine), ...linesOf(dlg).map(String)],
     });
     await cancel(dlg);
@@ -17540,7 +17540,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       state: line?.querySelector('.agents__state > .badge:first-child')?.textContent?.trim() ?? null,
     });
     const background = read(lineOf(/^parked · background · deadline in \d+h \d+m$/));
-    const scheduled = read(lineOf(/^parked · scheduled · wakes in \d+d \d+h$/));
+    const scheduled = read(lineOf(/^parked · scheduled · wakes in \d+d( \d+h)?$/));
     pinned.unmount();
     const PARKED = 'Stopped while a background command, a subagent or a scheduled wakeup is open. Probed under the parked and horizon rules and the idle window.';
     results.push({

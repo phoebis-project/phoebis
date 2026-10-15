@@ -100,8 +100,8 @@ export function fmtDuration(ms: number): string {
   const d = Math.floor(h / 24);
   if (abs < 60_000) return `${Math.max(1, Math.round(abs / 1000))}s`;
   if (h < 1) return `${m}m`;
-  if (d < 1) return `${h}h ${m % 60}m`;
-  return `${d}d ${h % 24}h`;
+  if (d < 1) return m % 60 === 0 ? `${h}h` : `${h}h ${m % 60}m`;
+  return h % 24 === 0 ? `${d}d` : `${d}d ${h % 24}h`;
 }
 
 /**

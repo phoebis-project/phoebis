@@ -99,9 +99,10 @@ test("an earlier holder reads its creation minute in the viewer's zone, and one 
 test('a ceiling reads floored: the dialog in days, hours and minutes, the card in whole hours or minutes', () => {
   assert.deepEqual(
     [158_760_000, 255_960_000, 11_760_000, 2_760_000, 3_600_000].map(fmtDuration),
-    ['1d 20h', '2d 23h', '3h 16m', '46m', '1h 0m'],
+    ['1d 20h', '2d 23h', '3h 16m', '46m', '1h'],
     'the break-evens at the production leads, each unit floored',
   );
+  assert.equal(fmtDuration(259_200_000), '3d', 'a whole number of days reads without its zero hours');
   assert.equal(fmtHours(158_760_000), '44h', '44.1 hours never rounds up to 45');
   assert.equal(fmtHours(255_960_000), '71h');
   assert.equal(fmtHours(3_600_000), '1h', 'one hour reads in hours');

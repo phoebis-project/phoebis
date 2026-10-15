@@ -126,10 +126,10 @@ test('the preview names the member closest to the ceiling when none projects ove
   const near = oauth('near', 0.85, 0.3);
   assert.equal(line([near, cool], []), `No member projects over the ceiling on any window: the closest is near, 5h 85 % at ${d.instant(NOW + 2 * HOUR, NOW)}.`, 'a 5-hour horizon reads its clock time');
   const weekly = oauth('weekly', 0.4, 0.884);
-  assert.equal(line([cool, weekly], []), 'No member projects over the ceiling on any window: the closest is weekly, 7d 88 % in 5h 0m.', 'a weekly horizon reads the span to it');
+  assert.equal(line([cool, weekly], []), 'No member projects over the ceiling on any window: the closest is weekly, 7d 88 % in 5h.', 'a weekly horizon reads the span to it');
   const fable = oauth('fable', 0.4, 0.5, 0.87);
-  assert.equal(line([fable], [pin('fable', 'f', 0.01, false, { model: 'claude-fable-5-1' })]), 'No member projects over the ceiling on any window: the closest is fable, Fable week 87 % in 5h 0m.', "the Fable week reads where a pin's model draws it");
-  assert.equal(line([fable], [pin('fable', 's', 0.01, false)]), 'No member projects over the ceiling on any window: the closest is fable, 7d 50 % in 5h 0m.', 'and only there');
+  assert.equal(line([fable], [pin('fable', 'f', 0.01, false, { model: 'claude-fable-5-1' })]), 'No member projects over the ceiling on any window: the closest is fable, Fable week 87 % in 5h.', "the Fable week reads where a pin's model draws it");
+  assert.equal(line([fable], [pin('fable', 's', 0.01, false)]), 'No member projects over the ceiling on any window: the closest is fable, 7d 50 % in 5h.', 'and only there');
   assert.equal(line([{ id: 'key', kind: 'api_key', label: 'key', windows: [], fableWindow: null }], []), 'No member projects over the ceiling on any window.', 'a pool of API-key members alone has no window to read');
 });
 
