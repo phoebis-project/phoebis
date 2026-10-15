@@ -3468,6 +3468,11 @@
   color: var(--warning-ink);
 }
 
+/* A chart legend's figure under zero, the Net saving's, in the tile's critical ink: a legend has no stat value. */
+.legend__value .is-negative {
+  color: var(--critical-ink);
+}
+
 /* The Sessions strip reads its counts beside their caps, "40 MiB of 256 MiB" the longest, which a sixth of the page at
    1280 px breaks after "of": the tiles take three to a row there, and each value stays on its line. */
 .stat-grid--caps {

@@ -13127,11 +13127,32 @@ expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share',
 await tab(m, 'Cost');
 expect('/analytics cost tab', m.text(), ['Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read']);
 await tab(m, 'Cache warming');
-expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Probe cost', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used. A high parked-limit or horizon share says the parked ceilings do.", 'Cache warming by pool']);
+expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Probe cost', 'Saved by probes', 'Net saving', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used. A high parked-limit or horizon share says the parked ceilings do.", 'Cache warming by pool']);
 {
   const titles = [...m.container.querySelectorAll('.card__title')].map((t) => t.textContent?.trim());
   const left = ['Gross saved', 'Net saved'].filter((w) => m.text().includes(w));
-  results.push({ name: '/analytics cache warming draws no savings figure: no saved tile or column and no Savings chart', ok: left.length === 0 && !titles.includes('Savings'), missing: [...left, titles.includes('Savings') ? 'Savings chart' : ''].filter(Boolean) });
+  results.push({ name: '/analytics cache warming names its saving Saved by probes and Net saving, under no Gross saved or Net saved figure and no Savings chart', ok: left.length === 0 && !titles.includes('Savings') && titles.includes('Saved by probes'), missing: [...left, titles.includes('Savings') ? 'Savings chart' : '', titles.includes('Saved by probes') ? '' : 'no Saved by probes chart'].filter(Boolean) });
+}
+{
+  // The four tiles in order, Kept warm's note summing the two counts per TTL, the chart's legend the range's gross,
+  // cost and net, and the by-pool table's Saved column after Probe cost, each read by its own element.
+  const tiles = [...m.container.querySelectorAll('#cache-warming > .tiles-row > .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim() ?? '', t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
+  const chart = [...m.container.querySelectorAll('#cache-warming .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Saved by probes');
+  const legend = [...(chart?.querySelectorAll('.legend li') ?? [])].map((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''));
+  const warming = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Cache warming by pool'));
+  const columns = [...(warming?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+  const cards = [...m.container.querySelectorAll('#cache-warming .grid-2 > .card')].map((c) => c.querySelector('.card__title')?.textContent?.trim() ?? '');
+  results.push({
+    name: '/analytics cache warming draws Probe cost, Saved by probes, Net saving and Kept warm with the two counts in its note, a Saved by probes chart before the kept-warm charts and a Saved column after Probe cost',
+    ok:
+      JSON.stringify(tiles.map(([label]) => label)) === JSON.stringify(['Probe cost', 'Saved by probes', 'Net saving', 'Kept warm']) &&
+      /^[\d,]+ tokens read warm, [\d,]+ at five minutes and [\d,]+ at an hour$/.test(tiles[3]?.[1] ?? '') &&
+      chart?.querySelector('.card__subtitle')?.textContent?.trim() === "Per bucket, the gross saving against the probes' cost" &&
+      JSON.stringify(legend) === JSON.stringify(['Saved by probes', 'Probe cost', 'Net saving']) &&
+      cards.indexOf('Saved by probes') >= 0 && cards.indexOf('Saved by probes') === cards.indexOf('Kept-warm requests') - 1 &&
+      columns.indexOf('Saved') === columns.indexOf('Probe cost') + 1 && columns.at(-1) === 'Saved',
+    missing: [JSON.stringify(tiles), JSON.stringify(legend), cards.join(','), columns.join(',')],
+  });
 }
 await tab(m, 'Accounts');
 expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak 7d, extra usage', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']);
@@ -13412,9 +13433,20 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       ending: cardIn('Wasted probes')?.querySelector('.card__subtitle')?.textContent?.trim().endsWith("says the parked ceilings do. In the one account's window shares.") ?? false,
       tiles: [...(cardIn('Wasted probes')?.querySelectorAll('.stat') ?? [])].slice(1).map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']),
     });
+    // A tile's value, its note and whether the value carries the critical ink.
+    const tileRead = (label) => {
+      const t = [...shares.container.querySelectorAll('#cache-warming > .tiles-row > .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === label);
+      return [t?.querySelector('.stat__value')?.textContent?.trim(), t?.querySelector('.stat__note')?.textContent?.trim(), t?.querySelector('.stat__value')?.classList.contains('is-critical') ?? false];
+    };
     const probeNoted = probeTile();
     const wastedNoted = wastedRead();
+    const savingNoted = [tileRead('Saved by probes'), tileRead('Net saving')];
     const poolNoted = costCells('Cache warming by pool', 6);
+    results.push({
+      name: "/analytics under Window shares grouped by account with no account named the Saved by probes and Net saving tiles dash under the note that names the Accounts filter",
+      ok: JSON.stringify(savingNoted) === JSON.stringify([['-', ONE_ACCOUNT_SHARE_NOTE, false], ['-', ONE_ACCOUNT_SHARE_NOTE, false]]),
+      missing: [JSON.stringify(savingNoted)],
+    });
     results.push({
       name: "/analytics under Window shares grouped by account with no account named the cache cost card, Cache by model, the Probe cost tile and the Wasted cost tile dash under the note that names the Accounts filter alone, and the by-pool table dashes, the blurb ending in the one account's window shares",
       ok:
@@ -13422,7 +13454,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         modelNoted.cells.length > 0 && modelNoted.cells.every(([, cells]) => JSON.stringify(cells) === '["-","-"]') && modelNoted.subtitle === ONE_ACCOUNT_SHARE_NOTE &&
         JSON.stringify(probeNoted) === JSON.stringify(['-', ONE_ACCOUNT_SHARE_NOTE]) &&
         wastedNoted.ending && JSON.stringify(wastedNoted.tiles) === JSON.stringify([['Wasted cost', '-', ONE_ACCOUNT_SHARE_NOTE], ['Share of probe cost', '-', '']]) &&
-        poolNoted.length > 0 && poolNoted.every(([, cells]) => JSON.stringify(cells) === '["-"]'),
+        poolNoted.length > 0 && poolNoted.every(([, cells]) => JSON.stringify(cells) === '["-","-"]'),
       missing: [`unit on Cache ${cacheUnit}`, `unit on Cache warming ${warmingUnit}`, `cache note ${cacheNote}`, `model ${JSON.stringify(modelNoted)}`, `probe tile ${JSON.stringify(probeNoted)}`, `wasted ${JSON.stringify(wastedNoted)}`, `pools ${JSON.stringify(poolNoted)}`],
     });
     // One account named, nightly, whose plan rows price every window: the cache card's legend reads its two 7-day
@@ -13434,6 +13466,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await shares.settle(200);
     const probeNamed = probeTile();
     const wastedNamed = wastedRead();
+    const savingNamed = [tileRead('Saved by probes'), tileRead('Net saving')];
     const poolNamed = costCells('Cache warming by pool', 6);
     await tab(shares, 'Cache');
     const namedCard = cardIn('Write cost vs read cost');
@@ -13462,7 +13495,33 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       ['Wasted cost', shareOrDashOf(nightlyProbes, (x) => x.wasted), wastedOthers.join(', ')],
       ['Share of probe cost', fmtPct(nightlyProbes.seven_day.wasted / nightlyProbes.seven_day.cost, 1), `of ${shareLabel('seven_day', nightlyProbes.seven_day.cost)} on probes`],
     ];
-    const poolWant = (await namedAnswer((q) => q.groupBy === 'pool')).map((g) => [g.label, [markedShare(g, g.probeShares, (x) => x.cost)]]);
+    const poolWant = (await namedAnswer((q) => q.groupBy === 'pool')).map((g) => [g.label, [markedShare(g, g.probeShares, (x) => x.cost), markedShare(g, g.savingShares, (x) => x)]]);
+    {
+      // The account's saving reads its 7-day saving share with the other windows and its credited requests in the
+      // note, and the net each window's saving less its probe share: a window with no credit or no probe behind it
+      // counts zero, and so does a model week its rows ran off, while a shared window the route priced none on reads a
+      // dash.
+      const nightly = (await namedAnswer((q) => q.groupBy === 'account' && q.includeProbes === true)).find((g) => g.key === 'nightly') ?? null;
+      const kept = nightly?.keptWarm ? nightly.keptWarm.tokens1h + nightly.keptWarm.tokens5m : 0;
+      const probed = nightly ? nightly.probes.ok + nightly.probes.held + nightly.probes.skipped + nightly.probes.failed : 0;
+      const shared = (k) => k === 'five_hour' || k === 'seven_day';
+      const savingAt = (k) => (kept <= 0 ? 0 : nightly?.savingShares && Object.hasOwn(nightly.savingShares, k) ? nightly.savingShares[k] : shared(k) ? null : 0);
+      const probeAt = (k) => (probed <= 0 ? 0 : nightly?.probeShares && Object.hasOwn(nightly.probeShares, k) ? nightly.probeShares[k].cost : shared(k) ? null : 0);
+      const netAt = (k) => (savingAt(k) === null || probeAt(k) === null ? null : savingAt(k) - probeAt(k));
+      const weekKey = probeWeekOf(nightly?.savingShares) ?? probeWeekOf(nightly?.probeShares);
+      const credits = `${fmtInt(nightly?.keptWarm?.requests ?? 0)} requests kept warm`;
+      const savingOthers = ['five_hour', probeWeekOf(nightly?.savingShares)].flatMap((k) => (k === undefined || !nightly?.savingShares || !Object.hasOwn(nightly.savingShares, k) ? [] : [shareLabel(k, nightly.savingShares[k])]));
+      const netOthers = ['five_hour', weekKey].flatMap((k) => (k === undefined || netAt(k) === null ? [] : [shareLabel(k, netAt(k))]));
+      const want = nightly === null ? null : [
+        [shareOrDashOf(nightly.savingShares, (x) => x), [...savingOthers, credits].join(', '), false],
+        [netAt('seven_day') === null ? '-' : shareLabel('seven_day', netAt('seven_day')), [...netOthers, 'less the probe cost'].join(', '), netAt('seven_day') !== null && netAt('seven_day') < 0],
+      ];
+      results.push({
+        name: "/analytics under Window shares with one account named the Saved by probes tile reads the account's 7-day saving share over the other windows and the credited requests, and Net saving each window's saving less its probe share",
+        ok: want !== null && kept > 0 && JSON.stringify(savingNamed) === JSON.stringify(want),
+        missing: [JSON.stringify(savingNamed), `want ${JSON.stringify(want)}`],
+      });
+    }
     results.push({
       name: "/analytics under Window shares with one account named Cache by model reads each model's 7-day read and write shares as the route answers them under the account and the model grouping, and the Wasted probes card and the by-pool table the account's probe shares",
       ok:
@@ -13487,6 +13546,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const models = cellsOf('Cache by model');
       await tab(estimatedPage, 'Cache warming');
       const pools = cellsOf('Cache warming by pool');
+      // The cells skip the label column, so a column's cell sits one before its head.
+      const probeColumn = [...([...estimatedPage.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cache warming by pool')?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '').indexOf('Probe cost') - 1;
       estimatedPage.unmount();
       asked.restore();
       localStorage.removeItem('phoebis.unit');
@@ -13504,8 +13565,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         ok:
           model !== undefined && modelRow !== undefined && modelRow.title === `${model.label}. ${ESTIMATED_TITLE}.` &&
           marked(modelRow.cells.at(-2), shareLabel('seven_day', model.cacheShares.seven_day.read)) && marked(modelRow.cells.at(-1), shareLabel('seven_day', model.cacheShares.seven_day.write)) &&
-          pool !== undefined && marked(poolRow?.cells.at(-1), shareLabel('seven_day', pool.probeShares.seven_day.cost)),
-        missing: [`model ${model?.label}: ${JSON.stringify(modelRow)}`, `pool ${pool?.label}: ${JSON.stringify(poolRow)}`],
+          pool !== undefined && probeColumn >= 0 && marked(poolRow?.cells[probeColumn], shareLabel('seven_day', pool.probeShares.seven_day.cost)),
+        missing: [`model ${model?.label}: ${JSON.stringify(modelRow)}`, `pool ${pool?.label}: ${JSON.stringify(poolRow)} at ${probeColumn}`],
       });
     }
     await tab(shares, 'Cost');
@@ -14049,6 +14110,52 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
           JSON.stringify(probeTile.lines) === JSON.stringify(pairOf(probe.cost, billed.probeCostUsd)) && probeTile.note === `${fmtInt(probeCount(whole))} probes, ${NATIVE_7D_SUBSET}` && probeTile.title === (whole.estimated ? ESTIMATED_TITLE : null),
         missing: [JSON.stringify(probeTile), JSON.stringify({ billed: billed.probeCostUsd, probe, probes: [probeCount(whole), probeCount(billed)] })],
       });
+      // The saving's sides are told apart by their kept-warm credits, the plan side the whole read's less the billed
+      // read's: the gross a side with a credit, the net a side with a credit or a probe, each side's saving less its
+      // probe cost. A side with nothing behind it counts zero, and one the route priced nothing on reads a dash.
+      const keptIn = (g) => (g?.keptWarm ? g.keptWarm.tokens1h + g.keptWarm.tokens5m : 0);
+      const savingSides = (wholeGroup, billedGroup, net) => {
+        const billedCredits = keptIn(billedGroup);
+        const planCredits = keptIn(wholeGroup) - billedCredits;
+        const billedProbes = billedGroup ? probeCount(billedGroup) : 0;
+        const planProbes = probeCount(wholeGroup) - billedProbes;
+        const planSaving = planCredits <= 0 ? 0 : (wholeGroup.savingEquivalent.seven_day ?? null);
+        const planCost = planProbes <= 0 ? 0 : (wholeGroup.probeEquivalent.seven_day?.cost ?? null);
+        const plan = planCredits > 0 || (net && planProbes > 0);
+        const paid = billedCredits > 0 || (net && billedProbes > 0);
+        const equivalent = !net ? planSaving : planSaving === null || planCost === null ? null : planSaving - planCost;
+        const dollars = (billedGroup?.savingUsd ?? 0) - (net ? (billedGroup?.probeCostUsd ?? 0) : 0);
+        if (!plan && !paid) return { billed: dollars, equivalent: equivalent ?? 0, estimated: false };
+        return { billed: paid ? dollars : undefined, equivalent: plan ? equivalent : undefined, estimated: wholeGroup.estimated && plan && equivalent !== null };
+      };
+      const linesOf = (s) => [...(s.equivalent === undefined ? [] : [[s.equivalent === null ? '-' : `${mark(s.estimated)}${fmtEquivalent('seven_day', s.equivalent)}`, 'subscription']]), ...(s.billed === undefined ? [] : [[fmtUsd(s.billed), 'billed']])];
+      {
+        const tiles = native.container.querySelector('#cache-warming > .tiles-row');
+        const gross = savingSides(whole, billed, false);
+        const net = savingSides(whole, billed, true);
+        const savedTile = tileOf(tiles, 'Saved by probes');
+        const netTile = tileOf(tiles, 'Net saving');
+        const netCritical = [...(tiles?.querySelectorAll('.stat') ?? [])].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Net saving')?.querySelector('.stat__value')?.classList.contains('is-critical') ?? null;
+        results.push({
+          name: "/analytics under native the Saved by probes tile stacks the plan credits' 20x 7-day saving over the billed credits' dollars, and Net saving each side less its probes, critical while the plan side is under zero",
+          ok:
+            keptIn(billed) > 0 && keptIn(whole) > keptIn(billed) &&
+            JSON.stringify(savedTile.lines) === JSON.stringify(linesOf(gross)) && savedTile.lines.length === 2 && savedTile.note === `${fmtInt(whole.keptWarm.requests)} requests kept warm, ${NATIVE_7D_SUBSET}` && savedTile.title === (gross.estimated ? ESTIMATED_TITLE : null) &&
+            JSON.stringify(netTile.lines) === JSON.stringify(linesOf(net)) && netTile.note === `less the probe cost, ${NATIVE_7D_SUBSET}` && netTile.title === (net.estimated ? ESTIMATED_TITLE : null) &&
+            netCritical === (typeof net.equivalent === 'number' && net.equivalent < 0),
+          missing: [JSON.stringify(savedTile), JSON.stringify(netTile), `critical ${netCritical}`, JSON.stringify({ gross, kept: [keptIn(whole), keptIn(billed)], net })],
+        });
+        // The chart sums the series' groups of every bucket, where a group's probes can all be billed beside its plan
+        // rows, and its legend still reads the range's plan side as the tiles read it off the breakdown.
+        const legend = legendOf('Saved by probes').map(({ label, value }) => [label, value]);
+        const subscription = (tile) => tile.lines.find(([, word]) => word === 'subscription')?.[0] ?? null;
+        const want = [['Saved by probes', subscription(savedTile)], ['Probe cost', subscription(probeTile)], ['Net saving', subscription(netTile)]];
+        results.push({
+          name: "/analytics under native the Saved by probes chart's legend reads the range's plan side in the 20x 7-day equivalent, the tiles' subscription figures",
+          ok: want.every(([, figure]) => figure !== null && figure !== '-') && JSON.stringify(legend) === JSON.stringify(want),
+          missing: [JSON.stringify(legend), `want ${JSON.stringify(want)}`],
+        });
+      }
       const wastedCard = cardOf('Wasted probes');
       const wasted = { count: tileOf(wastedCard, 'Wasted probes'), cost: tileOf(wastedCard, 'Wasted cost'), share: tileOf(wastedCard, 'Share of probe cost'), subtitle: wastedCard?.querySelector('.card__subtitle')?.textContent?.trim() ?? '' };
       results.push({
@@ -14079,16 +14186,28 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         ];
         return { main: shown[0].short, sub: shown[1]?.full ?? '', title: titleOf(shown.flatMap((s) => (s.full === null ? [] : [s.full])).join(', '), marked) };
       };
+      const savedCellOf = (g) => {
+        const s = savingSides(g, (billedPools ?? []).find((x) => x.key === g.key), false);
+        const shown = [
+          ...(s.equivalent === undefined ? [] : [s.equivalent === null ? { full: null, short: '-' } : { full: fmtEquivalent('seven_day', s.equivalent), short: `${mark(s.estimated)}${equivalentShort('seven_day', s.equivalent)}` }]),
+          ...(s.billed === undefined ? [] : [{ full: `${fmtUsd(s.billed)} billed`, short: fmtUsd(s.billed) }]),
+        ];
+        return { main: shown[0].short, sub: shown[1]?.full ?? '', title: titleOf(shown.flatMap((x) => (x.full === null ? [] : [x.full])).join(', '), s.estimated) };
+      };
       const poolRows = rowsOf('Cache warming by pool');
+      // The cells skip the label column, so a column's cell sits one before its head.
+      const poolHeads = [...(cardOf('Cache warming by pool')?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+      const [probeAt, savedAt] = [poolHeads.indexOf('Probe cost') - 1, poolHeads.indexOf('Saved') - 1];
       const poolWrong = poolRows.flatMap((r) => {
         const g = pools.find((x) => x.label === r.label);
-        const want = g === undefined ? null : poolCellOf(g);
-        return JSON.stringify(r.cells.at(-1)) === JSON.stringify(want) ? [] : [`${r.label}: ${JSON.stringify(r.cells.at(-1))} against ${JSON.stringify(want)}`];
+        const want = g === undefined ? null : [poolCellOf(g), savedCellOf(g)];
+        const got = [r.cells[probeAt], r.cells[savedAt]];
+        return JSON.stringify(got) === JSON.stringify(want) ? [] : [`${r.label}: ${JSON.stringify(got)} against ${JSON.stringify(want)}`];
       });
       results.push({
-        name: "/analytics under native the by-pool table's Probe cost cell reads the pool's plan probes in the short 20x 7-day form with its billed probes' dollars on a line under it",
-        ok: billedPools !== null && poolRows.length > 0 && poolWrong.length === 0 && poolRows.some((r) => /^~?\d[\d.]*% 20x 7d$/.test(r.cells.at(-1)?.main ?? '') && (r.cells.at(-1)?.sub ?? '').endsWith(' billed')),
-        missing: [`${poolRows.length} rows`, ...poolWrong.slice(0, 4)],
+        name: "/analytics under native the by-pool table's Probe cost and Saved cells read the pool's plan side in the short 20x 7-day form with its billed side's dollars on a line under it",
+        ok: billedPools !== null && probeAt >= 0 && savedAt === probeAt + 1 && poolRows.length > 0 && poolWrong.length === 0 && poolRows.some((r) => /^~?\d[\d.]*% 20x 7d$/.test(r.cells[probeAt]?.main ?? '') && (r.cells[probeAt]?.sub ?? '').endsWith(' billed')) && poolRows.some((r) => /^~?\d[\d.]*% 20x 7d$/.test(r.cells[savedAt]?.main ?? '')),
+        missing: [`${poolRows.length} rows, heads ${poolHeads.join(',')}`, ...poolWrong.slice(0, 4)],
       });
       asked.restore();
       native.unmount();
@@ -14163,12 +14282,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const tableOf = (t) => [...page.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
       const rowsOf = (t) => Object.fromEntries([...(tableOf(t)?.querySelectorAll('tbody tr') ?? [])].map((tr) => [tr.children[0]?.textContent?.trim() ?? '', [...tr.querySelectorAll('td.num')].map((td) => td.textContent?.trim() ?? '')]));
       const wastedCost = () => [...page.container.querySelectorAll('.card .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Wasted cost')?.querySelector('.stat__value')?.textContent?.trim() ?? '';
+      const tileValue = (label) => [...page.container.querySelectorAll('#cache-warming > .tiles-row > .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === label)?.querySelector('.stat__value')?.textContent?.trim() ?? '';
+      // The cells skip the label column, so a column's cell sits one before its head.
+      const columnOf = (t, head) => [...(tableOf(t)?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '').indexOf(head) - 1;
       const under = {};
       for (const unit of ['all', 'usd', 'equivalent']) {
         await chooseUnit(page, unit);
         const models = rowsOf('Cache by model');
         await tab(page, 'Cache warming');
-        under[unit] = { models, pools: rowsOf('Cache warming by pool'), wasted: wastedCost() };
+        under[unit] = { models, net: tileValue('Net saving'), pools: rowsOf('Cache warming by pool'), probeAt: columnOf('Cache warming by pool', 'Probe cost'), saved: tileValue('Saved by probes'), savedAt: columnOf('Cache warming by pool', 'Saved'), wasted: wastedCost() };
         await tab(page, 'Cache');
       }
       asked.restore();
@@ -14187,14 +14309,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const adds = (all, usd, equivalent) => Math.abs(usdOf(usd) + usdOf(equivalent) - usdOf(all)) < 0.015;
       const sums = [
         ...Object.entries(under.all.models).flatMap(([model, cells]) => [5, 6].map((i) => [`${model} ${i}`, cells[i], under.usd.models[model]?.[i], under.equivalent.models[model]?.[i]])),
-        ...Object.entries(under.all.pools).map(([pool, cells]) => [pool, cells.at(-1), under.usd.pools[pool]?.at(-1), under.equivalent.pools[pool]?.at(-1)]),
+        ...['probeAt', 'savedAt'].flatMap((column) => Object.entries(under.all.pools).map(([pool, cells]) => [`${pool} ${column}`, cells[under.all[column]], under.usd.pools[pool]?.[under.usd[column]], under.equivalent.pools[pool]?.[under.equivalent[column]]])),
         ['wasted', under.all.wasted, under.usd.wasted, under.equivalent.wasted],
+        ['saved', under.all.saved, under.usd.saved, under.equivalent.saved],
+        ['net', under.all.net, under.usd.net, under.equivalent.net],
       ];
       const tokensKept = ['usd', 'equivalent'].every((unit) => Object.entries(under.all.models).every(([model, cells]) => JSON.stringify(under[unit].models[model]?.slice(0, 5)) === JSON.stringify(cells.slice(0, 5))));
       const wrong = [...sideWrong('usd', billedModels), ...sideWrong('equivalent', planModels)];
+      const columns = ['all', 'usd', 'equivalent'].every((unit) => under[unit].probeAt >= 0 && under[unit].savedAt === under[unit].probeAt + 1);
       results.push({
-        name: "/analytics under Billed dollars and Dollar equivalent Cache by model's cost cells, the Wasted cost tile and the by-pool Probe cost cells read their side's dollars while the token columns keep every row, and the two sides add up to All in dollars within a cent",
-        ok: Object.keys(under.all.models).length > 0 && Object.keys(under.all.pools).length > 0 && wrong.length === 0 && tokensKept && sums.every(([, all, usd, equivalent]) => adds(all, usd, equivalent)) && usdOf(under.usd.wasted) > 0 && usdOf(under.equivalent.wasted) > 0,
+        name: "/analytics under Billed dollars and Dollar equivalent Cache by model's cost cells, the Wasted cost, Saved by probes and Net saving tiles and the by-pool Probe cost and Saved cells read their side's dollars while the token columns keep every row, and the two sides add up to All in dollars within a cent",
+        ok: Object.keys(under.all.models).length > 0 && Object.keys(under.all.pools).length > 0 && columns && wrong.length === 0 && tokensKept && sums.every(([, all, usd, equivalent]) => adds(all, usd, equivalent)) && usdOf(under.usd.wasted) > 0 && usdOf(under.equivalent.wasted) > 0 && usdOf(under.all.saved) > 0,
         missing: [...wrong.slice(0, 4), `tokens kept ${tokensKept}`, ...sums.filter(([, all, usd, equivalent]) => !adds(all, usd, equivalent)).map((s) => s.join(' ')).slice(0, 4)],
       });
     }
@@ -14377,25 +14502,30 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const query = { from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() };
       const template = (await api.getAnalyticsBreakdown(query)).find((g) => g.key === 'primary');
       const probesOf = (ok) => ({ failed: 0, held: 0, migrated: 0, ok, skipped: 0 });
+      // The plan paid for the requests the probes kept warm, so their saving lives on the plan side alone.
+      const zero = { requests: 0, tokens1h: 0, tokens5m: 0 };
       api.getAnalyticsBreakdown = async (q) => {
         const real = q.funding !== 'billed';
         const probed = q.funding !== 'plan';
-        const mixed = real || q.includeProbes ? [{ ...template, probeCostUsd: probed ? 0.5 : 0, probes: probesOf(probed ? 5 : 0), requests: (real ? 10 : 0) + (probed && q.includeProbes ? 5 : 0) }] : [];
-        const probeOnly = probed && q.includeProbes ? [{ ...template, key: 'warmer', label: 'warmer', probeCostUsd: 0.3, probes: probesOf(3), requests: 3 }] : [];
+        const mixed = real || q.includeProbes ? [{ ...template, keptWarm: real ? { requests: 2, tokens1h: 0, tokens5m: 1_000 } : zero, probeCostUsd: probed ? 0.5 : 0, probes: probesOf(probed ? 5 : 0), requests: (real ? 10 : 0) + (probed && q.includeProbes ? 5 : 0), savingUsd: real ? 0.2 : 0 }] : [];
+        const probeOnly = probed && q.includeProbes ? [{ ...template, key: 'warmer', keptWarm: zero, label: 'warmer', probeCostUsd: 0.3, probes: probesOf(3), requests: 3, savingUsd: 0 }] : [];
         return [...mixed, ...probeOnly];
       };
       const tileUnder = async (unit) => {
         localStorage.removeItem('phoebis.unit');
         const page = await mount(`/analytics${unit ? `?unit=${unit}` : ''}#cache-warming`);
         await page.settle(900);
-        const tile = [...page.container.querySelectorAll('#cache-warming .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
-        const read = [tile?.querySelector('.stat__value')?.textContent?.trim() ?? '', tile?.querySelector('.stat__note')?.textContent?.trim() ?? ''];
+        const tileOf = (label) => [...page.container.querySelectorAll('#cache-warming > .tiles-row > .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === label);
+        const readOf = (label) => [tileOf(label)?.querySelector('.stat__value')?.textContent?.trim() ?? '', tileOf(label)?.querySelector('.stat__note')?.textContent?.trim() ?? '', tileOf(label)?.querySelector('.stat__value')?.classList.contains('is-critical') ?? false];
+        const read = readOf('Probe cost').slice(0, 2);
+        const saving = [readOf('Saved by probes'), readOf('Net saving')];
         page.unmount();
-        return read;
+        return { read, saving };
       };
-      const whole = await tileUnder('all');
-      const billed = await tileUnder('usd');
-      const plan = await tileUnder('equivalent');
+      const underWhole = await tileUnder('all');
+      const underBilled = await tileUnder('usd');
+      const underPlan = await tileUnder('equivalent');
+      const [whole, billed, plan] = [underWhole.read, underBilled.read, underPlan.read];
       const usd = (read) => Number(/^\$([\d,.]+)/.exec(read[0])?.[1].replace(/,/g, '') ?? NaN);
       const count = (read) => Number(/^(\d[\d,]*) probes, /.exec(read[1])?.[1].replace(/,/g, '') ?? NaN);
       results.push({
@@ -14403,7 +14533,99 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         ok: template !== undefined && usd(whole) === 0.8 && count(whole) === 8 && usd(billed) === 0.8 && count(billed) === 8 && billed[1].endsWith(', billed') && usd(plan) === 0 && count(plan) === 0 && Math.abs(usd(billed) + usd(plan) - usd(whole)) < 0.005 && count(billed) + count(plan) === count(whole),
         missing: [`template ${template?.key}`, `whole ${JSON.stringify(whole)}`, `billed ${JSON.stringify(billed)}`, `plan ${JSON.stringify(plan)}`],
       });
+      // The tiles' figures are the stub's own: the plan side's credits saved $0.20, the probes cost $0.50 beside them
+      // and $0.30 on the probe-only group, all of them billed.
+      const savingWant = {
+        all: [['$0.20', '2 requests kept warm, all requests', false], ['-$0.60', 'less the probe cost, all requests', true]],
+        equivalent: [['$0.20', "2 requests kept warm, the subscription requests' equivalent", false], ['$0.20', "less the probe cost, the subscription requests' equivalent", false]],
+        usd: [['$0.00', '0 requests kept warm, billed', false], ['-$0.80', 'less the probe cost, billed', true]],
+      };
+      const savingGot = { all: underWhole.saving, equivalent: underPlan.saving, usd: underBilled.saving };
+      results.push({
+        name: '/analytics under All in dollars, Billed dollars and Dollar equivalent the Saved by probes tile reads the credited requests and their dollars, and Net saving that less the probes in the critical ink while under zero, the two positions adding up to the whole',
+        ok: template !== undefined && JSON.stringify(savingGot) === JSON.stringify(savingWant),
+        missing: [JSON.stringify(savingGot), `want ${JSON.stringify(savingWant)}`],
+      });
       delete api.getAnalyticsBreakdown;
+    }
+    {
+      // The Saved by probes chart reads a series of its own that counts probes under the position's funding, as the
+      // Probe cost tile reads its breakdown: the route answers a group left with probe rows alone only to a query that
+      // counts them, so the second bucket's probe-only group reaches the legend through that read alone. A dollar side
+      // narrows the rows as the breakdown stub above does, and the figures are the stub's own.
+      const now = Date.now();
+      const query = { from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() };
+      const template = (await api.getAnalyticsBreakdown(query)).find((g) => g.key === 'primary');
+      const hours = [3, 2].map((h) => new Date(Math.floor((now - h * 3_600_000) / 3_600_000) * 3_600_000).toISOString());
+      const probesOf = (ok) => ({ failed: 0, held: 0, migrated: 0, ok, skipped: 0 });
+      const zero = { requests: 0, tokens1h: 0, tokens5m: 0 };
+      const asked = [];
+      api.getAnalyticsSeries = async (q) => {
+        asked.push({ funding: q.funding ?? null, includeProbes: q.includeProbes === true });
+        const real = q.funding !== 'billed';
+        const probed = q.funding !== 'plan';
+        const first = real || q.includeProbes ? [{ ...template, keptWarm: real ? { requests: 2, tokens1h: 0, tokens5m: 1_000 } : zero, probeCostUsd: probed ? 0.5 : 0, probes: probesOf(probed ? 5 : 0), requests: (real ? 10 : 0) + (probed && q.includeProbes ? 5 : 0), savingUsd: real ? 0.2 : 0 }] : [];
+        const second = probed && q.includeProbes ? [{ ...template, key: 'warmer', keptWarm: zero, label: 'warmer', probeCostUsd: 0.3, probes: probesOf(3), requests: 3, savingUsd: 0 }] : [];
+        return [{ at: hours[0], groups: first }, { at: hours[1], groups: second }];
+      };
+      const legendUnder = async (unit) => {
+        localStorage.removeItem('phoebis.unit');
+        const from = asked.length;
+        const page = await mount(`/analytics?unit=${unit}#cache-warming`);
+        await page.settle(900);
+        const chart = [...page.container.querySelectorAll('#cache-warming .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Saved by probes');
+        const legend = [...(chart?.querySelectorAll('.legend li') ?? [])].map((li) => [[...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''), li.querySelector('.legend__value')?.textContent?.trim() ?? '', li.querySelector('.legend__value .is-negative') !== null]);
+        page.unmount();
+        return { legend, queries: asked.slice(from) };
+      };
+      const whole = await legendUnder('all');
+      const billed = await legendUnder('usd');
+      delete api.getAnalyticsSeries;
+      localStorage.removeItem('phoebis.unit');
+      const asks = (read, funding) => read.queries.some((q) => q.includeProbes && q.funding === funding);
+      results.push({
+        name: "/analytics the Saved by probes chart's legend counts the probe cost of a bucket that holds probes alone, read off a series that counts probes under the position's funding, and its net is the gross less that cost",
+        ok:
+          template !== undefined && asks(whole, null) && asks(billed, 'billed') &&
+          JSON.stringify(whole.legend) === JSON.stringify([['Saved by probes', '$0.20', false], ['Probe cost', '$0.80', false], ['Net saving', '-$0.60', true]]) &&
+          JSON.stringify(billed.legend) === JSON.stringify([['Saved by probes', '$0.00', false], ['Probe cost', '$0.80', false], ['Net saving', '-$0.80', true]]),
+        missing: [`template ${template?.key}`, `all ${JSON.stringify(whole)}`, `usd ${JSON.stringify(billed)}`],
+      });
+    }
+    {
+      // The story's work pool kept the notebook's cache warm with probes no request came back for, so its probes cost
+      // more than they saved: the by-pool table nets it under zero beside the pools that net a saving or nothing, and
+      // filtered to it the Net saving tile and the chart's net take the critical ink, where the all pool's take none.
+      const usdOf = (v) => Number(String(v ?? '').replace(/[$,]/g, ''));
+      localStorage.removeItem('phoebis.unit');
+      const page = await mount('/analytics?unit=all#cache-warming', { now: CLOCK_ORIGIN });
+      const table = [...page.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cache warming by pool');
+      const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+      const nets = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => {
+        const cells = [...tr.children].map((td) => td.textContent?.trim() ?? '');
+        return { net: Math.round((usdOf(cells[heads.indexOf('Saved')]) - usdOf(cells[heads.indexOf('Probe cost')])) * 10_000) / 10_000, pool: cells[0] };
+      });
+      page.unmount();
+      const toneOf = async (search) => {
+        localStorage.removeItem('phoebis.unit');
+        const filtered = await mount(`/analytics${search}#cache-warming`, { now: CLOCK_ORIGIN });
+        const tile = [...filtered.container.querySelectorAll('#cache-warming > .tiles-row > .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Net saving');
+        const chart = [...filtered.container.querySelectorAll('#cache-warming .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Saved by probes');
+        const read = { legend: chart === undefined ? null : chart.querySelector('.legend__value .is-negative') !== null, tile: tile?.querySelector('.stat__value')?.classList.contains('is-critical') ?? null, value: tile?.querySelector('.stat__value')?.textContent?.trim() ?? '' };
+        filtered.unmount();
+        return read;
+      };
+      const tones = { all: await toneOf('?unit=all&pools=all'), allNative: await toneOf('?pools=all'), work: await toneOf('?unit=all&pools=work'), workNative: await toneOf('?pools=work') };
+      localStorage.removeItem('phoebis.unit');
+      const under = nets.filter((n) => n.net < 0);
+      results.push({
+        name: "/analytics the story's by-pool nets carry one pool under zero, its probes costing more than they saved, and only that pool's Net saving tile and chart net take the critical ink",
+        ok:
+          nets.length > 1 && under.length === 1 && under[0].pool === 'work' && nets.some((n) => n.pool === 'all' && n.net > 0) &&
+          tones.work.tile === true && tones.work.legend === true && tones.workNative.tile === true && tones.workNative.legend === true &&
+          tones.all.tile === false && tones.all.legend === false && tones.allNative.tile === false && tones.allNative.legend === false,
+        missing: [heads.join(','), JSON.stringify(nets), JSON.stringify(tones)],
+      });
     }
     // The setting outlives a mount and the shared page keeps its last choice, so the shared page goes back to native
     // and the checks after this block read a fresh browser's position.
@@ -17834,13 +18056,16 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     // The request log carries one cost total and no probe or kept-warm facts, so a session view draws those
     // figures as unavailable rather than as zero.
     const tiles = [...m.container.querySelectorAll('#cache-warming > .tiles-row .stat__value')].map((v) => v.textContent?.trim());
+    const savingCard = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Saved by probes');
+    const savingLegend = [...(savingCard?.querySelectorAll('.legend__value') ?? [])].map((v) => v.textContent?.trim());
+    const savingBars = savingCard?.querySelectorAll('.recharts-bar-rectangle').length ?? 0;
     await tab(m, 'Cache');
     const costCard = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Write cost vs read cost');
     const costLegend = [...(costCard?.querySelectorAll('.legend__value') ?? [])].map((v) => v.textContent?.trim());
     results.push({
-      name: '/analytics a session view reads its warming tiles and cache costs as unavailable',
-      ok: tiles.length === 2 && tiles.every((v) => v === '-') && costLegend.length === 2 && costLegend.every((v) => v === '-'),
-      missing: [...tiles, ...costLegend],
+      name: '/analytics a session view reads its warming tiles, the Saved by probes legend and cache costs as unavailable',
+      ok: tiles.length === 4 && tiles.every((v) => v === '-') && savingLegend.length === 3 && savingLegend.every((v) => v === '-') && savingBars === 0 && costLegend.length === 2 && costLegend.every((v) => v === '-'),
+      missing: [...tiles, `saving ${JSON.stringify(savingLegend)} with ${savingBars} bars`, ...costLegend],
     });
   }
   {

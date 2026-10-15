@@ -648,6 +648,32 @@ test("the named account's saving latches on the groups that carry a credit, so a
   assert.deepEqual(d.oneAccountGroupOf(base, [credited, partial]).savingShares, { five_hour: 0.75 }, 'a credited group that priced no 7-day saving leaves the window out');
 });
 
+test('a group whose credits are all billed adds no saving window and drops none, in a sum of groups and in the named account\'s whole', () => {
+  const base = accountGroup();
+  const windows = { five_hour: 0.25, seven_day: 0.125 };
+  const credited = accountGroup({ keptWarm: { requests: 2, tokens1h: 700, tokens5m: 300 }, savingEquivalent: windows, savingShares: windows });
+  // An overage's or an API key's credits price in dollars alone, beside plan rows the route priced on both windows.
+  const billed = accountGroup({ keptWarm: { requests: 3, tokens1h: 0, tokens5m: 900 }, savingEquivalent: {}, savingShares: {}, savingUsd: 0.4 });
+  assert.ok(billed.planRequests > 0 && billed.planOutputTokens > 0 && billed.costEquivalent.five_hour !== undefined && billed.costEquivalent.seven_day !== undefined, 'the billed credits sit beside priced plan rows');
+  assert.deepEqual(d.sumGroups([credited, billed]).savingEquivalent, windows, 'the sum keeps both windows');
+  assert.deepEqual(d.oneAccountGroupOf(base, [credited, billed]).savingShares, windows, "the named account's whole keeps both windows");
+  // A plan credit on a model the revision cannot price leaves its request's own plan cost without the windows too.
+  const unpriced = accountGroup({ costEquivalent: {}, keptWarm: { requests: 1, tokens1h: 0, tokens5m: 400 }, savingEquivalent: {}, savingShares: {} });
+  assert.deepEqual(d.sumGroups([credited, unpriced]).savingEquivalent, {}, 'an unpriced plan credit leaves both windows out of the sum');
+  assert.deepEqual(d.oneAccountGroupOf(base, [credited, unpriced]).savingShares, {}, "and out of the named account's whole");
+});
+
+test('the net saving is the gross less the probe cost, under zero where the probes cost more', () => {
+  assert.equal(d.netSaving(1.5, 0.25), 1.25);
+  assert.equal(d.netSaving(0.125, 0.5), -0.375, 'probes that cost more than they saved net below zero');
+  assert.equal(d.netSaving(0, 0), 0);
+});
+
+test("the kept-warm note sums the two counts and names each TTL's", () => {
+  assert.equal(d.keptWarmNote({ requests: 4, tokens1h: 4_345, tokens5m: 8_000 }), '12,345 tokens read warm, 8,000 at five minutes and 4,345 at an hour');
+  assert.equal(d.keptWarmNote({ requests: 0, tokens1h: 0, tokens5m: 0 }), '0 tokens read warm, 0 at five minutes and 0 at an hour');
+});
+
 test("a group with nothing to charge a plan window forces no gap on the named account's whole: failures with no token, probes that never ran, billed probes", () => {
   const base = accountGroup();
   const none = Object.fromEntries(Object.keys(base.tokens).map((k) => [k, 0]));

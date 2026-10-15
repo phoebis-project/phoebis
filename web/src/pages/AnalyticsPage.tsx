@@ -19,7 +19,7 @@ import { FilterBar } from '@/components/FilterBar';
 import { GroupBy, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress, RANGE_PRESETS } from '@/lib/address';
-import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, isolatedSlots, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -401,10 +401,19 @@ export function AnalyticsPage() {
     [query, funding, funded, fundedTab, warming, generation],
     reload,
   );
+  // The Saved by probes chart's series twin of that breakdown, counting probes under the same funding: the page's series
+  // counts them only when the address asks, and a bucket left with probe rows alone would draw no probe cost there.
+  const warmingSeries = useAsync(
+    () => (warming ? api.getAnalyticsSeries({ ...query, funding: funded ? funding : undefined, includeProbes: true }) : Promise.resolve<AnalyticsPoint[] | null>(null)),
+    [query, funding, funded, warming, generation],
+    reload,
+  );
   // Native pairs the whole read's plan probes with the billed probes' dollars, which no member of the whole carries, so
   // the Cache warming tab reads the billed rows once more, counting probes as the whole read does.
   const nativeWarming = warming && unit === 'native';
   const billedBreakdown = useAsync(() => (nativeWarming ? api.getAnalyticsBreakdown({ ...query, funding: 'billed', includeProbes: true }) : Promise.resolve<AnalyticsGroup[] | null>(null)), [query, nativeWarming, generation], reload);
+  // And the chart's billed twin, whose dollars the native tooltip pairs with the plan side's equivalents.
+  const billedWarmingSeries = useAsync(() => (nativeWarming ? api.getAnalyticsSeries({ ...query, funding: 'billed', includeProbes: true }) : Promise.resolve<AnalyticsPoint[] | null>(null)), [query, nativeWarming, generation], reload);
   // A dollar side narrows Cache by model's two cost cells alone, its token columns reading every row, so the side's
   // rows by model come from a read of their own beside the page's.
   const byModelFunded = useAsync(() => (tab === 'cache' && funded ? api.getAnalyticsBreakdown({ ...query, funding, groupBy: 'model' }) : Promise.resolve<AnalyticsGroup[] | null>(null)), [query, funding, funded, tab, generation], reload);
@@ -546,6 +555,11 @@ export function AnalyticsPage() {
   const billedTotals = useMemo(() => (nativeWarming && !billedBreakdown.stale && billedBreakdown.data !== null ? sumGroups(billedBreakdown.data) : null), [nativeWarming, billedBreakdown.stale, billedBreakdown.data]);
   const shareTiles = shareTilesOf(groupBy, namedAccount, oneGroup, costLoading);
   const probeTile = probeTileOf(unit, namedAccount, oneGroup, costTotals, billedTotals, costLoading, sessionId !== null);
+  const savingTile = savingTileOf(unit, namedAccount, oneGroup, costTotals, billedTotals, costLoading, sessionId !== null);
+  const netTile = netTileOf(unit, namedAccount, oneGroup, costTotals, billedTotals, costLoading, sessionId !== null);
+  const warmingPoints = useMemo(() => (warmingSeries.stale ? [] : (warmingSeries.data ?? [])), [warmingSeries.stale, warmingSeries.data]);
+  const billedWarmingPoints = nativeWarming && !billedWarmingSeries.stale ? billedWarmingSeries.data : null;
+  const warmingLoading = warmingSeries.data === null || warmingSeries.stale || (nativeWarming && (billedWarmingSeries.data === null || billedWarmingSeries.stale));
   const fundedModels = useMemo(() => new Map((byModelFunded.stale ? [] : (byModelFunded.data ?? [])).map((g) => [g.key, g])), [byModelFunded.stale, byModelFunded.data]);
   const fundedPools = useMemo(() => new Map((fundedByPool.stale ? [] : (fundedByPool.data ?? [])).map((g) => [g.key, g])), [fundedByPool.stale, fundedByPool.data]);
   // Native draws the cache card's bars in the plan rows' equivalent with the billed dollars in its subtitle, and a
@@ -985,7 +999,9 @@ export function AnalyticsPage() {
         <Section id="cache-warming" shown={shown} title="Cache warming" meta={sessionId === null ? 'Probe rows are always counted here, whatever the toggle above says' : SESSION_SOURCE_NOTE}>
           <div className="tiles-row">
             <Tile label="Probe cost" value={probeTile.value} note={probeTile.note} title={probeTile.title} error={costError} />
-            <Tile label="Kept warm" value={loading ? null : keptWarm === null ? '-' : fmtInt(keptWarm.requests)} note={keptWarm === null ? UNAVAILABLE_NOTE : `${fmtCompact(keptWarmTokens(keptWarm))} tokens read warm`} />
+            <Tile label="Saved by probes" value={savingTile.value} note={savingTile.note} title={savingTile.title} error={costError} />
+            <Tile label="Net saving" value={netTile.value} note={netTile.note} title={netTile.title} tone={netTile.critical ? 'critical' : undefined} error={costError} />
+            <Tile label="Kept warm" value={loading ? null : keptWarm === null ? '-' : fmtInt(keptWarm.requests)} note={keptWarm === null ? UNAVAILABLE_NOTE : keptWarmNote(keptWarm)} />
           </div>
           <div className="grid-2">
             <ChartCard title="Probes by outcome" subtitle="Per bucket, stacked" loading={loading} legend={PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(totals.probes[s.key]) }))}>
@@ -1012,6 +1028,16 @@ export function AnalyticsPage() {
                 <WastedProbes group={costTotals} probes={probesOf(costTotals)} unit={unit} billed={billedTotals} account={namedAccount === null ? null : { group: oneGroup }} />
               )}
             </Card>
+
+            <SavingChart
+              axis={axis}
+              billed={billedWarmingPoints}
+              error={sessionId === null ? (warmingSeries.error ?? billedWarmingSeries.error) : null}
+              loading={sessionId === null ? warmingLoading : loading}
+              points={sessionId === null ? warmingPoints : points}
+              session={sessionId !== null}
+              unit={unit}
+            />
 
             <ChartCard title="Kept-warm requests" subtitle="Requests whose cache read followed a probe" loading={loading} legend={[{ color: ink.series[0], label: 'Kept-warm requests', value: keptWarm === null ? '-' : fmtInt(keptWarm.requests) }]}>
               <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
@@ -1159,6 +1185,41 @@ const probeFiguresOf = (sides: ReturnType<typeof probeSidesOf>): CostFigure[] =>
 ];
 
 /**
+ * The saving's two sides under native, told apart by their kept-warm credits, the plan side's the whole read's less the
+ * billed read's: the plan credits' 20x 7-day saving off the whole read and the billed credits' dollars off `billed`.
+ * `net` reads each side's saving less its probes' cost, so a side stands there on a credit or a probe, and a side whose
+ * probes kept nothing warm nets their cost under zero. `undefined` leaves a side out, null reads a dash where the plan
+ * rows priced nothing on the window, and a group with nothing on either side reads its zero in each unit.
+ */
+function savingSidesOf(whole: AnalyticsGroup, billed: AnalyticsGroup | null | undefined, read: 'gross' | 'net'): ReturnType<typeof probeSidesOf> {
+  const credits = (g: AnalyticsGroup | null | undefined) => (g?.keptWarm ? keptWarmTokens(g.keptWarm) : 0);
+  const billedCredits = credits(billed);
+  const planCredits = credits(whole) - billedCredits;
+  const billedProbes = billed ? probesOf(billed) : 0;
+  const planProbes = probesOf(whole) - billedProbes;
+  const net = read === 'net';
+  const planSaving = planCredits <= 0 ? 0 : own(whole.savingEquivalent, 'seven_day') ? whole.savingEquivalent.seven_day : null;
+  const planCost = !net || planProbes <= 0 ? 0 : own(whole.probeEquivalent, 'seven_day') ? whole.probeEquivalent.seven_day.cost : null;
+  const plan = planCredits > 0 || (net && planProbes > 0);
+  const paid = billedCredits > 0 || (net && billedProbes > 0);
+  const equivalent = planSaving === null || planCost === null ? null : netSaving(planSaving, planCost);
+  const dollars = netSaving(billed?.savingUsd ?? 0, net ? (billed?.probeCostUsd ?? 0) : 0);
+  if (!plan && !paid) return { billed: dollars, equivalent: equivalent ?? 0, estimated: false };
+  return { billed: paid ? dollars : undefined, equivalent: plan ? equivalent : undefined, estimated: whole.estimated && plan && equivalent !== null };
+}
+
+/**
+ * A group's saving share less its probe share on one window: zero on a side with no credit or no probe behind it, and
+ * on a model week the side's rows ran off, and null on a shared window the side's rows priced nothing on.
+ */
+function shareNetOf(g: AnalyticsGroup, key: string): number | null {
+  const at = <T,>(map: Record<string, T> | null, held: boolean, read: (v: T) => number) => (!held ? 0 : map !== null && own(map, key) ? read(map[key]) : key === 'five_hour' || key === 'seven_day' ? null : 0);
+  const saving = at(g.savingShares, g.keptWarm !== null && keptWarmTokens(g.keptWarm) > 0, (v) => v);
+  const cost = at(g.probeShares, probesOf(g) > 0, (v) => v.cost);
+  return saving === null || cost === null ? null : netSaving(saving, cost);
+}
+
+/**
  * The Probe cost tile per position: under "Window shares" the named account's probe share of its 7-day window with
  * the other windows and the probe count in the note, a dash with the count where none is priced, and the note alone
  * with none or several accounts named. Under native the plan probes' 20x 7-day equivalent of the whole read stacked
@@ -1183,6 +1244,59 @@ function probeTileOf(unit: UnitPosition, namedAccount: string | null, group: Ana
     return { note: `${fmtInt(probesOf(totals))} probes, ${NATIVE_7D_SUBSET}`, title: sides.estimated ? ESTIMATED_TITLE : undefined, value: loading ? null : figuresValue(probeFiguresOf(sides)) };
   }
   return { note: `${fmtInt(probesOf(totals))} probes, ${UNIT_SPLIT[dollarsOf(unit)]}`, value: loading ? null : fmtUsd(totals.probeCostUsd) };
+}
+
+const keptWarmRequests = (g: AnalyticsGroup | null) => `${fmtInt(g?.keptWarm?.requests ?? 0)} requests kept warm`;
+
+/**
+ * The saving tile's figures per position, shaped as probeTileOf's: under native the plan rows' 20x 7-day equivalent
+ * over the billed dollars, under all the dollars, under usd the billed subset, under share the one account's window
+ * share or a dash with the note, under equivalent the equivalent. The note leads with the credited requests, and a
+ * session view, whose fold carries no credit, reads the figure unmeasured.
+ */
+function savingTileOf(unit: UnitPosition, namedAccount: string | null, group: AnalyticsGroup | null, totals: AnalyticsGroup, billed: AnalyticsGroup | null, loading: boolean, session: boolean): { note: string; title?: string; value: ReactNode | null } {
+  if (unit === 'share') {
+    if (namedAccount === null) return { note: ONE_ACCOUNT_SHARE_NOTE, value: loading ? null : '-' };
+    if (session || group?.fromRequests) return { note: UNAVAILABLE_NOTE, value: loading ? null : '-' };
+    const shares = group?.savingShares ?? null;
+    const named = (key: string | undefined) => (shares === null || key === undefined || !own(shares, key) ? null : shareLabel(key, shares[key]));
+    const others = [named('five_hour'), named(shares === null ? undefined : weekKeyOf(shares))].filter((s): s is string => s !== null);
+    return { note: [...others, keptWarmRequests(group)].join(', '), value: loading ? null : (named('seven_day') ?? '-') };
+  }
+  if (session || totals.fromRequests === true) return { note: UNAVAILABLE_NOTE, value: loading ? null : '-' };
+  if (unit === 'native') {
+    const sides = savingSidesOf(totals, billed, 'gross');
+    return { note: `${keptWarmRequests(totals)}, ${NATIVE_7D_SUBSET}`, title: sides.estimated ? ESTIMATED_TITLE : undefined, value: loading ? null : figuresValue(probeFiguresOf(sides)) };
+  }
+  return { note: `${keptWarmRequests(totals)}, ${UNIT_SPLIT[dollarsOf(unit)]}`, value: loading ? null : fmtUsd(totals.savingUsd) };
+}
+
+/**
+ * The Net saving tile, savingTileOf's shape over the saving less the probe cost per side, `critical` while the figure is
+ * under zero. Under native that is the plan side's figure, the widget's subject, and the billed dollars beside it never
+ * tone the tile.
+ */
+function netTileOf(unit: UnitPosition, namedAccount: string | null, group: AnalyticsGroup | null, totals: AnalyticsGroup, billed: AnalyticsGroup | null, loading: boolean, session: boolean): { critical: boolean; note: string; title?: string; value: ReactNode | null } {
+  const less = (subset: string) => `less the probe cost, ${subset}`;
+  if (unit === 'share') {
+    if (namedAccount === null) return { critical: false, note: ONE_ACCOUNT_SHARE_NOTE, value: loading ? null : '-' };
+    if (session || group?.fromRequests) return { critical: false, note: UNAVAILABLE_NOTE, value: loading ? null : '-' };
+    if (group === null) return { critical: false, note: 'less the probe cost', value: loading ? null : '-' };
+    const named = (key: string | undefined) => {
+      const net = key === undefined ? null : shareNetOf(group, key);
+      return key === undefined || net === null ? null : shareLabel(key, net);
+    };
+    const sevenDay = shareNetOf(group, 'seven_day');
+    const others = [named('five_hour'), named(weekKeyOf(group.savingShares ?? {}) ?? weekKeyOf(group.probeShares ?? {}))].filter((s): s is string => s !== null);
+    return { critical: !loading && sevenDay !== null && sevenDay < 0, note: [...others, 'less the probe cost'].join(', '), value: loading ? null : sevenDay === null ? '-' : shareLabel('seven_day', sevenDay) };
+  }
+  if (session || totals.fromRequests === true) return { critical: false, note: UNAVAILABLE_NOTE, value: loading ? null : '-' };
+  if (unit === 'native') {
+    const sides = savingSidesOf(totals, billed, 'net');
+    return { critical: !loading && typeof sides.equivalent === 'number' && sides.equivalent < 0, note: less(NATIVE_7D_SUBSET), title: sides.estimated ? ESTIMATED_TITLE : undefined, value: loading ? null : figuresValue(probeFiguresOf(sides)) };
+  }
+  const net = netSaving(totals.savingUsd, totals.probeCostUsd);
+  return { critical: !loading && net < 0, note: less(UNIT_SPLIT[dollarsOf(unit)]), value: loading ? null : fmtUsd(net) };
 }
 
 /** The named account's cache share of its 7-day window on one side, read off its group, a dash where none is priced. */
@@ -1500,6 +1614,95 @@ function WastedProbes({ account, billed, group, probes, unit }: { account: { gro
   );
 }
 
+/** A side pair in one line, the plan side's equivalent and the billed side's dollars, as the native tooltip reads it. */
+const sidesText = (s: ReturnType<typeof probeSidesOf>): string => [...(s.equivalent === undefined ? [] : [equivalentOrDash('seven_day', s.equivalent, s.estimated)]), ...(s.billed === undefined ? [] : [`${fmtUsd(s.billed)} billed`])].join(', ');
+/** A bucket's 7-day figure from a window map, zero where the bucket holds none, so its bar draws no height. */
+const sevenDayOf = <T,>(map: Record<string, T>, read: (v: T) => number): number => (own(map, 'seven_day') ? read(map.seven_day) : 0);
+/** An equivalent figure as the chart prints it: a side with no row reads its zero, and a side priced nothing a dash. */
+const chartEquivalent = (s: ReturnType<typeof probeSidesOf>): string => equivalentOrDash('seven_day', s.equivalent === undefined ? 0 : s.equivalent, s.estimated);
+
+/**
+ * The chart's sum of groups, `totalsOf`'s with the plan probes' 7-day cost read off each group. `sumGroups` leaves the
+ * window out wherever a group with answered probes and plan rows carries none, and a group whose probes are all billed
+ * (an API key's, an overage's) carries none to carry, which a bucket keyed by the page's grouping often holds. Here
+ * such a group adds nothing, and the window stays out only where a group's plan rows lack a shared window too, the mark
+ * of a model the revision cannot price, whose plan probes would be unpriced as well.
+ */
+function warmingSumOf(groups: AnalyticsGroup[]) {
+  const summed = totalsOf(groups);
+  const { seven_day: _, ...others } = summed.probeEquivalent;
+  const unpriced = groups.some((g) => !own(g.probeEquivalent, 'seven_day') && g.probes.ok > 0 && planRowsRequired(g) && !(own(g.costEquivalent, 'five_hour') && own(g.costEquivalent, 'seven_day')));
+  if (unpriced) return { ...summed, probeEquivalent: others };
+  const sevenDay = groups.reduce((n, g) => (own(g.probeEquivalent, 'seven_day') ? { cost: n.cost + g.probeEquivalent.seven_day.cost, wasted: n.wasted + g.probeEquivalent.seven_day.wasted } : n), { cost: 0, wasted: 0 });
+  return { ...summed, probeEquivalent: { ...others, seven_day: sevenDay } };
+}
+
+/**
+ * The Saved by probes chart: two bars per bucket, the gross saving and the probe cost, each bucket's net in the
+ * tooltip, and the range's gross, cost and net in the legend, the net in the critical ink under zero. `points` is the
+ * series that counts probes under the position's funding and `billed` native's billed twin. The dollar positions draw
+ * dollars. Native draws the plan side's 20x 7-day equivalents with the billed dollars beside them in the tooltip, as
+ * the Probe cost tile pairs them, and the billed dollars alone where the range holds no plan side, as the cache cost
+ * card does. Window shares draw the equivalents as well, since the route answers a bucket's share only where one
+ * account's rows fill it. A session view's fold carries no credit, so `session` draws no bar and dashes the legend.
+ */
+function SavingChart({ axis, billed, error, loading, points, session, unit }: { axis: TimeAxis; billed: AnalyticsPoint[] | null; error: string | null; loading: boolean; points: AnalyticsPoint[]; session: boolean; unit: UnitPosition }) {
+  const ink = useChartInk();
+  const buckets = useMemo((): Bucket[] => points.map((p) => ({ at: Date.parse(p.at), ...warmingSumOf(p.groups) })), [points]);
+  const billedBuckets = useMemo(() => (billed === null ? null : bucketsOf(billed)), [billed]);
+  const billedAt = useMemo(() => new Map((billedBuckets ?? []).map((b) => [b.at, b])), [billedBuckets]);
+  const totals = useMemo(() => warmingSumOf(points.flatMap((p) => p.groups)), [points]);
+  const billedTotals = useMemo(() => (billed === null ? null : totalsOf(billed.flatMap((p) => p.groups))), [billed]);
+  const native = unit === 'native';
+  const range = { cost: probeSidesOf(totals, billedTotals, 'cost'), gross: savingSidesOf(totals, billedTotals, 'gross'), net: savingSidesOf(totals, billedTotals, 'net') };
+  const equivalents = unit === 'share' || (native && range.net.equivalent !== undefined);
+  const drawn = native && !equivalents ? (billedBuckets ?? []) : buckets;
+  const dollars = native && !equivalents ? (billedTotals ?? totals) : totals;
+  const net = equivalents ? (range.net.equivalent === undefined ? 0 : range.net.equivalent) : netSaving(dollars.savingUsd, dollars.probeCostUsd);
+  const negative = !session && net !== null && net < 0;
+  const figures = session
+    ? { cost: '-', gross: '-', net: '-' }
+    : equivalents
+      ? { cost: chartEquivalent(range.cost), gross: chartEquivalent(range.gross), net: chartEquivalent(range.net) }
+      : { cost: fmtUsd(dollars.probeCostUsd), gross: fmtUsd(dollars.savingUsd), net: fmtUsd(net ?? 0) };
+  const gross = (p: Bucket) => (equivalents ? sevenDayOf(p.savingEquivalent, (v) => v) : p.savingUsd);
+  const cost = (p: Bucket) => (equivalents ? sevenDayOf(p.probeEquivalent, (v) => v.cost) : p.probeCostUsd);
+  const tip = (p: Bucket): TooltipRow[] => {
+    const rows = (values: [string, string, string]) => [
+      { color: ink.series[1], label: 'saved', value: values[0] },
+      { color: ink.series[3], label: 'probe cost', value: values[1] },
+      { label: 'net', value: values[2] },
+    ];
+    if (session) return rows(['-', '-', '-']);
+    if (!equivalents) return rows([fmtUsd(p.savingUsd), fmtUsd(p.probeCostUsd), fmtUsd(netSaving(p.savingUsd, p.probeCostUsd))]);
+    const paid = native ? (billedAt.get(p.at) ?? null) : null;
+    const of = (s: ReturnType<typeof probeSidesOf>) => (native ? sidesText(s) : chartEquivalent(s));
+    return rows([of(savingSidesOf(p, paid, 'gross')), of(probeSidesOf(p, paid, 'cost')), of(savingSidesOf(p, paid, 'net'))]);
+  };
+  return (
+    <ChartCard
+      title="Saved by probes"
+      subtitle="Per bucket, the gross saving against the probes' cost"
+      loading={loading}
+      error={error}
+      legend={[
+        { color: ink.series[1], label: 'Saved by probes', value: figures.gross },
+        { color: ink.series[3], label: 'Probe cost', value: figures.cost },
+        { color: ink.muted, hollow: true, label: 'Net saving', value: negative ? <span className="is-negative">{figures.net}</span> : figures.net },
+      ]}
+    >
+      <BarChart data={drawn} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={4} barGap={2}>
+        <CartesianGrid vertical={false} stroke={ink.grid} />
+        <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+        {equivalents ? <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={60} /> : <YAxis {...usdAxis(drawn.flatMap((b) => [b.savingUsd, b.probeCostUsd]))} tickLine={false} axisLine={false} />}
+        <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>(tip)} />
+        {!session && <Bar dataKey={gross} fill={ink.series[1]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+        {!session && <Bar dataKey={cost} fill={ink.series[3]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+      </BarChart>
+    </ChartCard>
+  );
+}
+
 /** A raw reason name with a break opportunity after each underscore, so a header holding one wraps at its words. */
 const breakable = (name: string): ReactNode => name.split(/(?<=_)/).flatMap((part, i) => (i === 0 ? [part] : [<wbr key={i} />, part]));
 
@@ -1648,9 +1851,9 @@ function CacheByModel({ error, funded, groups, loading, namedAccount, unit }: { 
 }
 
 /**
- * The Probe cost cell follows the position as the Probe cost tile does: native pairs the pool's plan probes' 20x 7-day
- * equivalent with its billed probes' dollars (`funded`, the billed read by pool), a dollar side reads its own read by
- * pool, and the shares read the pool's probe share where the route answers one. The other columns read every row.
+ * The Probe cost and Saved cells follow the position as their tiles do: native pairs the pool's plan side's 20x 7-day
+ * equivalent with its billed side's dollars (`funded`, the billed read by pool), a dollar side reads its own read by
+ * pool, and the shares read the pool's share where the route answers one. The other columns read every row.
  */
 function KeepaliveByPool({ error, funded, groups, loading, unit }: { error: string | null; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; unit: UnitPosition }) {
   const rows = useMemo(() => [...groups].sort((a, b) => (b.keptWarm === null ? 0 : keptWarmTokens(b.keptWarm)) - (a.keptWarm === null ? 0 : keptWarmTokens(a.keptWarm))), [groups]);
@@ -1665,13 +1868,24 @@ function KeepaliveByPool({ error, funded, groups, loading, unit }: { error: stri
     }
     return fmtUsd(unit === 'all' ? g.probeCostUsd : (funded.get(g.key)?.probeCostUsd ?? 0));
   };
+  const saved = (g: AnalyticsGroup): ReactNode => {
+    if (unit === 'native') {
+      const sides = savingSidesOf(g, funded.get(g.key), 'gross');
+      return nativeCell(nativeCellOf('seven_day', sides.equivalent, sides.estimated, sides.billed));
+    }
+    if (unit === 'share') {
+      const shares = g.savingShares;
+      return shares === null || !own(shares, 'seven_day') ? '-' : shareCell(shareLabel('seven_day', shares.seven_day), g.estimated);
+    }
+    return fmtUsd(unit === 'all' ? g.savingUsd : (funded.get(g.key)?.savingUsd ?? 0));
+  };
   return (
     <BreakdownTable
       title="Cache warming by pool"
       error={error}
       loading={loading}
       groupLabel="Pool"
-      columns={['Probes OK', 'Held', 'Skipped', 'Failed', 'Kept-warm requests', 'Kept-warm tokens', 'Probe cost']}
+      columns={['Probes OK', 'Held', 'Skipped', 'Failed', 'Kept-warm requests', 'Kept-warm tokens', 'Probe cost', 'Saved']}
       rows={rows.map((g) => ({
         key: g.key,
         label: g.label,
@@ -1684,6 +1898,7 @@ function KeepaliveByPool({ error, funded, groups, loading, unit }: { error: stri
           g.keptWarm === null ? '-' : fmtInt(g.keptWarm.requests),
           g.keptWarm === null ? '-' : fmtCompact(keptWarmTokens(g.keptWarm)),
           g.fromRequests ? '-' : probeCost(g),
+          g.fromRequests ? '-' : saved(g),
         ],
       }))}
     />

@@ -275,10 +275,17 @@ export const addReadWrite = (a: { read: number; write: number }, b: { read: numb
  */
 export const probesRequired = (g: AnalyticsGroup): boolean => g.probes.ok > 0 && planRowsRequired(g);
 /**
- * Whether a group's kept-warm credits oblige it to carry both shared saving windows: kept-warm tokens on a group with
- * chargeable plan usage, so a group whose probes kept nothing warm adds no saving window and lacks none.
+ * Whether a group's kept-warm credits oblige it to carry both shared saving windows: credits the plan funded, on a
+ * group with chargeable plan usage. The routes answer no count of the plan-funded credits apart from the billed ones,
+ * so a plan credit shows by a saving window the ledger priced it on, in the equivalent or in the one account's shares,
+ * and one on a model the revision cannot price shows by the shared cost window its own request's plan row lacks too.
+ * A group whose probes kept nothing warm, or whose credits are all billed (an API key's, an overage's), carries no plan
+ * saving to lack, so it adds no saving window and drops none.
  */
-export const savingRequired = (g: AnalyticsGroup): boolean => keptWarmTokens(g.keptWarm ?? { tokens1h: 0, tokens5m: 0 }) > 0 && planRowsRequired(g);
+export const savingRequired = (g: AnalyticsGroup): boolean =>
+  keptWarmTokens(g.keptWarm ?? { tokens1h: 0, tokens5m: 0 }) > 0 &&
+  planRowsRequired(g) &&
+  (Object.keys(g.savingEquivalent).length > 0 || (g.savingShares !== null && Object.keys(g.savingShares).length > 0) || SHARED_WINDOWS.some((w) => !own(g.costEquivalent, w)));
 /**
  * The named account's whole: the position's totals with its shares summed over the groups the route answered them on.
  */
@@ -292,6 +299,12 @@ export const oneAccountGroupOf = (totals: AnalyticsGroup, groups: AnalyticsGroup
 
 /** The two counts summed, the one figure the charts and the by-pool table print per group. */
 export const keptWarmTokens = (k: { tokens1h: number; tokens5m: number }): number => k.tokens1h + k.tokens5m;
+/** The net saving, the gross less the probe cost, in whatever unit both figures came in. */
+export const netSaving = (gross: number, probeCost: number): number => gross - probeCost;
+/** The two counts' note: "12,345 tokens read warm, 8,000 at five minutes and 4,345 at an hour". */
+export function keptWarmNote(k: { requests: number; tokens1h: number; tokens5m: number }): string {
+  return `${fmtInt(keptWarmTokens(k))} tokens read warm, ${fmtInt(k.tokens5m)} at five minutes and ${fmtInt(k.tokens1h)} at an hour`;
+}
 
 /** The model week's key in a share map, the one key beside the two shared windows, undefined where the map has none. */
 export const weekKeyOf = (shares: Record<string, unknown>): string | undefined => Object.keys(shares).find((k) => !SHARED_WINDOWS.includes(k));

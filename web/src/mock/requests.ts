@@ -2065,7 +2065,67 @@ function historicalRollups(): HourlyRollup[] {
   return out;
 }
 
-export const ALL_ROLLUPS: HourlyRollup[] = [...historicalRollups(), ...ROLLUPS];
+/** How long after a request's answer its hour-TTL recipe probes, ahead of the entry's expiry. */
+const HOUR_PROBE_LEAD = 55 * MINUTE;
+
+/**
+ * The work pool keeps the notebook's cache warm after the key's one request, and the session never comes back: the hour
+ * recipe's one probe reads the cached prefix ahead of its expiry, the pool's one-hour idle window then runs out, and
+ * the probe settles wasted on that limit. It kept no request warm, so the pool's probes cost more than they saved,
+ * the story's one pool whose net saving reads under zero.
+ */
+function idleWarming(rows: RequestLog[]): HourlyRollup[] {
+  const r = rows.find((x) => x.keyId === 'notebook' && x.kind !== 'probe' && x.status === 200);
+  if (r === undefined || r.accountId === null) return [];
+  const at = Date.parse(r.at) + (r.durationMs ?? 0) + HOUR_PROBE_LEAD;
+  const prefix = r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h;
+  const usage: Usage = { cacheRead: prefix, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 1, ...NO_ANSWER_FACTS };
+  const costUsd = costOf(r.model, usage, false, at);
+  const wastedProbeReasons = emptyWastedProbeReasons();
+  wastedProbeReasons.idle_limit = 1;
+  return [
+    {
+      hour: iso(startOfHour(at)),
+      client: CLIENTS[r.keyId ?? ''] ?? '-',
+      effort: NO_EFFORT,
+      keyId: 'notebook',
+      keyGeneration: r.keyGeneration,
+      kind: 'probe',
+      poolId: r.poolId ?? '-',
+      accountId: r.accountId,
+      model: r.model,
+      requestClass: NO_CLASS,
+      sessionId: r.sessionId ?? '-',
+      funding: kindOf(r.accountId) === 'api_key' ? 'billed' : 'plan',
+      speed: 'standard',
+      requests: { client_gone: 0, incomplete: 0, ok: 1, overloaded: 0, rate_limited: 0, undecodable: 0, upstream_error: 0 },
+      failovers: 0,
+      migrations: 0,
+      tokens: { cacheRead: prefix, cacheWrite1h: 0, cacheWrite5m: 0, output: 1, ...NO_ANSWER_FACTS, uncachedInput: 0 },
+      cacheHits: 1,
+      cacheMisses: 0,
+      cacheMissReasons: emptyCacheMissReasons(),
+      expiredBetweenTurns: 0,
+      uncached: 0,
+      costUsd,
+      cost: costSplitOf(r.model, usage, false, at),
+      ...hourShares(r.accountId, r.canonicalModel, [{ at, usage }]),
+      tier: accountTier(r.accountId),
+      histograms: { durationMs: histogramOf([600]), outputTps: emptyHistogram(), ttfbMs: histogramOf([320]), ttftMs: emptyHistogram() },
+      keptWarm: { requests: 0, tokens1h: 0, tokens5m: 0 },
+      savingUsd: 0,
+      probes: { failed: 0, held: 0, ok: 1, skipped: 0 },
+      probeMigrated: 0,
+      probeCostUsd: costUsd,
+      wastedProbeReasons,
+      wastedProbeUsd: costUsd,
+      wastedProbes: 1,
+    },
+  ];
+}
+
+// The idle warming sits before the logged hours, so the rows' last entry stays the current hour's.
+export const ALL_ROLLUPS: HourlyRollup[] = [...historicalRollups(), ...idleWarming(REQUESTS), ...ROLLUPS];
 
 const counted = (from: number) => REQUESTS.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= from);
 /** The rows the dashboard counts. A probe is the router's own traffic, which the routes leave out. */

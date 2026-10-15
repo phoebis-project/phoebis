@@ -3236,6 +3236,67 @@ async function wastedProbeRows(theme) {
   }
 }
 
+/** The top bar's unit positions in its order. The pass reads no module of the console, so it lists them here. */
+const UNIT_POSITIONS = ['native', 'all', 'usd', 'share', 'equivalent'];
+
+/**
+ * The Cache warming tab under each unit position at the pass's 1280 by 800: Probe cost, Saved by probes, Net saving
+ * and Kept warm on one row at one top, the two saving tiles in the Probe cost tile's box and value type, and the Saved
+ * by probes chart in the box and title type of the Kept-warm requests card beside it, the tiles' figures and the
+ * chart's legend recorded per position. Each position loads the page as a view loads, on its `?unit=` address, which
+ * writes the console-wide setting, so the measure ends on a load of `?unit=native`: the measures after it and the view's
+ * shot read a fresh browser's position, on Traffic.
+ */
+async function savingTiles(theme) {
+  const say = (what) => failures.push(`${theme} /analytics: ${what}`);
+  const load = async (search) => {
+    await page.clock.setSystemTime(clockOrigin);
+    await page.goto(`${base}/analytics${search}`);
+    await booted();
+    await advance(LOAD_MS);
+    await page.waitForSelector('.analytics-section#traffic', { timeout: 15_000 });
+  };
+  try {
+    for (const position of UNIT_POSITIONS) {
+      await load(`?unit=${position}`);
+      if (!(await tabTo(theme, 'Cache warming'))) continue;
+      const read = await page.evaluate(() => {
+        const box = (el) => {
+          const b = el.getBoundingClientRect();
+          return { height: Math.round(b.height), top: Math.round(b.top), width: Math.round(b.width) };
+        };
+        const type = (el) => {
+          const s = getComputedStyle(el);
+          return `${s.fontFamily}/${s.fontSize}/${s.fontWeight}/${s.lineHeight}`;
+        };
+        const tiles = [...document.querySelectorAll('#cache-warming > .tiles-row > .stat')].map((t) => {
+          const value = t.querySelector('.stat__value');
+          return { ...box(t), label: t.querySelector('.stat__label')?.textContent?.trim() ?? '', note: t.querySelector('.stat__note')?.textContent?.trim() ?? '', type: value ? type(value) : null, value: value?.textContent?.trim() ?? '' };
+        });
+        const card = (title) => [...document.querySelectorAll('#cache-warming .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+        const cardBox = (title) => {
+          const c = card(title);
+          return c ? { ...box(c), title: type(c.querySelector('.card__title')) } : null;
+        };
+        const legend = [...(card('Saved by probes')?.querySelectorAll('.legend li') ?? [])].map((li) => [[...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''), li.querySelector('.legend__value')?.textContent?.trim() ?? '']);
+        return { chart: cardBox('Saved by probes'), kept: cardBox('Kept-warm requests'), legend, tiles };
+      });
+      measurements.push(`${theme} /analytics saving tiles ${position} ${JSON.stringify({ legend: read.legend, tiles: read.tiles.map(({ label, note, top, value }) => ({ label, note, top, value })) })}`);
+      const labels = read.tiles.map((t) => t.label);
+      if (JSON.stringify(labels) !== JSON.stringify(['Probe cost', 'Saved by probes', 'Net saving', 'Kept warm'])) say(`under ${position} the Cache warming tiles read ${JSON.stringify(labels)}`);
+      if (new Set(read.tiles.map((t) => t.top)).size !== 1) say(`under ${position} the tiles do not share one top: ${JSON.stringify(read.tiles.map((t) => [t.label, t.top]))}`);
+      const probe = read.tiles.find((t) => t.label === 'Probe cost');
+      for (const label of ['Saved by probes', 'Net saving']) {
+        for (const what of compare(read.tiles.find((t) => t.label === label), probe, ['height', 'top', 'type', 'width'], `under ${position} the ${label} tile against the Probe cost tile`)) say(what);
+      }
+      for (const what of compare(read.chart, read.kept, ['height', 'title', 'top', 'width'], `under ${position} the Saved by probes chart against the Kept-warm requests card`)) say(what);
+      if (JSON.stringify(read.legend.map(([label]) => label)) !== JSON.stringify(['Saved by probes', 'Probe cost', 'Net saving'])) say(`under ${position} the Saved by probes legend reads ${JSON.stringify(read.legend)}`);
+    }
+  } finally {
+    await load('?unit=native');
+  }
+}
+
 /**
  * The burn section and the rewrites card against the Failovers card they sit beside: the same title type, the same
  * width in the grid, and, where a card drew a chart, the same chart height. The rewrites card follows Failovers. The
@@ -7531,6 +7592,9 @@ try {
         await stickyStrip(theme);
         await unitControl(theme);
         if (mock) await accountsCardToggles(theme);
+        // Last of the view's measures: its loads set the page's clock back to the origin, and the Burn shot above reads
+        // the clock its earlier measures stepped.
+        await savingTiles(theme);
       }
       if (view.path === '/settings') {
         await settingsOrder(theme);
