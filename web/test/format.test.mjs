@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // zone, and `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtDayTick, fmtDuration, fmtEndsIn, fmtEquivalent, fmtHours, fmtHourTick, fmtMiB, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
+const { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtEquivalent, fmtHours, fmtHourTick, fmtMiB, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, instant, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
 
 test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
   const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };
@@ -51,6 +51,30 @@ test('an instant in the first hour of a day reads 00 on the 24-hour clock and 12
     assert.match(fmtAbsolute(midnight), /, 12:05:09\sAM$/);
     assert.match(fmtTime(midnight), /^12:05:09\sAM$/);
     assert.match(fmtShortTime(new Date(2026, 8, 17, 13, 5).toISOString()), /^01:05\sPM$/);
+  } finally {
+    setTimeFormat('24h');
+  }
+});
+
+test("a log row's time within a day of now reads the clock alone, and one a day or more away its date before it", () => {
+  const now = Date.parse('2026-09-16T14:30:00Z');
+  const cases = [
+    ['2026-09-16T09:12:05Z', '09:12:05', 'within the day the time alone'],
+    ['2026-09-15T14:30:01Z', '14:30:01', 'a second short of a day'],
+    ['2026-09-15T14:30:00Z', 'Sep 15 14:30:00', 'a day away carries its date'],
+    ['2026-09-14T09:12:05Z', 'Sep 14 09:12:05', 'two days back, the seconds kept'],
+    ['2026-08-16T08:05:09Z', 'Aug 16 08:05:09', 'a month away'],
+    ['2026-09-17T14:30:00Z', 'Sep 17 14:30:00', 'a day ahead dates as a day back does'],
+  ];
+  for (const [at, expected, why] of cases) {
+    assert.equal(fmtDatedTime(at, now), expected, why);
+    // The instant formatter dates the same rows, so a log's time and a reset's agree on which carry a date.
+    assert.equal(/^[A-Z]/.test(instant(Date.parse(at), now)), /^[A-Z]/.test(expected), `instant agrees on ${at}`);
+  }
+  setTimeFormat('12h');
+  try {
+    assert.match(fmtDatedTime('2026-09-16T13:05:09Z', now), /^01:05:09\sPM$/, 'the time format reaches the clock alone');
+    assert.match(fmtDatedTime('2026-09-14T21:12:05Z', now), /^Sep 14 09:12:05\sPM$/, 'and the dated form');
   } finally {
     setTimeFormat('24h');
   }

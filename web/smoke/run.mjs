@@ -9277,6 +9277,33 @@ m.unmount();
   page.unmount();
 }
 
+// The story's requests span the day before its clock, so the 7-day range read at that clock dates no row, and read a
+// day and an hour later dates every one. A row is paired with the story's by the id under its time.
+{
+  const HOUR = 3_600_000;
+  const clockText = (at) => new Date(at).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit', second: '2-digit' });
+  const datedText = (at) => `${new Date(at).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${clockText(at)}`;
+  const byId = new Map(requests.map((r) => [r.id, r]));
+  const timesAt = async (now) => {
+    const page = await mount('/requests?range=7d', { now });
+    const at = [...page.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Time');
+    const read = [...page.container.querySelectorAll('.requests__table tbody tr')]
+      .map((tr) => tr.children[at])
+      .filter(Boolean)
+      .map((td) => ({ row: byId.get(td.querySelector('.sub.mono')?.getAttribute('title') ?? '') ?? null, text: td.firstChild?.textContent ?? '', title: td.getAttribute('title') }));
+    page.unmount();
+    return read;
+  };
+  const story = await timesAt(CLOCK_ORIGIN);
+  const later = await timesAt(CLOCK_ORIGIN + 25 * HOUR);
+  const wrong = (read, expected) => read.filter((c) => c.row === null || c.text !== expected(c.row.at) || c.title !== fmtAbsolute(c.row.at)).map((c) => `${c.row?.id ?? 'unpaired'}: ${c.text}`);
+  results.push({
+    name: '/requests under the 7-day range a row older than a day prints its date before the time, and the newest row within the day the time alone',
+    ok: story.length > 0 && later.length > 0 && wrong(story, clockText).length === 0 && wrong(later, datedText).length === 0 && later.every((c) => /^[A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}:\d{2}$/.test(c.text)),
+    missing: [`${story.length} rows at the story's clock, ${later.length} a day and an hour later`, ...wrong(story, clockText).slice(0, 3), ...wrong(later, datedText).slice(0, 3)],
+  });
+}
+
 // The open drawer narrows the table to the columns that leave it room, and the chosen set returns when it closes.
 {
   const COMPACT = ['Time', 'Model', 'Status', 'Attempts', ''];
@@ -10716,6 +10743,27 @@ m.unmount();
     });
   }
   {
+    // The week's state changes put the story's changes of two and three days back on the first page beside today's.
+    const DAY = 24 * HOUR;
+    const dateText = (at) => new Date(at).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+    const spied = countCalls('listRoutingLog');
+    const week = await mount('/routing-log?range=7d&kinds=account_state_changed', { now: CLOCK_ORIGIN });
+    spied.restore();
+    const asked = spied.calls[0]?.[0] ?? {};
+    const answered = (await api.listRoutingLog(asked)).rows;
+    const read = trs(week).map((tr) => ({ text: cell(tr, 'time')?.firstChild?.textContent ?? '', title: cell(tr, 'time')?.getAttribute('title') ?? null }));
+    week.unmount();
+    const older = answered.filter((r) => CLOCK_ORIGIN - Date.parse(r.at) >= DAY);
+    const expected = answered.map((r) => (CLOCK_ORIGIN - Date.parse(r.at) >= DAY ? `${dateText(r.at)} ${clockText(r.at)}` : clockText(r.at)));
+    results.push({
+      name: '/routing-log under the 7-day range a row older than a day prints its date before the time, and the newest row within the day the time alone',
+      ok:
+        asked.from === iso(CLOCK_ORIGIN - 7 * DAY) && older.length > 0 && answered.length > older.length && CLOCK_ORIGIN - Date.parse(answered[0].at) < DAY &&
+        read.length === answered.length && JSON.stringify(read.map((r) => r.text)) === JSON.stringify(expected) && read.every((r, i) => r.title === fmtAbsolute(answered[i].at)),
+      missing: [JSON.stringify(asked), `${older.length} of ${answered.length} rows older than a day`, `read ${JSON.stringify(read)}`, `expected ${JSON.stringify(expected)}`],
+    });
+  }
+  {
     const rest = { address: m.location().search, chips: m.container.querySelectorAll('.chip--filter').length };
     const probes = await api.listRoutingLog({ from: sent.from, kinds: ['probe'], limit: 25, to: sent.to });
     const only = await mount(`/routing-log?kinds=probe`, { now: CLOCK_ORIGIN });
@@ -11586,19 +11634,27 @@ m.unmount();
     if (root) scanned.push({ root: root.cloneNode(true), where });
   };
   /**
-   * The open card draws the strip where the walk list stood: its stations in order, a leaf per candidate table row in
-   * the table's order up to eight and then "and N more", and the one taken terminus reading the kind's word.
+   * The open card draws the strip where the walk list stood: its stations in order, a leaf per candidate table row up
+   * to eight and then "and N more", and the one taken terminus reading the kind's word. The table ranks its rows while
+   * the strip keeps the walk, so the leaves are the rows' members as a set, in the record's order.
    */
-  const stripDrawn = (what, card, expected) => {
+  const stripDrawn = (what, card, expected, record) => {
     const rows = candidateRows(card).map((tr) => [tr.querySelector('td a')?.textContent ?? '', tr.querySelector('.decision-card__judged .badge')?.textContent ?? '']);
     const leaves = leavesOf(card).map((l) => [l.account, l.badge]);
-    const fanned = rows.length <= 8 ? JSON.stringify(leaves) === JSON.stringify(rows) : leaves.length === 9 && leaves[8][1] === `and ${rows.length - 8} more` && leaves.slice(0, 8).every(([a, b]) => rows.some(([x, y]) => x === a && y === b));
+    const recorded = record.candidates.map((c) => c.accountId);
+    const asSet = (pairs) => JSON.stringify(pairs.map((p) => p.join(' ')).sort());
+    // Past eight the strip shows the record's first members, the placed one in the last place where it stands later.
+    const walked = (shown) => shown.every(([a], i) => recorded.indexOf(a) >= 0 && (i === 0 || recorded.indexOf(a) > recorded.indexOf(shown[i - 1][0])));
+    const fanned =
+      rows.length <= 8
+        ? asSet(leaves) === asSet(rows) && JSON.stringify(leaves.map(([a]) => a)) === JSON.stringify(recorded)
+        : leaves.length === 9 && leaves[8][1] === `and ${rows.length - 8} more` && leaves.slice(0, 8).every(([a, b]) => rows.some(([x, y]) => x === a && y === b)) && walked(leaves.slice(0, 8));
     const taken = terminiOf(card).filter((t) => t.taken);
     const kind = card?.querySelector('.decision-card__verdict > .badge')?.textContent ?? null;
     results.push({
       name: `/routing-log the ${what}'s card draws the strip in the walk's place with its stations in order`,
       ok: card !== null && card.querySelector('.decision-card__walk') === null && card.querySelectorAll('.decision-strip').length === 1 && JSON.stringify(pairsOf(card)) === JSON.stringify(expected) && fanned && taken.length === 1 && kind !== null && taken[0].badge === kind,
-      missing: [pairsOf(card).map((x) => x.join(' ')).join(' / '), `expected ${JSON.stringify(expected)}`, `leaves ${JSON.stringify(leaves)}`, `rows ${JSON.stringify(rows)}`, JSON.stringify(terminiOf(card))],
+      missing: [pairsOf(card).map((x) => x.join(' ')).join(' / '), `expected ${JSON.stringify(expected)}`, `leaves ${JSON.stringify(leaves)}`, `rows ${JSON.stringify(rows)}`, `record ${JSON.stringify(recorded)}`, JSON.stringify(terminiOf(card))],
     });
   };
 
@@ -11669,7 +11725,7 @@ m.unmount();
   {
     const { card, page, panel, record } = await story('req_f8085653-422');
     scan('renewal', card);
-    stripDrawn('renewal', card, RENEWAL_STATIONS);
+    stripDrawn('renewal', card, RENEWAL_STATIONS, record);
     await popoversOpen('renewal', page, card, record);
     const stations = stationsOf(card);
     // The engine recorded all five rules `no` before it renewed, so each one is on the taken path under its bracket.
@@ -11756,7 +11812,7 @@ m.unmount();
     // The static placement's chosen member carries a deeper static entry the TTL refused beside the one the rung took.
     const { card, page, record } = await story('req_b2bed817-a58');
     scan('static placement', card);
-    stripDrawn('static placement', card, modelPairs(record));
+    stripDrawn('static placement', card, modelPairs(record), record);
     await popoversOpen('static placement', page, card, record);
     const rungs = stationsOf(card).filter((s) => ['content', 'with main', 'static'].includes(s.step));
     const chosen = record.candidates.find((c) => c.accountId === record.outcome.accountId);
@@ -11805,7 +11861,7 @@ m.unmount();
   {
     const { card, page, record } = await story('req_da52d141-a5a');
     scan('spent move', card);
-    stripDrawn('spent move', card, modelPairs(record));
+    stripDrawn('spent move', card, modelPairs(record), record);
     await popoversOpen('spent move', page, card, record);
     const stations = stationsOf(card);
     const steps = stations.map((s) => `${s.step} ${s.verdict}`);
@@ -11844,7 +11900,7 @@ m.unmount();
     stripDrawn('shed move', card, [
       ...[['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'fired'], ['Renew', 'not run']],
       ...[['Move', 'moved'], ['Fit', 'fits'], ['Cap filter', 'passed'], ['Partitions', 'match'], ['content', 'none'], ['with main', 'none'], ['static', 'none'], ['Pick', 'chosen'], ['Reserve', 'booked']],
-    ]);
+    ], record);
     await popoversOpen('shed move', page, card, record);
     const shed = stationsOf(card).find((s) => s.step === 'shed');
     // The fired rule's popover reads its round in the Round group.
@@ -11861,7 +11917,7 @@ m.unmount();
     page.unmount();
     const round = await story('req_1eaa9bc1-a18');
     scan('shedding round', round.card);
-    stripDrawn('shedding round', round.card, RENEWAL_STATIONS);
+    stripDrawn('shedding round', round.card, RENEWAL_STATIONS, round.record);
     await popoversOpen('shedding round', round.page, round.card, round.record);
     const ran = stationsOf(round.card).find((s) => s.step === 'shed');
     // The round's shed rule reads its marks in its popover's Round group, each a chip linking its session.
@@ -11885,7 +11941,7 @@ m.unmount();
   {
     const { card, page, record } = await story('req_69e30548-32e', 1);
     scan('hold', card);
-    stripDrawn('hold', card, modelPairs(record));
+    stripDrawn('hold', card, modelPairs(record), record);
     await popoversOpen('hold', page, card, record);
     const hold = stationsOf(card).find((s) => s.step === 'Hold');
     const held = await popoverOf(page, hold?.button);
@@ -11910,7 +11966,7 @@ m.unmount();
     const placed = after?.querySelector('.decision-card');
     scan('placement after the hold', placed);
     const second = await api.getDecision('req_69e30548-32e', 2);
-    stripDrawn('placement after the hold', placed, modelPairs(second));
+    stripDrawn('placement after the hold', placed, modelPairs(second), second);
     await popoversOpen('placement after the hold', page, placed, second);
     const { cohort, heldMs } = second.outcome.cohortHold;
     results.push({
@@ -11924,7 +11980,7 @@ m.unmount();
     // A hold on the strategy's pick names no cohort, and the placement after it reads the account it waited on.
     const { card, page, record } = await story('req_e8b7eb13-060', 1);
     scan('strategy hold', card);
-    stripDrawn('strategy hold', card, modelPairs(record));
+    stripDrawn('strategy hold', card, modelPairs(record), record);
     await popoversOpen('strategy hold', page, card, record);
     const hold = stationsOf(card).find((s) => s.step === 'Hold');
     const held = await popoverOf(page, hold?.button);
@@ -11936,7 +11992,7 @@ m.unmount();
     const after = (await openRow(page, 'req_e8b7eb13-060/2'))?.querySelector('.decision-card');
     scan('placement after a strategy hold', after);
     const second = await api.getDecision('req_e8b7eb13-060', 2);
-    stripDrawn('placement after a strategy hold', after, modelPairs(second));
+    stripDrawn('placement after a strategy hold', after, modelPairs(second), second);
     await popoversOpen('placement after a strategy hold', page, after, second);
     const { heldMs, waitedOn } = second.outcome.cohortHold;
     results.push({
@@ -11952,7 +12008,7 @@ m.unmount();
     const [id, seq] = ['req_77634945-72b', 2];
     const { card, page, record } = await story(id, seq);
     scan('exhaustion after a hold', card);
-    stripDrawn('exhaustion after a hold', card, modelPairs(record));
+    stripDrawn('exhaustion after a hold', card, modelPairs(record), record);
     await popoversOpen('exhaustion after a hold', page, card, record);
     const answered = requests.find((r) => r.id === id)?.status;
     results.push({
@@ -11967,7 +12023,7 @@ m.unmount();
   {
     const { card, page, record } = await story('req_51d0e2b8-7a0');
     scan('exhaustion', card);
-    stripDrawn('exhaustion', card, modelPairs(record));
+    stripDrawn('exhaustion', card, modelPairs(record), record);
     await popoversOpen('exhaustion', page, card, record);
     const line = stationsOf(card).find((s) => s.step === 'Exhausted');
     const weighed = record.walk.find((s) => s.step === 'exhausted')?.facts.find((f) => f.key === 'obstacles')?.value ?? [];
@@ -11995,7 +12051,7 @@ m.unmount();
   {
     const { card, page, record } = await story('req_e0a4c6f2-118');
     scan('refusal', card);
-    stripDrawn('refusal', card, [['Admission', 'refused'], ['Rest of the walk', 'not run']]);
+    stripDrawn('refusal', card, [['Admission', 'refused'], ['Rest of the walk', 'not run']], record);
     await popoversOpen('refusal', page, card, record);
     const stations = stationsOf(card);
     // The admission's popover reads the refusal's reason, and the rest of the walk's says what did not run.
@@ -12023,7 +12079,7 @@ m.unmount();
     // A probe's decision keeps its kind, so it opens to the same card, its probe line among the steps.
     const { card, page, record } = await story('req_c41d0311-200', 1, 'probe');
     scan('probe', card);
-    stripDrawn('probe', card, modelPairs(record));
+    stripDrawn('probe', card, modelPairs(record), record);
     await popoversOpen('probe', page, card, record);
     const steps = stationsOf(card).map((s) => s.step);
     results.push({
@@ -12036,7 +12092,7 @@ m.unmount();
   {
     const { card, page, record, row } = await story('req_1d9c3e55-0b2', 2);
     scan('failover attempt', card);
-    stripDrawn('failover attempt', card, modelPairs(record));
+    stripDrawn('failover attempt', card, modelPairs(record), record);
     await popoversOpen('failover attempt', page, card, record);
     results.push({
       name: "/routing-log a failover attempt's card reads attempt n of m",
@@ -12061,7 +12117,7 @@ m.unmount();
       ['static', 'none'],
       ['Pick', 'chosen'],
       ['Reserve', 'booked'],
-    ]);
+    ], record);
     await popoversOpen('fresh placement', page, card, record);
     const stations = stationsOf(card);
     const pick = stations.find((s) => s.step === 'Pick');
@@ -12143,7 +12199,7 @@ m.unmount();
     for (const { expected, id, own, seq, terminus, what } of cards) {
       const { card, page, record } = await story(id, seq);
       scan(what, card);
-      stripDrawn(what, card, expected);
+      stripDrawn(what, card, expected, record);
       await popoversOpen(what, page, card, record);
       const taken = [...(card?.querySelectorAll('.decision-strip .strip-terminus.is-taken') ?? [])].map((b) => [b.dataset.terminus, b.querySelector('.strip-terminus__word')?.textContent, b.querySelector('.badge')?.textContent]);
       const holds = await own(card, record, page);
@@ -12405,7 +12461,7 @@ m.unmount();
     // The fast request's failover passed over a member whose usage credits are out, which its chip's hover says.
     const { card, page, record } = await story('req_4b0e9d17-c31', 2);
     scan('fast failover', card);
-    stripDrawn('fast failover', card, modelPairs(record));
+    stripDrawn('fast failover', card, modelPairs(record), record);
     await popoversOpen('fast failover', page, card, record);
     const out = record.candidates.find((c) => c.obstacle?.name === 'credits');
     const chip = candidateRows(card).find((tr) => tr.querySelector('td a')?.textContent === out?.accountId)?.querySelector('.decision-card__why .chip');
@@ -12420,7 +12476,7 @@ m.unmount();
     // A placement beside the main conversation promised no size, so its cache read is weighed against the input.
     const { card, page, record } = await story('req_52f62e67-839');
     scan('with main placement', card);
-    stripDrawn('with main placement', card, modelPairs(record));
+    stripDrawn('with main placement', card, modelPairs(record), record);
     await popoversOpen('with main placement', page, card, record);
     const line = stationsOf(card).find((s) => s.step === 'with main');
     // A placement beside the main conversation names no entry, so its rung's popover draws no Entry group and no hash.
@@ -12478,6 +12534,28 @@ m.unmount();
       missing: [first?.children[2]?.textContent ?? 'no row'],
     });
     dropped.page.unmount();
+  }
+  {
+    // The card the log opens first is a renewal, and the fast failover's record lists the member it placed third.
+    const read = async (id, seq) => {
+      const { card, page, record } = await story(id, seq);
+      const first = candidateRows(card)[0];
+      const got = {
+        first: first?.querySelector('td a')?.textContent ?? null,
+        placed: record.outcome.accountId,
+        recorded: record.candidates[0]?.accountId ?? null,
+        tinted: first?.classList.contains('is-chosen') ?? false,
+        title: card?.querySelector('.decision-card__candidates')?.closest('section')?.querySelector('.decision-card__title')?.textContent ?? null,
+      };
+      page.unmount();
+      return got;
+    };
+    const cards = [await read('req_f8085653-422', 1), await read('req_4b0e9d17-c31', 2)];
+    results.push({
+      name: "/routing-log the candidate table reads Candidates, by rank and leads with the member the decision placed, tinted, whatever the record's order",
+      ok: cards.every((c) => c.title === 'Candidates, by rank' && c.first !== null && c.first === c.placed && c.tinted) && cards[1].recorded !== cards[1].placed,
+      missing: cards.map((c) => JSON.stringify(c)),
+    });
   }
   {
     // The answer has not ended, so the attempt has no usage and wrote no cache-map entry yet.

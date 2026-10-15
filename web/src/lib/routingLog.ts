@@ -1304,6 +1304,19 @@ export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: 
   };
 }
 
+const VERDICT_ORDER: Record<string, number> = { chosen: 0, renewed: 1, held_on: 2, source: 3, destination: 4, ranked: 5, eligible: 6, out: 7, not_needed: 7 };
+
+/**
+ * The candidates by rank: the chosen, renewed, held-on, source and destination members in that order, then the ranked
+ * ones by rank, then the eligible ones the strategy did not rank, then the out and not-needed ones, each group by
+ * priority and then by account id.
+ */
+export function rankCandidates(candidates: RecordCandidate[]): RecordCandidate[] {
+  const group = (c: RecordCandidate) => VERDICT_ORDER[c.verdict] ?? 8;
+  const rank = (c: RecordCandidate) => (c.verdict === 'ranked' ? (c.rank ?? Number.POSITIVE_INFINITY) : 0);
+  return [...candidates].sort((a, b) => group(a) - group(b) || rank(a) - rank(b) || a.tier[1] - b.tier[1] || a.accountId.localeCompare(b.accountId));
+}
+
 /**
  * A setting the card can draw a row of: every member of the record's settings but a version 1 record's `legacy`. The
  * rows leave out the pool's edit instant, which the fold's head reads.

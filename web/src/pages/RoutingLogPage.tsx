@@ -16,7 +16,7 @@ import { clock } from '@/lib/clock';
 import { compareByModelTier } from '@/lib/costs';
 import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, FOLLOW_OVERRUN, readEnd, spanEnded } from '@/lib/follow';
-import { fmtAbsolute, fmtInt, fmtTime, upperFirst } from '@/lib/format';
+import { fmtAbsolute, fmtDatedTime, fmtInt, fmtTime, upperFirst } from '@/lib/format';
 import { useAsync, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { ALL_KINDS, byOf, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref } from '@/lib/routingLog';
 
@@ -325,7 +325,7 @@ function LogRow({ isNew, now, onToggle, open, row, rows }: { isNew: boolean; now
         <IconChevronRight size={14} />
       </td>
       <td className="num routing-log__time" title={fmtAbsolute(row.at)}>
-        {fmtTime(row.at)}
+        {fmtDatedTime(row.at, now)}
         {row.type === 'decision' && (
           <span className="sub mono routing-log__cut">
             <EntityLink kind="request" id={row.requestId} />

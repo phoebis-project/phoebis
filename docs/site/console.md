@@ -474,24 +474,24 @@ keeps them.
 
 The table offers thirteen columns, Time, Key, Pool, Account, Model, Client, Kind, Transport, Status,
 Attempts, TTFB, Tokens and Cost, with Kind, Pool and Transport hidden until the Columns control turns them on, and
-shows Time, Model, Status and Attempts alone while the drawer is open. The model column reads the family and version
-with the whole id on hover. The client column reads the class the router derived from the user agent
-(`claude-code/<entrypoint>` or `other`), whole on hover, with the agent type beneath it on a subagent's
-turn.
-Status reads the code with the outcome
-word beside it where the request did not succeed (`canceled`, `exhausted`, `failed`, `incomplete` or `rejected`). One
-row is one client request however many attempts it took: Attempts reads `2 attempts` with the trail of account and
-status on hover, nothing for a request of one attempt, and a `held {time}` badge for a request that waited for a slot
-while every account was at its cap. Cost reads in the top bar's unit. Under Native a request a subscription window paid
-reads its 20x 5-hour equivalent over its 20x 7-day one (`1.47% 20x 5h` over `0.244% 20x 7d`), with every window, the
-model week among them, and the dollar equivalent on hover. Under the four other positions it reads its account's own
-window shares, each with its window's short word (`0.12% Fable week` over `0.42% 5h`, the full labels on hover). An
-overage, fast mode or API-key request reads dollars under every position, and a figure an estimate priced leads with
-`~`, its hover adding "Estimated at the model tier's latest weighted model". The table pages by "Rows" (10, 25, 50 or
-100, 25 by default) with First, Previous and Next, holds the requests up to the moment you opened it so paging does not
-shift, and the split Refresh button's body brings it up to now. An empty table reads "No requests match" with "Widen the
-date range or clear a filter." and "Reset filters", which clears the filters, the search and the range. What each figure
-means is on [Statistics](statistics.md).
+shows Time, Model, Status and Attempts alone while the drawer is open. A row older than a day prints its date before the
+time, so a 7-day or 30-day range reads without the hover. The model column reads the family and version with the whole
+id on hover. The client column reads the class the router derived from the user agent (`claude-code/<entrypoint>`
+or `other`), whole on hover, with the agent type beneath it on a subagent's turn.
+Status reads the code with the outcome word beside it where the
+request did not succeed (`canceled`, `exhausted`, `failed`, `incomplete` or `rejected`). One row is one client request
+however many attempts it took: Attempts reads `2 attempts` with the trail of account and status on hover, nothing for a
+request of one attempt, and a `held {time}` badge for a request that waited for a slot while every account was at its
+cap. Cost reads in the top bar's unit. Under Native a request a subscription window paid reads its 20x 5-hour equivalent
+over its 20x 7-day one (`1.47% 20x 5h` over `0.244% 20x 7d`), with every window, the model week among them, and the
+dollar equivalent on hover. Under the four other positions it reads its account's own window shares, each with its
+window's short word (`0.12% Fable week` over `0.42% 5h`, the full labels on hover). An overage, fast mode or API-key
+request reads dollars under every position, and a figure an estimate priced leads with `~`, its hover adding "Estimated
+at the model tier's latest weighted model". The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First,
+Previous and Next, holds the requests up to the moment you opened it so paging does not shift, and the split Refresh
+button's body brings it up to now. An empty table reads "No requests match" with "Widen the date range or clear a
+filter." and "Reset filters", which clears the filters, the search and the range. What each figure means is on
+[Statistics](statistics.md).
 
 Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
 and the choice stays with the open page, out of its address. At each interval it reads the list again, a preset's range
@@ -823,19 +823,20 @@ the bar is open, with the interval kept and the cause named in the dropdown's ti
 than a minute in the past when the page took it has nothing new to read, so the dropdown reads Off and stays disabled,
 while a link whose range ends at the moment it was made reads on, each read refreshing the rows inside it.
 
-A row reads Time (a decision's request beneath it as a link to the request's drawer), Kind (a decision in a filled badge
-with `attempt 2/3` beneath a failover attempt, an event in an outlined one), Session (the first eight characters with
-the agent beneath), Account (a move names the account it left and the one it landed on), Model, By, Fact, and Details,
-which opens the request's drawer. By names what decided the row in one chip: the rule that fired (`spent rule`), the
-rung that placed it (`static rung`), the strategy and the tier's priority (`Pace P0`, whose hover is the Pace hint),
-where a hold waited (`cohort`, `session pin`), what exhausted the pool (`budget`, `cooldown`, `fast lane`), the refusal
-(`client drift`, `key revoked`), `no rule fired` for a renewal, or an event's reason (`window spent`, `429 on 5h`). Fact
-gives the value that made it so as a muted label with its value, `gap`, `idle`, `prefix`, `until`, a move's `runway` on
-its destination (a span such as `2 h 10 min`, `none` or `unbounded`) followed by `least bad` or `rewrite only` where the
-destination did not fit, or a renewal's window utilization, such as `5h 96%`, where that window's projection reached the
-ceiling. A verdict reads in one color across the rows, the card and the strip: good when it served the request, warning
-when it changed its course, critical for a refusal or an exhaustion, and neutral for none and no. Every account, key,
-pool, model, session and request a row names is a link.
+A row reads Time (dated past a day as on the Requests view, a decision's request beneath it as a link to the request's
+drawer), Kind (a decision in a filled badge with `attempt 2/3` beneath a failover attempt, an event in an outlined one),
+Session (the first eight characters with the agent beneath), Account (a move names the account it left and the one it
+landed on), Model, By, Fact, and Details, which opens the request's drawer. By names what decided the row in one chip:
+the rule that fired (`spent rule`), the rung that placed it (`static rung`), the strategy and the tier's priority
+(`Pace P0`, whose hover is the Pace hint), where a hold waited (`cohort`, `session pin`), what exhausted the pool
+(`budget`, `cooldown`, `fast lane`), the refusal (`client drift`, `key revoked`), `no rule fired` for a renewal, or an
+event's reason (`window spent`, `429 on 5h`). Fact gives the value that made it so as a muted label with its value,
+`gap`, `idle`, `prefix`, `until`, a move's `runway` on its destination (a span such as `2 h 10 min`, `none` or
+`unbounded`) followed by `least bad` or `rewrite only` where the destination did not fit, or a renewal's window
+utilization, such as `5h 96%`, where that window's projection reached the ceiling. A verdict reads in one color across
+the rows, the card and the strip: good when it served the request, warning when it changed its course, critical for a
+refusal or an exhaustion, and neutral for none and no. Every account, key, pool, model, session and request a row names
+is a link.
 
 Every row opens beneath itself. A decision row loads its record and draws the decision card. Its verdict line names the
 decision with its accounts and its pool as links ("Moved secondary to primary", "Attempt 2 of 2: placed on primary",
@@ -854,14 +855,16 @@ pin renewed in place." on a renewal and "Nothing was booked." on any other decis
 placement's partitions draw as the stations Spent, At cap, No fit and Winding down. A click or a hover on a station, a
 candidate or a terminus opens its facts in a popover, and Tab, Enter, Space and Escape walk them from the keyboard.
 
-"Candidates, in the walk's order" lists every pool member with the chosen or held-on member tinted: Account with its
-plan beneath, Tier (`plan P0`, `overage P0`, `keys P1`), 5h, 7d and Fable as three lines each (the utilization, the
-reset, the reading's source and age), Projection and Runway, In flight against the cap, the Pace score, Prefix, and
-Verdict. Projection reads one line per window the candidate reports, the projection at the window's horizon,
-`5h 99% at 18:20` where the horizon is the reset and `7d 41% in 5 h` where it falls earlier, and Runway a span
-(`2 h 10 min`), `none` or `unbounded`, each a dash for a candidate the gate did not read. The Pace score stands under a
-header naming the window it read, `Spare rate, 7-day per hour` or `Spare rate, Fable week per hour` (`Pace` where no
-subscription candidate names one, and `Pace, 7-day left per hour` on a version 1 record), each cell's hover reading
+"Candidates, by rank" lists every pool member with the chosen or held-on member tinted: Account with its plan beneath,
+Tier (`plan P0`, `overage P0`, `keys P1`), 5h, 7d and Fable as three lines each (the utilization, the reset, the
+reading's source and age), Projection and Runway, In flight against the cap, the Pace score, Prefix, and Verdict. The
+rows list the chosen, renewed or held-on member first, then the ranked members by rank, then the eligible ones the
+strategy did not rank, then the ones a partition or a check dropped with their obstacle. Projection reads one line per
+window the candidate reports, the projection at the window's horizon, `5h 99% at 18:20` where the horizon is the reset
+and `7d 41% in 5 h` where it falls earlier, and Runway a span (`2 h 10 min`), `none` or `unbounded`, each a dash for a
+candidate the gate did not read. The Pace score stands under a header naming the window it read,
+`Spare rate, 7-day per hour` or `Spare rate, Fable week per hour` (`Pace` where no subscription candidate names one, and
+`Pace, 7-day left per hour` on a version 1 record), each cell's hover reading
 `{pct} of the 7-day window left over {n} h to its reset at {time}, less {burn} of burn: {rate}.` (or
 `to its subscription's end at {time}`) followed by `Inside its tier, the highest spare rate wins.` Verdict carries the
 one chip that decided it (`429 on 5h until 15:42`, `budget $1.10 of $5.00`), whose hover says why the member was passed

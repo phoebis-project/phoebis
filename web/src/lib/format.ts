@@ -182,6 +182,16 @@ export function instant(ms: number, now: number): string {
   return `${new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${fmtShortTime(at)}`;
 }
 
+/**
+ * The clock time within a day of `now`, else the date before it ("Sep 14 09:12:05"), the seconds kept and the threshold
+ * `instant`'s, so the two agree on which rows carry a date.
+ */
+export function fmtDatedTime(isoTime: string, now: number): string {
+  const ms = Date.parse(isoTime);
+  if (Math.abs(ms - now) < 86_400_000) return fmtTime(isoTime);
+  return `${new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${fmtTime(isoTime)}`;
+}
+
 /** A custom span's words: the times alone inside one local calendar day, the date before each time across days. */
 export function spanText(fromMs: number, toMs: number): string {
   const from = new Date(fromMs);

@@ -794,6 +794,37 @@ async function routingLogColumns(theme) {
 }
 
 /**
+ * `path` loaded as the view loop loads a view, from the pass's origin, so a measure that leaves the bare view and
+ * loads it again hands the shot and the measures after it the view as it first drew.
+ */
+async function loadAtOrigin(path, wait) {
+  await page.clock.setSystemTime(clockOrigin);
+  await page.goto(`${base}${path}`);
+  await booted();
+  await advance(LOAD_MS);
+  await page.waitForSelector(wait, { timeout: 15_000 }).catch(() => {});
+}
+
+/**
+ * The routing log's Time cells under the 7-day range on the state changes alone, where the mock story's changes of two
+ * and three days back stand on the first page beside today's, so a cell prints its date before the time: each cell's
+ * text width against its content box, its lines and its height against the row's other cells are recorded. The mock
+ * pass fails a page that draws no dated cell. The router's seed draws no row older than a day, so its pass records
+ * that the read stands down. The bare log loads again after.
+ */
+async function routingLogDatedTime(theme) {
+  try {
+    await loadAtOrigin('/routing-log?range=7d&kinds=account_state_changed', '.routing-log__table');
+    const read = timeFit(await page.evaluate(timeCellsOf, '.routing-log__table'));
+    if (!mock && read.dated.length === 0) measurements.push(`${theme} /routing-log dated Time cells skipped: the seed draws no row older than a day (${read.cells} rows under 7d)`);
+    else measurements.push(`${theme} /routing-log dated Time cells under 7d ${JSON.stringify(read)}`);
+    if (mock && read.dated.length === 0) failures.push(`${theme} /routing-log: no Time cell under 7d on the state changes prints its date, so the dated form is not measured`);
+  } finally {
+    await loadAtOrigin('/routing-log', '.routing-log__table');
+  }
+}
+
+/**
  * The Diagnostics group: on the Dashboard with the expert view off the sidebar draws neither the heading nor the
  * Routing log link, and with the log open both are drawn and the link is the active one.
  */
@@ -3527,12 +3558,72 @@ async function analyticsColumns(theme) {
 }
 
 /**
- * The request table's room, as the fit measures read it: how much the table needs of its wrap, its narrowest layout,
- * the columns' widths, the Client text's cut, the TTFB cells' lines, and the Cost cells that read a share or a 20x
- * equivalent.
+ * A log table's Time cells as the browser lays them out, run in the page: per cell its leading text (the date and the
+ * time, ahead of the id or the request link beneath it), that text's width, its lines and how far it runs past the
+ * cell's content box through a `Range` over it, and the cell's content height against the tallest of its row's other
+ * cells. A cell is dated when its text leads with the month and the day. Null where the table is not drawn.
  */
-function readRequestsTable() {
-  return page.evaluate(() => {
+function timeCellsOf(selector) {
+  const table = document.querySelector(selector);
+  if (!table) return null;
+  const at = [...table.querySelectorAll('thead th')].findIndex((th) => th.textContent?.trim() === 'Time');
+  const round = (n) => Math.round(n * 10) / 10;
+  const contentHeight = (td) => {
+    const range = document.createRange();
+    range.selectNodeContents(td);
+    return range.getBoundingClientRect().height;
+  };
+  // A placeholder or an open row's panel is one cell across the table, so it has no Time cell.
+  return [...table.querySelectorAll('tbody tr')]
+    .filter((tr) => at >= 0 && tr.children.length > at)
+    .map((tr) => {
+      const td = tr.children[at];
+      const lead = td.firstChild?.nodeType === Node.TEXT_NODE ? td.firstChild : null;
+      const range = document.createRange();
+      if (lead) range.selectNode(lead);
+      const rects = lead ? [...range.getClientRects()].filter((r) => r.width > 0) : [];
+      const style = getComputedStyle(td);
+      const box = td.getBoundingClientRect();
+      const left = box.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft);
+      const right = box.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight);
+      const others = [...tr.children].filter((c) => c !== td && getComputedStyle(c).display !== 'none').map(contentHeight);
+      return {
+        box: round(right - left),
+        dated: /^[A-Z][a-z]{2} \d{1,2} /.test(lead?.textContent ?? ''),
+        height: round(contentHeight(td)),
+        lines: new Set(rects.map((r) => Math.round(r.top))).size,
+        others: round(Math.max(0, ...others)),
+        past: round(Math.max(0, ...rects.map((r) => Math.max(left - r.left, r.right - right)))),
+        text: lead?.textContent ?? '',
+        width: round(lead ? range.getBoundingClientRect().width : 0),
+      };
+    });
+}
+
+/**
+ * The Time cells' read for a measurements line: the count, each dated cell's text, width, content box, lines, height and
+ * its row's tallest other cell, the widest cell's figures, and the texts of the cells that break over two lines, run
+ * past their content box by more than half a pixel or stand more than a pixel taller than their row's other cells.
+ */
+function timeFit(cells) {
+  const list = cells ?? [];
+  return {
+    cells: list.length,
+    dated: list.filter((c) => c.dated).map((c) => [c.text, c.width, c.box, c.lines, c.height, c.others]),
+    past: list.filter((c) => c.past > 0.5).map((c) => c.text),
+    split: list.filter((c) => c.lines > 1).map((c) => c.text),
+    taller: list.filter((c) => c.height > c.others + 1).map((c) => c.text),
+    widest: list.reduce((w, c) => (w === null || c.width > w.width ? c : w), null),
+  };
+}
+
+/**
+ * The request table's room, as the fit measures read it: how much the table needs of its wrap, its narrowest layout,
+ * the columns' widths, the Client text's cut, the TTFB cells' lines, the Cost cells that read a share or a 20x
+ * equivalent, and the Time cells' fit.
+ */
+async function readRequestsTable() {
+  const read = await page.evaluate(() => {
     const table = document.querySelector('.requests__table');
     const wrap = table?.closest('.table-wrap');
     if (!table || !wrap) return null;
@@ -3585,6 +3676,7 @@ function readRequestsTable() {
       ttfb: { cells: ttfb.length, split: ttfb.filter((td) => lines(td) > 1).map((td) => td.textContent?.trim() ?? '') },
     };
   });
+  return read && { ...read, time: timeFit(await page.evaluate(timeCellsOf, '.requests__table')) };
 }
 
 /**
@@ -3595,22 +3687,33 @@ function readRequestsTable() {
  * the 990 px card (its default set runs past 990 px there with the fills at their floors), so in the mock pass the
  * width is recorded and the table scrolls inside its wrap. In both passes each cut Client text
  * holds at least sixteen characters of its font, the fills' floor. The share measure below reads the same
- * width with the Cost column's widest text.
+ * width with the Cost column's widest text. Under a `range` the page was loaded on, the Time cells' fit is held as
+ * well: a cell whose date and time break over two lines, run past its content box or stand taller than the row's other
+ * cells fails. Neither pass draws a request older than a day there, since the mock's story and the router's seed both
+ * lie within the day before the pass's clock, so the smoke's clock case holds the dated text and
+ * `routingLogDatedTime` lays a dated cell out.
  */
-async function requestsTableFits(theme) {
+async function requestsTableFits(theme, range = null) {
   const read = await readRequestsTable();
-  measurements.push(`${theme} /requests table ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}, client text ${JSON.stringify(read.classes)}, floor ${JSON.stringify(read.floor)}, TTFB ${JSON.stringify(read.ttfb)}`}`);
+  const under = range === null ? '' : ` under ${range}`;
+  measurements.push(`${theme} /requests table${under} ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}, client text ${JSON.stringify(read.classes)}, floor ${JSON.stringify(read.floor)}, TTFB ${JSON.stringify(read.ttfb)}, Time ${JSON.stringify(read.time)}`}`);
   if (read === null) {
-    failures.push(`${theme} /requests: no request table to measure`);
+    failures.push(`${theme} /requests${under}: no request table to measure`);
     return;
   }
-  if (read.drawer) failures.push(`${theme} /requests: the drawer is open, so the default set is not measured alone`);
-  if (!mock && read.scroll > read.client) failures.push(`${theme} /requests: the table needs ${read.scroll}px of its wrap's ${read.client}px`);
-  if (read.classes.shown > 0 && JSON.stringify(read.classes.ellipsis) !== JSON.stringify(['ellipsis'])) failures.push(`${theme} /requests: the Client text overflows as ${read.classes.ellipsis.join(', ')}, not behind an ellipsis`);
-  for (const text of read.classes.untitled) failures.push(`${theme} /requests: the cut Client text "${text}" does not carry its whole class on the cell's title`);
-  for (const text of read.floor.short) failures.push(`${theme} /requests: the cut text ${text}`);
-  if (read.rows > 0 && read.ttfb.cells === 0) failures.push(`${theme} /requests: no TTFB cell to measure`);
-  for (const text of read.ttfb.split) failures.push(`${theme} /requests: the TTFB cell "${text}" draws its figure and its unit on two lines`);
+  const say = (what) => failures.push(`${theme} /requests${under}: ${what}`);
+  if (read.drawer) say('the drawer is open, so the default set is not measured alone');
+  if (!mock && read.scroll > read.client) say(`the table needs ${read.scroll}px of its wrap's ${read.client}px`);
+  if (read.classes.shown > 0 && JSON.stringify(read.classes.ellipsis) !== JSON.stringify(['ellipsis'])) say(`the Client text overflows as ${read.classes.ellipsis.join(', ')}, not behind an ellipsis`);
+  for (const text of read.classes.untitled) say(`the cut Client text "${text}" does not carry its whole class on the cell's title`);
+  for (const text of read.floor.short) say(`the cut text ${text}`);
+  if (read.rows > 0 && read.ttfb.cells === 0) say('no TTFB cell to measure');
+  for (const text of read.ttfb.split) say(`the TTFB cell "${text}" draws its figure and its unit on two lines`);
+  if (range === null) return;
+  if (read.rows > 0 && read.time.cells === 0) say('no Time cell to measure');
+  for (const text of read.time.split) say(`the Time cell "${text}" breaks over two lines`);
+  for (const text of read.time.past) say(`the Time cell "${text}" runs past its cell`);
+  for (const text of read.time.taller) say(`the Time cell "${text}" stands taller than its row's other cells`);
 }
 
 /**
@@ -3620,18 +3723,19 @@ async function requestsTableFits(theme) {
  * count of cells whose main line or `.sub` reads one is asserted above zero: a page with no such cell would measure
  * the table without the widest text. The need, the wrap's width and the Cost column's width are recorded: the story's
  * values run wider than the 990 px card with the fills at their floors, so the table scrolls inside its wrap there and
- * the width is a record, as in `requestsTableFits`.
+ * the width is a record, as in `requestsTableFits`, under the `range` the page was loaded on as well.
  */
-async function requestsTableFitsWithShares(theme) {
+async function requestsTableFitsWithShares(theme, range = null) {
   const read = await readRequestsTable();
+  const under = range === null ? '' : ` under ${range}`;
   const cost = read?.columns.find(([label]) => label === 'Cost')?.[1] ?? null;
-  measurements.push(`${theme} /requests table with shares ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, Cost column ${cost}px, ${read.shares} of ${read.rows} Cost cells read a 20x equivalent or a share`}`);
+  measurements.push(`${theme} /requests table with shares${under} ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, Cost column ${cost}px, ${read.shares} of ${read.rows} Cost cells read a 20x equivalent or a share`}`);
   if (read === null) {
-    failures.push(`${theme} /requests: no request table to measure with shares`);
+    failures.push(`${theme} /requests${under}: no request table to measure with shares`);
     return;
   }
-  if (read.drawer) failures.push(`${theme} /requests: the drawer is open, so the default set is not measured with shares alone`);
-  if (read.shares === 0) failures.push(`${theme} /requests: no Cost cell of the default set reads a 20x equivalent or a share, so the table is measured without the widest text`);
+  if (read.drawer) failures.push(`${theme} /requests${under}: the drawer is open, so the default set is not measured with shares alone`);
+  if (read.shares === 0) failures.push(`${theme} /requests${under}: no Cost cell of the default set reads a 20x equivalent or a share, so the table is measured without the widest text`);
 }
 
 /**
@@ -7619,6 +7723,11 @@ try {
       if (view.path === '/requests') {
         await requestsTableFits(theme);
         if (mock) await requestsTableFitsWithShares(theme);
+        // The 7-day range is read once more, and the bare log loads again for the measures after it and the shot.
+        await loadAtOrigin('/requests?range=7d', '.requests__table');
+        await requestsTableFits(theme, '7d');
+        if (mock) await requestsTableFitsWithShares(theme, '7d');
+        await loadAtOrigin('/requests', '.requests__table');
         // The Status, Attempts and links cells drop their second item under the first, and the links column's header
         // is empty. In the mock pass the story's values run past the card, so the table's width is a record there.
         await tableColumns(theme, 'requests', '.requests__table', ['Client'], 0, { overflowRecorded: mock, wrapping: ['Status', 'Attempts', ''] });
@@ -7628,6 +7737,8 @@ try {
       if (view.path === '/routing-log') {
         await routingLogColumns(theme);
         await diagnosticsNav(theme, view.path);
+        // Before the first decision opens, since the read leaves the bare log and loads it again.
+        await routingLogDatedTime(theme);
         await firstDecisionOpen(theme);
         await pagerControls(theme, view.path);
       }
