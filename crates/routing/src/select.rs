@@ -1217,12 +1217,16 @@ fn run(
                     Some(("released", None))
                 } else {
                     healed(state, snapshot, pool, &current, request.now)
-                        .map(|projection| ("healed", Some(projection)))
+                        .map(|heal| ("healed", Some(heal)))
                 };
-                if let Some((reason, projection)) = cleared_as {
+                if let Some((reason, heal)) = cleared_as {
                     if let Some(cleared) = state.clear_mark(&key) {
-                        rec.mark_cleared =
-                            Some(mark_cleared_of(&current, reason, projection, request.now));
+                        rec.mark_cleared = Some(mark_cleared_of(
+                            &current,
+                            reason,
+                            heal.as_ref(),
+                            request.now,
+                        ));
                         writes.push(StateWrite::UpsertPin(cleared.clone()));
                         current = cleared;
                         marked = false;
@@ -2180,6 +2184,10 @@ pub fn seconds_ms(seconds: u64) -> i64 {
 }
 
 pub(crate) const FIVE_HOUR_MS: i64 = 5 * 3_600_000;
+
+/// The safety wait: the stretch has to read over the threshold at a pinned selection and still read over it at one
+/// this much later before the round fires, so one large turn's charge does not fire a round on its own.
+pub const SLOW_DOWN_WAIT_MS: i64 = 120_000;
 
 /// A slow-down hold under a second is not served: the relay's tick is 250 ms and a second selection costs more than
 /// the hold buys, so the pin renews unslowed and the next request reads again.
@@ -3209,9 +3217,10 @@ fn move_of<'a>(
         );
         return MoveVerdict::Stay;
     }
-    // The shed rule's one trigger: the projection at its horizon over the ceiling, tested on every plan window the
-    // pool's pins on the account draw, in the windows' order, one round per selection at most. The line names every
-    // projection it read whether or not one fired.
+    // The shed rule's trigger, tested on every plan window the pool's pins on the account draw, in the windows' order,
+    // one round per selection at most: on a pool that slows its pins the 5-hour window's is the stretch over the
+    // threshold after the safety wait, every other window's the projection at its horizon over the ceiling. The line
+    // names every projection it read whether or not one fired.
     let source = current.account_id.as_str();
     let tier = snapshot.tier(source).unwrap_or_default();
     let projections = projections_of(state, snapshot, pool, source, tier, now, BurnRead::Achieved);
@@ -3229,13 +3238,21 @@ fn move_of<'a>(
         facts.push(Fact::int(until, projection.horizon).unit("time"));
     }
     facts.push(Fact::number("ceiling", ceiling(pool, FIVE_HOUR)).unit("percent"));
-    let trigger = trigger_of(pool, &projections, &windows, now);
+    let over_since = slowed
+        .and(state.slow_down_state(&pool.id, source))
+        .and_then(|entry| entry.over_since);
+    // A decision inside the safety wait says how long the stretch has read over the threshold.
+    if let Some(since) = over_since.filter(|since| now - since < SLOW_DOWN_WAIT_MS) {
+        facts.push(Fact::int("over_ms", now - since).unit("ms"));
+    }
+    let trigger = trigger_of(pool, &projections, slowed, over_since, &windows, now);
     rec.trigger_windows = windows;
     let Some(trigger) = trigger else {
         rule_line(rec, 4, "no", facts, &pace_facts);
         return MoveVerdict::Stay;
     };
     facts.push(Fact::text("trigger", trigger.window));
+    facts.push(Fact::text("fired_by", trigger.source));
     facts.push(Fact::number("excess", trigger.excess * 3_600.0).unit("percent_per_hour"));
     if state
         .last_shed(&pool.id, source)
@@ -3631,8 +3648,8 @@ fn burn_unit(
     BurnUnit::of(kind, state.in_overage(account_id, now, fallback_ms))
 }
 
-/// What fired a round: the first plan window, in the trigger's order, whose projection at its horizon reads over its
-/// ceiling. `excess` is share per second on `window`.
+/// What fired a round: the first plan window, in the trigger's order, whose test read over. `excess` is share per
+/// second on `window`.
 pub(crate) struct Trigger {
     pub window: &'static str,
     /// The prediction at the round's instant.
@@ -3641,6 +3658,14 @@ pub(crate) struct Trigger {
     pub horizon: i64,
     pub ceiling: f64,
     pub excess: f64,
+    /// `projection` when the projection at the window's horizon fired the round, `slow_down` when the stretch did.
+    pub source: &'static str,
+    /// The account's stretch and the pool's threshold, under `slow_down`.
+    pub stretch_ms: Option<i64>,
+    pub threshold_ms: Option<i64>,
+    /// The account's factor and the speed its demand was read at, where the account has a slow-down read.
+    pub factor: Option<f64>,
+    pub speed: Option<f64>,
 }
 
 /// A mark the round made: the pin and the destination the round found for it.
@@ -3688,17 +3713,50 @@ fn trigger_windows(
         .collect()
 }
 
-/// What fires a round, if anything: the first of `windows` whose projection at its horizon reads over the window's
-/// ceiling, strictly. The excess is share per second on that window: the burn that, removed now, lands the projection
-/// on the ceiling at the horizon.
+/// What fires a round, if anything: the first of `windows` whose test reads over. The excess is share per second on
+/// that window: the burn that, removed now, lands the projection on the ceiling at the horizon.
+///
+/// On a pool that slows its pins the 5-hour window's test is the stretch: it fires once `over_since`, the instant the
+/// stretch first read over the threshold, is `SLOW_DOWN_WAIT_MS` past, with the horizon at the reset less the
+/// threshold and the demand's projection there over the ceiling. Removing the excess then brings the remaining
+/// demand's stretch to the threshold, so the round takes what the slow-down cannot cover. A reset nearer than the
+/// threshold puts that horizon at or before `now` and fires nothing, since the slow-down alone holds the window to its
+/// reset, and an account with no read fires nothing on the window. Every other window's test is the projection at its
+/// horizon over the window's ceiling, strictly, on the achieved burn.
 fn trigger_of(
     pool: &PoolRow,
     projections: &BTreeMap<String, Projection>,
+    read: Option<&SlowDownRead>,
+    over_since: Option<i64>,
     windows: &[&'static str],
     now: i64,
 ) -> Option<Trigger> {
     windows.iter().find_map(|window| {
         let limit = ceiling(pool, window);
+        if *window == FIVE_HOUR && slow_down(pool) {
+            let read = read?;
+            over_since.filter(|since| now - since >= SLOW_DOWN_WAIT_MS)?;
+            let horizon = read.horizon - read.threshold_ms;
+            if horizon <= now {
+                return None;
+            }
+            let to_horizon = seconds(horizon - now);
+            let projection = read.utilization + read.demand * to_horizon;
+            // A burn of nothing at the ceiling reads a stretch of the whole time to the reset with nothing to remove.
+            return (projection > limit).then_some(Trigger {
+                window,
+                utilization: read.utilization,
+                projection,
+                horizon,
+                ceiling: limit,
+                excess: (projection - limit) / to_horizon.max(1.0),
+                source: "slow_down",
+                stretch_ms: Some(read.stretch_ms),
+                threshold_ms: Some(read.threshold_ms),
+                factor: Some(read.factor),
+                speed: Some(read.speed),
+            });
+        }
         let projection = projections
             .get(*window)
             .filter(|projection| projection.at_horizon > limit)?;
@@ -3710,23 +3768,51 @@ fn trigger_of(
             ceiling: limit,
             // A horizon at `now` would divide by nothing: the excess then reads the whole overrun as one second's.
             excess: (projection.at_horizon - limit) / seconds(projection.horizon - now).max(1.0),
+            source: "projection",
+            stretch_ms: None,
+            threshold_ms: None,
+            factor: read.map(|read| read.factor),
+            speed: read.map(|read| read.speed),
         })
     })
 }
 
-/// Whether a marked pin's trigger reads gone at `now`: the account's projection on the mark's window at its horizon
-/// under the ceiling, strictly, since a reading at the ceiling leaves the pin's next turn no room. Answers the healing
-/// projection, `None` for a mark that stands or whose window the account has no reading of.
+/// What the heal check read when it cleared a mark: the healing projection, with the stretch and the threshold where
+/// the stretch healed it.
+struct Healed {
+    projection: f64,
+    stretch_ms: Option<i64>,
+    threshold_ms: Option<i64>,
+}
+
+/// Whether a marked pin's window reads back under the round's test at `now`, the test the window fires on. A 5-hour
+/// mark on a pool that slows its pins heals when the stretch reads at or under the threshold, read here since the heal
+/// runs ahead of the selection's own read, and answers the demand's projection at the reset less the threshold, or the
+/// prediction where that instant has passed, since no horizon lies ahead to price. Every other mark heals when the
+/// projection on its window at its horizon, on the achieved burn, reads under the ceiling, strictly, since a reading at
+/// the ceiling leaves the pin's next turn no room. `None` for a mark that stands or whose window the account has no
+/// read of.
 fn healed(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
     pin: &PinRow,
     now: i64,
-) -> Option<f64> {
+) -> Option<Healed> {
     let window = pin.marked_window.as_deref()?;
     let tier = snapshot.tier(&pin.account_id).unwrap_or_default();
-    // The trigger the mark was made on reads the achieved burn, so its heal reads the same.
+    if window == FIVE_HOUR && slow_down(pool) {
+        let read = slow_down_of(state, snapshot, pool, &pin.account_id, tier, now)?;
+        if read.stretch_ms > read.threshold_ms {
+            return None;
+        }
+        let ahead = (read.horizon - read.threshold_ms - now).max(0);
+        return Some(Healed {
+            projection: read.utilization + read.demand * seconds(ahead),
+            stretch_ms: Some(read.stretch_ms),
+            threshold_ms: Some(read.threshold_ms),
+        });
+    }
     let projection = projection_of(
         state,
         snapshot,
@@ -3737,14 +3823,18 @@ fn healed(
         now,
         BurnRead::Achieved,
     )?;
-    (projection.at_horizon < ceiling(pool, window)).then_some(projection.at_horizon)
+    (projection.at_horizon < ceiling(pool, window)).then_some(Healed {
+        projection: projection.at_horizon,
+        stretch_ms: None,
+        threshold_ms: None,
+    })
 }
 
-/// The facts of the mark `row` carries, as the decision clears it for `reason`.
+/// The facts of the mark `row` carries, as the decision clears it for `reason`, with what the heal read on `healed`.
 fn mark_cleared_of(
     row: &PinRow,
     reason: &'static str,
-    projection: Option<f64>,
+    heal: Option<&Healed>,
     now: i64,
 ) -> MarkClearedFacts {
     MarkClearedFacts {
@@ -3752,7 +3842,9 @@ fn mark_cleared_of(
         marked_at: row.marked_at.unwrap_or(now),
         marked_on: row.marked_on.clone().unwrap_or_default(),
         marked_window: row.marked_window.clone().unwrap_or_default(),
-        projection,
+        projection: heal.map(|heal| heal.projection),
+        stretch_ms: heal.and_then(|heal| heal.stretch_ms),
+        threshold_ms: heal.and_then(|heal| heal.threshold_ms),
     }
 }
 
@@ -3849,11 +3941,12 @@ fn destination_of(
 /// A shedding round over the pool's pins on the account `current` sits on: every pin of it under one of the pool's
 /// keys, ordered as the anchor table prices them (cold first by burn, then warm by burn over rewrite cost, bounded by
 /// `warm_sessions`, a fast-lane pin out of a window-share round), then walked while the removed burn is under the
-/// target, `min(excess, shed_cap x burn_sum)` on the trigger's window. A standing mark is a move pending, so its burn
-/// counts as removed and the pin is skipped. The last unmarked pin and an unpriced one are never marked, and a pin
-/// with no fitting destination counts nothing. Each mark plans a reservation on its destination, which the next pin's
-/// fit counts, so a sibling's headroom is taken once. The current pin's warmth and lane are this request's, every
-/// other pin's the stored ones.
+/// target, `min(excess, shed_cap x burn_sum)` on the trigger's window. Once one pin's burn covers what the target still
+/// asks, the walk marks the covering pin whose move costs the least, `cheapest` on the record, rather than the next in
+/// the order. A standing mark is a move pending, so its burn counts as removed and the pin is skipped. The last
+/// unmarked pin and an unpriced one are never marked, and a pin with no fitting destination counts nothing. Each mark
+/// plans a reservation on its destination, which the next pin's fit counts, so a sibling's headroom is taken once. The
+/// current pin's warmth and lane are this request's, every other pin's the stored ones.
 #[allow(clippy::too_many_arguments)]
 fn shed_round(
     state: &RoutingState,
@@ -3921,7 +4014,13 @@ fn shed_round(
     // The walk's figures: each pin's burn on the trigger's window in share per second, `None` for a pin the pricer
     // does not weight, and the record's figures per hour. A pin whose model does not draw the window burns nothing
     // there whatever the pricer answers, since the projection that fired summed the burn of the drawing models alone.
+    // Under the stretch the excess is the demand's, so each pin's rate reads over the speed that demand was read at
+    // and the round removes what the slow-down cannot cover in the excess's own units.
     let tier = snapshot.tier(account_id).unwrap_or_default();
+    let speed = trigger
+        .speed
+        .filter(|speed| trigger.source == "slow_down" && *speed > 0.0)
+        .unwrap_or(1.0);
     let share_of = |p: &PinRow| {
         plan_windows(&p.model)
             .any(|window| window == trigger.window)
@@ -3931,7 +4030,7 @@ fn shed_round(
                     .rate(trigger.window, tier, &p.model, &p.burn, now)
             })
             .flatten()
-            .map(|rate| burn_decayed(rate, p.burn_at, now, average_ms))
+            .map(|rate| burn_decayed(rate, p.burn_at, now, average_ms) / speed)
     };
     let per_hour = |share: f64| share * 3_600.0;
     let burn_sum: f64 = ordered.iter().filter_map(share_of).sum();
@@ -3949,53 +4048,113 @@ fn shed_round(
     let mut marks: Vec<Mark> = Vec::new();
     let mut planned: Vec<Reservation> = Vec::new();
     let mut reads: HashMap<PinKey, PinRead> = HashMap::new();
-    for (index, p) in ordered.iter().enumerate() {
+    let past_the_cold =
+        |index: usize| pool.shedding.warm_sessions == WarmSessions::Never && index >= cold_count;
+    // The destination `p`'s own move would take beside the round's earlier marks, the figures the record shows of it,
+    // and the booking a mark plans there: `no_runway` where nothing fits.
+    let plan_of = |p: &PinRow, planned: &[Reservation]| {
+        let req = pin_request(request, p, is_current(p));
         let mut read = PinRead::default();
+        let Some((destination, fit)) = destination_of(
+            state,
+            snapshot,
+            pool,
+            &req,
+            eligible,
+            p,
+            planned,
+            now,
+            dwell_ms,
+            fallback_ms,
+        ) else {
+            read.skip = Some("no_runway");
+            return (read, None);
+        };
+        let destination_tier = snapshot.tier(&destination).unwrap_or_default();
+        let (rewrite, pin_burn) =
+            pin_figures(state, pool, &req, Figures::Pin(p), destination_tier, now);
+        read.runway_ms = fit.runway_ms;
+        read.rewrite = rewrite.get(trigger.window).copied();
+        let booking = Reservation {
+            account_id: destination,
+            attempt: request.attempt,
+            pin: Some(p.key()),
+            booked_at: now,
+            rewrite,
+            burn: pin_burn,
+            expires_at: now.saturating_add(IN_FLIGHT_RECLAIM_MS),
+        };
+        (read, Some(booking))
+    };
+    // A move's cost in cache terms: a warm pin pays its rewrite on its destination, while a cold pin's cache is
+    // rewritten wherever it runs next, the reason the order walks the cold pins first, so its move costs nothing. Under
+    // `always` the order ignores warmth, and every pin pays its rewrite. A pin with no prompt size reported costs
+    // nothing, as the order ranks it.
+    let cost_of = |p: &PinRow, read: &PinRead| {
+        if pool.shedding.warm_sessions == WarmSessions::Always || !is_cold(p) {
+            read.rewrite.unwrap_or(0.0)
+        } else {
+            0.0
+        }
+    };
+    let mut met = false;
+    let mut cheapest: Option<PinKey> = None;
+    for (index, p) in ordered.iter().enumerate() {
+        // A covering pin the pick read at an earlier position keeps what its gate found there.
+        let mut read = reads.remove(&p.key()).unwrap_or_default();
         if mark_holds(p) {
             read.skip = Some("standing");
-        } else if removed >= target
-            || (pool.shedding.warm_sessions == WarmSessions::Never && index >= cold_count)
-        {
+        } else if met || removed >= target || past_the_cold(index) {
             // The target is met, or `never` stops after the cold pins: the rest of the order is left as it is.
         } else if marks.len() + standing + 1 >= total {
             // The last unmarked pin stays whatever the target still asks, so no round takes all of an account's
             // burn. An indivisible pin may carry the removed burn past the target, and the walk stops there.
             read.skip = Some("last_pin");
         } else if let Some(burn) = share_of(p) {
-            let req = pin_request(request, p, is_current(p));
-            match destination_of(
-                state,
-                snapshot,
-                pool,
-                &req,
-                eligible,
-                p,
-                &planned,
-                now,
-                dwell_ms,
-                fallback_ms,
-            ) {
-                None => read.skip = Some("no_runway"),
-                Some((destination, fit)) => {
-                    let destination_tier = snapshot.tier(&destination).unwrap_or_default();
-                    let (rewrite, pin_burn) =
-                        pin_figures(state, pool, &req, Figures::Pin(p), destination_tier, now);
-                    read.runway_ms = fit.runway_ms;
-                    read.rewrite = rewrite.get(trigger.window).copied();
+            // The cheapest sufficient pin: a pin is indivisible, and for a rest under one pin's burn the order would
+            // mark the pin that sheds the most per token, however far its burn overshoots the rest. Once a pin from
+            // this position on covers the rest, the walk marks, among the covering pins the gate finds a destination
+            // for, the one whose move costs the least, the first in the order among equals, and the target is met.
+            let rest = target - removed;
+            let mut pick: Option<(f64, &PinRow, f64, Reservation)> = None;
+            for (offset, q) in ordered[index..].iter().enumerate() {
+                let Some(covers) = share_of(q).filter(|covers| *covers >= rest) else {
+                    continue;
+                };
+                if mark_holds(q) || past_the_cold(index + offset) {
+                    continue;
+                }
+                let (q_read, booking) = plan_of(q, &planned);
+                let cost = cost_of(q, &q_read);
+                if let Some(booking) = booking {
+                    if pick.as_ref().is_none_or(|(least, ..)| cost < *least) {
+                        pick = Some((cost, q, covers, booking));
+                    }
+                }
+                reads.insert(q.key(), q_read);
+            }
+            read = reads.remove(&p.key()).unwrap_or_default();
+            if let Some((_, q, covers, booking)) = pick {
+                marks.push(Mark {
+                    key: q.key(),
+                    planned: booking.account_id.clone(),
+                });
+                removed += covers;
+                planned.push(booking);
+                cheapest = Some(q.key());
+                met = true;
+            } else if burn < rest {
+                // No covering pin has a destination, so the order marks this pin where its own gate finds one. A
+                // covering pin here already reads the `no_runway` its gate found.
+                let (own, booking) = plan_of(p, &planned);
+                read = own;
+                if let Some(booking) = booking {
                     marks.push(Mark {
                         key: p.key(),
-                        planned: destination.clone(),
+                        planned: booking.account_id.clone(),
                     });
                     removed += burn;
-                    planned.push(Reservation {
-                        account_id: destination,
-                        attempt: request.attempt,
-                        pin: Some(p.key()),
-                        booked_at: now,
-                        rewrite,
-                        burn: pin_burn,
-                        expires_at: now.saturating_add(IN_FLIGHT_RECLAIM_MS),
-                    });
+                    planned.push(booking);
                 }
             }
         } else {
@@ -4039,7 +4198,11 @@ fn shed_round(
             } else {
                 read.and_then(|read| read.skip)
             },
-            note: is_current(p).then_some("current"),
+            note: if cheapest.as_ref() == Some(&p.key()) {
+                Some("cheapest")
+            } else {
+                is_current(p).then_some("current")
+            },
         }
     };
     let pins: Vec<ShedPinFacts> = ordered
@@ -4069,6 +4232,10 @@ fn shed_round(
         projection: trigger.projection,
         horizon: trigger.horizon,
         ceiling: trigger.ceiling,
+        trigger: trigger.source,
+        stretch_ms: trigger.stretch_ms,
+        threshold_ms: trigger.threshold_ms,
+        factor: trigger.factor,
         unit: unit.as_str(),
         burn_average_seconds: whole_seconds(average_ms),
         shed_cap: cap,

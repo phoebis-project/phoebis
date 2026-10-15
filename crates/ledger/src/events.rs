@@ -164,6 +164,8 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             marked_on,
             marked_window,
             projection,
+            stretch_ms,
+            threshold_ms,
             at,
         } => EventRecord {
             at: *at,
@@ -180,6 +182,8 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                     "marked_on": marked_on,
                     "marked_window": marked_window,
                     "projection": projection,
+                    "stretch_ms": stretch_ms,
+                    "threshold_ms": threshold_ms,
                 })
                 .to_string(),
             ),
@@ -1104,6 +1108,10 @@ mod tests {
                 projection: 0.97,
                 horizon: 19_000,
                 ceiling: 0.95,
+                trigger: "slow_down",
+                stretch_ms: Some(2_520_000),
+                threshold_ms: Some(1_800_000),
+                factor: Some(0.3),
                 unit: "window_share",
                 burn_average_seconds: 600,
                 shed_cap: 0.5,
@@ -1160,6 +1168,10 @@ mod tests {
             ("projection", json!(0.97)),
             ("horizon", json!(19_000)),
             ("ceiling", json!(0.95)),
+            ("trigger", json!("slow_down")),
+            ("stretch_ms", json!(2_520_000)),
+            ("threshold_ms", json!(1_800_000)),
+            ("factor", json!(0.3)),
             ("unit", json!("window_share")),
             ("burn_average_seconds", json!(600)),
             ("shed_cap", json!(0.5)),
@@ -1176,7 +1188,7 @@ mod tests {
         ] {
             assert_eq!(detail[field], value, "{field}");
         }
-        for absent in ["ahead", "elapsed_share", "threshold", "trigger"] {
+        for absent in ["ahead", "elapsed_share", "threshold"] {
             assert!(
                 detail.get(absent).is_none(),
                 "{absent} is no member of the round: {detail}"
@@ -1198,6 +1210,7 @@ mod tests {
                 "dwell_seconds",
                 "dwell_until",
                 "excess",
+                "factor",
                 "horizon",
                 "marks",
                 "outcome",
@@ -1207,7 +1220,10 @@ mod tests {
                 "reason",
                 "removed",
                 "shed_cap",
+                "stretch_ms",
                 "target",
+                "threshold_ms",
+                "trigger",
                 "unit",
                 "utilization",
                 "warm_sessions",
@@ -1387,6 +1403,8 @@ mod tests {
             marked_on: "a".into(),
             marked_window: "five_hour".into(),
             projection: Some(0.91),
+            stretch_ms: Some(1_440_000),
+            threshold_ms: Some(1_800_000),
             at: 6_000,
         })
         .expect("a mark row");
@@ -1410,7 +1428,8 @@ mod tests {
             detail_of(&row),
             json!({
                 "agent_id": "sub-1", "reason": "healed", "marked_at": 1_000, "marked_on": "a",
-                "marked_window": "five_hour", "projection": 0.91
+                "marked_window": "five_hour", "projection": 0.91, "stretch_ms": 1_440_000,
+                "threshold_ms": 1_800_000
             })
         );
 

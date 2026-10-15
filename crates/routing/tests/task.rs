@@ -6915,13 +6915,62 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
         .await
         .unwrap();
     let (summary, _) = next_decision(&mut events).await;
-    assert_eq!(summary.kind, "renewed", "s1 is not marked, so it stays");
+    assert_eq!(
+        summary.kind, "moved",
+        "the round marks s1, the request's own pin, which moves in the same selection"
+    );
     let key = |session: &str| PinKeyFacts {
         key_id: "k".into(),
         session_id: session.into(),
         agent_id: "main".into(),
         model: "claude-sonnet-5".into(),
     };
+    match next_event(&mut events).await {
+        RouterEvent::PinMigrated {
+            session_id,
+            from_account,
+            to_account,
+            reason,
+            ..
+        } => assert_eq!(
+            (
+                session_id.as_str(),
+                from_account.as_str(),
+                to_account.as_str(),
+                reason.as_str()
+            ),
+            ("s1", "a", "b", "shed")
+        ),
+        other => panic!("the move's pin event follows its decision, not {other:?}"),
+    }
+    match next_event(&mut events).await {
+        RouterEvent::MarkCleared {
+            account_id,
+            session_id,
+            reason,
+            marked_at,
+            marked_on,
+            marked_window,
+            projection,
+            stretch_ms,
+            threshold_ms,
+            ..
+        } => assert_eq!(
+            (
+                account_id.as_str(),
+                session_id.as_str(),
+                reason,
+                marked_at,
+                marked_on.as_str(),
+                marked_window.as_str(),
+                projection,
+                stretch_ms,
+                threshold_ms
+            ),
+            ("a", "s1", "moved", at, "a", "five_hour", None, None, None)
+        ),
+        other => panic!("the move clears the mark beside its pin event, not {other:?}"),
+    }
     match next_event(&mut events).await {
         RouterEvent::SheddingRound {
             account_id,
@@ -6951,6 +7000,16 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
                 (round.window.as_str(), round.unit, round.warm_sessions),
                 ("five_hour", "window_share", "when_needed")
             );
+            assert_eq!(
+                (
+                    round.trigger,
+                    round.stretch_ms,
+                    round.threshold_ms,
+                    round.factor
+                ),
+                ("projection", None, None, None),
+                "the pool runs no slow-down, so the projection fired the round"
+            );
             assert!((round.utilization - 0.9).abs() < 1e-9);
             assert!((round.ceiling - 0.95).abs() < 1e-9);
             assert_eq!(round.horizon, at + 5 * HOUR, "no reset, so five hours out");
@@ -6966,10 +7025,11 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
                     .map(|p| (p.session_id.as_str(), p.cold, p.marked, p.skip, p.note))
                     .collect::<Vec<_>>(),
                 [
-                    ("s2", true, true, None, None),
-                    ("s1", false, false, Some("last_pin"), Some("current"))
+                    ("s2", true, false, None, None),
+                    ("s1", false, true, None, Some("cheapest"))
                 ],
-                "the round's order: the cold pin first and marked, the warm current one the last pin"
+                "the round's order: the cold pin first, its burn under the target, and the warm current one, whose \
+                 burn covers the target, marked as the cheapest sufficient pin"
             );
             assert!(round.pins.iter().all(|p| p.burn.is_some()));
             let sum: f64 = round.pins.iter().filter_map(|p| p.burn).sum();
@@ -6978,9 +7038,10 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
                 (round.target - round.excess.min(0.5 * sum)).abs() < 1e-9,
                 "the target is the lesser of the excess and the cap's share of the burn"
             );
-            assert!((round.removed - round.pins[0].burn.unwrap()).abs() < 1e-9);
-            assert_eq!(round.pins[0].planned.as_deref(), Some("b"));
-            assert_eq!(round.marks, vec![key("s2")]);
+            assert!(round.pins[0].burn.unwrap() < round.target);
+            assert!((round.removed - round.pins[1].burn.unwrap()).abs() < 1e-9);
+            assert_eq!(round.pins[1].planned.as_deref(), Some("b"));
+            assert_eq!(round.marks, vec![key("s1")]);
             assert_eq!((round.outcome.as_str(), round.reason), ("marked 1", None));
             assert_eq!(
                 (round.dwell_seconds, round.dwell_until),
@@ -6989,40 +7050,12 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
         }
         other => panic!("the round follows its decision, not {other:?}"),
     }
-    // Inside the dwell no round runs: the marked `s2` moves to `b` at its next request, and the mark leaves with it.
+    // Inside the dwell no round runs: the unmarked `s2` renews where it is.
     handle
         .select(request(&handle, Some("s2"), at + 1_000))
         .await
         .unwrap();
-    assert_eq!(next_decision(&mut events).await.0.kind, "moved");
-    assert!(matches!(
-        next_event(&mut events).await,
-        RouterEvent::PinMigrated { .. }
-    ));
-    match next_event(&mut events).await {
-        RouterEvent::MarkCleared {
-            account_id,
-            session_id,
-            reason,
-            marked_at,
-            marked_on,
-            marked_window,
-            projection,
-            ..
-        } => assert_eq!(
-            (
-                account_id.as_str(),
-                session_id.as_str(),
-                reason,
-                marked_at,
-                marked_on.as_str(),
-                marked_window.as_str(),
-                projection
-            ),
-            ("a", "s2", "moved", at, "a", "five_hour", None)
-        ),
-        other => panic!("the move clears the mark beside its pin event, not {other:?}"),
-    }
+    assert_eq!(next_decision(&mut events).await.0.kind, "renewed");
     no_further_event(&mut events).await;
 }
 

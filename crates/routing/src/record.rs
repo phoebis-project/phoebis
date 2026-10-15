@@ -517,17 +517,22 @@ pub enum MoveCause {
     },
 }
 
-/// A mark the decision cleared: `healed` when the heal check found the trigger gone at the pin's request, `moved` when
-/// the pin left the account the mark was made on, `released` when the pool's load shedding was off at the pin's
-/// request.
+/// A mark the decision cleared: `healed` when the heal check found the window back under its test at the pin's request
+/// (the projection under the ceiling, or the stretch at or under the threshold on a 5-hour mark of a pool that slows
+/// its pins), `moved` when the pin left the account the mark was made on, `released` when the pool's load shedding was
+/// off at the pin's request.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct MarkClearedFacts {
     pub reason: &'static str,
     pub marked_at: i64,
     pub marked_on: String,
     pub marked_window: String,
-    /// The healing projection, on `healed`.
+    /// The healing projection, on `healed`. Where the stretch healed the mark it is the demand's at the reset less the
+    /// threshold, or the prediction where that instant has passed.
     pub projection: Option<f64>,
+    /// The stretch and the pool's threshold the heal read, on a `healed` mark the stretch made. None otherwise.
+    pub stretch_ms: Option<i64>,
+    pub threshold_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -621,6 +626,16 @@ pub struct ShedRoundFacts {
     pub projection: f64,
     pub horizon: i64,
     pub ceiling: f64,
+    /// `projection` when the projection at the window's horizon fired the round, `slow_down` when the stretch did.
+    /// Under `slow_down` the horizon is the reset less the threshold, and the projection, the excess and the pins' burn
+    /// are the demand's.
+    pub trigger: &'static str,
+    /// The account's stretch when the stretch fired the round, `None` under `projection`.
+    pub stretch_ms: Option<i64>,
+    /// The pool's `slow_down_stretch_seconds` when the stretch fired the round, `None` under `projection`.
+    pub threshold_ms: Option<i64>,
+    /// The account's factor at the round, `None` where the account has no slow-down read.
+    pub factor: Option<f64>,
     /// `window_share` or `usd`, the unit the round's order read the anchor table in.
     pub unit: &'static str,
     pub burn_average_seconds: u64,
@@ -662,7 +677,8 @@ pub struct ShedPinFacts {
     pub runway_ms: Option<i64>,
     /// `fast_lane`, `last_pin`, `no_runway`, `standing` or `unpriced`.
     pub skip: Option<&'static str>,
-    /// `current` for the request's own pin.
+    /// `cheapest` for the pin the round marked as the cheapest one whose burn covers what the target still asked,
+    /// else `current` for the request's own pin.
     pub note: Option<&'static str>,
 }
 

@@ -101,10 +101,11 @@ pub enum RouterEvent {
         source_request_id: Option<String>,
         at: i64,
     },
-    /// A shedding mark left a pin: the heal check found the trigger gone at the pin's request (`healed`, with the
-    /// healing projection), the pin moved off the account the mark was made on (`moved`), or the pin was released,
-    /// expired or lost a rekey's merge without a move, or asked while its pool's load shedding was off (`released`).
-    /// `account_id` is the account the pin sat on when the mark cleared.
+    /// A shedding mark left a pin: the heal check found the window back under its test at the pin's request (`healed`,
+    /// with the healing projection, and with the stretch and the threshold where the stretch healed a 5-hour mark), the
+    /// pin moved off the account the mark was made on (`moved`), or the pin was released, expired or lost a rekey's
+    /// merge without a move, or asked while its pool's load shedding was off (`released`). `account_id` is the account
+    /// the pin sat on when the mark cleared.
     MarkCleared {
         account_id: String,
         key_id: String,
@@ -116,6 +117,8 @@ pub enum RouterEvent {
         marked_on: String,
         marked_window: String,
         projection: Option<f64>,
+        stretch_ms: Option<i64>,
+        threshold_ms: Option<i64>,
         at: i64,
     },
     OverageEnded {
@@ -2217,6 +2220,8 @@ fn released_mark(row: &PinRow, at: i64) -> Option<RouterEvent> {
         marked_on: row.marked_on.clone()?,
         marked_window: row.marked_window.clone().unwrap_or_default(),
         projection: None,
+        stretch_ms: None,
+        threshold_ms: None,
         at,
     })
 }
@@ -2804,6 +2809,8 @@ impl Task {
                             marked_on: facts.marked_on.clone(),
                             marked_window: facts.marked_window.clone(),
                             projection: facts.projection,
+                            stretch_ms: facts.stretch_ms,
+                            threshold_ms: facts.threshold_ms,
                             at: request.now,
                         }),
                         None if pin_events

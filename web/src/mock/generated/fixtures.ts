@@ -12908,7 +12908,9 @@ export const FIXTURES: Record<string, Fixture> = {
             "marked_at": 1791717520000,
             "marked_on": "business",
             "marked_window": "five_hour",
-            "projection": null
+            "projection": null,
+            "stretch_ms": null,
+            "threshold_ms": null
           }
         },
         {
@@ -13018,6 +13020,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "projection": 0.99,
             "horizon": 1791719920000,
             "ceiling": 0.95,
+            "trigger": "projection",
+            "stretch_ms": null,
+            "threshold_ms": null,
+            "factor": null,
             "unit": "window_share",
             "burn_average_seconds": 1800,
             "shed_cap": 0.2,
