@@ -157,35 +157,35 @@ three pace orders put the account furthest ahead of that window's pace first, th
 past the share of the window elapsed (the lead the router answers for each window), and the accounts without the
 window or with the window expired last. Each live window's meter reads the share left and its pace,
 `{window}: {pct} left, {n}% ahead of pace`, `{n}% behind pace` or `on pace`, with ` to its end at {time}` where the pace
-runs to the subscription's end rather than the reset, and a mark at the share of the window still to come.
-On a screen under 900 px wide the reset label takes a line of its own under the meter.
-Under the meter the window reads `resets {ago}`, followed on a window the router projects by the share the projection
-leaves at the window's horizon: `resets in 2h 13m, 19% left at the reset` where the horizon is the reset (within a
-minute), `resets in 3d 5h, 56% left in 5 h` where it comes earlier (five hours out on a weekly window, or the account's
-end), and `{pct} left now` once it has come. A window the sessions spend before its horizon reads the time until it runs
-out, `spent in 2 h 10 min`. The reset and the projection split over two lines where the column does not hold them on
-one, and the hover adds the burn behind the projection, `the sessions on this account burn 8.5% an hour`. On a slowed
-account the 5-hour window's line ends in the speed chip, `0.5x` in the warning tone (the account's slow-down factor to
-two decimals, a trailing zero dropped, `0.35x`), whose hover reads `slowed since 17:40: the sessions on this account
-would pass the ceiling 42 min before the reset, over the 30 min threshold` (`under` while no round can fire). The chip
-draws while the factor is under 1 and the 5-hour window the read came from has not reset since, and the Dashboard's
-account cards, the Accounts view, the Pools cards and the Sessions view draw the same chip with the same hover
-([Slow-down](routing.md#slow-down)). The window bars of the Dashboard's account cards and of the Accounts list draw the
-projection alone in the reset's place, in a compact form (`19% left at reset`, `56% left in 5 h`) that splits between
-the share and the horizon where the bar is narrow, with the reset's instant on hover, and keep the reset where the
-window has no projection. The Accounts detail's bars read the whole label, split between its two parts where the bar is
-narrow, and the 5-hour bar's label carries the chip on a slowed account. The Pools dialog's Preview, the Sessions Runway
-column and the routing log keep the used share, the figure that the window ceiling of a pool is measured against. A
-window whose reset has passed with no reading since reads `expired {ago}` instead, with "no reading since the reset,
-{time}" on hover, and draws no share and an empty meter until the next reading, and a window the account does not report
-reads "not reported". A card with no window yet reads "No quota windows reported yet.", and one whose read failed shows
-the error with `, next attempt {time}` and a "Retry" button in the windows' place. The "Extra usage" chip reads `off`,
-`not in use`, `in use` or `not reported`, with the month's spend against its limit while extra usage is enabled, in the
-serious tone while requests bill as extra usage, and the provider's reason inside the line with the whole message on
-hover. The chips name the plan by its tier ("Plan"), when the plan of an account marked canceled ends (in the serious
-tone inside a week), and when a trial ends ("Trial"). The poll reading says when the poll last asked the endpoint and
-how it answered, with the whole message and the backoff on hover, and "Refresh" reads this account's endpoint now. A
-card that shows an error, whose last poll failed, or that is backing off counts as needing attention.
+runs to the subscription's end rather than the reset, and a mark at the share of the window still to come. On a screen
+under 900 px wide the reset label takes a line of its own under the meter. Under the meter the window reads
+`resets {ago}`, followed on a window the router projects by the share the projection leaves at the window's horizon:
+`resets in 2h 13m, 19% left at the reset` where the horizon is the reset (within a minute), `resets in 3d 5h, 56% left
+in 5 h` where it comes earlier (five hours out on a weekly window, or the account's end), and `{pct} left now` once it
+has come. A window the sessions spend before its horizon reads the time until it runs out, `spent in 2 h 10 min`. The
+reset and the projection split over two lines where the column does not hold them on one, and the hover adds the burn
+behind the projection, `the sessions on this account burn 8.5% an hour`. On a slowed account the 5-hour window's line
+ends in the speed chip, `0.5x` in the warning tone (the account's slow-down factor to two decimals, a trailing zero
+dropped, `0.35x`), whose hover reads `slowed since 17:40: the sessions on this account would pass the ceiling 42 min
+before the reset, over the 30 min threshold` (`under` while no round can fire). The chip draws while the factor is under
+1 and the 5-hour window the read came from has not reset since, and the Dashboard's account cards, the Accounts view,
+the Pools cards and the Sessions view draw the same chip with the same hover ([Slow-down](routing.md#slow-down)). The
+window bars of the Dashboard's account cards and of the Accounts list draw the projection alone in the reset's place, in
+a compact form (`19% left at reset`, `56% left in 5 h`) that splits between the share and the horizon where the bar is
+narrow, with the reset's instant on hover, and keep the reset where the window has no projection. The Accounts detail's
+bars read the whole label, split between its two parts where the bar is narrow, and the 5-hour bar's label carries the
+chip on a slowed account. The Pools dialog's Preview, the Sessions Runway column and the routing log keep the used
+share, the figure that the window ceiling of a pool is measured against. A window whose reset has passed with no reading
+since reads `expired {ago}` instead, with "no reading since the reset, {time}" on hover, and draws no share and an empty
+meter until the next reading, and a window the account does not report reads "not reported". A card with no window yet
+reads "No quota windows reported yet.", and one whose read failed shows the error with `, next attempt {time}` and a
+"Retry" button in the windows' place. The "Extra usage" chip reads `off`, `not in use`, `in use` or `not reported`, with
+the month's spend against its limit while extra usage is enabled, in the serious tone while requests bill as extra
+usage, and the provider's reason inside the line with the whole message on hover. The chips name the plan by its tier
+("Plan"), when the plan of an account marked canceled ends (in the serious tone inside a week), and when a trial ends
+("Trial"). The poll reading says when the poll last asked the endpoint and how it answered, with the whole message and
+the backoff on hover, and "Refresh" reads this account's endpoint now. A card that shows an error, whose last poll
+failed, or that is backing off counts as needing attention.
 
 Quota windows lays the same windows across a calendar titled "Quota windows", with its span and length (`two weeks` in
 the Weekly mode, `three days` in the 5-hour mode), "Previous period", "Today" and "Next period" buttons, the mode switch
