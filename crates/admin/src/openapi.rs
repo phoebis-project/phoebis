@@ -280,8 +280,6 @@ pub(crate) struct TtlRulesView {
     pub subagent: String,
 }
 
-// No captured pool carries a per-model override, so the round trip never reaches this type: its fields are held to
-// the relay crate's `ModelTtl` by reading the two side by side.
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ModelTtlView {
@@ -470,8 +468,6 @@ pub(crate) struct RegimePeakView {
     pub capacity_factor: PerWindowView,
 }
 
-// The shipped cost model carries no override, so the round trip never reaches this type or `TypeOverrideView`:
-// their fields are held to the ledger's `Override` and `TypeOverride` by reading the two side by side.
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct OverrideView {
@@ -676,8 +672,6 @@ pub(crate) struct CacheShareView {
 }
 
 /// The probe rows' share of a window and the wasted probes' part of it.
-// No captured row carries a probe share, so the round trip never reaches this type: its fields are held to the
-// ledger's `ProbeShare` by reading the two side by side.
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProbeShareView {
@@ -956,14 +950,70 @@ pub(crate) mod round_trip {
             );
         }
     }
+
+    /// A fully set `source` serializes and deserializes through the mirror `T` with no unknown field and back to the
+    /// same value, so a mirror the capture never reaches is still held to its source type.
+    pub(crate) fn round_trips_source<S: Serialize, T: DeserializeOwned + Serialize>(source: S) {
+        let value = serde_json::to_value(&source).unwrap();
+        let typed: T = serde_json::from_value(value.clone())
+            .unwrap_or_else(|e| panic!("the source does not fit the mirror: {e}"));
+        assert_eq!(serde_json::to_value(&typed).unwrap(), value);
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::round_trip::round_trips;
+    use super::round_trip::{round_trips, round_trips_source};
+    use super::{ModelTtlView, OverrideView, ProbeShareView, TypeOverrideView};
+    use indexmap::IndexMap;
+    use phoebis_ledger::{Override, ProbeShare, TypeOverride};
+    use phoebis_relay::{CacheTtl, ModelTtl};
+
+    fn every_cell() -> TypeOverride {
+        TypeOverride {
+            cache_read: Some(0.1),
+            cache_write_1h: Some(2.0),
+            cache_write_5m: Some(1.25),
+            input: Some(1.5),
+            output: Some(5.0),
+        }
+    }
 
     #[test]
     fn the_session_answer_round_trips_through_its_declared_type() {
         round_trips::<crate::routes::SessionView>("session");
+    }
+
+    #[test]
+    fn a_model_ttl_with_every_field_set_round_trips_through_its_mirror() {
+        round_trips_source::<_, ModelTtlView>(ModelTtl {
+            main: CacheTtl::OneHour,
+            model: "claude-opus-4-6".to_string(),
+            subagent: CacheTtl::FiveMinutes,
+        });
+    }
+
+    #[test]
+    fn an_override_with_both_members_set_round_trips_through_its_mirror() {
+        round_trips_source::<_, OverrideView>(Override {
+            type_multiplier: Some(every_cell()),
+            weight_by_window: Some(IndexMap::from([
+                ("five_hour".to_string(), 1.5),
+                ("seven_day".to_string(), 0.75),
+            ])),
+        });
+    }
+
+    #[test]
+    fn a_type_override_with_every_cell_set_round_trips_through_its_mirror() {
+        round_trips_source::<_, TypeOverrideView>(every_cell());
+    }
+
+    #[test]
+    fn a_probe_share_with_every_field_set_round_trips_through_its_mirror() {
+        round_trips_source::<_, ProbeShareView>(ProbeShare {
+            cost: 0.25,
+            wasted: Some(0.4),
+        });
     }
 }
