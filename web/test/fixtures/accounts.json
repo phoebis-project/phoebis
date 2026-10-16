@@ -48,8 +48,7 @@
           "tier": "default_claude_max_20x",
           "since": 1773482400000,
           "trial_ends_at": null,
-          "ends_at": null,
-          "derived_ends_at": 1791972000000
+          "ends_at": null
         },
         "windows": [
           {
@@ -60,7 +59,8 @@
             "projection": null,
             "horizon": null,
             "burn": null,
-            "demand": null
+            "demand": null,
+            "lead": -0.18000000000000005
           },
           {
             "id": "seven_day",
@@ -70,7 +70,8 @@
             "projection": null,
             "horizon": null,
             "burn": null,
-            "demand": null
+            "demand": null,
+            "lead": -0.4471428571428571
           },
           {
             "id": "seven_day_fable",
@@ -80,7 +81,8 @@
             "projection": null,
             "horizon": null,
             "burn": null,
-            "demand": null
+            "demand": null,
+            "lead": -0.7371428571428571
           },
           {
             "id": "seven_day_opus",
@@ -90,7 +92,8 @@
             "projection": null,
             "horizon": null,
             "burn": null,
-            "demand": null
+            "demand": null,
+            "lead": -0.8271428571428571
           }
         ],
         "slow_down": null,
