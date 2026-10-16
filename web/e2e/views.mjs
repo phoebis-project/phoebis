@@ -5996,8 +5996,9 @@ async function sessionsLead(theme) {
 /**
  * The cost reference from Sessions, walked tab by tab at 1280 by 800 and at 1440 by 900: no table runs past its wrap,
  * every second model sits on --surface-2 against --surface with its sub-rows on its shade, the older models' fold row
- * sits on --surface-3 with the stripes running on through it, and the footer's Revision select draws on one line
- * inside the dialog. The mock pass writes each tab of the open dialog at 1280 by 800.
+ * sits on --surface-3 with the stripes running on through it, the footer's Revision select draws on one line inside
+ * the dialog, and Plan rates opens on the interactive regime. The mock pass writes each tab of the open dialog at 1280
+ * by 800.
  */
 async function costReference(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -6097,6 +6098,11 @@ async function costReference(theme) {
       await dialog.getByRole('tab', { name: label, exact: true }).click();
       await settle();
       await measure(where, slug, size);
+      // Both the mock's cost model and the shipped one name the interactive regime, which Plan rates opens on.
+      if (slug === 'plan-rates') {
+        const regime = (await dialog.locator('.cost-ref__panel:not([hidden]) [aria-label="Regime"] button[aria-pressed="true"]').allTextContents()).map((t) => t.trim());
+        if (JSON.stringify(regime) !== JSON.stringify(['interactive'])) say(`${where}: the Regime control shows ${JSON.stringify(regime)}, not interactive`);
+      }
       if (mock && size.width === 1280) {
         await atRest();
         await dialog.screenshot({ path: join(shots, theme, `cost-reference-${slug}.png`) });

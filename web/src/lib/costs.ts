@@ -39,6 +39,24 @@ export const pricedWindow = (costs: SubscriptionCosts, window: string): { diviso
   return window.startsWith('seven_day') ? { divisor: 1, priced: 'seven_day' } : null;
 };
 
+/** The regimes' names in the file's order. */
+export const regimeNames = (costs: SubscriptionCosts): string[] => Object.keys(costs.regimes);
+
+/** The regime listing the entrypoint, null for null or an entrypoint no regime lists. */
+export const regimeOf = (costs: SubscriptionCosts, entrypoint: string | null): string | null =>
+  entrypoint === null ? null : (regimeNames(costs).find((name) => costs.regimes[name].entrypoints.includes(entrypoint)) ?? null);
+
+/** The model as the named regime prices it: its capacity rows over the base's, a tier it does not name keeping the
+ *  base row, and its band factors in place of the base's. The base itself for null or an unknown name. */
+export const withRegime = (costs: SubscriptionCosts, name: string | null): SubscriptionCosts => {
+  if (name === null || !own(costs.regimes, name)) return costs;
+  const regime = costs.regimes[name];
+  return { ...costs, capacity: { ...costs.capacity, ...regime.capacity }, peak: { ...costs.peak, capacityFactor: regime.peakCapacityFactor } };
+};
+
+/** `withRegime` of the regime listing the entrypoint: one derived model every reader prices through. */
+export const underRegime = (costs: SubscriptionCosts, entrypoint: string | null): SubscriptionCosts => withRegime(costs, regimeOf(costs, entrypoint));
+
 /** The model's row key: its id as sent, else its undated name, since the price rows carry dated ids. */
 const keyOf = (costs: SubscriptionCosts, model: string): string | null => (own(costs.modelWeight, model) ? model : own(costs.modelWeight, undatedModel(model)) ? undatedModel(model) : null);
 

@@ -1765,6 +1765,12 @@ export interface ModelPrice {
 }
 
 export interface TypeMultiplier { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; input: number; output: number }
+/** A pricing regime of the cost model: the entrypoints it covers, its capacity rows and its band factors. */
+export interface Regime {
+  capacity: Record<string, { fiveHour: number | null; sevenDay: number | null }>;
+  entrypoints: string[];
+  peakCapacityFactor: { fiveHour: number; sevenDay: number };
+}
 /** The subscription cost model as the ledger loaded it, the file's keys in camel case and its maps in the file's order. */
 export interface SubscriptionCosts {
   capacity: Record<string, { fiveHour: number | null; sevenDay: number | null }>;
@@ -1775,6 +1781,8 @@ export interface SubscriptionCosts {
   modelWindows: Record<string, { capacityFactor: number; of: string }>;
   overrides: Record<string, { typeMultiplier?: Partial<TypeMultiplier>; weightByWindow?: Record<string, number> }>;
   peak: { capacityFactor: { fiveHour: number; sevenDay: number }; fromHour: number; toHour: number; weekdays: boolean; zone: string };
+  /** The regimes by name, in the file's order. A request prices under the one listing its entrypoint, else the base. */
+  regimes: Record<string, Regime>;
   /** The model tiers in display order. */
   tierOrder: string[];
   typeMultiplier: TypeMultiplier;

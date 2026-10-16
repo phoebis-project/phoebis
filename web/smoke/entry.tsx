@@ -33,7 +33,7 @@ export { PlanRates } from '@/components/costs/PlanRates';
 export { Expert, Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumber, Toggle } from '@/components/ui/primitives';
 // The figures and the model form a Dashboard check computes its expectation from, so the check and the page read one
 // derivation; the cost reference's and the About card's checks read theirs the same way.
-export { anchorTier, bandFactor, bandRuns, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, revisionAt, shareOf, tierGroups, tierOrder, weightOf, weightOrFallback, windowMultiple } from '@/lib/costs';
+export { anchorTier, bandFactor, bandRuns, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, regimeNames, revisionAt, shareOf, smallestTier, tierCapacity, tierGroups, tierOrder, weightOf, weightOrFallback, windowMultiple, withRegime } from '@/lib/costs';
 // The strip's model and its buttons' names, so a card check spells the stations a record draws and the names a reader
 // hears from the derivation the strip reads.
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';

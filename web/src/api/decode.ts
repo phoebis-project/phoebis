@@ -941,6 +941,7 @@ const emptyCosts = (): SubscriptionCosts => ({
   modelWindows: {},
   overrides: {},
   peak: { capacityFactor: { fiveHour: 1, sevenDay: 1 }, fromHour: 0, toHour: 0, weekdays: false, zone: '' },
+  regimes: {},
   tierOrder: [],
   typeMultiplier: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 },
   unit: { definedBy: { band: '', tier: '', window: '' }, unitsPerWindow: 0 },
@@ -969,6 +970,7 @@ const override = (v: unknown): SubscriptionCosts['overrides'][string] => {
   const typeMultiplier: Partial<TypeMultiplier> | null = named === null ? null : Object.fromEntries(TYPE_KEYS.filter(([, wire]) => !absent(named[wire])).map(([key, wire]) => [key, finite(named[wire])]));
   return { ...(typeMultiplier === null ? {} : { typeMultiplier }), ...(absent(o.weight_by_window) ? {} : { weightByWindow: byKey(o.weight_by_window, finite) }) };
 };
+const capacityRows = (v: unknown): SubscriptionCosts['capacity'] => byKey(v, (t) => ({ fiveHour: finiteOrNull(map(t).five_hour), sevenDay: finiteOrNull(map(t).seven_day) }));
 /**
  * Every member the model requires is present and of its type: a capacity and a weight may be null, an override's
  * multiplier block and each multiplier in it absent or null, its `weight_by_window` block absent or null but never a
@@ -982,13 +984,22 @@ const strictCosts = (content: unknown): SubscriptionCosts => {
   const factor = map(peak.capacity_factor);
   const multiplier = map(c.type_multiplier);
   return {
-    capacity: byKey(c.capacity, (t) => ({ fiveHour: finiteOrNull(map(t).five_hour), sevenDay: finiteOrNull(map(t).seven_day) })),
+    capacity: capacityRows(c.capacity),
     effective: text(c.effective),
     modelTier: byKey(c.model_tier, text),
     modelWeight: byKey(c.model_weight, finiteOrNull),
     modelWindows: byKey(c.model_windows, (w) => ({ capacityFactor: finite(map(w).capacity_factor), of: text(map(w).of) })),
     overrides: byKey(c.overrides, override),
     peak: { capacityFactor: { fiveHour: finite(factor.five_hour), sevenDay: finite(factor.seven_day) }, fromHour: finite(peak.from_hour), toHour: finite(peak.to_hour), weekdays: flag(peak.weekdays), zone: text(peak.zone) },
+    regimes: byKey(c.regimes, (r) => {
+      const regime = map(r);
+      const regimeFactor = map(map(regime.peak).capacity_factor);
+      return {
+        capacity: capacityRows(regime.capacity),
+        entrypoints: [...must(Array.isArray(regime.entrypoints) && regime.entrypoints.every((t) => typeof t === 'string'), regime.entrypoints as string[])],
+        peakCapacityFactor: { fiveHour: finite(regimeFactor.five_hour), sevenDay: finite(regimeFactor.seven_day) },
+      };
+    }),
     tierOrder: [...must(Array.isArray(c.tier_order) && c.tier_order.every((t) => typeof t === 'string'), c.tier_order as string[])],
     typeMultiplier: { cacheRead: finite(multiplier.cache_read), cacheWrite1h: finite(multiplier.cache_write_1h), cacheWrite5m: finite(multiplier.cache_write_5m), input: finite(multiplier.input), output: finite(multiplier.output) },
     unit: { definedBy: { band: text(definedBy.band), tier: text(definedBy.tier), window: text(definedBy.window) }, unitsPerWindow: finite(unit.units_per_window) },

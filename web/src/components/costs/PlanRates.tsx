@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { ModelPrice, SubscriptionCosts } from '@/api/types';
 import { Segmented } from '@/components/ui/primitives';
-import { anchorTier, bandNow, latestWeighted, modelTierOf, modelWeeks, shareIn, tierCapacity, tierGroups, unreachableBand, weightedWindows, weightOf, weightOrFallback, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
+import { anchorTier, bandNow, latestWeighted, modelTierOf, modelWeeks, regimeNames, shareIn, tierCapacity, tierGroups, unreachableBand, weightedWindows, weightOf, weightOrFallback, withRegime, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
 import { ESTIMATED_TITLE, fmtShare, undatedModel, upperFirst, withEstimate } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
 import { nowLine } from './PeakBand';
@@ -49,7 +49,14 @@ export function FoldRow({ cols, count, onToggle, open }: { cols: number; count: 
 export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { costs: SubscriptionCosts; now: number; olderOpen: boolean; onToggleOlder: () => void; prices: ModelPrice[] }) {
   const tiers = Object.keys(costs.capacity).filter((tier) => WINDOWS.some((w) => tierCapacity(costs, tier, w.key) !== null));
   const [tier, setTier] = useState(() => anchorTier(costs));
-  const next = bandNow(costs, now);
+  const regimes = regimeNames(costs);
+  // The interactive regime first where the model names it, since the interactive client is the traffic an operator
+  // runs. '' is Other, the base regime.
+  const [regime, setRegime] = useState(() => (regimes.includes('interactive') ? 'interactive' : ''));
+  // A revision without the chosen regime reads the base, so the control and the caption follow it.
+  const named = regimes.includes(regime) ? regime : '';
+  const priced = withRegime(costs, named || null);
+  const next = bandNow(priced, now);
   const unresolved = 'unresolved' in next ? next.unresolved : null;
   // With no state to read the viewer picks one, Inside first, so a share never reads below what the band may charge.
   const [inside, setInside] = useState(() => unresolved !== null);
@@ -87,8 +94,8 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
 
   /** `what` names the window in the cell's title: "5-hour window", "Fable week". */
   const cell = (model: string, window: string, what: string, type: (typeof TOKEN_TYPES)[number], i: number) => {
-    const share = shareIn(costs, window, tier, model, { ...ZERO, [type.key]: tokens * 1_000_000 }, chosen);
-    const estimated = weightOrFallback(costs, model, window)?.estimated === true;
+    const share = shareIn(priced, window, tier, model, { ...ZERO, [type.key]: tokens * 1_000_000 }, chosen);
+    const estimated = weightOrFallback(priced, model, window)?.estimated === true;
     const sep = i === 0 ? 'cost-ref__sep' : '';
     if (share === null) {
       return (
@@ -190,6 +197,12 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
           <span>Tier</span>
           <Segmented ariaLabel="Tier" value={tier} onChange={setTier} options={tiers.map((t) => ({ label: planLabel(t), value: t }))} />
         </span>
+        {regimes.length > 0 && (
+          <span className="cost-ref__control">
+            <span>Regime</span>
+            <Segmented ariaLabel="Regime" value={named} onChange={setRegime} options={[...regimes.map((r) => ({ label: r, value: r })), { label: 'Other', value: '' }]} />
+          </span>
+        )}
         <BandSwitch inside={chosen} onChange={setInside} unreachable={unreachable} />
         <span className="cost-ref__tokens">
           <label>
@@ -217,11 +230,12 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
             ))}
           </span>
         </span>
-        <span className="cost-ref__now">{unresolved === null ? nowLine(costs, now) : `This browser cannot read the zone ${unresolved}, so pick the band state yourself.`}</span>
+        <span className="cost-ref__now">{unresolved === null ? nowLine(priced, now) : `This browser cannot read the zone ${unresolved}, so pick the band state yourself.`}</span>
       </div>
       <div className="cost-ref__caption">
         <b>
-          Share of a {tierName} window per {fmtTokens(tokens)} tokens{chosen ? ', a request completing inside the peak band' : ''}
+          Share of a {tierName} window per {fmtTokens(tokens)} tokens{named ? ` under ${named} (${costs.regimes[named].entrypoints.join(', ')})` : ''}
+          {chosen ? ', a request completing inside the peak band' : ''}
         </b>
         <span className="muted">A shaded cell is more than one full window. A ~ marks an estimate: the model reads the latest weighed model of its model tier.</span>
       </div>

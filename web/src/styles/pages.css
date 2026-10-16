@@ -3826,6 +3826,14 @@
   color: var(--ink-2);
 }
 
+/* A regime's group row labels the tiers under it, so it reads in the muted ink of a header rather than as a tier. */
+.cost-ref__tiers tr.cost-ref__group td {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+  text-align: left;
+}
+
 .cost-ref__barcell {
   display: grid;
   grid-template-columns: 150px auto;

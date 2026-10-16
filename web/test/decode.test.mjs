@@ -2004,7 +2004,7 @@ test('settings decode the members the route answers and nothing more', () => {
       retention: ['bodyCaptureMaxHours'],
       sessions: ['expireAfterSeconds'],
       storage: ['apiPricesPath', 'ledgerPath', 'path', 'subscriptionCostsPath'],
-      subscriptionCosts: ['capacity', 'effective', 'modelTier', 'modelWeight', 'modelWindows', 'overrides', 'peak', 'problem', 'revisions', 'source', 'tierOrder', 'typeMultiplier', 'unit'],
+      subscriptionCosts: ['capacity', 'effective', 'modelTier', 'modelWeight', 'modelWindows', 'overrides', 'peak', 'problem', 'regimes', 'revisions', 'source', 'tierOrder', 'typeMultiplier', 'unit'],
     },
     'each member carries what the pages read and no other key',
   );
@@ -2043,6 +2043,7 @@ test('a settings member the answer leaves out decodes to its default', () => {
       overrides: {},
       peak: { capacityFactor: { fiveHour: 1, sevenDay: 1 }, fromHour: 0, toHour: 0, weekdays: false, zone: '' },
       problem: null,
+      regimes: {},
       revisions: [],
       source: '',
       tierOrder: [],
@@ -2114,6 +2115,7 @@ test('a cost model answer with a member missing or of the wrong type reads as th
     overrides: {},
     peak: { capacityFactor: { fiveHour: 1, sevenDay: 1 }, fromHour: 0, toHour: 0, weekdays: false, zone: '' },
     problem: "The cost model's answer could not be read.",
+    regimes: {},
     revisions: [],
     source: envelope.source,
     tierOrder: [],
@@ -2126,6 +2128,8 @@ test('a cost model answer with a member missing or of the wrong type reads as th
   const malformed = {
     'a capacity left out': (c) => { delete c.capacity.default_claude_ai.five_hour; },
     'a model window factor left out': (c) => { delete c.model_windows.seven_day_fable.capacity_factor; },
+    "a regime's band factor left out": (c) => { delete c.regimes.desk.peak.capacity_factor; },
+    "a regime's entrypoints left out": (c) => { delete c.regimes.desk.entrypoints; },
     'a weekday flag sent as a string': (c) => { c.peak.weekdays = 'true'; },
     'a weight map sent as a list': (c) => { c.model_weight = []; },
     'a weight that is neither a number nor null': (c) => { c.model_weight['claude-opus-5-5'] = '2'; },
@@ -2151,6 +2155,38 @@ test('a cost model answer with a member missing or of the wrong type reads as th
   const weightByWindow = envelope.content.overrides['claude-haiku-4-5'].weight_by_window;
   assert.deepEqual(decoded((c) => { c.overrides['claude-haiku-4-5'].type_multiplier.cache_read = null; }).overrides['claude-haiku-4-5'], { typeMultiplier: {}, weightByWindow }, 'a null override multiplier keeps the shared one');
   assert.deepEqual(decoded((c) => { c.overrides['claude-haiku-4-5'].type_multiplier = null; }).overrides['claude-haiku-4-5'], { weightByWindow }, 'a null override block names nothing');
+});
+
+test('the cost model decodes its regimes strictly and the empty model carries none', () => {
+  const content = fixture('pricing').subscription_costs.content;
+  const costs = d.decodeSubscriptionCosts(content);
+  assert.ok(Object.keys(content.regimes).length > 0, 'the fixture carries a regime');
+  assert.deepEqual(Object.keys(costs.regimes), Object.keys(content.regimes), "the regimes in the file's order");
+  for (const [name, regime] of Object.entries(content.regimes)) {
+    const factor = regime.peak.capacity_factor;
+    assert.deepEqual(
+      costs.regimes[name],
+      {
+        capacity: Object.fromEntries(Object.entries(regime.capacity).map(([tier, row]) => [tier, { fiveHour: row.five_hour, sevenDay: row.seven_day }])),
+        entrypoints: regime.entrypoints,
+        peakCapacityFactor: { fiveHour: factor.five_hour, sevenDay: factor.seven_day },
+      },
+      name,
+    );
+    assert.deepEqual(Object.keys(costs.regimes[name].capacity), Object.keys(regime.capacity), `${name}'s tiers in the file's order`);
+  }
+  const empty = d.decodeSubscriptionCosts(undefined);
+  assert.deepEqual(empty.regimes, {}, 'the empty model carries no regime');
+  const name = Object.keys(content.regimes)[0];
+  const refused = (edit) => {
+    const c = structuredClone(content);
+    edit(c.regimes[name]);
+    return d.decodeSubscriptionCosts(c);
+  };
+  assert.deepEqual(refused((r) => { delete r.entrypoints; }), empty, 'a regime without its entrypoints reads as the empty model');
+  assert.deepEqual(refused((r) => { r.entrypoints = [...r.entrypoints, 5]; }), empty, 'an entrypoint that is not a string');
+  assert.deepEqual(refused((r) => { delete r.peak.capacity_factor; }), empty, 'a regime without its band factors');
+  assert.deepEqual(refused((r) => { r.capacity = []; }), empty, 'a capacity map sent as a list');
 });
 
 test('a pricing effective date that is not a date decodes as the string sent with no parsed date', () => {

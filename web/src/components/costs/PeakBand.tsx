@@ -2,7 +2,7 @@ import { Fragment, useMemo } from 'react';
 import type { SubscriptionCosts } from '@/api/types';
 import { useFormatVersion } from '@/app/settings';
 import { Card } from '@/components/ui/primitives';
-import { bandCaption, bandNow, bandWeek, nextLocalChange, zoneCity } from '@/lib/costs';
+import { bandCaption, bandNow, bandWeek, nextLocalChange, regimeNames, zoneCity } from '@/lib/costs';
 import { fmtShortTime, getTimeFormat } from '@/lib/format';
 
 /** The browser's zone, the one every time the console shows reads in. */
@@ -39,6 +39,11 @@ const shareCost = (factor: number) => `${Number((1 / factor).toPrecision(3))}x`;
 const holds = (factor: number) => `${Math.round(factor * 100)}%`;
 const factorText = (factor: number) => (factor === 1 ? `no band, holds ${holds(factor)}` : `holds ${holds(factor)}, a share costs ${shareCost(factor)}`);
 
+const FACTOR_WINDOWS: { key: 'fiveHour' | 'sevenDay'; label: string }[] = [
+  { key: 'fiveHour', label: '5-hour window' },
+  { key: 'sevenDay', label: '7-day window' },
+];
+
 const HOUR_TICKS = [0, 3, 6, 9, 12, 15, 18, 21, 24];
 // Past 20:00 the now marker's label would run off the track's end, so it sits on the marker's left.
 const LATE = 20 * 60;
@@ -64,12 +69,23 @@ export function PeakBand({ costs, now }: { costs: SubscriptionCosts; now: number
     const parts = new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', minute: 'numeric', timeZone: zone }).formatToParts(now);
     return Number(parts.find((p) => p.type === 'hour')?.value) * 60 + Number(parts.find((p) => p.type === 'minute')?.value);
   }, [now, zone]);
-  const { fiveHour, sevenDay } = costs.peak.capacityFactor;
+  const { fiveHour } = costs.peak.capacityFactor;
+  // The band and its factors are the base regime's. A regime that holds a window differently adds its own row.
+  const factors = [
+    ...FACTOR_WINDOWS.map(({ key, label }) => ({ factor: costs.peak.capacityFactor[key], label })),
+    ...regimeNames(costs).flatMap((name) =>
+      FACTOR_WINDOWS.filter(({ key }) => costs.regimes[name].peakCapacityFactor[key] !== costs.peak.capacityFactor[key]).map(({ key, label }) => ({ factor: costs.regimes[name].peakCapacityFactor[key], label: `${label}, ${name}` })),
+    ),
+  ];
+  const holdsWhole = regimeNames(costs).some((name) => costs.regimes[name].peakCapacityFactor.fiveHour === 1 && fiveHour !== 1);
   const state = bandNow(costs, now);
   // A zone this browser cannot read gives no hours here, so the card draws no grid, no swatch and no change.
   const unresolved = 'unresolved' in state;
   return (
-    <Card title="Peak band" subtitle={`${week.some((day) => day.today) ? 'This week.' : 'Next week.'} A request completing inside the band spends more of its 5-hour window.`}>
+    <Card
+      title="Peak band"
+      subtitle={`${week.some((day) => day.today) ? 'This week.' : 'Next week.'} A request completing inside the band spends more of its 5-hour window${holdsWhole ? ', except under a regime that holds 100% inside it' : ''}.`}
+    >
       <div className="cost-ref__band-side">
         <div>
           <p className="cost-ref__band-lead">{caption}</p>
@@ -115,10 +131,7 @@ export function PeakBand({ costs, now }: { costs: SubscriptionCosts; now: number
             </p>
           )}
           <div className="cost-ref__factor">
-            {[
-              { factor: fiveHour, label: '5-hour window' },
-              { factor: sevenDay, label: '7-day window' },
-            ].map(({ factor, label }) => (
+            {factors.map(({ factor, label }) => (
               <Fragment key={label}>
                 <span>{label}</span>
                 <span className="cost-ref__track">

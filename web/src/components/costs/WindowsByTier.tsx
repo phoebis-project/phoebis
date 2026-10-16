@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import type { SubscriptionCosts } from '@/api/types';
 import { Card, Segmented } from '@/components/ui/primitives';
-import { fullWindowsAWeek, smallestTier, tierCapacity, windowMultiple, type CostWindow } from '@/lib/costs';
-import { fmtShare } from '@/lib/format';
+import { anchorTier, fullWindowsAWeek, regimeNames, smallestTier, tierCapacity, withRegime, type CostWindow } from '@/lib/costs';
+import { fmtInt, fmtShare } from '@/lib/format';
 import { planLabel } from '@/lib/quota';
 
 const WINDOWS: { factor: 'fiveHour' | 'sevenDay'; key: CostWindow; short: string }[] = [
@@ -33,17 +33,30 @@ export function BandSwitch({ inside, onChange, unreachable = null }: { inside: b
   );
 }
 
-/** Each sized tier's windows against the smallest tier's, and its week counted in full 5-hour windows. */
+/** The tiers a model sizes on either window, in the file's order. */
+const sizedTiers = (model: SubscriptionCosts, tiers: string[]) => tiers.filter((tier) => WINDOWS.some((w) => tierCapacity(model, tier, w.key) !== null));
+
+/** Each sized tier's windows against the smallest tier's, and its week counted in full 5-hour windows, then each
+ *  regime's tiers under a row naming it and its entrypoints. */
 export function WindowsByTier({ costs }: { costs: SubscriptionCosts }) {
   const [inside, setInside] = useState(false);
-  const tiers = Object.keys(costs.capacity).filter((tier) => WINDOWS.some((w) => tierCapacity(costs, tier, w.key) !== null));
-  const largest = (window: CostWindow) => Math.max(0, ...tiers.map((tier) => tierCapacity(costs, tier, window) ?? 0));
+  const tiers = sizedTiers(costs, Object.keys(costs.capacity));
+  const regimes = regimeNames(costs).map((name) => {
+    const model = withRegime(costs, name);
+    return { model, name, tiers: sizedTiers(model, Object.keys(costs.regimes[name].capacity)) };
+  });
+  // One scale for every row the card draws, so a regime's window reads against the base's in the bar's length.
+  const largest = (window: CostWindow) => Math.max(0, ...tiers.map((tier) => tierCapacity(costs, tier, window) ?? 0), ...regimes.flatMap((r) => r.tiers.map((tier) => tierCapacity(r.model, tier, window) ?? 0)));
   const smallest = smallestTier(costs, 'five_hour');
-  const barCell = (tier: string, w: (typeof WINDOWS)[number]) => {
+  const anchor = anchorTier(costs);
+  /** `regime` is null on the base's rows. A regime's multiples read against the base's smallest tier, never the
+   *  regime's own, so its rows compare with the base's. */
+  const barCell = (model: SubscriptionCosts, regime: string | null, tier: string, w: (typeof WINDOWS)[number]) => {
     const label = planLabel(tier);
-    const capacity = tierCapacity(costs, tier, w.key);
-    const multiple = windowMultiple(costs, tier, w.key);
+    const capacity = tierCapacity(model, tier, w.key);
     const base = smallestTier(costs, w.key);
+    const baseCapacity = base === null ? null : tierCapacity(costs, base, w.key);
+    const multiple = capacity === null || baseCapacity === null ? null : capacity / baseCapacity;
     const max = largest(w.key);
     if (capacity === null || multiple === null || base === null || max <= 0) {
       return (
@@ -54,9 +67,15 @@ export function WindowsByTier({ costs }: { costs: SubscriptionCosts }) {
         </td>
       );
     }
-    const factor = inside ? costs.peak.capacityFactor[w.factor] : 1;
+    const factor = inside ? model.peak.capacityFactor[w.factor] : 1;
     const held = capacity * factor;
-    const title = `${label} ${w.short} window${inside ? ' inside the peak band' : ''}: ${figure(multiple)}x a ${planLabel(base)} one, ${fmtShare(held / max)} of the largest`;
+    const read = `${label} ${w.short} window${regime === null ? '' : ` under ${regime}`}${inside ? ' inside the peak band' : ''}: ${figure(multiple)}x a ${planLabel(base)} one, ${fmtShare(held / max)} of the largest`;
+    const regimeAnchor = tierCapacity(model, anchor, w.key);
+    const baseAnchor = tierCapacity(costs, anchor, w.key);
+    const title =
+      regime === null || regimeAnchor === null || baseAnchor === null
+        ? read
+        : `${read}. One percent of the ${planLabel(anchor)} ${w.short} window is ${fmtInt(regimeAnchor / 100)} units for a request under ${regime} and ${fmtInt(baseAnchor / 100)} for any other.`;
     return (
       <td key={w.key}>
         <div className="cost-ref__barcell" title={title}>
@@ -69,8 +88,8 @@ export function WindowsByTier({ costs }: { costs: SubscriptionCosts }) {
       </td>
     );
   };
-  const weekCell = (tier: string) => {
-    const full = fullWindowsAWeek(costs, tier, inside);
+  const weekCell = (model: SubscriptionCosts, tier: string) => {
+    const full = fullWindowsAWeek(model, tier, inside);
     if (full === null) {
       return (
         <td>
@@ -95,6 +114,28 @@ export function WindowsByTier({ costs }: { costs: SubscriptionCosts }) {
       </td>
     );
   };
+  const tierRow = (model: SubscriptionCosts, regime: string | null, tier: string) => (alt: string | undefined) => (
+    <tr key={regime === null ? tier : `${regime} ${tier}`} className={alt}>
+      <td>
+        <span className="cost-ref__tier-name">{planLabel(tier)}</span>
+        <span className="cost-ref__tier-key">{tier}</span>
+      </td>
+      {WINDOWS.map((w) => barCell(model, regime, tier, w))}
+      {weekCell(model, tier)}
+    </tr>
+  );
+  // The stripes run on through the group rows, which count as rows of their own.
+  const rows = [
+    ...tiers.map((tier) => tierRow(costs, null, tier)),
+    ...regimes.flatMap(({ model, name, tiers: named }) => [
+      (alt: string | undefined) => (
+        <tr key={`group ${name}`} className={['cost-ref__group', alt].filter(Boolean).join(' ')}>
+          <td colSpan={WINDOWS.length + 2}>{`${name}: ${costs.regimes[name].entrypoints.join(', ')}`}</td>
+        </tr>
+      ),
+      ...named.map((tier) => tierRow(model, name, tier)),
+    ]),
+  ];
   return (
     <Card title="Windows by tier" subtitle={`How much each tier's windows hold, against ${smallest === null ? 'the smallest' : planLabel(smallest)}`} actions={<BandSwitch inside={inside} onChange={setInside} />}>
       <table className="cost-ref__tiers">
@@ -106,18 +147,7 @@ export function WindowsByTier({ costs }: { costs: SubscriptionCosts }) {
             <th>Full 5-hour windows a week</th>
           </tr>
         </thead>
-        <tbody>
-          {tiers.map((tier, n) => (
-            <tr key={tier} className={n % 2 ? 'is-alt' : undefined}>
-              <td>
-                <span className="cost-ref__tier-name">{planLabel(tier)}</span>
-                <span className="cost-ref__tier-key">{tier}</span>
-              </td>
-              {WINDOWS.map((w) => barCell(tier, w))}
-              {weekCell(tier)}
-            </tr>
-          ))}
-        </tbody>
+        <tbody>{rows.map((row, n) => row(n % 2 ? 'is-alt' : undefined))}</tbody>
       </table>
     </Card>
   );

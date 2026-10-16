@@ -6,7 +6,8 @@ import * as d from './dist/api.js';
 // The test tables, round throughout: weights Opus 5.5 2, Haiku 4.5 0.5 (1 on the week through its override, with a
 // cache read at 0.2), Opus 5 null; multipliers cache read 0.1, writes 2, input 1, output 10; capacities Max 20x 100 on
 // the 5-hour window and 1000 on the week, Pro 5 and 50, Team 10 and null; the peak band weekdays 5 to 11 in Los
-// Angeles at a 5-hour capacity factor of 0.5; the Fable week half the 7-day window.
+// Angeles at a 5-hour capacity factor of 0.5; the Fable week half the 7-day window. The regime desk, for the
+// entrypoints desk and pane, sizes Max 20x 200 and 1250 and Pro 10 and 62.5 and holds both windows whole in the band.
 const tables = JSON.parse(readFileSync(new URL('./fixtures/test_tables.json', import.meta.url), 'utf8')).body;
 const costs = d.decodeSubscriptionCosts(tables.subscription_costs.content);
 
@@ -376,6 +377,47 @@ test('the full 5-hour windows a week are the week over the window, each at its o
   assert.equal(d.fullWindowsAWeek(costs, 'default_claude_team', false), null, "Team's unsized week");
   const bandedWeek = { ...costs, peak: { ...costs.peak, capacityFactor: { fiveHour: 0.5, sevenDay: 0.5 } } };
   close(d.fullWindowsAWeek(bandedWeek, MAX_20X, true), 10, 'a banded week, (1000 x 0.5) / (100 x 0.5)');
+});
+
+test('the overlay prices a listed entrypoint under its regime and anything else at the base', () => {
+  assert.deepEqual(d.regimeNames(costs), ['desk']);
+  assert.equal(d.regimeOf(costs, 'pane'), 'desk');
+  assert.equal(d.regimeOf(costs, 'desk'), 'desk');
+  assert.equal(d.regimeOf(costs, 'cli'), null, 'an entrypoint no regime lists');
+  assert.equal(d.regimeOf(costs, null), null, 'a request without an entrypoint');
+  assert.deepEqual(d.underRegime(costs, 'desk'), d.withRegime(costs, 'desk'));
+  assert.notDeepEqual(d.withRegime(costs, 'desk'), costs, 'the regime changes the model');
+  assert.equal(d.underRegime(costs, 'sdk-cli'), costs, 'an unlisted entrypoint prices at the base itself');
+  assert.equal(d.underRegime(costs, null), costs);
+  assert.equal(d.withRegime(costs, 'nowhere'), costs, 'an unknown name is the base itself');
+  assert.equal(d.withRegime(costs, null), costs);
+});
+
+test('every reader prices through the overlay', () => {
+  const over = d.withRegime(costs, 'desk');
+  const u = usage({ input: 1 });
+  assert.equal(d.tierCapacity(over, MAX_20X, 'five_hour'), 200);
+  assert.equal(d.tierCapacity(costs, MAX_20X, 'five_hour'), 100);
+  assert.equal(d.tierCapacity(over, 'default_claude_team', 'five_hour'), 10, "a tier the regime does not name keeps the base's row");
+  close(d.ratesOf(over, 'five_hour', MAX_20X, OPUS)?.input, 10_000, 'input, 2 x 1 / 200 x 1e6');
+  close(d.ratesOf(costs, 'five_hour', MAX_20X, OPUS)?.input, 20_000, 'input at the base, 2 x 1 / 100 x 1e6');
+  close(d.shareIn(over, 'five_hour', MAX_20X, OPUS, u, true), d.shareIn(over, 'five_hour', MAX_20X, OPUS, u, false), 'the regime holds the window whole inside the band');
+  close(d.shareIn(costs, 'five_hour', MAX_20X, OPUS, u, true), 2 * d.shareIn(costs, 'five_hour', MAX_20X, OPUS, u, false), "the base's inside share doubles");
+  // At an instant: the regime's 2 / 200 inside and outside the band, against the base's 2 / 100 out and 2 / 50 in.
+  close(d.shareOf(over, 'five_hour', MAX_20X, OPUS, u, IN), 0.01, 'shareOf inside the band');
+  close(d.shareOf(over, 'five_hour', MAX_20X, OPUS, u, OUT), 0.01, 'shareOf outside the band');
+  close(d.shareOf(costs, 'five_hour', MAX_20X, OPUS, u, IN), 2 * d.shareOf(costs, 'five_hour', MAX_20X, OPUS, u, OUT), 'the base through shareOf');
+  close(d.shareOrFallback(over, 'five_hour', MAX_20X, OPUS, u, IN)?.share, 0.01, 'shareOrFallback inside the band');
+  close(d.shareOrFallback(over, 'five_hour', MAX_20X, OPUS, u, OUT)?.share, 0.01, 'shareOrFallback outside the band');
+  close(d.equivalentOf(over, 'five_hour', OPUS, u, OUT)?.equivalent, d.equivalentOf(costs, 'five_hour', OPUS, u, OUT)?.equivalent / 2, "the equivalent, half the base's");
+  assert.equal(d.bandFactor(over, 'five_hour', IN), 1);
+  assert.equal(d.bandFactor(costs, 'five_hour', IN), 2);
+  close(d.fullWindowsAWeek(over, MAX_20X, false), 6.25, 'Max 20x under the regime, 1250 / 200');
+  close(d.fullWindowsAWeek(costs, MAX_20X, false), 10, 'Max 20x at the base, 1000 / 100');
+  assert.equal(d.smallestTier(over, 'five_hour'), 'default_claude_ai');
+  // The overlay's own smallest is the regime's Pro row of 10, so a card that compares a regime's tier with the base's
+  // reads its multiple against the base's smallest tier instead.
+  assert.equal(d.windowMultiple(over, MAX_20X, 'five_hour'), 20, '200 / 10');
 });
 
 test('fundingOf reads the account kind, then a fast answer, then overage, and a missing attempt as dollars', () => {
