@@ -247,6 +247,9 @@ pub(crate) struct AffinityFacts {
     pub key_id: String,
     pub key_generation: i64,
     pub canonical_model: String,
+    /// The request's entrypoint as the identity read it, what the usage report's charge prices under: `None` for a
+    /// client that is not Claude Code.
+    pub entrypoint: Option<String>,
     pub lane: String,
     /// The identity's session id, `None` for a request with no identity.
     pub root: Option<String>,
@@ -300,6 +303,7 @@ impl AffinityFacts {
                     fast,
                     request_id: self.request_id.clone(),
                     attempt: self.attempt,
+                    entrypoint: self.entrypoint.clone(),
                 },
             );
             usage_sent = true;

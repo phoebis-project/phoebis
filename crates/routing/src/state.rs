@@ -40,6 +40,13 @@ pub struct PinRef {
     /// The lane the pin held once the selection that handed this out placed or renewed it. A renewal keeps the
     /// epoch across a lane change, so a report whose effect is bound to a lane checks this as well.
     pub lane: String,
+    /// The pin's entrypoint as the selection stamped it, `""` for none: a client renewal writes it back to the row.
+    pub entrypoint: String,
+}
+
+/// The pin's entrypoint as the pricers take it: `None` for a pin that carries none.
+pub fn entrypoint_of(pin: &PinRow) -> Option<&str> {
+    Some(pin.entrypoint.as_str()).filter(|entrypoint| !entrypoint.is_empty())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -332,21 +339,24 @@ pub struct SharePricer {
     rate: Arc<Rate>,
 }
 
-type Price = dyn Fn(&str, &str, &str, PinUsage, i64) -> Option<f64> + Send + Sync;
+type Price = dyn Fn(&str, Option<&str>, &str, &str, PinUsage, i64) -> Option<f64> + Send + Sync;
 type Measured = dyn Fn(&str) -> bool + Send + Sync;
-type Rate = dyn Fn(&str, &str, &str, &PinBurn, i64) -> Option<f64> + Send + Sync;
+type Rate = dyn Fn(&str, Option<&str>, &str, &str, &PinBurn, i64) -> Option<f64> + Send + Sync;
 
 impl SharePricer {
-    /// `price(window, tier, canonical_model, usage, at)`: the share of `window` on `tier` at `at` (the band
-    /// weighs the 5-hour window at a completion), `None` for a window the tables cannot price for the model on
-    /// the tier.
+    /// `price(window, entrypoint, tier, canonical_model, usage, at)`: the share of `window` on `tier` at `at` (the
+    /// band weighs the 5-hour window at a completion) under the regime `entrypoint` names, the base one for `None`,
+    /// and `None` for a window the tables cannot price for the model on the tier.
     pub fn new(
-        price: impl Fn(&str, &str, &str, PinUsage, i64) -> Option<f64> + Send + Sync + 'static,
+        price: impl Fn(&str, Option<&str>, &str, &str, PinUsage, i64) -> Option<f64>
+            + Send
+            + Sync
+            + 'static,
     ) -> SharePricer {
         SharePricer {
             price: Arc::new(price),
             measured: Arc::new(|_| true),
-            rate: Arc::new(|_, _, _, _, _| None),
+            rate: Arc::new(|_, _, _, _, _, _| None),
         }
     }
 
@@ -362,13 +372,17 @@ impl SharePricer {
         }
     }
 
-    /// `rate(window, tier, canonical_model, burn, at)`: the share of `window` on `tier` a pin burning `burn` typed
-    /// tokens a second consumes per second at the band of `at`. A model without a weight of its own prices at its
-    /// model tier's latest weight, an estimate, and the rate is `None` for a model of no weighted model tier, a tier
-    /// the file lacks or a window the tier has no capacity on. Every pricer prices nothing here until it is set.
+    /// `rate(window, entrypoint, tier, canonical_model, burn, at)`: the share of `window` on `tier` a pin burning
+    /// `burn` typed tokens a second consumes per second at the band of `at` under the regime `entrypoint` names, the
+    /// base one for `None`. A model without a weight of its own prices at its model tier's latest weight, an
+    /// estimate, and the rate is `None` for a model of no weighted model tier, a tier the file lacks or a window the
+    /// tier has no capacity on. Every pricer prices nothing here until it is set.
     pub fn with_rate(
         self,
-        rate: impl Fn(&str, &str, &str, &PinBurn, i64) -> Option<f64> + Send + Sync + 'static,
+        rate: impl Fn(&str, Option<&str>, &str, &str, &PinBurn, i64) -> Option<f64>
+            + Send
+            + Sync
+            + 'static,
     ) -> SharePricer {
         SharePricer {
             rate: Arc::new(rate),
@@ -379,23 +393,25 @@ impl SharePricer {
     pub fn rate(
         &self,
         window: &str,
+        entrypoint: Option<&str>,
         tier: &str,
         canonical_model: &str,
         burn: &PinBurn,
         at: i64,
     ) -> Option<f64> {
-        (self.rate)(window, tier, canonical_model, burn, at)
+        (self.rate)(window, entrypoint, tier, canonical_model, burn, at)
     }
 
     pub fn price(
         &self,
         window: &str,
+        entrypoint: Option<&str>,
         tier: &str,
         canonical_model: &str,
         usage: PinUsage,
         at: i64,
     ) -> Option<f64> {
-        (self.price)(window, tier, canonical_model, usage, at)
+        (self.price)(window, entrypoint, tier, canonical_model, usage, at)
     }
 
     pub fn measured(&self, window: &str) -> bool {
@@ -406,7 +422,7 @@ impl SharePricer {
 impl Default for SharePricer {
     /// Prices nothing: a task spawned without the ledger's tables predicts from readings alone.
     fn default() -> Self {
-        SharePricer::new(|_, _, _, _, _| None)
+        SharePricer::new(|_, _, _, _, _, _| None)
     }
 }
 
@@ -578,11 +594,12 @@ impl BurnUnit {
         }
     }
 
-    /// The table `rates` prices this unit's copy through.
-    pub fn table(self, rates: &BurnRates) -> &RateTable {
+    /// The table `rates` prices this unit's copy through: under `WindowShare` the 5-hour table of the regime
+    /// `entrypoint` names, the base one for `None`. Dollars cost the same whatever the entrypoint.
+    pub fn table<'a>(self, rates: &'a BurnRates, entrypoint: Option<&str>) -> &'a RateTable {
         match self {
             BurnUnit::Usd => &rates.dollars,
-            BurnUnit::WindowShare => &rates.five_hour,
+            BurnUnit::WindowShare => rates.five_hour.for_entrypoint(entrypoint),
         }
     }
 }
@@ -643,6 +660,9 @@ pub struct Reservation {
     pub attempt: u32,
     /// The pin the selection wrote, `None` for a request that pins nothing and still lands its body.
     pub pin: Option<PinKey>,
+    /// The entrypoint of the request that booked it, the regime `rewrite` and `burn` were priced under at `booked_at`,
+    /// which a reader that weighs the booking over a span prices it under again. `None` is the base regime.
+    pub entrypoint: Option<String>,
     pub booked_at: i64,
     /// The rewrite's share per plan window, what `predicted` adds.
     pub rewrite: BTreeMap<String, f64>,
@@ -2313,7 +2333,10 @@ impl RoutingState {
             for window in plan_windows(&pin.model) {
                 // The plain average, since the banded copy weighs past renewals' bands and the rate reads the band
                 // of now. Every type decays by one factor, so decaying the share equals pricing the decayed rates.
-                if let Some(rate) = self.share.rate(window, tier, &pin.model, &pin.burn, now) {
+                if let Some(rate) =
+                    self.share
+                        .rate(window, entrypoint_of(pin), tier, &pin.model, &pin.burn, now)
+                {
                     *shares.entry(window.to_string()).or_insert(0.0) +=
                         burn_decayed(rate, pin.burn_at, now, average_ms);
                 }
@@ -2966,6 +2989,7 @@ mod tests {
             static_hash: None,
             tail_hash: None,
             lane: crate::lane_key("m", "standard", "none", "-"),
+            entrypoint: String::new(),
             marked_at: None,
             marked_on: None,
             marked_window: None,
@@ -3900,6 +3924,7 @@ mod tests {
             account_id: account.into(),
             attempt,
             pin,
+            entrypoint: None,
             booked_at,
             rewrite: map(rewrite),
             burn: map(burn),
@@ -3927,7 +3952,7 @@ mod tests {
     /// `burn.input` priced a millionth of the 5-hour window and a ten-millionth of every other window per token a
     /// second, whatever the tier or the model.
     fn input_rates() -> SharePricer {
-        SharePricer::default().with_rate(|window, _, _, burn, _| {
+        SharePricer::default().with_rate(|window, _, _, _, burn, _| {
             Some(if window == FIVE_HOUR {
                 burn.input * 1e-6
             } else {
@@ -4050,7 +4075,7 @@ mod tests {
         );
         assert!(close(shares[SEVEN_DAY], 0.004), "{shares:?}");
         assert!(state.release_reservation("r").is_some());
-        state.set_share(SharePricer::default().with_rate(|_, _, _, _, _| None));
+        state.set_share(SharePricer::default().with_rate(|_, _, _, _, _, _| None));
         assert!(
             state
                 .burn_shares("a", &|_| true, "t", 0, 1_800_000)
@@ -4247,7 +4272,9 @@ mod tests {
                 }],
                 ..RoutingLoad::default()
             });
-            state.set_share(SharePricer::default().with_rate(|_, _, _, burn, _| Some(burn.input)));
+            state.set_share(
+                SharePricer::default().with_rate(|_, _, _, _, burn, _| Some(burn.input)),
+            );
             state
                 .burn_shares("a", &|_| true, "t", 0, 1_800_000)
                 .into_keys()

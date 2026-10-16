@@ -34,6 +34,7 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
         static_hash: None,
         tail_hash: None,
         lane: lane_key(model, "standard", "none", "-"),
+        entrypoint: String::new(),
         marked_at: None,
         marked_on: None,
         marked_window: None,
@@ -312,6 +313,92 @@ fn a_pins_lane_and_an_affinity_entrys_lane_survive_a_reopen() {
             .collect::<Vec<_>>(),
         vec![fast.as_str()],
         "so did the entry's"
+    );
+}
+
+#[test]
+fn a_pins_entrypoint_survives_a_reopen_and_a_row_from_before_reads_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    let interactive = PinRow {
+        entrypoint: "cli".into(),
+        ..pin("k", "s", "claude-opus-5-5", "a")
+    };
+    {
+        let store = Store::open(&path, &storage_key).unwrap();
+        seed_accounts(&store, &["a"]);
+        store.upsert_pin(&interactive).unwrap();
+    }
+    let entrypoints = || {
+        Store::open(&path, &storage_key)
+            .unwrap()
+            .load_routing()
+            .unwrap()
+            .pins
+            .into_iter()
+            .map(|p| (p.session_id, p.entrypoint))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        entrypoints(),
+        [("s".to_string(), "cli".to_string())],
+        "the pin's entrypoint reads back after a reopen"
+    );
+    Store::open(&path, &storage_key)
+        .unwrap()
+        .upsert_pin(&PinRow {
+            entrypoint: "claude-vscode".into(),
+            ..interactive.clone()
+        })
+        .unwrap();
+    assert_eq!(
+        entrypoints(),
+        [("s".to_string(), "claude-vscode".to_string())],
+        "the next request's entrypoint replaces it"
+    );
+    // A registry stamped at the version before the column, holding a pin that version wrote.
+    let before = pin("k", "before", "claude-opus-5-5", "a");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(&format!(
+        "{UNDO_V56} UPDATE meta SET value = '55' WHERE key = 'schema_version';"
+    ))
+    .unwrap();
+    conn.execute(
+        "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, \
+         key_generation, incarnation, last_refresh_at, lane) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        rusqlite::params![
+            before.key_id,
+            before.session_id,
+            before.agent_id,
+            before.model,
+            before.account_id,
+            before.epoch as i64,
+            before.created_at,
+            before.last_used_at,
+            before.key_generation,
+            before.incarnation as i64,
+            before.last_refresh_at,
+            before.lane
+        ],
+    )
+    .unwrap();
+    drop(conn);
+    let migrated =
+        Store::open(&path, &storage_key).expect("the migration completes and the store opens");
+    assert_eq!(migrated.schema_version().unwrap(), 56);
+    let pins = migrated.load_routing().unwrap().pins;
+    assert_eq!(
+        pins.iter().find(|p| p.session_id == "before"),
+        Some(&before),
+        "the row from before the column reads no entrypoint, the base regime, and every field it was written with"
+    );
+    assert_eq!(
+        pins.iter()
+            .find(|p| p.session_id == "s")
+            .map(|p| p.entrypoint.as_str()),
+        Some(""),
+        "a pin the step reaches reads no entrypoint until its next request stamps one"
     );
 }
 
@@ -848,6 +935,9 @@ fn affinity_rows_land_together_replace_by_model_and_hash_and_delete_by_key() {
     );
 }
 
+// The reverse of the registry's version 56: the pins lose `entrypoint`. One line with the marker last. The trailing `\n`
+// ends the marker's comment.
+const UNDO_V56: &str = "ALTER TABLE pins DROP COLUMN entrypoint; -- rollback\n";
 // The reverse of the registry's version 55: the pools lose `slow_down`, `slow_down_stretch_seconds`,
 // `slow_down_hold_seconds`, `return_to_plan` and `return_to_plan_dwell_seconds`. One line with the marker last. The
 // trailing `\n` ends the marker's comment.
@@ -916,7 +1006,7 @@ fn an_affinity_rows_message_id_round_trips_and_a_row_from_before_the_column_read
     let before = affinity_row("claude-sonnet-5", "hash-1", "a");
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} UPDATE meta SET value = '50' WHERE key = 'schema_version';"
+        "{UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} UPDATE meta SET value = '50' WHERE key = 'schema_version';"
     ))
     .unwrap();
     conn.execute(
@@ -942,7 +1032,7 @@ fn an_affinity_rows_message_id_round_trips_and_a_row_from_before_the_column_read
     drop(conn);
     let migrated =
         Store::open(&path, &storage_key).expect("the migration completes and the store opens");
-    assert_eq!(migrated.schema_version().unwrap(), 55);
+    assert_eq!(migrated.schema_version().unwrap(), 56);
     assert_eq!(
         migrated.load_routing().unwrap().affinity,
         vec![AffinityRow {

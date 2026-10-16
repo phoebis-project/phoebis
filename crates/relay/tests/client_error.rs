@@ -94,6 +94,7 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             static_hash: None,
             boundaries: Arc::from([]),
             client: ClientClass::ClaudeCode,
+            entrypoint: None,
             static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,

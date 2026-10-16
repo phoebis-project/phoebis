@@ -689,8 +689,11 @@ fn a_registry_whose_only_sealed_rows_are_recipe_bodies_is_judged_by_them() {
     assert!(agents.iter().all(|agent| agent.body.is_none()));
 }
 
-/// The reverse of the registry's newest migration, the slow-down's three columns and the return-to-plan mode and dwell
-/// gone, as `crates/store/tests` replays it.
+/// The reverse of the registry's newest migration, the pin's entrypoint column gone, as `crates/store/tests` replays it.
+const UNDO_V56: &str =
+    "ALTER TABLE pins DROP COLUMN entrypoint; UPDATE meta SET value = '55' WHERE key = 'schema_version';";
+
+/// The reverse of the step before it, the slow-down's three columns and the return-to-plan mode and dwell gone.
 const UNDO_V55: &str = "ALTER TABLE pools DROP COLUMN slow_down; \
      ALTER TABLE pools DROP COLUMN slow_down_stretch_seconds; \
      ALTER TABLE pools DROP COLUMN slow_down_hold_seconds; \
@@ -706,7 +709,7 @@ fn a_run_that_stops_short_of_the_discard_leaves_the_registry_at_the_version_it_f
     seed(&registry(dir.path()), &old);
     rusqlite::Connection::open(registry(dir.path()))
         .unwrap()
-        .execute_batch(UNDO_V55)
+        .execute_batch(&format!("{UNDO_V56} {UNDO_V55}"))
         .unwrap();
     std::fs::write(key_file(dir.path()), OLD_KEY).unwrap();
     let out = recover_key(&config, &["--yes"], b"");

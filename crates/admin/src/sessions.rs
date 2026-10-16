@@ -7,7 +7,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_routing::{BurnRates, BurnUnit, FIVE_HOUR};
+use phoebis_routing::{entrypoint_of, BurnRates, BurnUnit, FIVE_HOUR};
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
@@ -204,13 +204,14 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     // A pin's burn is typed tokens a second, priced here on the account it sits on: dollars through the table
     // in force at the set the pin's last prompt length selects, its fast usage at the fast cells beside it, or
     // the share of the account's own 5-hour window through the model's anchor rates over its tier's capacity
-    // ratio. The anchor rates alone are the 20x equivalent. Each account's tier is read once per request.
+    // ratio, both under the pin's regime. The anchor rates alone are the 20x equivalent. Each account's tier is read
+    // once per request.
     let revisions = state.pricing.revisions();
     let prices = revisions.in_force(now);
     let costs = state.tables.revisions.in_force(now);
     let rates = BurnRates {
         dollars: prices.rate_table(),
-        five_hour: state.tables.rate_table(FIVE_HOUR, None, now),
+        five_hour: state.tables.regime_rates(FIVE_HOUR, now),
         fast: prices.fast_rate_table(),
     };
     let mut tiers: std::collections::HashMap<String, Option<String>> =
@@ -285,8 +286,12 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 let tier = tiers.get(&p.account_id).and_then(Option::as_deref);
                 // An account tier the cost model does not size prices nothing, as does a model with no weight of its
                 // own or of its model tier, so the figure reads null rather than a guess.
-                tier.and_then(|t| state.tables.tier_factor(t, FIVE_HOUR, None, now))
-                    .and_then(|factor| equivalent.map(|b| b / factor))
+                tier.and_then(|t| {
+                    state
+                        .tables
+                        .tier_factor(t, FIVE_HOUR, entrypoint_of(p), now)
+                })
+                .and_then(|factor| equivalent.map(|b| b / factor))
             }
         };
         rows.insert(

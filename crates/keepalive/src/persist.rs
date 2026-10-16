@@ -96,6 +96,10 @@ pub(crate) struct PersistedAgent {
     pub account: Option<String>,
     pub pool_id: String,
     pub canonical_model: String,
+    /// Absent from a row saved before agents carried one, which loads as `None`, the base regime, until the next
+    /// request names one.
+    #[serde(default)]
+    pub entrypoint: Option<String>,
     pub reason: String,
     pub last_guard: Option<Guard>,
     pub hold_counted: bool,
@@ -414,6 +418,7 @@ impl PersistedAgent {
             account: agent.account.clone(),
             pool_id: agent.pool_id.clone(),
             canonical_model: agent.canonical_model.clone(),
+            entrypoint: agent.entrypoint.clone(),
             reason: agent.reason.as_str().to_string(),
             last_guard: agent.last_guard,
             hold_counted: agent.hold_counted,
@@ -514,6 +519,7 @@ impl PersistedAgent {
         agent.canonical_model = self.canonical_model;
         agent.reason = reason_of(&self.reason)?;
         agent.last_guard = self.last_guard;
+        agent.entrypoint = self.entrypoint;
         agent.hold_counted = self.hold_counted;
         agent.paused = self.paused;
         agent.probes = self.probes;
@@ -1397,5 +1403,33 @@ mod tests {
                 serde_json::from_str(&serde_json::to_string(&Jitter(value)).unwrap()).unwrap();
             assert_eq!(back.0.to_bits(), value.to_bits());
         }
+    }
+
+    #[test]
+    fn a_persisted_agent_without_an_entrypoint_loads_with_none() {
+        let mut agent = Agent::new("main", "k", 1, 0, KeepaliveTiming::default());
+        agent.entrypoint = Some("cli".into());
+        let payload = serde_json::to_value(PersistedAgent::of(&agent)).unwrap();
+        let saved: PersistedAgent = serde_json::from_value(payload.clone()).unwrap();
+        assert_eq!(
+            saved.entrypoint.as_deref(),
+            Some("cli"),
+            "the agent's entrypoint is saved with it"
+        );
+        let mut before = payload;
+        before
+            .as_object_mut()
+            .expect("the payload is an object")
+            .remove("entrypoint");
+        let loaded: PersistedAgent =
+            serde_json::from_value(before).expect("a payload saved before the member loads");
+        assert_eq!(loaded.entrypoint, None);
+        let (restored, _) = loaded
+            .restore(KeepaliveTiming::default())
+            .expect("every word of the payload is known");
+        assert_eq!(
+            restored.entrypoint, None,
+            "its probes price at the base regime until the next request names one"
+        );
     }
 }

@@ -42,6 +42,9 @@ pub(crate) struct ProbeJob {
     pub account: Option<String>,
     pub pool_id: String,
     pub canonical_model: String,
+    /// The agent's entrypoint at dispatch, which the probe's headers carry, so the probe settles under the regime it
+    /// was sent with even when the agent observes another before it lands.
+    pub entrypoint: Option<String>,
     pub recipe: Recipe,
     pub expected: u64,
     /// The dispatch counted this probe in the agent's `idle_ticks`, as it does for an idle main agent or an unattended
@@ -186,27 +189,30 @@ pub(crate) enum Applied {
     Orphaned,
 }
 
-/// The unit a probe settles in: the one `settlement_unit` decides, or dollars where the share it names cannot be
-/// priced. Only the unit is kept, since the credit reads its presence and the ledger prices the probe's counts.
+/// The unit a probe settles in: the one `settlement_unit` decides under the regime of the probe's `entrypoint`, or
+/// dollars where the share it names cannot be priced. Only the unit is kept, since the credit reads its presence and
+/// the ledger prices the probe's counts.
+#[allow(clippy::too_many_arguments)]
 fn settled_unit(
     default_unit: SavingsUnit,
     tables: &PlanTables,
+    entrypoint: Option<&str>,
     tier: Option<&str>,
     account: &str,
     canonical_model: &str,
     usage: ProbeUsage,
     at: i64,
 ) -> SavingsUnit {
-    let unit = settlement_unit(default_unit, tables, tier, canonical_model, at);
+    let unit = settlement_unit(default_unit, tables, entrypoint, tier, canonical_model, at);
     if unit == SavingsUnit::WindowShare
-        && probe_cost(tables, tier, canonical_model, usage, at).is_none()
+        && probe_cost(tables, entrypoint, tier, canonical_model, usage, at).is_none()
     {
         // `settlement_unit` reads `priced`, which asks exactly what `share_at` needs (a weight on the window and a
         // capacity for the tier), so this branch is unreachable. It stays as the defensive read of a `None`.
         tracing::debug!(
             account,
             model = canonical_model,
-            unpriced = unpriced_reason(tables, canonical_model, at),
+            unpriced = unpriced_reason(tables, entrypoint, canonical_model, at),
             "a probe the cost model cannot price on the window share settles in dollars"
         );
         return SavingsUnit::Usd;
@@ -372,6 +378,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         let unit = settled_unit(
             default_unit,
             &tables,
+            job.entrypoint.as_deref(),
             tier.as_deref(),
             &record.account,
             &record.canonical_model,
@@ -1055,6 +1062,7 @@ mod tests {
             account: Some("a".into()),
             pool_id: "main".into(),
             canonical_model: "m".into(),
+            entrypoint: None,
             recipe: Recipe {
                 body: Vec::new(),
                 headers: Vec::new(),
@@ -1376,6 +1384,7 @@ mod tests {
         let unit = settled_unit(
             SavingsUnit::WindowShare,
             &tables,
+            None,
             MAX_20X,
             "o",
             "unlisted-model",
@@ -1387,6 +1396,46 @@ mod tests {
             SavingsUnit::Usd,
             "the cost model has no weight, so the unit falls back too"
         );
+    }
+
+    // The test model's regime `desk` holds 200 units of the Max 20x 5-hour window against the base 100 and keeps its
+    // own band, so at an instant outside the base band a probe sent under it costs half the base share.
+    #[test]
+    fn a_probes_cost_and_its_settlement_follow_the_agents_entrypoint() {
+        let tables = phoebis_ledger::test_tables::subscription_costs();
+        let at = phoebis_ledger::test_tables::JANUARY_2026;
+        let cost = |entrypoint| {
+            probe_cost(
+                &tables,
+                entrypoint,
+                MAX_20X,
+                "claude-opus-5-5",
+                million_input(),
+                at,
+            )
+            .expect("a weighted model on a sized tier")
+        };
+        let (interactive, base) = (cost(Some("desk")), cost(None));
+        assert!(
+            (interactive / base - 0.5).abs() < 1e-12,
+            "the probe's share under the regime is half the base one: {interactive} against {base}"
+        );
+        for entrypoint in [Some("desk"), None] {
+            assert_eq!(
+                settled_unit(
+                    SavingsUnit::WindowShare,
+                    &tables,
+                    entrypoint,
+                    MAX_20X,
+                    "o",
+                    "claude-opus-5-5",
+                    million_input(),
+                    at,
+                ),
+                SavingsUnit::WindowShare,
+                "{entrypoint:?}"
+            );
+        }
     }
 
     // The test table: Opus 5.5 weighs 2 and an input token multiplies by 1, the Max 20x 5-hour window holds 100
@@ -1406,6 +1455,7 @@ mod tests {
         let unit = settled_unit(
             SavingsUnit::WindowShare,
             &tables,
+            None,
             MAX_20X,
             "o",
             "claude-opus-5-5",
@@ -1414,7 +1464,7 @@ mod tests {
         );
         assert_eq!(unit, SavingsUnit::WindowShare);
         let share =
-            |at: i64| probe_cost(&tables, MAX_20X, "claude-opus-5-5", one_input, at).unwrap();
+            |at: i64| probe_cost(&tables, None, MAX_20X, "claude-opus-5-5", one_input, at).unwrap();
         let cost = share(OFF_BAND);
         assert!(
             (cost - 2.0 / 100.0).abs() < 1e-12,
@@ -1433,6 +1483,7 @@ mod tests {
         let unit = settled_unit(
             SavingsUnit::WindowShare,
             &tables,
+            None,
             None,
             "o",
             "claude-opus-5",
@@ -1453,6 +1504,7 @@ mod tests {
         let unit = settled_unit(
             SavingsUnit::WindowShare,
             &tables,
+            None,
             MAX_20X,
             "o",
             "claude-mystery-2",

@@ -30,10 +30,10 @@ use crate::select::{
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
-    is_plan_window, mark_holds, plan_windows, shed_dwell_ms, slow_down_hold_ms, AccountTicket,
-    BurnUnit, CreditsState, EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef,
-    PinUsage, RateTable, RoutingState, SharePricer, SlowDownEdge, StateWrite, UtilizationSample,
-    WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    entrypoint_of, is_plan_window, mark_holds, plan_windows, shed_dwell_ms, slow_down_hold_ms,
+    AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight, MemberSpend, OverageEvidence,
+    PinRef, PinUsage, RateTable, RoutingState, SharePricer, SlowDownEdge, StateWrite,
+    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::{resolve, term, window_for, Candidate, KeyRefusal, Presented, RegistrySnapshot};
 
@@ -335,8 +335,8 @@ pub struct RouterConfig {
     /// start row.
     pub hold_first_purge: bool,
     pub purge_interval: Duration,
-    /// The dollar table and the subscription cost model's 5-hour share table a reader prices each pin's row
-    /// through, and the fast table it prices the pin's fast usage through. A renewal folds tokens and reads none of
+    /// The dollar table and the subscription cost model's 5-hour share tables per regime a reader prices each pin's
+    /// row through, and the fast table it prices the pin's fast usage through. A renewal folds tokens and reads none of
     /// them. The task holds them because neither this crate nor the relay can see the ledger's tables.
     pub rates: BurnRates,
     /// The share of an account's windows a completed request consumed; the default prices nothing.
@@ -358,13 +358,42 @@ impl Default for RouterConfig {
     }
 }
 
+/// The 5-hour share tables per regime, read once at start: the base table and one per regime the revision in force
+/// names, with each listed entrypoint mapped to its regime's name.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RegimeRates {
+    pub base: RateTable,
+    pub regimes: HashMap<String, RateTable>,
+    pub entrypoints: HashMap<String, String>,
+}
+
+impl RegimeRates {
+    /// The unit table as the base and no regime, so every entrypoint reads a token count.
+    pub fn unit() -> RegimeRates {
+        RegimeRates {
+            base: RateTable::unit(),
+            regimes: HashMap::new(),
+            entrypoints: HashMap::new(),
+        }
+    }
+
+    /// The regime's table for a listed entrypoint, the base table for `None` and for an unlisted one.
+    pub fn for_entrypoint(&self, entrypoint: Option<&str>) -> &RateTable {
+        entrypoint
+            .and_then(|entrypoint| self.entrypoints.get(entrypoint))
+            .and_then(|regime| self.regimes.get(regime))
+            .unwrap_or(&self.base)
+    }
+}
+
 /// The three tables a reader prices a pin's burn through: dollars per token and the subscription cost model's
-/// 5-hour share on its anchor tier per token for the pin's row, and dollars per token at the fast cells for the
-/// pin's fast usage. All three default to `RateTable::unit`, so a burn read through the default is a token count.
+/// 5-hour share on its anchor tier per token for the pin's row under the pin's regime, and dollars per token at the
+/// fast cells for the pin's fast usage. All three default to the unit tables, so a burn read through the default is a
+/// token count.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BurnRates {
     pub dollars: RateTable,
-    pub five_hour: RateTable,
+    pub five_hour: RegimeRates,
     /// Dollars per token at the fast cells, the table a pin's fast usage prices through. A row without fast cells
     /// carries its own standard and long-context rates here, as the ledger builds it, so a fast answer on such a
     /// row prices at the set its prompt selects, as it does in the ledger.
@@ -375,7 +404,7 @@ impl Default for BurnRates {
     fn default() -> Self {
         BurnRates {
             dollars: RateTable::unit(),
-            five_hour: RateTable::unit(),
+            five_hour: RegimeRates::unit(),
             fast: RateTable::unit(),
         }
     }
@@ -387,12 +416,14 @@ impl BurnRates {
     /// the fast table. On a row with fast cells that table carries them whatever the prompt, so a prompt that
     /// crosses the threshold reprices the ordinary usage alone, and on a row without them it carries the row's own
     /// sets, so the fast usage reprices with the row, as the ledger prices a fast answer there. Under `WindowShare`
-    /// the banded copy alone: fast usage draws usage credits, never the plan's window. `None` where a type the pin
-    /// burns has no rate.
+    /// the banded copy alone, through the table of the pin's regime: fast usage draws usage credits, never the plan's
+    /// window. `None` where a type the pin burns has no rate.
     pub fn price_pin(&self, unit: BurnUnit, pin: &PinRow, fast: &PinBurn) -> Option<f64> {
-        let own =
-            unit.table(self)
-                .price_burn(&pin.model, &unit.read(pin), pin.last_input_tokens)?;
+        let own = unit.table(self, entrypoint_of(pin)).price_burn(
+            &pin.model,
+            &unit.read(pin),
+            pin.last_input_tokens,
+        )?;
         match unit {
             BurnUnit::Usd => Some(
                 own + self
@@ -404,27 +435,30 @@ impl BurnRates {
     }
 }
 
-/// The weight the meter puts on a charge landing on a window at an instant. The ledger's peak band decides it,
-/// and this crate cannot name the ledger's table, so the band arrives as a function; the default weighs every
+/// The weight the meter puts on a charge landing on a window at an instant, read under the regime of the request's
+/// entrypoint (the base one for `None`), since each regime carries its own band factor. The ledger's peak band decides
+/// it, and this crate cannot name the ledger's table, so the band arrives as a function; the default weighs every
 /// instant 1.
 #[derive(Clone)]
 pub struct BandWeight(Arc<Weigh>);
 
-type Weigh = dyn Fn(&str, i64) -> f64 + Send + Sync;
+type Weigh = dyn Fn(&str, Option<&str>, i64) -> f64 + Send + Sync;
 
 impl BandWeight {
-    pub fn new(weigh: impl Fn(&str, i64) -> f64 + Send + Sync + 'static) -> BandWeight {
+    pub fn new(
+        weigh: impl Fn(&str, Option<&str>, i64) -> f64 + Send + Sync + 'static,
+    ) -> BandWeight {
         BandWeight(Arc::new(weigh))
     }
 
-    pub fn at(&self, window: &str, at: i64) -> f64 {
-        (self.0)(window, at)
+    pub fn at(&self, window: &str, entrypoint: Option<&str>, at: i64) -> f64 {
+        (self.0)(window, entrypoint, at)
     }
 }
 
 impl Default for BandWeight {
     fn default() -> BandWeight {
-        BandWeight::new(|_, _| 1.0)
+        BandWeight::new(|_, _, _| 1.0)
     }
 }
 
@@ -548,6 +582,9 @@ pub enum Report {
         /// The request whose booking the usage releases before it charges, and the wire attempt that answered.
         request_id: String,
         attempt: u32,
+        /// The request's entrypoint as the identity read it, what the charge prices under: `None` for a client that
+        /// is not Claude Code, which prices at the base regime.
+        entrypoint: Option<String>,
     },
 }
 
@@ -3701,6 +3738,11 @@ impl Task {
                             ..current
                         };
                         renewed.cache_ttl_ms = cache_ttl_ms;
+                        // A probe replays another request's headers, so the row keeps its entrypoint as it keeps
+                        // its lane.
+                        if origin == "client" {
+                            renewed.entrypoint = pin.entrypoint.clone();
+                        }
                         if origin == "keepalive" {
                             // A probe's selection judged nothing, since it replays another request's facts; the
                             // renewal is the refresh it wrote. Its usage is the keepalive's cost, never the
@@ -3711,9 +3753,10 @@ impl Task {
                             // reader prices the copies its funding selects on the account the pin sits on when it
                             // reads, so leaving overage or moving between tiers needs no reset.
                             let window_ms = self.burn_window_ms(&pin.key_id);
-                            // The meter charges a request inside the peak band more, so the banded copy weighs
-                            // it by the band at the renewal; dollars cost the same at every hour.
-                            let band = self.config.band.at(FIVE_HOUR, now);
+                            // The meter charges a request inside the peak band more, by its own regime's factor, so
+                            // the banded copy weighs it by the band of the row's regime at the renewal; dollars cost
+                            // the same at every hour.
+                            let band = self.config.band.at(FIVE_HOUR, entrypoint_of(&renewed), now);
                             let at = renewed.burn_at;
                             let prompt =
                                 usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
@@ -3828,6 +3871,7 @@ impl Task {
                 fast,
                 request_id,
                 attempt: _,
+                entrypoint,
             } => {
                 // The usage replaces the booking, on every path below: a request that holds none (a renewal, a
                 // request from before a restart, one whose booking the purge expired) still charges its account.
@@ -3851,10 +3895,16 @@ impl Task {
                 let Some(tier) = snapshot.tier(&account_id) else {
                     return;
                 };
+                // The report's own entrypoint, never a booking's: an ordinary renewal holds none.
                 let price = |window: &str| {
-                    self.config
-                        .share
-                        .price(window, tier, &canonical_model, usage, at)
+                    self.config.share.price(
+                        window,
+                        entrypoint.as_deref(),
+                        tier,
+                        &canonical_model,
+                        usage,
+                        at,
+                    )
                 };
                 let own = window_for(&canonical_model);
                 let mut shares = vec![(FIVE_HOUR, price(FIVE_HOUR)), (SEVEN_DAY, price(SEVEN_DAY))];
@@ -4900,6 +4950,50 @@ mod tests {
 
     fn dropped(handle: &RouterHandle) -> u64 {
         handle.dropped_reports().iter().map(|(_, n)| n).sum()
+    }
+
+    #[test]
+    fn regime_rates_answer_the_regimes_table_for_a_listed_entrypoint_and_the_base_otherwise() {
+        let half = crate::state::Rates {
+            input: Some(0.5),
+            cache_read: Some(0.5),
+            write_5m: Some(0.5),
+            write_1h: Some(0.5),
+            output: Some(0.5),
+        };
+        let desk = RateTable {
+            fallback: half,
+            ..RateTable::unit()
+        };
+        let rates = RegimeRates {
+            base: RateTable::unit(),
+            regimes: HashMap::from([("desk".to_string(), desk.clone())]),
+            entrypoints: HashMap::from([
+                ("desk".to_string(), "desk".to_string()),
+                ("pane".to_string(), "desk".to_string()),
+            ]),
+        };
+        assert_eq!(rates.for_entrypoint(Some("desk")), &desk);
+        assert_eq!(
+            rates.for_entrypoint(Some("pane")),
+            &desk,
+            "every entrypoint the regime lists reads its table"
+        );
+        assert_eq!(
+            rates.for_entrypoint(None),
+            &RateTable::unit(),
+            "no entrypoint is the base regime"
+        );
+        assert_eq!(
+            rates.for_entrypoint(Some("sdk-cli")),
+            &RateTable::unit(),
+            "an entrypoint no regime lists prices at the base"
+        );
+        assert_eq!(
+            RegimeRates::unit().for_entrypoint(Some("desk")),
+            &RateTable::unit(),
+            "the unit tables list no regime"
+        );
     }
 
     /// Both arms of an open window's bound take the reset's slack: the request that opened the window can reach the

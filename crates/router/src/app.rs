@@ -731,10 +731,11 @@ pub async fn run_until(
     served
 }
 
-/// The routing task's burn prices and peak band: the model's 5-hour share per token on its anchor tier and its band,
-/// and for dollars `prices`, the revision of the table `Pricing::load` chose that is in force at the start `now`, the
-/// share of an account's window a completed request consumed, and the share per second a pin's burn consumes, both
-/// priced through the model on the account's tier. The `BurnRates` tables and the measured windows are read at `now`
+/// The routing task's burn prices and peak band: the model's 5-hour share per token on its anchor tier per regime and
+/// its band, and for dollars `prices`, the revision of the table `Pricing::load` chose that is in force at the start
+/// `now`, the share of an account's window a completed request consumed, and the share per second a pin's burn
+/// consumes, both priced through the model on the account's tier. Every closure prices under the regime of the
+/// entrypoint it is handed, the base one for `None`. The `BurnRates` tables and the measured windows are read at `now`
 /// and fixed for the life of the process, so a pending revision reaches them at the next start, while the two shares
 /// price at each call's instant under the revision in force then.
 fn router_config(
@@ -747,20 +748,22 @@ fn router_config(
     let measured = tables.clone();
     let rate_tables = tables.clone();
     phoebis_routing::RouterConfig {
-        band: phoebis_routing::BandWeight::new(move |window, at| {
-            band.band_factor(window, None, at)
+        band: phoebis_routing::BandWeight::new(move |window, entrypoint, at| {
+            band.band_factor(window, entrypoint, at)
         }),
         rates: phoebis_routing::BurnRates {
             dollars: prices.rate_table(),
-            five_hour: tables.rate_table(phoebis_routing::FIVE_HOUR, None, now),
+            five_hour: tables.regime_rates(phoebis_routing::FIVE_HOUR, now),
             fast: prices.fast_rate_table(),
         },
-        share: phoebis_routing::SharePricer::new(move |window, tier, model, usage, at| {
-            tables.share_at(window, None, tier, model, usage, at)
-        })
+        share: phoebis_routing::SharePricer::new(
+            move |window, entrypoint, tier, model, usage, at| {
+                tables.share_at(window, entrypoint, tier, model, usage, at)
+            },
+        )
         .with_measured(move |window| measured.measured(window, now))
-        .with_rate(move |window, tier, model, burn, at| {
-            rate_tables.share_rate_at(window, None, tier, model, burn, at)
+        .with_rate(move |window, entrypoint, tier, model, burn, at| {
+            rate_tables.share_rate_at(window, entrypoint, tier, model, burn, at)
         }),
         funding_retry: Duration::from_secs(300.min(routing.model_rejection_seconds)),
         // Released once the ledger's mirror subscribed and the start row is recorded, below.
@@ -1028,6 +1031,7 @@ mod tests {
         assert_eq!(
             config.share.price(
                 phoebis_routing::FIVE_HOUR,
+                None,
                 tier,
                 "claude-opus-5-5",
                 usage,
@@ -1047,7 +1051,7 @@ mod tests {
             assert_eq!(
                 config
                     .share
-                    .price(window, tier, "claude-opus-5-5", usage, at),
+                    .price(window, None, tier, "claude-opus-5-5", usage, at),
                 tables.share_at(window, None, tier, "claude-opus-5-5", usage, at),
                 "{window}"
             );
@@ -1071,7 +1075,7 @@ mod tests {
         ] {
             let rate = config
                 .share
-                .rate(window, tier, "claude-opus-5-5", &burn, at);
+                .rate(window, None, tier, "claude-opus-5-5", &burn, at);
             assert_eq!(
                 rate,
                 tables.share_rate_at(window, None, tier, "claude-opus-5-5", &burn, at),
@@ -1083,6 +1087,7 @@ mod tests {
             .share
             .price(
                 phoebis_routing::FIVE_HOUR,
+                None,
                 tier,
                 "claude-opus-5-5",
                 usage,
@@ -1092,6 +1097,7 @@ mod tests {
         assert_eq!(
             config.share.price(
                 phoebis_routing::FIVE_HOUR,
+                None,
                 "no_such_tier",
                 "claude-opus-5-5",
                 usage,
@@ -1103,6 +1109,7 @@ mod tests {
         assert_eq!(
             config.share.price(
                 phoebis_routing::FIVE_HOUR,
+                None,
                 tier,
                 "claude-mystery-2",
                 usage,
@@ -1110,6 +1117,88 @@ mod tests {
             ),
             None,
             "the shipped model places Mystery 2 in no tier, so nothing weighs it"
+        );
+    }
+
+    /// The test model's regime `desk` holds twice the base 5-hour capacity on Max 20x, and the base's band halves the
+    /// base capacity while the regime keeps its own, so outside the band every figure under the regime is half the base
+    /// one, and inside it the band weighs the base alone.
+    #[test]
+    fn the_router_config_passes_the_entrypoint_through_every_closure_and_builds_the_regime_tables()
+    {
+        let tables = phoebis_ledger::PlanTables {
+            revisions: phoebis_ledger::CostRevisions::from_yaml(
+                &phoebis_ledger::test_tables::first_entry_costs_text(),
+            )
+            .expect("the test model parses"),
+            path: None,
+            source: "test".to_string(),
+        };
+        let config = router_config(
+            phoebis_ledger::PriceRevisions::shipped().in_force(START),
+            Arc::new(tables),
+            &RoutingConfig::default(),
+            START,
+        );
+        let usage = phoebis_routing::PinUsage {
+            input: 1_000,
+            ..Default::default()
+        };
+        let burn = phoebis_store::PinBurn {
+            input: 10.0,
+            ..Default::default()
+        };
+        let (tier, model) = ("default_claude_max_20x", "claude-opus-5-5");
+        // Monday 2026-09-21 at 14:00 and at 20:00 UTC, inside and outside the test model's band.
+        let (in_band, out_of_band) = (1_789_999_200_000, 1_790_020_800_000);
+        let half = |under: Option<f64>, base: Option<f64>| {
+            under
+                .zip(base)
+                .is_some_and(|(under, base)| base > 0.0 && (under / base - 0.5).abs() < 1e-12)
+        };
+        let five_hour = phoebis_routing::FIVE_HOUR;
+        assert!(
+            half(
+                config
+                    .share
+                    .price(five_hour, Some("desk"), tier, model, usage, out_of_band),
+                config
+                    .share
+                    .price(five_hour, None, tier, model, usage, out_of_band)
+            ),
+            "a request's charge prices under its regime"
+        );
+        assert!(
+            half(
+                config
+                    .share
+                    .rate(five_hour, Some("desk"), tier, model, &burn, out_of_band),
+                config
+                    .share
+                    .rate(five_hour, None, tier, model, &burn, out_of_band)
+            ),
+            "a pin's burn prices under its regime"
+        );
+        let input =
+            |entrypoint| config.rates.five_hour.for_entrypoint(entrypoint).rows[model].input;
+        assert!(
+            half(input(Some("desk")), input(None)),
+            "the burn table of the regime ranks its pins at half the base rate"
+        );
+        assert_eq!(
+            config.rates.five_hour.for_entrypoint(Some("pane")),
+            config.rates.five_hour.for_entrypoint(Some("desk")),
+            "every entrypoint the regime lists reads its table"
+        );
+        assert_eq!(
+            config.band.at(five_hour, Some("desk"), in_band),
+            1.0,
+            "the regime carries no band"
+        );
+        assert_eq!(
+            config.band.at(five_hour, None, in_band),
+            2.0,
+            "the base band halves the base capacity"
         );
     }
 
@@ -1170,6 +1259,7 @@ mod tests {
         let week = |at| {
             config.share.price(
                 phoebis_routing::SEVEN_DAY,
+                None,
                 tier,
                 "claude-opus-5-5",
                 usage,
@@ -1223,6 +1313,7 @@ mod tests {
         let share = config
             .rates
             .five_hour
+            .base
             .price("claude-opus-5-5", usage, prompt)
             .expect("a priced model");
         let expected = tables
@@ -1249,6 +1340,7 @@ mod tests {
         let estimated = config
             .rates
             .five_hour
+            .base
             .price("claude-opus-4-8", usage, prompt)
             .expect("a model of a weighted model tier");
         let expected = tables
@@ -1267,7 +1359,7 @@ mod tests {
              {estimated} against {expected}"
         );
         assert_eq!(
-            config.rates.five_hour.price("gpt-5", usage, prompt),
+            config.rates.five_hour.base.price("gpt-5", usage, prompt),
             None,
             "the share table prices no model outside every weighted model tier"
         );
@@ -1323,13 +1415,18 @@ mod tests {
                 < 1e-12,
             "the fast table prices a usage as the price table estimates a fast answer"
         );
-        let banded = config.band.at(phoebis_routing::FIVE_HOUR, in_band);
+        let banded = config.band.at(phoebis_routing::FIVE_HOUR, None, in_band);
         assert_eq!(
             banded,
             tables.band_factor(phoebis_routing::FIVE_HOUR, None, in_band),
             "the router weighs the band as the model it loaded does"
         );
-        assert_eq!(config.band.at(phoebis_routing::FIVE_HOUR, out_of_band), 1.0);
+        assert_eq!(
+            config
+                .band
+                .at(phoebis_routing::FIVE_HOUR, None, out_of_band),
+            1.0
+        );
         assert!(
             banded > 1.0,
             "a charge inside the band weighs more than one outside it: {banded}"
@@ -1365,7 +1462,7 @@ mod tests {
             ("2026-01-01", "2099-01-01")
         );
         let opus = |table: &phoebis_routing::RateTable| table.rates_for("claude-opus-5-5", 0);
-        let burn = opus(&config.rates.five_hour);
+        let burn = opus(&config.rates.five_hour.base);
         assert_eq!(
             burn,
             opus(&in_force.rate_table(phoebis_routing::FIVE_HOUR, None)),

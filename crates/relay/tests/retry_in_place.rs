@@ -891,7 +891,7 @@ const TIER: &str = "default_claude_max_20x";
 /// A ten-millionth of either window per token of input or cache write on `TIER`, so a body of `n` tokens books
 /// `n / 10_000_000` and a usage of `n` input tokens charges the same.
 fn tenth_per_million() -> SharePricer {
-    SharePricer::new(|_, tier, _, usage, _| {
+    SharePricer::new(|_, _, tier, _, usage, _| {
         (tier == TIER).then(|| (usage.input + usage.write_5m) as f64 / 10_000_000.0)
     })
 }
@@ -1025,7 +1025,7 @@ async fn a_retry_in_place_sends_no_ended_between_its_attempts_and_one_usage_for_
 /// Every pin on `TIER` burns a tenth of the 5-hour window an hour whatever its usage, and nothing is charged, so the
 /// window reads what the test reports.
 fn tenth_an_hour() -> SharePricer {
-    SharePricer::new(|_, _, _, _, _| None).with_rate(|window, tier, _, _, _| {
+    SharePricer::new(|_, _, _, _, _, _| None).with_rate(|window, _, tier, _, _, _| {
         (window == FIVE_HOUR && tier == TIER).then_some(0.1 / 3_600.0)
     })
 }

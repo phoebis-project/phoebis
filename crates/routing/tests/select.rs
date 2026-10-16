@@ -5,10 +5,10 @@ use phoebis_routing::{
     CohortHold, CreditsState, Decided, DecisionRecord, EvidenceSource, Exhaustion, FactEntity,
     FactValue, FailedOver, HoldFacts, HoldOutcome, HoldWait, LaneFacts,
     LongContextRates, MemberSpend, MigrateReason, MoveCause, OverageEvidence, PinKeyFacts, PinRef,
-    Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegistrySnapshot, RequestFlags,
-    Reservation, RoutingState, SelectRequest, SelectResult, SharePricer, SlowDownRead, StateWrite,
-    UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading, WindowSource,
-    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
+    Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot,
+    RequestFlags, Reservation, RoutingState, SelectRequest, SelectResult, SharePricer,
+    SlowDownRead, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading,
+    WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
     MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, WEEK_MS,
 };
 use phoebis_store::{
@@ -416,6 +416,7 @@ fn select_request(
         static_hash: None,
         boundaries: Arc::from([]),
         client: ClientClass::ClaudeCode,
+        entrypoint: None,
         static_boundaries: Arc::from([]),
         marker: false,
         parent_agent_id: None,
@@ -7896,6 +7897,7 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         static_hash: None,
         tail_hash: None,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+        entrypoint: String::new(),
         marked_at: None,
         marked_on: None,
         marked_window: None,
@@ -10668,6 +10670,7 @@ fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
         static_hash: None,
         tail_hash: None,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+        entrypoint: String::new(),
         marked_at: None,
         marked_on: None,
         marked_window: None,
@@ -11826,10 +11829,11 @@ fn rounding(pins: Vec<PinRow>) -> RoutingState {
 
 /// The round cases' pricer on `TIER`: a pin burning `x` input tokens a second burns `x / 100` of the 5-hour window an
 /// hour, a sixth of that of the 7-day window and a third of the Fable week, whatever its model, and a cache-write token
-/// prices as `ratio_pricer`'s. A model spelled `guess` or `unpriced`, or the unlisted `claude-opus-4-8`, prices
-/// nothing.
+/// prices as `ratio_pricer`'s. The entrypoint `desk`, the cases' own regime, prices half the 5-hour figure, and no
+/// entrypoint or any other one the base. A model spelled `guess` or `unpriced`, or the unlisted `claude-opus-4-8`,
+/// prices nothing.
 fn hourly_pricer() -> SharePricer {
-    fn per_token(window: &str, tier: &str, model: &str) -> Option<f64> {
+    fn per_token(window: &str, entrypoint: Option<&str>, tier: &str, model: &str) -> Option<f64> {
         if tier != TIER
             || model.contains("guess")
             || model.contains("unpriced")
@@ -11838,17 +11842,19 @@ fn hourly_pricer() -> SharePricer {
             return None;
         }
         match window {
+            FIVE_HOUR if entrypoint == Some("desk") => Some(20_000_000.0),
             FIVE_HOUR => Some(10_000_000.0),
             SEVEN_DAY => Some(60_000_000.0),
             SEVEN_DAY_FABLE => Some(30_000_000.0),
             _ => None,
         }
     }
-    SharePricer::new(|window, tier, model, usage, _| {
-        per_token(window, tier, model).map(|per| (usage.write_5m + 2 * usage.write_1h) as f64 / per)
+    SharePricer::new(|window, entrypoint, tier, model, usage, _| {
+        per_token(window, entrypoint, tier, model)
+            .map(|per| (usage.write_5m + 2 * usage.write_1h) as f64 / per)
     })
-    .with_rate(|window, tier, model, burn, _| {
-        per_token(window, tier, model).map(|per| burn.input / per * 100_000.0 / 3_600.0)
+    .with_rate(|window, entrypoint, tier, model, burn, _| {
+        per_token(window, entrypoint, tier, model).map(|per| burn.input / per * 100_000.0 / 3_600.0)
     })
 }
 
@@ -11932,7 +11938,10 @@ fn a_subscription_pin_in_overage_orders_the_round_by_the_dollar_average_and_leav
     let mut st = rounding(vec![opus, sonnet]);
     st.set_rates(BurnRates {
         dollars: input_prices(&[("claude-opus-5", Some(1.0)), ("claude-sonnet-5", Some(9.0))]),
-        five_hour: input_prices(&[("claude-opus-5", Some(9.0)), ("claude-sonnet-5", Some(1.0))]),
+        five_hour: RegimeRates {
+            base: input_prices(&[("claude-opus-5", Some(9.0)), ("claude-sonnet-5", Some(1.0))]),
+            ..RegimeRates::unit()
+        },
         fast: RateTable::unit(),
     });
     let opus_key = PinKey {
@@ -12000,7 +12009,10 @@ fn the_shedding_round_orders_cold_pins_first_then_warm_by_burn_over_rewrite_and_
     // Sonnet's measured-scale share per token: one table's rate scales every pin of the account alike, so the
     // order and the share of the sum read as the token counts would.
     st.set_rates(BurnRates {
-        five_hour: input_prices(&[("claude-sonnet-5", Some(0.0454e-6))]),
+        five_hour: RegimeRates {
+            base: input_prices(&[("claude-sonnet-5", Some(0.0454e-6))]),
+            ..RegimeRates::unit()
+        },
         ..BurnRates::default()
     });
     over_a_fitting_b(&mut st, T - 500);
@@ -12057,7 +12069,10 @@ fn an_unpriced_pin_is_never_marked_and_stays_out_of_the_rounds_burn_sum() {
     ]);
     // The guess model's input rate is unknown, so its two pins burn nine tokens a second that price to nothing.
     st.set_rates(BurnRates {
-        five_hour: input_prices(&[("claude-sonnet-5", Some(1.0)), ("claude-guess", None)]),
+        five_hour: RegimeRates {
+            base: input_prices(&[("claude-sonnet-5", Some(1.0)), ("claude-guess", None)]),
+            ..RegimeRates::unit()
+        },
         ..BurnRates::default()
     });
     over_a_fitting_b(&mut st, T - 500);
@@ -12126,9 +12141,12 @@ fn a_pin_on_a_model_the_share_table_does_not_list_burns_nothing_and_is_never_mar
         output: None,
     };
     st.set_rates(BurnRates {
-        five_hour: RateTable {
-            fallback: none,
-            ..input_prices(&[("claude-sonnet-5", Some(1.0))])
+        five_hour: RegimeRates {
+            base: RateTable {
+                fallback: none,
+                ..input_prices(&[("claude-sonnet-5", Some(1.0))])
+            },
+            ..RegimeRates::unit()
         },
         ..BurnRates::default()
     });
@@ -12353,6 +12371,7 @@ fn a_pin_that_fails_over_off_its_account_leaves_its_mark_with_the_row() {
                     model: "claude-sonnet-5".into(),
                     epoch: current.epoch,
                     lane: current.lane,
+                    entrypoint: String::new(),
                 },
                 account,
             )
@@ -12453,7 +12472,10 @@ fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
         },
     ]);
     st.set_rates(BurnRates {
-        five_hour: input_prices(&[("claude-sonnet-5", Some(1.0)), ("claude-guess", None)]),
+        five_hour: RegimeRates {
+            base: input_prices(&[("claude-sonnet-5", Some(1.0)), ("claude-guess", None)]),
+            ..RegimeRates::unit()
+        },
         ..BurnRates::default()
     });
     over_a_fitting_b(&mut st, T - 500);
@@ -12634,7 +12656,10 @@ fn warm_sessions_never_marks_no_warm_pin_when_an_unpriced_cold_pin_leaves_the_co
         burning("warm-1", "a", 1.0, true, T),
     ]);
     st.set_rates(BurnRates {
-        five_hour: input_prices(&[("claude-sonnet-5", Some(1.0)), ("claude-guess", None)]),
+        five_hour: RegimeRates {
+            base: input_prices(&[("claude-sonnet-5", Some(1.0)), ("claude-guess", None)]),
+            ..RegimeRates::unit()
+        },
         ..BurnRates::default()
     });
     over_a_fitting_b(&mut st, T - 500);
@@ -14589,6 +14614,7 @@ fn the_candidate_table_fills_tier_pace_and_budget_for_every_member() {
             account_id: "b".into(),
             attempt: 1,
             pin: None,
+            entrypoint: None,
             booked_at: T - 1_000,
             rewrite: [(FIVE_HOUR.to_string(), 0.05)].into_iter().collect(),
             burn: Default::default(),
@@ -15778,7 +15804,10 @@ fn a_pin_whose_last_prompt_was_over_the_threshold_prices_its_burn_at_the_long_co
             &[("claude-sonnet-5", Some(1.0))],
             &[("claude-sonnet-5", 1_000, 5.0)],
         ),
-        five_hour: RateTable::unit(),
+        five_hour: RegimeRates {
+            base: RateTable::unit(),
+            ..RegimeRates::unit()
+        },
         fast: RateTable::unit(),
     });
     let (pins, sum) = st.burn_of("a", &|_| true, BurnUnit::Usd, st.rates(), T, HOUR);
@@ -15837,7 +15866,10 @@ fn a_pins_fast_usage_prices_at_the_fast_cells_in_the_round_and_counts_toward_no_
             &[("claude-sonnet-5", Some(1.0))],
             &[("claude-sonnet-5", 1_000, 5.0)],
         ),
-        five_hour: RateTable::unit(),
+        five_hour: RegimeRates {
+            base: RateTable::unit(),
+            ..RegimeRates::unit()
+        },
         fast: input_prices(&[("claude-sonnet-5", Some(3.0))]),
     });
     let burn = |unit| {
@@ -15902,7 +15934,7 @@ fn ratio_pricer() -> SharePricer {
         };
         Some(tokens / per_token)
     }
-    SharePricer::new(|window, tier, model, usage, _| {
+    SharePricer::new(|window, _, tier, model, usage, _| {
         ratio(
             window,
             tier,
@@ -15910,7 +15942,7 @@ fn ratio_pricer() -> SharePricer {
             (usage.write_5m + 2 * usage.write_1h) as f64,
         )
     })
-    .with_rate(|window, tier, model, burn, _| ratio(window, tier, model, burn.input))
+    .with_rate(|window, _, tier, model, burn, _| ratio(window, tier, model, burn.input))
 }
 
 fn close(a: f64, b: f64) -> bool {
@@ -18472,6 +18504,122 @@ fn a_five_hour_round_fires_on_the_projection_over_the_ceiling_and_marks_until_th
     assert!(marked(&st, "s1") && marked(&st, "s2") && !marked(&st, "s3"));
 }
 
+/// Two cold pins of `a` burning 20 input tokens a second each, `s0` placed under the cases' regime `desk` and `s1`
+/// under none, so `s0` sorts first in the key order, with `a` at 0.80 on its 5-hour window and the reset an hour out,
+/// and `b` at 0.1 on both windows.
+fn a_desk_pin_and_a_base_pin() -> RoutingState {
+    let mut st = rounding(vec![
+        PinRow {
+            entrypoint: "desk".into(),
+            ..burning("s0", "a", 20.0, false, T)
+        },
+        burning("s1", "a", 20.0, false, T),
+    ]);
+    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st
+}
+
+/// The round's burn per hour of the pin of `session`.
+fn round_burn(round: &phoebis_routing::ShedRoundFacts, session: &str) -> f64 {
+    round
+        .pins
+        .iter()
+        .find(|p| p.session_id == session)
+        .and_then(|p| p.burn)
+        .unwrap_or_else(|| panic!("no priced pin {session} in {:?}", round.pins))
+}
+
+#[test]
+fn two_pins_of_equal_burn_project_half_the_share_for_the_pin_under_the_test_regime_and_the_base_for_one_without(
+) {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = a_desk_pin_and_a_base_pin();
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let desk_turn = SelectRequest {
+        entrypoint: Some("desk".into()),
+        ..auxiliary(&s, "s0", T)
+    };
+    let d = decide(&mut st, &s, &desk_turn, &mut rng());
+    let shed = line(&d.record, "move:shed");
+    // The base pin burns 0.20 of the window an hour and the desk pin half of it, so the hour to the reset adds 0.30.
+    assert!(
+        (number(fact(shed, "projection_five_hour")) - 1.10).abs() < 1e-9,
+        "the projection sums each pin under its own regime: {:?}",
+        fact(shed, "projection_five_hour")
+    );
+    let round = d.shed_round.expect("the round ran").facts;
+    assert!(
+        (round_burn(&round, "s1") - 0.20).abs() < 1e-9,
+        "the pin without an entrypoint burns the base figure"
+    );
+    assert!(
+        (round_burn(&round, "s0") - 0.10).abs() < 1e-9,
+        "the desk pin burns half of it"
+    );
+}
+
+#[test]
+fn the_order_ranks_a_pin_by_the_rate_of_its_own_regime() {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = a_desk_pin_and_a_base_pin();
+    let half = Rates {
+        input: Some(0.5),
+        cache_read: Some(0.5),
+        write_5m: Some(0.5),
+        write_1h: Some(0.5),
+        output: Some(0.5),
+    };
+    st.set_rates(BurnRates {
+        five_hour: RegimeRates {
+            base: RateTable::unit(),
+            regimes: HashMap::from([(
+                "desk".to_string(),
+                RateTable {
+                    fallback: half,
+                    ..RateTable::unit()
+                },
+            )]),
+            entrypoints: HashMap::from([("desk".to_string(), "desk".to_string())]),
+        },
+        ..BurnRates::default()
+    });
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let desk_turn = SelectRequest {
+        entrypoint: Some("desk".into()),
+        ..auxiliary(&s, "s0", T)
+    };
+    let d = decide(&mut st, &s, &desk_turn, &mut rng());
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| p.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["s1", "s0"],
+        "the desk pin's tokens weigh half under its regime's table, so it ranks after the base pin of equal tokens"
+    );
+}
+
+#[test]
+fn a_pin_with_no_entrypoint_prices_at_the_base_regime() {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = rounding(vec![burning("s1", "a", 20.0, false, T)]);
+    st.record_sample("a", refreshing(0.80, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert!(
+        (number(fact(shed, "projection_five_hour")) - 1.0).abs() < 1e-9,
+        "the hour to the reset adds the pin's base 0.20: {:?}",
+        fact(shed, "projection_five_hour")
+    );
+    let round = d.shed_round.expect("the round ran").facts;
+    assert!((round_burn(&round, "s1") - 0.20).abs() < 1e-9);
+}
+
 #[test]
 fn a_round_counts_a_siblings_headroom_once_across_its_marks() {
     // b holds room for one pin's rewrite and burn to its horizon, c for one more.
@@ -18946,10 +19094,10 @@ fn replay_pricer() -> SharePricer {
             _ => None,
         }
     }
-    SharePricer::new(|window, tier, _, usage, _| {
+    SharePricer::new(|window, _, tier, _, usage, _| {
         per_token(window, tier).map(|per| (usage.write_5m + usage.write_1h) as f64 / per)
     })
-    .with_rate(|window, tier, _, burn, _| {
+    .with_rate(|window, _, tier, _, burn, _| {
         per_token(window, tier).map(|per| {
             (burn.input
                 + burn.output
@@ -19188,6 +19336,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
         pricer
             .rate(
                 FIVE_HOUR,
+                None,
                 TIER,
                 model,
                 &PinBurn {
@@ -19909,6 +20058,7 @@ fn the_demand_is_the_achieved_burn_over_the_speed_and_a_booking_counts_undivided
             account_id: "a".into(),
             attempt: 1,
             pin: None,
+            entrypoint: None,
             booked_at: T,
             rewrite: BTreeMap::new(),
             burn: BTreeMap::from([(FIVE_HOUR.to_string(), 0.02 / 3_600.0)]),
@@ -20197,6 +20347,7 @@ fn a_shed_move_and_a_failover_landing_keep_the_pins_cycle_under_its_key() {
                 model: "claude-sonnet-5".into(),
                 epoch: current.epoch,
                 lane: current.lane.clone(),
+                entrypoint: String::new(),
             },
             "a",
         )
@@ -21281,6 +21432,7 @@ fn a_failover_landing_on_another_account_leaves_the_sources_deadline_and_keeps_t
                 model: "claude-sonnet-5".into(),
                 epoch: current.epoch,
                 lane: current.lane.clone(),
+                entrypoint: String::new(),
             },
             "a",
         )

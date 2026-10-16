@@ -64,6 +64,9 @@ pub struct PinRow {
     /// The lane of the request that created the pin, stamped again by each request that refreshed or colded it;
     /// `""` on a pin written before pins carried a lane, which adopts the next request's lane.
     pub lane: String,
+    /// The entrypoint of the request that placed the pin, stamped again by each client renewal. `""` for none and on
+    /// a pin written before pins carried one, which adopts the next request's, and the base regime prices `""`.
+    pub entrypoint: String,
     /// The round's mark: when it was made, the account it was made on and the window whose trigger made it. It
     /// stands while `marked_on` is the pin's account, and nothing but a move, a release or a heal clears it.
     pub marked_at: Option<i64>,
@@ -285,7 +288,7 @@ impl Store {
             overage: tx.prepare("SELECT account_id, in_use, since, reset, observed_at, source, incarnation FROM overage_state ORDER BY account_id")?
                 .query_map([], |r| Ok(OverageRow { account_id: r.get(0)?, in_use: r.get(1)?, since: r.get(2)?, reset: r.get(3)?, observed_at: r.get(4)?, source: r.get(5)?, incarnation: r.get::<_, i64>(6)? as u64 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
-            pins: tx.prepare(&format!("SELECT key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS}, marked_at, marked_on, marked_window FROM pins ORDER BY key_id, session_id, agent_id, model"))?
+            pins: tx.prepare(&format!("SELECT key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS}, marked_at, marked_on, marked_window, entrypoint FROM pins ORDER BY key_id, session_id, agent_id, model"))?
                 .query_map([], |r| Ok(PinRow {
                     key_id: r.get(0)?, session_id: r.get(1)?, agent_id: r.get(2)?, model: r.get(3)?, account_id: r.get(4)?,
                     epoch: r.get::<_, i64>(5)? as u64, created_at: r.get(6)?, last_used_at: r.get(7)?,
@@ -296,6 +299,7 @@ impl Store {
                     lane: r.get(18)?, burn: burn_from(r, 19)?, burn_banded: burn_from(r, 24)?,
                     burn_fast: burn_from(r, 29)?,
                     marked_at: r.get(34)?, marked_on: r.get(35)?, marked_window: r.get(36)?,
+                    entrypoint: r.get(37)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             resolutions: tx.prepare("SELECT spelling, dated_id, resolved_at FROM model_resolutions ORDER BY spelling")?
@@ -583,8 +587,8 @@ fn burn_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<PinBurn> {
 fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
     conn.execute(
         &format!(
-            "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS}, marked_at, marked_on, marked_window) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37) \
+            "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS}, marked_at, marked_on, marked_window, entrypoint) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38) \
              ON CONFLICT(key_id, session_id, agent_id, model) DO UPDATE SET \
                account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, \
                last_used_at = excluded.last_used_at, key_generation = excluded.key_generation, \
@@ -600,7 +604,8 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
                burn_fast_cache_read = excluded.burn_fast_cache_read, burn_fast_input = excluded.burn_fast_input, \
                burn_fast_output = excluded.burn_fast_output, burn_fast_write_1h = excluded.burn_fast_write_1h, \
                burn_fast_write_5m = excluded.burn_fast_write_5m, marked_at = excluded.marked_at, \
-               marked_on = excluded.marked_on, marked_window = excluded.marked_window"
+               marked_on = excluded.marked_on, marked_window = excluded.marked_window, \
+               entrypoint = excluded.entrypoint"
         ),
         params![
             pin.key_id,
@@ -639,7 +644,8 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
             pin.burn_fast.write_5m,
             pin.marked_at,
             pin.marked_on,
-            pin.marked_window
+            pin.marked_window,
+            pin.entrypoint
         ],
     )?;
     Ok(())

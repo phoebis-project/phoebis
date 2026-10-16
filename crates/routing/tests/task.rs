@@ -9,9 +9,9 @@ use phoebis_routing::{
     AffinityReport, BandWeight, BurnRates, BurnUnit, ClientClass, ConversationLookup, CreditsState,
     DecisionRecord, DecisionSummary, Exhaustion, KeyRefusal, LongContextRates,
     MemberSpend, MoveCause, PinRef, PinUsage, PredecessorQuery, Presented, RateTable, Rates,
-    Refusal, RefusalFacts, RefusedRequest, ReloadError, Report, ResolveError, RouterConfig,
-    RouterHandle, RoutingState, SelectRequest, SelectResult, SharePricer, UtilizationSample,
-    WindowReading, WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
+    Refusal, RefusalFacts, RefusedRequest, RegimeRates, ReloadError, Report, ResolveError,
+    RouterConfig, RouterHandle, RoutingState, SelectRequest, SelectResult, SharePricer,
+    UtilizationSample, WindowReading, WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
     FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE,
     WRITER_DEPTH,
 };
@@ -163,6 +163,7 @@ fn request(
         static_hash: None,
         boundaries: Arc::from([]),
         client: ClientClass::ClaudeCode,
+        entrypoint: None,
         static_boundaries: Arc::from([]),
         marker: false,
         parent_agent_id: None,
@@ -814,6 +815,7 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
         model: "claude-sonnet-5".into(),
         epoch: 1,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+        entrypoint: String::new(),
     };
     let reports = [
         Report::AccountState {
@@ -1068,6 +1070,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             static_hash: None,
             boundaries: Arc::from([]),
             client: ClientClass::ClaudeCode,
+            entrypoint: None,
             static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
@@ -1206,6 +1209,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             static_hash: None,
             boundaries: Arc::from([]),
             client: ClientClass::ClaudeCode,
+            entrypoint: None,
             static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
@@ -2031,6 +2035,7 @@ async fn pin_of(handle: &phoebis_routing::RouterHandle) -> phoebis_routing::PinR
         model: row.model,
         epoch: row.epoch,
         lane: row.lane,
+        entrypoint: String::new(),
     }
 }
 
@@ -2681,7 +2686,7 @@ fn window_row(account: &str, window: &str, utilization: f64, reset: Option<i64>)
 
 /// Prices a million input tokens at a tenth of either window, whatever the tier, the model or the instant.
 fn a_tenth_per_million() -> SharePricer {
-    SharePricer::new(|_, _, _, usage, _| Some(usage.input as f64 / 1_000_000.0 * 0.1))
+    SharePricer::new(|_, _, _, _, usage, _| Some(usage.input as f64 / 1_000_000.0 * 0.1))
 }
 
 /// The rate-limit tier `with_tier` puts an account on, which a pricer that prices one tier keys on.
@@ -2718,6 +2723,7 @@ fn a_million_input_served(account: &str, at: i64, fast: bool) -> Report {
         fast,
         request_id: "r-1".into(),
         attempt: 1,
+        entrypoint: None,
     }
 }
 
@@ -2857,7 +2863,7 @@ async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week
     // A tenth of a shared window per million input tokens, and twice that of the Fable week, which is half the
     // 7-day window. A window the pricer cannot price keeps its reading while the others charge: the first
     // unpriced model has no 7-day cell and prices on the 5-hour window alone, the second prices on neither.
-    let share = SharePricer::new(|window, _, model, usage, _| {
+    let share = SharePricer::new(|window, _, _, model, usage, _| {
         let tenth = usage.input as f64 / 1_000_000.0 * 0.1;
         match (window, model) {
             (SEVEN_DAY, "claude-unpriced-1") => None,
@@ -2904,6 +2910,7 @@ async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week
         fast: false,
         request_id: "r-1".into(),
         attempt: 1,
+        entrypoint: None,
     };
     let windows = || async {
         let mut read_all = Vec::new();
@@ -5509,7 +5516,10 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
 fn quarter_dollar_rates() -> BurnRates {
     BurnRates {
         dollars: flat_rates(0.25),
-        five_hour: RateTable::unit(),
+        five_hour: RegimeRates {
+            base: RateTable::unit(),
+            ..RegimeRates::unit()
+        },
         fast: RateTable::unit(),
     }
 }
@@ -5956,7 +5966,10 @@ async fn a_fast_renewal_over_the_threshold_on_a_row_without_fast_cells_prices_at
     let rates = BurnRates {
         fast: dollars.clone(),
         dollars,
-        five_hour: RateTable::unit(),
+        five_hour: RegimeRates {
+            base: RateTable::unit(),
+            ..RegimeRates::unit()
+        },
     };
     let (s1, fast) = fast_renewed_over_the_threshold(&rates).await;
     let window = 600.0_f64;
@@ -5976,7 +5989,10 @@ async fn a_fast_renewal_over_the_threshold_on_a_row_without_fast_cells_prices_at
 fn both_blocks_rates() -> BurnRates {
     BurnRates {
         dollars: long_context_rates(0.25, 1.0),
-        five_hour: RateTable::unit(),
+        five_hour: RegimeRates {
+            base: RateTable::unit(),
+            ..RegimeRates::unit()
+        },
         fast: flat_rates(0.5),
     }
 }
@@ -6212,7 +6228,7 @@ async fn the_burn_lands_in_the_store_with_the_input_size_and_the_ttl() {
 async fn a_renewal_inside_the_band_folds_a_heavier_banded_copy_and_the_same_plain_rates() {
     // Monday 2026-09-21 at 14:00 and at 20:00 UTC.
     let (inside, outside) = (1_789_999_200_000_i64, 1_790_020_800_000_i64);
-    let band = BandWeight::new(|window: &str, at: i64| {
+    let band = BandWeight::new(|window: &str, _, at: i64| {
         let hour = at.rem_euclid(86_400_000) / 3_600_000;
         if window == FIVE_HOUR && (12..18).contains(&hour) {
             1.45
@@ -7104,6 +7120,7 @@ fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64
         static_hash: None,
         tail_hash: None,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+        entrypoint: String::new(),
         marked_at: None,
         marked_on: None,
         marked_window: None,
@@ -7132,13 +7149,13 @@ fn priced_config() -> RouterConfig {
             _ => None,
         }
     }
-    let share = SharePricer::new(|window, tier, _, usage, _| {
+    let share = SharePricer::new(|window, _, tier, _, usage, _| {
         (tier == TIER)
             .then(|| per_token(window))
             .flatten()
             .map(|per| (usage.write_5m + usage.write_1h) as f64 / per)
     })
-    .with_rate(|window, tier, _, burn, _| {
+    .with_rate(|window, _, tier, _, burn, _| {
         if tier != TIER {
             return None;
         }
@@ -7613,6 +7630,7 @@ async fn a_cooldown_report_naming_a_marked_pin_clears_its_mark_as_released() {
                 model: "claude-sonnet-5".into(),
                 epoch: 1,
                 lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+                entrypoint: String::new(),
             }),
             incarnation: 1,
             lifecycle_generation: 1,
@@ -8592,10 +8610,17 @@ async fn a_moved_account_state_emits_the_relay_s_cause() {
 }
 
 /// Prices a million tokens of input or cache write at a tenth of either window on `TIER`, whatever the model or the
-/// instant, and nothing on any other tier: a 200 000 token body books 0.02 and a million input tokens charge 0.1.
+/// instant, and nothing on any other tier: a 200 000 token body books 0.02 and a million input tokens charge 0.1. The
+/// entrypoint `desk`, the tests' own regime, prices half of that on the 5-hour window, and no entrypoint or any other
+/// one the base.
 fn a_tenth_per_million_written() -> SharePricer {
-    SharePricer::new(|_, tier, _, usage, _| {
-        (tier == TIER).then(|| (usage.input + usage.write_5m) as f64 / 1_000_000.0 * 0.1)
+    SharePricer::new(|window, entrypoint, tier, _, usage, _| {
+        let regime = if window == FIVE_HOUR && entrypoint == Some("desk") {
+            0.5
+        } else {
+            1.0
+        };
+        (tier == TIER).then(|| (usage.input + usage.write_5m) as f64 / 1_000_000.0 * 0.1 * regime)
     })
 }
 
@@ -8613,6 +8638,26 @@ fn usage_of(request_id: &str, attempt: u32, at: i64) -> Report {
         fast: false,
         request_id: request_id.into(),
         attempt,
+        entrypoint: None,
+    }
+}
+
+/// A million input tokens served on `a` for `request_id`'s first wire attempt, from a request whose user agent named
+/// `entrypoint`.
+fn usage_under(request_id: &str, at: i64, entrypoint: Option<&str>) -> Report {
+    Report::Usage {
+        account_id: "a".into(),
+        at,
+        canonical_model: "claude-sonnet-5".into(),
+        incarnation: 1,
+        usage: PinUsage {
+            input: 1_000_000,
+            ..PinUsage::default()
+        },
+        fast: false,
+        request_id: request_id.into(),
+        attempt: 1,
+        entrypoint: entrypoint.map(String::from),
     }
 }
 
@@ -8818,6 +8863,38 @@ async fn a_renewals_usage_charges_its_account_with_no_booking() {
 }
 
 #[tokio::test]
+async fn an_interactive_second_turn_on_an_existing_pin_charges_under_its_regime_with_no_booking() {
+    let now = Arc::new(AtomicI64::new(2_000));
+    let (handle, _events) = priced_router(&now).await;
+    let desk_turn = |request_id: &str, at: i64| SelectRequest {
+        entrypoint: Some("desk".into()),
+        ..placement(&handle, request_id, "s1", at)
+    };
+    handle.select(desk_turn("r-1", 2_000)).await.unwrap();
+    handle.report(usage_under("r-1", 2_500, Some("desk"))).await;
+    let placed = read(&handle, "a", FIVE_HOUR).await.unwrap();
+    let renewed = handle.select(desk_turn("r-2", 3_000)).await.unwrap().result;
+    assert!(
+        matches!(&renewed, SelectResult::Selected(s) if s.trace.renewed),
+        "{renewed:?}"
+    );
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, placed),
+        "a renewal books nothing"
+    );
+    handle.report(usage_under("r-2", 3_500, Some("desk"))).await;
+    let interactive = read(&handle, "a", FIVE_HOUR).await.unwrap();
+    handle.report(usage_under("r-3", 4_000, None)).await;
+    let base = read(&handle, "a", FIVE_HOUR).await.unwrap();
+    let (interactive_rise, base_rise) = (interactive - placed, base - interactive);
+    assert!(
+        base_rise > 0.0 && (interactive_rise / base_rise - 0.5).abs() < 1e-9,
+        "the turn's charge prices under the regime its report carries, half the base one's: {interactive_rise} \
+         against {base_rise}"
+    );
+}
+
+#[tokio::test]
 async fn a_usage_after_its_bookings_expiry_charges_once() {
     use phoebis_routing::RouterEvent;
     let now = Arc::new(AtomicI64::new(2_000));
@@ -9001,6 +9078,7 @@ async fn a_charge_or_a_reservation_that_predicts_a_spent_window_emits_window_spe
             fast: false,
             request_id: "r-3".into(),
             attempt: 1,
+            entrypoint: None,
         })
         .await;
     match next_spent(&mut events).await {
@@ -9144,6 +9222,7 @@ async fn a_predicted_wall_with_no_reset_holds_back_a_sample_whose_reset_lands_wi
             fast: false,
             request_id: "r-1".into(),
             attempt: 1,
+            entrypoint: None,
         })
         .await;
     assert!(matches!(
@@ -9215,6 +9294,7 @@ async fn a_predicted_wall_with_no_reset_holds_back_the_samples_of_its_own_window
             fast: false,
             request_id: "r-1".into(),
             attempt: 1,
+            entrypoint: None,
         })
         .await;
     assert!(matches!(
@@ -9339,6 +9419,7 @@ async fn a_quiet_accounts_slow_down_entry_and_a_gone_pins_pace_leave_at_the_purg
                 model: "claude-sonnet-5".into(),
                 epoch: 1,
                 lane: s1.lane.clone(),
+                entrypoint: String::new(),
             },
             "a",
         )

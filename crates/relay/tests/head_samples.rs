@@ -270,7 +270,7 @@ async fn a_finished_answer_reports_its_usage_to_the_router() {
         &[oauth("o", "sk-ant-oat01-OOOO", 0)],
         PoolSpec::default(),
         RouterConfig {
-            share: SharePricer::new(|_, _, _, usage, _| {
+            share: SharePricer::new(|_, _, _, _, usage, _| {
                 Some(usage.input as f64 / 1_000_000.0 * 0.1)
             }),
             ..RouterConfig::default()

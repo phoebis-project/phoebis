@@ -2748,6 +2748,7 @@ fn burning_opus_pin(
         static_hash: None,
         tail_hash: None,
         lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
+        entrypoint: String::new(),
         marked_at: None,
         marked_on: None,
         marked_window: None,
@@ -3067,6 +3068,7 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
             model: "claude-haiku-5-5".into(),
             epoch: 1,
             lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
+            entrypoint: String::new(),
         },
         now,
         usage: Some(phoebis_routing::PinUsage {
@@ -3125,6 +3127,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
                 model: "claude-opus-5-5".into(),
                 epoch: 1,
                 lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
+                entrypoint: String::new(),
             },
             now,
             usage: Some(phoebis_routing::PinUsage {
@@ -3236,6 +3239,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
 /// and two tenths of a point of the 7-day window, whatever the account tier, model or instant.
 fn round_rates(
     window: &str,
+    _entrypoint: Option<&str>,
     _tier: &str,
     _model: &str,
     burn: &phoebis_store::PinBurn,
@@ -3658,6 +3662,7 @@ async fn main_turn(
             static_hash: None,
             boundaries: std::sync::Arc::from([]),
             client: phoebis_routing::ClientClass::ClaudeCode,
+            entrypoint: None,
             static_boundaries: std::sync::Arc::from([]),
             marker: false,
             parent_agent_id: None,
@@ -4068,6 +4073,7 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
             static_hash: None,
             tail_hash: None,
             lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+            entrypoint: String::new(),
             marked_at: None,
             marked_on: None,
             marked_window: None,
@@ -4106,6 +4112,7 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
             static_hash: None,
             tail_hash: None,
             lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+            entrypoint: String::new(),
             marked_at: None,
             marked_on: None,
             marked_window: None,
@@ -4255,6 +4262,7 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin_and_relea
             static_hash: None,
             tail_hash: None,
             lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+            entrypoint: String::new(),
             marked_at: None,
             marked_on: None,
             marked_window: None,

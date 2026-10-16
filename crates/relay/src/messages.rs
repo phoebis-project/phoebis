@@ -1756,6 +1756,7 @@ impl Relay {
                         .map(|c| c.message_boundaries.clone())
                         .unwrap_or_default(),
                     client: client_class,
+                    entrypoint: identity.entrypoint.clone(),
                     static_boundaries: facts
                         .chains
                         .as_ref()
@@ -3329,6 +3330,7 @@ impl Relay {
             key_id: ctx.key.id.clone(),
             key_generation: ctx.key.created_at,
             canonical_model: ctx.identity.canonical_model.clone(),
+            entrypoint: ctx.identity.entrypoint.clone(),
             lane: ctx.lane.to_string(),
             root,
             static_boundaries: ctx

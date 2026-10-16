@@ -85,11 +85,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (53, V53),
     (54, V54),
     (55, V55),
+    (56, V56),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 55;
+pub const SCHEMA_VERSION: u32 = 56;
 
 /// The version that bounds an account to one pool; a file below it is read for overlaps before it migrates.
 pub const ONE_POOL_VERSION: u32 = 47;
@@ -805,3 +806,8 @@ ALTER TABLE pools ADD COLUMN return_to_plan TEXT NOT NULL DEFAULT 'always';
 ALTER TABLE pools ADD COLUMN return_to_plan_dwell_seconds INTEGER NOT NULL DEFAULT 900;
 UPDATE pools SET return_to_plan_dwell_seconds = shed_dwell_seconds;
 "#;
+
+// The entrypoint of the request that placed the pin, the regime its figures price under: a column beside the row's
+// key, so the table is not rebuilt, and a row from before reads `''`, the base regime, until its next request stamps
+// it.
+const V56: &str = "ALTER TABLE pins ADD COLUMN entrypoint TEXT NOT NULL DEFAULT '';";

@@ -1103,6 +1103,36 @@ impl PlanTables {
         self.revisions.in_force(at).rate_table(window, entrypoint)
     }
 
+    /// The `window` tables of the revision in force at `at`, one per regime it names, each read through the regime's
+    /// first listed entrypoint, with every listed entrypoint mapped to its regime, and the base table every other
+    /// entrypoint and none fall back to.
+    pub fn regime_rates(&self, window: &str, at: i64) -> phoebis_routing::RegimeRates {
+        let costs = self.revisions.in_force(at);
+        phoebis_routing::RegimeRates {
+            base: costs.rate_table(window, None),
+            regimes: costs
+                .regimes
+                .iter()
+                .map(|(name, regime)| {
+                    (
+                        name.clone(),
+                        costs.rate_table(window, regime.entrypoints.first().map(String::as_str)),
+                    )
+                })
+                .collect(),
+            entrypoints: costs
+                .regimes
+                .iter()
+                .flat_map(|(name, regime)| {
+                    regime
+                        .entrypoints
+                        .iter()
+                        .map(move |entrypoint| (entrypoint.clone(), name.clone()))
+                })
+                .collect(),
+        }
+    }
+
     pub fn tier_factor(
         &self,
         tier: &str,

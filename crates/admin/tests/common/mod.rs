@@ -173,7 +173,7 @@ pub async fn admin_parts_full_priced(prices: PriceRevisions) -> Full {
 /// runway and a spare rate of its own rates rather than the shipped cost model's.
 pub async fn admin_parts_full_on_rated(
     store: Arc<Store>,
-    rate: impl Fn(&str, &str, &str, &PinBurn, i64) -> Option<f64> + Send + Sync + 'static,
+    rate: impl Fn(&str, Option<&str>, &str, &str, &PinBurn, i64) -> Option<f64> + Send + Sync + 'static,
 ) -> Full {
     full_from(
         build_app_routed(

@@ -11,17 +11,26 @@ use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement, Skipped};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
 
-/// A probe's estimated cost as the share of the `tier`'s 5-hour window at `at` (the band inside the price). `None` for
-/// a model the subscription cost model gives no weight, its own or its model tier's latest, or an account tier it has
-/// no capacity for on the window. A probe's dollars are its own request row's counts, which the ledger prices.
+/// A probe's estimated cost as the share of the `tier`'s 5-hour window at `at` (the band inside the price) under the
+/// regime of the agent's `entrypoint`, the base one for `None`. `None` for a model the subscription cost model gives no
+/// weight, its own or its model tier's latest, or an account tier it has no capacity for on the window. A probe's
+/// dollars are its own request row's counts, which the ledger prices.
 pub(crate) fn probe_cost(
     tables: &PlanTables,
+    entrypoint: Option<&str>,
     tier: Option<&str>,
     canonical_model: &str,
     usage: ProbeUsage,
     at: i64,
 ) -> Option<f64> {
-    tables.share_at(FIVE_HOUR, None, tier?, canonical_model, typed(usage), at)
+    tables.share_at(
+        FIVE_HOUR,
+        entrypoint,
+        tier?,
+        canonical_model,
+        typed(usage),
+        at,
+    )
 }
 
 /// A probe answer's tokens by type. An answer that reports the aggregate `cache_creation_input_tokens` and no TTL
@@ -50,11 +59,16 @@ pub(crate) fn answered_speed(usage: ProbeUsage) -> Speed {
 
 /// `row` when the cost model in force at `at` gives the model no weight on the 5-hour window, neither its own nor its
 /// model tier's latest, else `tier`: the only two reasons left, since the loader refuses an anchor tier without a
-/// capacity on either window and a weighted model prices every type.
-pub(crate) fn unpriced_reason(tables: &PlanTables, canonical_model: &str, at: i64) -> &'static str {
+/// capacity on either window and a weighted model prices every type. Read under the regime of `entrypoint`.
+pub(crate) fn unpriced_reason(
+    tables: &PlanTables,
+    entrypoint: Option<&str>,
+    canonical_model: &str,
+    at: i64,
+) -> &'static str {
     if !tables.priced(
         FIVE_HOUR,
-        None,
+        entrypoint,
         &tables.revisions.in_force(at).unit.defined_by.tier,
         canonical_model,
         at,
@@ -66,16 +80,18 @@ pub(crate) fn unpriced_reason(tables: &PlanTables, canonical_model: &str, at: i6
 }
 
 /// The unit a probe settles in: `default_unit`, unless that is the window share and the cost model in force at `at`
-/// cannot price the account's tier and model on the 5-hour window (no weight of the model's own or of its model
-/// tier, or no capacity), in which case dollars.
+/// cannot price the account's tier and model on the 5-hour window under the regime of `entrypoint` (no weight of the
+/// model's own or of its model tier, or no capacity), in which case dollars.
 pub(crate) fn settlement_unit(
     default_unit: SavingsUnit,
     tables: &PlanTables,
+    entrypoint: Option<&str>,
     tier: Option<&str>,
     canonical_model: &str,
     at: i64,
 ) -> SavingsUnit {
-    let priced = tier.is_some_and(|tier| tables.priced(FIVE_HOUR, None, tier, canonical_model, at));
+    let priced =
+        tier.is_some_and(|tier| tables.priced(FIVE_HOUR, entrypoint, tier, canonical_model, at));
     if default_unit == SavingsUnit::WindowShare && !priced {
         SavingsUnit::Usd
     } else {
@@ -268,6 +284,7 @@ mod tests {
         let cost = |usage| {
             probe_cost(
                 &tables,
+                None,
                 Some("default_claude_max_20x"),
                 "claude-sonnet-5",
                 usage,
@@ -285,12 +302,15 @@ mod tests {
         // weight, and places Mystery 2 in a tier with no weighted model.
         let tables = phoebis_ledger::test_tables::subscription_costs();
         let at = phoebis_ledger::test_tables::JANUARY_2026;
-        assert_eq!(unpriced_reason(&tables, "claude-mystery-2", at), "row");
+        assert_eq!(
+            unpriced_reason(&tables, None, "claude-mystery-2", at),
+            "row"
+        );
         for model in ["claude-opus-5", "claude-opus-9", "claude-opus-5-5"] {
-            assert_eq!(unpriced_reason(&tables, model, at), "tier", "{model}");
+            assert_eq!(unpriced_reason(&tables, None, model, at), "tier", "{model}");
         }
         assert_eq!(
-            unpriced_reason(&tables, "claude-opus-5-5-20260401", at),
+            unpriced_reason(&tables, None, "claude-opus-5-5-20260401", at),
             "tier",
             "a dated id reads its undated weight"
         );

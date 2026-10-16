@@ -22,11 +22,11 @@ use crate::record::{
     WALK_STEPS,
 };
 use crate::state::{
-    all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, load_shedding,
-    mark_holds, plan_windows, return_to_plan_dwell_ms, shed_cap, shed_dwell_ms, slow_down,
-    slow_down_hold_ms, slow_down_stretch_ms, warm, BurnUnit, CreditsState, MemberSpend, PinPace,
-    PinRef, PinUsage, Reservation, RoutingState, StateWrite, Tier, WindowReading, FAST_INPUT,
-    FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, entrypoint_of,
+    load_shedding, mark_holds, plan_windows, return_to_plan_dwell_ms, shed_cap, shed_dwell_ms,
+    slow_down, slow_down_hold_ms, slow_down_stretch_ms, warm, BurnUnit, CreditsState, MemberSpend,
+    PinPace, PinRef, PinUsage, Reservation, RoutingState, StateWrite, Tier, WindowReading,
+    FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::windows::{window_for, MODEL_WINDOWS};
 use crate::{term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
@@ -102,6 +102,9 @@ pub struct SelectRequest {
     /// Shared with the attempts before and after and with the answer's affinity report, never copied per attempt.
     pub boundaries: Arc<[String]>,
     pub client: ClientClass,
+    /// The user agent's entrypoint token, `None` for a client that is not Claude Code: the regime the request and the
+    /// pin it places or renews price under.
+    pub entrypoint: Option<String>,
     /// Every static boundary in chain order; `static_hash` stays the last one.
     pub static_boundaries: Arc<[String]>,
     /// The body carries a `cache_control` marker, or the TTL policy will add one: the cache gate.
@@ -670,7 +673,7 @@ pub(crate) fn pin_figures(
     };
     let priced = |window: &str, p: &PinRow| {
         share
-            .rate(window, tier, &p.model, &p.burn, now)
+            .rate(window, entrypoint_of(p), tier, &p.model, &p.burn, now)
             .map(|rate| burn_decayed(rate, p.burn_at, now, average_ms))
     };
     let mut rewrite = BTreeMap::new();
@@ -678,7 +681,14 @@ pub(crate) fn pin_figures(
     for window in plan_windows(model) {
         // Nothing priced, or a share of nothing, is nothing to book.
         if let Some(share) = share
-            .price(window, tier, model, write, now)
+            .price(
+                window,
+                request.entrypoint.as_deref(),
+                tier,
+                model,
+                write,
+                now,
+            )
             .filter(|s| *s > 0.0)
         {
             rewrite.insert(window.to_string(), share);
@@ -1990,6 +2000,7 @@ fn run(
                         agent_id: request.agent_id.clone(),
                         model: request.canonical_model.clone(),
                     }),
+                    entrypoint: request.entrypoint.clone(),
                     booked_at: request.now,
                     rewrite,
                     burn,
@@ -2020,6 +2031,7 @@ fn run(
             moving.as_ref().or(failed_over.map(|f| &f.row)),
         );
         let lane = row.lane.clone();
+        let entrypoint = row.entrypoint.clone();
         rec.pin_written = Some(PinWritten {
             action: if migrated.is_some() {
                 "moved"
@@ -2040,6 +2052,7 @@ fn run(
             model: request.canonical_model.clone(),
             epoch,
             lane,
+            entrypoint,
         }
     });
     let mut trace_skipped: Vec<Skipped> = obstacles
@@ -2135,6 +2148,7 @@ fn fresh_pin(
         static_hash: None,
         tail_hash: None,
         lane: request.lane.clone(),
+        entrypoint: request.entrypoint.clone().unwrap_or_default(),
         marked_at: None,
         marked_on: None,
         marked_window: None,
@@ -2421,7 +2435,7 @@ pub(crate) fn slow_down_of(
                 .filter(|cycle| *cycle > 0.0);
             let weight = state
                 .share()
-                .rate(FIVE_HOUR, tier, &p.model, &p.burn, now)
+                .rate(FIVE_HOUR, entrypoint_of(p), tier, &p.model, &p.burn, now)
                 .map_or(0.0, |rate| burn_decayed(rate, p.burn_at, now, average_ms));
             (p.key(), cycle, weight)
         })
@@ -4005,6 +4019,7 @@ fn pin_request(request: &SelectRequest, pin: &PinRow, current: bool) -> SelectRe
         folded_model: pin.model.clone(),
         lane: pin.lane.clone(),
         fast: lane_is_fast(&pin.lane),
+        entrypoint: entrypoint_of(pin).map(String::from),
         body_tokens: 0,
         ..request.clone()
     }
@@ -4178,7 +4193,14 @@ fn shed_round(
     let share_of = |p: &PinRow| {
         state
             .share()
-            .rate(trigger.window, tier, &p.model, &p.burn, now)
+            .rate(
+                trigger.window,
+                entrypoint_of(p),
+                tier,
+                &p.model,
+                &p.burn,
+                now,
+            )
             .map(|rate| burn_decayed(rate, p.burn_at, now, average_ms) / speed)
     };
     let per_hour = |share: f64| share * 3_600.0;
@@ -4228,6 +4250,7 @@ fn shed_round(
             account_id: destination,
             attempt: request.attempt,
             pin: Some(p.key()),
+            entrypoint: req.entrypoint.clone(),
             booked_at: now,
             rewrite,
             burn: pin_burn,
@@ -4550,7 +4573,12 @@ fn renew(
             stamp_hashes(&mut renewed, request);
         }
     }
+    // A probe replays another request's headers, so the row keeps the entrypoint its own requests stamped.
+    if !request.probe {
+        renewed.entrypoint = request.entrypoint.clone().unwrap_or_default();
+    }
     let lane = renewed.lane.clone();
+    let entrypoint = renewed.entrypoint.clone();
     let (refresh_stamped, hashes_stamped) = (
         verdict == Warmth::Refresh,
         verdict != Warmth::Untouched && chained,
@@ -4601,6 +4629,7 @@ fn renew(
             model: current.model.clone(),
             epoch: current.epoch,
             lane,
+            entrypoint,
         }),
         migrated: None,
         in_overage: state.in_overage(&current.account_id, now, fallback_ms),

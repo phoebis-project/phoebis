@@ -571,6 +571,9 @@ pub(crate) struct Agent {
     /// The canonical model of the request the recipe came from, as the relay resolved it: the price lookups,
     /// the rollup keys, the cooldown scope, and the views read this, never the caller's spelling in the recipe.
     pub canonical_model: String,
+    /// The entrypoint of the observed request's `client` label, what its probes price under, and `None` for a label
+    /// that names none.
+    pub entrypoint: Option<String>,
     pub reason: Reason,
     /// The guard's verdict on the last request the agent observed, `None` before the first one. Never `reason`
     /// itself: an auxiliary or a foreign request never reaches `reason`, which stays the recipe's own gating
@@ -647,6 +650,7 @@ impl Agent {
             account: None,
             pool_id: String::new(),
             canonical_model: String::new(),
+            entrypoint: None,
             reason: Reason::AwaitingRequest,
             last_guard: None,
             hold_counted: false,
@@ -2245,6 +2249,9 @@ impl Engine {
             .agents
             .get_mut(&agent_id)
             .unwrap();
+        // The probe replays this request's headers, so it meters under the entrypoint they carry.
+        agent.entrypoint =
+            phoebis_ledger::entrypoint_of_client(&observed.client.class).map(String::from);
         agent.current = Some(Observation {
             id: observed.request_id.clone(),
             attempt: 0,
@@ -2918,6 +2925,7 @@ impl Engine {
                     account: agent.account.clone(),
                     pool_id: agent.pool_id.clone(),
                     canonical_model: agent.canonical_model.clone(),
+                    entrypoint: agent.entrypoint.clone(),
                     recipe: observation.recipe.clone(),
                     expected: observation.expected,
                     counted_idle_tick: idle,
