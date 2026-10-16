@@ -1877,7 +1877,7 @@ export function PoolDialog({
             />
           </Field>
           <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.burnAverageSeconds)}>
-            <Field label={ENGINE_FIELD_LABELS.burnAverageSeconds} className="cell--half" hint="The time constant of each session's burn average. The projection, the slow-down and the round read it.">
+            <Field label={ENGINE_FIELD_LABELS.burnAverageSeconds} className="cell--half" hint="The time constant of each session's burn average. The projection, the slow-down and the round read it. A 5-hour window younger than twice it fires no round.">
               <Input
                 type="number"
                 min={ENGINE_BOUNDS.burnAverageSeconds.min}

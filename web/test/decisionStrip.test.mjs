@@ -932,8 +932,8 @@ test("the pin's three groups and the shed's three groups hold their keys", async
     [
       'Round',
       [
-        'trigger', 'excess', 'fired_by', 'over_ms', 'over_since', 'over_since_five_hour', 'wait_five_hour', 'over_since_seven_day', 'wait_seven_day', 'over_since_seven_day_fable', 'wait_seven_day_fable', 'stretch_ms',
-        'threshold_ms', 'target', 'round', 'marked', 'marks', 'skipped',
+        'trigger', 'excess', 'fired_by', 'over_ms', 'over_since', 'over_since_five_hour', 'wait_five_hour', 'age_five_hour', 'hold_five_hour', 'over_since_seven_day', 'wait_seven_day', 'over_since_seven_day_fable',
+        'wait_seven_day_fable', 'stretch_ms', 'threshold_ms', 'target', 'round', 'marked', 'marks', 'skipped',
       ],
     ],
     ['Destinations', ['destinations', 'no_destination', 'ending']],
@@ -968,6 +968,28 @@ test("the pin's three groups and the shed's three groups hold their keys", async
   const skipped = (await recordOf('req_6e1f3b98-a24/1'));
   const rows = stationPlan(skipped, 'move:shed').block.groups.find((g) => g.label === 'Round').rows.find((r) => r.label === 'skipped');
   assert.deepEqual(rows.chips.map((c) => [c.value, c.href]), [['bcc805b6: no runway', '/sessions'], ['d7167642: no runway', '/sessions']]);
+});
+
+test("a held 5-hour window's age and its hold read as durations in the Round group after the wait", async () => {
+  // The line the router writes while the 5-hour window is younger than its hold and its stamp still waits.
+  const base = await recordOf('req_868264bc-611/1');
+  const held = step('move:shed', 'no', [
+    fact('projection_five_hour', 1.126, 'percent'),
+    fact('horizon_five_hour', NOW + 7_200_000, 'time'),
+    fact('over_since_five_hour', NOW - 300_000, 'time'),
+    fact('wait_five_hour', 900_000, 'ms'),
+    fact('age_five_hour', 600_000, 'ms'),
+    fact('hold_five_hour', 3_600_000, 'ms'),
+    fact('ceiling', 0.75, 'percent'),
+    fact('marked', false),
+    fact('slow_down', 'off'),
+  ]);
+  const keyed = { ...base, walk: base.walk.map((s) => (s.step === 'move:shed' ? held : s)) };
+  const plan = stationPlan(keyed, 'move:shed');
+  const round = plan.block.groups.find((g) => g.label === 'Round');
+  assert.deepEqual(round.rows.map((r) => r.label), ['over since 5h', 'wait 5h', 'age 5h', 'age hold 5h', 'marked']);
+  assert.deepEqual(round.rows.slice(1, 4).map((r) => r.chips.map(chipText)), [['wait 5h 15 min'], ['age 5h 10 min'], ['age hold 5h 1 h']]);
+  assert.deepEqual(plan.block.groups.map((g) => g.label), ['Windows', 'Round'], 'no fact of the line falls to the unlabeled group');
 });
 
 test("the return rule's popover reads its mode first, since the mode decides which facts the rule read", async () => {

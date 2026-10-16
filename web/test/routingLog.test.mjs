@@ -310,11 +310,11 @@ test('the step and verdict words', () => {
 
 test('the walk words name every key the slow-down, the return rule, the pick, the placement and the shed line write', () => {
   const words = {
-    by_runway: 'by runway', cycle_ms: 'cycle', demand_five_hour: 'demand', dwell_ms: 'dwell', factor: 'speed', fired_by: 'fired by', ladder: 'ladder', mode: 'mode', over_ms: 'over for', over_since: 'over since',
-    over_since_five_hour: 'over since 5h', over_since_seven_day: 'over since 7d', over_since_seven_day_fable: 'over since Fable', slow_down: 'slow-down', slow_down_until: 'slowed until', speed: 'realized',
-    stretch_ms: 'stretch', threshold_ms: 'threshold', wait_five_hour: 'wait 5h', wait_seven_day: 'wait 7d', wait_seven_day_fable: 'wait Fable',
+    age_five_hour: 'age 5h', by_runway: 'by runway', cycle_ms: 'cycle', demand_five_hour: 'demand', dwell_ms: 'dwell', factor: 'speed', fired_by: 'fired by', hold_five_hour: 'age hold 5h', ladder: 'ladder', mode: 'mode',
+    over_ms: 'over for', over_since: 'over since', over_since_five_hour: 'over since 5h', over_since_seven_day: 'over since 7d', over_since_seven_day_fable: 'over since Fable', slow_down: 'slow-down',
+    slow_down_until: 'slowed until', speed: 'realized', stretch_ms: 'stretch', threshold_ms: 'threshold', wait_five_hour: 'wait 5h', wait_seven_day: 'wait 7d', wait_seven_day_fable: 'wait Fable',
   };
-  assert.equal(Object.keys(words).length, 21);
+  assert.equal(Object.keys(words).length, 23);
   // Several of the words equal the underscores read as spaces, so the table's own entries are what the case reads.
   for (const [key, word] of Object.entries(words)) assert.equal(d.WALK_KEY[key], word, key);
   assert.equal(d.WALK_KEY.wait_ms, 'wait', "the spent rule's wait keeps its word");
@@ -878,13 +878,16 @@ const DETAIL_EVENTS = {
   shedding_round: [
     {
       burn_average_seconds: 1_800, burn_sum: 0.12, ceiling: 0.95, dwell_seconds: 900, dwell_until: ms(14, 15), excess: 0.06, factor: null, horizon: ms(16, 0),
-      marks: [{ agent_id: 'c21e', key_id: 'desktop', model: 'claude-sonnet-5', session_id: 's1' }],
+      marks: [{ agent_id: 'c21e', key_id: 'desktop', model: 'claude-fable-5-1', session_id: 's1' }],
       outcome: 'marked 1', persisted: true,
-      pins: [{ agent_id: 'c21e', burn: 0.07, cold: true, key_id: 'desktop', last_input_tokens: 48_100, marked: true, model: 'claude-sonnet-5', note: null, per_rewrite: 0.004, planned: 'secondary', rewrite: 0.005, runway_ms: null, session_id: 's1', skip: null }],
+      pins: [
+        { agent_id: 'c21e', burn: 0.07, cold: true, key_id: 'desktop', last_input_tokens: 48_100, marked: true, model: 'claude-fable-5-1', note: null, per_rewrite: 0.004, planned: 'secondary', rewrite: 0.005, rewrite_window: 'seven_day_fable', runway_ms: null, session_id: 's1', skip: null },
+        { agent_id: 'd93b', burn: null, cold: false, key_id: 'desktop', last_input_tokens: 48_000, marked: false, model: 'claude-opus-5', note: null, per_rewrite: null, planned: null, rewrite: null, rewrite_window: null, runway_ms: null, session_id: 's2', skip: 'off_window' },
+      ],
       projection: 0.99, reason: null, removed: 0.07, shed_cap: 0.2, stretch_ms: null, target: 0.024, threshold_ms: null, trigger: 'projection', unit: 'window_share', utilization: 0.71, warm_sessions: 'when_needed',
-      window: 'five_hour',
+      window: 'seven_day_fable',
     },
-    ['Started by', 'Trigger', 'Fired by', 'Excess', 'Cap', 'Unit', 'Burn average', 'Warm sessions', 'Pins', 'Planned destinations', 'Outcome', 'Next round after', 'Dwell', 'Survive a restart'],
+    ['Started by', 'Trigger', 'Fired by', 'Excess', 'Cap', 'Unit', 'Burn average', 'Warm sessions', 'Pins', 'Skipped', 'Planned destinations', 'Outcome', 'Next round after', 'Dwell', 'Survive a restart'],
   ],
   slow_down_ended: [{ duration_ms: 5_180_000, factor_min: 0.35, held_ms: 36_000, since: ms(9, 12) }, ['Lasted', 'Slowest', 'Held', 'Effect']],
   slow_down_started: [{ demand: 0.12, factor: 0.5, reset: ms(18, 20), stretch_ms: 2_520_000, threshold_ms: 1_800_000 }, ['Speed', 'Stretch', 'Demand', 'Reset', 'Effect']],
@@ -912,9 +915,30 @@ test('every event kind has its detail pairs starting with When, Account and Pool
   assert.deepEqual(without.slice(0, 2).map((p) => p.label), ['When', 'Pins loaded']);
   const round = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, []).find((p) => p.label === 'Pins');
   assert.deepEqual(round.table.head, ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', 'Rewrite', 'Destination', 'Mark']);
-  assert.deepEqual(round.table.rows.map((r) => r.map(chipText)), [['s1', 'c21e', 'cold', '7.0 %/h', '48.1K', '0.5%', 'secondary', 'marked']]);
+  assert.deepEqual(round.table.rows.map((r) => r.map(chipText)), [
+    ['s1', 'c21e', 'cold', '7.0 %/h', '48.1K', '0.5% of 20x Fable', 'secondary', 'marked'],
+    ['s2', 'd93b', 'warm', '-', '48K', '-', '-', 'off window'],
+  ]);
   const restart = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, []).find((p) => p.label === 'Survive a restart');
   assert.deepEqual(texts(restart.chips), ['persisted']);
+});
+
+test("a round's off-window pin reads its word and the rewrite cell names its unit", () => {
+  const detail = DETAIL_EVENTS.shedding_round[0];
+  const drawn = (body) => {
+    const pairs = d.detailPairs(event('shedding_round', body), NOW, []);
+    return { rows: pairs.find((p) => p.label === 'Pins').table.rows.map((r) => [chipText(r[5]), chipText(r[7])]), skipped: texts(pairs.find((p) => p.label === 'Skipped')?.chips ?? []) };
+  };
+  // The Fable pin's rewrite is the 20x equivalent of its week, and the Opus pin, which draws no Fable week, sat out.
+  assert.deepEqual(drawn(detail), { rows: [['0.5% of 20x Fable', 'marked'], ['-', 'off window']], skipped: ['s2: off window'] });
+  assert.deepEqual(read(event('shedding_round', detail)).facts, ['pins 1 of 2'], 'the count reads every listed pin, the one left out included');
+  // On a 5-hour round every pin is on the window, and a model with no week of its own prices its rewrite on the 7-day.
+  const fiveHour = (pin) => drawn({ ...detail, pins: [pin], window: 'five_hour' }).rows[0][0];
+  const sonnet = { ...detail.pins[0], model: 'claude-sonnet-5', rewrite_window: 'seven_day' };
+  assert.equal(fiveHour(sonnet), '0.5% of 20x 7d');
+  const unnamed = { ...sonnet };
+  delete unnamed.rewrite_window;
+  assert.equal(fiveHour(unnamed), '0.5%', 'a pin whose record names no window draws the bare share');
 });
 
 test('the two slow-down events read their pairs and effects', () => {

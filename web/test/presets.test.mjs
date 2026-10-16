@@ -262,15 +262,94 @@ test("the preview reads a sibling's runway on every window the pin's model draws
 
 test('a round fired by the Fable week counts the pins whose model draws it alone, so it plans no Sonnet move', () => {
   // fable-hot crosses on its Fable week alone: 99 % five hours out under the ceiling of 90, an excess of 1.8 points an
-  // hour, while its shared windows sit under it. The Sonnet pin burns five points an hour and the Fable pin one, but
-  // only the Fable pin draws the week that fired, so the round marks it and the Sonnet pin reads unpriced there.
+  // hour, while its shared windows sit under it. The Sonnet pin burns five points an hour and the Fable pins one and a
+  // half, but only the Fable pins draw the week that fired, so the Sonnet pin sits the round out and the cap's 0.75
+  // points an hour are reached by the heavier Fable pin alone.
   const fableHot = oauth('fable-hot', 0.5, 0.4, 0.99);
   const sibling = oauth('cool', 0.3, 0.2, 0.3);
-  const pins = [pin('fable-hot', 'sonnet-a', 0.05, false), pin('fable-hot', 'fable-b', 0.01, false, { model: 'claude-fable-5-1' })];
+  const fable = (id, burn) => pin('fable-hot', id, burn, false, { model: 'claude-fable-5-1' });
+  const pins = [pin('fable-hot', 'sonnet-a', 0.05, false), fable('fable-b', 0.01), fable('fable-c', 0.005)];
   const preview = d.shedPreview(pool([fableHot, sibling]), [fableHot, sibling], pins, NOW);
   assert.deepEqual(preview.hot.map((h) => [h.label, h.window, h.excess.toFixed(3)]), [['fable-hot', '7d_fable', '0.018']]);
-  assert.deepEqual([preview.sessions, preview.covered.toFixed(3), preview.unpriced], [1, '0.010', false], "the Fable pin's point alone, never the Sonnet pin's five");
+  assert.deepEqual([preview.sessions, preview.covered.toFixed(3), preview.unpriced], [1, '0.010', false], "fable-b's point alone, never the Sonnet pin's five");
   assert.equal(d.shedPreviewLine(preview, NOW), '1 member projects over the ceiling: fable-hot. A round there would mark 1 session (0 warm), 1.0 %/h of the excess, to move to a sibling with runway.');
+});
+
+test("a pin whose model does not draw the fired window is out of the preview's round", () => {
+  // hot crosses on its Fable week alone. The Sonnet pins draw no Fable week, so the round walks the Fable pin by
+  // itself, and a member's last pin is never marked, however much the Sonnet pins burn on the shared windows.
+  const fableHot = oauth('hot', 0.3, 0.2, 0.97);
+  const sibling = oauth('cool', 0.3, 0.2, 0.3);
+  const pins = [pin('hot', 'fable-a', 0.01, false, { model: 'claude-fable-5-1' }), pin('hot', 'sonnet-b', 0.05, false), pin('hot', 'sonnet-c', 0.03, false)];
+  const preview = d.shedPreview(pool([fableHot, sibling]), [fableHot, sibling], pins, NOW);
+  assert.deepEqual([preview.hot.map((h) => h.window), preview.quiet, preview.sessions], [['7d_fable'], 'last', 0]);
+  assert.equal(d.shedPreviewLine(preview, NOW), quiet("each is its member's last."));
+});
+
+test('the preview counts an unpriced pin on the window for the last-pin rule still', () => {
+  // On a 5-hour round both models draw the window, so the Sonnet pin served in dollars stays in the order unpriced and
+  // the Fable pin is not its member's last.
+  const sibling = oauth('cool', 0.3, 0.2, 0.3);
+  const pins = [pin('hot', 'fable-a', 0.03, false, { model: 'claude-fable-5-1' }), pin('hot', 'sonnet-b', 0.02, false, { burnUnit: 'usd' })];
+  const preview = d.shedPreview(pool([hot, sibling]), [hot, sibling], pins, NOW);
+  assert.deepEqual([preview.hot.map((h) => h.window), preview.sessions, preview.quiet], [['5h'], 1, null]);
+  assert.equal(d.shedPreviewLine(preview, NOW), '1 member projects over the ceiling: hot. A round there would mark 1 session (0 warm), 3.0 %/h of the excess, to move to a sibling with runway.');
+});
+
+/** `oauth` with its 5-hour window resetting `resetIn` from now, so the window started five hours before the reset. */
+const fresh = (id, five, seven, resetIn) => ({ ...oauth(id, five, seven), windows: [win('5h', five, resetIn), win('7d', seven, 5 * HOUR)] });
+/** The sentence that names a member whose 5-hour round the hold, twice the test pool's 30-minute average, took away. */
+const heldSentence = (label, age) => `${label}'s 5-hour window is ${age} old, under the hold of 1 h, so its round reads the next window.`;
+
+test('a member whose 5-hour window is under the hold is read on its next window and named', () => {
+  // hot's 5-hour window reset ten minutes ago, so its round reads the 7-day window, over the ceiling too: 97 % five
+  // hours out, an excess of 1.4 points an hour, which cold-a's 3 covers alone.
+  const young = fresh('hot', 0.99, 0.97, 4 * HOUR + 50 * MINUTE);
+  const preview = d.shedPreview(pool([young, cool]), [young, cool], three, NOW);
+  assert.deepEqual(preview.hot.map((h) => h.window), ['7d']);
+  assert.deepEqual(preview.held, [{ ageMs: 600_000, holdMs: 3_600_000, id: 'hot', label: 'hot' }]);
+  assert.equal(d.shedPreviewLine(preview, NOW), `1 member projects over the ceiling: hot. A round there would mark 1 session (0 warm), 1.4 %/h of the excess, to move to a sibling with runway. ${heldSentence('hot', '10 min')}`);
+  assert.equal(line([young, cool], three, { loadShedding: false }), `Load shedding is off: no round runs. 1 member projects over the ceiling: hot. ${heldSentence('hot', '10 min')}`, 'the switch off names the held member too');
+});
+
+test('a held member with no other window over the ceiling is named beside the closest', () => {
+  const young = fresh('hot', 0.99, 0.4, 4 * HOUR + 50 * MINUTE);
+  const preview = d.shedPreview(pool([young, cool]), [young, cool], three, NOW);
+  assert.deepEqual([preview.hot.length, preview.closest], [0, { horizon: NOW + 5 * HOUR, label: 'hot', projection: 0.4, window: '7d' }]);
+  // The closest weekly window reads the span to its horizon, whose spelling the duration format decides.
+  const said = d.shedPreviewLine(preview, NOW);
+  assert.ok(said.startsWith('No member projects over the ceiling on any window: the closest is hot, 7d 40 % in '), said);
+  assert.ok(said.endsWith(heldSentence('hot', '10 min')), said);
+});
+
+test('a passed reset with no new one starts the window at the reset', () => {
+  const passed = fresh('hot', 0.99, 0.4, -5 * MINUTE);
+  const preview = d.shedPreview(pool([passed, cool]), [passed, cool], three, NOW);
+  assert.deepEqual([preview.hot.length, preview.held], [0, [{ ageMs: 300_000, holdMs: 3_600_000, id: 'hot', label: 'hot' }]]);
+});
+
+test('a window older than the hold fires as today', () => {
+  const read = (resetIn) => {
+    const member = fresh('hot', 0.99, 0.4, resetIn);
+    const preview = d.shedPreview(pool([member, cool]), [member, cool], three, NOW);
+    return [preview.hot.map((h) => h.window), preview.held];
+  };
+  assert.deepEqual(read(3 * HOUR + 59 * MINUTE), [['5h'], []], '61 minutes old');
+  assert.deepEqual(read(4 * HOUR), [['5h'], []], 'a window exactly as old as the hold fires');
+});
+
+test('a 5-hour reset more than five hours ahead starts no fresh window, so nothing is held', () => {
+  const ahead = fresh('hot', 0.99, 0.4, 6 * HOUR);
+  const preview = d.shedPreview(pool([ahead, cool]), [ahead, cool], three, NOW);
+  assert.deepEqual([preview.hot.map((h) => h.window), preview.held], [['5h'], []]);
+});
+
+test('a held member whose 5-hour projection reads under the ceiling is not named', () => {
+  // calm's 5-hour window is ten minutes old and reads 50 %, so the hold took no round away from it.
+  const calm = fresh('calm', 0.5, 0.2, 4 * HOUR + 50 * MINUTE);
+  const preview = d.shedPreview(pool([hot, calm]), [hot, calm], three, NOW);
+  assert.deepEqual(preview.held, []);
+  assert.equal(d.shedPreviewLine(preview, NOW), '1 member projects over the ceiling: hot. A round there would mark 2 sessions (1 warm), 4.5 %/h of the excess, to move to a sibling with runway.');
 });
 
 test("a round on a weekly window scales the pins' 5-hour burn by the account's burn on that window", () => {

@@ -4376,7 +4376,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         shedSwitch()?.closest('.field')?.className === migrate?.closest('.field')?.className &&
         migrate?.closest('.field')?.classList.contains('field--beside') === true &&
         hintOf('Load shedding', 'Shed cap (%)') === "The most of the member's burn one round removes. The round removes what brings the window under the ceiling, up to this." &&
-        hintOf('Windows', 'Burn average (s)') === "The time constant of each session's burn average. The projection, the slow-down and the round read it." &&
+        hintOf('Windows', 'Burn average (s)') === "The time constant of each session's burn average. The projection, the slow-down and the round read it. A 5-hour window younger than twice it fires no round." &&
         hintOf('Load shedding', 'Shed dwell (s)') === 'The least time between two rounds on one member, and how long a moved session stays off it.' &&
         field('Load shedding', 'Shed cap (%)')?.getAttribute('min') === '10' &&
         field('Load shedding', 'Shed cap (%)')?.getAttribute('max') === '100',

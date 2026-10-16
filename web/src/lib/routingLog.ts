@@ -829,6 +829,7 @@ export interface WalkLine {
 /** The fact keys of the walk in the console's words. Any other key reads with its underscores as spaces. */
 export const WALK_KEY: Record<string, string> = {
   above_ceiling: 'above ceiling',
+  age_five_hour: 'age 5h',
   ahead_five_hour: '5h ahead',
   ahead_seven_day: '7d ahead',
   at_cap: 'at cap',
@@ -851,6 +852,7 @@ export const WALK_KEY: Record<string, string> = {
   factor: 'speed',
   fired_by: 'fired by',
   grace_ms: 'grace',
+  hold_five_hour: 'age hold 5h',
   horizon_five_hour: 'horizon 5h',
   horizon_seven_day: 'horizon 7d',
   horizon_seven_day_fable: 'horizon Fable',
@@ -1887,6 +1889,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
               const b = num(p.burn);
               const last = num(p.last_input_tokens);
               const rewrite = num(p.rewrite);
+              const rewriteWindow = str(p.rewrite_window);
               const planned = str(p.planned);
               const skip = str(p.skip);
               return [
@@ -1895,7 +1898,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
                 plain(p.cold === true ? 'cold' : 'warm'),
                 plain(b === null ? '-' : hourlyShare(b)),
                 plain(last === null ? '-' : fmtCompact(last)),
-                plain(rewrite === null ? '-' : fmtShare(rewrite)),
+                plain(rewrite === null ? '-' : rewriteWindow === null ? fmtShare(rewrite) : `${fmtShare(rewrite)} of 20x ${wordOf(WINDOW_WORD, rewriteWindow)}`),
                 planned === null ? plain('-') : accountChip(planned),
                 plain(p.marked === true ? 'marked' : skip !== null ? words(skip) : (str(p.note) ?? '-')),
               ];
