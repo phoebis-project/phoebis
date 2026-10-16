@@ -134,9 +134,11 @@ fn runs(readings: &[Reading]) -> Vec<Run> {
 /// folds the routing conditions, so `meter_drift` reads the windows the same tick closed.
 ///
 /// A run is complete once a later reset appears or its reset lies behind `now`. It is skipped with fewer than two
-/// readings, with a fall in utilization (a reset the readings missed), or with a first reading older than the oldest
-/// retained request, whose rise the router's own requests would explain only in part. The ledger reads no registry:
-/// every account with a reading is read, and an account whose attempts draw no plan window writes no row.
+/// readings, with a fall in utilization (a reset the readings missed), with a first reading older than the oldest
+/// retained request, whose rise the router's own requests would explain only in part, or with a plan-funded attempt
+/// carrying tokens that the tables price to no share on the window, whose draw the rise holds and the sum would miss.
+/// The ledger reads no registry: every account with a reading is read, and an account whose attempts draw no plan
+/// window writes no row.
 pub fn reconcile(
     tx: &Transaction<'_>,
     prices: &PriceRevisions,
@@ -255,8 +257,9 @@ fn readings_of(
 
 /// The share of `window` the account's plan-funded attempts completed after `from` and at or before `to` were priced
 /// at, each under the regime its request's client names and the band at its completion, with how many priced and how
-/// many of those at a model tier's estimate. `None` when none priced to a share above zero. The Fable week prices the
-/// attempts on a model that draws it alone, as the meter charges no other model to that week.
+/// many of those at a model tier's estimate. `None` when none priced to a share above zero, or when an attempt with
+/// tokens priced to no share on the window. The Fable week prices the attempts on a model that draws it alone, as the
+/// meter charges no other model to that week.
 fn predicted(
     conn: &Connection,
     prices: &PriceRevisions,
@@ -352,6 +355,10 @@ fn predicted(
             SEVEN_DAY => point.seven_day_share,
             _ => point.model_week_share,
         };
+        // The meter's rise carries what this attempt drew, so a sum of the others alone would read as drift.
+        if priced.is_none() && point.tokens > 0 {
+            return Ok(None);
+        }
         if let Some(priced) = priced {
             share += priced;
             requests += 1;

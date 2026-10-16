@@ -25,6 +25,8 @@ const OPUS: &str = "claude-opus-5-5";
 const FABLE: &str = "claude-fable-5-1";
 /// Unweighted, so it prices through its model tier's latest weighted model, Opus 5.5 at weight 2, as an estimate.
 const OPUS_UNWEIGHTED: &str = "claude-opus-5";
+/// Of the model tier `mystery`, which no weighted model shares, so it prices to no share.
+const MYSTERY: &str = "claude-mystery-2";
 
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-9 * b.abs().max(1.0)
@@ -513,4 +515,48 @@ fn an_estimated_attempt_is_counted_and_an_overage_attempt_draws_nothing() {
         rows[0].predicted_share
     );
     assert!(close(rows[0].ratio, 1.0), "{}", rows[0].ratio);
+}
+
+#[test]
+fn a_run_with_a_plan_attempt_the_tables_cannot_price_is_skipped_unless_it_carries_no_token() {
+    let reset = SATURDAY + HOUR;
+    let now = reset + HOUR;
+    // 0.1 of the window from ten Sonnet units, beside an attempt on a model of a tier with no weighted model, which
+    // the tables price to no share whatever its tokens.
+    let fold_with = |mystery_input: u64| {
+        let db = LedgerDb::open_in_memory().unwrap();
+        seed_request(&db, "seed", SATURDAY - MINUTE);
+        db.insert_samples(
+            &[
+                reading(FIVE_HOUR, SATURDAY, 0.10, reset),
+                reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.40, reset),
+            ],
+            None,
+        )
+        .unwrap();
+        served(&db, "sonnet", SONNET, SATURDAY + 5 * MINUTE, 10, None);
+        served(
+            &db,
+            "mystery",
+            MYSTERY,
+            SATURDAY + 10 * MINUTE,
+            mystery_input,
+            None,
+        );
+        fold(&db, now);
+        rows(&db, now)
+    };
+    assert_eq!(
+        fold_with(20),
+        [],
+        "the rise carries the unpriced attempt's draw, which a sum of the priced one alone would read as drift"
+    );
+    assert_eq!(
+        fold_with(0)
+            .iter()
+            .map(|r| (r.window.as_str(), r.requests))
+            .collect::<Vec<_>>(),
+        [(FIVE_HOUR, 1)],
+        "an attempt without a token drew nothing, so the run prices the rest"
+    );
 }
