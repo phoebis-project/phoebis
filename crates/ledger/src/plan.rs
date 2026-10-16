@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 use jiff::civil::Weekday;
 use jiff::tz::{TimeZone, TimeZoneDatabase};
 use jiff::Timestamp;
-use phoebis_routing::{window_for, PinUsage, RateTable, Rates, FIVE_HOUR, SEVEN_DAY};
+use phoebis_routing::{window_for, BandSegment, PinUsage, RateTable, Rates, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::PinBurn;
 
 use crate::rollup::{BILLED_FUNDING, FAST_FUNDING, OVERAGE_FUNDING, PLAN_FUNDING};
@@ -125,6 +125,59 @@ impl Peak {
         }
         let hour = i16::from(local.hour());
         i16::from(self.from_hour) <= hour && hour < i16::from(self.to_hour)
+    }
+
+    /// The band's spans inside `[from, to)`, in order: each local day the span touches, a weekend day skipped under
+    /// `weekdays` as `covers` skips it, its `[from_hour, to_hour)` resolved in the zone and cut to the span. A local
+    /// hour the zone skips or repeats resolves as `covers` reads it: the band opens at the first instant whose hour is
+    /// `from_hour` or later. Empty where the zone did not resolve.
+    fn edges(&self, from: i64, to: i64) -> Vec<(i64, i64)> {
+        let mut spans = Vec::new();
+        let Some(zone) = &self.resolved else {
+            return spans;
+        };
+        let (Ok(start), Ok(end)) = (
+            Timestamp::from_millisecond(from),
+            Timestamp::from_millisecond(to),
+        ) else {
+            return spans;
+        };
+        let at_hour = |day: jiff::civil::Date, hour: u8| -> Option<i64> {
+            // `to_hour` may be 24, the next day's midnight.
+            let (day, hour) = if hour >= 24 {
+                (day.tomorrow().ok()?, 0)
+            } else {
+                (day, hour)
+            };
+            let local = day.at(i8::try_from(hour).ok()?, 0, 0, 0);
+            Some(
+                local
+                    .to_zoned(zone.clone())
+                    .ok()?
+                    .timestamp()
+                    .as_millisecond(),
+            )
+        };
+        let last = end.to_zoned(zone.clone()).date();
+        let mut day = start.to_zoned(zone.clone()).date();
+        while day <= last {
+            let weekend = matches!(day.weekday(), Weekday::Saturday | Weekday::Sunday);
+            if !(self.weekdays && weekend) {
+                if let (Some(open), Some(close)) =
+                    (at_hour(day, self.from_hour), at_hour(day, self.to_hour))
+                {
+                    let (lo, hi) = (open.max(from), close.min(to));
+                    if lo < hi {
+                        spans.push((lo, hi));
+                    }
+                }
+            }
+            let Ok(next) = day.tomorrow() else {
+                break;
+            };
+            day = next;
+        }
+        spans
     }
 }
 
@@ -664,6 +717,11 @@ impl SubscriptionCosts {
         if !self.peak.covers(at) {
             return 1.0;
         }
+        self.band_capacity_factor(priced, entrypoint)
+    }
+
+    /// The factor the band sets on `priced` under the regime the entrypoint names, else the base one.
+    fn band_capacity_factor(&self, priced: &str, entrypoint: Option<&str>) -> f64 {
         let factors = self
             .regime_of(entrypoint)
             .map_or(&self.peak.capacity_factor, |r| &r.peak.capacity_factor);
@@ -769,6 +827,58 @@ impl SubscriptionCosts {
         self.priced_window(window).map_or(1.0, |(priced, _)| {
             1.0 / self.factor_at(priced, entrypoint, at)
         })
+    }
+
+    /// `[from, to)` cut at the band's edges for `window`'s priced window under the regime the entrypoint names, each
+    /// piece at one over the regime's capacity factor inside the band and 1 outside: the local days of the span are
+    /// walked in the resolved zone, a weekend day skipped under `weekdays`, and `[from_hour, to_hour)` of each day
+    /// intersected with the span, the hours read in local time as `covers` reads them, so a daylight-rule day follows
+    /// the zone's rule. One piece at weight 1 where the factor is 1, the band covers nothing of the span, the window
+    /// prices nothing, or the zone did not resolve. A list, so a file with two bands a day prices right. An empty span
+    /// reads one piece at the band's weight at `from`, since a horizon clamped at its instant asks for one.
+    pub fn band_segments(
+        &self,
+        window: &str,
+        entrypoint: Option<&str>,
+        from: i64,
+        to: i64,
+    ) -> Vec<BandSegment> {
+        let one = |weight: f64| vec![BandSegment { from, to, weight }];
+        let Some((priced, _)) = self.priced_window(window) else {
+            return one(1.0);
+        };
+        let factor = self.band_capacity_factor(priced, entrypoint);
+        if factor == 1.0 {
+            return one(1.0);
+        }
+        if from >= to {
+            return one(1.0 / self.factor_at(priced, entrypoint, from));
+        }
+        let mut segments = Vec::new();
+        let mut at = from;
+        for (open, close) in self.peak.edges(from, to) {
+            if at < open {
+                segments.push(BandSegment {
+                    from: at,
+                    to: open,
+                    weight: 1.0,
+                });
+            }
+            segments.push(BandSegment {
+                from: open,
+                to: close,
+                weight: 1.0 / factor,
+            });
+            at = close;
+        }
+        if at < to {
+            segments.push(BandSegment {
+                from: at,
+                to,
+                weight: 1.0,
+            });
+        }
+        segments
     }
 
     /// The per-token share of the anchor tier's `window` out of band under the regime `entrypoint` names, empty for a
@@ -1097,6 +1207,19 @@ impl PlanTables {
         self.revisions
             .in_force(at)
             .band_factor(window, entrypoint, at)
+    }
+
+    /// The segments of `[from, to)` under the revision in force at `from`.
+    pub fn band_segments(
+        &self,
+        window: &str,
+        entrypoint: Option<&str>,
+        from: i64,
+        to: i64,
+    ) -> Vec<BandSegment> {
+        self.revisions
+            .in_force(from)
+            .band_segments(window, entrypoint, from, to)
     }
 
     pub fn rate_table(&self, window: &str, entrypoint: Option<&str>, at: i64) -> RateTable {

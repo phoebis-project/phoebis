@@ -15,7 +15,7 @@ use tokio::time::Instant;
 
 use crate::affinity::{AffinityMap, PurgedEntry};
 use crate::listing::{row_for, snapshot_date, tier_segment};
-use crate::select::{affinity_ttl_ms, seconds_ms, SlowDownRead, SLOW_DOWN_WAIT_MS};
+use crate::select::{affinity_ttl_ms, seconds_ms, Banded, SlowDownRead, SLOW_DOWN_WAIT_MS};
 use crate::task::BurnRates;
 use crate::windows::{window_for, MODEL_WINDOWS};
 use crate::RegistrySnapshot;
@@ -338,12 +338,23 @@ pub struct SharePricer {
     measured: Arc<Measured>,
     rate: Arc<Rate>,
     equivalent: Arc<Equivalent>,
+    band_segments: Arc<BandSegments>,
 }
 
 type Price = dyn Fn(&str, Option<&str>, &str, &str, PinUsage, i64) -> Option<f64> + Send + Sync;
 type Measured = dyn Fn(&str) -> bool + Send + Sync;
 type Rate = dyn Fn(&str, Option<&str>, &str, &str, &PinBurn, i64) -> Option<f64> + Send + Sync;
 type Equivalent = dyn Fn(&str, Option<&str>, &str, PinUsage, i64) -> Option<f64> + Send + Sync;
+type BandSegments = dyn Fn(&str, Option<&str>, i64, i64) -> Vec<BandSegment> + Send + Sync;
+
+/// One piece of a span as the band weighs it: `[from, to)` in milliseconds at `weight`, one over the regime's capacity
+/// factor inside the band and 1 outside.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BandSegment {
+    pub from: i64,
+    pub to: i64,
+    pub weight: f64,
+}
 
 impl SharePricer {
     /// `price(window, entrypoint, tier, canonical_model, usage, at)`: the share of `window` on `tier` at `at` (the
@@ -360,6 +371,13 @@ impl SharePricer {
             measured: Arc::new(|_| true),
             rate: Arc::new(|_, _, _, _, _, _| None),
             equivalent: Arc::new(|_, _, _, _, _| None),
+            band_segments: Arc::new(|_, _, from, to| {
+                vec![BandSegment {
+                    from,
+                    to,
+                    weight: 1.0,
+                }]
+            }),
         }
     }
 
@@ -409,6 +427,19 @@ impl SharePricer {
         }
     }
 
+    /// `band_segments(window, entrypoint, from, to)`: the span cut at the band's edges for the window under the
+    /// regime the entrypoint names. One segment at weight 1 until this is set, so a task spawned without the tables
+    /// projects at one rate.
+    pub fn with_band_segments(
+        self,
+        segments: impl Fn(&str, Option<&str>, i64, i64) -> Vec<BandSegment> + Send + Sync + 'static,
+    ) -> SharePricer {
+        SharePricer {
+            band_segments: Arc::new(segments),
+            ..self
+        }
+    }
+
     pub fn rate(
         &self,
         window: &str,
@@ -446,6 +477,33 @@ impl SharePricer {
 
     pub fn measured(&self, window: &str) -> bool {
         (self.measured)(window)
+    }
+
+    /// The segments of `[from, to)`, one at weight 1 over the span where the closure answers none, so no reader
+    /// indexes an empty list.
+    pub fn band_segments(
+        &self,
+        window: &str,
+        entrypoint: Option<&str>,
+        from: i64,
+        to: i64,
+    ) -> Vec<BandSegment> {
+        let segments = (self.band_segments)(window, entrypoint, from, to);
+        if segments.is_empty() {
+            return vec![BandSegment {
+                from,
+                to,
+                weight: 1.0,
+            }];
+        }
+        segments
+    }
+
+    /// The band's weight at one instant: a booking's `burn` was priced at it, so its plain rate is the burn over it.
+    pub fn band_weight_at(&self, window: &str, entrypoint: Option<&str>, at: i64) -> f64 {
+        self.band_segments(window, entrypoint, at, at.saturating_add(1))
+            .first()
+            .map_or(1.0, |segment| segment.weight)
     }
 }
 
@@ -2332,6 +2390,60 @@ impl RoutingState {
         self.shares(account_id, keep, tier, now, average_ms, speed)
     }
 
+    /// The account's rates as `shares` sums them, each over `[now, horizon(window))` as the band weighs it, for the
+    /// windows `horizon` names: each kept pin's at its own regime's segments, the pins' sum over `speed`, then each
+    /// live booking's undivided at its own regime's segments, its plain rate read under the band of its `booked_at`,
+    /// since its `burn` was priced there. An unpriced pin adds nothing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn banded_shares(
+        &self,
+        account_id: &str,
+        keep: &dyn Fn(&PinRow) -> bool,
+        tier: &str,
+        now: i64,
+        average_ms: i64,
+        speed: f64,
+        horizon: &dyn Fn(&str) -> Option<i64>,
+    ) -> BTreeMap<String, Banded> {
+        let mut banded: BTreeMap<String, Banded> = BTreeMap::new();
+        self.pin_rates(
+            account_id,
+            keep,
+            tier,
+            now,
+            average_ms,
+            &mut |window, entrypoint, rate| {
+                let Some(to) = horizon(window) else {
+                    return;
+                };
+                let piece =
+                    Banded::of(rate, &self.share.band_segments(window, entrypoint, now, to));
+                let sum = banded.entry(window.to_string()).or_default();
+                *sum = sum.plus(&piece);
+            },
+        );
+        for sum in banded.values_mut() {
+            *sum = sum.scaled(1.0 / speed);
+        }
+        for reservation in self.live_bookings(account_id) {
+            let entrypoint = reservation.entrypoint.as_deref();
+            for (window, burn) in &reservation.burn {
+                let Some(to) = horizon(window) else {
+                    continue;
+                };
+                let piece = Banded::read_at(
+                    *burn,
+                    self.share
+                        .band_weight_at(window, entrypoint, reservation.booked_at),
+                    &self.share.band_segments(window, entrypoint, now, to),
+                );
+                let sum = banded.entry(window.clone()).or_default();
+                *sum = sum.plus(&piece);
+            }
+        }
+        banded
+    }
+
     fn shares(
         &self,
         account_id: &str,
@@ -2341,23 +2453,55 @@ impl RoutingState {
         average_ms: i64,
         speed: f64,
     ) -> BTreeMap<String, f64> {
+        let mut shares = BTreeMap::new();
+        self.pin_rates(
+            account_id,
+            keep,
+            tier,
+            now,
+            average_ms,
+            &mut |window, _, rate| {
+                *shares.entry(window.to_string()).or_insert(0.0) += rate;
+            },
+        );
+        for share in shares.values_mut() {
+            *share /= speed;
+        }
+        for reservation in self.live_bookings(account_id) {
+            for (window, burn) in &reservation.burn {
+                *shares.entry(window.clone()).or_insert(0.0) += burn;
+            }
+        }
+        shares
+    }
+
+    /// Folds `add` over each kept pin's decayed rate at `now` on every plan window its model draws, with the pin's
+    /// entrypoint, in the pin map's order. A priced pin alone reaches `add`.
+    fn pin_rates(
+        &self,
+        account_id: &str,
+        keep: &dyn Fn(&PinRow) -> bool,
+        tier: &str,
+        now: i64,
+        average_ms: i64,
+        add: &mut dyn FnMut(&'static str, Option<&str>, f64),
+    ) {
         // A pin a live booking on this account names counts through the booking's burn alone, so a moved pin counts
         // once while its move is in flight. The booking is matched on the account and the pin row, never on the key
         // across accounts: a booking a request still in flight on the source holds there must not hide the live
         // row another request of the session moved onto the destination.
         let reserved: HashSet<PinKey> = self
-            .reservations
-            .values()
-            .filter(|reservation| reservation.account_id == account_id)
+            .live_bookings(account_id)
             .filter_map(|reservation| reservation.pin.clone())
             .collect();
-        let mut shares = BTreeMap::new();
         for pin in self
             .pins
             .values()
             .filter(|pin| pin.account_id == account_id && keep(pin))
         {
-            if reserved.contains(&pin.key()) {
+            // The key clones four strings per kept pin on the selection's hot path, and most selections hold no
+            // booking on the account.
+            if !reserved.is_empty() && reserved.contains(&pin.key()) {
                 continue;
             }
             for window in plan_windows(&pin.model) {
@@ -2367,24 +2511,20 @@ impl RoutingState {
                     self.share
                         .rate(window, entrypoint_of(pin), tier, &pin.model, &pin.burn, now)
                 {
-                    *shares.entry(window.to_string()).or_insert(0.0) +=
-                        burn_decayed(rate, pin.burn_at, now, average_ms);
+                    add(
+                        window,
+                        entrypoint_of(pin),
+                        burn_decayed(rate, pin.burn_at, now, average_ms),
+                    );
                 }
             }
         }
-        for share in shares.values_mut() {
-            *share /= speed;
-        }
-        for reservation in self
-            .reservations
+    }
+
+    fn live_bookings<'a>(&'a self, account_id: &'a str) -> impl Iterator<Item = &'a Reservation> {
+        self.reservations
             .values()
-            .filter(|reservation| reservation.account_id == account_id)
-        {
-            for (window, burn) in &reservation.burn {
-                *shares.entry(window.clone()).or_insert(0.0) += burn;
-            }
-        }
-        shares
+            .filter(move |reservation| reservation.account_id == account_id)
     }
 
     /// Whether the pin under the key carries a standing mark: `marked_at` set and `marked_on` its current account.
@@ -4344,6 +4484,7 @@ mod tests {
             horizon: T + 40 * MINUTE,
             reset: Some(T + 40 * MINUTE),
             demand: 0.1 / 3_600.0,
+            banded: Banded::flat(0.1 / 3_600.0, T, T + 40 * MINUTE),
             stretch_ms: 10 * MINUTE,
             threshold_ms: 30 * MINUTE,
             factor,
@@ -4415,6 +4556,7 @@ mod tests {
             horizon: T + 40 * MINUTE,
             reset: Some(T + 40 * MINUTE),
             demand: 0.1 / 3_600.0,
+            banded: Banded::flat(0.1 / 3_600.0, T, T + 40 * MINUTE),
             stretch_ms: 10 * MINUTE,
             threshold_ms: 30 * MINUTE,
             factor,
@@ -4469,6 +4611,7 @@ mod tests {
             horizon: 3_600_000,
             reset: Some(3_600_000),
             demand: 0.1 / 3_600.0,
+            banded: Banded::flat(0.1 / 3_600.0, 0, 3_600_000),
             stretch_ms: 600_000,
             threshold_ms: 1_800_000,
             factor,
@@ -4560,6 +4703,7 @@ mod tests {
             horizon: 3_600_000,
             reset: None,
             demand: 0.0,
+            banded: Banded::flat(0.0, 0, 3_600_000),
             stretch_ms: 0,
             threshold_ms: 1_800_000,
             factor: 1.0,

@@ -749,6 +749,7 @@ fn router_config(
     let measured = tables.clone();
     let rate_tables = tables.clone();
     let equivalent_tables = tables.clone();
+    let segment_tables = tables.clone();
     phoebis_routing::RouterConfig {
         band: phoebis_routing::BandWeight::new(move |window, entrypoint, at| {
             band.band_factor(window, entrypoint, at)
@@ -769,6 +770,9 @@ fn router_config(
         })
         .with_equivalent(move |window, entrypoint, model, usage, at| {
             equivalent_tables.equivalent_at(window, entrypoint, model, usage, at)
+        })
+        .with_band_segments(move |window, entrypoint, from, to| {
+            segment_tables.band_segments(window, entrypoint, from, to)
         }),
         funding_retry: Duration::from_secs(300.min(routing.model_rejection_seconds)),
         // Released once the ledger's mirror subscribed and the start row is recorded, below.

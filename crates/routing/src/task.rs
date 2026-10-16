@@ -2555,12 +2555,13 @@ fn decayed(pin: PinRow, now: i64, average_ms: i64) -> PinRow {
     }
 }
 
-/// A standing pin's runway on its own account: per window the model draws, `(ceiling - predicted) / burn` from
-/// `projection_of`, whose `burn` already holds the pin, so neither the pin's burn nor a rewrite is added again (that
-/// is `fit_of`'s arithmetic for a destination). `Some(0)` where `predicted` already reaches the ceiling, an unbounded
-/// runway (`None` with no binding window) where the account's burn on every drawn window it projects is zero, and the
-/// binding window the shortest. The outer `None` where the account projects none of the drawn windows: an api_key
-/// account, or one with no reading of them.
+/// A standing pin's runway on its own account: per window the model draws, the time `projection_of`'s burn takes to
+/// fill `ceiling - predicted` over the band's segments, as the projection beside it weighs them. Its burn already
+/// holds the pin, so neither the pin's burn nor a rewrite is added again (that is `fit_of`'s arithmetic for a
+/// destination). `Some(0)` where `predicted` already reaches the ceiling, an unbounded runway (`None` with no binding
+/// window) where the account's burn on every drawn window it projects is zero, and the binding window the shortest.
+/// The outer `None` where the account projects none of the drawn windows: an api_key account, or one with no reading
+/// of them.
 fn standing_runway(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2589,10 +2590,11 @@ fn standing_runway(
         let limit = ceiling(pool, window);
         let runway_ms = if projection.predicted >= limit {
             0
-        } else if projection.burn <= 0.0 {
-            continue;
         } else {
-            ((limit - projection.predicted) / projection.burn * 1_000.0).round() as i64
+            let Some(runway_ms) = projection.banded.time_to(limit - projection.predicted) else {
+                continue;
+            };
+            runway_ms
         };
         bounded.push((window, runway_ms));
     }

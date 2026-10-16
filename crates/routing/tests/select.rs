@@ -1,15 +1,16 @@
 use phoebis_routing::{
     cohort_hold, decide, effective_warm, lane_key, release_reasons, resolve, select, shed_dwell_ms,
     warm, warmth_of, windows::MODEL_WINDOWS, AccountTicket, AffinityChain, AffinityMap,
-    AffinityRow, BudgetFacts, BurnRates, BurnUnit, CandidateFacts, ChainFacts, ClientClass,
-    CohortHold, CreditsState, Decided, DecisionRecord, EvidenceSource, Exhaustion, FactEntity,
-    FactValue, FailedOver, HoldFacts, HoldOutcome, HoldWait, LaneFacts,
-    LongContextRates, MemberSpend, MigrateReason, MoveCause, OverageEvidence, PinKeyFacts, PinRef,
-    Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot,
-    RequestFlags, Reservation, RoutingState, SelectRequest, SelectResult, SharePricer,
-    SlowDownRead, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading,
-    WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
-    MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, WEEK_MS,
+    AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit, CandidateFacts, ChainFacts,
+    ClientClass, CohortHold, CreditsState, Decided, DecisionRecord, EvidenceSource, Exhaustion,
+    FactEntity, FactValue, FailedOver, HoldFacts, HoldOutcome, HoldWait,
+    LaneFacts, LongContextRates, MemberSpend, MigrateReason, MoveCause, OverageEvidence,
+    PinKeyFacts, PinRef, Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegimeRates,
+    RegistrySnapshot, RequestFlags, Reservation, RoutingState, SelectRequest, SelectResult,
+    SharePricer, SlowDownRead, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause,
+    WindowReading, WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
+    IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS,
+    WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -11863,6 +11864,50 @@ fn hourly_pricer() -> SharePricer {
     })
 }
 
+/// `hourly_pricer` under a band of the case's own over `[band_from, band_to)`: the 5-hour window under any regime but
+/// `desk` weighs a second inside it twice, and every other window and the regime `desk` read one segment at weight 1.
+/// An empty span reads the weight of its instant.
+fn banded_pricer(band_from: i64, band_to: i64) -> SharePricer {
+    hourly_pricer().with_band_segments(move |window, entrypoint, from, to| {
+        let weight = |at: i64| {
+            if band_from <= at && at < band_to {
+                2.0
+            } else {
+                1.0
+            }
+        };
+        if window != FIVE_HOUR || entrypoint == Some("desk") {
+            return vec![BandSegment {
+                from,
+                to,
+                weight: 1.0,
+            }];
+        }
+        if from >= to {
+            return vec![BandSegment {
+                from,
+                to,
+                weight: weight(from),
+            }];
+        }
+        let mut edges = vec![from];
+        edges.extend(
+            [band_from, band_to]
+                .into_iter()
+                .filter(|e| from < *e && *e < to),
+        );
+        edges.push(to);
+        edges
+            .windows(2)
+            .map(|pair| BandSegment {
+                from: pair[0],
+                to: pair[1],
+                weight: weight(pair[0]),
+            })
+            .collect()
+    })
+}
+
 /// `hourly_pricer` with the model `claude-unpriced-5` burning and fitting as `claude-sonnet-5` does, while its
 /// equivalent stays `hourly_pricer`'s, which weighs no model spelled `unpriced`: a pin of that model covers a target
 /// and finds a destination, and the pick cannot size its rewrite.
@@ -19893,6 +19938,7 @@ fn seeded_read(factor: f64, at: i64) -> SlowDownRead {
         horizon: at + HOUR,
         reset: Some(at + HOUR),
         demand: 0.0,
+        banded: Banded::flat(0.0, at, at + HOUR),
         stretch_ms: 0,
         threshold_ms: 1_800_000,
         factor,
@@ -24074,5 +24120,257 @@ fn a_reading_whose_reset_lies_more_than_a_window_ahead_reads_no_hold() {
         no_fact(shed, "age_five_hour") && no_fact(shed, "hold_five_hour"),
         "{:?}",
         shed.facts
+    );
+}
+
+/// One cold pin of `a` burning 10 input tokens a second, a tenth of the 5-hour window an hour under `hourly_pricer`,
+/// with `a` at 0.5 and its reset an hour out, priced under a band of the case's own over `[band_from, band_to)`.
+fn one_pin_under_a_band(band_from: i64, band_to: i64) -> RoutingState {
+    let mut st = loaded(vec![burning("s1", "a", 10.0, false, T)]);
+    st.set_share(banded_pricer(band_from, band_to));
+    st.record_sample("a", refreshing(0.5, T + HOUR, T + 72 * HOUR, T - 500));
+    st
+}
+
+/// `one_pin_under_a_band`'s rate at `T` in share per second.
+const TENTH_AN_HOUR: f64 = 0.1 / 3_600.0;
+
+/// The shed line's 5-hour projection of the pinned turn of `s1` at `T` on `st`.
+fn five_hour_projection(s: &RegistrySnapshot, st: &mut RoutingState) -> (f64, Decided) {
+    let d = decide(st, s, &auxiliary(s, "s1", T), &mut rng());
+    let projection = number(fact(line(&d.record, "move:shed"), "projection_five_hour"));
+    (projection, d)
+}
+
+#[test]
+fn a_five_hour_horizon_read_out_of_band_that_enters_it_projects_the_plain_rate_outside_and_twice_it_inside(
+) {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = one_pin_under_a_band(T + 30 * MINUTE, T + 10 * HOUR);
+    let (projection, d) = five_hour_projection(&s, &mut st);
+    let rate = TENTH_AN_HOUR;
+    let expected = 0.5 + rate * 1_800.0 + 2.0 * rate * 1_800.0;
+    assert!(
+        (projection - expected).abs() < 1e-9,
+        "the half hour before the band at the rate read at T and the half hour in it at twice that: {projection} \
+         against {expected}"
+    );
+    let burn = candidate(&d.record, "a").burn[FIVE_HOUR];
+    assert!(
+        (burn - rate * 3_600.0).abs() < 1e-9,
+        "the burn stays the rate at T: {burn}"
+    );
+}
+
+#[test]
+fn a_horizon_read_in_band_that_leaves_it_projects_the_other_way() {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = one_pin_under_a_band(T - HOUR, T + 30 * MINUTE);
+    let (projection, _) = five_hour_projection(&s, &mut st);
+    // The rate read at T carries the band's weight of 2, so the plain rate after the band is half of it.
+    let rate = TENTH_AN_HOUR;
+    let expected = 0.5 + rate * 1_800.0 + rate / 2.0 * 1_800.0;
+    assert!(
+        (projection - expected).abs() < 1e-9,
+        "{projection} against {expected}"
+    );
+}
+
+#[test]
+fn a_horizon_inside_or_outside_the_band_projects_as_today() {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    for (band_from, band_to, span) in [
+        (T - HOUR, T + 2 * HOUR, "inside"),
+        (T + 2 * HOUR, T + 3 * HOUR, "outside"),
+    ] {
+        let mut st = one_pin_under_a_band(band_from, band_to);
+        let (projection, _) = five_hour_projection(&s, &mut st);
+        let expected = 0.5 + TENTH_AN_HOUR * 3_600.0;
+        assert!(
+            (projection - expected).abs() < 1e-9,
+            "a horizon {span} the band at the rate read at T: {projection} against {expected}"
+        );
+    }
+}
+
+#[test]
+fn the_runway_on_a_crossing_span_reaches_the_room_earlier_than_one_rate_would() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    // 36 input tokens a second, 0.36 of the 5-hour window an hour, moved off a spent `a` onto `b`, whose span to its
+    // reset three hours out enters the band after half an hour.
+    let mut st = loaded(vec![gated_pin("s1", "a", 36.0)]);
+    st.set_share(banded_pricer(T + 30 * MINUTE, T + 10 * HOUR));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    let fit = line(&d.record, "fit");
+    let runway = number(fact_of(fit, "runway_ms", "b"));
+    let rate = 0.36 / 3_600.0;
+    let room = 0.95 - 0.3 - number(fact_of(fit, "rewrite_five_hour", "b"));
+    let walk = 1_800.0 + (room - rate * 1_800.0) / (2.0 * rate);
+    assert!(
+        runway < room / rate * 1_000.0,
+        "the band's hours fill the room faster than the rate read at T: {runway}"
+    );
+    assert!(
+        (runway - walk * 1_000.0).abs() <= 1.0,
+        "the half hour at the rate read at T and the rest at twice it: {runway} against {}",
+        walk * 1_000.0
+    );
+}
+
+#[test]
+fn the_stretch_and_the_factor_on_a_crossing_span_weigh_the_band() {
+    let (_, s) = stretch_pools(1800);
+    let mut st = three_pins_and_a_fitting_b();
+    st.set_share(banded_pricer(T + 10 * MINUTE, T + 10 * HOUR));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s3", T), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    // The pins' 0.42 an hour fill 0.07 of a's 0.15 of room in the ten minutes before the band and the rest at twice
+    // that, and add 0.77 over the hour to the reset.
+    let rate = 0.42 / 3_600.0;
+    let room = 0.95 - 0.80;
+    let reached = 600.0 + (room - rate * 600.0) / (2.0 * rate);
+    let stretch = number(fact(shed, "stretch_ms"));
+    assert!(
+        (stretch - (3_600.0 - reached) * 1_000.0).abs() <= 1.0,
+        "{stretch} against {}",
+        (3_600.0 - reached) * 1_000.0
+    );
+    assert!(
+        stretch > (3_600.0 - room / rate) * 1_000.0 + 1.0,
+        "the stretch is longer than one rate gives: {stretch}"
+    );
+    let factor = number(fact(shed, "factor"));
+    let increase = rate * 600.0 + 2.0 * rate * 3_000.0;
+    assert!(
+        (factor - room / increase).abs() < 1e-9,
+        "{factor} against {}",
+        room / increase
+    );
+    assert!(
+        factor < room / (rate * 3_600.0),
+        "the factor is lower than one rate gives: {factor}"
+    );
+}
+
+#[test]
+fn the_five_hour_rounds_excess_reads_the_moved_horizons_increase() {
+    let (_, s) = stretch_pools(1800);
+    let mut st = three_pins_and_a_fitting_b();
+    st.set_share(banded_pricer(T + 10 * MINUTE, T + 10 * HOUR));
+    for at in [T, T + MINUTE] {
+        decide(&mut st, &s, &auxiliary(&s, "s3", at), &mut rng());
+    }
+    let d = decide(
+        &mut st,
+        &s,
+        &auxiliary(&s, "s3", T + 2 * MINUTE),
+        &mut rng(),
+    );
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(fact(shed, "fired_by"), &FactValue::Text("slow_down".into()));
+    let round = d.shed_round.expect("the round ran").facts;
+    // The demand read at T + 2 min, out of the band, runs eight minutes at that rate to the band and twenty at twice it
+    // to the reset less the threshold, 28 minutes after the read.
+    let demand = number(fact(shed, "demand_five_hour")) / 3_600.0;
+    let increase = demand * 480.0 + 2.0 * demand * 1_200.0;
+    let excess = (round.utilization + increase - 0.95) / 1_680.0 * 3_600.0;
+    assert!(
+        (round.excess - excess).abs() < 1e-9,
+        "{} against {excess}",
+        round.excess
+    );
+    assert!((number(fact(shed, "excess")) - excess).abs() < 1e-9);
+}
+
+#[test]
+fn a_pin_under_the_test_regime_projects_at_one_rate_beside_a_base_pin_that_weighs_the_band() {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = a_desk_pin_and_a_base_pin();
+    st.set_share(banded_pricer(T + 30 * MINUTE, T + 10 * HOUR));
+    let desk_turn = SelectRequest {
+        entrypoint: Some("desk".into()),
+        ..auxiliary(&s, "s0", T)
+    };
+    let d = decide(&mut st, &s, &desk_turn, &mut rng());
+    let projection = number(fact(line(&d.record, "move:shed"), "projection_five_hour"));
+    // The desk pin burns 0.10 of the window an hour across the edge, the base pin 0.20 before it and 0.40 after.
+    let (desk, base) = (0.10 / 3_600.0, 0.20 / 3_600.0);
+    let expected = 0.80 + desk * 3_600.0 + base * 1_800.0 + 2.0 * base * 1_800.0;
+    assert!(
+        (projection - expected).abs() < 1e-9,
+        "{projection} against {expected}"
+    );
+}
+
+#[test]
+fn a_live_interactive_reservation_on_a_base_pins_horizon_reads_one_rate_across_the_band_edge() {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = one_pin_under_a_band(T + 30 * MINUTE, T + 10 * HOUR);
+    // A booking of 0.05 of the window an hour, priced under the regime `desk` at T.
+    let z = 0.05 / 3_600.0;
+    st.book_reservation(
+        "r-0",
+        Reservation {
+            account_id: "a".into(),
+            attempt: 1,
+            pin: None,
+            entrypoint: Some("desk".into()),
+            booked_at: T,
+            rewrite: BTreeMap::new(),
+            burn: BTreeMap::from([(FIVE_HOUR.to_string(), z)]),
+            expires_at: T + HOUR,
+        },
+    );
+    let (projection, _) = five_hour_projection(&s, &mut st);
+    let rate = TENTH_AN_HOUR;
+    let expected = 0.5 + rate * 1_800.0 + 2.0 * rate * 1_800.0 + z * 3_600.0;
+    assert!(
+        (projection - expected).abs() < 1e-9,
+        "the base pin weighs the band and the booking reads its own regime's one rate: {projection} against \
+         {expected}"
+    );
+}
+
+#[test]
+fn a_live_reservation_is_not_divided_by_the_speed_under_a_constant_band() {
+    // A pin whose rate reads one share a second on every window, a booking of one share a second on the 5-hour window,
+    // and the pricer's default segments.
+    let mut st = loaded(vec![burning("s1", "a", 1.0, false, T)]);
+    st.set_share(SharePricer::default().with_rate(|_, _, _, _, _, _| Some(1.0)));
+    st.book_reservation(
+        "r-0",
+        Reservation {
+            account_id: "a".into(),
+            attempt: 1,
+            pin: None,
+            entrypoint: None,
+            booked_at: T,
+            rewrite: BTreeMap::new(),
+            burn: BTreeMap::from([(FIVE_HOUR.to_string(), 1.0)]),
+            expires_at: T + HOUR,
+        },
+    );
+    let horizon = T + 600 * SECOND;
+    let banded = st.banded_shares("a", &|_| true, TIER, T, AVERAGE_MS, 0.5, &|_| Some(horizon));
+    assert_eq!(
+        banded.get(FIVE_HOUR),
+        Some(&Banded::flat(3.0, T, horizon)),
+        "the pin over the speed of a half and the booking undivided"
+    );
+    assert_eq!(
+        st.demand_shares("a", &|_| true, TIER, T, AVERAGE_MS, 0.5)
+            .get(FIVE_HOUR),
+        Some(&3.0),
+        "as the demand reads it"
     );
 }

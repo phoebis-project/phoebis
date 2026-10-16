@@ -24,9 +24,10 @@ use crate::record::{
 use crate::state::{
     all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, entrypoint_of,
     load_shedding, mark_holds, plan_windows, return_to_plan_dwell_ms, shed_cap, shed_dwell_ms,
-    slow_down, slow_down_hold_ms, slow_down_stretch_ms, warm, BurnUnit, CreditsState, MemberSpend,
-    PinPace, PinRef, PinUsage, Reservation, RoutingState, StateWrite, Tier, WindowReading,
-    FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    slow_down, slow_down_hold_ms, slow_down_stretch_ms, warm, BandSegment, BurnUnit, CreditsState,
+    MemberSpend, PinPace, PinRef, PinUsage, Reservation, RoutingState, StateWrite, Tier,
+    WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY,
+    SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::windows::{window_for, MODEL_WINDOWS};
 use crate::{term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
@@ -2223,15 +2224,17 @@ fn seconds(ms: i64) -> f64 {
     ms as f64 / 1_000.0
 }
 
-/// The projection of one account on one window at its horizon, read at `now`: the prediction plus the burn (share a
-/// second) over the seconds to the horizon.
+/// The projection of one account on one window at its horizon, read at `now`: the prediction plus what the burn adds
+/// to the horizon, the band's seconds weighed as the band weighs them.
 pub(crate) struct Projection {
     pub predicted: f64,
-    /// Share per second: the account's `burn_shares` on the window under `BurnRead::Achieved`, its `demand_shares`
-    /// under `BurnRead::Demand`.
+    /// Share per second at `now`: the account's `burn_shares` on the window under `BurnRead::Achieved`, its
+    /// `demand_shares` under `BurnRead::Demand`.
     pub burn: f64,
     pub horizon: i64,
     pub at_horizon: f64,
+    /// The same burn over `[now, horizon)` as the band weighs it, whose increase `at_horizon` adds.
+    pub banded: Banded,
 }
 
 /// The pins the account's pool keeps: a pin under a key of a pool the account left is retained until it ends and
@@ -2290,35 +2293,174 @@ fn projections_of(
     }
     let keep = in_pool(snapshot, pool);
     let average_ms = burn_average_ms(pool);
+    let speed = match read {
+        BurnRead::Achieved => 1.0,
+        BurnRead::Demand => state.slow_down_speed(pool, account_id),
+    };
     let burn = match read {
         BurnRead::Achieved => state.burn_shares(account_id, &keep, tier, now, average_ms),
-        BurnRead::Demand => state.demand_shares(
-            account_id,
-            &keep,
-            tier,
-            now,
-            average_ms,
-            state.slow_down_speed(pool, account_id),
-        ),
+        BurnRead::Demand => state.demand_shares(account_id, &keep, tier, now, average_ms, speed),
     };
+    // The readings and horizons first, so the band's segments are cut over each window's own horizon. A window with
+    // no burn projects its prediction.
     let mut projections = BTreeMap::new();
     for window in all_plan_windows() {
         let Some(reading) = state.predicted(account_id, window, now) else {
             continue;
         };
-        let horizon = horizon_of(snapshot, account_id, window, &reading, now);
-        let burn = burn.get(window).copied().unwrap_or(0.0);
         projections.insert(
             window.to_string(),
             Projection {
                 predicted: reading.utilization,
-                burn,
-                horizon,
-                at_horizon: reading.utilization + burn * seconds(horizon - now),
+                burn: burn.get(window).copied().unwrap_or(0.0),
+                horizon: horizon_of(snapshot, account_id, window, &reading, now),
+                at_horizon: reading.utilization,
+                banded: Banded::default(),
             },
         );
     }
+    let banded = state.banded_shares(account_id, &keep, tier, now, average_ms, speed, &|window| {
+        projections
+            .get(window)
+            .map(|projection: &Projection| projection.horizon)
+    });
+    for (window, banded) in banded {
+        if let Some(projection) = projections.get_mut(&window) {
+            projection.at_horizon = projection.predicted + banded.increase();
+            projection.banded = banded;
+        }
+    }
     projections
+}
+
+/// A rate over a span as the band weighs it: pieces of `[from, to)` each at the rate the band gives it there, built
+/// from a rate read at `now` (which carries the band of `now`, so the plain rate is it over the first segment's weight)
+/// and added across pins of different regimes piece by piece.
+// Public since `SlowDownRead` is and test literals build it outside `slow_down_of`. `pieces` stays private, so a
+// `Banded` is built only through its own functions.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Banded {
+    /// `(from, to, rate)`: milliseconds and share per second, in order and contiguous.
+    pieces: Vec<(i64, i64, f64)>,
+}
+
+impl Banded {
+    /// One piece at weight 1 over `[from, to)`: the unbanded read, what a literal outside `slow_down_of` carries and
+    /// what the pricer's default segments give every reader.
+    pub fn flat(rate: f64, from: i64, to: i64) -> Banded {
+        Banded {
+            pieces: vec![(from, to, rate)],
+        }
+    }
+
+    /// A rate read at the span's start, under the first segment's band.
+    pub(crate) fn of(rate_at_now: f64, segments: &[BandSegment]) -> Banded {
+        let read_weight = segments.first().map_or(1.0, |segment| segment.weight);
+        Banded::read_at(rate_at_now, read_weight, segments)
+    }
+
+    /// A rate read under another instant's band, a booking's at `booked_at`: the plain rate is `rate / read_weight`.
+    pub(crate) fn read_at(rate: f64, read_weight: f64, segments: &[BandSegment]) -> Banded {
+        let plain = rate / read_weight;
+        Banded {
+            pieces: segments
+                .iter()
+                .map(|segment| (segment.from, segment.to, plain * segment.weight))
+                .collect(),
+        }
+    }
+
+    /// The union of both pieces' edges, the rates added where both cover a piece. Two empty spans at one instant add
+    /// into one, so the rate survives for `time_to`'s continuation past an ended horizon.
+    pub(crate) fn plus(&self, other: &Banded) -> Banded {
+        if self.pieces.is_empty() {
+            return other.clone();
+        }
+        if other.pieces.is_empty() {
+            return self.clone();
+        }
+        let mut edges: Vec<i64> = self
+            .pieces
+            .iter()
+            .chain(&other.pieces)
+            .flat_map(|&(from, to, _)| [from, to])
+            .collect();
+        edges.sort_unstable();
+        edges.dedup();
+        if let [at] = edges[..] {
+            let rate = |pieces: &[(i64, i64, f64)]| pieces.last().map_or(0.0, |piece| piece.2);
+            return Banded {
+                pieces: vec![(at, at, rate(&self.pieces) + rate(&other.pieces))],
+            };
+        }
+        let rate_at = |pieces: &[(i64, i64, f64)], at: i64| {
+            pieces
+                .iter()
+                .find(|&&(from, to, _)| from <= at && at < to)
+                .map(|piece| piece.2)
+        };
+        Banded {
+            pieces: edges
+                .windows(2)
+                .filter_map(|pair| {
+                    let (from, to) = (pair[0], pair[1]);
+                    match (rate_at(&self.pieces, from), rate_at(&other.pieces, from)) {
+                        (None, None) => None,
+                        (a, b) => Some((from, to, a.unwrap_or(0.0) + b.unwrap_or(0.0))),
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    /// Every rate times `by`, the speed's division.
+    pub(crate) fn scaled(&self, by: f64) -> Banded {
+        Banded {
+            pieces: self
+                .pieces
+                .iter()
+                .map(|&(from, to, rate)| (from, to, rate * by))
+                .collect(),
+        }
+    }
+
+    /// The share the rate adds over the span.
+    pub(crate) fn increase(&self) -> f64 {
+        self.pieces
+            .iter()
+            .map(|&(from, to, rate)| rate * seconds(to - from))
+            .sum()
+    }
+
+    /// The share the rate adds from the span's start to `at`, nothing past the span's end.
+    pub(crate) fn increase_until(&self, at: i64) -> f64 {
+        self.pieces
+            .iter()
+            .filter(|&&(from, _, _)| from < at)
+            .map(|&(from, to, rate)| rate * seconds(to.min(at) - from))
+            .sum()
+    }
+
+    /// Milliseconds from the span's start until the accumulated increase reaches `room`, the last piece's rate
+    /// continued past the span: `Some(0)` for a room at or under zero, `None` where no piece carries a rate.
+    pub(crate) fn time_to(&self, room: f64) -> Option<i64> {
+        if room <= 0.0 {
+            return Some(0);
+        }
+        let start = self.pieces.first()?.0;
+        let (last, walked) = self.pieces.split_last()?;
+        let mut left = room;
+        for &(from, to, rate) in walked {
+            let adds = rate * seconds(to - from);
+            if rate > 0.0 && adds >= left {
+                return Some(((seconds(from - start) + left / rate) * 1_000.0).round() as i64);
+            }
+            left -= adds;
+        }
+        // The last piece is solved linearly, inside the span or past it.
+        let &(from, _, rate) = last;
+        (rate > 0.0).then(|| ((seconds(from - start) + left / rate) * 1_000.0).round() as i64)
+    }
 }
 
 /// The projection of `account_id` on `window` at its horizon on the burn `read` names: `None` for an account with no
@@ -2348,6 +2490,8 @@ pub struct SlowDownRead {
     pub reset: Option<i64>,
     /// Share of the window per second.
     pub demand: f64,
+    /// The demand over `[now, horizon)` as the band weighs it, which the stretch and the factor read.
+    pub banded: Banded,
     /// The time between the instant the unslowed demand passes the ceiling and the horizon, 0 when it never does.
     pub stretch_ms: i64,
     /// The pool's `slow_down_stretch_seconds`.
@@ -2376,11 +2520,12 @@ pub struct PinHold {
 
 /// The account's slow-down read at `now` on `pool`: `U` the 5-hour prediction, `R` the time to the 5-hour horizon, `B`
 /// the 5-hour demand, the stretch `S = R - (ceiling - U) / B` and the factor `(ceiling - U) / (R x B)` clamped to
-/// [0, 1], which is `1 - S / R`. A demand of nothing below the ceiling reads no stretch and a factor of 1, and a
-/// window at or past the ceiling a stretch of at least `R` and a factor of 0, whatever the demand. A horizon already
-/// reached reads a factor of 0 at or past the ceiling and 1 under it, so no `0 / 0` reaches the entry. `None` for a
-/// pool whose slow-down is off, an api_key account (no 5-hour window), an account with no 5-hour reading, and one
-/// whose tier the profile has not named, which prices no demand.
+/// [0, 1], which is `1 - S / R`, with `(ceiling - U) / B` the time the demand takes to fill the room and `R x B` what
+/// it adds by the horizon, both read over the band's segments. A demand of nothing below the ceiling reads no stretch
+/// and a factor of 1, and a window at or past the ceiling a stretch of at least `R` and a factor of 0, whatever the
+/// demand. A horizon already reached reads a factor of 0 at or past the ceiling and 1 under it, so no `0 / 0` reaches
+/// the entry. `None` for a pool whose slow-down is off, an api_key account (no 5-hour window), an account with no
+/// 5-hour reading, and one whose tier the profile has not named, which prices no demand.
 pub(crate) fn slow_down_of(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2411,6 +2556,18 @@ pub(crate) fn slow_down_of(
         .get(FIVE_HOUR)
         .copied()
         .unwrap_or(0.0);
+    let banded = state
+        .banded_shares(
+            account_id,
+            &in_pool(snapshot, pool),
+            tier,
+            now,
+            burn_average_ms(pool),
+            speed,
+            &|window| (window == FIVE_HOUR).then_some(horizon),
+        )
+        .remove(FIVE_HOUR)
+        .unwrap_or_default();
     let limit = ceiling(pool, FIVE_HOUR);
     let to_horizon = seconds(horizon - now);
     let (stretch, factor) = if utilization >= limit {
@@ -2423,9 +2580,12 @@ pub(crate) fn slow_down_of(
     } else if demand <= 0.0 || to_horizon <= 0.0 {
         (0.0, 1.0)
     } else {
+        let room = limit - utilization;
         (
-            (to_horizon - (limit - utilization) / demand).max(0.0),
-            ((limit - utilization) / (to_horizon * demand)).clamp(0.0, 1.0),
+            banded
+                .time_to(room)
+                .map_or(0.0, |reached| (to_horizon - seconds(reached)).max(0.0)),
+            (room / banded.increase()).clamp(0.0, 1.0),
         )
     };
     // Every kept pin, each weighted by its own priced burn on the window: a pin without a cycle is never held, but its
@@ -2452,6 +2612,7 @@ pub(crate) fn slow_down_of(
         horizon,
         reset: reading.reset,
         demand,
+        banded,
         stretch_ms: (stretch * 1_000.0).round() as i64,
         threshold_ms: slow_down_stretch_ms(pool),
         factor,
@@ -2557,6 +2718,7 @@ pub(crate) fn fit_of(
     let (rewrite, pin_burn) = tier
         .map(|tier| pin_figures(state, pool, request, figures, tier, now))
         .unwrap_or_default();
+    let share = state.share();
     let projections = projections_of(
         state,
         snapshot,
@@ -2584,15 +2746,34 @@ pub(crate) fn fit_of(
             continue;
         };
         let planned_rewrite: f64 = planned.iter().filter_map(|r| r.rewrite.get(window)).sum();
-        let planned_burn: f64 = planned.iter().filter_map(|r| r.burn.get(window)).sum();
+        let segments = |entrypoint: Option<&str>| {
+            share.band_segments(window, entrypoint, now, projection.horizon)
+        };
+        // Each planned booking weighs its own regime's band from the plain rate it was priced at on `booked_at`, so a
+        // round that plans bookings of two regimes reads each as the meter will charge it.
+        let planned_burn = planned
+            .iter()
+            .filter_map(|r| {
+                let burn = *r.burn.get(window)?;
+                let entrypoint = r.entrypoint.as_deref();
+                let read_weight = share.band_weight_at(window, entrypoint, r.booked_at);
+                Some(Banded::read_at(burn, read_weight, &segments(entrypoint)))
+            })
+            .fold(Banded::default(), |sum, booking| sum.plus(&booking));
         let predicted = projection.predicted + planned_rewrite;
-        let account_burn = projection.burn + planned_burn;
+        // The projection is the account's alone, and the runway adds the pin's own burn to it.
+        let account_burn = projection.banded.plus(&planned_burn);
         let rewrite = rewrite.get(window).copied().unwrap_or(0.0);
-        let burn = account_burn + pin_burn.get(window).copied().unwrap_or(0.0);
+        let burn = match pin_burn.get(window) {
+            Some(rate) => {
+                account_burn.plus(&Banded::of(*rate, &segments(request.entrypoint.as_deref())))
+            }
+            None => account_burn.clone(),
+        };
         let limit = ceiling(pool, window);
         let span = projection.horizon - now;
         read.projection
-            .insert(window.to_string(), predicted + account_burn * seconds(span));
+            .insert(window.to_string(), predicted + account_burn.increase());
         read.horizon.insert(window.to_string(), projection.horizon);
         read.rewrite.insert(window.to_string(), rewrite);
         read.reserved.insert(
@@ -2606,10 +2787,8 @@ pub(crate) fn fit_of(
         }
         let runway_ms = if !lands {
             Some(0)
-        } else if burn <= 0.0 {
-            None
         } else {
-            Some(((limit - predicted - rewrite) / burn * 1_000.0).round() as i64)
+            burn.time_to(limit - predicted - rewrite)
         };
         let Some(runway_ms) = runway_ms else {
             continue;
@@ -3886,7 +4065,7 @@ fn trigger_of(
                 return None;
             }
             let to_horizon = seconds(horizon - now);
-            let projection = read.utilization + read.demand * to_horizon;
+            let projection = read.utilization + read.banded.increase_until(horizon);
             // A burn of nothing at the ceiling reads a stretch of the whole time to the reset with nothing to remove.
             return (projection > limit).then_some(Trigger {
                 window,
@@ -3969,9 +4148,9 @@ fn healed(
         if read.stretch_ms > read.threshold_ms {
             return None;
         }
-        let ahead = (read.horizon - read.threshold_ms - now).max(0);
         return Some(Healed {
-            projection: read.utilization + read.demand * seconds(ahead),
+            projection: read.utilization
+                + read.banded.increase_until(read.horizon - read.threshold_ms),
             stretch_ms: Some(read.stretch_ms),
             threshold_ms: Some(read.threshold_ms),
         });
@@ -6651,7 +6830,20 @@ mod elapsed_share_tests {
 
 #[cfg(all(test, debug_assertions))]
 mod tests {
-    use super::Recorder;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use phoebis_store::{
+        AccountKind, AccountRow, AccountState, PoolMember, PoolRow, RegistryLoad, RoutingLoad,
+        StateCause, SubscriptionTerm,
+    };
+
+    use super::{fit_of, lane_key, Banded, Figures, Judge, Recorder, SelectRequest};
+    use crate::state::{
+        BandSegment, Reservation, RoutingState, SharePricer, UtilizationSample, WindowReading,
+        WindowSource, FIVE_HOUR,
+    };
+    use crate::RegistrySnapshot;
 
     #[test]
     #[should_panic(expected = "the walk step x/match is not in WALK_STEPS")]
@@ -6663,6 +6855,238 @@ mod tests {
     #[should_panic(expected = "the walk step pin/fired is not in WALK_STEPS")]
     fn the_recorder_refuses_a_verdict_the_table_does_not_list_for_its_step() {
         Recorder::default().step("pin", "fired", Vec::new());
+    }
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-12
+    }
+
+    /// Two hours cut at the first, the first at `weights[0]` and the second at `weights[1]`.
+    fn two_hours(weights: [f64; 2]) -> [BandSegment; 2] {
+        [
+            BandSegment {
+                from: 0,
+                to: 3_600_000,
+                weight: weights[0],
+            },
+            BandSegment {
+                from: 3_600_000,
+                to: 7_200_000,
+                weight: weights[1],
+            },
+        ]
+    }
+
+    #[test]
+    fn banded_rates_weigh_each_piece_and_add_across_pins() {
+        let rate = 1e-6;
+        let entering = Banded::of(rate, &two_hours([1.0, 2.0]));
+        assert!(
+            close(entering.increase(), 3_600.0 * rate * 3.0),
+            "a rate read outside the band is the plain one, which the band's hour doubles"
+        );
+        let leaving = Banded::of(rate, &two_hours([2.0, 1.0]));
+        assert!(
+            close(leaving.increase(), 3_600.0 * rate * 1.5),
+            "a rate read inside the band carries its weight, so the plain rate after it is half"
+        );
+        let whole = [BandSegment {
+            from: 0,
+            to: 7_200_000,
+            weight: 1.0,
+        }];
+        let sum = entering.plus(&Banded::of(rate, &whole));
+        assert!(
+            close(sum.increase_until(3_600_000), 3_600.0 * 2.0 * rate)
+                && close(sum.increase(), 3_600.0 * 5.0 * rate),
+            "a pin at one rate adds its rate on both pieces"
+        );
+        assert_eq!(
+            entering.time_to(3_600.0 * rate),
+            Some(3_600_000),
+            "the room the first hour fills is reached at its edge"
+        );
+        assert_eq!(
+            entering.time_to(3_600.0 * rate * 5.0),
+            Some(10_800_000),
+            "a room past the span is reached at the last piece's rate"
+        );
+        assert_eq!(entering.time_to(0.0), Some(0));
+        assert_eq!(Banded::of(0.0, &two_hours([1.0, 2.0])).time_to(rate), None);
+        assert!(
+            close(
+                Banded::read_at(rate, 2.0, &two_hours([1.0, 2.0])).increase(),
+                entering.increase() / 2.0
+            ),
+            "a rate read inside the band and weighed from outside it reads half the plain rate"
+        );
+        assert!(close(
+            entering.scaled(0.5).increase(),
+            entering.increase() / 2.0
+        ));
+        assert_eq!(Banded::flat(rate, 0, 7_200_000), Banded::of(rate, &whole));
+    }
+
+    #[test]
+    fn two_planned_reservations_of_two_regimes_weigh_the_band_each_under_its_own() {
+        const HOUR: i64 = 3_600_000;
+        const T: i64 = 10 * HOUR;
+        let (band_from, band_to) = (T + HOUR / 2, T + 10 * HOUR);
+        let snapshot = RegistrySnapshot::from_load(
+            RegistryLoad {
+                accounts: vec![AccountRow {
+                    id: "b".into(),
+                    kind: AccountKind::Oauth,
+                    label: "b".into(),
+                    enabled: true,
+                    identity: None,
+                    lifecycle_generation: 1,
+                    incarnation: 1,
+                    revision: 1,
+                    state: AccountState::Ready,
+                    state_cause: StateCause::Operator,
+                }],
+                members: vec![PoolMember {
+                    pool_id: "p".into(),
+                    account_id: "b".into(),
+                    priority: 0,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
+                }],
+                pools: vec![PoolRow::for_tests("p")],
+                terms: vec![SubscriptionTerm {
+                    account_id: "b".into(),
+                    since: None,
+                    trial_ends_at: None,
+                    cancelled: false,
+                    ends_at: None,
+                    tier: Some("default_claude_max_20x".into()),
+                }],
+                ..RegistryLoad::default()
+            },
+            [0; 32],
+            0,
+            1,
+        );
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        // The case's own band: twice the weight inside it on the 5-hour window under the base regime, one segment at
+        // weight 1 under `desk`.
+        state.set_share(SharePricer::default().with_band_segments(
+            move |window, entrypoint, from, to| {
+                let weight = |at: i64| {
+                    if band_from <= at && at < band_to {
+                        2.0
+                    } else {
+                        1.0
+                    }
+                };
+                if window != FIVE_HOUR || entrypoint == Some("desk") {
+                    return vec![BandSegment {
+                        from,
+                        to,
+                        weight: 1.0,
+                    }];
+                }
+                let mut edges = vec![from];
+                edges.extend(
+                    [band_from, band_to]
+                        .into_iter()
+                        .filter(|e| from < *e && *e < to),
+                );
+                edges.push(to);
+                edges
+                    .windows(2)
+                    .map(|pair| BandSegment {
+                        from: pair[0],
+                        to: pair[1],
+                        weight: weight(pair[0]),
+                    })
+                    .collect()
+            },
+        ));
+        state.record_sample(
+            "b",
+            UtilizationSample {
+                observed_at: T,
+                ..Default::default()
+            }
+            .with(
+                FIVE_HOUR,
+                WindowReading {
+                    utilization: 0.3,
+                    reset: Some(T + HOUR),
+                    observed_at: T,
+                    source: WindowSource::Poll,
+                },
+            ),
+        );
+        // A tenth of the window an hour each, booked at T, out of the band.
+        let y = 0.1 / 3_600.0;
+        let booking = |entrypoint: Option<&str>| Reservation {
+            account_id: "b".into(),
+            attempt: 1,
+            pin: None,
+            entrypoint: entrypoint.map(String::from),
+            booked_at: T,
+            rewrite: BTreeMap::new(),
+            burn: BTreeMap::from([(FIVE_HOUR.to_string(), y)]),
+            expires_at: T + HOUR,
+        };
+        let model = "claude-sonnet-5";
+        let request = SelectRequest {
+            request_id: "r-1".into(),
+            attempt: 1,
+            seq: 1,
+            key_id: "k".into(),
+            key_generation: 0,
+            agent_id: "main".into(),
+            session_id: Some("s1".into()),
+            canonical_model: model.into(),
+            folded_model: model.into(),
+            candidates: Vec::new(),
+            portable: true,
+            attempted: Vec::new(),
+            now: T,
+            received_at: T,
+            fallback_ms: 60_000,
+            revision: snapshot.revision,
+            probe: false,
+            count: false,
+            request_class: None,
+            context_compacted: false,
+            static_hash: None,
+            boundaries: Arc::from([]),
+            client: Default::default(),
+            entrypoint: None,
+            static_boundaries: Arc::from([]),
+            marker: false,
+            parent_agent_id: None,
+            holds: Vec::new(),
+            failed_over: None,
+            dialed: false,
+            held_out: false,
+            lane: lane_key(model, "standard", "none", "-"),
+            fast: false,
+            body_tokens: 0,
+        };
+        let read = fit_of(
+            &state,
+            &snapshot,
+            snapshot.pool("p").expect("the case's pool"),
+            &request,
+            Figures::Fresh(&[]),
+            "b",
+            &[booking(Some("desk")), booking(None)],
+            T,
+            Judge::Placement,
+        );
+        let projection = read.projection[FIVE_HOUR];
+        let expected = 0.3 + y * 1_800.0 + 2.0 * y * 1_800.0 + y * 3_600.0;
+        assert!(
+            (projection - expected).abs() < 1e-9,
+            "the base booking weighs the band's half hour and the desk booking reads one rate: {projection} against \
+             {expected}"
+        );
     }
 }
 

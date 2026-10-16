@@ -28,6 +28,8 @@ const NOVEMBER_HALF_PAST_TWELVE: i64 = 1_793_622_600_000;
 const NOVEMBER_HALF_PAST_ONE: i64 = 1_793_626_200_000;
 /// Monday 2026-11-02 at 18:30 UTC: past the band's September hours, still inside it in November.
 const NOVEMBER_HALF_PAST_SIX: i64 = 1_793_644_200_000;
+/// Friday 2026-09-25 at 23:00 UTC, 16:00 in the band's zone: past the band on the last weekday before a weekend.
+const FRIDAY_NIGHT: i64 = 1_790_377_200_000;
 
 /// Inside the band and outside it, on the same weekday.
 const IN_BAND: i64 = SEPTEMBER_AFTERNOON;
@@ -964,6 +966,105 @@ fn the_band_covers_weekday_hours_in_its_zone_and_follows_the_zones_daylight_rule
         tables.share_at(FIVE_HOUR, None, MAX_20X, OPUS, input(1), SATURDAY_AFTERNOON),
         0.02,
         "a weekend charge is the plain share",
+    );
+}
+
+#[test]
+fn the_band_segments_cut_a_span_at_the_bands_edges_in_its_zone() {
+    const HOUR: i64 = 3_600_000;
+    const MINUTE: i64 = 60_000;
+    let tables = first();
+    let segments = |window: &str, entrypoint: Option<&str>, from: i64, to: i64| {
+        let segments = tables.band_segments(window, entrypoint, from, to);
+        let covered = segments.first().map(|s| s.from) == Some(from)
+            && segments.last().map(|s| s.to) == Some(to)
+            && segments.windows(2).all(|pair| pair[0].to == pair[1].from);
+        assert!(covered, "{segments:?} covers [{from}, {to}) end to end");
+        segments
+            .iter()
+            .map(|s| (s.from, s.to, s.weight))
+            .collect::<Vec<_>>()
+    };
+    let five_hour = |from: i64, to: i64| segments(FIVE_HOUR, None, from, to);
+    assert_eq!(
+        five_hour(SEPTEMBER_NOON, SEPTEMBER_NOON + 2 * HOUR),
+        [(SEPTEMBER_NOON, SEPTEMBER_NOON + 2 * HOUR, 2.0)],
+        "inside the band, at one over its factor of 0.5"
+    );
+    assert_eq!(
+        five_hour(OUT_OF_BAND - HOUR, OUT_OF_BAND),
+        [(OUT_OF_BAND - HOUR, OUT_OF_BAND, 1.0)],
+        "outside it"
+    );
+    assert_eq!(
+        five_hour(SEPTEMBER_NOON - HOUR, SEPTEMBER_NOON + HOUR),
+        [
+            (SEPTEMBER_NOON - HOUR, SEPTEMBER_NOON, 1.0),
+            (SEPTEMBER_NOON, SEPTEMBER_NOON + HOUR, 2.0),
+        ],
+        "across its start"
+    );
+    assert_eq!(
+        five_hour(SEPTEMBER_EVENING - HOUR, SEPTEMBER_EVENING + HOUR),
+        [
+            (SEPTEMBER_EVENING - HOUR, SEPTEMBER_EVENING, 2.0),
+            (SEPTEMBER_EVENING, SEPTEMBER_EVENING + HOUR, 1.0),
+        ],
+        "across its end"
+    );
+    // The span reaches 08:00 on Saturday in the zone, inside the band's hours of a weekday.
+    assert_eq!(
+        five_hour(FRIDAY_NIGHT, SATURDAY_AFTERNOON + HOUR),
+        [(FRIDAY_NIGHT, SATURDAY_AFTERNOON + HOUR, 1.0)],
+        "across midnight into a weekend"
+    );
+    // Pacific daylight time ends on 2026-11-01, so the band opens at 13:00 UTC, an hour after September's 12:00.
+    assert_eq!(
+        five_hour(NOVEMBER_HALF_PAST_TWELVE, NOVEMBER_HALF_PAST_SIX),
+        [
+            (
+                NOVEMBER_HALF_PAST_TWELVE,
+                NOVEMBER_HALF_PAST_TWELVE + 30 * MINUTE,
+                1.0
+            ),
+            (
+                NOVEMBER_HALF_PAST_TWELVE + 30 * MINUTE,
+                NOVEMBER_HALF_PAST_SIX,
+                2.0
+            ),
+        ],
+        "on the daylight-rule day"
+    );
+    assert_eq!(
+        segments(
+            SEVEN_DAY,
+            None,
+            SEPTEMBER_NOON - HOUR,
+            SEPTEMBER_NOON + HOUR
+        ),
+        [(SEPTEMBER_NOON - HOUR, SEPTEMBER_NOON + HOUR, 1.0)],
+        "the 7-day window's factor is 1"
+    );
+    assert_eq!(
+        segments(
+            FIVE_HOUR,
+            Some("desk"),
+            SEPTEMBER_NOON - HOUR,
+            SEPTEMBER_NOON + HOUR
+        ),
+        [(SEPTEMBER_NOON - HOUR, SEPTEMBER_NOON + HOUR, 1.0)],
+        "the regime's factor is 1"
+    );
+    // A horizon clamped at its instant asks for an empty span, which reads the band's weight there.
+    assert_eq!(
+        five_hour(IN_BAND, IN_BAND),
+        [(IN_BAND, IN_BAND, 2.0)],
+        "an empty span in the band"
+    );
+    assert_eq!(
+        five_hour(OUT_OF_BAND, OUT_OF_BAND),
+        [(OUT_OF_BAND, OUT_OF_BAND, 1.0)],
+        "an empty span outside it"
     );
 }
 
