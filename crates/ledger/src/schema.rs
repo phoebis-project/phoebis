@@ -308,7 +308,7 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// one count becomes the five-minute count in place and the hour count joins at zero. A row from before keeps its
 /// whole count under five minutes, since its split was never recorded. The table is not rebuilt.
 ///
-/// Version 39: one row per completed 5-hour, 7-day and Fable window of an account, the rise its readings showed against
+/// Version 38: one row per completed 5-hour, 7-day and Fable window of an account, the rise its readings showed against
 /// the share the router priced for its own plan-funded attempts between those readings, each attempt under its own
 /// regime, and how many of them priced at a model tier's estimate. The hourly fold writes the rows and reads the
 /// newest of each window for the meter's drift, so a cost model whose figures stray from the upstream's readings is
@@ -969,7 +969,7 @@ CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, acc
 ALTER TABLE rollups_hourly ADD COLUMN kept_warm_1h_tokens INTEGER NOT NULL DEFAULT 0;",
     ),
     (
-        39,
+        38,
         "CREATE TABLE window_reconciliations (
   account_id TEXT NOT NULL, window TEXT NOT NULL, window_end INTEGER NOT NULL,
   first_reading_at INTEGER NOT NULL, last_reading_at INTEGER NOT NULL,

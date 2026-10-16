@@ -14399,7 +14399,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "ready": true,
       "dead": [],
       "ledger": {
-        "schema_version": 39,
+        "schema_version": 38,
         "written": 19,
         "dropped": 0,
         "write_failures": 0,
