@@ -94,7 +94,10 @@ pool's stretch threshold within the day reads, under the label "Slowed past twic
 `studio: slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12`, the
 bar after `over`, the lowest factor of its spans and the pool's threshold. Each opens the [routing log](#routing-log) on
 the pool's shedding rounds, the account's moves and spent windows, its spent windows, or its slow-down starts and ends,
-from the moment the condition began. A parked ledger record adds "Replay parked records", which answers
+from the moment the condition began. An account whose meter drifted reads
+`acct-a: 5h charged 2.0x the table, 7d 1.3x, since 14:20`, each off window with the ratio the meter charged against the
+cost model, under the label "Meter drift against the table", and opens the [Analytics](#analytics) view on the account
+with the Burn section in view. A parked ledger record adds "Replay parked records", which answers
 `Landed {n}, {n} still parked`.
 
 Four tiles follow, each with a sparkline over the last 24 hours: "Requests, 24h" with `{n} per hour`, "Tokens, 24h"
@@ -284,6 +287,8 @@ and its detail, the age on hover. The pool's own exhausted row and its Rounds wi
 [routing log](#routing-log) on its exhausted decisions or its shedding rounds since the condition began, and an
 account's Destination spent within the hour row opens it on the account's moves and spent windows, its Wall reached
 under the ceiling row on its spent windows, and its Slowed past twice the stretch row on its slow-down starts and ends.
+An account's Meter drift against the table row opens [Analytics](#analytics) on the account with the Burn section in
+view.
 
 The serving table lists who serves next: Tier (`P{n}`, or `plan P{n}`, `overage P{n}` and `API keys P{n}` where the pool
 prefers subscription accounts), Account, Standing and Pins. Standing reads `next` for the member a fresh session lands
@@ -327,11 +332,11 @@ session's burn is averaged over." and holds `Window ceiling (%)`, from 50 to 100
 lands on a member only where its windows stay under this share until they reset, or for the next five hours on a weekly
 window. A round runs on a member whose window would pass it.", and in the expert view `Burn average (s)`, from 600 to
 7200, with the hint "The time constant of each session's burn average. The projection, the slow-down and the round read
-it." It closes on the "Member utilization" bar, whose hint reads "Each tick is a member's latest 5-hour or 7-day
-reading, as on the Quota page. Drag the ceiling's handle, or focus it and use the arrow keys." The bar is one track of
-used shares holding both windows' readings, a tick per member window with the hover `{account}: {window} {used}` and the
-legend "5-hour reading" and "7-day reading", and the ceiling stands on it in every view as the "Window ceiling" handle,
-dragged or moved with the arrow keys, with the field following it.
+it. A 5-hour window younger than twice it fires no round." It closes on the "Member utilization" bar, whose hint reads
+"Each tick is a member's latest 5-hour or 7-day reading, as on the Quota page. Drag the ceiling's handle, or focus it
+and use the arrow keys." The bar is one track of used shares holding both windows' readings, a tick per member window
+with the hover `{account}: {window} {used}` and the legend "5-hour reading" and "7-day reading", and the ceiling stands
+on it in every view as the "Window ceiling" handle, dragged or moved with the arrow keys, with the field following it.
 
 Load shedding opens on "A member whose window would pass the ceiling before its reset, or within five hours on a weekly
 window, runs a round that marks the sessions that cover the excess, and each moves to a sibling with runway at its next
@@ -358,10 +363,14 @@ projection passes the ceiling, and otherwise `1 member projects over the ceiling
 runway for the sessions a round would mark, or by `A round there would mark no session:` with the reason it marks none,
 `none is priced.` where the members over the ceiling hold no priced session, `each is its member's last.` where every
 priced session is the last on its member, which a round never marks, `each is warm.` where Warm sessions is never and
-every priced session is warm, or `none burns.` where the round's target is zero. `{p}` is a whole percent with a space
-before the sign (`99 %`), `{horizon}` `at` a clock time on the 5-hour window and `in` a span on a weekly one
-(`in 5h 0m`), `{window}` the window's label (`5h`, `7d` or `Fable week`), `{excess}` a percent an hour with one decimal
-(`9.5 %/h`), and `{list}` the members in the Members group's order.
+every priced session is warm, or `none burns.` where the round's target is zero. A member whose 5-hour window is under
+the hold is read on its next window in the order, and where its 5-hour projection reads over the ceiling, the line names
+the round the hold took away:
+`{label}'s 5-hour window is {age} old, under the hold of {hold}, so its round reads the next window.` `{p}` is a whole
+percent with a space before the sign (`99 %`), `{horizon}` `at` a clock time on the 5-hour window and `in` a span on a
+weekly one (`in 5h 0m`), `{window}` the window's label (`5h`, `7d` or `Fable week`), `{excess}` a percent an hour with
+one decimal (`9.5 %/h`), `{list}` the members in the Members group's order, and `{age}` and `{hold}` spans to the minute
+(`45 min`, `1 h`).
 
 Slow-down, in the expert view, opens on "The slow-down holds each request of a session before it is forwarded, so an
 account whose sessions would pass the ceiling before the reset reaches it under the ceiling instead. A session waits its
@@ -638,8 +647,13 @@ marks a bucket whose model has no measured weight and reads the latest weighed m
 model of no known tier, or on a tier the cost model has no capacity for on that window, prices no share there and draws
 no point, under a "model unlisted" entry, and under Window shares an account whose tier the cost model does not size
 reads "tier unknown". Spend per minute charts the dollars alone, a subscription account's among them for its fast-mode
-and overage answers. The section closes on Member budgets, Pool, Account, Spent, Budget and Period ends, one row per
-budget a member carries, a member at its budget marked and one the ledger has not reported on reading "not reported".
+and overage answers. The Meter reconciliation card stands between the charts and Member budgets, one row per completed
+5-hour, 7-day or Fable window of an account, newest first: Upstream, Window, Ended, Rise (the rise the upstream's
+readings showed), Predicted (the share the router priced for its own requests in it), Ratio, with a warning badge on a
+ratio under 0.8 or over 1.25 after a rise of at least 5%, and Requests. It reads the trailing 30 days under the Accounts
+filter whatever the range. The section closes on Member budgets, Pool, Account, Spent, Budget and Period ends, one row
+per budget a member carries, a member at its budget marked and one the ledger has not reported on reading "not
+reported".
 
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-light.png#only-light)
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-dark.png#only-dark)
@@ -780,19 +794,24 @@ them in, whether the band runs now and until when, the next change of the local 
 factor. Plan rates draws the share of a tier's 5-hour and 7-day window that a token count of each type spends, per
 model, for a request completing outside or inside the band, with a tier chooser (the anchor tier Max 20x first), the
 band control and a token field in millions with quick picks for 100k, 1M and 10M, a weight column per model, a Fable
-week row under a Fable model's 7-day group, and a warning tint on a cell past a full window. A model the cost model does
-not weigh, on a model tier with a weighed model, reads that tier's latest weighed model, each of its cells marked with a
-`~` and its weight cell reading `estimated, as {model}`, and the caption adds "A ~ marks an estimate: the model reads
-the latest weighed model of its model tier." A model of no model tier, or of one with no weighed model, keeps its dashes
-and reads "not weighed". API prices draws the dollar list prices per million tokens, input, cache read, cache write 5m,
-cache write 1h and output, with a fast-mode row under each model that serves fast mode and a row under each model priced
-by prompt length, under the caption "USD per million tokens at list price" and its note "An API-key account pays these.
-A subscription account pays them in overage and for fast-mode answers." Both tables show one row per model tier, its
-newest model, in the cost model's `tier_order` with `model_tier` naming each model's tier and a model of no tier last,
-and fold the older models under one row at the table's foot that names their count, "1 older model" or `{n} older
-models`, and expands to them in the same order. The fold is shared by both tables and starts closed at each opening. The
-price rows, the weights and how a probe is priced are on [Pricing](statistics.md#pricing), which lists the shipped
-revision in force, and the dialog shows an earlier entry under the Revision select.
+week row under a Fable model's 7-day group, and a warning tint on a cell past a full window. Under a regime of the cost
+model ([Plan meter](statistics.md#plan-meter)), Windows by tier adds a group row naming the regime and its entrypoints
+and a row per tier the regime names, the multiples against the base regime's smallest tier, the Peak band card a factor
+row per regime that holds a window differently inside the band, and Plan rates a Regime control beside Tier offering
+each regime and `Other` for the base rows, opening on `interactive` where the model names it, with the regime's
+entrypoints in the caption. A model the cost model does not weigh, on a model tier with a weighed model, reads that
+tier's latest weighed model, each of its cells marked with a `~` and its weight cell reading `estimated, as {model}`,
+and the caption adds "A ~ marks an estimate: the model reads the latest weighed model of its model tier." A model of no
+model tier, or of one with no weighed model, keeps its dashes and reads "not weighed". API prices draws the dollar list
+prices per million tokens, input, cache read, cache write 5m, cache write 1h and output, with a fast-mode row under each
+model that serves fast mode and a row under each model priced by prompt length, under the caption "USD per million
+tokens at list price" and its note "An API-key account pays these. A subscription account pays them in overage and for
+fast-mode answers." Both tables show one row per model tier, its newest model, in the cost model's `tier_order` with
+`model_tier` naming each model's tier and a model of no tier last, and fold the older models under one row at the
+table's foot that names their count, "1 older model" or `{n} older models`, and expands to them in the same order. The
+fold is shared by both tables and starts closed at each opening. The price rows, the weights and how a probe is priced
+are on [Pricing](statistics.md#pricing), which lists the shipped revision in force, and the dialog shows an earlier
+entry under the Revision select.
 
 ## Settings
 
@@ -905,7 +924,7 @@ candidate's slow-down factor. The Pace score stands under a header naming the wi
 `Pace, 7-day left per hour` on a version 1 record), each cell's hover reading
 `{pct} of the 7-day window left over {n} h to its reset at {time}, less {burn} of burn: {rate}.` (or
 `to its subscription's end at {time}`) followed by `Inside its tier, the highest spare rate wins.` Verdict carries the
-one chip that decided it (`429 on 5h until 15:42`, `budget $1.10 of $5.00`), whose hover says why the member was passed
+one chip that decided it (`429 on 5h until 14:55`, `budget $1.10 of $5.00`), whose hover says why the member was passed
 over, and beside it a badge for a destination the gate read that did not fit, `rewrite only` or `least bad` in the
 warning tone and `ending` neutral. Three folds, "Request facts", "Pin and warmth" (a record that pins nothing reads why:
 not looked up or pinning off, and a pin that carries them reads Cycle and Slowed until) and
@@ -937,15 +956,17 @@ round's panel reads Started by, Trigger (`5h projection 99% at 18:20 over the ce
 `7d projection 96% in 5 h over the ceiling 95%`, or `5h stretch 42 min over the threshold 30 min` for a round the
 stretch fired, followed by Demand, `12.0 %/h to the reset at 18:20`), Fired by (`the projection` or `the slow-down`),
 Excess (`9.5 %/h`), Cap with the target and the burn removed, Unit, Burn average, Warm sessions, the Pins table
-(Session, Agent, Warmth, Burn, Last prompt, Rewrite, Destination, Mark), Skipped (one chip per pin, its session and its
-reason), Planned destinations, Outcome (`marked 2`, or `nothing to mark: no runway`), Next round after, Dwell and
-Survive a restart. A mark cleared panel reads the pin, Reason (`healed: the 5h projection read 91% under the ceiling`,
-`healed: the stretch read 24 min under the threshold 30 min` for a mark the stretch made, `moved` or `released`), Marked
-(when, on which account) and Standing for, and a reservation expired panel reads Request, Attempt, Cause, Reserved
-(`5h 10.4%`, `7d 1.2%`), Held for and the Effect `the booked share left the account's prediction`. A slow-down started
-panel reads Speed (`0.5x`), Stretch (`42 min of 30 min`, the threshold after `of`), Demand (`12.0 %/h`), Reset and the
-Effect `requests of the account's sessions wait their cycle times the slow-down up to the hold`, and a slow-down ended
-panel Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
+(Session, Agent, Warmth, Burn, Last prompt, Rewrite as the Max 20x equivalent of the pin's weekly window, labeled
+`of 20x 7d` or `of 20x Fable`, Destination, Mark), Skipped (one chip per pin, its session and its reason, `off window`
+for a pin whose model does not draw the window that fired), Planned destinations, Outcome (`marked 2`, or
+`nothing to mark: no runway`), Next round after, Dwell and Survive a restart. A mark cleared panel reads the pin, Reason
+(`healed: the 5h projection read 91% under the ceiling`, `healed: the stretch read 24 min under the threshold 30 min`
+for a mark the stretch made, `moved` or `released`), Marked (when, on which account) and Standing for, and a reservation
+expired panel reads Request, Attempt, Cause, Reserved (`5h 10.4%`, `7d 1.2%`), Held for and the Effect
+`the booked share left the account's prediction`. A slow-down started panel reads Speed (`0.5x`), Stretch
+(`42 min of 30 min`, the threshold after `of`), Demand (`12.0 %/h`), Reset and the Effect
+`requests of the account's sessions wait their cycle times the slow-down up to the hold`, and a slow-down ended panel
+Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
 `requests of the account's sessions pass unheld again`. The kinds and what each row records:
 
 | Event | What it records |

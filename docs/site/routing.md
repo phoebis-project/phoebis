@@ -384,14 +384,15 @@ and while an account backs off, since when and when its next attempt comes. The 
 minutes.
 
 **The projection** Every move and placement reads where each plan window of a subscription account is headed: its
-prediction plus the burn of the sessions pinned to it under the pool's keys, priced per window on the account's tier at
-the band of now, times the time to the window's horizon. The 5-hour window's horizon is the earlier of its reset and the
-account's subscription end. A weekly window's, the 7-day window's and a model's own week's, is the earliest of five
-hours from now, its reset and the end, so a weekly projection looks five hours ahead at most. A 5-hour reading past its
-reset with no new reset looks five hours ahead too, since the window opens with the next request. `burn_average_seconds`
-(default 1800) is the time constant of each session's burn average, the figure the projection carries forward (see
-**Burn**, below). A burn the cost model cannot price adds nothing, so an account whose tier the profile has not named
-projects its prediction alone, and an API-key account has no plan window and no projection.
+prediction plus the burn of the sessions pinned to it under the pool's keys, priced per window on the account's tier,
+the band's hours inside the horizon weighed as the band weighs them, times the time to the window's horizon. The 5-hour
+window's horizon is the earlier of its reset and the account's subscription end. A weekly window's, the 7-day window's
+and a model's own week's, is the earliest of five hours from now, its reset and the end, so a weekly projection looks
+five hours ahead at most. A 5-hour reading past its reset with no new reset looks five hours ahead too, since the window
+opens with the next request. `burn_average_seconds` (default 1800) is the time constant of each session's burn average,
+the figure the projection carries forward (see **Burn**, below). A burn the cost model cannot price adds nothing, so an
+account whose tier the profile has not named projects its prediction alone, and an API-key account has no plan window
+and no projection.
 
 **The demand** What the slow-down holds back is still wanted: a session held before each request burns less than it asks
 to, and the moment the hold lifts it burns at its own pace again, so the router keeps two readings of a session's burn.
@@ -491,12 +492,19 @@ burn average has absorbed it. The wait holds the round back and nothing else: th
 already standing moves at its pin's next request, and a window inside its wait yields to the next in the order. The
 5-hour window of a pool whose `slow_down` is on crosses when the stretch the slow-down reads has stood over
 `slow_down_stretch_seconds` for its safety wait, and the round's horizon moves earlier by the threshold (see
-[Slow-down](#slow-down), below). A weekly window's horizon lies five hours ahead at most, so a weekly wall is shed only
-in its last five hours, when the gate also stops placing new sessions there. A round runs on an account at most once per
-`shed_dwell_seconds`, and a selection runs one round at most. The excess is the burn that, removed now, lands the fired
-window's projection on the ceiling at its horizon, the demand's projection at the moved horizon under the slow-down. The
-round's target is the lesser of the excess and `shed_cap` (default 0.5) of the burn of the round's pins on that window,
-so the excess sets the amount and the cap bounds it.
+[Slow-down](#slow-down), below). No 5-hour round fires while the window is younger than twice `burn_average_seconds` (an
+hour at the default), whatever fired the trigger, because each session's burn average still carries the previous
+window's last half hour over the reset and the projection would apply that rate to a horizon of up to five hours. While
+the hold runs, the routing log's record of the selection reads the shed rule `no` with the window's age
+(`age_five_hour`) against the hold (`hold_five_hour`), the stamp and the wait keep running, a weekly window past its
+wait fires in the 5-hour window's place, and a standing mark still moves. The weekly windows take no hold, since the
+same burst after a weekly reset is a small share of a week over a weekly horizon's five hours. A weekly window's horizon
+lies five hours ahead at most, so a weekly wall is shed only in its last five hours, when the gate also stops placing
+new sessions there. A round runs on an account at most once per `shed_dwell_seconds`, and a selection runs one round at
+most. The excess is the burn that, removed now, lands the fired window's projection on the ceiling at its horizon, the
+demand's projection at the moved horizon under the slow-down. The round's target is the lesser of the excess and
+`shed_cap` (default 0.5) of the burn of the round's pins on that window, so the excess sets the amount and the cap
+bounds it.
 
 With `load_shedding` off no round runs and nothing is marked, and a mark already standing is released at the session's
 next request, which renews the pin in place. The destination gate, the reservations and `window_ceiling` on every move
@@ -510,25 +518,29 @@ fired, so the round's pins add up to its excess. `warm_sessions` bounds the orde
 warm. A pin a former pool left on the account is outside the round until it ends. While the account runs on its plan, a
 pin whose last refreshing request was sent in fast mode is out of the round: fast mode draws usage credits and no plan
 window, so the pin has no share to shed. In dollars, on an API-key account or one in overage, it stays in the round. A
-session that returns to standard requests brings its pin back with the plan burn it still carries. The round then walks
-the pins in that order while the burn it removed, each pin's burn on the fired window, is under the target. A pin with a
+session that returns to standard requests brings its pin back with the plan burn it still carries. A pin whose model
+does not draw the window that fired is out of the round too (`off_window`), so a Fable-week round walks the account's
+Fable sessions alone and an Opus session on the account is neither counted nor moved by it. The round then walks the
+pins in that order while the burn it removed, each pin's burn on the fired window, is under the target. A pin with a
 standing mark counts its burn as removed and is skipped as `standing`, since its move is pending. The pool's last
-unmarked pin on the account is never marked (`last_pin`), so a pool with one session there sheds nothing and no round
+unmarked pin on the window is never marked (`last_pin`), so a pool with one session there sheds nothing and no round
 takes all of an account's burn. A pin whose burn the cost model cannot price counts nothing and is never marked
 (`unpriced`), so a session is never shed on a guess. A pin the shed rule's gate finds no destination for is skipped as
 `no_runway` and counts nothing. Every other pin is marked with the destination the gate planned for it, and the walk
 counts that destination's planned rewrite and burn for the pins after it, so two marks do not take one sibling's
 headroom twice. A pin is indivisible, so the order serves a target larger than one pin's burn, and once the burn of a
 pin the walk has not reached covers what the target still asks, the walk picks instead: among the pins whose burn covers
-the rest and for which the gate finds a destination, it marks the one whose move costs the least cache, a warm pin its
-rewrite on its planned destination and a cold pin nothing, since its cache is rewritten wherever it runs next (under
+the rest and for which the gate finds a destination, it marks the one whose move costs the least, a warm pin its rewrite
+as the Max 20x equivalent of the pin's model week, or of the 7-day window where the model has no week, one figure for
+the pin on every destination, and a cold pin nothing, since its cache is rewritten wherever it runs next (under
 `warm_sessions` `always` every pin its rewrite, as the order ignores warmth there), the first in the order among equals,
-and the marking ends there with the target met. The pin the pick marked carries the note `cheapest` in the round's
-record and event, every pin the pick read carries the rewrite and runway the gate read for it, and a pick that finds no
-covering pin with a destination leaves the walk to the order. A pin whose burn carries the removed burn past the target
-stays marked, and the walk stops there. A round that marks nothing records why: `no_runway` when no priced pin had a
-destination, `last_pin` when the account had one pin, `standing` when every pin walked was a pending move, and
-`unpriced` when no burn was priced. Either way the round is recorded, so the dwell holds.
+and the marking ends there with the target met. A move's cost is the share its rewrite spends on the scarce weekly
+windows, since the 5-hour window refills. The pin the pick marked carries the note `cheapest` in the round's record and
+event, every pin the pick read carries the runway the gate read for it and its rewrite in the pick's unit, and a pick
+that finds no covering pin with a destination leaves the walk to the order. A pin whose burn carries the removed burn
+past the target stays marked, and the walk stops there. A round that marks nothing records why: `no_runway` when no
+priced pin had a destination, `last_pin` when the account had one pin, `standing` when every pin walked was a pending
+move, and `unpriced` when no burn was priced. Either way the round is recorded, so the dwell holds.
 
 A marked session moves at its next request, the request that ran the round included, since the mark check follows the
 round. It moves only to a sibling it fits, the one the strategy ranks first with the longest runway among its ties,
@@ -574,9 +586,11 @@ copy as a share of the anchor tier's 5-hour window while a subscription account 
 in dollars, at the set the pin's last prompt selects on a model priced by prompt length
 ([Pricing](statistics.md#pricing)), with the fast copy added in, on an API-key account or a subscription account in
 overage, so leaving overage switches the reading without a reset and a session that moves between tiers reads the right
-share on both. The projection, the round's walk and the spare rate price the plain copy on the account's tier, on every
-window the pin's model draws, at the band in force when they read. A keepalive probe's usage never counts. A burn the
-model cannot price, for a model it has no weight for or a tier it has no capacity for, reads as none.
+share on both. The projection, the round's walk and the spare rate price the plain copy on the account's tier under the
+regime of the pin's entrypoint ([Plan meter](statistics.md#plan-meter)), on every window the pin's model draws, the walk
+and the spare rate at the band in force when they read, and the projection weighing the band's hours inside its horizon
+as the band weighs them. A keepalive probe's usage never counts. A burn the model cannot price, for a model it has no
+weight for or a tier it has no capacity for, reads as none.
 
 Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `fast_lane`, `mark`, `overage`,
 `return_to_plan`, `shed` or `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session,
