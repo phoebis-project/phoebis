@@ -1127,9 +1127,10 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
 }
 {
   // Each pace order reads that window's lead off the account answer, the account furthest ahead first, and an account
-  // whose window is absent, expired or without a lead after every one with a lead, ties by label. The story's leads
-  // lie on both sides of zero on the 5-hour and 7-day windows, so each order moves cards past one another. The page
-  // mounts on its own frozen instant, so the shared mount's later checks keep the default order.
+  // whose window is absent, expired or without a lead after every one with a lead, ties by label. The story's 7-day
+  // leads lie on both sides of zero, so that order is read across it, and its 5-hour leads all sit above zero, so that
+  // order is read on one side. Each order moves cards past one another. The page mounts on its own frozen instant, so
+  // the shared mount's later checks keep the default order.
   const at = Date.now();
   const q = await mount('/quota', { now: at });
   const accounts = (await api.listAccounts()).filter((a) => a.kind === 'oauth');
@@ -1162,7 +1163,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
     await sortBy(value);
     orders.push({ drawn: drawn(), value, want: wanted(id) });
   }
-  const sides = ['5h', '7d'].map((id) => accounts.map((a) => leadOn(a, id)).filter((l) => l !== null)).map((leads) => leads.some((l) => l > 0) && leads.some((l) => l < 0));
+  const sides = ['7d'].map((id) => accounts.map((a) => leadOn(a, id)).filter((l) => l !== null)).map((leads) => leads.some((l) => l > 0) && leads.some((l) => l < 0));
   await sortBy('default');
   const back = drawn();
   q.unmount();
@@ -1173,7 +1174,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
       orders.every((o) => o.want.length > 0 && JSON.stringify(o.drawn) === JSON.stringify(o.want)) &&
       sides.every(Boolean) &&
       JSON.stringify(back) === JSON.stringify(accounts.map((a) => a.label)),
-    missing: [JSON.stringify(options), ...orders.map((o) => `${o.value}: ${JSON.stringify(o.drawn)} against ${JSON.stringify(o.want)}`), `leads on both sides of zero on 5h and 7d: ${JSON.stringify(sides)}`, `default: ${JSON.stringify(back)}`],
+    missing: [JSON.stringify(options), ...orders.map((o) => `${o.value}: ${JSON.stringify(o.drawn)} against ${JSON.stringify(o.want)}`), `leads on both sides of zero on 7d: ${JSON.stringify(sides)}`, `default: ${JSON.stringify(back)}`],
   });
 }
 {
