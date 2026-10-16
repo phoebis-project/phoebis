@@ -4385,35 +4385,41 @@ fn shed_round(
     // over-read or under-read the pin's relief by the band's factor on a span the band crosses. The span is at least
     // the one second the excess divides by. Under the stretch the excess is the demand's, so each pin's rate reads over
     // the speed that demand was read at and the round removes what the slow-down cannot cover in the excess's own
-    // units.
+    // units. Each pin's figure is computed once before the walk, since the pick's loop reads every covering candidate
+    // at every position.
     let tier = snapshot.tier(account_id).unwrap_or_default();
     let speed = trigger
         .speed
         .filter(|speed| trigger.source == "slow_down" && *speed > 0.0)
         .unwrap_or(1.0);
     let horizon = trigger.horizon.max(now.saturating_add(1_000));
-    let share_of = |p: &PinRow| {
-        state
-            .share()
-            .rate(
-                trigger.window,
-                entrypoint_of(p),
-                tier,
-                &p.model,
-                &p.burn,
-                now,
-            )
-            .map(|rate| {
-                let segments =
-                    state
-                        .share()
-                        .band_segments(trigger.window, entrypoint_of(p), now, horizon);
-                Banded::of(burn_decayed(rate, p.burn_at, now, average_ms), &segments)
-                    .divided(speed)
-                    .increase()
-                    / seconds(horizon - now)
-            })
-    };
+    let shares: HashMap<PinKey, Option<f64>> = ordered
+        .iter()
+        .map(|p| {
+            let share = state
+                .share()
+                .rate(
+                    trigger.window,
+                    entrypoint_of(p),
+                    tier,
+                    &p.model,
+                    &p.burn,
+                    now,
+                )
+                .map(|rate| {
+                    let segments =
+                        state
+                            .share()
+                            .band_segments(trigger.window, entrypoint_of(p), now, horizon);
+                    Banded::of(burn_decayed(rate, p.burn_at, now, average_ms), &segments)
+                        .divided(speed)
+                        .increase()
+                        / seconds(horizon - now)
+                });
+            (p.key(), share)
+        })
+        .collect();
+    let share_of = |p: &PinRow| shares.get(&p.key()).copied().flatten();
     let per_hour = |share: f64| share * 3_600.0;
     let burn_sum: f64 = ordered.iter().filter_map(share_of).sum();
     let cap = shed_cap(pool);
