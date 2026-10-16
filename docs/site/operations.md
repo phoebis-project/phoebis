@@ -148,17 +148,19 @@ service layout, as root:
 1. Stop the service: `sudo systemctl stop phoebis`.
 2. Take a [backup](#backup): `phoebis backup --to <dir>`.
 3. Run `sudo phoebis recover-key --config /etc/phoebis/config.yaml --owner phoebis`. A key file already in place is
-   read as the new key. When the file `storage.encryption_key_file` names is missing, the run generates the key as
-   `init` does, at `0600` and owned by the `--owner` user with the directories it created for it, and prints `wrote a
-   new storage key to {path} (mode 0600)`. The `--owner` user also receives the registry's lock file when this run
-   creates it, and handing these to the `--owner` user needs root (`--owner needs root` refuses a run without it).
+   read as the new key. When the file `storage.encryption_key_file` names is missing, the run generates the key in
+   memory and writes its file once the operator confirms (at once under `--yes`), as `init` does, at `0600` and owned
+   by the `--owner` user with the directories it created for it, then prints `wrote a new storage key to {path} (mode
+   0600)`, so a run stopped at the prompt leaves no key file. The `--owner` user also receives the registry's lock
+   file when this run creates it, and handing these to the `--owner` user needs root (`--owner needs root` refuses a
+   run without it).
 4. Read its summary, which opens `the recovery discards what the old key sealed:` over the counts of OAuth credential
    bundles, API-key secrets and keepalive recipe bodies, then `and marks the accounts:` over the counts of OAuth
    accounts disconnected, API-key accounts unpaired and open refresh attempts failed.
 5. Answer the prompt `type yes to discard them: `. Any other answer prints `the registry was not changed` and exits 2,
-   and a declined run discards nothing and removes a key file it generated, with any directory it created for it,
-   naming the file in its last line, `removed the storage key this run wrote to {path}`. `--yes` skips the question
-   for a script.
+   and a declined run discards nothing, writes no key file and removes the registry's lock file where this run
+   created it, naming the file in its last line, `removed the lock file {path} this run created`. `--yes` skips the
+   question for a script.
 
 It refuses with `the registry is locked, stop the service first` while a router holds the registry, with `the storage
 key matches the registry, nothing to recover` when the key file still opens the registry's canary (or, without one,
@@ -166,12 +168,18 @@ any of its sealed rows), with `the storage key opens {readable_rows} sealed {row
 nothing was discarded: restore the canary from a backup` (`{rows}` reading `row` or `rows`) when the canary alone does
 not open, since the canary is then the corrupt part and a backup restores it, and with `no registry at {path}, nothing
 to recover` when the registry does not exist. Before it discards anything it tries every sealed row, never a sample.
-Each refusal exits 1, and a failure after the run generated the key file removes the file as a declined run does. A
-run that stops before the discard leaves the registry at the schema version it found. Past them it runs the sequence
+Each refusal exits 1. Past them it prepares the registry's schema, running every migration above the stored version,
+and a preparation that fails prints `the registry's schema could not be prepared for the recovery, so nothing was
+discarded: {error}` and exits 1. A run that stops before the preparation leaves the registry at the schema version it
+found, and one whose preparation fails leaves it at the step it reached, since each migration step commits alone. A
+run that exits 1 or 2 removes the key file it wrote, with any directory it created for it, and the registry's lock
+file where this run created it, and past the registry's open its last line names them, `removed the key file {path}
+and the lock file {path} this run created`, naming the one it created where it created one. Then it runs the sequence
 under [What it runs](#what-it-runs) as one transaction, seals a new canary under the new key in that same transaction,
 prints the counts again under `discarded what the old key sealed:` and `and marked the accounts:`, then `sealed a new
 canary under the key at {path}`, then `start the service, then:` over the three steps that remain, and exits 0 once
-the accounts are marked. It prints counts and paths, never a key. Then start the service, and:
+the accounts are marked, keeping the key file and the lock file for the service's next start. It prints counts and
+paths, never a key. Then start the service, and:
 
 - Re-enter every API-key secret in the console.
 - Pair every OAuth account again in the console.

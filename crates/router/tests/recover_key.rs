@@ -233,6 +233,51 @@ fn assert_untouched(registry: &Path, key: &StorageKey) {
     );
 }
 
+/// The summary a recovery prints over what `seed` sealed, under `discards` and `marks`, one line per count.
+fn seed_summary(discards: &str, marks: &str) -> Vec<String> {
+    [
+        discards,
+        "  OAuth credential bundles: 2",
+        "  API-key secrets: 1",
+        "  keepalive recipe bodies: 1",
+        marks,
+        "  oauth accounts disconnected: 2",
+        "  api_key accounts unpaired: 1",
+        "  open refresh attempts failed: 2",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+fn summary_before() -> Vec<String> {
+    seed_summary(
+        "the recovery discards what the old key sealed:",
+        "and marks the accounts:",
+    )
+}
+
+fn summary_after() -> Vec<String> {
+    seed_summary(
+        "discarded what the old key sealed:",
+        "and marked the accounts:",
+    )
+}
+
+fn wrote_line(key: &Path) -> String {
+    format!("wrote a new storage key to {} (mode 0600)", key.display())
+}
+
+/// Writes the registry's schema marker past the store, as a bad edit or a newer build would leave it.
+fn set_schema_marker(registry: &Path, version: u32) {
+    rusqlite::Connection::open(registry)
+        .unwrap()
+        .execute(
+            "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
+            [version.to_string()],
+        )
+        .unwrap();
+}
+
 #[test]
 fn the_recovery_refuses_a_registry_another_process_holds_with_the_lock_line_and_writes_no_key() {
     let dir = tempfile::tempdir().unwrap();
@@ -429,6 +474,71 @@ fn a_missing_key_file_is_generated_at_0600_and_the_recovery_discards_every_seale
 }
 
 #[test]
+fn a_preparation_that_fails_says_nothing_was_discarded_and_leaves_the_sealed_rows_and_the_key_file()
+{
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path());
+    let old = key(OLD_KEY);
+    seed(&registry(dir.path()), &old);
+    std::fs::write(key_file(dir.path()), NEW_KEY).unwrap();
+    // The marker one step behind a registry that holds every step's columns: the open admits it, and the last
+    // step's column is a duplicate the preparation's migration refuses.
+    set_schema_marker(&registry(dir.path()), phoebis_store::SCHEMA_VERSION - 1);
+    let out = recover_key(&config, &["--yes"], b"");
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let lines = stdout_lines(&out);
+    let summary = summary_before();
+    assert_eq!(lines.len(), summary.len() + 1, "{}", printed(&out));
+    assert_eq!(lines[..summary.len()], summary[..], "{}", printed(&out));
+    assert!(
+        lines[summary.len()].starts_with(
+            "the registry's schema could not be prepared for the recovery, so nothing was discarded: "
+        ),
+        "{}",
+        printed(&out)
+    );
+    assert_no_key(&out, &[OLD_KEY, NEW_KEY]);
+    assert_eq!(
+        std::fs::read_to_string(key_file(dir.path())).unwrap(),
+        NEW_KEY,
+        "the operator's key file stays"
+    );
+    set_schema_marker(&registry(dir.path()), phoebis_store::SCHEMA_VERSION);
+    assert_untouched(&registry(dir.path()), &old);
+}
+
+#[test]
+fn a_registry_from_a_newer_build_is_refused_at_the_open_before_the_key_file_and_leaves_no_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path());
+    let lock = dir.path().join("lock");
+    let old = key(OLD_KEY);
+    seed(&registry(dir.path()), &old);
+    std::fs::remove_file(&lock).unwrap();
+    set_schema_marker(&registry(dir.path()), phoebis_store::SCHEMA_VERSION + 1);
+    let out = recover_key(&config, &["--yes"], b"");
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let lines = stdout_lines(&out);
+    assert!(
+        lines.len() == 1
+            && lines[0].starts_with(&format!(
+                "opening the registry at {}: ",
+                registry(dir.path()).display()
+            )),
+        "{}",
+        printed(&out)
+    );
+    assert!(!key_file(dir.path()).exists(), "{}", printed(&out));
+    assert!(
+        !lock.exists(),
+        "the refused open removes the lock file it created: {}",
+        printed(&out)
+    );
+    set_schema_marker(&registry(dir.path()), phoebis_store::SCHEMA_VERSION);
+    assert_untouched(&registry(dir.path()), &old);
+}
+
+#[test]
 fn the_prompt_takes_yes_alone_and_anything_else_exits_2_with_the_registry_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_file(dir.path());
@@ -475,35 +585,109 @@ fn the_prompt_takes_yes_alone_and_anything_else_exits_2_with_the_registry_unchan
 }
 
 #[test]
-fn a_declined_run_removes_the_key_file_it_generated_and_the_directory_it_created_for_it() {
+fn a_declined_run_on_a_registry_without_a_key_file_writes_no_key_and_removes_the_lock_it_created() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path());
+    let lock = dir.path().join("lock");
+    let old = key(OLD_KEY);
+    seed(&registry(dir.path()), &old);
+    // A registry restored onto a new host comes without the lock file the service's own open leaves beside it.
+    std::fs::remove_file(&lock).unwrap();
+    let out = recover_key(&config, &[], b"no\n");
+    assert_eq!(out.status.code(), Some(2), "{}", printed(&out));
+    let mut expected = summary_before();
+    // A piped answer is not echoed, so the line shares the prompt's line.
+    expected.push("type yes to discard them: the registry was not changed".to_owned());
+    expected.push(format!(
+        "removed the lock file {} this run created",
+        lock.display()
+    ));
+    assert_eq!(stdout_lines(&out), expected, "{}", printed(&out));
+    assert!(!key_file(dir.path()).exists(), "{}", printed(&out));
+    assert!(!lock.exists(), "{}", printed(&out));
+    assert_no_key(&out, &[OLD_KEY]);
+    assert_untouched(&registry(dir.path()), &old);
+}
+
+#[test]
+fn a_run_under_yes_writes_the_key_file_after_the_summary_and_keeps_it_with_the_lock_it_created() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path());
+    let lock = dir.path().join("lock");
+    seed(&registry(dir.path()), &key(OLD_KEY));
+    std::fs::remove_file(&lock).unwrap();
+    let out = recover_key(&config, &["--yes"], b"");
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    let mut expected = summary_before();
+    expected.push(wrote_line(&key_file(dir.path())));
+    expected.extend(summary_after());
+    expected.push(format!(
+        "sealed a new canary under the key at {}",
+        key_file(dir.path()).display()
+    ));
+    expected.push("start the service, then:".to_owned());
+    expected.extend(FOLLOW_UPS.map(str::to_owned));
+    assert_eq!(stdout_lines(&out), expected, "{}", printed(&out));
+    let written = std::fs::read_to_string(key_file(dir.path())).unwrap();
+    assert_no_key(&out, &[written.trim_end(), OLD_KEY]);
+    assert!(
+        lock.exists(),
+        "the service's next start opens the lock: {}",
+        printed(&out)
+    );
+    assert_eq!(
+        Store::read_canary(
+            &registry(dir.path()),
+            &StorageKey::from_file(&key_file(dir.path())).unwrap()
+        )
+        .unwrap(),
+        CanaryRead::Matches
+    );
+}
+
+#[test]
+fn a_discard_that_does_not_land_removes_the_key_file_its_directory_and_the_lock_this_run_created() {
     let dir = tempfile::tempdir().unwrap();
     let keys = dir.path().join("keys");
     let generated = keys.join("storage.key");
+    let lock = dir.path().join("lock");
     let config = config_naming(dir.path(), &generated);
     let old = key(OLD_KEY);
     seed(&registry(dir.path()), &old);
-    let out = recover_key(&config, &[], b"no\n");
-    assert_eq!(out.status.code(), Some(2), "{}", printed(&out));
+    std::fs::remove_file(&lock).unwrap();
+    // SQLite locks the whole database, so a write transaction held from a second connection outlasts the discard's
+    // busy timeout, while the preparation of a registry at the current version writes nothing and lands.
+    let writer = rusqlite::Connection::open(registry(dir.path())).unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let out = recover_key(&config, &["--yes"], b"");
+    drop(writer);
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
     let lines = stdout_lines(&out);
+    let mut expected = summary_before();
+    expected.push(wrote_line(&generated));
+    assert_eq!(lines.len(), expected.len() + 2, "{}", printed(&out));
+    assert_eq!(lines[..expected.len()], expected[..], "{}", printed(&out));
     assert!(
-        lines.contains(&format!(
-            "wrote a new storage key to {} (mode 0600)",
-            generated.display()
+        lines[expected.len()].starts_with(&format!(
+            "the recovery did not land, so the registry at {} is unchanged: ",
+            registry(dir.path()).display()
         )),
         "{}",
         printed(&out)
     );
     assert_eq!(
-        lines.last(),
-        Some(&format!(
-            "removed the storage key this run wrote to {}",
-            generated.display()
-        )),
+        lines[expected.len() + 1],
+        format!(
+            "removed the key file {} and the lock file {} this run created",
+            generated.display(),
+            lock.display()
+        ),
         "{}",
         printed(&out)
     );
     assert!(!generated.exists(), "{}", printed(&out));
     assert!(!keys.exists(), "{}", printed(&out));
+    assert!(!lock.exists(), "{}", printed(&out));
     assert_no_key(&out, &[OLD_KEY]);
     assert_untouched(&registry(dir.path()), &old);
 }

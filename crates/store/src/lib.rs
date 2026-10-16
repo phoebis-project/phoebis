@@ -469,7 +469,7 @@ impl Store {
         })
     }
 
-    /// Every stamp written from here on reads `clock`. The admin fixture capture sets it once, before it seeds the
+    /// Every stamp written from here on reads `clock`. The admin fixture capture sets it before it seeds the
     /// registry, so two captures stamp the same instants.
     pub fn set_clock(&self, clock: Clock) {
         *self.clock.lock().expect(LOCK_POISONED) = clock;
@@ -915,8 +915,8 @@ impl HoldGate {
 }
 
 /// The registry opened for a key recovery: the process lock taken (so a running router refuses the open with
-/// `Locked`), the schema checked but not migrated until the discard, and no canary proof, since the key is the one
-/// thing being replaced.
+/// `Locked`), the schema checked but not migrated until `prepare_recovery` runs before the discard, and no canary
+/// proof, since the key is the one thing being replaced.
 pub struct RecoveryStore {
     conn: Connection,
     created_lock: Option<PathBuf>,
@@ -947,14 +947,27 @@ impl Store {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound
         );
         let process_lock = lock::acquire(data_dir)?;
-        let conn = Connection::open_with_flags(
-            db_path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        // The key check, the counts and the prompt read the file as it is: a run that stops before the discard leaves
-        // the registry at the version it found, which the build that wrote it still opens.
-        conn.busy_timeout(BUSY_TIMEOUT)?;
-        check_schema(&conn)?;
+        let open = || -> Result<Connection, StoreError> {
+            let conn = Connection::open_with_flags(
+                db_path,
+                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )?;
+            // The key check, the counts and the prompt read the file as it is: a run that stops before the
+            // preparation leaves the registry at the version it found, which the build that wrote it still opens.
+            conn.busy_timeout(BUSY_TIMEOUT)?;
+            check_schema(&conn)?;
+            Ok(conn)
+        };
+        let conn = match open() {
+            Ok(conn) => conn,
+            Err(error) => {
+                // Removed while this open still holds it, so no other process has taken the file it removes.
+                if lock_missing {
+                    let _ = std::fs::remove_file(&lock_file);
+                }
+                return Err(error);
+            }
+        };
         Ok(RecoveryStore {
             conn,
             created_lock: lock_missing.then_some(lock_file),
@@ -997,10 +1010,17 @@ impl RecoveryStore {
         sealed_counts_on(&self.conn)
     }
 
-    /// One transaction: the canary, the credentials, the API-key secrets and the recipe bodies go, every oauth
-    /// account reads `disconnected` and every api_key account `unpaired` under `cause` with its lifecycle
-    /// generation and revision stepped, open and uncertain refresh attempts settle `failed` with the detail
-    /// `disconnected`, and a canary is sealed under `key`.
+    /// Runs the schema and every migration above the stored version, the step `discard_sealed` needs before its
+    /// statements meet the columns they name. A failure here moved nothing the discard would, so the caller says
+    /// nothing was discarded.
+    pub fn prepare_recovery(&mut self) -> Result<(), StoreError> {
+        prepare(&mut self.conn, true)
+    }
+
+    /// One transaction over a schema `prepare_recovery` moved: the canary, the credentials, the API-key secrets and
+    /// the recipe bodies go, every oauth account reads `disconnected` and every api_key account `unpaired` under
+    /// `cause` with its lifecycle generation and revision stepped, open and uncertain refresh attempts settle
+    /// `failed` with the detail `disconnected`, and a canary is sealed under `key`.
     ///
     /// The operations page prints these statements as the sequence an operator runs by hand, so the two change
     /// together.
@@ -1010,8 +1030,6 @@ impl RecoveryStore {
         cause: StateCause,
     ) -> Result<SealedCounts, StoreError> {
         let (nonce, sealed) = crypto::seal(key, CANARY_AAD, CANARY_PLAINTEXT)?;
-        // The schema moves only once the recovery proceeds, so the statements below meet the columns they name.
-        prepare(&mut self.conn, true)?;
         // No `Store` clock exists here: the wall clock stamps the rows, as it does every write outside a test rig.
         let now = jiff::Timestamp::now().as_millisecond();
         let tx = self

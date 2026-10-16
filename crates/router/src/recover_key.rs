@@ -1,7 +1,8 @@
 //! `phoebis recover-key`: the recovery after a lost storage key, on a stopped registry. It takes the registry's lock,
-//! reads the key file the configuration names or generates it as `init` does, refuses a key that still opens the
-//! registry, prints what it discards and asks, then discards every row sealed under the old key and seals a new
-//! canary in one transaction. It prints counts and paths, never a key.
+//! reads the key file the configuration names or generates a key in memory, refuses a key that still opens the
+//! registry, prints what it discards and asks, then writes a generated key's file as `init` does, prepares the
+//! schema, and discards every row sealed under the old key and seals a new canary in one transaction. It prints
+//! counts and paths, never a key.
 
 use std::io::{BufRead, ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -33,9 +34,9 @@ const FOLLOW_UPS: [&str; 3] = [
 /// Exit 0 once the accounts are marked, 1 on a refusal or a failure, 2 when the operator answered anything but
 /// `yes`. The lines it prints: the lock refusal "the registry is locked, stop the service first", the matching
 /// key "the storage key matches the registry, nothing to recover", the corrupt canary over rows the key still opens,
-/// the generated key file's path, the discard summary (one line per count), the prompt, and the three follow-up
-/// steps. A run that exits 1 or 2 after it generated the key file removes the file again, with the directories it
-/// created for it, and says so.
+/// the discard summary (one line per count), the prompt, the generated key file's path, the preparation's failure,
+/// the discard's failure, and the three follow-up steps. A run that exits 1 or 2 removes the key file it wrote, with
+/// the directories it created for it, and the lock file it created, in one line naming them.
 pub fn run(
     config_path: &Path,
     args: &RecoverKeyArgs,
@@ -92,48 +93,42 @@ fn recover(
             ))
         }
     };
-    // The service's next start opens the lock file, so one a root run created goes to the service's user.
-    if let (Some(owner), Some(lock)) = (owner, store.created_lock()) {
-        hand_over(lock, owner)?;
-    }
     let key_file = &config.storage.encryption_key_file;
-    let reading = |error: &dyn std::fmt::Display| {
-        format!(
-            "reading storage.encryption_key_file {}: {error}",
-            key_file.display()
-        )
+    // The service's next start opens the lock file, so one a root run created goes to the service's user.
+    let handed = match (owner, store.created_lock()) {
+        (Some(owner), Some(lock)) => hand_over(lock, owner),
+        _ => Ok(()),
     };
-    let (key, generated) = match std::fs::symlink_metadata(key_file) {
-        Ok(_) => (
-            StorageKey::from_file(key_file).map_err(|error| reading(&error))?,
-            None,
-        ),
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            let (key, dirs) = generate(key_file, owner)?;
-            (key, Some(dirs))
-        }
-        Err(error) => return Err(reading(&error)),
-    };
-    let outcome = match generated {
-        Some(_) => say(
-            out,
-            &format!(
-                "wrote a new storage key to {} (mode 0600)",
-                key_file.display()
-            ),
-        )
-        .and_then(|()| discard(&mut store, registry, &key, key_file, args, input, out)),
-        None => discard(&mut store, registry, &key, key_file, args, input, out),
-    };
-    let Some(dirs) = generated else {
-        return outcome;
-    };
+    let mut written = None;
+    let outcome = handed
+        .and_then(|()| key_of(key_file, owner))
+        .and_then(|(key, source)| {
+            discard(
+                &mut store,
+                registry,
+                &key,
+                source,
+                key_file,
+                args,
+                input,
+                out,
+                &mut written,
+            )
+        });
     if matches!(outcome, Ok(0)) {
         return outcome;
     }
-    // Removed while the lock is held, so no other run reads a key this one leaves unused. A start after a declined or
+    let key = written
+        .as_ref()
+        .map(|written| (written.key_file.as_path(), written.dirs.as_slice()));
+    let lock = store.created_lock();
+    if key.is_none() && lock.is_none() {
+        return outcome;
+    }
+    // Removed while the lock is held, so no other run reads a key this one leaves unused. The lock file goes last and
+    // the run exits right after, since a start may take a new lock the moment it is gone. A start after a declined or
     // failed run then reports the missing key file it found rather than a key the registry refuses.
-    let removed = remove_generated(key_file, &dirs);
+    let removed = remove_created(key, lock);
     match outcome {
         Ok(code) => {
             let _ = say(out, &removed);
@@ -143,16 +138,52 @@ fn recover(
     }
 }
 
-/// The run past the key file: the refusal of a key that opens the registry, the summary, the prompt, and the
-/// transaction.
+/// Where the run's key came from. A generated key lives in memory alone until the operator confirms.
+enum KeySource {
+    Read,
+    Generated { owner: Option<(u32, u32)> },
+}
+
+/// The key file a run wrote and the directories it created for it, from the top down.
+struct Written {
+    key_file: PathBuf,
+    dirs: Vec<PathBuf>,
+}
+
+/// The key in the file `key_file` names where one is there, else a new key whose file `discard` writes.
+fn key_of(key_file: &Path, owner: Option<(u32, u32)>) -> Result<(StorageKey, KeySource), String> {
+    let reading = |error: &dyn std::fmt::Display| {
+        format!(
+            "reading storage.encryption_key_file {}: {error}",
+            key_file.display()
+        )
+    };
+    match std::fs::symlink_metadata(key_file) {
+        Ok(_) => Ok((
+            StorageKey::from_file(key_file).map_err(|error| reading(&error))?,
+            KeySource::Read,
+        )),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            Ok((StorageKey::generate(), KeySource::Generated { owner }))
+        }
+        Err(error) => Err(reading(&error)),
+    }
+}
+
+/// The run past the key: the refusal of a key that opens the registry, the summary, the prompt, the file of a
+/// generated key, the preparation and the transaction. `written` names the key file once it is on disk, so the run
+/// removes it again after an exit of 1 or 2.
+#[allow(clippy::too_many_arguments)]
 fn discard(
     store: &mut RecoveryStore,
     registry: &Path,
     key: &StorageKey,
+    source: KeySource,
     key_file: &Path,
     args: &RecoverKeyArgs,
     input: &mut dyn BufRead,
     out: &mut dyn Write,
+    written: &mut Option<Written>,
 ) -> Result<i32, String> {
     let registry_error =
         |error: StoreError| format!("reading the registry at {}: {error}", registry.display());
@@ -194,6 +225,26 @@ fn discard(
             return Ok(2);
         }
     }
+    // Written once the operator confirmed, so a run stopped at the prompt leaves no key file behind.
+    if let KeySource::Generated { owner } = source {
+        let dirs = write_key(key_file, key, owner)?;
+        *written = Some(Written {
+            key_file: key_file.to_path_buf(),
+            dirs,
+        });
+        say(
+            out,
+            &format!(
+                "wrote a new storage key to {} (mode 0600)",
+                key_file.display()
+            ),
+        )?;
+    }
+    store.prepare_recovery().map_err(|error| {
+        format!(
+            "the registry's schema could not be prepared for the recovery, so nothing was discarded: {error}"
+        )
+    })?;
     let landed = store
         .discard_sealed(key, StateCause::Operator)
         .map_err(|error| {
@@ -225,11 +276,15 @@ fn discard(
     Ok(0)
 }
 
-/// Writes a new key as `init` does: 64 hex characters and a newline, in a file created at `0600` in one open, under
-/// the directories missing on the way to it created at `0700`, all handed to `owner`. Answers the key and the
-/// directories it created, from the top down, the run's own to remove again. A step that fails removes what it
-/// created, so a rerun starts from the same state.
-fn generate(path: &Path, owner: Option<(u32, u32)>) -> Result<(StorageKey, Vec<PathBuf>), String> {
+/// Writes `key` as `init` writes a new one: 64 hex characters and a newline, in a file created at `0600` in one open,
+/// under the directories missing on the way to it created at `0700`, all handed to `owner`. Answers the directories
+/// it created, from the top down, the run's own to remove again. A step that fails removes what it created, so a
+/// rerun starts from the same state.
+fn write_key(
+    path: &Path,
+    key: &StorageKey,
+    owner: Option<(u32, u32)>,
+) -> Result<Vec<PathBuf>, String> {
     let mut dirs: Vec<PathBuf> = permissions::data_dir_of(path)
         .ancestors()
         .take_while(|dir| {
@@ -249,7 +304,6 @@ fn generate(path: &Path, owner: Option<(u32, u32)>) -> Result<(StorageKey, Vec<P
             return Err(format!("creating {}: {error}", path.display()));
         }
     };
-    let key = StorageKey::generate();
     let written = file
         .write_all(key.to_hex().as_bytes())
         .and_then(|()| file.write_all(b"\n"))
@@ -268,7 +322,7 @@ fn generate(path: &Path, owner: Option<(u32, u32)>) -> Result<(StorageKey, Vec<P
         let _ = remove_dirs(&dirs);
         return Err(error);
     }
-    Ok((key, dirs))
+    Ok(dirs)
 }
 
 fn hand_over(path: &Path, (uid, gid): (u32, u32)) -> Result<(), String> {
@@ -276,25 +330,47 @@ fn hand_over(path: &Path, (uid, gid): (u32, u32)) -> Result<(), String> {
         .map_err(|error| format!("handing {} to the owner: {error}", path.display()))
 }
 
-/// Removes the key file `generate` wrote and the directories it created, and answers the one line saying so.
-fn remove_generated(path: &Path, dirs: &[PathBuf]) -> String {
-    if let Err(error) = std::fs::remove_file(path) {
-        return format!(
-            "the storage key this run wrote to {} was not removed: {error}",
-            path.display()
-        );
+/// Removes the key file `write_key` wrote with the directories it created, then the lock file the open created, and
+/// answers the one line naming what went, followed by a line for each that stayed. The directories of a key file
+/// that stays are not empty, so they are left untried.
+fn remove_created(key: Option<(&Path, &[PathBuf])>, lock: Option<&Path>) -> String {
+    let mut removed = Vec::new();
+    let mut stayed = Vec::new();
+    if let Some((path, dirs)) = key {
+        match std::fs::remove_file(path) {
+            Ok(()) => {
+                removed.push(format!("the key file {}", path.display()));
+                if let Err((dir, error)) = remove_dirs(dirs) {
+                    stayed.push(format!(
+                        "the directory this run created at {} was not removed: {error}",
+                        dir.display()
+                    ));
+                }
+            }
+            Err(error) => stayed.push(format!(
+                "the storage key this run created at {} was not removed: {error}",
+                path.display()
+            )),
+        }
     }
-    if let Err((dir, error)) = remove_dirs(dirs) {
-        return format!(
-            "removed the storage key this run wrote to {}, but not the directory {}: {error}",
-            path.display(),
-            dir.display()
-        );
+    if let Some(lock) = lock {
+        match std::fs::remove_file(lock) {
+            Ok(()) => removed.push(format!("the lock file {}", lock.display())),
+            Err(error) => stayed.push(format!(
+                "the lock file this run created at {} was not removed: {error}",
+                lock.display()
+            )),
+        }
     }
-    format!(
-        "removed the storage key this run wrote to {}",
-        path.display()
-    )
+    let mut lines = Vec::new();
+    if !removed.is_empty() {
+        lines.push(format!(
+            "removed {} this run created",
+            removed.join(" and ")
+        ));
+    }
+    lines.extend(stayed);
+    lines.join("\n")
 }
 
 /// The deepest first, so each one is empty by the time it goes.
