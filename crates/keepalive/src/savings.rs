@@ -142,8 +142,10 @@ impl Engine {
     /// One request the previous recipe kept warm. The caller reads every part of the key off the agent under
     /// the lock and hands them over, so nothing here needs the lock back. `kind` and `in_overage` are the credited
     /// request's serving attempt's, so the credit files under the funding word its request row took, and `tier` and
-    /// `band` its request row's, so the credit prices at the cells and the windows that row does. `ttl_ms` is the TTL
-    /// the request's observation settled on, the TTL its own write would have taken.
+    /// `band` its request row's, so the credit prices at the cells and the windows that row does. `at` is the request's
+    /// receipt, the instant its row files under, so the credit sits in that row's hour and revision whenever the
+    /// answer completes. `ttl_ms` is the TTL the request's observation settled on, the TTL its own write would have
+    /// taken.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_kept_warm(
         &self,

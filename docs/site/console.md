@@ -163,10 +163,12 @@ under 900 px wide the reset label takes a line of its own under the meter. Under
 `resets in 2h 13m, 19% left at the reset` where the horizon is the reset (within a minute),
 `resets in 3d 5h, 56% left in 5 h` where it comes earlier (five hours out on a weekly window, or the account's end), and
 `{pct} left now` once it has come. A window the sessions spend before its horizon reads the time until it runs out,
-`spent in 2 h 10 min`. The reset and the projection split over two lines where the column does not hold them on one, and
-the hover adds the burn behind the projection, `the sessions on this account burn 8.5% an hour`. On a slowed account the
-5-hour window's line ends in the speed chip, `0.5x` in the warning tone (the account's slow-down factor to two decimals,
-a trailing zero dropped, `0.35x`), whose hover reads `slowed since 17:40: the sessions on this account would pass the
+`spent in 2 h 10 min`, counted back from the projection at the horizon along the burn, so the span follows the router's
+forecast with the charges and the reservations the last reading does not hold yet, and `0% left now` once that time has
+passed. The reset and the projection split over two lines where the column does not hold them on one, and the hover adds
+the burn behind the projection, `the sessions on this account burn 8.5% an hour`. On a slowed account the 5-hour
+window's line ends in the speed chip, `0.5x` in the warning tone (the account's slow-down factor to two decimals, a
+trailing zero dropped, `0.35x`), whose hover reads `slowed since 17:40: the sessions on this account would pass the
 ceiling 42 min before the reset, over the 30 min threshold` (`under` while no round can fire). The chip draws while the
 factor is under 1 and the 5-hour window the read came from has not reset since, and the Dashboard's account cards, the
 Accounts view, the Pools cards and the Sessions view draw the same chip with the same hover
@@ -707,15 +709,16 @@ warm between five minutes and an hour, then Probes by outcome (OK, Migrated, Hel
 warming by pool (Probes OK, Held, Skipped, Failed, Kept-warm requests, Kept-warm tokens, Probe cost, Saved). Saved by
 probes is what the kept-warm requests saved, the cache write each avoided at its TTL's rate less the read it paid. Net
 saving is that saving less the probe cost, in the critical ink while the probes cost more than they saved, which under
-Native the plan side alone decides. A Saved by probes chart draws the gross saving and the probe cost per bucket with
-the net on hover. The by-pool table's Saved column reads each pool's saving beside its Probe cost. Probe cost, Saved by
-probes, Net saving, Wasted cost, Share of probe cost and the by-pool Probe cost and Saved read in the top bar's unit:
-under Native the plan side's 20x 7-day equivalent over the billed side's dollars, under the three dollar positions the
-position's figures in dollars, and under Window shares the named account's share of its 7-day window, a dash under
-"Shares of one account's windows alone: name one account in the Accounts filter." while none is named. The chart draws
-dollars under the three dollar positions, the 20x 7-day equivalent under Window shares and under Native, with the billed
-dollars on hover, and the billed dollars alone under Native where the range holds no plan side. What a probe is and when
-it counts as wasted is on [Keepalive](keepalive.md).
+Native the plan side alone decides. A held or skipped probe never reached the upstream and costs nothing, so a range
+whose probes were all held or skipped reads a zero Probe cost and its whole saving as its Net saving. A Saved by probes
+chart draws the gross saving and the probe cost per bucket with the net on hover. The by-pool table's Saved column reads
+each pool's saving beside its Probe cost. Probe cost, Saved by probes, Net saving, Wasted cost, Share of probe cost and
+the by-pool Probe cost and Saved read in the top bar's unit: under Native the plan side's 20x 7-day equivalent over the
+billed side's dollars, under the three dollar positions the position's figures in dollars, and under Window shares the
+named account's share of its 7-day window, a dash under "Shares of one account's windows alone: name one account in the
+Accounts filter." while none is named. The chart draws dollars under the three dollar positions, the 20x 7-day
+equivalent under Window shares and under Native, with the billed dollars on hover, and the billed dollars alone under
+Native where the range holds no plan side. What a probe is and when it counts as wasted is on [Keepalive](keepalive.md).
 
 Accounts draws Peak 5-hour utilization, then Window usage and Pace under a "Window" switch whose positions are the
 windows the range sampled, 5-hour, 7-day, 7-day Fable and "7-day, extra usage". Pace reads "The lead over pace per

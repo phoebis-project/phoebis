@@ -1312,15 +1312,20 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   const wOf = (id, label) => accounts.find((a) => a.id === id)?.windows.find((w) => w.id === label) ?? null;
   const weekly = wOf('primary', '7d');
   const story = { nightly5h: cellOf('nightly', '5h').text, primary5h: cellOf('primary', '5h').text, primary7d: cellOf('primary', '7d').text };
+  // nightly's forecast reads 104% at its reset 3 h 41 min out on a burn of 1.9% an hour, so it reaches the whole window
+  // 2 h 6 min before the reset: 1 h 35 min after the story's start, and less as the clock runs on.
+  const nightly = wOf('nightly', '5h');
+  const spentIn = nightly === null ? null : Date.parse(nightly.horizon) - ((nightly.projection - 1) / nightly.burn) * 3_600_000 - at;
   results.push({
-    name: "/quota nightly's 5-hour window reads spent in 1 h 35 min, primary's 19% left at the reset and its 7-day window 56% left in the span to its horizon",
+    name: "/quota nightly's 5-hour window reads spent in the 1 h 35 min its forecast leaves from the story's start, primary's 19% left at the reset and its 7-day window 56% left in the span to its horizon",
     ok:
-      story.nightly5h.endsWith(', spent in 1 h 35 min') &&
+      spentIn !== null && spentIn > 85 * 60_000 && spentIn < 95 * 60_000 &&
+      story.nightly5h.endsWith(`, spent in ${minuteSpan(spentIn)}`) &&
       story.primary5h.endsWith(', 19% left at the reset') &&
       weekly !== null &&
       projectionWords(weekly, at)?.startsWith('56% left in ') === true &&
       story.primary7d.endsWith(`, ${projectionWords(weekly, at)}`),
-    missing: [JSON.stringify(story), weekly ? String(projectionWords(weekly, at)) : 'no 7-day window on primary'],
+    missing: [JSON.stringify(story), `nightly spent in ${spentIn} ms`, weekly ? String(projectionWords(weekly, at)) : 'no 7-day window on primary'],
   });
   const burned = live.filter((r) => burnWords(r.w) !== null);
   const offBurn = burned.filter((r) => !r.title.endsWith(`, ${burnWords(r.w)}`));
@@ -14671,6 +14676,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
       await tab(native, 'Cache warming');
       const probeCount = (g) => g.probes.ok + g.probes.held + g.probes.skipped + g.probes.failed;
+      // A side's probe cost latches on the probes that reached the upstream, since a held or skipped probe never ran.
+      const upstreamCount = (g) => g.probes.ok + g.probes.failed;
       const whole = sumGroups((await answerOf((q) => q.groupBy === 'key' && q.funding === undefined && q.includeProbes === true)) ?? []);
       const billedAnswer = await answerOf((q) => q.groupBy === 'key' && q.funding === 'billed' && q.includeProbes === true);
       const billed = sumGroups(billedAnswer ?? []);
@@ -14700,8 +14707,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const savingSides = (wholeGroup, billedGroup, net) => {
         const billedCredits = keptIn(billedGroup);
         const planCredits = keptIn(wholeGroup) - billedCredits;
-        const billedProbes = billedGroup ? probeCount(billedGroup) : 0;
-        const planProbes = probeCount(wholeGroup) - billedProbes;
+        const billedProbes = billedGroup ? upstreamCount(billedGroup) : 0;
+        const planProbes = upstreamCount(wholeGroup) - billedProbes;
         const planSaving = planCredits <= 0 ? 0 : (wholeGroup.savingEquivalent.seven_day ?? null);
         const planCost = planProbes <= 0 ? 0 : (wholeGroup.probeEquivalent.seven_day?.cost ?? null);
         const plan = planCredits > 0 || (net && planProbes > 0);
@@ -14757,8 +14764,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const billedPools = await answerOf((q) => q.groupBy === 'pool' && q.funding === 'billed' && q.includeProbes === true);
       const poolCellOf = (g) => {
         const b = (billedPools ?? []).find((x) => x.key === g.key);
-        const billedProbes = b === undefined ? 0 : probeCount(b);
-        const planProbes = probeCount(g) - billedProbes;
+        const billedProbes = b === undefined ? 0 : upstreamCount(b);
+        const planProbes = upstreamCount(g) - billedProbes;
         const sides = sidesIn(planProbes > 0, billedProbes > 0);
         // A window the plan probes priced nothing on reads a dash, and a pool with no probe its zero, unmarked.
         const equivalent = g.probeEquivalent.seven_day?.cost ?? (planProbes > 0 ? null : 0);
@@ -14821,6 +14828,46 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         name: '/analytics under native a billed net under zero beside a plan net above it leaves the Net saving tile out of the critical ink',
         ok: template !== undefined && JSON.stringify(lines) === JSON.stringify([[fmtEquivalent('seven_day', 0.015), 'subscription'], ['-$0.40', 'billed']]) && critical === false,
         missing: [`template ${template?.key}`, JSON.stringify(lines), `critical ${critical}`],
+      });
+    }
+    {
+      // A probe the router held or a gate skipped never reached the upstream, so a range whose probes were all held or
+      // skipped spent nothing on probes: under native the Probe cost tile reads its zero in each unit, and the Net
+      // saving tile and the chart's legend the plan credits' saving whole. The figures are the stub's own: the plan
+      // credits saved 2% of the 20x 7-day window, and no probe priced a window.
+      const now = Date.now();
+      const template = (await api.getAnalyticsBreakdown({ from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() })).find((g) => g.key === 'primary');
+      const none = { failed: 0, held: 0, migrated: 0, ok: 0, skipped: 0 };
+      const whole = template === undefined ? null : { ...template, estimated: false, keptWarm: { requests: 4, tokens1h: 0, tokens5m: 4_000 }, probeCostUsd: 0, probeEquivalent: {}, probes: { ...none, held: 3, skipped: 2 }, savingEquivalent: { five_hour: 0.1, seven_day: 0.02 }, savingUsd: 0.5, wastedProbeUsd: 0, wastedProbes: 0 };
+      const paid = template === undefined ? null : { ...template, cacheEquivalent: {}, costEquivalent: {}, estimated: false, keptWarm: { requests: 0, tokens1h: 0, tokens5m: 0 }, planOutputTokens: 0, planRequests: 0, probeCostUsd: 0, probeEquivalent: {}, probes: none, savingEquivalent: {}, savingUsd: 0, wastedProbeUsd: 0, wastedProbes: 0 };
+      const at = new Date(Math.floor((CLOCK_ORIGIN - 2 * 3_600_000) / 3_600_000) * 3_600_000).toISOString();
+      api.getAnalyticsBreakdown = async (q) => (whole === null ? [] : [q.funding === 'billed' ? paid : whole]);
+      api.getAnalyticsSeries = async (q) => (whole === null ? [] : [{ at, groups: [q.funding === 'billed' ? paid : whole] }]);
+      localStorage.removeItem('phoebis.unit');
+      const page = await mount('/analytics#cache-warming', { now: CLOCK_ORIGIN });
+      await page.settle();
+      const linesOf = (label) => {
+        const tile = [...page.container.querySelectorAll('#cache-warming > .tiles-row > .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === label);
+        return [...(tile?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => {
+          const figure = l.cloneNode(true);
+          figure.querySelector('.stat__pair-word')?.remove();
+          return [figure.textContent?.trim() ?? '', l.querySelector('.stat__pair-word')?.textContent?.trim() ?? ''];
+        });
+      };
+      const tiles = { net: linesOf('Net saving'), probe: linesOf('Probe cost') };
+      const chart = [...page.container.querySelectorAll('#cache-warming .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Saved by probes');
+      const legend = [...(chart?.querySelectorAll('.legend li') ?? [])].map((li) => [[...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''), li.querySelector('.legend__value')?.textContent?.trim() ?? '']);
+      page.unmount();
+      delete api.getAnalyticsBreakdown;
+      delete api.getAnalyticsSeries;
+      const [zero, saved] = [fmtEquivalent('seven_day', 0), fmtEquivalent('seven_day', 0.02)];
+      results.push({
+        name: "/analytics under native a range whose probes were all held or skipped reads a zero probe cost, and Net saving and the chart's legend the plan credits' saving whole",
+        ok:
+          template !== undefined &&
+          JSON.stringify(tiles) === JSON.stringify({ net: [[saved, 'subscription']], probe: [[zero, 'subscription'], ['$0.00', 'billed']] }) &&
+          JSON.stringify(legend) === JSON.stringify([['Saved by probes', saved], ['Probe cost', zero], ['Net saving', saved]]),
+        missing: [`template ${template?.key}`, JSON.stringify(tiles), JSON.stringify(legend)],
       });
     }
     {

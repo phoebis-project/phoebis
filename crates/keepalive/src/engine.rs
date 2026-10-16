@@ -2532,7 +2532,8 @@ impl Engine {
             .is_some_and(|o| o.ready && o.expected > 0);
         // The TTL this request's own evidence settled on, set at a stream's first event or, for an answer without a
         // stream, by the reading just above. The write a credited request avoided would have taken it, and a discard
-        // below clears the observation. Its receipt picks the revision its band reads, as its own request row's does.
+        // below clears the observation. Its receipt picks the hour the credit files in and the revision its band and
+        // its saving price at, as its own request row's does, though the answer may land past either boundary.
         let (observed_ttl, arrived) = inner.sessions[&key]
             .agents
             .get(&agent_id)
@@ -2609,7 +2610,7 @@ impl Engine {
                 )
             });
             self.record_kept_warm(
-                now,
+                arrived,
                 &key,
                 key_generation,
                 &pool_id,

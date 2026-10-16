@@ -2773,11 +2773,12 @@ async fn a_credit_keys_its_requests_tier_and_band_and_reaches_the_saving_shares(
     }
 }
 
-/// A credit keys the band its request's own row keys, read at the relay's receipt: a Haiku 5.5 request received a
-/// minute and a half before February, whose prompt passes January's long-context threshold and not February's, and
-/// observed by the engine and answered after midnight, files its credit under `long` beside its request row.
+/// A credit keys the hour and the band its request's own row keys, read at the relay's receipt: a Haiku 5.5 request
+/// received a minute and a half before February, whose prompt passes January's long-context threshold and not
+/// February's, and observed by the engine and answered after midnight, files its credit in the January hour under
+/// `long` beside its request row, so its saving prices at the January long-context cells.
 #[tokio::test]
-async fn a_credit_answered_across_a_revision_boundary_keys_the_band_of_its_requests_arrival() {
+async fn a_credit_answered_across_a_revision_boundary_files_at_its_requests_arrival() {
     const HAIKU: &str = "claude-haiku-5-5";
     const PROMPT: u64 = 1_510;
     let mut r = rig(RigSpec {
@@ -2842,7 +2843,8 @@ async fn a_credit_answered_across_a_revision_boundary_keys_the_band_of_its_reque
         "the prompt passes January's threshold and not February's"
     );
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
-    assert!(row(&r, &id).await.kept_warm);
+    let request = row(&r, &id).await;
+    assert!(request.kept_warm);
     let credit = rows
         .iter()
         .find(|row| row.kept_warm_requests > 0)
@@ -2850,6 +2852,39 @@ async fn a_credit_answered_across_a_revision_boundary_keys_the_band_of_its_reque
     assert_eq!(
         credit.band, "long",
         "the credit keys the band of its request's arrival, not of its answer"
+    );
+    assert_eq!(
+        (credit.hour, hour_of(request.received_at)),
+        (hour_of(received), hour_of(received)),
+        "the credit files in its request row's January hour, not in the hour of its answer"
+    );
+    // The answer read 1,500 tokens back on a five-minute entry, so the credit saved the write at the January
+    // long-context cells less the read it paid.
+    assert_eq!(
+        (credit.kept_warm_5m_tokens, credit.kept_warm_1h_tokens),
+        (1_500, 0)
+    );
+    let long = r.pricing.in_force(received).models[HAIKU]
+        .long_context
+        .as_ref()
+        .expect("the test list prices Haiku 5.5 by prompt length")
+        .clone();
+    let january = 1_500.0 * (long.cells.cache_write_5m - long.cells.cache_read) / 1_000_000.0;
+    let saving = phoebis_ledger::breakdown(
+        &rows,
+        "all",
+        true,
+        &phoebis_ledger::LiveKeys::default(),
+        &[],
+        None,
+        &r.pricing,
+        &r.tables,
+    )
+    .first()
+    .map_or(0.0, |group| group.saving_usd);
+    assert!(
+        (saving - january).abs() < 1e-12,
+        "the saving at the January long-context cells: {saving} against {january}"
     );
 }
 

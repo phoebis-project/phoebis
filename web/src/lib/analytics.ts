@@ -296,6 +296,12 @@ const planSideShows = (g: AnalyticsGroup, maps: (Record<string, unknown> | null)
  */
 export const probesRequired = (g: AnalyticsGroup): boolean => g.probes.ok > 0 && planRowsRequired(g) && planSideShows(g, [g.probeEquivalent, g.probeShares]);
 /**
+ * The probes that reached the upstream, the answered and the failed ones, the count a side's probe cost latches on: a
+ * held or skipped probe never ran, so a group whose probes were all held or skipped spent nothing on probes and its
+ * saving stands.
+ */
+export const upstreamProbes = (g: Pick<AnalyticsGroup, 'probes'>): number => g.probes.ok + g.probes.failed;
+/**
  * Whether a group's kept-warm credits oblige it to carry both shared saving windows: credits the plan funded, on a
  * group with chargeable plan usage. A group whose probes kept nothing warm, or whose credits are all billed, carries no
  * plan saving to lack, so it adds no saving window and drops none.

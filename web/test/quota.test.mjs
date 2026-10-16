@@ -181,6 +181,22 @@ test('a window the projection spends before its horizon reads the instant it run
   assert.deepEqual(d.projectionParts(spent, now, true), ['spent', 'in 1 h 15 min']);
 });
 
+test("a spent window reads the instant the router's forecast reaches the whole window, where the forecast runs past the last sample", () => {
+  const now = Date.UTC(2026, 8, 16, 14, 30);
+  const at = (ms) => new Date(now + ms).toISOString();
+  // 20% sampled while the forecast reads 90% now and 110% at a horizon an hour out at 20% an hour: the forecast
+  // reaches the whole window in 30 minutes, where the sample's 80% left would last 4 hours at that burn.
+  const ahead = { burn: 0.2, horizon: at(HOUR), projection: 1.1, resetsAt: at(HOUR), utilization: 0.2 };
+  assert.equal(d.projectionWords(ahead, now), 'spent in 30 min');
+  assert.deepEqual(d.projectionParts(ahead, now, true), ['spent', 'in 30 min'], 'the compact form');
+  // 50% sampled, a 95% forecast now at 10% an hour, so 105% an hour out: 30 minutes, where the sample reads 5 h.
+  const weekly = { burn: 0.1, horizon: at(HOUR), projection: 1.05, resetsAt: at(3 * DAY), utilization: 0.5 };
+  assert.equal(d.projectionWords(weekly, now), 'spent in 30 min', 'a weekly horizon before its reset');
+  assert.equal(d.projectionWords(weekly, now + 20 * MINUTE), 'spent in 10 min', 'the span shortens on the clock between reads');
+  assert.equal(d.projectionWords({ ...weekly, projection: 1.45 }, now), '0% left now', 'a forecast that reached the whole window before now');
+  assert.equal(d.projectionWords({ ...weekly, horizon: at(-MINUTE) }, now, true), '0% left now', 'a horizon past with the forecast over the window');
+});
+
 test('a projection past the window without a burn reads no share left, and a window already used up reads none now', () => {
   const now = Date.UTC(2026, 8, 16, 14, 30);
   const at = (ms) => new Date(now + ms).toISOString();

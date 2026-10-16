@@ -724,6 +724,12 @@ test("a group with nothing to charge a plan window forces no gap on the named ac
   for (const [what, other] of [['probes that never ran', neverRan], ['probes of billed traffic alone', billed]]) assert.deepEqual(d.oneAccountGroupOf(base, [answered, other]).probeShares, shares, what);
 });
 
+test('the probe cost counts the probes that reached the upstream, so a group whose probes were all held or skipped costs nothing', () => {
+  const base = accountGroup();
+  assert.equal(d.upstreamProbes(accountGroup({ probes: { ...base.probes, failed: 0, held: 3, ok: 0, skipped: 2 } })), 0, 'held and skipped probes never ran');
+  assert.equal(d.upstreamProbes(accountGroup({ probes: { ...base.probes, failed: 2, held: 3, ok: 5, skipped: 4 } })), 7, 'the answered and the failed probes');
+});
+
 test('the model week is labeled by the key the share map carries, so a second model week reads under its own name', () => {
   assert.equal(d.weekLabelOf('seven_day_fable'), '7-day Fable');
   assert.equal(d.weekLabelOf('seven_day_opus'), 'seven_day_opus', 'a week the console has no label for reads under its key');

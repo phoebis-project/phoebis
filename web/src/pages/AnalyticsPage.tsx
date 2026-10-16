@@ -19,7 +19,7 @@ import { FilterBar } from '@/components/FilterBar';
 import { GroupBy, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress, RANGE_PRESETS } from '@/lib/address';
-import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, upstreamProbes, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -1168,13 +1168,14 @@ function shareTilesOf(groupBy: GroupBy, namedAccount: string | null, group: Anal
 
 /**
  * A probe figure's two sides under native: the plan probes' 20x 7-day equivalent off the whole read and the billed
- * probes' dollars off the billed read, told apart by their probe counts. `undefined` leaves out a side with no probe,
- * null reads a dash where the plan probes priced nothing on the window, and a group with no probe on either side reads
- * its zero in each unit, as an empty range does, with no mark, since no figure of it is an estimate.
+ * probes' dollars off the billed read, told apart by the counts of their probes that reached the upstream, since a
+ * held or skipped probe costs nothing. `undefined` leaves out a side with no such probe, null reads a dash where the
+ * plan probes priced nothing on the window, and a group with no such probe on either side reads its zero in each unit,
+ * as an empty range does, with no mark, since no figure of it is an estimate.
  */
 function probeSidesOf(whole: AnalyticsGroup, billed: AnalyticsGroup | null | undefined, read: 'cost' | 'wasted'): { billed: number | undefined; equivalent: number | null | undefined; estimated: boolean } {
-  const billedProbes = billed ? probesOf(billed) : 0;
-  const planProbes = probesOf(whole) - billedProbes;
+  const billedProbes = billed ? upstreamProbes(billed) : 0;
+  const planProbes = upstreamProbes(whole) - billedProbes;
   const priced = own(whole.probeEquivalent, 'seven_day') ? whole.probeEquivalent.seven_day[read] : null;
   const dollars = billed ? (read === 'cost' ? billed.probeCostUsd : billed.wastedProbeUsd) : 0;
   if (planProbes <= 0 && billedProbes <= 0) return { billed: dollars, equivalent: priced ?? 0, estimated: false };
@@ -1188,16 +1189,17 @@ const probeFiguresOf = (sides: ReturnType<typeof probeSidesOf>): CostFigure[] =>
 /**
  * The saving's two sides under native, told apart by their kept-warm credits, the plan side's the whole read's less the
  * billed read's: the plan credits' 20x 7-day saving off the whole read and the billed credits' dollars off `billed`.
- * `net` reads each side's saving less its probes' cost, so a side stands there on a credit or a probe, and a side whose
- * probes kept nothing warm nets their cost under zero. `undefined` leaves a side out, null reads a dash where the plan
- * rows priced nothing on the window, and a group with nothing on either side reads its zero in each unit.
+ * `net` reads each side's saving less its probes' cost, so a side stands there on a credit or a probe that reached the
+ * upstream, and a side whose probes kept nothing warm nets their cost under zero. A held or skipped probe costs nothing,
+ * so it leaves its side's saving whole. `undefined` leaves a side out, null reads a dash where the plan rows priced
+ * nothing on the window, and a group with nothing on either side reads its zero in each unit.
  */
 function savingSidesOf(whole: AnalyticsGroup, billed: AnalyticsGroup | null | undefined, read: 'gross' | 'net'): ReturnType<typeof probeSidesOf> {
   const credits = (g: AnalyticsGroup | null | undefined) => (g?.keptWarm ? keptWarmTokens(g.keptWarm) : 0);
   const billedCredits = credits(billed);
   const planCredits = credits(whole) - billedCredits;
-  const billedProbes = billed ? probesOf(billed) : 0;
-  const planProbes = probesOf(whole) - billedProbes;
+  const billedProbes = billed ? upstreamProbes(billed) : 0;
+  const planProbes = upstreamProbes(whole) - billedProbes;
   const net = read === 'net';
   const planSaving = planCredits <= 0 ? 0 : own(whole.savingEquivalent, 'seven_day') ? whole.savingEquivalent.seven_day : null;
   const planCost = !net || planProbes <= 0 ? 0 : own(whole.probeEquivalent, 'seven_day') ? whole.probeEquivalent.seven_day.cost : null;
@@ -1210,13 +1212,14 @@ function savingSidesOf(whole: AnalyticsGroup, billed: AnalyticsGroup | null | un
 }
 
 /**
- * A group's saving share less its probe share on one window: zero on a side with no credit or no probe behind it, and
- * on a model week the side's rows ran off, and null on a shared window the side's rows priced nothing on.
+ * A group's saving share less its probe share on one window: zero on a side with no credit or no probe that reached
+ * the upstream behind it, and on a model week the side's rows ran off, and null on a shared window the side's rows
+ * priced nothing on.
  */
 function shareNetOf(g: AnalyticsGroup, key: string): number | null {
   const at = <T,>(map: Record<string, T> | null, held: boolean, read: (v: T) => number) => (!held ? 0 : map !== null && own(map, key) ? read(map[key]) : key === 'five_hour' || key === 'seven_day' ? null : 0);
   const saving = at(g.savingShares, g.keptWarm !== null && keptWarmTokens(g.keptWarm) > 0, (v) => v);
-  const cost = at(g.probeShares, probesOf(g) > 0, (v) => v.cost);
+  const cost = at(g.probeShares, upstreamProbes(g) > 0, (v) => v.cost);
   return saving === null || cost === null ? null : netSaving(saving, cost);
 }
 

@@ -89,8 +89,9 @@ export function minuteSpan(ms: number): string {
  * `56% left in 5 h` where it comes earlier, `59% left now` once it has come, the share `1 - projection` floored at
  * zero, and `19% left at reset` in the compact form the bars draw. A window the projection spends before its horizon
  * (`projection` at 1 or more) reads the instant it runs out instead, `spent in 2 h 10 min` in both forms, the span
- * `(1 - utilization) / burn` hours through `minuteSpan`. With `burn` null or zero it reads `0% left` in the horizon's
- * form, and a utilization already at 1 or more reads `0% left now`. Null without a projection.
+ * `(horizon - now) - (projection - 1) / burn` hours through `minuteSpan`, and `0% left now` once that instant has
+ * come. With `burn` null or zero it reads `0% left` in the horizon's form, and a utilization already at 1 or more reads
+ * `0% left now`. Null without a projection.
  */
 export function projectionWords(w: Pick<RateLimitWindow, 'burn' | 'horizon' | 'projection' | 'resetsAt' | 'utilization'>, now: number, compact = false): string | null {
   const parts = projectionParts(w, now, compact);
@@ -102,10 +103,15 @@ export function projectionWords(w: Pick<RateLimitWindow, 'burn' | 'horizon' | 'p
 export function projectionParts(w: Pick<RateLimitWindow, 'burn' | 'horizon' | 'projection' | 'resetsAt' | 'utilization'>, now: number, compact = false): [string, string] | null {
   if (w.projection === null || w.horizon === null) return null;
   if (w.utilization >= 1) return ['0% left', 'now'];
-  // The sessions spend the window before its horizon: the instant the used share reaches 1 along the burn.
-  if (w.projection >= 1 && w.burn !== null && w.burn > 0) return ['spent', `in ${minuteSpan(((1 - w.utilization) / w.burn) * HOUR)}`];
-  const left = `${fmtPct(Math.max(0, 1 - w.projection))} left`;
   const horizon = Date.parse(w.horizon);
+  // The sessions spend the window before its horizon. The projection is the router's forecast, which carries the
+  // later charges and the reservations the last sample does not, so the instant the share reaches 1 is read back
+  // from the horizon along the burn rather than forward from the sampled utilization.
+  if (w.projection >= 1 && w.burn !== null && w.burn > 0) {
+    const span = horizon - now - ((w.projection - 1) / w.burn) * HOUR;
+    return span > 0 ? ['spent', `in ${minuteSpan(span)}`] : ['0% left', 'now'];
+  }
+  const left = `${fmtPct(Math.max(0, 1 - w.projection))} left`;
   if (horizon <= now) return [left, 'now'];
   // The route reads the horizon off the router's latest reading and the reset off the ledger's newest sample, whole
   // seconds on one path and milliseconds on the other, so a horizon within a minute of the reset is the reset.
