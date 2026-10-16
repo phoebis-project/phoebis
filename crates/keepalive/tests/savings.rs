@@ -2671,6 +2671,7 @@ async fn a_plan_funded_probe_on_an_unweighted_model_of_a_weighted_tier_settles_i
     let share = |model: &str| {
         r.tables.share_at(
             phoebis_routing::FIVE_HOUR,
+            None,
             "default_claude_max_20x",
             model,
             usage,

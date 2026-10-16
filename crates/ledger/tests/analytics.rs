@@ -47,7 +47,7 @@ fn share_of(
     at: i64,
 ) -> f64 {
     tables
-        .share_at(window, tier, model, usage, at)
+        .share_at(window, None, tier, model, usage, at)
         .expect("the tables price the model on the tier")
 }
 
@@ -1234,7 +1234,7 @@ fn with_probes() -> RollupFilter {
 /// A Fable share on `test_tier` at the off-band hour, the share cases' instant.
 fn fable_shares(tables: &PlanTables, usage: PinUsage) -> WindowShares {
     let at = hour_range(WEEKDAY_OFF_PEAK).0;
-    price_shares(tables, "test_tier", "claude-fable-5-1", usage, at, at).shares
+    price_shares(tables, None, "test_tier", "claude-fable-5-1", usage, at, at).shares
 }
 
 #[tokio::test]
@@ -1361,6 +1361,7 @@ async fn an_unpriced_row_nulls_the_window_it_could_not_price_and_leaves_the_othe
         .expect("the narrow tier still prices the 5-hour window");
     let want = price_shares(
         &tables,
+        None,
         "narrow_tier",
         "claude-fable-5-1",
         usage(1_000, 100),
@@ -1405,6 +1406,7 @@ fn a_haiku_row_adds_nothing_to_the_fable_week_and_never_nulls_it() {
     let fable = fable_shares(&tables, usage(1_000, 100));
     let haiku = price_shares(
         &tables,
+        None,
         "test_tier",
         "claude-haiku-4-5",
         usage(1_000, 100),
@@ -2179,7 +2181,7 @@ async fn groups_by(
 /// The 20x equivalent `usage` of `model` reads in the hour of `at`, from the shipped cost model the readers price at.
 fn equivalent_of(model: &str, usage: PinUsage, at: i64) -> WindowShares {
     let hour = hour_of(at) * 1_000;
-    price_equivalent(&COSTS, model, usage, hour, hour).shares
+    price_equivalent(&COSTS, None, model, usage, hour, hour).shares
 }
 
 /// The owner's reading: one request of a Pro account sits next to one of a Max 20x account in the one unit, so the
@@ -2603,7 +2605,7 @@ fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_
             .expect("the bucket every tracked row landed in")
     };
     let hour = phoebis_ledger::hour_of(3_600_000);
-    let band = tables.band_factor(FIVE_HOUR, hour * 1_000);
+    let band = tables.band_factor(FIVE_HOUR, None, hour * 1_000);
     let tokens = usage(1_000, 100);
     let cached = PinUsage {
         cache_read: 500,
@@ -2617,7 +2619,7 @@ fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_
     );
     let equivalent = |window: &str, usage: PinUsage| {
         tables
-            .equivalent_at(window, "claude-sonnet-5-5", usage, hour * 1_000)
+            .equivalent_at(window, None, "claude-sonnet-5-5", usage, hour * 1_000)
             .expect("the shipped model weighs the model")
     };
     for (window, got) in [
@@ -2960,8 +2962,16 @@ fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_on_a_sized_
             MAX_20X,
         )
     };
-    let share =
-        |model: &str| tables.share_at(FIVE_HOUR, MAX_20X, model, usage(1_000, 100), 3_600_000);
+    let share = |model: &str| {
+        tables.share_at(
+            FIVE_HOUR,
+            None,
+            MAX_20X,
+            model,
+            usage(1_000, 100),
+            3_600_000,
+        )
+    };
     assert!(
         share("claude-opus-4-8").is_some() && share("claude-opus-4-8") == share("claude-opus-5-5"),
         "the model has no weight of its own and prices at Opus 5.5's, the latest weighted model of its tier"
@@ -3105,7 +3115,7 @@ fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_
         tokens,
         WEEKDAY_OFF_PEAK,
     );
-    let factor = tables.band_factor(FIVE_HOUR, WEEKDAY_PEAK);
+    let factor = tables.band_factor(FIVE_HOUR, None, WEEKDAY_PEAK);
     assert!(factor > 1.0, "the peak hour lies inside the band");
     assert!(
         (off_peak.five_hour_share.unwrap() - base).abs() < 1e-6,
@@ -3324,7 +3334,7 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
     // with no tier at all, so a Pro account's request compares to a Max 20x account's.
     let equivalent = |window: &str| {
         tables
-            .equivalent_at(window, "claude-opus-5-5", million, hour)
+            .equivalent_at(window, None, "claude-opus-5-5", million, hour)
             .unwrap()
     };
     for point in [&max, &pro, &tierless] {
@@ -3615,9 +3625,9 @@ fn a_session_attempt_weighs_its_five_hour_share_by_the_band_at_its_completion() 
     )
     .unwrap();
     let tables = PlanTables::shipped();
-    let factor = tables.band_factor(FIVE_HOUR, finished);
+    let factor = tables.band_factor(FIVE_HOUR, None, finished);
     assert!(
-        tables.band_factor(FIVE_HOUR, started) == 1.0 && factor > 1.0,
+        tables.band_factor(FIVE_HOUR, None, started) == 1.0 && factor > 1.0,
         "the attempt starts before the band and completes inside it"
     );
     let filter = SeriesFilter {
@@ -3866,6 +3876,7 @@ fn the_burn_answers_the_model_week_beside_the_shared_windows() {
     let week_share = tables
         .share_at(
             SEVEN_DAY_FABLE,
+            None,
             MAX_20X,
             "claude-fable-5-1",
             million,
@@ -3873,7 +3884,13 @@ fn the_burn_answers_the_model_week_beside_the_shared_windows() {
         )
         .unwrap();
     let week_equivalent = tables
-        .equivalent_at(SEVEN_DAY_FABLE, "claude-fable-5-1", million, 3_600_000)
+        .equivalent_at(
+            SEVEN_DAY_FABLE,
+            None,
+            "claude-fable-5-1",
+            million,
+            3_600_000,
+        )
         .unwrap();
     let named = read(vec!["a".into()]);
     let fable = point_at(&named, 3_600);
@@ -3991,7 +4008,7 @@ async fn the_burn_groups_by_every_breakdown_dimension_and_answers_the_shares_whe
     );
     let opus = point(&by_model, "claude-opus-5-5");
     let equivalent = tables
-        .equivalent_at(FIVE_HOUR, "claude-opus-5-5", million, hour * 1_000)
+        .equivalent_at(FIVE_HOUR, None, "claude-opus-5-5", million, hour * 1_000)
         .unwrap();
     assert!(
         opus.five_hour_equivalent
@@ -4062,6 +4079,7 @@ fn a_session_series_answers_its_shares_where_the_read_names_one_account() {
     let equivalent = tables
         .equivalent_at(
             FIVE_HOUR,
+            None,
             "claude-opus-5-5",
             million,
             WEEKDAY_OFF_PEAK + 500,
@@ -4225,6 +4243,7 @@ fn price_shares_answers_the_two_shared_windows_and_the_model_week_the_model_carr
     // over the model week's half of it.
     let fable = price_shares(
         &tables,
+        None,
         "test_tier",
         "claude-fable-5-1",
         one,
@@ -4241,6 +4260,7 @@ fn price_shares_answers_the_two_shared_windows_and_the_model_week_the_model_carr
     );
     let haiku = price_shares(
         &tables,
+        None,
         "test_tier",
         "claude-haiku-4-5",
         one,
@@ -4259,6 +4279,7 @@ fn price_shares_answers_the_two_shared_windows_and_the_model_week_the_model_carr
     );
     let narrow = price_shares(
         &tables,
+        None,
         "narrow_tier",
         "claude-fable-5-1",
         one,
@@ -4273,6 +4294,7 @@ fn price_shares_answers_the_two_shared_windows_and_the_model_week_the_model_carr
     );
     let unweighted = price_shares(
         &tables,
+        None,
         "test_tier",
         "claude-opus-5-5",
         one,
@@ -4287,6 +4309,7 @@ fn price_shares_answers_the_two_shared_windows_and_the_model_week_the_model_carr
     );
     let no_tier = price_shares(
         &tables,
+        None,
         "missing_tier",
         "claude-fable-5-1",
         one,
@@ -5898,7 +5921,7 @@ fn a_cost_revision_inside_a_price_span_moves_the_totals_equivalent_at_its_own_bo
         .unwrap();
     let at = |instant: i64| {
         let hour = hour_of(instant) * 1_000;
-        price_equivalent(&costs, "claude-opus-5-5", usage(1_000, 0), hour, hour).shares
+        price_equivalent(&costs, None, "claude-opus-5-5", usage(1_000, 0), hour, hour).shares
     };
     let (first, second) = (at(before), at(after));
     assert!(
@@ -5966,6 +5989,70 @@ fn a_peak_hour_beside_a_quiet_one_prices_the_totals_equivalent_at_each_hours_fac
         (five_hour - (0.02 + 0.04)).abs() < 1e-12,
         "the quiet hour's 0.02 and the peak hour's 0.04: {five_hour}"
     );
+}
+
+/// Two rows of one hour, account tier and model, one Opus 5.5 input token each, one from an entrypoint the test regime
+/// lists and one from an entrypoint it leaves out: each prices under its own regime, 2 / 200 and 2 / 100 of the Max 20x
+/// 5-hour window, where one price over the group would read the base 0.04. A session attempt from the listed
+/// entrypoint reads the regime's figure. 04:00 in Los Angeles, before the band, in the first cost entry.
+#[test]
+fn a_group_mixing_two_clients_prices_each_rows_regime() {
+    let costs = phoebis_ledger::test_tables::subscription_costs();
+    let prices = phoebis_ledger::test_tables::api_prices();
+    let at = phoebis_ledger::test_tables::JANUARY_2026;
+    let row = |id, client| ShareRow {
+        id,
+        model: "claude-opus-5-5",
+        at,
+        usage: usage(1, 0),
+        client: Some(client),
+        tier: Some(MAX_20X),
+        ..ShareRow::default()
+    };
+    let (from_hour, to_hour) = (hour_of(at), hour_of(at) + 3_600);
+    let filter = SeriesFilter {
+        from: from_hour * 1_000,
+        to: to_hour * 1_000,
+        bucket_seconds: 3_600,
+        accounts: vec!["a".into()],
+        ..SeriesFilter::default()
+    };
+    let close = |got: f64, want: f64| (got - want).abs() < 1e-12;
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_share(&db, row("r-desk", "claude-code/desk"));
+    plant_share(&db, row("r-sdk", "claude-code/sdk-cli"));
+    let (totals, points) = db
+        .read_blocking(|c| {
+            Ok((
+                request_totals(c, "account_id", from_hour, to_hour, &prices, &costs)?,
+                burn_series(c, &costs, &prices, &filter)?,
+            ))
+        })
+        .unwrap();
+    let equivalent = totals["a"].equivalent.five_hour;
+    assert!(
+        close(equivalent, 0.01 + 0.02),
+        "each row under its own regime: {equivalent}"
+    );
+    let share = points
+        .iter()
+        .find_map(|p| p.five_hour_share)
+        .unwrap_or_else(|| panic!("the hour carries its share: {points:?}"));
+    assert!(
+        close(share, 0.01 + 0.02),
+        "each row under its own regime: {share}"
+    );
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_share(&db, row("r-desk", "claude-code/desk"));
+    let sessions = db
+        .read_blocking(|c| phoebis_ledger::session_burn_series(c, &costs, &prices, &filter))
+        .unwrap();
+    let share = sessions
+        .iter()
+        .find(|(id, _)| id == "s")
+        .and_then(|(_, points)| points.iter().find_map(|p| p.five_hour_share))
+        .unwrap_or_else(|| panic!("the session's hour carries its share: {sessions:?}"));
+    assert!(close(share, 0.01), "the attempt under the regime: {share}");
 }
 
 /// The dashboard's day, a pool's traffic and the totals read the billed rows' dollars apart and the plan rows in the

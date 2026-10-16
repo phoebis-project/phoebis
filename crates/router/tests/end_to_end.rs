@@ -2740,6 +2740,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
     let share = tables
         .share_at(
             phoebis_routing::FIVE_HOUR,
+            None,
             "default_claude_max_20x",
             "claude-opus-5-5",
             usage,
@@ -2762,6 +2763,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         tables
             .share_rate_at(
                 phoebis_routing::FIVE_HOUR,
+                None,
                 "default_claude_max_20x",
                 &pin.model,
                 &pin.burn,
@@ -2780,7 +2782,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         "{account} against {low}..{high} decayed to the read"
     );
     let per_second = |tokens: f64| tokens / 1_800.0;
-    let band = tables.band_factor(phoebis_routing::FIVE_HOUR, burn_at);
+    let band = tables.band_factor(phoebis_routing::FIVE_HOUR, None, burn_at);
     assert_eq!(
         (pin.burn, pin.burn_at),
         (

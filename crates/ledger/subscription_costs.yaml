@@ -1,10 +1,12 @@
 # The subscription cost model. A token costs weight(model) x multiplier(type) units on every window; a window holds
 # `capacity` units; a request's share of a window is the units it spent over that capacity, over the peak factor when
 # the request completes inside the band. Unit: 1/150,000,000 of the Max 20x 5-hour window outside the peak band, so
-# one percent of that window, the step the usage header moves in, is 1,500,000 units. An account tier left out, or
-# set to null, is unpriced. A model without a weight prices at the weight of its model tier's latest weighted model,
-# as an estimate, and a model of no model tier, or of one with no weight, prices nothing. Written by the plan meter's
-# table_fit.py. Every value is a design constant it tested, except a row whose comment says it is assumed.
+# one percent of that window, the step the usage header moves in, is 1,500,000 units. A `regimes` entry prices the
+# entrypoints it lists at its own capacity rows and band factor, every other entrypoint at the rows above. The unit
+# stays the base Max 20x 5-hour window, of which an interactive window holds 300,000,000. An account tier left out,
+# or set to null, is unpriced. A model without a weight prices at the weight of its model tier's latest weighted
+# model, as an estimate, and a model of no model tier, or of one with no weight, prices nothing. Written by the plan
+# meter's table_fit.py. Every value is a design constant it tested, except a row whose comment says it is assumed.
 revisions:
   - effective: 2026-10-05
 
@@ -63,3 +65,13 @@ revisions:
       claude-sonnet-4-5: sonnet
       claude-haiku-5-5: haiku
       claude-haiku-4-5: haiku
+
+    regimes:  # named by what they price, and an entrypoint no regime lists reads the rows above
+      interactive:
+        entrypoints: [claude-desktop, claude-desktop-3p, claude-vscode, cli]
+        capacity:
+          default_claude_ai:      {five_hour: 15000000, seven_day: 112500000}    # assumed: the Max 20x factor
+          default_claude_max_5x:  {five_hour: 75000000, seven_day: 562500000}    # 2026-10-15, the Max 5x account
+          default_claude_max_20x: {five_hour: 300000000, seven_day: 1125000000}  # 2026-10-08 to 15, eight accounts
+        peak:
+          capacity_factor: {five_hour: 1, seven_day: 1}

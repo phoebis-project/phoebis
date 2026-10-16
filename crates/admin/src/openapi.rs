@@ -390,6 +390,9 @@ pub(crate) struct SubscriptionCostsView {
     pub tier_order: Vec<String>,
     /// Undated model id to the name of its model tier in `tier_order`.
     pub model_tier: BTreeMap<String, String>,
+    /// Keyed by the regime's name, each listing the entrypoints it prices and the capacity rows and band factor it
+    /// sets for them.
+    pub regimes: BTreeMap<String, RegimeView>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -447,6 +450,24 @@ pub(crate) struct TypeMultiplierView {
 pub(crate) struct ModelWindowView {
     pub capacity_factor: f64,
     pub of: String,
+}
+
+/// A regime: the entrypoints it prices, and the capacity rows and band factor it sets in place of the base ones. A
+/// tier it leaves out prices at the base row.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RegimeView {
+    pub entrypoints: Vec<String>,
+    /// Keyed by the tier the account's profile reports.
+    pub capacity: BTreeMap<String, CapacityView>,
+    pub peak: RegimePeakView,
+}
+
+/// The band factor a regime sets on each shared window, read inside the base band's hours.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RegimePeakView {
+    pub capacity_factor: PerWindowView,
 }
 
 // The shipped cost model carries no override, so the round trip never reaches this type or `TypeOverrideView`:

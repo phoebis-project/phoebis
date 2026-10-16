@@ -16,7 +16,8 @@ use serde_json::Value;
 use crate::db::{row_to_attempt, row_to_request, LedgerDb, ATTEMPT_SELECT, REQUEST_SELECT};
 use crate::histogram::Histogram;
 use crate::plan::{
-    funding_of, price_equivalent, price_shares, CostRevisions, Funding, PlanTables, WindowShares,
+    entrypoint_of_client, funding_of, price_equivalent, price_shares, CostRevisions, Funding,
+    PlanTables, WindowShares,
 };
 use crate::price::{price_row, Priced, RowKey};
 use crate::pricing::{effective_instant, prompt_tokens, Band, PriceRevisions, Speed};
@@ -1763,7 +1764,7 @@ pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter) -> Vec<RollupRow> {
 }
 
 /// The price key of a rollup row: its own model, speed, band, funding and `kind`, its tier (`None` under
-/// `UNATTRIBUTED`), and its hour as the instant, with no completion.
+/// `UNATTRIBUTED`), the entrypoint its `client` names, and its hour as the instant, with no completion.
 fn row_key(row: &RollupRow) -> RowKey<'_> {
     RowKey {
         model: &row.canonical_model,
@@ -1772,6 +1773,7 @@ fn row_key(row: &RollupRow) -> RowKey<'_> {
         funding: Funding::of_rollup(&row.funding),
         kind: row.kind.as_str(),
         tier: (row.tier != UNATTRIBUTED).then_some(row.tier.as_str()),
+        entrypoint: entrypoint_of_client(&row.client),
         at: row.hour * 1_000,
         band_at: None,
     }
@@ -1952,11 +1954,22 @@ struct ShareSums {
 
 impl ShareSums {
     /// Folds one plan-funded row in: the request side's shares when `counted`, as the request dollars take the row,
-    /// and the probe cost when the row is a probe's, each window priced at the row's own hour under `tier`.
+    /// and the probe cost when the row is a probe's, each window priced at the row's own hour under `tier` and the
+    /// regime the row's `client` names, so a group that mixes clients prices each row under its own.
     fn add(&mut self, row: &RollupRow, tier: &str, tables: &PlanTables, counted: bool) {
         self.add_priced(row, counted, None, |usage| {
             let at = row.hour * 1_000;
-            price_shares(tables, tier, &row.canonical_model, usage, at, at).shares
+            let entrypoint = entrypoint_of_client(&row.client);
+            price_shares(
+                tables,
+                entrypoint,
+                tier,
+                &row.canonical_model,
+                usage,
+                at,
+                at,
+            )
+            .shares
         });
     }
 
@@ -1971,7 +1984,8 @@ impl ShareSums {
     ) {
         self.add_priced(row, counted, whole, |usage| {
             let at = row.hour * 1_000;
-            price_equivalent(costs, &row.canonical_model, usage, at, at).shares
+            let entrypoint = entrypoint_of_client(&row.client);
+            price_equivalent(costs, entrypoint, &row.canonical_model, usage, at, at).shares
         });
     }
 
@@ -2147,8 +2161,17 @@ struct SplitSum {
 }
 
 impl SplitSum {
-    fn add(&mut self, costs: &PlanTables, canonical_model: &str, usage: PinUsage, at: i64) {
-        let week = |usage: PinUsage| costs.equivalent_at(SEVEN_DAY, canonical_model, usage, at);
+    fn add(
+        &mut self,
+        costs: &PlanTables,
+        entrypoint: Option<&str>,
+        canonical_model: &str,
+        usage: PinUsage,
+        at: i64,
+    ) {
+        let week = |usage: PinUsage| {
+            costs.equivalent_at(SEVEN_DAY, entrypoint, canonical_model, usage, at)
+        };
         let parts = [
             week(PinUsage {
                 input: usage.input,
@@ -2221,8 +2244,13 @@ impl PlanSums {
         }
         self.estimated |= priced.estimated;
         if counted {
-            self.split
-                .add(costs, &row.canonical_model, usage, row.hour * 1_000);
+            self.split.add(
+                costs,
+                entrypoint_of_client(&row.client),
+                &row.canonical_model,
+                usage,
+                row.hour * 1_000,
+            );
         }
     }
 }
@@ -2824,8 +2852,9 @@ pub struct Totals {
 }
 
 /// The price columns and the hour a SQL sum groups by beside its own column, and the sums it answers in the order
-/// `price_group` reads them, spelled once for both totals.
-const PRICE_GROUP_COLUMNS: &str = "canonical_model, speed, band, funding, hour";
+/// `price_group` reads them, spelled once for both totals. The client is a price column, since its entrypoint names
+/// the regime a group's shares price under.
+const PRICE_GROUP_COLUMNS: &str = "canonical_model, speed, band, funding, client, hour";
 const PRICE_GROUP_SUMS: &str = "SUM(requests), SUM(input_tokens), SUM(cache_read_tokens), \
      SUM(cache_write_5m_tokens), SUM(cache_write_1h_tokens), SUM(output_tokens)";
 
@@ -2844,13 +2873,14 @@ fn price_group(
     let speed: String = r.get(offset + 1)?;
     let band: String = r.get(offset + 2)?;
     let funding: String = r.get(offset + 3)?;
-    let hour: i64 = r.get(offset + 4)?;
+    let client: String = r.get(offset + 4)?;
+    let hour: i64 = r.get(offset + 5)?;
     let usage = PinUsage {
-        input: count(6)?,
-        cache_read: count(7)?,
-        write_5m: count(8)?,
-        write_1h: count(9)?,
-        output: count(10)?,
+        input: count(7)?,
+        cache_read: count(8)?,
+        write_5m: count(9)?,
+        write_1h: count(10)?,
+        output: count(11)?,
     };
     let key = RowKey {
         model: &model,
@@ -2859,6 +2889,7 @@ fn price_group(
         funding: Funding::of_rollup(&funding),
         kind: "inference",
         tier: None,
+        entrypoint: entrypoint_of_client(&client),
         at: hour * 1_000,
         band_at: None,
     };
@@ -2870,7 +2901,7 @@ fn price_group(
     }
     Ok(Totals {
         cost_usd: usd,
-        requests: count(5)?,
+        requests: count(6)?,
         tokens: tokens_of(usage),
         billed_usd: if key.funding == Funding::Plan {
             0.0
@@ -3517,6 +3548,9 @@ pub struct BurnPoint {
 /// attempt carry the same five token counts and the keys their price reads under different names.
 struct UsageRow<'a> {
     canonical_model: &'a str,
+    /// The row's `client` label, whose entrypoint names the regime the row prices under: a rollup row's key word, a
+    /// session attempt's request's, `UNATTRIBUTED` where the request carries none.
+    client: &'a str,
     input_tokens: u64,
     cache_read_tokens: u64,
     cache_write_5m_tokens: u64,
@@ -3598,6 +3632,7 @@ fn price_usage(
         funding: row.funding,
         kind: row.kind,
         tier,
+        entrypoint: entrypoint_of_client(row.client),
         at: row.received_at,
         band_at: Some(row.at),
     };
@@ -3668,8 +3703,12 @@ fn price_usage(
                 // Ahead of the model's weights: a dollar-billed row prices in dollars whatever the model weighs it
                 // at, so the zero share rests on the tier alone. An api_key account has no window to share.
                 if let Some(tier) = tier.filter(|_| funding != Funding::ApiKey) {
-                    let sized =
-                        |window: &str| tables.tier_factor(tier, window, row.received_at).is_some();
+                    let entrypoint = entrypoint_of_client(row.client);
+                    let sized = |window: &str| {
+                        tables
+                            .tier_factor(tier, window, entrypoint, row.received_at)
+                            .is_some()
+                    };
                     if sized(FIVE_HOUR) {
                         latch_zero(&mut point.five_hour_share, point.five_hour_unpriced);
                     }
@@ -3792,6 +3831,7 @@ fn price_burn_row(
         tables,
         &UsageRow {
             canonical_model: &row.canonical_model,
+            client: &row.client,
             input_tokens: row.input_tokens,
             cache_read_tokens: row.cache_read_tokens,
             cache_write_5m_tokens: row.cache_write_5m_tokens,
@@ -4099,6 +4139,8 @@ struct SessionAttempt {
     kind: String,
     /// `attempts.tier`, the account tier the attempt recorded at its landing.
     tier: Option<String>,
+    /// `requests.client`, `None` on a row from before the column existed.
+    client: Option<String>,
 }
 
 /// `read_session_attempts`' statement for `sessions` ids and its binds, spelled once so the plan test explains the
@@ -4114,7 +4156,7 @@ fn session_attempts_statement(
         "SELECT r.session_id, a.account_id, a.started_at, \
          COALESCE(a.finished_at, r.finished_at, a.started_at), r.canonical_model, \
          a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, \
-         a.output_tokens, r.received_at, a.speed, a.account_kind, a.overage_in_use, r.kind, a.tier \
+         a.output_tokens, r.received_at, a.speed, a.account_kind, a.overage_in_use, r.kind, a.tier, r.client \
          FROM attempts a JOIN requests r ON r.id = a.request_id \
          WHERE r.session_id IN ({placeholders}) AND a.started_at >= ? AND a.started_at < ? \
          AND r.received_at >= ? AND r.received_at < ?"
@@ -4160,6 +4202,7 @@ fn read_session_attempts(
             overage_in_use: row.get(13)?,
             kind: row.get(14)?,
             tier: row.get(15)?,
+            client: row.get(16)?,
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>()
@@ -4236,6 +4279,7 @@ pub fn session_burn_series(
             tables,
             &UsageRow {
                 canonical_model: &a.canonical_model,
+                client: a.client.as_deref().unwrap_or(UNATTRIBUTED),
                 input_tokens: a.input_tokens,
                 cache_read_tokens: a.cache_read_tokens,
                 cache_write_5m_tokens: a.cache_write_5m_tokens,
@@ -4361,7 +4405,17 @@ mod tests {
             if priced == usage {
                 whole.set(whole.get() + 1);
             }
-            price_shares(&tables, TIER, model, priced, HOUR * 1_000, HOUR * 1_000).shares
+            let entrypoint = entrypoint_of_client(&row.client);
+            price_shares(
+                &tables,
+                entrypoint,
+                TIER,
+                model,
+                priced,
+                HOUR * 1_000,
+                HOUR * 1_000,
+            )
+            .shares
         });
         assert_eq!(whole.get(), 1, "the row's usage is priced once");
         let sums_of = |windows: &IndexMap<&'static str, WindowSum>| {
@@ -4403,14 +4457,15 @@ mod tests {
         row.output_tokens = 100;
         let usage = row.usage();
         let at = HOUR * 1_000;
-        let whole = price_equivalent(&tables, model, usage, at, at).shares;
+        let entrypoint = entrypoint_of_client(&row.client);
+        let whole = price_equivalent(&tables, entrypoint, model, usage, at, at).shares;
         let priced_whole = std::cell::Cell::new(0);
         let mut sums = ShareSums::default();
         sums.add_priced(&row, true, Some(whole.clone()), |priced| {
             if priced == usage {
                 priced_whole.set(priced_whole.get() + 1);
             }
-            price_equivalent(&tables, model, priced, at, at).shares
+            price_equivalent(&tables, entrypoint, model, priced, at, at).shares
         });
         assert_eq!(priced_whole.get(), 0, "the whole usage is not priced again");
         let cost: Vec<_> = sums.cost.iter().map(|(w, sum)| (*w, sum.sum)).collect();

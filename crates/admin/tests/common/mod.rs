@@ -1313,6 +1313,7 @@ pub fn priced_row(
             funding,
             kind: "inference",
             tier: None,
+            entrypoint: None,
             at: hour,
             band_at: None,
         },

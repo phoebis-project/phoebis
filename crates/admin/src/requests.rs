@@ -9,9 +9,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{
-    funding_of, list_requests, price_equivalent, price_shares, request_by_id, request_events,
-    AttemptRecord, Funding, LiveKeys, PlanTables, PriceRevisions, PricedShares,
-    RequestFilter, RequestRecord, Speed,
+    entrypoint_of_client, funding_of, list_requests, price_equivalent, price_shares, request_by_id,
+    request_events, AttemptRecord, Funding, LiveKeys, PlanTables,
+    PriceRevisions, PricedShares, RequestFilter, RequestRecord, Speed,
 };
 use phoebis_routing::PinUsage;
 use serde_json::Value;
@@ -521,7 +521,7 @@ struct PlanFigures {
 /// `None` for a request no subscription window paid: no attempt, or a serving attempt whose funding is not plan.
 /// The request's receipt selects the cost revision, as it selects the price revision of the dollars, and the
 /// attempt's completion (else the request's, else the attempt's start) reads the peak band, where the meter charges
-/// it.
+/// it. The entrypoint the request's `client` names picks the regime both figures price under.
 fn plan_figures(
     r: &RequestRecord,
     attempts: &[AttemptRecord],
@@ -539,10 +539,12 @@ fn plan_figures(
         output: a.output_tokens.unwrap_or(0),
     };
     let band_at = a.finished_at.or(r.finished_at).unwrap_or(a.started_at);
+    let entrypoint = r.client.as_deref().and_then(entrypoint_of_client);
     Some(PlanFigures {
         shares: a.tier.as_deref().map(|tier| {
             price_shares(
                 tables,
+                entrypoint,
                 tier,
                 &r.canonical_model,
                 usage,
@@ -550,7 +552,14 @@ fn plan_figures(
                 band_at,
             )
         }),
-        equivalent: price_equivalent(tables, &r.canonical_model, usage, r.received_at, band_at),
+        equivalent: price_equivalent(
+            tables,
+            entrypoint,
+            &r.canonical_model,
+            usage,
+            r.received_at,
+            band_at,
+        ),
     })
 }
 
@@ -1071,8 +1080,8 @@ revisions:
         let shares = shares_of();
         let (inside, outside) = (WEEKDAY_PEAK_END - 60_000, WEEKDAY_PEAK_END + 60_000);
         assert!(
-            shares.tables.band_factor("five_hour", inside) > 1.0
-                && shares.tables.band_factor("five_hour", outside) == 1.0,
+            shares.tables.band_factor("five_hour", None, inside) > 1.0
+                && shares.tables.band_factor("five_hour", None, outside) == 1.0,
             "the two instants sit either side of the band's end"
         );
         let request = RequestRecord {
@@ -1342,7 +1351,7 @@ revisions:
                 *share,
                 shares
                     .tables
-                    .equivalent_at(window, "claude-fable-5-1", one_input, finished),
+                    .equivalent_at(window, None, "claude-fable-5-1", one_input, finished),
                 "{window}: the cost model's units over the anchor tier's capacity"
             );
         }
@@ -1421,10 +1430,17 @@ revisions:
             ..PinUsage::default()
         };
         let share = |costs: &phoebis_ledger::SubscriptionCosts, at: i64| {
-            costs.share_at("five_hour", "test_tier", "claude-fable-5-1", one_input, at)
+            costs.share_at(
+                "five_hour",
+                None,
+                "test_tier",
+                "claude-fable-5-1",
+                one_input,
+                at,
+            )
         };
         let equivalent = |costs: &phoebis_ledger::SubscriptionCosts, at: i64| {
-            costs.equivalent_at("five_hour", "claude-fable-5-1", one_input, at)
+            costs.equivalent_at("five_hour", None, "claude-fable-5-1", one_input, at)
         };
         let got = (
             summary.cost_shares.expect("a plan request")["five_hour"],

@@ -23,7 +23,7 @@
         "effective_body_capture_hours": 24,
         "auto_mode_server": null,
         "effective_auto_mode_server": true,
-        "prefix": "ZFPxvgA5",
+        "prefix": "9DTXh5RA",
         "created_at": 1791721000000,
         "updated_at": 1791721000000,
         "revision": 6189767511104,
@@ -35,8 +35,8 @@
           "billed_usd": 0.0107,
           "cost_usd": 0.02135,
           "equivalent": {
-            "five_hour": 0.000078725,
-            "seven_day": 0.000013120833333333332
+            "five_hour": 0.0000393625,
+            "seven_day": 0.000010496666666666667
           },
           "estimated": true,
           "requests": 6,
@@ -46,8 +46,8 @@
           "billed_usd": 0.0107,
           "cost_usd": 0.02135,
           "equivalent": {
-            "five_hour": 0.000078725,
-            "seven_day": 0.000013120833333333332
+            "five_hour": 0.0000393625,
+            "seven_day": 0.000010496666666666667
           },
           "estimated": true,
           "requests": 6

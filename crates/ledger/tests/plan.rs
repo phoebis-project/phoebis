@@ -121,12 +121,12 @@ fn one_input_token_spends_its_weight_over_the_tiers_five_hour_capacity_and_twice
 ) {
     let tables = first();
     assert_share(
-        tables.share_at(FIVE_HOUR, MAX_20X, OPUS, input(1), OUT_OF_BAND),
+        tables.share_at(FIVE_HOUR, None, MAX_20X, OPUS, input(1), OUT_OF_BAND),
         0.02,
         "out of band",
     );
     assert_share(
-        tables.share_at(FIVE_HOUR, MAX_20X, OPUS, input(1), IN_BAND),
+        tables.share_at(FIVE_HOUR, None, MAX_20X, OPUS, input(1), IN_BAND),
         0.04,
         "in band",
     );
@@ -142,11 +142,11 @@ fn one_input_token_a_second_burns_its_weight_over_the_capacity_per_second_and_tw
         (OUT_OF_BAND, 0.02, "out of band"),
         (IN_BAND, 0.04, "in band"),
     ] {
-        let rate = tables.share_rate_at(FIVE_HOUR, MAX_20X, OPUS, &input_burn(1.0), at);
+        let rate = tables.share_rate_at(FIVE_HOUR, None, MAX_20X, OPUS, &input_burn(1.0), at);
         assert_share(rate, want, what);
         assert_rate_follows_share(
             rate,
-            tables.share_at(FIVE_HOUR, MAX_20X, OPUS, input(1), at),
+            tables.share_at(FIVE_HOUR, None, MAX_20X, OPUS, input(1), at),
             what,
         );
     }
@@ -164,12 +164,13 @@ fn a_burn_of_every_type_sums_its_five_rates_as_a_usage_sums_its_five_counts() {
         write_1h: 1.0,
         write_5m: 1.0,
     };
-    let rate = tables.share_rate_at(FIVE_HOUR, MAX_20X, OPUS, &one_of_each, OUT_OF_BAND);
+    let rate = tables.share_rate_at(FIVE_HOUR, None, MAX_20X, OPUS, &one_of_each, OUT_OF_BAND);
     assert_share(rate, 0.302, "one token of each type a second");
     assert_rate_follows_share(
         rate,
         tables.share_at(
             FIVE_HOUR,
+            None,
             MAX_20X,
             OPUS,
             PinUsage {
@@ -191,9 +192,10 @@ fn a_burn_of_every_type_sums_its_five_rates_as_a_usage_sums_its_five_counts() {
         write_5m: 3.0,
     };
     assert_rate_follows_share(
-        tables.share_rate_at(FIVE_HOUR, MAX_20X, HAIKU, &apart, OUT_OF_BAND),
+        tables.share_rate_at(FIVE_HOUR, None, MAX_20X, HAIKU, &apart, OUT_OF_BAND),
         tables.share_at(
             FIVE_HOUR,
+            None,
             MAX_20X,
             HAIKU,
             PinUsage {
@@ -218,11 +220,11 @@ fn the_rate_on_a_model_week_and_on_a_smaller_tier_follows_share_at() {
         (SEVEN_DAY_FABLE, MAX_20X, 0.004, "the Fable week"),
         (FIVE_HOUR, PRO, 0.4, "Pro"),
     ] {
-        let rate = tables.share_rate_at(window, tier, OPUS, &input_burn(1.0), OUT_OF_BAND);
+        let rate = tables.share_rate_at(window, None, tier, OPUS, &input_burn(1.0), OUT_OF_BAND);
         assert_share(rate, want, what);
         assert_rate_follows_share(
             rate,
-            tables.share_at(window, tier, OPUS, input(1), OUT_OF_BAND),
+            tables.share_at(window, None, tier, OPUS, input(1), OUT_OF_BAND),
             what,
         );
     }
@@ -236,11 +238,12 @@ fn a_model_of_no_weighted_tier_or_a_tier_without_capacity_prices_no_rate() {
     for model in ["claude-mystery-2", "gpt-5"] {
         for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
             let what = format!("{model} on {window}");
-            let rate = tables.share_rate_at(window, MAX_20X, model, &input_burn(1.0), OUT_OF_BAND);
+            let rate =
+                tables.share_rate_at(window, None, MAX_20X, model, &input_burn(1.0), OUT_OF_BAND);
             assert_eq!(rate, None, "{what}");
             assert_rate_follows_share(
                 rate,
-                tables.share_at(window, MAX_20X, model, input(1), OUT_OF_BAND),
+                tables.share_at(window, None, MAX_20X, model, input(1), OUT_OF_BAND),
                 &what,
             );
         }
@@ -251,11 +254,11 @@ fn a_model_of_no_weighted_tier_or_a_tier_without_capacity_prices_no_rate() {
         (SEVEN_DAY_FABLE, TEAM),
     ] {
         let what = format!("{tier} on {window}");
-        let rate = tables.share_rate_at(window, tier, OPUS, &input_burn(1.0), OUT_OF_BAND);
+        let rate = tables.share_rate_at(window, None, tier, OPUS, &input_burn(1.0), OUT_OF_BAND);
         assert_eq!(rate, None, "{what}");
         assert_rate_follows_share(
             rate,
-            tables.share_at(window, tier, OPUS, input(1), OUT_OF_BAND),
+            tables.share_at(window, None, tier, OPUS, input(1), OUT_OF_BAND),
             &what,
         );
     }
@@ -267,7 +270,7 @@ fn a_zero_burn_prices_zero_on_a_weighted_model() {
     for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
         for at in [IN_BAND, OUT_OF_BAND] {
             assert_eq!(
-                tables.share_rate_at(window, MAX_20X, OPUS, &PinBurn::default(), at),
+                tables.share_rate_at(window, None, MAX_20X, OPUS, &PinBurn::default(), at),
                 Some(0.0),
                 "{window} at {at}"
             );
@@ -283,6 +286,7 @@ fn a_model_without_a_weight_burns_at_its_tiers_latest_weight_as_its_share_prices
     assert_share(
         tables.share_rate_at(
             FIVE_HOUR,
+            None,
             MAX_20X,
             "claude-opus-5",
             &input_burn(1.0),
@@ -294,8 +298,8 @@ fn a_model_without_a_weight_burns_at_its_tiers_latest_weight_as_its_share_prices
     for model in ["claude-opus-5", "claude-opus-4-8", "claude-opus-9"] {
         for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
             assert_rate_follows_share(
-                tables.share_rate_at(window, MAX_20X, model, &input_burn(1.0), OUT_OF_BAND),
-                tables.share_at(window, MAX_20X, model, input(1), OUT_OF_BAND),
+                tables.share_rate_at(window, None, MAX_20X, model, &input_burn(1.0), OUT_OF_BAND),
+                tables.share_at(window, None, MAX_20X, model, input(1), OUT_OF_BAND),
                 &format!("{model} on {window}"),
             );
         }
@@ -311,11 +315,11 @@ fn the_tables_price_a_burn_at_the_revision_in_force_at_the_instant() {
         (JANUARY_2026, 0.02, "the first revision in January"),
         (OUT_OF_BAND, 0.04, "the second revision in September"),
     ] {
-        let rate = tables.share_rate_at(FIVE_HOUR, MAX_20X, OPUS, &input_burn(1.0), at);
+        let rate = tables.share_rate_at(FIVE_HOUR, None, MAX_20X, OPUS, &input_burn(1.0), at);
         assert_share(rate, want, what);
         assert_rate_follows_share(
             rate,
-            tables.share_at(FIVE_HOUR, MAX_20X, OPUS, input(1), at),
+            tables.share_at(FIVE_HOUR, None, MAX_20X, OPUS, input(1), at),
             what,
         );
     }
@@ -327,7 +331,7 @@ fn the_week_prices_on_its_own_capacity_and_its_factor_of_one_leaves_it_unbanded(
     let tables = first();
     for at in [IN_BAND, OUT_OF_BAND] {
         assert_share(
-            tables.share_at(SEVEN_DAY, MAX_20X, OPUS, input(1), at),
+            tables.share_at(SEVEN_DAY, None, MAX_20X, OPUS, input(1), at),
             0.002,
             &format!("the week at {at}"),
         );
@@ -338,7 +342,7 @@ fn the_week_prices_on_its_own_capacity_and_its_factor_of_one_leaves_it_unbanded(
 #[test]
 fn a_pro_account_spends_the_same_units_over_its_own_smaller_capacity() {
     assert_share(
-        first().share_at(FIVE_HOUR, PRO, OPUS, input(1), OUT_OF_BAND),
+        first().share_at(FIVE_HOUR, None, PRO, OPUS, input(1), OUT_OF_BAND),
         0.4,
         "Pro",
     );
@@ -348,7 +352,7 @@ fn a_pro_account_spends_the_same_units_over_its_own_smaller_capacity() {
 #[test]
 fn a_model_week_reads_the_seven_day_share_over_its_capacity_factor() {
     assert_share(
-        first().share_at(SEVEN_DAY_FABLE, MAX_20X, OPUS, input(1), OUT_OF_BAND),
+        first().share_at(SEVEN_DAY_FABLE, None, MAX_20X, OPUS, input(1), OUT_OF_BAND),
         0.004,
         "the Fable week",
     );
@@ -366,7 +370,7 @@ fn every_token_type_costs_the_weight_times_its_shared_multiplier() {
         output: 1,
     };
     assert_share(
-        first().share_at(FIVE_HOUR, MAX_20X, OPUS, one_of_each, OUT_OF_BAND),
+        first().share_at(FIVE_HOUR, None, MAX_20X, OPUS, one_of_each, OUT_OF_BAND),
         0.302,
         "one token of each type",
     );
@@ -377,23 +381,24 @@ fn every_token_type_costs_the_weight_times_its_shared_multiplier() {
 fn an_override_replaces_its_multiplier_everywhere_and_its_weight_on_the_window_it_names_alone() {
     let tables = first();
     assert_share(
-        tables.share_at(SEVEN_DAY, MAX_20X, HAIKU, cache_read(1), OUT_OF_BAND),
+        tables.share_at(SEVEN_DAY, None, MAX_20X, HAIKU, cache_read(1), OUT_OF_BAND),
         0.0002,
         "one cache read on the week: weight 1 times 0.2 over 1000",
     );
     assert_share(
-        tables.share_at(FIVE_HOUR, MAX_20X, HAIKU, input(1), OUT_OF_BAND),
+        tables.share_at(FIVE_HOUR, None, MAX_20X, HAIKU, input(1), OUT_OF_BAND),
         0.005,
         "the 5-hour window keeps the weight 0.5: 0.5 / 100",
     );
     assert_share(
-        tables.share_at(SEVEN_DAY_FABLE, MAX_20X, HAIKU, input(1), OUT_OF_BAND),
+        tables.share_at(SEVEN_DAY_FABLE, None, MAX_20X, HAIKU, input(1), OUT_OF_BAND),
         0.001,
         "the override names `seven_day` alone, so the Fable week keeps 0.5: 0.5 / 1000 / 0.5",
     );
     assert_share(
         tables.share_at(
             SEVEN_DAY,
+            None,
             MAX_20X,
             HAIKU,
             PinUsage {
@@ -412,6 +417,7 @@ fn a_dated_id_prices_at_its_undated_weight() {
     assert_share(
         first().share_at(
             FIVE_HOUR,
+            None,
             MAX_20X,
             "claude-opus-5-5-20260401",
             input(1),
@@ -429,34 +435,44 @@ fn a_model_without_a_weight_prices_at_its_tiers_latest_weight_and_a_model_of_no_
 ) {
     let tables = first();
     assert_share(
-        tables.share_at(FIVE_HOUR, MAX_20X, "claude-opus-5", input(1), OUT_OF_BAND),
+        tables.share_at(
+            FIVE_HOUR,
+            None,
+            MAX_20X,
+            "claude-opus-5",
+            input(1),
+            OUT_OF_BAND,
+        ),
         0.02,
         "Opus 5 at Opus 5.5's weight: 2 / 100",
     );
     for model in ["claude-opus-5", "claude-opus-4-8", "claude-opus-9"] {
         for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
             assert_eq!(
-                tables.share_at(window, MAX_20X, model, input(1), OUT_OF_BAND),
-                tables.share_at(window, MAX_20X, OPUS, input(1), OUT_OF_BAND),
+                tables.share_at(window, None, MAX_20X, model, input(1), OUT_OF_BAND),
+                tables.share_at(window, None, MAX_20X, OPUS, input(1), OUT_OF_BAND),
                 "{model} on {window}"
             );
-            assert!(tables.priced(window, MAX_20X, model), "{model} on {window}");
+            assert!(
+                tables.priced(window, None, MAX_20X, model),
+                "{model} on {window}"
+            );
         }
     }
     for model in ["claude-mystery-2", "gpt-5"] {
         for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
             assert_eq!(
-                tables.share_at(window, MAX_20X, model, input(1), OUT_OF_BAND),
+                tables.share_at(window, None, MAX_20X, model, input(1), OUT_OF_BAND),
                 None,
                 "{model} on {window}"
             );
             assert!(
-                !tables.priced(window, MAX_20X, model),
+                !tables.priced(window, None, MAX_20X, model),
                 "{model} on {window}"
             );
         }
     }
-    assert!(tables.priced(FIVE_HOUR, MAX_20X, OPUS));
+    assert!(tables.priced(FIVE_HOUR, None, MAX_20X, OPUS));
 }
 
 // The second revision doubles every weight, so one Opus 5.5 input token reads 4 / 100 from 2026-02-01 on.
@@ -464,12 +480,12 @@ fn a_model_without_a_weight_prices_at_its_tiers_latest_weight_and_a_model_of_no_
 fn the_tables_price_at_the_revision_in_force_at_the_instant_and_hold_the_next_one() {
     let tables = tables();
     assert_share(
-        tables.share_at(FIVE_HOUR, MAX_20X, OPUS, input(1), JANUARY_2026),
+        tables.share_at(FIVE_HOUR, None, MAX_20X, OPUS, input(1), JANUARY_2026),
         0.02,
         "the first revision in January",
     );
     assert_share(
-        tables.share_at(FIVE_HOUR, MAX_20X, OPUS, input(1), OUT_OF_BAND),
+        tables.share_at(FIVE_HOUR, None, MAX_20X, OPUS, input(1), OUT_OF_BAND),
         0.04,
         "the second revision in September",
     );
@@ -481,12 +497,15 @@ fn the_tables_price_at_the_revision_in_force_at_the_instant_and_hold_the_next_on
         Some("2026-02-01")
     );
     assert_eq!(tables.revisions.pending(OUT_OF_BAND), None);
-    assert!(tables.priced(FIVE_HOUR, MAX_20X, OPUS, JANUARY_2026));
+    assert!(tables.priced(FIVE_HOUR, None, MAX_20X, OPUS, JANUARY_2026));
     assert!(tables.measured(SEVEN_DAY_FABLE, JANUARY_2026));
-    assert_eq!(tables.tier_factor(PRO, FIVE_HOUR, JANUARY_2026), Some(0.05));
-    assert_eq!(tables.band_factor(FIVE_HOUR, IN_BAND), 2.0);
     assert_eq!(
-        tables.rate_table(FIVE_HOUR, OUT_OF_BAND).rows[OPUS].input,
+        tables.tier_factor(PRO, FIVE_HOUR, None, JANUARY_2026),
+        Some(0.05)
+    );
+    assert_eq!(tables.band_factor(FIVE_HOUR, None, IN_BAND), 2.0);
+    assert_eq!(
+        tables.rate_table(FIVE_HOUR, None, OUT_OF_BAND).rows[OPUS].input,
         Some(0.04)
     );
 }
@@ -598,24 +617,31 @@ fn the_by_tier_count_reads_the_tier_entries_without_a_weight_whose_tier_has_one(
 fn a_tier_the_file_lacks_or_a_null_capacity_prices_nothing_on_that_window() {
     let tables = first();
     assert_eq!(
-        tables.share_at(FIVE_HOUR, "claude_enterprise", OPUS, input(1), OUT_OF_BAND),
+        tables.share_at(
+            FIVE_HOUR,
+            None,
+            "claude_enterprise",
+            OPUS,
+            input(1),
+            OUT_OF_BAND
+        ),
         None
     );
-    assert!(!tables.priced(FIVE_HOUR, "claude_enterprise", OPUS));
+    assert!(!tables.priced(FIVE_HOUR, None, "claude_enterprise", OPUS));
     for window in [SEVEN_DAY, SEVEN_DAY_FABLE] {
         assert_eq!(
-            tables.share_at(window, TEAM, OPUS, input(1), OUT_OF_BAND),
+            tables.share_at(window, None, TEAM, OPUS, input(1), OUT_OF_BAND),
             None,
             "Team on {window}"
         );
-        assert!(!tables.priced(window, TEAM, OPUS), "Team on {window}");
+        assert!(!tables.priced(window, None, TEAM, OPUS), "Team on {window}");
     }
     assert_share(
-        tables.share_at(FIVE_HOUR, TEAM, OPUS, input(1), OUT_OF_BAND),
+        tables.share_at(FIVE_HOUR, None, TEAM, OPUS, input(1), OUT_OF_BAND),
         0.2,
         "Team on the 5-hour window: 2 / 10",
     );
-    assert!(tables.priced(FIVE_HOUR, TEAM, OPUS));
+    assert!(tables.priced(FIVE_HOUR, None, TEAM, OPUS));
 }
 
 // The equivalent is the share of the anchor account tier, Max 20x: one Opus 5.5 input token is 2 units, 2 / 100 of
@@ -625,33 +651,33 @@ fn a_tier_the_file_lacks_or_a_null_capacity_prices_nothing_on_that_window() {
 fn the_equivalent_is_the_share_of_the_max_20x_windows_on_the_three_columns() {
     let tables = tables();
     assert_share(
-        tables.equivalent_at(FIVE_HOUR, OPUS, input(1), JANUARY_2026),
+        tables.equivalent_at(FIVE_HOUR, None, OPUS, input(1), JANUARY_2026),
         0.02,
         "the 5-hour window out of band",
     );
     assert_share(
-        tables.equivalent_at(FIVE_HOUR, OPUS, input(1), JANUARY_IN_BAND),
+        tables.equivalent_at(FIVE_HOUR, None, OPUS, input(1), JANUARY_IN_BAND),
         0.04,
         "the 5-hour window inside the band",
     );
     assert_share(
-        first().equivalent_at(FIVE_HOUR, OPUS, input(1), IN_BAND),
+        first().equivalent_at(FIVE_HOUR, None, OPUS, input(1), IN_BAND),
         0.04,
         "one revision's equivalent reads the band at its instant",
     );
     assert_share(
-        tables.equivalent_at(SEVEN_DAY, OPUS, input(1), JANUARY_2026),
+        tables.equivalent_at(SEVEN_DAY, None, OPUS, input(1), JANUARY_2026),
         0.002,
         "the week",
     );
     assert_share(
-        tables.equivalent_at(SEVEN_DAY_FABLE, FABLE, input(1), JANUARY_2026),
+        tables.equivalent_at(SEVEN_DAY_FABLE, None, FABLE, input(1), JANUARY_2026),
         0.02,
         "the Fable week: 10 / 1000 / 0.5",
     );
     for window in [FIVE_HOUR, SEVEN_DAY] {
         assert_eq!(
-            tables.equivalent_at(window, "claude-mystery-2", input(1), JANUARY_2026),
+            tables.equivalent_at(window, None, "claude-mystery-2", input(1), JANUARY_2026),
             None,
             "a model tier with no weighted model on {window}"
         );
@@ -661,7 +687,7 @@ fn the_equivalent_is_the_share_of_the_max_20x_windows_on_the_three_columns() {
 #[test]
 fn the_equivalent_answers_the_model_week_for_a_model_that_carries_one_and_the_fallback_marked() {
     let tables = tables();
-    let fable = price_equivalent(&tables, FABLE, input(1), JANUARY_2026, JANUARY_2026);
+    let fable = price_equivalent(&tables, None, FABLE, input(1), JANUARY_2026, JANUARY_2026);
     assert_eq!(
         fable.shares.keys().copied().collect::<Vec<_>>(),
         [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE]
@@ -670,7 +696,7 @@ fn the_equivalent_answers_the_model_week_for_a_model_that_carries_one_and_the_fa
         assert_share(fable.shares[window], want, window);
         assert!(!fable.estimated[window], "{window}");
     }
-    let opus = price_equivalent(&tables, OPUS, input(1), JANUARY_2026, JANUARY_2026);
+    let opus = price_equivalent(&tables, None, OPUS, input(1), JANUARY_2026, JANUARY_2026);
     assert_eq!(
         opus.shares.keys().copied().collect::<Vec<_>>(),
         [FIVE_HOUR, SEVEN_DAY]
@@ -684,6 +710,7 @@ fn the_equivalent_answers_the_model_week_for_a_model_that_carries_one_and_the_fa
     assert!(!opus.any_estimated());
     let unweighted = price_equivalent(
         &tables,
+        None,
         "claude-opus-5",
         input(1),
         JANUARY_2026,
@@ -704,6 +731,7 @@ fn a_share_priced_at_its_model_tiers_latest_weight_is_marked_estimated() {
     let tables = tables();
     let unweighted = price_shares(
         &tables,
+        None,
         MAX_20X,
         "claude-opus-5",
         input(1),
@@ -714,7 +742,15 @@ fn a_share_priced_at_its_model_tiers_latest_weight_is_marked_estimated() {
         unweighted.estimated.into_iter().collect::<Vec<_>>(),
         [(FIVE_HOUR, true), (SEVEN_DAY, true)]
     );
-    let weighted = price_shares(&tables, MAX_20X, OPUS, input(1), JANUARY_2026, JANUARY_2026);
+    let weighted = price_shares(
+        &tables,
+        None,
+        MAX_20X,
+        OPUS,
+        input(1),
+        JANUARY_2026,
+        JANUARY_2026,
+    );
     assert_eq!(
         weighted.estimated.into_iter().collect::<Vec<_>>(),
         [(FIVE_HOUR, false), (SEVEN_DAY, false)]
@@ -743,13 +779,14 @@ fn a_null_weight_with_an_override_on_one_window_marks_the_other_windows_alone_as
     for priced in [
         price_shares(
             &edited,
+            None,
             MAX_20X,
             HAIKU,
             input(1),
             JANUARY_2026,
             JANUARY_2026,
         ),
-        price_equivalent(&edited, HAIKU, input(1), JANUARY_2026, JANUARY_2026),
+        price_equivalent(&edited, None, HAIKU, input(1), JANUARY_2026, JANUARY_2026),
     ] {
         assert_share(priced.shares[FIVE_HOUR], 0.0025, "Haiku 5.5's 0.25 / 100");
         assert_share(priced.shares[SEVEN_DAY], 0.001, "the override's 1 / 1000");
@@ -765,6 +802,7 @@ fn a_null_weight_with_an_override_on_one_window_marks_the_other_windows_alone_as
     }
     let unedited = price_shares(
         &tables(),
+        None,
         MAX_20X,
         HAIKU,
         input(1),
@@ -788,11 +826,11 @@ fn the_shipped_equivalent_is_the_units_over_the_max_20x_capacity_and_a_pro_share
     let half_hours = (0..7 * 48).map(|n| from + n * 1_800_000 + 900_000);
     let out_of_band = half_hours
         .clone()
-        .find(|at| costs.band_factor(FIVE_HOUR, *at) == 1.0)
+        .find(|at| costs.band_factor(FIVE_HOUR, None, *at) == 1.0)
         .expect("an instant out of band");
     let in_band = half_hours
         .clone()
-        .find(|at| costs.band_factor(FIVE_HOUR, *at) > 1.0)
+        .find(|at| costs.band_factor(FIVE_HOUR, None, *at) > 1.0)
         .expect("the band falls inside a week");
     for at in [out_of_band, in_band] {
         assert_eq!(
@@ -818,17 +856,17 @@ fn the_shipped_equivalent_is_the_units_over_the_max_20x_capacity_and_a_pro_share
     let opus = units(OPUS, multiplier.input);
     let opus_equivalent = opus / five_hour;
     assert_share(
-        costs.equivalent_at(FIVE_HOUR, OPUS, input(million), out_of_band),
+        costs.equivalent_at(FIVE_HOUR, None, OPUS, input(million), out_of_band),
         opus_equivalent,
         "Opus 5.5 input on the 5-hour window",
     );
     assert_share(
-        costs.equivalent_at(FIVE_HOUR, OPUS, input(million), in_band),
+        costs.equivalent_at(FIVE_HOUR, None, OPUS, input(million), in_band),
         opus_equivalent / costs.peak.capacity_factor.five_hour,
         "Opus 5.5 input on the 5-hour window inside the band",
     );
     assert_share(
-        costs.equivalent_at(SEVEN_DAY, OPUS, input(million), out_of_band),
+        costs.equivalent_at(SEVEN_DAY, None, OPUS, input(million), out_of_band),
         opus / seven_day,
         "Opus 5.5 input on the week",
     );
@@ -839,19 +877,19 @@ fn the_shipped_equivalent_is_the_units_over_the_max_20x_capacity_and_a_pro_share
         (SEVEN_DAY_FABLE, fable / seven_day / fable_week),
     ] {
         assert_share(
-            costs.equivalent_at(window, FABLE, input(million), out_of_band),
+            costs.equivalent_at(window, None, FABLE, input(million), out_of_band),
             want,
             &format!("Fable 5.1 input on {window}"),
         );
     }
     assert_share(
-        costs.equivalent_at(FIVE_HOUR, OPUS, output(million), out_of_band),
+        costs.equivalent_at(FIVE_HOUR, None, OPUS, output(million), out_of_band),
         units(OPUS, multiplier.output) / five_hour,
         "Opus 5.5 output on the 5-hour window",
     );
     let pro = costs.capacity[PRO].five_hour.unwrap();
     assert_share(
-        costs.share_at(FIVE_HOUR, PRO, OPUS, input(million), out_of_band),
+        costs.share_at(FIVE_HOUR, None, PRO, OPUS, input(million), out_of_band),
         opus_equivalent * five_hour / pro,
         "the Pro share is the equivalent times the anchor's capacity over Pro's",
     );
@@ -862,37 +900,48 @@ fn the_shipped_equivalent_is_the_units_over_the_max_20x_capacity_and_a_pro_share
 fn the_tier_factor_is_the_capacity_over_the_anchors_and_reads_a_tier_with_or_without_its_prefix() {
     let tables = first();
     assert_share(
-        tables.tier_factor("claude_ai", FIVE_HOUR),
+        tables.tier_factor("claude_ai", FIVE_HOUR, None),
         0.05,
         "without the prefix",
     );
-    assert_share(tables.tier_factor(PRO, FIVE_HOUR), 0.05, "as reported");
-    assert_share(tables.tier_factor(MAX_5X, SEVEN_DAY), 0.25, "Max 5x week");
     assert_share(
-        tables.tier_factor(MAX_5X, SEVEN_DAY_FABLE),
+        tables.tier_factor(PRO, FIVE_HOUR, None),
+        0.05,
+        "as reported",
+    );
+    assert_share(
+        tables.tier_factor(MAX_5X, SEVEN_DAY, None),
+        0.25,
+        "Max 5x week",
+    );
+    assert_share(
+        tables.tier_factor(MAX_5X, SEVEN_DAY_FABLE, None),
         0.25,
         "a model week reads the week's ratio",
     );
-    assert_eq!(tables.tier_factor(TEAM, SEVEN_DAY), None);
-    assert_eq!(tables.tier_factor(MAX_20X, "five_hour_x"), None);
-    assert_eq!(tables.tier_factor("claude_enterprise", FIVE_HOUR), None);
+    assert_eq!(tables.tier_factor(TEAM, SEVEN_DAY, None), None);
+    assert_eq!(tables.tier_factor(MAX_20X, "five_hour_x", None), None);
+    assert_eq!(
+        tables.tier_factor("claude_enterprise", FIVE_HOUR, None),
+        None
+    );
 }
 
 // The 5-hour capacity factor is 0.5 inside the band, so the band weighs a 5-hour charge 2; the week's is 1.
 #[test]
 fn the_band_factor_is_the_reciprocal_of_the_windows_capacity_factor_inside_the_band() {
     let tables = first();
-    assert_eq!(tables.band_factor(FIVE_HOUR, IN_BAND), 2.0);
-    assert_eq!(tables.band_factor(FIVE_HOUR, OUT_OF_BAND), 1.0);
-    assert_eq!(tables.band_factor(SEVEN_DAY, IN_BAND), 1.0);
-    assert_eq!(tables.band_factor(SEVEN_DAY_FABLE, IN_BAND), 1.0);
-    assert_eq!(tables.band_factor("x", IN_BAND), 1.0);
+    assert_eq!(tables.band_factor(FIVE_HOUR, None, IN_BAND), 2.0);
+    assert_eq!(tables.band_factor(FIVE_HOUR, None, OUT_OF_BAND), 1.0);
+    assert_eq!(tables.band_factor(SEVEN_DAY, None, IN_BAND), 1.0);
+    assert_eq!(tables.band_factor(SEVEN_DAY_FABLE, None, IN_BAND), 1.0);
+    assert_eq!(tables.band_factor("x", None, IN_BAND), 1.0);
 }
 
 #[test]
 fn the_band_covers_weekday_hours_in_its_zone_and_follows_the_zones_daylight_rule() {
     let tables = first();
-    let factor = |at: i64| tables.band_factor(FIVE_HOUR, at);
+    let factor = |at: i64| tables.band_factor(FIVE_HOUR, None, at);
     assert_eq!(factor(SEPTEMBER_AFTERNOON), 2.0);
     assert_eq!(factor(SEPTEMBER_NOON), 2.0, "the band's first minute");
     assert_eq!(factor(SEPTEMBER_BEFORE_NOON), 1.0);
@@ -911,7 +960,7 @@ fn the_band_covers_weekday_hours_in_its_zone_and_follows_the_zones_daylight_rule
     assert_eq!(factor(NOVEMBER_HALF_PAST_ONE), 2.0);
     assert_eq!(factor(NOVEMBER_HALF_PAST_SIX), 2.0);
     assert_share(
-        tables.share_at(FIVE_HOUR, MAX_20X, OPUS, input(1), SATURDAY_AFTERNOON),
+        tables.share_at(FIVE_HOUR, None, MAX_20X, OPUS, input(1), SATURDAY_AFTERNOON),
         0.02,
         "a weekend charge is the plain share",
     );
@@ -932,15 +981,22 @@ fn the_shared_windows_and_every_model_week_the_file_names_read_measured() {
 fn a_week_the_file_does_not_name_prices_the_seven_day_share_once_and_any_other_window_nothing() {
     let tables = first();
     assert_share(
-        tables.share_at("seven_day_other", MAX_20X, OPUS, input(1), OUT_OF_BAND),
+        tables.share_at(
+            "seven_day_other",
+            None,
+            MAX_20X,
+            OPUS,
+            input(1),
+            OUT_OF_BAND,
+        ),
         0.002,
         "an unnamed week",
     );
     assert_eq!(
-        tables.share_at("one_hour", MAX_20X, OPUS, input(1), OUT_OF_BAND),
+        tables.share_at("one_hour", None, MAX_20X, OPUS, input(1), OUT_OF_BAND),
         None
     );
-    assert!(!tables.priced("one_hour", MAX_20X, OPUS));
+    assert!(!tables.priced("one_hour", None, MAX_20X, OPUS));
 }
 
 // Per token on the anchor's 5-hour window of 100: Opus 5.5 at 2 times (1, 0.1, 2, 2, 10), Haiku at 0.5 times
@@ -949,7 +1005,7 @@ fn a_week_the_file_does_not_name_prices_the_seven_day_share_once_and_any_other_w
 // carries no rate.
 #[test]
 fn the_rate_table_carries_a_row_per_weighted_model_and_per_unweighted_model_of_a_weighted_tier() {
-    let rates = first().rate_table(FIVE_HOUR);
+    let rates = first().rate_table(FIVE_HOUR, None);
     assert!(
         all_close(
             per_type(rates.rows[OPUS]),
@@ -986,7 +1042,7 @@ fn the_rate_table_carries_a_row_per_weighted_model_and_per_unweighted_model_of_a
         per_type(rates.rows[OPUS]),
         "a dated id reads its undated row"
     );
-    assert!(first().rate_table("one_hour").rows.is_empty());
+    assert!(first().rate_table("one_hour", None).rows.is_empty());
 }
 
 // An id no file lists prices through the model tier its id names: Opus 9 at the opus model tier's latest weighted
@@ -995,7 +1051,7 @@ fn the_rate_table_carries_a_row_per_weighted_model_and_per_unweighted_model_of_a
 #[test]
 fn an_unlisted_id_naming_a_weighted_tier_rates_at_its_latest_weight_as_the_meter_charges_it() {
     let costs = first();
-    let rates = costs.rate_table(FIVE_HOUR);
+    let rates = costs.rate_table(FIVE_HOUR, None);
     assert_eq!(rates.rows.get("claude-opus-9"), None, "no file lists it");
     let usage = PinUsage {
         input: 1_000,
@@ -1009,7 +1065,7 @@ fn an_unlisted_id_naming_a_weighted_tier_rates_at_its_latest_weight_as_the_meter
             .price(model, usage, 0)
             .unwrap_or_else(|| panic!("{model}: no rate"));
         let charged = costs
-            .share_at(FIVE_HOUR, MAX_20X, model, usage, OUT_OF_BAND)
+            .share_at(FIVE_HOUR, None, MAX_20X, model, usage, OUT_OF_BAND)
             .expect("the meter charges it");
         assert!(close(rated, charged), "{model}: {rated} against {charged}");
     }
@@ -1041,13 +1097,152 @@ fn a_listed_id_its_model_tier_leaves_unpriced_takes_no_rate_from_the_model_tier_
         .in_force(JANUARY_2026)
         .clone();
     assert_eq!(
-        costs.share_at(FIVE_HOUR, MAX_20X, "claude-opus-7", input(1), OUT_OF_BAND),
+        costs.share_at(
+            FIVE_HOUR,
+            None,
+            MAX_20X,
+            "claude-opus-7",
+            input(1),
+            OUT_OF_BAND
+        ),
         None,
         "the meter leaves it unpriced"
     );
-    let rates = costs.rate_table(FIVE_HOUR);
+    let rates = costs.rate_table(FIVE_HOUR, None);
     assert_eq!(per_type(rates.rates_for("claude-opus-7", 0)), [None; 5]);
     assert_eq!(rates.price("claude-opus-7", input(1), 0), None);
+}
+
+// The test regime holds twice the base Max 20x 5-hour row and 1.25 times its week (200 and 1,250 against 100 and
+// 1,000), so one Opus 5.5 input token, 2 units, reads 2 / 200 and 2 / 1,250 under it, and one Fable 5.1 input token,
+// 10 units, reads 10 / 1,250 over the model week's 0.5.
+#[test]
+fn a_listed_entrypoint_prices_the_five_hour_share_at_half_and_the_week_at_four_fifths_of_the_base()
+{
+    let tables = first();
+    for (window, model, regime, base) in [
+        (FIVE_HOUR, OPUS, 0.01, 0.02),
+        (SEVEN_DAY, OPUS, 0.0016, 0.002),
+        (SEVEN_DAY_FABLE, FABLE, 0.016, 0.02),
+    ] {
+        for entrypoint in ["desk", "pane"] {
+            assert_share(
+                tables.share_at(
+                    window,
+                    Some(entrypoint),
+                    MAX_20X,
+                    model,
+                    input(1),
+                    OUT_OF_BAND,
+                ),
+                regime,
+                &format!("{entrypoint} on {window}"),
+            );
+        }
+        assert_share(
+            tables.share_at(window, None, MAX_20X, model, input(1), OUT_OF_BAND),
+            base,
+            &format!("the base on {window}"),
+        );
+    }
+}
+
+// The base band holds half the 5-hour window and the test regime's holds all of it, so inside the band the base share
+// doubles to 0.04 while the regime's stays at 2 / 200.
+#[test]
+fn the_band_moves_the_base_share_and_not_the_regimes() {
+    let tables = first();
+    assert_share(
+        tables.share_at(FIVE_HOUR, Some("desk"), MAX_20X, OPUS, input(1), IN_BAND),
+        0.01,
+        "the regime in band",
+    );
+    assert_share(
+        tables.share_at(FIVE_HOUR, None, MAX_20X, OPUS, input(1), IN_BAND),
+        0.04,
+        "the base in band",
+    );
+    assert_eq!(tables.band_factor(FIVE_HOUR, Some("desk"), IN_BAND), 1.0);
+    assert_eq!(tables.band_factor(FIVE_HOUR, None, IN_BAND), 2.0);
+}
+
+// The test regime names Pro and Max 20x alone, so Max 5x reads its base 25 under it, 2 / 25. A tier factor divides by
+// the regime's own anchor row: Pro's 10 over 200 is the base ratio of 5 over 100, and Max 5x's base 25 over 200 is
+// the factor that turns the regime's anchor rate of 2 / 200 back into the 0.08.
+#[test]
+fn a_tier_the_regime_leaves_out_prices_at_the_base_row_under_it() {
+    let tables = first();
+    assert_share(
+        tables.share_at(FIVE_HOUR, Some("desk"), MAX_5X, OPUS, input(1), OUT_OF_BAND),
+        0.08,
+        "Max 5x under the regime",
+    );
+    assert_share(
+        tables.tier_factor(PRO, FIVE_HOUR, Some("desk")),
+        0.05,
+        "Pro under the regime",
+    );
+    assert_share(
+        tables.tier_factor(MAX_5X, FIVE_HOUR, Some("desk")),
+        0.125,
+        "Max 5x under the regime's anchor",
+    );
+}
+
+// The equivalent is the share a Max 20x account spends, so under the regime it reads the regime's Max 20x row, and
+// the rate table divides by that row too.
+#[test]
+fn the_equivalent_and_the_rate_table_follow_the_regime() {
+    let tables = first();
+    assert_share(
+        tables.equivalent_at(FIVE_HOUR, Some("desk"), OPUS, input(1), OUT_OF_BAND),
+        0.01,
+        "the regime's equivalent",
+    );
+    let input_rate = |entrypoint: Option<&str>| {
+        tables.rate_table(FIVE_HOUR, entrypoint).rows[OPUS]
+            .input
+            .expect("Opus 5.5 carries a rate")
+    };
+    let (regime, base) = (input_rate(Some("desk")), input_rate(None));
+    assert!(close(regime, base / 2.0), "{regime} against {base}");
+}
+
+#[test]
+fn regime_of_names_the_regime_for_a_listed_token_and_none_otherwise() {
+    let tables = first();
+    let desk = &tables.regimes["desk"];
+    for token in ["desk", "pane"] {
+        assert_eq!(tables.regime_of(Some(token)), Some(desk), "{token}");
+    }
+    assert_eq!(tables.regime_of(Some("sdk-cli")), None);
+    assert_eq!(tables.regime_of(None), None);
+}
+
+#[test]
+fn a_file_without_the_regimes_map_prices_every_entrypoint_at_the_base() {
+    let text = test_tables::first_entry_costs_text();
+    let (without, _) = text
+        .split_once("    regimes:\n")
+        .expect("the first entry carries the map");
+    let costs = CostRevisions::from_yaml(without)
+        .expect("a file without the map loads")
+        .in_force(JANUARY_2026)
+        .clone();
+    assert!(costs.regimes.is_empty());
+    assert_eq!(costs.regime_of(Some("desk")), None);
+    assert_share(
+        costs.share_at(
+            FIVE_HOUR,
+            Some("desk"),
+            MAX_20X,
+            OPUS,
+            input(1),
+            OUT_OF_BAND,
+        ),
+        0.02,
+        "a listed token at the base",
+    );
 }
 
 /// The test table with the first `from` replaced by `to`, refused: the `Plan` message. Both revisions carry most
@@ -1113,6 +1308,94 @@ fn an_unknown_key_or_a_missing_one_is_refused_by_name() {
         &refused("{cache_read: 0.2}", "{cache_reads: 0.2}"),
         "unknown field `cache_reads`",
     );
+}
+
+#[test]
+fn a_malformed_regime_is_refused_by_key() {
+    let bare = "a bare token of lowercase letters, digits, hyphens and underscores";
+    assert_names(&refused("desk:", "Desk:"), &format!("regimes.Desk: {bare}"));
+    // A separator inside the key.
+    assert_names(
+        &refused("desk:", "desk top:"),
+        &format!("regimes.desk top: {bare}"),
+    );
+    let long = "a".repeat(257);
+    for member in ["Pane", "pane=1", "pane.1", "", long.as_str()] {
+        let list = if member.is_empty() {
+            "[desk, \"\"]".to_string()
+        } else {
+            format!("[desk, {member}]")
+        };
+        assert_names(
+            &refused("[desk, pane]", &list),
+            &format!("regimes.desk.entrypoints: {member} is not {bare}"),
+        );
+    }
+    assert_names(
+        &refused("[desk, pane]", "[]"),
+        "regimes.desk.entrypoints: lists none",
+    );
+    let peak = "          capacity_factor: {five_hour: 1, seven_day: 1}\n";
+    assert_names(
+        &refused(
+            peak,
+            &format!(
+                "{peak}      lap:\n        entrypoints: [desk]\n        capacity:\n          \
+                 default_claude_ai: {{five_hour: 10, seven_day: 62.5}}\n        peak:\n{peak}"
+            ),
+        ),
+        "regimes.lap.entrypoints: desk is listed by desk",
+    );
+    let pro = "          default_claude_ai:      {five_hour: 10, seven_day: 62.5}\n";
+    let max = "          default_claude_max_20x: {five_hour: 200, seven_day: 1250}\n";
+    assert_names(
+        &refused(
+            &format!("        capacity:\n{pro}{max}"),
+            "        capacity: {}\n",
+        ),
+        "regimes.desk: names no tier",
+    );
+    assert_names(
+        &refused(
+            max,
+            &format!("{max}          default_claude_pro: {{five_hour: 10, seven_day: 62.5}}\n"),
+        ),
+        "regimes.desk.capacity.default_claude_pro: no capacity row",
+    );
+    assert_names(
+        &refused("five_hour: 200", "five_hour: 0"),
+        "regimes.desk.capacity.default_claude_max_20x.five_hour: a capacity is a number above zero, or null",
+    );
+    assert_names(
+        &refused("seven_day: 1250", "seven_day: null"),
+        "regimes.desk.capacity.default_claude_max_20x.seven_day: the anchor tier carries a capacity on both windows",
+    );
+    assert_names(
+        &refused("{five_hour: 1, seven_day: 1}", "{five_hour: 0, seven_day: 1}"),
+        "regimes.desk.peak.capacity_factor.five_hour: a factor is a number above zero and at most 1",
+    );
+}
+
+// The shipped interactive regime lists `claude-desktop-3p`, so the alphabet carries the digits, and the client spells
+// some entrypoints with an underscore (`local_agent`), so it carries that too.
+#[test]
+fn a_token_with_a_digit_is_a_bare_token() {
+    for member in ["pane-3p", "pane_2"] {
+        let text = SUBSCRIPTION_COSTS.replacen("desk:", "desk-2:", 1).replacen(
+            "[desk, pane]",
+            &format!("[desk, {member}]"),
+            1,
+        );
+        let costs = CostRevisions::from_yaml(&text)
+            .unwrap_or_else(|e| panic!("{member} loads: {e}"))
+            .in_force(JANUARY_2026)
+            .clone();
+        assert_eq!(
+            costs.regime_of(Some(member)),
+            Some(&costs.regimes["desk-2"]),
+            "{member}"
+        );
+    }
 }
 
 #[test]
@@ -1534,6 +1817,10 @@ fn the_shipped_model_parses_and_holds_the_shape() {
             "the weights are in the model order"
         );
     }
+    assert!(
+        !revisions.latest().regimes.is_empty(),
+        "the shipped model names a regime"
+    );
 }
 
 #[test]

@@ -15,9 +15,9 @@ use crate::query::PROBE_KIND;
 use crate::rollup::CostSplit;
 
 /// What prices a row: its model, the cells its speed and band select, who paid, the rollup's `kind` word, the account
-/// tier the row carries (`None` for an api_key account, a profile not yet read, or the rollup's `-`) and the instant
-/// that picks the revision and the threshold. `band_at` is the instant the peak band is read at where a reader has a
-/// completion (an attempt's), else `at` (a rollup row's hour).
+/// tier the row carries (`None` for an api_key account, a profile not yet read, or the rollup's `-`), the entrypoint
+/// whose regime prices its shares and the instant that picks the revision and the threshold. `band_at` is the instant
+/// the peak band is read at where a reader has a completion (an attempt's), else `at` (a rollup row's hour).
 #[derive(Clone, Copy, Debug)]
 pub struct RowKey<'a> {
     pub model: &'a str,
@@ -28,6 +28,8 @@ pub struct RowKey<'a> {
     /// prices at `fallback_rates`, since a probe that consumed quota must never read as free.
     pub kind: &'a str,
     pub tier: Option<&'a str>,
+    /// The request's entrypoint from its `client` label, `None` the base regime.
+    pub entrypoint: Option<&'a str>,
     pub at: i64,
     pub band_at: Option<i64>,
 }
@@ -72,8 +74,18 @@ pub fn price_row(
     let shares = key
         .tier
         .filter(|tier| costs.revisions.in_force(key.at).sizes(tier))
-        .map(|tier| price_shares(costs, tier, key.model, counts, key.at, band_at));
-    let equivalent = price_equivalent(costs, key.model, counts, key.at, band_at);
+        .map(|tier| {
+            price_shares(
+                costs,
+                key.entrypoint,
+                tier,
+                key.model,
+                counts,
+                key.at,
+                band_at,
+            )
+        });
+    let equivalent = price_equivalent(costs, key.entrypoint, key.model, counts, key.at, band_at);
     Priced {
         usd,
         estimated: equivalent.any_estimated()
@@ -136,6 +148,7 @@ mod tests {
             funding: Funding::Plan,
             kind: "inference",
             tier: Some(MAX_20X),
+            entrypoint: None,
             at: JANUARY_2026,
             band_at: None,
         }
@@ -168,6 +181,24 @@ mod tests {
         assert!(close(shares[FIVE_HOUR], 0.02) && close(shares[SEVEN_DAY], 0.002));
         assert_eq!(priced.equivalent, priced.shares, "Max 20x is the anchor");
         assert!(!priced.estimated);
+    }
+
+    // The test regime holds 200 and 1,250 units on Max 20x against the base 100 and 1,000, so the one token's 2 units
+    // read half the base 5-hour figure and four fifths of the week's, in the shares and in the equivalent alike.
+    #[test]
+    fn a_rows_entrypoint_prices_its_shares_and_its_equivalent_under_the_regime() {
+        let priced = price(
+            &RowKey {
+                entrypoint: Some("desk"),
+                ..plan_row()
+            },
+            input(1),
+        );
+        for figures in [&priced.shares, &priced.equivalent] {
+            let figures = figures.as_ref().expect("a plan row on Max 20x");
+            assert!(close(figures[FIVE_HOUR], 0.01), "{figures:?}");
+            assert!(close(figures[SEVEN_DAY], 0.0016), "{figures:?}");
+        }
     }
 
     // The fast block's input is 20 per million, the standard cell 10.

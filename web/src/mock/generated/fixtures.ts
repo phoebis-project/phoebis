@@ -949,17 +949,17 @@ export const FIXTURES: Record<string, Fixture> = {
           "plan_requests": 4,
           "plan_output_tokens": 400,
           "cost_equivalent": {
-            "five_hour": 0.000078725,
-            "seven_day": 0.000013120833333333332
+            "five_hour": 0.0000393625,
+            "seven_day": 0.000010496666666666667
           },
           "cache_equivalent": {
             "five_hour": {
-              "read": 5.583333333333333e-7,
-              "write": 0.00001116666666666667
+              "read": 2.7916666666666666e-7,
+              "write": 0.000005583333333333335
             },
             "seven_day": {
-              "read": 9.305555555555557e-8,
-              "write": 0.0000018611111111111113
+              "read": 7.444444444444444e-8,
+              "write": 0.000001488888888888889
             }
           },
           "probe_equivalent": {},
@@ -971,10 +971,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "output": 0.003
           },
           "equivalent_split": {
-            "input": 0.000007444444444444444,
-            "cache_read": 9.305555555555557e-8,
-            "cache_write": 0.0000018611111111111113,
-            "output": 0.0000037222222222222225
+            "input": 0.000005955555555555555,
+            "cache_read": 7.444444444444444e-8,
+            "cache_write": 0.000001488888888888889,
+            "output": 0.000002977777777777778
           },
           "estimated": true
         },
@@ -1330,17 +1330,17 @@ export const FIXTURES: Record<string, Fixture> = {
           "plan_requests": 1,
           "plan_output_tokens": 100,
           "cost_equivalent": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
+            "five_hour": 0.0000088125,
+            "seven_day": 0.00000235
           },
           "cache_equivalent": {
             "five_hour": {
-              "read": 1.25e-7,
-              "write": 0.0000025
+              "read": 6.25e-8,
+              "write": 0.00000125
             },
             "seven_day": {
-              "read": 2.0833333333333338e-8,
-              "write": 4.1666666666666667e-7
+              "read": 1.6666666666666667e-8,
+              "write": 3.333333333333334e-7
             }
           },
           "probe_equivalent": {},
@@ -1352,10 +1352,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "output": 0
           },
           "equivalent_split": {
-            "input": 0.0000016666666666666669,
-            "cache_read": 2.0833333333333338e-8,
-            "cache_write": 4.1666666666666667e-7,
-            "output": 8.333333333333333e-7
+            "input": 0.0000013333333333333334,
+            "cache_read": 1.6666666666666667e-8,
+            "cache_write": 3.333333333333334e-7,
+            "output": 6.666666666666667e-7
           },
           "estimated": false
         }
@@ -1717,34 +1717,34 @@ export const FIXTURES: Record<string, Fixture> = {
           "wasted_probe_usd": 0,
           "wasted_probe_reasons": {},
           "cost_shares": {
-            "five_hour": 0.00009635,
-            "seven_day": 0.000016058333333333332
+            "five_hour": 0.000048175000000000005,
+            "seven_day": 0.000012846666666666668
           },
           "cache_shares": {
             "five_hour": {
-              "read": 6.833333333333333e-7,
-              "write": 0.000013666666666666667
+              "read": 3.4166666666666664e-7,
+              "write": 0.0000068333333333333345
             },
             "seven_day": {
-              "read": 1.138888888888889e-7,
-              "write": 0.0000022777777777777776
+              "read": 9.111111111111113e-8,
+              "write": 0.0000018222222222222223
             }
           },
           "probe_shares": {},
           "plan_requests": 5,
           "plan_output_tokens": 500,
           "cost_equivalent": {
-            "five_hour": 0.00009635,
-            "seven_day": 0.000016058333333333332
+            "five_hour": 0.000048175000000000005,
+            "seven_day": 0.000012846666666666668
           },
           "cache_equivalent": {
             "five_hour": {
-              "read": 6.833333333333333e-7,
-              "write": 0.000013666666666666667
+              "read": 3.4166666666666664e-7,
+              "write": 0.0000068333333333333345
             },
             "seven_day": {
-              "read": 1.138888888888889e-7,
-              "write": 0.0000022777777777777776
+              "read": 9.111111111111113e-8,
+              "write": 0.0000018222222222222223
             }
           },
           "probe_equivalent": {},
@@ -1756,10 +1756,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "output": 0.002
           },
           "equivalent_split": {
-            "input": 0.00000911111111111111,
-            "cache_read": 1.138888888888889e-7,
-            "cache_write": 0.0000022777777777777776,
-            "output": 0.000004555555555555555
+            "input": 0.000007288888888888889,
+            "cache_read": 9.111111111111113e-8,
+            "cache_write": 0.0000018222222222222223,
+            "output": 0.0000036444444444444446
           },
           "estimated": true
         },
@@ -2850,17 +2850,17 @@ export const FIXTURES: Record<string, Fixture> = {
           "plan_requests": 5,
           "plan_output_tokens": 500,
           "cost_equivalent": {
-            "five_hour": 0.00009635,
-            "seven_day": 0.000016058333333333332
+            "five_hour": 0.000048175000000000005,
+            "seven_day": 0.000012846666666666668
           },
           "cache_equivalent": {
             "five_hour": {
-              "read": 6.833333333333333e-7,
-              "write": 0.000013666666666666667
+              "read": 3.4166666666666664e-7,
+              "write": 0.0000068333333333333345
             },
             "seven_day": {
-              "read": 1.138888888888889e-7,
-              "write": 0.0000022777777777777776
+              "read": 9.111111111111113e-8,
+              "write": 0.0000018222222222222223
             }
           },
           "probe_equivalent": {},
@@ -2872,10 +2872,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "output": 0.002
           },
           "equivalent_split": {
-            "input": 0.00000911111111111111,
-            "cache_read": 1.138888888888889e-7,
-            "cache_write": 0.0000022777777777777776,
-            "output": 0.000004555555555555555
+            "input": 0.000007288888888888889,
+            "cache_read": 9.111111111111113e-8,
+            "cache_write": 0.0000018222222222222223,
+            "output": 0.0000036444444444444446
           },
           "estimated": true
         }
@@ -3288,11 +3288,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "group": "business",
           "unit": "window_share",
           "usd": 0.0071,
-          "five_hour_share": 0.00003525,
-          "seven_day_share": 0.000005875,
+          "five_hour_share": 0.000017625,
+          "seven_day_share": 0.0000047,
           "model_week_share": null,
-          "five_hour_equivalent": 0.00003525,
-          "seven_day_equivalent": 0.000005875,
+          "five_hour_equivalent": 0.000017625,
+          "seven_day_equivalent": 0.0000047,
           "model_week_equivalent": null,
           "estimated": false,
           "cached_tokens": 2000,
@@ -3304,11 +3304,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "group": "business",
           "unit": "window_share",
           "usd": 0,
-          "five_hour_share": 0.00006110000000000001,
-          "seven_day_share": 0.000010183333333333331,
+          "five_hour_share": 0.000030550000000000004,
+          "seven_day_share": 0.000008146666666666666,
           "model_week_share": null,
-          "five_hour_equivalent": 0.00006110000000000001,
-          "seven_day_equivalent": 0.000010183333333333331,
+          "five_hour_equivalent": 0.000030550000000000004,
+          "seven_day_equivalent": 0.000008146666666666666,
           "model_week_equivalent": null,
           "estimated": true,
           "cached_tokens": 1500,
@@ -4436,17 +4436,17 @@ export const FIXTURES: Record<string, Fixture> = {
               "plan_requests": 1,
               "plan_output_tokens": 100,
               "cost_equivalent": {
-                "five_hour": 0.000017625,
-                "seven_day": 0.0000029375
+                "five_hour": 0.0000088125,
+                "seven_day": 0.00000235
               },
               "cache_equivalent": {
                 "five_hour": {
-                  "read": 1.25e-7,
-                  "write": 0.0000025
+                  "read": 6.25e-8,
+                  "write": 0.00000125
                 },
                 "seven_day": {
-                  "read": 2.0833333333333338e-8,
-                  "write": 4.1666666666666667e-7
+                  "read": 1.6666666666666667e-8,
+                  "write": 3.333333333333334e-7
                 }
               },
               "probe_equivalent": {},
@@ -4458,10 +4458,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "output": 0.002
               },
               "equivalent_split": {
-                "input": 0.0000016666666666666669,
-                "cache_read": 2.0833333333333338e-8,
-                "cache_write": 4.1666666666666667e-7,
-                "output": 8.333333333333333e-7
+                "input": 0.0000013333333333333334,
+                "cache_read": 1.6666666666666667e-8,
+                "cache_write": 3.333333333333334e-7,
+                "output": 6.666666666666667e-7
               },
               "estimated": false
             },
@@ -4817,17 +4817,17 @@ export const FIXTURES: Record<string, Fixture> = {
               "plan_requests": 1,
               "plan_output_tokens": 100,
               "cost_equivalent": {
-                "five_hour": 0.000017625,
-                "seven_day": 0.0000029375
+                "five_hour": 0.0000088125,
+                "seven_day": 0.00000235
               },
               "cache_equivalent": {
                 "five_hour": {
-                  "read": 1.25e-7,
-                  "write": 0.0000025
+                  "read": 6.25e-8,
+                  "write": 0.00000125
                 },
                 "seven_day": {
-                  "read": 2.0833333333333338e-8,
-                  "write": 4.1666666666666667e-7
+                  "read": 1.6666666666666667e-8,
+                  "write": 3.333333333333334e-7
                 }
               },
               "probe_equivalent": {},
@@ -4839,10 +4839,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "output": 0
               },
               "equivalent_split": {
-                "input": 0.0000016666666666666669,
-                "cache_read": 2.0833333333333338e-8,
-                "cache_write": 4.1666666666666667e-7,
-                "output": 8.333333333333333e-7
+                "input": 0.0000013333333333333334,
+                "cache_read": 1.6666666666666667e-8,
+                "cache_write": 3.333333333333334e-7,
+                "output": 6.666666666666667e-7
               },
               "estimated": false
             }
@@ -5204,17 +5204,17 @@ export const FIXTURES: Record<string, Fixture> = {
               "plan_requests": 3,
               "plan_output_tokens": 300,
               "cost_equivalent": {
-                "five_hour": 0.00006110000000000001,
-                "seven_day": 0.000010183333333333331
+                "five_hour": 0.000030550000000000004,
+                "seven_day": 0.000008146666666666666
               },
               "cache_equivalent": {
                 "five_hour": {
-                  "read": 4.333333333333334e-7,
-                  "write": 0.000008666666666666668
+                  "read": 2.166666666666667e-7,
+                  "write": 0.000004333333333333334
                 },
                 "seven_day": {
-                  "read": 7.222222222222222e-8,
-                  "write": 0.0000014444444444444445
+                  "read": 5.7777777777777775e-8,
+                  "write": 0.0000011555555555555556
                 }
               },
               "probe_equivalent": {},
@@ -5226,10 +5226,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "output": 0.001
               },
               "equivalent_split": {
-                "input": 0.000005777777777777778,
-                "cache_read": 7.222222222222222e-8,
-                "cache_write": 0.0000014444444444444445,
-                "output": 0.000002888888888888889
+                "input": 0.000004622222222222222,
+                "cache_read": 5.7777777777777775e-8,
+                "cache_write": 0.0000011555555555555556,
+                "output": 0.000002311111111111111
               },
               "estimated": true
             }
@@ -5688,34 +5688,34 @@ export const FIXTURES: Record<string, Fixture> = {
               "wasted_probe_usd": 0,
               "wasted_probe_reasons": {},
               "cost_shares": {
-                "five_hour": 0.00003525,
-                "seven_day": 0.000005875
+                "five_hour": 0.000017625,
+                "seven_day": 0.0000047
               },
               "cache_shares": {
                 "five_hour": {
-                  "read": 2.5e-7,
-                  "write": 0.000005
+                  "read": 1.25e-7,
+                  "write": 0.0000025
                 },
                 "seven_day": {
-                  "read": 4.1666666666666676e-8,
-                  "write": 8.333333333333333e-7
+                  "read": 3.3333333333333334e-8,
+                  "write": 6.666666666666667e-7
                 }
               },
               "probe_shares": {},
               "plan_requests": 2,
               "plan_output_tokens": 200,
               "cost_equivalent": {
-                "five_hour": 0.00003525,
-                "seven_day": 0.000005875
+                "five_hour": 0.000017625,
+                "seven_day": 0.0000047
               },
               "cache_equivalent": {
                 "five_hour": {
-                  "read": 2.5e-7,
-                  "write": 0.000005
+                  "read": 1.25e-7,
+                  "write": 0.0000025
                 },
                 "seven_day": {
-                  "read": 4.1666666666666676e-8,
-                  "write": 8.333333333333333e-7
+                  "read": 3.3333333333333334e-8,
+                  "write": 6.666666666666667e-7
                 }
               },
               "probe_equivalent": {},
@@ -5727,10 +5727,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "output": 0.002
               },
               "equivalent_split": {
-                "input": 0.0000033333333333333333,
-                "cache_read": 4.1666666666666676e-8,
-                "cache_write": 8.333333333333333e-7,
-                "output": 0.0000016666666666666669
+                "input": 0.000002666666666666667,
+                "cache_read": 3.3333333333333334e-8,
+                "cache_write": 6.666666666666667e-7,
+                "output": 0.0000013333333333333334
               },
               "estimated": false
             }
@@ -6086,34 +6086,34 @@ export const FIXTURES: Record<string, Fixture> = {
               "wasted_probe_usd": 0,
               "wasted_probe_reasons": {},
               "cost_shares": {
-                "five_hour": 0.00006110000000000001,
-                "seven_day": 0.000010183333333333331
+                "five_hour": 0.000030550000000000004,
+                "seven_day": 0.000008146666666666666
               },
               "cache_shares": {
                 "five_hour": {
-                  "read": 4.333333333333334e-7,
-                  "write": 0.000008666666666666668
+                  "read": 2.166666666666667e-7,
+                  "write": 0.000004333333333333334
                 },
                 "seven_day": {
-                  "read": 7.222222222222222e-8,
-                  "write": 0.0000014444444444444445
+                  "read": 5.7777777777777775e-8,
+                  "write": 0.0000011555555555555556
                 }
               },
               "probe_shares": {},
               "plan_requests": 3,
               "plan_output_tokens": 300,
               "cost_equivalent": {
-                "five_hour": 0.00006110000000000001,
-                "seven_day": 0.000010183333333333331
+                "five_hour": 0.000030550000000000004,
+                "seven_day": 0.000008146666666666666
               },
               "cache_equivalent": {
                 "five_hour": {
-                  "read": 4.333333333333334e-7,
-                  "write": 0.000008666666666666668
+                  "read": 2.166666666666667e-7,
+                  "write": 0.000004333333333333334
                 },
                 "seven_day": {
-                  "read": 7.222222222222222e-8,
-                  "write": 0.0000014444444444444445
+                  "read": 5.7777777777777775e-8,
+                  "write": 0.0000011555555555555556
                 }
               },
               "probe_equivalent": {},
@@ -6125,10 +6125,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "output": 0
               },
               "equivalent_split": {
-                "input": 0.000005777777777777778,
-                "cache_read": 7.222222222222222e-8,
-                "cache_write": 0.0000014444444444444445,
-                "output": 0.000002888888888888889
+                "input": 0.000004622222222222222,
+                "cache_read": 5.7777777777777775e-8,
+                "cache_write": 0.0000011555555555555556,
+                "output": 0.000002311111111111111
               },
               "estimated": true
             },
@@ -7009,8 +7009,8 @@ export const FIXTURES: Record<string, Fixture> = {
       "cost_24h": 0.0249,
       "billed_24h": 0.0107,
       "equivalent_24h": {
-        "five_hour": 0.00009635,
-        "seven_day": 0.000016058333333333332
+        "five_hour": 0.000048175000000000005,
+        "seven_day": 0.000012846666666666668
       },
       "estimated_24h": true,
       "error_rate_24h": 0.2857142857142857,
@@ -7285,8 +7285,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed": 0.0071,
           "cost": 0.0142,
           "equivalent": {
-            "five_hour": 0.00003525,
-            "seven_day": 0.000005875
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000047
           },
           "errors": 1,
           "requests": 3,
@@ -7297,8 +7297,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed": 0.0036,
           "cost": 0.0107,
           "equivalent": {
-            "five_hour": 0.00006110000000000001,
-            "seven_day": 0.000010183333333333331
+            "five_hour": 0.000030550000000000004,
+            "seven_day": 0.000008146666666666666
           },
           "errors": 1,
           "requests": 4,
@@ -7505,12 +7505,12 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0,
           "cost_shares": {
-            "five_hour": 0.00002585,
-            "seven_day": 0.000004308333333333333
+            "five_hour": 0.000012925,
+            "seven_day": 0.0000034466666666666666
           },
           "cost_equivalent": {
-            "five_hour": 0.00002585,
-            "seven_day": 0.000004308333333333333
+            "five_hour": 0.000012925,
+            "seven_day": 0.0000034466666666666666
           },
           "estimated": true,
           "tier": "default_claude_max_20x",
@@ -7633,12 +7633,12 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.00355,
           "cost_shares": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
+            "five_hour": 0.0000088125,
+            "seven_day": 0.00000235
           },
           "cost_equivalent": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
+            "five_hour": 0.0000088125,
+            "seven_day": 0.00000235
           },
           "estimated": false,
           "tier": "default_claude_max_20x",
@@ -7761,12 +7761,12 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.00355,
           "cost_shares": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
+            "five_hour": 0.0000088125,
+            "seven_day": 0.00000235
           },
           "cost_equivalent": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
+            "five_hour": 0.0000088125,
+            "seven_day": 0.00000235
           },
           "estimated": false,
           "tier": "default_claude_max_20x",
@@ -7893,12 +7893,12 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.00355,
           "cost_shares": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
+            "five_hour": 0.0000088125,
+            "seven_day": 0.00000235
           },
           "cost_equivalent": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
+            "five_hour": 0.0000088125,
+            "seven_day": 0.00000235
           },
           "estimated": false,
           "tier": "default_claude_max_20x",
@@ -8021,12 +8021,12 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.00355,
           "cost_shares": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
+            "five_hour": 0.0000088125,
+            "seven_day": 0.00000235
           },
           "cost_equivalent": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
+            "five_hour": 0.0000088125,
+            "seven_day": 0.00000235
           },
           "estimated": false,
           "tier": "default_claude_max_20x",
@@ -8964,7 +8964,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "effective_body_capture_hours": 24,
       "auto_mode_server": null,
       "effective_auto_mode_server": true,
-      "prefix": "ZFPxvgA5",
+      "prefix": "9DTXh5RA",
       "created_at": 1791721000000,
       "updated_at": 1791721000000,
       "revision": 6189767511104,
@@ -9044,7 +9044,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "effective_body_capture_hours": 24,
           "auto_mode_server": null,
           "effective_auto_mode_server": true,
-          "prefix": "ZFPxvgA5",
+          "prefix": "9DTXh5RA",
           "created_at": 1791721000000,
           "updated_at": 1791721000000,
           "revision": 6189767511104,
@@ -9056,8 +9056,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "billed_usd": 0.0107,
             "cost_usd": 0.02135,
             "equivalent": {
-              "five_hour": 0.000078725,
-              "seven_day": 0.000013120833333333332
+              "five_hour": 0.0000393625,
+              "seven_day": 0.000010496666666666667
             },
             "estimated": true,
             "requests": 6,
@@ -9067,8 +9067,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "billed_usd": 0.0107,
             "cost_usd": 0.02135,
             "equivalent": {
-              "five_hour": 0.000078725,
-              "seven_day": 0.000013120833333333332
+              "five_hour": 0.0000393625,
+              "seven_day": 0.000010496666666666667
             },
             "estimated": true,
             "requests": 6
@@ -9127,9 +9127,9 @@ export const FIXTURES: Record<string, Fixture> = {
   "pairing_started": {
     "route": "POST /admin/oauth/sessions",
     "body": {
-      "id": "8DLey99Qr5TObOlNRsjL8tF61sB0Jp2ud36a5gAc1TM",
-      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A60050%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=r_1HcRI5tTLVMsB9HXDP80Ck3EtlaYlrC6WhJi1bUB0&code_challenge_method=S256&state=zrJRLOStH-7D5o0AAHzSr579aW0VbHYK61-NgdrxPYs",
-      "redirect_uri": "http://localhost:60050/callback",
+      "id": "KepumBZpOcxaNoapoR9niiUbHun95H-uF9k-oS1W2HA",
+      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A60928%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=2P4gvs2_NqB4h3VtobLR0TWLAbOWhWBL7onIkc3XaDQ&code_challenge_method=S256&state=q2bj_wiQc4ArlJTmCfOmVurFk39DeQr1AZMFB8Y1NeA",
+      "redirect_uri": "http://localhost:60928/callback",
       "expires_at": 1791721600000
     }
   },
@@ -9448,8 +9448,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_usd": 0.0142,
           "billed_usd": 0.0071,
           "equivalent": {
-            "five_hour": 0.00003525,
-            "seven_day": 0.000005875
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000047
           },
           "estimated": false
         },
@@ -9461,8 +9461,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_usd": 0.0107,
           "billed_usd": 0.0036,
           "equivalent": {
-            "five_hour": 0.00006110000000000001,
-            "seven_day": 0.000010183333333333331
+            "five_hour": 0.000030550000000000004,
+            "seven_day": 0.000008146666666666666
           },
           "estimated": true
         }
@@ -9604,7 +9604,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "Zqfm0OlX",
+              "prefix": "9DTXh5RA",
               "enabled": true
             }
           ],
@@ -9613,8 +9613,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_24h": 0.024900000000000005,
           "billed_24h": 0.0107,
           "equivalent_24h": {
-            "five_hour": 0.00009635,
-            "seven_day": 0.000016058333333333332
+            "five_hour": 0.000048175000000000005,
+            "seven_day": 0.000012846666666666668
           },
           "estimated_24h": true,
           "active_pins": 1,
@@ -9926,8 +9926,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "cost_usd": 0.0142,
               "billed_usd": 0.0071,
               "equivalent": {
-                "five_hour": 0.00003525,
-                "seven_day": 0.000005875
+                "five_hour": 0.000017625,
+                "seven_day": 0.0000047
               },
               "estimated": false
             },
@@ -9939,8 +9939,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "cost_usd": 0.0107,
               "billed_usd": 0.0036,
               "equivalent": {
-                "five_hour": 0.00006110000000000001,
-                "seven_day": 0.000010183333333333331
+                "five_hour": 0.000030550000000000004,
+                "seven_day": 0.000008146666666666666
               },
               "estimated": true
             }
@@ -10329,6 +10329,36 @@ export const FIXTURES: Record<string, Fixture> = {
             "claude-sonnet-4-5": "sonnet",
             "claude-haiku-5-5": "haiku",
             "claude-haiku-4-5": "haiku"
+          },
+          "regimes": {
+            "interactive": {
+              "entrypoints": [
+                "claude-desktop",
+                "claude-desktop-3p",
+                "claude-vscode",
+                "cli"
+              ],
+              "capacity": {
+                "default_claude_ai": {
+                  "five_hour": 15000000,
+                  "seven_day": 112500000
+                },
+                "default_claude_max_5x": {
+                  "five_hour": 75000000,
+                  "seven_day": 562500000
+                },
+                "default_claude_max_20x": {
+                  "five_hour": 300000000,
+                  "seven_day": 1125000000
+                }
+              },
+              "peak": {
+                "capacity_factor": {
+                  "five_hour": 1,
+                  "seven_day": 1
+                }
+              }
+            }
           }
         },
         "revisions": [
@@ -10411,6 +10441,36 @@ export const FIXTURES: Record<string, Fixture> = {
                 "claude-sonnet-4-5": "sonnet",
                 "claude-haiku-5-5": "haiku",
                 "claude-haiku-4-5": "haiku"
+              },
+              "regimes": {
+                "interactive": {
+                  "entrypoints": [
+                    "claude-desktop",
+                    "claude-desktop-3p",
+                    "claude-vscode",
+                    "cli"
+                  ],
+                  "capacity": {
+                    "default_claude_ai": {
+                      "five_hour": 15000000,
+                      "seven_day": 112500000
+                    },
+                    "default_claude_max_5x": {
+                      "five_hour": 75000000,
+                      "seven_day": 562500000
+                    },
+                    "default_claude_max_20x": {
+                      "five_hour": 300000000,
+                      "seven_day": 1125000000
+                    }
+                  },
+                  "peak": {
+                    "capacity_factor": {
+                      "five_hour": 1,
+                      "seven_day": 1
+                    }
+                  }
+                }
               }
             }
           }
@@ -10950,12 +11010,12 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.00355,
           "cost_shares": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
+            "five_hour": 0.0000088125,
+            "seven_day": 0.00000235
           },
           "cost_equivalent": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
+            "five_hour": 0.0000088125,
+            "seven_day": 0.00000235
           },
           "estimated": false,
           "tier": "default_claude_max_20x",
@@ -11078,12 +11138,12 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.00355,
           "cost_shares": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
+            "five_hour": 0.0000088125,
+            "seven_day": 0.00000235
           },
           "cost_equivalent": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
+            "five_hour": 0.0000088125,
+            "seven_day": 0.00000235
           },
           "estimated": false,
           "tier": "default_claude_max_20x",
@@ -11210,12 +11270,12 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.00355,
           "cost_shares": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
+            "five_hour": 0.0000088125,
+            "seven_day": 0.00000235
           },
           "cost_equivalent": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
+            "five_hour": 0.0000088125,
+            "seven_day": 0.00000235
           },
           "estimated": false,
           "tier": "default_claude_max_20x",
@@ -11338,12 +11398,12 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.00355,
           "cost_shares": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
+            "five_hour": 0.0000088125,
+            "seven_day": 0.00000235
           },
           "cost_equivalent": {
-            "five_hour": 0.000017625,
-            "seven_day": 0.0000029375
+            "five_hour": 0.0000088125,
+            "seven_day": 0.00000235
           },
           "estimated": false,
           "tier": "default_claude_max_20x",
@@ -13337,7 +13397,7 @@ export const FIXTURES: Record<string, Fixture> = {
   "session": {
     "route": "GET /admin/session",
     "body": {
-      "session_id": "ubGziRUthj2CDHY-qPejWS0yDb2HWNwCGnqsCum9U1Q"
+      "session_id": "lex6W9LNVxDsdevm84ieMHP0o44aWVZzMqozyyjTgtQ"
     }
   },
   "sessions": {
@@ -14074,6 +14134,36 @@ export const FIXTURES: Record<string, Fixture> = {
             "claude-sonnet-4-5": "sonnet",
             "claude-haiku-5-5": "haiku",
             "claude-haiku-4-5": "haiku"
+          },
+          "regimes": {
+            "interactive": {
+              "entrypoints": [
+                "claude-desktop",
+                "claude-desktop-3p",
+                "claude-vscode",
+                "cli"
+              ],
+              "capacity": {
+                "default_claude_ai": {
+                  "five_hour": 15000000,
+                  "seven_day": 112500000
+                },
+                "default_claude_max_5x": {
+                  "five_hour": 75000000,
+                  "seven_day": 562500000
+                },
+                "default_claude_max_20x": {
+                  "five_hour": 300000000,
+                  "seven_day": 1125000000
+                }
+              },
+              "peak": {
+                "capacity_factor": {
+                  "five_hour": 1,
+                  "seven_day": 1
+                }
+              }
+            }
           }
         },
         "revisions": [
@@ -14156,6 +14246,36 @@ export const FIXTURES: Record<string, Fixture> = {
                 "claude-sonnet-4-5": "sonnet",
                 "claude-haiku-5-5": "haiku",
                 "claude-haiku-4-5": "haiku"
+              },
+              "regimes": {
+                "interactive": {
+                  "entrypoints": [
+                    "claude-desktop",
+                    "claude-desktop-3p",
+                    "claude-vscode",
+                    "cli"
+                  ],
+                  "capacity": {
+                    "default_claude_ai": {
+                      "five_hour": 15000000,
+                      "seven_day": 112500000
+                    },
+                    "default_claude_max_5x": {
+                      "five_hour": 75000000,
+                      "seven_day": 562500000
+                    },
+                    "default_claude_max_20x": {
+                      "five_hour": 300000000,
+                      "seven_day": 1125000000
+                    }
+                  },
+                  "peak": {
+                    "capacity_factor": {
+                      "five_hour": 1,
+                      "seven_day": 1
+                    }
+                  }
+                }
               }
             }
           }
@@ -14520,6 +14640,30 @@ export const FIXTURES: Record<string, Fixture> = {
             "claude-sonnet-5-5": "sonnet",
             "claude-haiku-4-5": "haiku",
             "claude-mystery-2": "mystery"
+          },
+          "regimes": {
+            "desk": {
+              "entrypoints": [
+                "desk",
+                "pane"
+              ],
+              "capacity": {
+                "default_claude_ai": {
+                  "five_hour": 10,
+                  "seven_day": 62.5
+                },
+                "default_claude_max_20x": {
+                  "five_hour": 200,
+                  "seven_day": 1250
+                }
+              },
+              "peak": {
+                "capacity_factor": {
+                  "five_hour": 1,
+                  "seven_day": 1
+                }
+              }
+            }
           }
         },
         "revisions": [
@@ -14608,6 +14752,30 @@ export const FIXTURES: Record<string, Fixture> = {
                 "claude-sonnet-5-5": "sonnet",
                 "claude-haiku-4-5": "haiku",
                 "claude-mystery-2": "mystery"
+              },
+              "regimes": {
+                "desk": {
+                  "entrypoints": [
+                    "desk",
+                    "pane"
+                  ],
+                  "capacity": {
+                    "default_claude_ai": {
+                      "five_hour": 10,
+                      "seven_day": 62.5
+                    },
+                    "default_claude_max_20x": {
+                      "five_hour": 200,
+                      "seven_day": 1250
+                    }
+                  },
+                  "peak": {
+                    "capacity_factor": {
+                      "five_hour": 1,
+                      "seven_day": 1
+                    }
+                  }
+                }
               }
             }
           },
@@ -14696,6 +14864,30 @@ export const FIXTURES: Record<string, Fixture> = {
                 "claude-sonnet-5-5": "sonnet",
                 "claude-haiku-4-5": "haiku",
                 "claude-mystery-2": "mystery"
+              },
+              "regimes": {
+                "desk": {
+                  "entrypoints": [
+                    "desk",
+                    "pane"
+                  ],
+                  "capacity": {
+                    "default_claude_ai": {
+                      "five_hour": 10,
+                      "seven_day": 62.5
+                    },
+                    "default_claude_max_20x": {
+                      "five_hour": 200,
+                      "seven_day": 1250
+                    }
+                  },
+                  "peak": {
+                    "capacity_factor": {
+                      "five_hour": 1,
+                      "seven_day": 1
+                    }
+                  }
+                }
               }
             }
           }

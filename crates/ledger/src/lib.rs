@@ -37,9 +37,9 @@ pub use pattern::{
     within_bounds as patterns_within_bounds, MAX_PATTERNS, MAX_PATTERN_CHARS, PATTERNS_TOO_LONG,
 };
 pub use plan::{
-    funding_of, price_equivalent, price_shares, Capacity, CostRevisions, DefinedBy, Funding,
-    ModelWindow, Override, Peak, PerWindow, PlanTables, PricedShares, SubscriptionCosts,
-    TypeMultiplier, TypeOverride, Unit, WindowShares,
+    entrypoint_of_client, funding_of, price_equivalent, price_shares, Capacity, CostRevisions,
+    DefinedBy, Funding, ModelWindow, Override, Peak, PerWindow, PlanTables, PricedShares, Regime,
+    RegimePeak, SubscriptionCosts, TypeMultiplier, TypeOverride, Unit, WindowShares,
 };
 pub use price::{price_row, Priced, RowKey};
 pub use pricing::{

@@ -359,17 +359,17 @@
         "plan_requests": 4,
         "plan_output_tokens": 400,
         "cost_equivalent": {
-          "five_hour": 0.000078725,
-          "seven_day": 0.000013120833333333332
+          "five_hour": 0.0000393625,
+          "seven_day": 0.000010496666666666667
         },
         "cache_equivalent": {
           "five_hour": {
-            "read": 5.583333333333333e-7,
-            "write": 0.00001116666666666667
+            "read": 2.7916666666666666e-7,
+            "write": 5.583333333333335e-6
           },
           "seven_day": {
-            "read": 9.305555555555557e-8,
-            "write": 1.8611111111111113e-6
+            "read": 7.444444444444444e-8,
+            "write": 1.488888888888889e-6
           }
         },
         "probe_equivalent": {},
@@ -381,10 +381,10 @@
           "output": 0.003
         },
         "equivalent_split": {
-          "input": 7.444444444444444e-6,
-          "cache_read": 9.305555555555557e-8,
-          "cache_write": 1.8611111111111113e-6,
-          "output": 3.7222222222222225e-6
+          "input": 5.955555555555555e-6,
+          "cache_read": 7.444444444444444e-8,
+          "cache_write": 1.488888888888889e-6,
+          "output": 2.977777777777778e-6
         },
         "estimated": true
       },
@@ -740,17 +740,17 @@
         "plan_requests": 1,
         "plan_output_tokens": 100,
         "cost_equivalent": {
-          "five_hour": 0.000017625,
-          "seven_day": 2.9375e-6
+          "five_hour": 8.8125e-6,
+          "seven_day": 2.35e-6
         },
         "cache_equivalent": {
           "five_hour": {
-            "read": 1.25e-7,
-            "write": 2.5e-6
+            "read": 6.25e-8,
+            "write": 1.25e-6
           },
           "seven_day": {
-            "read": 2.0833333333333338e-8,
-            "write": 4.1666666666666667e-7
+            "read": 1.6666666666666667e-8,
+            "write": 3.333333333333334e-7
           }
         },
         "probe_equivalent": {},
@@ -762,10 +762,10 @@
           "output": 0.0
         },
         "equivalent_split": {
-          "input": 1.6666666666666669e-6,
-          "cache_read": 2.0833333333333338e-8,
-          "cache_write": 4.1666666666666667e-7,
-          "output": 8.333333333333333e-7
+          "input": 1.3333333333333334e-6,
+          "cache_read": 1.6666666666666667e-8,
+          "cache_write": 3.333333333333334e-7,
+          "output": 6.666666666666667e-7
         },
         "estimated": false
       }

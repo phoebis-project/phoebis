@@ -197,12 +197,12 @@
         },
         "cost_usd": 0.00355,
         "cost_shares": {
-          "five_hour": 0.000017625,
-          "seven_day": 2.9375e-6
+          "five_hour": 8.8125e-6,
+          "seven_day": 2.35e-6
         },
         "cost_equivalent": {
-          "five_hour": 0.000017625,
-          "seven_day": 2.9375e-6
+          "five_hour": 8.8125e-6,
+          "seven_day": 2.35e-6
         },
         "estimated": false,
         "tier": "default_claude_max_20x",
@@ -325,12 +325,12 @@
         },
         "cost_usd": 0.00355,
         "cost_shares": {
-          "five_hour": 0.000017625,
-          "seven_day": 2.9375e-6
+          "five_hour": 8.8125e-6,
+          "seven_day": 2.35e-6
         },
         "cost_equivalent": {
-          "five_hour": 0.000017625,
-          "seven_day": 2.9375e-6
+          "five_hour": 8.8125e-6,
+          "seven_day": 2.35e-6
         },
         "estimated": false,
         "tier": "default_claude_max_20x",
@@ -457,12 +457,12 @@
         },
         "cost_usd": 0.00355,
         "cost_shares": {
-          "five_hour": 0.000017625,
-          "seven_day": 2.9375e-6
+          "five_hour": 8.8125e-6,
+          "seven_day": 2.35e-6
         },
         "cost_equivalent": {
-          "five_hour": 0.000017625,
-          "seven_day": 2.9375e-6
+          "five_hour": 8.8125e-6,
+          "seven_day": 2.35e-6
         },
         "estimated": false,
         "tier": "default_claude_max_20x",
@@ -585,12 +585,12 @@
         },
         "cost_usd": 0.00355,
         "cost_shares": {
-          "five_hour": 0.000017625,
-          "seven_day": 2.9375e-6
+          "five_hour": 8.8125e-6,
+          "seven_day": 2.35e-6
         },
         "cost_equivalent": {
-          "five_hour": 0.000017625,
-          "seven_day": 2.9375e-6
+          "five_hour": 8.8125e-6,
+          "seven_day": 2.35e-6
         },
         "estimated": false,
         "tier": "default_claude_max_20x",

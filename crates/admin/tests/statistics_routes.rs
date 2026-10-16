@@ -1241,7 +1241,9 @@ async fn a_plan_request_on_a_model_the_cost_model_does_not_weight_reads_an_estim
         "an Opus model's equivalent reads the two shared windows: {summary}"
     );
     for window in [phoebis_routing::FIVE_HOUR, phoebis_routing::SEVEN_DAY] {
-        let at_the_donor = tables.equivalent_at(window, donor, usage, band_at).unwrap();
+        let at_the_donor = tables
+            .equivalent_at(window, None, donor, usage, band_at)
+            .unwrap();
         assert!(
             close_to(&summary["cost_equivalent"][window], at_the_donor),
             "{window}: the 20x equivalent at the weight of the model tier's latest weighted model, \
@@ -1574,6 +1576,7 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
         tables
             .share_at(
                 window,
+                None,
                 "default_claude_max_20x",
                 "claude-opus-5-5",
                 usage,
@@ -1597,7 +1600,9 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
         "a subscription spends no dollars: {point}"
     );
     let equivalent = |window: &str, model: &str, at: i64| {
-        tables.equivalent_at(window, model, usage, at).unwrap()
+        tables
+            .equivalent_at(window, None, model, usage, at)
+            .unwrap()
     };
     let five_hour_equivalent = equivalent(phoebis_routing::FIVE_HOUR, "claude-opus-5-5", hour);
     let seven_day_equivalent = equivalent(phoebis_routing::SEVEN_DAY, "claude-opus-5-5", hour);
@@ -1616,6 +1621,7 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     let week_share = tables
         .share_at(
             phoebis_routing::SEVEN_DAY_FABLE,
+            None,
             "default_claude_max_20x",
             "claude-fable-5-1",
             usage,
@@ -2566,7 +2572,7 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         let completed = started + 500;
         let equivalent = |window: &str| {
             tables
-                .equivalent_at(window, "claude-sonnet-5", usage, completed)
+                .equivalent_at(window, None, "claude-sonnet-5", usage, completed)
                 .unwrap()
         };
         let any = bucket_of(points);
@@ -2584,6 +2590,7 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
             tables
                 .share_at(
                     window,
+                    None,
                     "default_claude_max_20x",
                     "claude-sonnet-5",
                     usage,
@@ -2895,6 +2902,7 @@ async fn the_session_series_sizes_its_buckets_like_the_account_series_on_long_ra
     let seven_day = phoebis_ledger::PlanTables::shipped()
         .share_at(
             phoebis_routing::SEVEN_DAY,
+            None,
             "default_claude_max_20x",
             "claude-sonnet-5-5",
             phoebis_routing::PinUsage {

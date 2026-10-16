@@ -2846,6 +2846,7 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
     let share_per_hour = phoebis_ledger::PlanTables::shipped()
         .share_at(
             phoebis_routing::FIVE_HOUR,
+            None,
             "default_claude_max_20x",
             "claude-opus-5-5",
             phoebis_routing::PinUsage {
@@ -2896,6 +2897,7 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
     let equivalent_per_hour = phoebis_ledger::PlanTables::shipped()
         .equivalent_at(
             phoebis_routing::FIVE_HOUR,
+            None,
             "claude-opus-5-5",
             phoebis_routing::PinUsage {
                 input: 145,
@@ -3143,6 +3145,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
     let on_max_20x = tables
         .share_at(
             phoebis_routing::FIVE_HOUR,
+            None,
             "default_claude_max_20x",
             "claude-opus-5-5",
             million,
@@ -3166,7 +3169,13 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
     );
     // The 20x equivalent reads no account tier, so the same figure on every tier the account moves to below.
     let equivalent = tables
-        .equivalent_at(phoebis_routing::FIVE_HOUR, "claude-opus-5-5", million, now)
+        .equivalent_at(
+            phoebis_routing::FIVE_HOUR,
+            None,
+            "claude-opus-5-5",
+            million,
+            now,
+        )
         .unwrap()
         * 3_600.0
         / window;
@@ -3187,6 +3196,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
     let pro = tables
         .share_at(
             phoebis_routing::FIVE_HOUR,
+            None,
             "default_claude_ai",
             "claude-opus-5-5",
             million,
@@ -3934,6 +3944,7 @@ async fn a_pin_on_a_model_without_a_weight_reads_an_estimated_burn() {
     let share_per_hour = tables
         .share_at(
             phoebis_routing::FIVE_HOUR,
+            None,
             "default_claude_max_20x",
             donor,
             phoebis_routing::PinUsage {
@@ -3954,6 +3965,7 @@ async fn a_pin_on_a_model_without_a_weight_reads_an_estimated_burn() {
     let equivalent_per_hour = tables
         .equivalent_at(
             phoebis_routing::FIVE_HOUR,
+            None,
             donor,
             phoebis_routing::PinUsage {
                 input: 100,

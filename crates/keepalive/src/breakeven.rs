@@ -135,7 +135,7 @@ impl FactorRows {
             fast,
             dollars_long,
             fast_long,
-            plan: tables.rate_table(FIVE_HOUR, at).rows,
+            plan: tables.rate_table(FIVE_HOUR, None, at).rows,
             plan_multipliers,
             plan_overrides,
             tightest,

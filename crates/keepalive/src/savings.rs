@@ -21,7 +21,7 @@ pub(crate) fn probe_cost(
     usage: ProbeUsage,
     at: i64,
 ) -> Option<f64> {
-    tables.share_at(FIVE_HOUR, tier?, canonical_model, typed(usage), at)
+    tables.share_at(FIVE_HOUR, None, tier?, canonical_model, typed(usage), at)
 }
 
 /// A probe answer's tokens by type. An answer that reports the aggregate `cache_creation_input_tokens` and no TTL
@@ -54,6 +54,7 @@ pub(crate) fn answered_speed(usage: ProbeUsage) -> Speed {
 pub(crate) fn unpriced_reason(tables: &PlanTables, canonical_model: &str, at: i64) -> &'static str {
     if !tables.priced(
         FIVE_HOUR,
+        None,
         &tables.revisions.in_force(at).unit.defined_by.tier,
         canonical_model,
         at,
@@ -74,7 +75,7 @@ pub(crate) fn settlement_unit(
     canonical_model: &str,
     at: i64,
 ) -> SavingsUnit {
-    let priced = tier.is_some_and(|tier| tables.priced(FIVE_HOUR, tier, canonical_model, at));
+    let priced = tier.is_some_and(|tier| tables.priced(FIVE_HOUR, None, tier, canonical_model, at));
     if default_unit == SavingsUnit::WindowShare && !priced {
         SavingsUnit::Usd
     } else {

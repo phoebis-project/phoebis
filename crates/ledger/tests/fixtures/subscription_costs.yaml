@@ -34,6 +34,14 @@ revisions:
       claude-sonnet-5-5: sonnet
       claude-haiku-4-5: haiku
       claude-mystery-2: mystery
+    regimes:
+      desk:
+        entrypoints: [desk, pane]
+        capacity:
+          default_claude_ai:      {five_hour: 10, seven_day: 62.5}
+          default_claude_max_20x: {five_hour: 200, seven_day: 1250}
+        peak:
+          capacity_factor: {five_hour: 1, seven_day: 1}
   - effective: 2026-02-01
     unit:
       defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
@@ -69,3 +77,11 @@ revisions:
       claude-sonnet-5-5: sonnet
       claude-haiku-4-5: haiku
       claude-mystery-2: mystery
+    regimes:
+      desk:
+        entrypoints: [desk, pane]
+        capacity:
+          default_claude_ai:      {five_hour: 10, seven_day: 62.5}
+          default_claude_max_20x: {five_hour: 200, seven_day: 1250}
+        peak:
+          capacity_factor: {five_hour: 1, seven_day: 1}

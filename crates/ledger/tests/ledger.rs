@@ -31,6 +31,7 @@ fn row_usd(prices: &PriceRevisions, row: &RollupRow) -> f64 {
         funding: phoebis_ledger::Funding::of_rollup(&row.funding),
         kind: &row.kind,
         tier: (row.tier != UNATTRIBUTED).then_some(row.tier.as_str()),
+        entrypoint: None,
         at: row.hour * 1_000,
         band_at: None,
     };

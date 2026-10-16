@@ -152,6 +152,7 @@ fn main() -> anyhow::Result<()> {
             let weighted = costs.weighted_model_count();
             let by_tier = costs.by_tier_count();
             let sized = costs.sized_tier_count();
+            let regimes = regime_clause(costs.regimes.keys().map(String::as_str));
             println!(
                 "subscription costs: {}",
                 table_line(
@@ -164,7 +165,7 @@ fn main() -> anyhow::Result<()> {
                         .map(|next| next.effective.as_str()),
                     config.stats.subscription_costs_path.as_deref(),
                     format!(
-                        "{weighted} weighted models, {by_tier} more by model tier, {sized} account tiers"
+                        "{weighted} weighted models, {by_tier} more by model tier, {sized} account tiers{regimes}"
                     )
                 )
             );
@@ -548,6 +549,18 @@ fn table_line(
             path.display()
         ),
         (_, None) => format!("built in ({listed})"),
+    }
+}
+
+/// The regimes of the cost entry in force for the `subscription costs:` line, named in the file's order, so an
+/// operator can tell a file that prices some entrypoints apart from one that prices all of them at the base rows.
+fn regime_clause<'a>(names: impl ExactSizeIterator<Item = &'a str>) -> String {
+    let count = names.len();
+    let names = names.collect::<Vec<_>>().join(", ");
+    match count {
+        0 => ", no regime".to_string(),
+        1 => format!(", 1 regime: {names}"),
+        n => format!(", {n} regimes: {names}"),
     }
 }
 

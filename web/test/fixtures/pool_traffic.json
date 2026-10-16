@@ -313,8 +313,8 @@
         "cost_usd": 0.0142,
         "billed_usd": 0.0071,
         "equivalent": {
-          "five_hour": 0.00003525,
-          "seven_day": 5.875e-6
+          "five_hour": 0.000017625,
+          "seven_day": 4.7e-6
         },
         "estimated": false
       },
@@ -326,8 +326,8 @@
         "cost_usd": 0.0107,
         "billed_usd": 0.0036,
         "equivalent": {
-          "five_hour": 0.00006110000000000001,
-          "seven_day": 0.000010183333333333331
+          "five_hour": 0.000030550000000000004,
+          "seven_day": 8.146666666666666e-6
         },
         "estimated": true
       }

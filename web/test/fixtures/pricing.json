@@ -369,6 +369,36 @@
           "claude-sonnet-4-5": "sonnet",
           "claude-haiku-5-5": "haiku",
           "claude-haiku-4-5": "haiku"
+        },
+        "regimes": {
+          "interactive": {
+            "entrypoints": [
+              "claude-desktop",
+              "claude-desktop-3p",
+              "claude-vscode",
+              "cli"
+            ],
+            "capacity": {
+              "default_claude_ai": {
+                "five_hour": 15000000.0,
+                "seven_day": 112500000.0
+              },
+              "default_claude_max_5x": {
+                "five_hour": 75000000.0,
+                "seven_day": 562500000.0
+              },
+              "default_claude_max_20x": {
+                "five_hour": 300000000.0,
+                "seven_day": 1125000000.0
+              }
+            },
+            "peak": {
+              "capacity_factor": {
+                "five_hour": 1.0,
+                "seven_day": 1.0
+              }
+            }
+          }
         }
       },
       "revisions": [
@@ -451,6 +481,36 @@
               "claude-sonnet-4-5": "sonnet",
               "claude-haiku-5-5": "haiku",
               "claude-haiku-4-5": "haiku"
+            },
+            "regimes": {
+              "interactive": {
+                "entrypoints": [
+                  "claude-desktop",
+                  "claude-desktop-3p",
+                  "claude-vscode",
+                  "cli"
+                ],
+                "capacity": {
+                  "default_claude_ai": {
+                    "five_hour": 15000000.0,
+                    "seven_day": 112500000.0
+                  },
+                  "default_claude_max_5x": {
+                    "five_hour": 75000000.0,
+                    "seven_day": 562500000.0
+                  },
+                  "default_claude_max_20x": {
+                    "five_hour": 300000000.0,
+                    "seven_day": 1125000000.0
+                  }
+                },
+                "peak": {
+                  "capacity_factor": {
+                    "five_hour": 1.0,
+                    "seven_day": 1.0
+                  }
+                }
+              }
             }
           }
         }

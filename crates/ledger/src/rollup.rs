@@ -3473,6 +3473,7 @@ mod tests {
             funding: crate::plan::Funding::of_rollup(&row.funding),
             kind: row.kind.as_str(),
             tier: None,
+            entrypoint: crate::plan::entrypoint_of_client(&row.client),
             at: row.hour * 1_000,
             band_at: None,
         };
@@ -3552,6 +3553,7 @@ mod tests {
                     funding: crate::plan::Funding::of_rollup(&d.funding),
                     kind: d.kind.as_str(),
                     tier: None,
+                    entrypoint: crate::plan::entrypoint_of_client(&d.client),
                     at: d.hour * 1_000,
                     band_at: None,
                 };

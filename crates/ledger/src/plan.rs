@@ -175,6 +175,23 @@ pub struct ModelWindow {
     pub of: String,
 }
 
+/// A regime: the entrypoints it prices and the capacity rows and band factor it sets in place of the base rows for
+/// them. A tier an entry leaves out prices at the base row, and the unit stays anchored on the base regime.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Regime {
+    pub entrypoints: Vec<String>,
+    pub capacity: IndexMap<String, Capacity>,
+    pub peak: RegimePeak,
+}
+
+/// The band factor a regime sets in place of the base one, read inside the base band's hours.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegimePeak {
+    pub capacity_factor: PerWindow,
+}
+
 /// A model that breaks a shared constant: its own multipliers, and its own weight on the windows it names.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -207,6 +224,10 @@ pub struct SubscriptionCosts {
     pub tier_order: Vec<String>,
     /// Undated model id to a name of `tier_order`, naming every model either shipped file lists.
     pub model_tier: IndexMap<String, String>,
+    /// Keyed by a name that says what the regime prices. A file without the map loads with none, and every
+    /// entrypoint prices at the base rows.
+    #[serde(default)]
+    pub regimes: IndexMap<String, Regime>,
 }
 
 #[derive(serde::Deserialize)]
@@ -266,6 +287,51 @@ fn factor_rule(path: &str, factor: f64) -> Result<(), LedgerError> {
     }
 }
 
+/// The capacity rule and the anchor rule over one set of tier rows, `path` the key the rows sit under, so the base
+/// rows and each regime's read the same words.
+fn capacity_rules(
+    path: &str,
+    rows: &IndexMap<String, Capacity>,
+    anchor: &str,
+) -> Result<(), LedgerError> {
+    for (tier, row) in rows {
+        for (window, capacity) in [(FIVE_HOUR, row.five_hour), (SEVEN_DAY, row.seven_day)] {
+            if capacity.is_some_and(|c| !c.is_finite() || c <= 0.0) {
+                return Err(refuse(format!(
+                    "{path}.{tier}.{window}: a capacity is a number above zero, or null"
+                )));
+            }
+        }
+    }
+    // The router's burn rates and every tier's capacity ratio read the anchor on each window, so a null there
+    // would leave the rates empty and the ratio `None` on a window a share still charges.
+    if let Some(row) = rows.get(anchor) {
+        for (window, capacity) in [(FIVE_HOUR, row.five_hour), (SEVEN_DAY, row.seven_day)] {
+            if capacity.is_none() {
+                return Err(refuse(format!(
+                    "{path}.{anchor}.{window}: the anchor tier carries a capacity on both windows"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The relay's `MAX_ID_LEN`, restated since the ledger cannot name the relay.
+const ENTRYPOINT_MAX: usize = 256;
+
+/// The entrypoint token alphabet: ASCII lowercase letters, ASCII digits, hyphens and underscores, 1 to
+/// `ENTRYPOINT_MAX` (256, the relay's `MAX_ID_LEN`) bytes, which `regimes.{key}` and each entry of
+/// `regimes.{key}.entrypoints` pass and the relay's `is_entrypoint_token` reads too. A digit is in it because
+/// `claude-desktop-3p` carries one, and an underscore because the client spells `claude_in_slack`, `local_agent` and
+/// the `remote_*` family with one. Every separator stays out, so no listed name can carry a second field.
+fn bare_token(candidate: &str) -> bool {
+    (1..=ENTRYPOINT_MAX).contains(&candidate.len())
+        && candidate
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+}
+
 impl SubscriptionCosts {
     /// The entry with its peak zone resolved and its rules checked, a refusal prefixed by the entry's date.
     fn resolved(mut self) -> Result<SubscriptionCosts, LedgerError> {
@@ -280,28 +346,8 @@ impl SubscriptionCosts {
     }
 
     fn validate(&self) -> Result<(), LedgerError> {
-        for (tier, row) in &self.capacity {
-            for (window, capacity) in [(FIVE_HOUR, row.five_hour), (SEVEN_DAY, row.seven_day)] {
-                if capacity.is_some_and(|c| !c.is_finite() || c <= 0.0) {
-                    return Err(refuse(format!(
-                        "capacity.{tier}.{window}: a capacity is a number above zero, or null"
-                    )));
-                }
-            }
-        }
         let anchor = &self.unit.defined_by;
-        // The router's burn rates and every tier's capacity ratio read the anchor on each window, so a null there
-        // would leave the rates empty and the ratio `None` on a window a share still charges.
-        if let Some(row) = self.capacity.get(&anchor.tier) {
-            for (window, capacity) in [(FIVE_HOUR, row.five_hour), (SEVEN_DAY, row.seven_day)] {
-                if capacity.is_none() {
-                    return Err(refuse(format!(
-                        "capacity.{}.{window}: the anchor tier carries a capacity on both windows",
-                        anchor.tier
-                    )));
-                }
-            }
-        }
+        capacity_rules("capacity", &self.capacity, &anchor.tier)?;
         if self.unit.units_per_window == 0 {
             return Err(refuse(
                 "unit.units_per_window: a count of units above zero".to_string(),
@@ -346,6 +392,57 @@ impl SubscriptionCosts {
             (SEVEN_DAY, factors.seven_day),
         ] {
             factor_rule(&format!("peak.capacity_factor.{window}"), factor)?;
+        }
+        // One regime prices an entrypoint, so a token two entries list is refused rather than read by file order.
+        let mut listed: HashMap<&str, &str> = HashMap::new();
+        for (key, regime) in &self.regimes {
+            if !bare_token(key) {
+                return Err(refuse(format!(
+                    "regimes.{key}: a bare token of lowercase letters, digits, hyphens and underscores"
+                )));
+            }
+            if regime.entrypoints.is_empty() {
+                return Err(refuse(format!("regimes.{key}.entrypoints: lists none")));
+            }
+            for name in &regime.entrypoints {
+                if !bare_token(name) {
+                    return Err(refuse(format!(
+                        "regimes.{key}.entrypoints: {name} is not a bare token of lowercase letters, digits, \
+                         hyphens and underscores"
+                    )));
+                }
+                if let Some(other) = listed.insert(name, key) {
+                    return Err(refuse(format!(
+                        "regimes.{key}.entrypoints: {name} is listed by {other}"
+                    )));
+                }
+            }
+            if regime.capacity.is_empty() {
+                return Err(refuse(format!("regimes.{key}: names no tier")));
+            }
+            for tier in regime.capacity.keys() {
+                if !self.capacity.contains_key(tier) {
+                    return Err(refuse(format!(
+                        "regimes.{key}.capacity.{tier}: no capacity row"
+                    )));
+                }
+            }
+            // `rate_table` divides by the regime's own anchor row, so the anchor rule holds there too.
+            capacity_rules(
+                &format!("regimes.{key}.capacity"),
+                &regime.capacity,
+                &anchor.tier,
+            )?;
+            let factors = &regime.peak.capacity_factor;
+            for (window, factor) in [
+                (FIVE_HOUR, factors.five_hour),
+                (SEVEN_DAY, factors.seven_day),
+            ] {
+                factor_rule(
+                    &format!("regimes.{key}.peak.capacity_factor.{window}"),
+                    factor,
+                )?;
+            }
         }
         let m = &self.type_multiplier;
         for (name, multiplier) in [
@@ -425,6 +522,21 @@ impl SubscriptionCosts {
             }
         }
         Ok(())
+    }
+
+    /// The regime whose `entrypoints` list the token, `None` for no token and for one no regime lists (the base).
+    pub fn regime_of(&self, entrypoint: Option<&str>) -> Option<&Regime> {
+        let token = entrypoint?;
+        self.regimes
+            .values()
+            .find(|regime| regime.entrypoints.iter().any(|e| e == token))
+    }
+
+    /// The regime's row where it names the tier, else the base row through `tier_row`.
+    pub fn capacity_of(&self, entrypoint: Option<&str>, tier: &str) -> Option<&Capacity> {
+        self.regime_of(entrypoint)
+            .and_then(|regime| tier_row(&regime.capacity, tier))
+            .or_else(|| tier_row(&self.capacity, tier))
     }
 
     /// The `model_tier` entry for the id, else for its undated base, else the `tier_order` name that is the first
@@ -547,29 +659,37 @@ impl SubscriptionCosts {
         ]
     }
 
-    /// `peak.capacity_factor[priced]` when `peak` covers `at`, else 1.
-    fn factor_at(&self, priced: &str, at: i64) -> f64 {
+    /// The regime's factor on `priced` where one lists the entrypoint, else the base, 1 outside the band.
+    fn factor_at(&self, priced: &str, entrypoint: Option<&str>, at: i64) -> f64 {
         if !self.peak.covers(at) {
             return 1.0;
         }
-        self.peak.capacity_factor.on(priced).unwrap_or(1.0)
+        let factors = self
+            .regime_of(entrypoint)
+            .map_or(&self.peak.capacity_factor, |r| &r.peak.capacity_factor);
+        factors.on(priced).unwrap_or(1.0)
     }
 
-    fn anchor_capacity(&self, priced: &str) -> Option<f64> {
-        self.capacity.get(&self.unit.defined_by.tier)?.on(priced)
+    /// The anchor tier's capacity under the regime: the unit is the base window, and a regime's table divides by its
+    /// own anchor row so an interactive pin ranks at the rate the meter charges it.
+    fn anchor_capacity(&self, priced: &str, entrypoint: Option<&str>) -> Option<f64> {
+        self.capacity_of(entrypoint, &self.unit.defined_by.tier)?
+            .on(priced)
     }
 
     /// The share of the tier's own `window` `usage` consumes for a request completing at `at`: its units over the
-    /// tier's capacity on the priced window, over the band's capacity factor there and the model week's divisor.
+    /// tier's capacity on the priced window, over the band's capacity factor there and the model week's divisor, the
+    /// capacity and the factor read under the regime `entrypoint` names.
     pub fn share_at(
         &self,
         window: &str,
+        entrypoint: Option<&str>,
         tier: &str,
         canonical_model: &str,
         usage: PinUsage,
         at: i64,
     ) -> Option<f64> {
-        self.share_and_flag_at(window, tier, canonical_model, usage, at)
+        self.share_and_flag_at(window, entrypoint, tier, canonical_model, usage, at)
             .map(|(share, _)| share)
     }
 
@@ -578,6 +698,7 @@ impl SubscriptionCosts {
     fn share_and_flag_at(
         &self,
         window: &str,
+        entrypoint: Option<&str>,
         tier: &str,
         canonical_model: &str,
         usage: PinUsage,
@@ -585,7 +706,7 @@ impl SubscriptionCosts {
     ) -> Option<(f64, bool)> {
         let (priced, divisor) = self.priced_window(window)?;
         let (weight, estimated) = self.weight_or_fallback(canonical_model, window)?;
-        let capacity = tier_row(&self.capacity, tier)?.on(priced)?;
+        let capacity = self.capacity_of(entrypoint, tier)?.on(priced)?;
         let [cache_read, write_1h, write_5m, input, output] = self.multipliers(canonical_model);
         let units = usage.input as f64 * weight * input
             + usage.cache_read as f64 * weight * cache_read
@@ -593,7 +714,7 @@ impl SubscriptionCosts {
             + usage.write_1h as f64 * weight * write_1h
             + usage.output as f64 * weight * output;
         Some((
-            units / capacity / self.factor_at(priced, at) / divisor,
+            units / capacity / self.factor_at(priced, entrypoint, at) / divisor,
             estimated,
         ))
     }
@@ -604,6 +725,7 @@ impl SubscriptionCosts {
     pub fn share_rate_at(
         &self,
         window: &str,
+        entrypoint: Option<&str>,
         tier: &str,
         canonical_model: &str,
         burn: &PinBurn,
@@ -611,26 +733,29 @@ impl SubscriptionCosts {
     ) -> Option<f64> {
         let (priced, divisor) = self.priced_window(window)?;
         let (weight, _) = self.weight_or_fallback(canonical_model, window)?;
-        let capacity = tier_row(&self.capacity, tier)?.on(priced)?;
+        let capacity = self.capacity_of(entrypoint, tier)?.on(priced)?;
         let [cache_read, write_1h, write_5m, input, output] = self.multipliers(canonical_model);
         let units = burn.input * weight * input
             + burn.cache_read * weight * cache_read
             + burn.write_5m * weight * write_5m
             + burn.write_1h * weight * write_1h
             + burn.output * weight * output;
-        Some(units / capacity / self.factor_at(priced, at) / divisor)
+        Some(units / capacity / self.factor_at(priced, entrypoint, at) / divisor)
     }
 
-    /// `share_at` under the anchor tier (`unit.defined_by.tier`): the cost model's units over the Max 20x capacity.
+    /// `share_at` under the anchor tier (`unit.defined_by.tier`): the cost model's units over the Max 20x capacity,
+    /// the regime's own where `entrypoint` names one, since the equivalent is what a Max 20x account would spend.
     pub fn equivalent_at(
         &self,
         window: &str,
+        entrypoint: Option<&str>,
         canonical_model: &str,
         usage: PinUsage,
         at: i64,
     ) -> Option<f64> {
         self.share_at(
             window,
+            entrypoint,
             &self.unit.defined_by.tier,
             canonical_model,
             usage,
@@ -639,19 +764,20 @@ impl SubscriptionCosts {
     }
 
     /// The weight the band puts on a charge landing on `window` at `at`: the reciprocal of the priced window's
-    /// capacity factor inside the band, else 1.
-    pub fn band_factor(&self, window: &str, at: i64) -> f64 {
-        self.priced_window(window)
-            .map_or(1.0, |(priced, _)| 1.0 / self.factor_at(priced, at))
+    /// capacity factor inside the band, the regime's where `entrypoint` names one, else 1.
+    pub fn band_factor(&self, window: &str, entrypoint: Option<&str>, at: i64) -> f64 {
+        self.priced_window(window).map_or(1.0, |(priced, _)| {
+            1.0 / self.factor_at(priced, entrypoint, at)
+        })
     }
 
-    /// The per-token share of the anchor tier's `window` out of band, empty for a window that prices nothing. A row
-    /// per `model_weight` and `model_tier` key: at the model's weight on the window, else at the base weight of its
-    /// model tier's `latest_weighted` (the estimate is the same model tier's measured weight, so a pin on an
-    /// unweighted model ranks by it rather than last, as the console prices it), else with no rate. A `tiers` row per
-    /// model tier with a weighted model, at the same base weight and the shared multipliers, prices an id no file
-    /// lists by the model tier its id names, as `tier_of` reads it.
-    pub fn rate_table(&self, window: &str) -> RateTable {
+    /// The per-token share of the anchor tier's `window` out of band under the regime `entrypoint` names, empty for a
+    /// window that prices nothing. A row per `model_weight` and `model_tier` key: at the model's weight on the window,
+    /// else at the base weight of its model tier's `latest_weighted` (the estimate is the same model tier's measured
+    /// weight, so a pin on an unweighted model ranks by it rather than last, as the console prices it), else with no
+    /// rate. A `tiers` row per model tier with a weighted model, at the same base weight and the shared multipliers,
+    /// prices an id no file lists by the model tier its id names, as `tier_of` reads it.
+    pub fn rate_table(&self, window: &str, entrypoint: Option<&str>) -> RateTable {
         // An estimate is the model tier's measured weight, the one `share_at` charges the model at, so a shed it
         // orders is the one the meter charges. A model neither a row nor a model tier row names takes no rate, and
         // its pin ranks last.
@@ -670,7 +796,7 @@ impl SubscriptionCosts {
                 fallback,
             };
         };
-        let Some(capacity) = self.anchor_capacity(priced) else {
+        let Some(capacity) = self.anchor_capacity(priced, entrypoint) else {
             return RateTable {
                 rows: HashMap::new(),
                 long_context: HashMap::new(),
@@ -733,12 +859,13 @@ impl SubscriptionCosts {
         }
     }
 
-    /// The tier's capacity over the anchor's on the priced window: what a reader holding anchor rates divides by to
-    /// read the share on the tier; `None` where either is unpriced.
-    pub fn tier_factor(&self, tier: &str, window: &str) -> Option<f64> {
+    /// The tier's capacity over the anchor's on the priced window, both under the regime `entrypoint` names: what a
+    /// reader holding that regime's anchor rates divides by to read the share on the tier, `None` where either is
+    /// unpriced.
+    pub fn tier_factor(&self, tier: &str, window: &str, entrypoint: Option<&str>) -> Option<f64> {
         let (priced, _) = self.priced_window(window)?;
-        let capacity = tier_row(&self.capacity, tier)?.on(priced)?;
-        Some(capacity / self.anchor_capacity(priced)?)
+        let capacity = self.capacity_of(entrypoint, tier)?.on(priced)?;
+        Some(capacity / self.anchor_capacity(priced, entrypoint)?)
     }
 
     /// True for the two shared windows and every model week the file names; a week priced as the 7-day share for
@@ -749,12 +876,20 @@ impl SubscriptionCosts {
 
     /// Whether `share_at` answers a share for any usage: the model has a weight on the window and the tier a
     /// capacity on the window it prices on.
-    pub fn priced(&self, window: &str, tier: &str, canonical_model: &str) -> bool {
+    pub fn priced(
+        &self,
+        window: &str,
+        entrypoint: Option<&str>,
+        tier: &str,
+        canonical_model: &str,
+    ) -> bool {
         let Some((priced, _)) = self.priced_window(window) else {
             return false;
         };
         self.weight_or_fallback(canonical_model, window).is_some()
-            && tier_row(&self.capacity, tier).is_some_and(|row| row.on(priced).is_some())
+            && self
+                .capacity_of(entrypoint, tier)
+                .is_some_and(|row| row.on(priced).is_some())
     }
 
     /// The models some window prices, each counted once: a `model_weight` row with a weight, or an `overrides` row
@@ -915,6 +1050,7 @@ impl PlanTables {
     pub fn share_at(
         &self,
         window: &str,
+        entrypoint: Option<&str>,
         tier: &str,
         canonical_model: &str,
         usage: PinUsage,
@@ -922,54 +1058,78 @@ impl PlanTables {
     ) -> Option<f64> {
         self.revisions
             .in_force(at)
-            .share_at(window, tier, canonical_model, usage, at)
+            .share_at(window, entrypoint, tier, canonical_model, usage, at)
     }
 
     pub fn share_rate_at(
         &self,
         window: &str,
+        entrypoint: Option<&str>,
         tier: &str,
         canonical_model: &str,
         burn: &PinBurn,
         at: i64,
     ) -> Option<f64> {
-        self.revisions
-            .in_force(at)
-            .share_rate_at(window, tier, canonical_model, burn, at)
+        self.revisions.in_force(at).share_rate_at(
+            window,
+            entrypoint,
+            tier,
+            canonical_model,
+            burn,
+            at,
+        )
     }
 
     pub fn equivalent_at(
         &self,
         window: &str,
+        entrypoint: Option<&str>,
         canonical_model: &str,
         usage: PinUsage,
         at: i64,
     ) -> Option<f64> {
         self.revisions
             .in_force(at)
-            .equivalent_at(window, canonical_model, usage, at)
+            .equivalent_at(window, entrypoint, canonical_model, usage, at)
     }
 
-    pub fn band_factor(&self, window: &str, at: i64) -> f64 {
-        self.revisions.in_force(at).band_factor(window, at)
+    pub fn band_factor(&self, window: &str, entrypoint: Option<&str>, at: i64) -> f64 {
+        self.revisions
+            .in_force(at)
+            .band_factor(window, entrypoint, at)
     }
 
-    pub fn rate_table(&self, window: &str, at: i64) -> RateTable {
-        self.revisions.in_force(at).rate_table(window)
+    pub fn rate_table(&self, window: &str, entrypoint: Option<&str>, at: i64) -> RateTable {
+        self.revisions.in_force(at).rate_table(window, entrypoint)
     }
 
-    pub fn tier_factor(&self, tier: &str, window: &str, at: i64) -> Option<f64> {
-        self.revisions.in_force(at).tier_factor(tier, window)
+    pub fn tier_factor(
+        &self,
+        tier: &str,
+        window: &str,
+        entrypoint: Option<&str>,
+        at: i64,
+    ) -> Option<f64> {
+        self.revisions
+            .in_force(at)
+            .tier_factor(tier, window, entrypoint)
     }
 
     pub fn measured(&self, window: &str, at: i64) -> bool {
         self.revisions.in_force(at).measured(window)
     }
 
-    pub fn priced(&self, window: &str, tier: &str, canonical_model: &str, at: i64) -> bool {
+    pub fn priced(
+        &self,
+        window: &str,
+        entrypoint: Option<&str>,
+        tier: &str,
+        canonical_model: &str,
+        at: i64,
+    ) -> bool {
         self.revisions
             .in_force(at)
-            .priced(window, tier, canonical_model)
+            .priced(window, entrypoint, tier, canonical_model)
     }
 
     pub fn tier_of(&self, canonical_model: &str, at: i64) -> Option<&str> {
@@ -1069,12 +1229,14 @@ impl PricedShares {
     }
 }
 
-/// `share_at` under the account tier on the two shared windows and on `window_for(canonical_model)` where that is a
-/// model week, each window flagged where it priced through the fallback. `at` selects the cost revision (the
-/// request's receipt, what the dollars and the rollup select on) and `band_at` the peak band inside that revision (the
-/// completion where a reader has one, else `at`). The revision never reads `band_at`.
+/// `share_at` under the account tier and the regime `entrypoint` names on the two shared windows and on
+/// `window_for(canonical_model)` where that is a model week, each window flagged where it priced through the fallback.
+/// `at` selects the cost revision (the request's receipt, what the dollars and the rollup select on) and `band_at` the
+/// peak band inside that revision (the completion where a reader has one, else `at`). The revision never reads
+/// `band_at`.
 pub fn price_shares(
     tables: &PlanTables,
+    entrypoint: Option<&str>,
     tier: &str,
     canonical_model: &str,
     usage: PinUsage,
@@ -1083,14 +1245,16 @@ pub fn price_shares(
 ) -> PricedShares {
     let costs = tables.revisions.in_force(at);
     priced_windows(canonical_model, |window| {
-        costs.share_and_flag_at(window, tier, canonical_model, usage, band_at)
+        costs.share_and_flag_at(window, entrypoint, tier, canonical_model, usage, band_at)
     })
 }
 
 /// The three equivalent columns (`five_hour`, `seven_day`, the model week where the model carries one) at the
-/// revision in force at `at`, the band read at `band_at`, the weight through the fallback.
+/// revision in force at `at` under the regime `entrypoint` names, the band read at `band_at`, the weight through the
+/// fallback.
 pub fn price_equivalent(
     tables: &PlanTables,
+    entrypoint: Option<&str>,
     canonical_model: &str,
     usage: PinUsage,
     at: i64,
@@ -1099,8 +1263,14 @@ pub fn price_equivalent(
     let costs = tables.revisions.in_force(at);
     let anchor = &costs.unit.defined_by.tier;
     priced_windows(canonical_model, |window| {
-        costs.share_and_flag_at(window, anchor, canonical_model, usage, band_at)
+        costs.share_and_flag_at(window, entrypoint, anchor, canonical_model, usage, band_at)
     })
+}
+
+/// `Some(token)` for the relay's `claude-code/<token>` label, `None` for `other`, `sdk/<lang>` and the rollups' `-`,
+/// so a ledger row prices under the regime its own `client` column names, history included.
+pub fn entrypoint_of_client(client: &str) -> Option<&str> {
+    client.strip_prefix("claude-code/")
 }
 
 /// `share` on the two shared windows and on `window_for(canonical_model)` where that is a model week, each window

@@ -264,6 +264,30 @@
           "claude-sonnet-5-5": "sonnet",
           "claude-haiku-4-5": "haiku",
           "claude-mystery-2": "mystery"
+        },
+        "regimes": {
+          "desk": {
+            "entrypoints": [
+              "desk",
+              "pane"
+            ],
+            "capacity": {
+              "default_claude_ai": {
+                "five_hour": 10.0,
+                "seven_day": 62.5
+              },
+              "default_claude_max_20x": {
+                "five_hour": 200.0,
+                "seven_day": 1250.0
+              }
+            },
+            "peak": {
+              "capacity_factor": {
+                "five_hour": 1.0,
+                "seven_day": 1.0
+              }
+            }
+          }
         }
       },
       "revisions": [
@@ -352,6 +376,30 @@
               "claude-sonnet-5-5": "sonnet",
               "claude-haiku-4-5": "haiku",
               "claude-mystery-2": "mystery"
+            },
+            "regimes": {
+              "desk": {
+                "entrypoints": [
+                  "desk",
+                  "pane"
+                ],
+                "capacity": {
+                  "default_claude_ai": {
+                    "five_hour": 10.0,
+                    "seven_day": 62.5
+                  },
+                  "default_claude_max_20x": {
+                    "five_hour": 200.0,
+                    "seven_day": 1250.0
+                  }
+                },
+                "peak": {
+                  "capacity_factor": {
+                    "five_hour": 1.0,
+                    "seven_day": 1.0
+                  }
+                }
+              }
             }
           }
         },
@@ -440,6 +488,30 @@
               "claude-sonnet-5-5": "sonnet",
               "claude-haiku-4-5": "haiku",
               "claude-mystery-2": "mystery"
+            },
+            "regimes": {
+              "desk": {
+                "entrypoints": [
+                  "desk",
+                  "pane"
+                ],
+                "capacity": {
+                  "default_claude_ai": {
+                    "five_hour": 10.0,
+                    "seven_day": 62.5
+                  },
+                  "default_claude_max_20x": {
+                    "five_hour": 200.0,
+                    "seven_day": 1250.0
+                  }
+                },
+                "peak": {
+                  "capacity_factor": {
+                    "five_hour": 1.0,
+                    "seven_day": 1.0
+                  }
+                }
+              }
             }
           }
         }
