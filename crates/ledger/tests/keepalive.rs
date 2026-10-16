@@ -630,6 +630,7 @@ async fn migration_thirty_seven_keeps_a_rollup_rows_kept_warm_tokens_under_five_
         )
         .unwrap();
         // The file as version 36 left it: the one count, holding what a credit booked before the split.
+        // Migration 38 creates the reconciliations' table, so it leaves before the replay creates it again.
         db.write(|c| {
             c.execute_batch(
                 "DROP TABLE window_reconciliations; \
