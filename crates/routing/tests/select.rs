@@ -23076,6 +23076,11 @@ fn a_five_hour_round_inside_the_hold_of_two_burn_averages_is_held_back() {
     );
     assert!(d.shed_round.is_none());
     assert_eq!(st.last_shed("p", "a"), None);
+    assert_eq!(
+        st.projection_over_since("p", "a", FIVE_HOUR),
+        Some(T),
+        "the window still reads over the ceiling, so the hold is the one reason it did not fire"
+    );
 }
 
 #[test]
@@ -23123,6 +23128,10 @@ fn a_five_hour_round_fires_once_the_window_is_as_old_as_the_hold() {
 fn a_weekly_window_fires_in_the_place_of_a_five_hour_window_inside_the_hold() {
     let s = held_pool(1200);
     let dwell = shed_dwell_ms(s.pool("p").expect("the pool"));
+    assert!(
+        dwell < 20 * MINUTE,
+        "a wait of at most the dwell has run on a window 20 minutes old"
+    );
     // Both of a's windows read over the ceiling past their waits: the 5-hour window since it opened 20 minutes before
     // T, inside the hold, and the week since a dwell ago.
     let mut st = three_pins_with_a(
@@ -23161,6 +23170,11 @@ fn a_weekly_window_fires_in_the_place_of_a_five_hour_window_inside_the_hold() {
 #[test]
 fn a_standing_mark_moves_at_its_pins_next_request_inside_the_hold() {
     let s = held_pool(1200);
+    let dwell = shed_dwell_ms(s.pool("p").expect("the pool"));
+    assert!(
+        dwell < 20 * MINUTE,
+        "a wait of at most the dwell has run on a window 20 minutes old"
+    );
     // s1 stands marked on the 5-hour window from a round whose dwell has passed. a's window opened 20 minutes before T
     // and reads over the ceiling since then, past its wait and inside the hold, and b, an hour from its reset, fits
     // s1's burn.
@@ -23364,6 +23378,11 @@ fn the_hold_follows_the_pools_burn_average() {
 #[test]
 fn a_window_whose_wait_ran_inside_the_hold_fires_at_the_first_selection_past_the_hold() {
     let s = held_pool(1200);
+    let dwell = shed_dwell_ms(s.pool("p").expect("the pool"));
+    assert!(
+        dwell < 39 * MINUTE,
+        "a wait of at most the dwell has run on a window 39 minutes old"
+    );
     // a's window opened 39 minutes before T and reads over the ceiling since then, so its wait ran inside the hold.
     let mut st = three_pins_with_a(refreshing(
         0.80,
