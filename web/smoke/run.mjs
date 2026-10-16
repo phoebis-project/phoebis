@@ -4560,6 +4560,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       'Return dwell (s)',
       'Wind down',
     ]);
+    results.push({
+      name: '/pools the Retry in place hint names the 180 seconds after which Claude Code retries a request on its own',
+      ok:
+        hintOf('Failover', 'Retry in place (s)') ===
+        'The longest throttle a request waits out on its member before failing over, and the longest wait for a free slot. At 0 a request fails over at once. Claude Code gives up on a request that has waited about 180 seconds without an answer and retries it on its own, so a longer wait is spent for nothing.',
+      missing: [String(hintOf('Failover', 'Retry in place (s)'))],
+    });
     const ceilingField = () => field('Windows', 'Window ceiling (%)');
     results.push({
       name: '/pools the Windows group opens with its intro and draws the ceiling from 50 to 100 with its hint, the burn average, then the bar',
@@ -6654,6 +6661,38 @@ localStorage.removeItem('phoebis.expertView');
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const labelsIn = (section) => [...(section?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
   const lineIn = (section) => section?.querySelector('.dialog-group__more')?.firstChild?.textContent ?? null;
+  // jsdom lays nothing out, so a row is read in the grid's order: an expert wrapper draws no box, so its cells stand in
+  // its place, and two halves in a row share one. Answers each group's pairs and every half alone on its row.
+  const halvesOf = (dlg) => {
+    const pairs = [];
+    const alone = [];
+    const nameOf = (cell) => cell.querySelector('.field__label')?.textContent?.trim() ?? cell.className;
+    for (const section of dlg?.querySelectorAll('section.dialog-group') ?? []) {
+      for (const cells of section.querySelectorAll('.cells')) {
+        const placed = [...cells.children].flatMap((child) => (child.classList.contains('expert') ? [...child.children] : [child]));
+        for (let i = 0; i < placed.length; i += 1) {
+          if (!placed[i].classList.contains('cell--half')) continue;
+          if (placed[i + 1]?.classList.contains('cell--half')) {
+            pairs.push([section.getAttribute('aria-label'), nameOf(placed[i]), nameOf(placed[i + 1])]);
+            i += 1;
+          } else alone.push(`${section.getAttribute('aria-label')}: ${nameOf(placed[i])}`);
+        }
+      }
+    }
+    return { alone, pairs };
+  };
+  const PLAIN_PAIRS = [
+    ['Identity', 'Name', 'Status'],
+    ['Keepalive', 'Max parked (s)', 'Scheduled horizon (s)'],
+  ];
+  const EXPERT_PAIRS = [
+    ['Identity', 'Name', 'Status'],
+    ['Windows', 'Window ceiling (%)', 'Burn average (s)'],
+    ['Load shedding', 'Shed cap (%)', 'Shed dwell (s)'],
+    ['Slow-down', 'Stretch (s)', 'Hold (s)'],
+    ['Failover', 'In flight', 'Retry in place (s)'],
+    ['Keepalive', 'Max parked (s)', 'Scheduled horizon (s)'],
+  ];
   const parentsOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const railOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const headingsOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])].map((h) => h.textContent?.trim());
@@ -6716,6 +6755,12 @@ localStorage.removeItem('phoebis.expertView');
       .filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(PLAIN_FIELDS[label]))
       .map(([label, read]) => `${label}: ${JSON.stringify(read)}`),
   });
+  const plainHalves = halvesOf(dlg);
+  results.push({
+    name: '/pools with the mode off no half cell stands alone on its row, so the window ceiling spans the row its hidden average leaves',
+    ok: plainHalves.alone.length === 0 && JSON.stringify(plainHalves.pairs) === JSON.stringify(PLAIN_PAIRS),
+    missing: [...plainHalves.alone, JSON.stringify(plainHalves.pairs)],
+  });
   const memberHint = () => [...(group(dlg, 'Windows')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Member utilization')?.querySelector('.field__hint')?.textContent ?? 'no hint';
   const plainHint = memberHint();
   results.push({
@@ -6738,6 +6783,12 @@ localStorage.removeItem('phoebis.expertView');
       JSON.stringify(expertRead) === JSON.stringify(EXPERT_FIELDS) &&
       dlg?.querySelector('.dialog-group__more') === null,
     missing: [localStorage.getItem('phoebis.expertView'), ...expertRail.map((x) => JSON.stringify(x)), ...Object.entries(expertRead).filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(EXPERT_FIELDS[label])).map(([label, read]) => `${label}: ${JSON.stringify(read)}`)],
+  });
+  const expertHalves = halvesOf(dlg);
+  results.push({
+    name: '/pools with the mode on the half cells stand in their six pairs, the window ceiling beside the burn average',
+    ok: expertHalves.alone.length === 0 && JSON.stringify(expertHalves.pairs) === JSON.stringify(EXPERT_PAIRS),
+    missing: [...expertHalves.alone, JSON.stringify(expertHalves.pairs)],
   });
   foot(dlg, 'Cancel')?.click();
   await p.settle(200);

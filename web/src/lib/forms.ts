@@ -104,7 +104,12 @@ const listed = (label: string) => `${label} is one of its listed choices.`;
 /** What the pool dialog knows beyond the input it sends. */
 export interface PoolChecks {
   /** The input sends 0 for an emptied retention as for capture off, so the field is read as typed while capture is on. */
-  capture?: { maxHours: number; on: boolean; typed: string };
+  capture?: {
+    /** The bootstrap's limit, absent until the settings read answers and after it fails, when the floor of 1 alone is checked. */
+    maxHours?: number;
+    on: boolean;
+    typed: string;
+  };
   /** On create the id derives from the name, so a taken one is held before the route's 409; a rename keeps its id. */
   identity?: { isNew: boolean; poolIds: ReadonlySet<string> };
 }
@@ -190,7 +195,11 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
     refuse('keepalive', KEEPALIVE_FIELD_LABELS[key], value === null || whole(value, KEEPALIVE_BOUNDS[key].min, KEEPALIVE_BOUNDS[key].max) ? null : boundText(KEEPALIVE_FIELD_LABELS[key], KEEPALIVE_BOUNDS[key]));
   }
 
-  refuse('bodyCapture', 'Capture retention in hours', checks.capture?.on && !whole(Number(checks.capture.typed), 1, checks.capture.maxHours) ? `Retention is a whole number of hours from 1 to ${checks.capture.maxHours}.` : null);
+  if (checks.capture?.on) {
+    const { maxHours, typed } = checks.capture;
+    const text = maxHours === undefined ? 'Retention is a whole number of hours of at least 1.' : `Retention is a whole number of hours from 1 to ${maxHours}.`;
+    refuse('bodyCapture', 'Capture retention in hours', whole(Number(typed), 1, maxHours ?? Number.MAX_SAFE_INTEGER) ? null : text);
+  }
   return out;
 }
 

@@ -1712,7 +1712,8 @@ async function chevronWeight(label, svg, size, stroke) {
  * while it shows: its height against the body's window, every cell against the two columns, every label beside its
  * switch or above its control, every control and hint as wide as its field, every dependent drawn and disabled while
  * its switch is off or its preset is not Custom, the warnings at their ends of their groups, no clipped select, nothing
- * pushed apart or past the frame, and the mono Name input as tall as the Status select beside it. The strips draw their
+ * pushed apart or past the frame, the window ceiling across the grid in the plain view and beside the burn average in
+ * the expert view, and the mono Name input as tall as the Status select beside it. The strips draw their
  * groups without the column rail's indent and hairline, a parent there answers the pointer, and a refusal dot follows
  * its entry's words by 6 px on their line.
  */
@@ -1771,6 +1772,37 @@ async function poolDialogWalk(theme, mode) {
       if (heights.name === null || heights.status === null) found.push('the Name input and the Status select are not both drawn to compare');
       else if (Math.abs(heights.name - heights.status) > 1) found.push(`the Name input is ${heights.name} px tall against the Status select's ${heights.status} px`);
       found.push(...(await chevronWeight(`${theme} /pools ${mode} dialog Identity select`, dialog.locator('section.dialog-group[aria-label="Identity"] .select > svg'), 12, 1.5)));
+    }
+    if (group === 'Windows') {
+      // The ceiling's row-mate, the burn average, draws in the expert view alone: the plain view's ceiling spans the
+      // grid's content box, and the expert view's takes the first column with the average in the second.
+      const cells = await dialog.evaluate((el) => {
+        const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === 'Windows');
+        const grid = section?.querySelector('.cells');
+        if (!grid) return null;
+        const at = (n) => Math.round(n * 100) / 100;
+        const s = getComputedStyle(grid);
+        const box = grid.getBoundingClientRect();
+        const left = box.left + parseFloat(s.paddingLeft) + parseFloat(s.borderLeftWidth);
+        const width = box.width - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight) - parseFloat(s.borderLeftWidth) - parseFloat(s.borderRightWidth);
+        const column = (width - parseFloat(s.columnGap)) / 2;
+        const cell = (text) => {
+          const r = [...section.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text)?.getBoundingClientRect();
+          return r ? { left: at(r.left), top: at(r.top), width: at(r.width) } : null;
+        };
+        return { average: cell('Burn average (s)'), ceiling: cell('Window ceiling (%)'), grid: { left: at(left), width: at(width) }, second: { left: at(left + column + parseFloat(s.columnGap)), width: at(column) } };
+      });
+      measurements.push(`${theme} /pools ${mode} dialog Windows ceiling cell ${JSON.stringify(cells)}`);
+      // Whole pixels, since the grid's tracks and the arithmetic above round apart in the last digits.
+      const px = (o) => o && Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Math.round(v)]));
+      if (!cells) found.push('its cells grid is not drawn to measure the window ceiling against');
+      else if (expert) {
+        found.push(...compare(px(cells.ceiling), px({ left: cells.grid.left, width: cells.second.width }), ['left', 'width'], 'the window ceiling against the first column'));
+        found.push(...compare(px(cells.average), px({ ...cells.second, top: cells.ceiling?.top ?? Number.NaN }), ['left', 'top', 'width'], 'the burn average against the second column beside the ceiling'));
+      } else {
+        if (cells.average) found.push('the burn average draws in the plain view');
+        found.push(...compare(px(cells.ceiling), px(cells.grid), ['left', 'width'], "the window ceiling against the grid's content box"));
+      }
     }
     if (group === 'Keepalive') {
       if (warning && !warning.closes) found.push('its warning does not close the group');

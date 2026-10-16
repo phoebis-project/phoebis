@@ -540,7 +540,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
   const pool = pools.find((p) => p.id === poolId) ?? null;
   const poolName = pool?.name ?? poolId;
   const poolHours = pool?.bodyCaptureHours ?? 0;
-  const maxHours = settings.data?.retention.bodyCaptureMaxHours ?? 72;
+  const maxHours = settings.data?.retention.bodyCaptureMaxHours;
   const effectiveHours = captureMode === 'inherit' ? poolHours : captureMode === 'off' ? 0 : Number(captureHours);
   const suggestions = useCatalogSuggestions(pool?.members.map((m) => m.accountId) ?? [], open);
   const refusals = keyRefusals({ captureHours, captureMode, modelRules, name, poolId }, { identity: { existingIds, isNew: existing === null }, maxHours });

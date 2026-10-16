@@ -6,6 +6,7 @@ export { createMemoryRouter, MemoryRouter, Outlet, RouterProvider } from 'react-
 export { api } from '@/api';
 export { ApiError, setHooks } from '@/api/http';
 export { queueToast } from '@/app/session';
+export { AppSettingsProvider } from '@/app/settings';
 export { useFollow } from '@/app/useFollow';
 export { AddFilter, PATTERN_GRAMMAR } from '@/components/AddFilter';
 export { BodyViewer } from '@/components/BodyViewer';
@@ -23,4 +24,6 @@ export { Button, ConfirmDialog, CopyButton, Descriptions, Dialog, Menu, PageLoad
 export { installClock } from '@/lib/clock';
 export { spanText } from '@/lib/format';
 export { useAsync, useNow, useRangeTakenAt } from '@/lib/hooks';
+export { KeyDialog } from '@/pages/KeysPage';
+export { PoolDialog } from '@/pages/PoolsPage';
 export { fakeClock } from '../smoke/clock';

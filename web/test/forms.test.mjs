@@ -366,6 +366,13 @@ test('a retention while capture is on must be a whole number of hours inside the
   assert.equal(d.validatePoolInput(input, accounts, { capture: { maxHours: 72, on: true, typed: '24' } }), true);
 });
 
+test('a retention while the limit is unread checks the floor of 1 alone', () => {
+  const retention = (typed) => d.poolRefusals(input, accounts, { capture: { on: true, typed } });
+  const floor = [{ field: 'Capture retention in hours', group: 'bodyCapture', text: 'Retention is a whole number of hours of at least 1.' }];
+  for (const typed of ['', '0', '1.5', '-1']) assert.deepEqual(retention(typed), floor, `${JSON.stringify(typed)} is refused`);
+  for (const typed of ['1', '5', '500']) assert.deepEqual(retention(typed), [], `${typed} is inside, since no upper bound applies before the limit is read`);
+});
+
 test("a new pool's name is refused when its id is taken, by case or by punctuation, or holds no letter or digit", () => {
   const named = (name, isNew = true) => d.poolRefusals({ ...input, name }, accounts, { identity: { isNew, poolIds: new Set(['jobs', 'main']) } });
   const taken = [{ field: 'Name', group: 'identity', text: 'Another pool already has the id jobs.' }];
