@@ -125,7 +125,10 @@ export interface ShedHot {
 export interface ShedHeld { ageMs: number; holdMs: number; id: string; label: string }
 
 export interface ShedPreview {
-  /** With no member over the ceiling, the window whose projection reads nearest under it. Null with none to read. */
+  /**
+   * With no member over the ceiling, the window whose projection reads nearest under it. Null with none to read. A
+   * 5-hour window under the hold is out of the reading, so the nearest is among the windows a round would read.
+   */
   closest: { horizon: number; label: string; projection: number; window: ShedWindow } | null;
   /** The excess the marks take off, in share an hour, each member's in the share of the window that fired it. */
   covered: number;
