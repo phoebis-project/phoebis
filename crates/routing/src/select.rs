@@ -4470,10 +4470,10 @@ fn shed_round(
         };
         (read, Some(booking))
     };
-    // A move's cost in cache terms: a warm pin pays its rewrite on its destination, while a cold pin's cache is
-    // rewritten wherever it runs next, the reason the order walks the cold pins first, so its move costs nothing. Under
-    // `always` the order ignores warmth, and every pin pays its rewrite. A pin with no prompt size reported costs
-    // nothing, as the order ranks it.
+    // A move's cost in cache terms: a warm pin pays its rewrite, the Max 20x equivalent of its week and the same on
+    // every destination, while a cold pin's cache is rewritten wherever it runs next, the reason the order walks the
+    // cold pins first, so its move costs nothing. Under `always` the order ignores warmth, and every pin pays its
+    // rewrite. A pin with no prompt size reported costs nothing, as the order ranks it.
     let cost_of = |p: &PinRow, read: &PinRead| {
         if pool.shedding.warm_sessions == WarmSessions::Always || !is_cold(p) {
             read.rewrite.unwrap_or(0.0)
