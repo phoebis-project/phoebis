@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, minuteSpan, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, withRegime, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, minuteSpan, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -18625,8 +18625,8 @@ m.unmount();
     {
       // Each regime's rows under its group row, sized against the base regime's smallest tier, every bar on one scale.
       const SHORT = { five_hour: '5-hour', seven_day: '7-day' };
-      const sizedUnder = (name) => Object.keys(costs.regimes[name].capacity).filter((tier) => WINDOWS.some((w) => tierCapacity(withRegime(costs, name), tier, w) !== null));
-      const largest = (w) => Math.max(0, ...tiers.map((tier) => tierCapacity(costs, tier, w) ?? 0), ...regimeNames(costs).flatMap((name) => sizedUnder(name).map((tier) => tierCapacity(withRegime(costs, name), tier, w) ?? 0)));
+      const namedBy = (name) => Object.keys(costs.regimes[name].capacity);
+      const largest = (w) => Math.max(0, ...tiers.map((tier) => tierCapacity(costs, tier, w) ?? 0), ...regimeNames(costs).flatMap((name) => namedBy(name).map((tier) => tierCapacity(withRegime(costs, name), tier, w) ?? 0)));
       const multipleText = (over, tier, w) => `${figure(tierCapacity(over, tier, w) / tierCapacity(costs, smallestTier(costs, w), w))}x`;
       const titleOf = (name, tier, w) => {
         const over = withRegime(costs, name);
@@ -18635,30 +18635,36 @@ m.unmount();
       };
       const want = regimeNames(costs).flatMap((name) => [
         { group: `${name}: ${costs.regimes[name].entrypoints.join(', ')}` },
-        ...sizedUnder(name).map((tier) => ({
-          key: tier,
-          multiples: WINDOWS.map((w) => multipleText(withRegime(costs, name), tier, w)),
-          name: planLabel(tier),
-          titles: WINDOWS.map((w) => titleOf(name, tier, w)),
-          week: figure(fullWindowsAWeek(withRegime(costs, name), tier, false)),
-        })),
+        ...namedBy(name).map((tier) => {
+          // A window the regime leaves unsized reads "not sized" with no bar, and its week a dash.
+          const over = withRegime(costs, name);
+          const sized = (w) => tierCapacity(over, tier, w) !== null;
+          const week = fullWindowsAWeek(over, tier, false);
+          return {
+            key: tier,
+            multiples: WINDOWS.map((w) => (sized(w) ? multipleText(over, tier, w) : 'not sized')),
+            name: planLabel(tier),
+            titles: WINDOWS.map((w) => (sized(w) ? titleOf(name, tier, w) : null)),
+            week: week === null ? '-' : figure(week),
+          };
+        }),
       ]);
       const drawn = allRows.slice(firstGroup === -1 ? allRows.length : firstGroup).map((r) =>
         r.classList.contains('cost-ref__group')
           ? { group: r.textContent }
           : {
               key: r.querySelector('.cost-ref__tier-key')?.textContent,
-              multiples: [1, 2].map((col) => r.children[col]?.querySelector('.cost-ref__val')?.textContent?.trim()),
+              multiples: [1, 2].map((col) => (r.children[col]?.querySelector('.cost-ref__val') ?? r.children[col])?.textContent?.trim()),
               name: r.querySelector('.cost-ref__tier-name')?.textContent,
-              titles: [1, 2].map((col) => r.children[col]?.querySelector('.cost-ref__barcell')?.getAttribute('title')),
-              week: r.children[3]?.querySelector('.cost-ref__val')?.firstChild?.textContent?.trim(),
+              titles: [1, 2].map((col) => r.children[col]?.querySelector('.cost-ref__barcell')?.getAttribute('title') ?? null),
+              week: (r.children[3]?.querySelector('.cost-ref__val')?.firstChild ?? r.children[3])?.textContent?.trim(),
             },
       );
       const groups = allRows.filter((r) => r.classList.contains('cost-ref__group'));
       const widths = [...(tierCard?.querySelectorAll('.cost-ref__bar') ?? [])].map((bar) => Number.parseFloat(bar.style.width));
       const stripes = allRows.filter((r, n) => r.classList.contains('is-alt') !== (n % 2 === 1)).length;
       results.push({
-        name: '/sessions windows by tier lists a group row and a row per sized tier under each regime',
+        name: '/sessions windows by tier lists a group row and a row per tier each regime names',
         ok:
           regimeNames(costs).length > 0 &&
           JSON.stringify(drawn) === JSON.stringify(want) &&
@@ -19277,6 +19283,25 @@ m.unmount();
         drawnCard.factors === 3,
       missing: [JSON.stringify(drawnCard)],
     });
+    // A regime may name a tier with neither window sized, which prices that tier unsized under the regime, so Windows
+    // by tier still lists its row: both bars not sized and its week a dash.
+    {
+      const desk = tested.regimes.desk;
+      const unsized = { ...tested, regimes: { ...tested.regimes, desk: { ...desk, capacity: { ...desk.capacity, default_claude_team: { fiveHour: null, sevenDay: null } } } } };
+      const shown = await mountNode(React.createElement(WindowsByTier, { costs: unsized }));
+      const rows = [...shown.container.querySelectorAll('tbody tr')];
+      const group = rows.findIndex((r) => r.classList.contains('cost-ref__group'));
+      const keyOf = (r) => r.querySelector('.cost-ref__tier-key')?.textContent;
+      const under = group === -1 ? [] : rows.slice(group + 1);
+      const team = under.find((r) => keyOf(r) === 'default_claude_team');
+      const read = { keys: under.map(keyOf), team: team === undefined ? null : [1, 2, 3].map((col) => team.children[col]?.textContent?.trim()), bars: team?.querySelectorAll('.cost-ref__bar').length ?? null };
+      shown.unmount();
+      results.push({
+        name: '/sessions windows by tier lists a tier a regime names with neither window sized, its bars not sized and its week a dash',
+        ok: JSON.stringify(read.keys) === JSON.stringify(Object.keys(unsized.regimes.desk.capacity)) && JSON.stringify(read.team) === JSON.stringify(['not sized', 'not sized', '-']) && read.bars === 0,
+        missing: [JSON.stringify(read)],
+      });
+    }
     // A null weight listed ahead of the lightest model, its model tier's latest weighed one, reads its weight as an
     // estimate, which never sets the light end of the weight column's scale: every multiple's title names the lightest
     // model weighed on its own.

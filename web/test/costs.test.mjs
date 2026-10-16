@@ -3,11 +3,12 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import * as d from './dist/api.js';
 
-// The test tables, round throughout: weights Opus 5.5 2, Haiku 4.5 0.5 (1 on the week through its override, with a
-// cache read at 0.2), Opus 5 null; multipliers cache read 0.1, writes 2, input 1, output 10; capacities Max 20x 100 on
-// the 5-hour window and 1000 on the week, Pro 5 and 50, Team 10 and null; the peak band weekdays 5 to 11 in Los
-// Angeles at a 5-hour capacity factor of 0.5; the Fable week half the 7-day window. The regime desk, for the
-// entrypoints desk and pane, sizes Max 20x 200 and 1250 and Pro 10 and 62.5 and holds both windows whole in the band.
+// The test tables, round throughout. The weights are Opus 5.5 2, Haiku 4.5 0.5 (1 on the week through its override,
+// with a cache read at 0.2) and Opus 5 null. The multipliers are cache read 0.1, writes 2, input 1 and output 10. The
+// capacities are Max 20x 100 on the 5-hour window and 1000 on the week, Pro 5 and 50, and Team 10 and null. The peak
+// band runs weekdays 5 to 11 in Los Angeles at a 5-hour capacity factor of 0.5, and the Fable week is half the 7-day
+// window. The regime desk, for the entrypoints desk and pane, sizes Max 20x 200 and 1250 and Pro 10 and 62.5 and
+// holds both windows whole in the band.
 const tables = JSON.parse(readFileSync(new URL('./fixtures/test_tables.json', import.meta.url), 'utf8')).body;
 const costs = d.decodeSubscriptionCosts(tables.subscription_costs.content);
 

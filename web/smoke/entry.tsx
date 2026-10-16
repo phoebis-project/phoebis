@@ -27,9 +27,10 @@ export { default as React } from 'react';
 export { AttemptCount, AttemptTrail } from '@/components/ui/AttemptTrail';
 // The viewer's row height and margin, so a body check bounds the drawn rows by the figures the viewer draws by.
 export { ROW_PX, WINDOW_ROWS } from '@/components/BodyViewer';
-// The two cost panels a check mounts alone, on a cost model the mock does not answer.
+// The cost panels a check mounts alone, on a cost model the mock does not answer.
 export { PeakBand } from '@/components/costs/PeakBand';
 export { PlanRates } from '@/components/costs/PlanRates';
+export { WindowsByTier } from '@/components/costs/WindowsByTier';
 export { Expert, Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumber, Toggle } from '@/components/ui/primitives';
 // The figures and the model form a Dashboard check computes its expectation from, so the check and the page read one
 // derivation; the cost reference's and the About card's checks read theirs the same way.

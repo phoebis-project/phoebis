@@ -33,18 +33,13 @@ export function BandSwitch({ inside, onChange, unreachable = null }: { inside: b
   );
 }
 
-/** The tiers a model sizes on either window, in the file's order. */
-const sizedTiers = (model: SubscriptionCosts, tiers: string[]) => tiers.filter((tier) => WINDOWS.some((w) => tierCapacity(model, tier, w.key) !== null));
-
-/** Each sized tier's windows against the smallest tier's, and its week counted in full 5-hour windows, then each
- *  regime's tiers under a row naming it and its entrypoints. */
+/** Each sized tier's windows against the smallest tier's, and its week counted in full 5-hour windows, then every
+ *  tier each regime names under a row naming it and its entrypoints. */
 export function WindowsByTier({ costs }: { costs: SubscriptionCosts }) {
   const [inside, setInside] = useState(false);
-  const tiers = sizedTiers(costs, Object.keys(costs.capacity));
-  const regimes = regimeNames(costs).map((name) => {
-    const model = withRegime(costs, name);
-    return { model, name, tiers: sizedTiers(model, Object.keys(costs.regimes[name].capacity)) };
-  });
+  const tiers = Object.keys(costs.capacity).filter((tier) => WINDOWS.some((w) => tierCapacity(costs, tier, w.key) !== null));
+  // A tier the regime names with neither window sized still gets its row, since the regime prices it unsized.
+  const regimes = regimeNames(costs).map((name) => ({ model: withRegime(costs, name), name, tiers: Object.keys(costs.regimes[name].capacity) }));
   // One scale for every row the card draws, so a regime's window reads against the base's in the bar's length.
   const largest = (window: CostWindow) => Math.max(0, ...tiers.map((tier) => tierCapacity(costs, tier, window) ?? 0), ...regimes.flatMap((r) => r.tiers.map((tier) => tierCapacity(r.model, tier, window) ?? 0)));
   const smallest = smallestTier(costs, 'five_hour');

@@ -54,8 +54,8 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
   // runs. '' is Other, the base regime.
   const [regime, setRegime] = useState(() => (regimes.includes('interactive') ? 'interactive' : ''));
   // A revision without the chosen regime reads the base, so the control and the caption follow it.
-  const named = regimes.includes(regime) ? regime : '';
-  const priced = withRegime(costs, named || null);
+  const shownRegime = regimes.includes(regime) ? regime : '';
+  const priced = withRegime(costs, shownRegime || null);
   const next = bandNow(priced, now);
   const unresolved = 'unresolved' in next ? next.unresolved : null;
   // With no state to read the viewer picks one, Inside first, so a share never reads below what the band may charge.
@@ -200,7 +200,7 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
         {regimes.length > 0 && (
           <span className="cost-ref__control">
             <span>Regime</span>
-            <Segmented ariaLabel="Regime" value={named} onChange={setRegime} options={[...regimes.map((r) => ({ label: r, value: r })), { label: 'Other', value: '' }]} />
+            <Segmented ariaLabel="Regime" value={shownRegime} onChange={setRegime} options={[...regimes.map((r) => ({ label: r, value: r })), { label: 'Other', value: '' }]} />
           </span>
         )}
         <BandSwitch inside={chosen} onChange={setInside} unreachable={unreachable} />
@@ -234,7 +234,7 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
       </div>
       <div className="cost-ref__caption">
         <b>
-          Share of a {tierName} window per {fmtTokens(tokens)} tokens{named ? ` under ${named} (${costs.regimes[named].entrypoints.join(', ')})` : ''}
+          Share of a {tierName} window per {fmtTokens(tokens)} tokens{shownRegime ? ` under ${shownRegime} (${costs.regimes[shownRegime].entrypoints.join(', ')})` : ''}
           {chosen ? ', a request completing inside the peak band' : ''}
         </b>
         <span className="muted">A shaded cell is more than one full window. A ~ marks an estimate: the model reads the latest weighed model of its model tier.</span>
