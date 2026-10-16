@@ -312,7 +312,7 @@ pub(crate) fn note_entrypoint_disagreement(
     if let (Some(agent), Some(line)) = (user_agent, line) {
         if agent != line {
             tracing::info!(
-                request_id,
+                request = %request_id,
                 user_agent_entrypoint = agent,
                 billing_entrypoint = line,
                 "the billing line names another entrypoint than the user agent, which prices"

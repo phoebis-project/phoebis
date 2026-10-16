@@ -417,6 +417,7 @@ mod tests {
         let mut sdk = agent("anthropic-sdk-python/0.40.0");
         sdk.insert("x-stainless-lang", "python".parse().unwrap());
         assert_eq!(entrypoint(&sdk), None);
+        assert_eq!(entrypoint(&HeaderMap::new()), None, "no user agent at all");
     }
 
     #[test]
