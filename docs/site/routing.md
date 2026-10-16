@@ -586,10 +586,10 @@ and by the plain copy in dollars, at the set the pin's last prompt selects on a 
 ([Pricing](statistics.md#pricing)), with the fast copy added in, on an API-key account or a subscription account in
 overage, so leaving overage switches the reading without a reset and a session that moves between tiers reads the right
 share on both. The projection, the round's walk and the spare rate price the plain copy on the account's tier under the
-regime of the pin's entrypoint ([Plan meter](statistics.md#plan-meter)), on every window the pin's model draws, the walk
-and the spare rate at the band in force when they read, and the projection weighing the band's hours inside its horizon
-as the band weighs them. A keepalive probe's usage never counts. A burn the model cannot price, for a model it has no
-weight for or a tier it has no capacity for, reads as none.
+regime of the pin's entrypoint ([Plan meter](statistics.md#plan-meter)), on every window the pin's model draws, the
+spare rate at the band in force when it reads, and the projection and the walk weighing the band's hours inside the
+horizon as the band weighs them, the walk over the span its excess covers. A keepalive probe's usage never counts. A
+burn the model cannot price, for a model it has no weight for or a tier it has no capacity for, reads as none.
 
 Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `fast_lane`, `mark`, `overage`,
 `return_to_plan`, `shed` or `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session,

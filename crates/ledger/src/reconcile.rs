@@ -178,7 +178,7 @@ pub fn reconcile(
                 let (Some(first_at), Some(last_at)) = (run.first.at, run.last.at) else {
                     continue;
                 };
-                // Rounded to six decimals, since 0.15 less 0.10 is 0.04999999999999999 in a double, one ulp under
+                // Rounded to six decimals, since 0.15 less 0.10 is 0.04999999999999999 in a double, two ulps under
                 // `MIN_RISE`, and a whole-percent pair's rise must compare against the bar as its percents read.
                 let rise = ((run.last.utilization - run.first.utilization) * 1e6).round() / 1e6;
                 if rise < 0.0 || first_at < earliest {
