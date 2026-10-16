@@ -875,9 +875,6 @@ pub(crate) struct Observation {
     pub kind: Option<AccountKind>,
     /// Whether the current attempt's head reported overage in use, the fact the request's own row files under.
     pub in_overage: bool,
-    /// The engine's instant at the request's arrival, which a successful completion makes the agent's
-    /// `last_answered_at`.
-    pub arrived_at: i64,
 }
 
 /// One unanswered probe with the label that settles it as wasted. Queued under the lock and written to the ledger by
@@ -2313,7 +2310,6 @@ impl Engine {
             dispatched_ms: None,
             kind: None,
             in_overage: false,
-            arrived_at: now,
         });
         agent.body_dirty = true;
         // The mark is retired only by a save at the row's revision, so the new body takes a revision of its own.
@@ -2576,8 +2572,8 @@ impl Engine {
                 .get_mut(&key)
                 .and_then(|s| s.agents.get_mut(&agent_id))
             {
-                if let Some(arrived_at) = agent.current.as_ref().map(|o| o.arrived_at) {
-                    agent.last_answered_at = Some(arrived_at);
+                if let Some(arrived) = agent.current.as_ref().map(|o| o.started) {
+                    agent.last_answered_at = Some(arrived);
                 }
             }
         }
@@ -3571,7 +3567,6 @@ mod tests {
             dispatched_ms: None,
             kind: None,
             in_overage: false,
-            arrived_at: 0,
         }
     }
 

@@ -110,6 +110,9 @@ pub(crate) struct PersistedAgent {
     pub unanswered: Vec<PersistedUnanswered>,
     pub kept: Vec<PersistedKept>,
     pub last_real_at: Option<i64>,
+    /// Absent from a row an earlier build saved, which loads as `None`, so a restart keeps that row's recipe and the
+    /// next successful completion sets it.
+    #[serde(default)]
     pub last_answered_at: Option<i64>,
     pub last_stop: Option<Wasted>,
     pub last_presence_at: Option<i64>,
@@ -143,7 +146,6 @@ pub(crate) struct PersistedObservation {
     pub recipe: PersistedRecipe,
     pub kind: Option<String>,
     pub in_overage: bool,
-    pub arrived_at: i64,
 }
 
 /// The recipe's fields beside the prompt and its header block: the hijack guard reads the two hashes, and the probe's
@@ -405,7 +407,6 @@ impl PersistedAgent {
                 },
                 kind: o.kind.map(|kind| kind_word(kind).to_string()),
                 in_overage: o.in_overage,
-                arrived_at: o.arrived_at,
             }),
             expires: agent.expires,
             jitter_frac: agent.jitter_frac,
@@ -628,7 +629,6 @@ impl PersistedObservation {
             dispatched_ms: row.dispatched_ms,
             kind: optional_kind(self.kind)?,
             in_overage: self.in_overage,
-            arrived_at: self.arrived_at,
         })
     }
 }
