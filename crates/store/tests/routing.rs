@@ -935,8 +935,8 @@ fn affinity_rows_land_together_replace_by_model_and_hash_and_delete_by_key() {
     );
 }
 
-// The reverse of the registry's version 56: the pins lose `entrypoint`. One line with the marker last. The trailing `\n`
-// ends the marker's comment.
+// The reverse of the registry's version 56: the pins lose `entrypoint`. One line with the marker last. The trailing
+// `\n` ends the marker's comment.
 const UNDO_V56: &str = "ALTER TABLE pins DROP COLUMN entrypoint; -- rollback\n";
 // The reverse of the registry's version 55: the pools lose `slow_down`, `slow_down_stretch_seconds`,
 // `slow_down_hold_seconds`, `return_to_plan` and `return_to_plan_dwell_seconds`. One line with the marker last. The

@@ -689,7 +689,8 @@ fn a_registry_whose_only_sealed_rows_are_recipe_bodies_is_judged_by_them() {
     assert!(agents.iter().all(|agent| agent.body.is_none()));
 }
 
-/// The reverse of the registry's newest migration, the pin's entrypoint column gone, as `crates/store/tests` replays it.
+/// The reverse of the registry's newest migration, the pin's entrypoint column gone, as `crates/store/tests` replays
+/// it.
 const UNDO_V56: &str =
     "ALTER TABLE pins DROP COLUMN entrypoint; UPDATE meta SET value = '55' WHERE key = 'schema_version';";
 

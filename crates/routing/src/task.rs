@@ -437,7 +437,7 @@ impl BurnRates {
 
 /// The weight the meter puts on a charge landing on a window at an instant, read under the regime of the request's
 /// entrypoint (the base one for `None`), since each regime carries its own band factor. The ledger's peak band decides
-/// it, and this crate cannot name the ledger's table, so the band arrives as a function; the default weighs every
+/// it, and this crate cannot name the ledger's table, so the band arrives as a function. The default weighs every
 /// instant 1.
 #[derive(Clone)]
 pub struct BandWeight(Arc<Weigh>);
@@ -3754,7 +3754,7 @@ impl Task {
                             // reads, so leaving overage or moving between tiers needs no reset.
                             let window_ms = self.burn_window_ms(&pin.key_id);
                             // The meter charges a request inside the peak band more, by its own regime's factor, so
-                            // the banded copy weighs it by the band of the row's regime at the renewal; dollars cost
+                            // the banded copy weighs it by the band of the row's regime at the renewal. Dollars cost
                             // the same at every hour.
                             let band = self.config.band.at(FIVE_HOUR, entrypoint_of(&renewed), now);
                             let at = renewed.burn_at;
