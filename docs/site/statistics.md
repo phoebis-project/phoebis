@@ -559,16 +559,17 @@ and names the accounts they ran on and the setting `window_ceiling` with the poo
 log on the pool's shedding rounds since the condition began.
 
 **`slowed_long`** holds while the account's slow-down spans of the last 24 hours, each from its `slow_down_started`
-event to its `slow_down_ended` event, to a `router_started` row that closed it, or to now while it stands open, sum past
-twice the pool's `slow_down_stretch_seconds`, at least an hour (five hours at the default of 9000, the hour on a pool
-set to move early at 1800), every span clamped to the day. It is folded as `wall_reached` is. The slow-down holds an
-account for as long as its demand runs ahead of its window, and the threshold is how long the operator lets it hold
-before a round moves sessions, so two thresholds' worth of slow-down in a day says the pool's load exceeds that
-account's windows, which is the pool's membership, its ceiling or its threshold and not one turn, while an account
-slowed for ten minutes at the end of a window is working as intended and raises nothing. The subject is the account, and
-the item dates from the start of the oldest span counted. The detail counts the spans, gives their sum, the bar, whether
-a span is open and the lowest factor of the spans, and names the setting `slow_down_stretch_seconds` with the pool's
-value, which the dashboard's line words under the label "Slowed past twice the stretch" as
+event to its `slow_down_ended` event, to the previous run's last row where a `router_started` row closed it (or to that
+row where it names none), or to now while it stands open, sum past twice the pool's `slow_down_stretch_seconds`, at
+least an hour (five hours at the default of 9000, the hour on a pool set to move early at 1800), every span clamped to
+the day. It is folded as `wall_reached` is. The slow-down holds an account for as long as its demand runs ahead of its
+window, and the threshold is how long the operator lets it hold before a round moves sessions, so two thresholds' worth
+of slow-down in a day says the pool's load exceeds that account's windows, which is the pool's membership, its ceiling
+or its threshold and not one turn, while an account slowed for ten minutes at the end of a window is working as intended
+and raises nothing. The subject is the account, and the item dates from the start of the oldest span counted. The detail
+counts the spans, gives their sum, the bar, whether a span is open and the lowest factor of the spans, and names the
+setting `slow_down_stretch_seconds` with the pool's value, which the dashboard's line words under the label "Slowed past
+twice the stretch" as
 `studio: slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12`. The
 item opens the routing log on the account's slow-down starts and ends since the condition began
 ([Slow-down](routing.md#slow-down)).
