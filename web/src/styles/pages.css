@@ -3413,6 +3413,11 @@
   min-width: 140px;
 }
 
+/* Alternating rows, as the data tables draw them, so a window's figures read across its row. */
+.reconciliations-table tr.is-alt td {
+  background: var(--surface-2);
+}
+
 .stat__value.is-critical {
   color: var(--critical-ink);
 }

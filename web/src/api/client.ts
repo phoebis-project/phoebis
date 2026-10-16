@@ -33,6 +33,7 @@ import type {
   PoolKeepalive,
   PoolStrategy,
   QuotaHistory,
+  ReconciliationsAnswer,
   ReplayOutcome,
   RequestDetail,
   RequestPage,
@@ -179,6 +180,8 @@ export interface Api {
    * page narrows it. Naming exactly one account answers that account's shares and unit under any grouping.
    */
   getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup, filters?: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'>): Promise<{ bucketSeconds: number; points: BurnPoint[] }>;
+  /** The route reads the Accounts filter alone: its windows are the trailing 30 days, whatever the page's range. */
+  getAnalyticsReconciliations(filters?: Pick<AnalyticsQuery, 'accountIds'>): Promise<ReconciliationsAnswer>;
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>): Promise<RewritesAnswer>;
   /** `funding` keeps the billed or the plan-funded rows. Under the account grouping each point's subscription groups carry their shares. */
   getAnalyticsSeries(query: AnalyticsQuery): Promise<AnalyticsPoint[]>;

@@ -1277,6 +1277,24 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([item.detail.slowed_ms, item.detail.bar_ms, item.detail.factor_min], [7_700_000, 3_600_000, 0.35], "the closed span of 86 min 20 s and the open one since 13:48, past twice work's 30 minutes");
   });
 
+  test(`the mock's reconciliations name the story's accounts and one off row, at ${at}`, async () => {
+    const s = await story;
+    const { reconciliations } = await s.api.getAnalyticsReconciliations();
+    const oauth = new Set(s.accounts.filter((a) => a.kind === 'oauth').map((a) => a.id));
+    for (const r of reconciliations) assert.ok(oauth.has(r.accountId), `${r.accountId}'s window names an OAuth account of the story`);
+    const off = reconciliations.filter((r) => s.lib.ratioOff(r));
+    assert.deepEqual(off.map((r) => [r.accountId, r.window]), [['nightly', 'five_hour']], 'one row reads off the band');
+    // The condition reads each window's newest row, so the off row is the one it holds on.
+    const [newest] = reconciliations.filter((r) => r.accountId === 'nightly' && r.window === 'five_hour').sort((x, y) => Date.parse(y.windowEnd) - Date.parse(x.windowEnd));
+    assert.equal(off[0], newest, "the off row is nightly's newest 5-hour window");
+    const drift = s.attention.filter((i) => i.kind === 'meter_drift');
+    assert.deepEqual(
+      drift.map((i) => [i.subject.id, i.since, i.detail.windows.map((w) => [w.window, w.ratio, w.observed_rise, w.window_end])]),
+      [[off[0].accountId, off[0].windowEnd, [[off[0].window, off[0].ratio, off[0].observedRise, Date.parse(off[0].windowEnd)]]]],
+      "the meter drift item names the off row's account, dated from its window's end",
+    );
+  });
+
   test(`the slow-down's story: the slowed request's hold and renewal on work, the round its stretch fired for the annex, the failover's cause on all and studio's span rows, at ${at}`, async () => {
     const s = await story;
     const records = await decisionsOf(s);

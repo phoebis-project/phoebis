@@ -1,6 +1,6 @@
 import type {
-  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, HeldPoint, LatencyHistograms, PinMigrationReason, PlacementRow, RequestKind, RequestLog, RewritePoint, RewritesAnswer,
-  WastedProbeReason,
+  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, HeldPoint, LatencyHistograms, PinMigrationReason, PlacementRow, Reconciliation, ReconciliationsAnswer, RequestKind, RequestLog,
+  RewritePoint, RewritesAnswer, WastedProbeReason,
 } from '@/api/types';
 import { bucketShare } from '@/lib/analytics';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
@@ -11,9 +11,9 @@ import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/
 import { matchesPattern } from '@/lib/pattern';
 import { ACCOUNTS } from './accounts';
 import { keyById } from './pools';
-import { USER_AGENTS } from './requests';
+import { USER_AGENTS, clock } from './requests';
 import { TABLES } from './samples';
-import { DAY, HOUR, iso } from './time';
+import { DAY, HOUR, MINUTE, NOW, iso } from './time';
 
 /**
  * One hour of one lane of the fixture ledger. The admin routes answer buckets and groups rather than rows,
@@ -636,4 +636,47 @@ export function placementsOf(requests: RequestLog[], q: Pick<AnalyticsQuery, 'fr
     }
   }
   return [...byRung.values()].sort((a, b) => a.rung.localeCompare(b.rung)).map((row) => ({ ...row, hitShare: row.placements > 0 ? row.hits / row.placements : null }));
+}
+
+/**
+ * The days the ledger keeps a request row, as the mock answers it beside its windows. The settings carry no request
+ * retention in days, so the figure is the mock's own, long enough that every window below finds its requests.
+ */
+export const REQUEST_RETENTION_DAYS = 90;
+
+/** A window the hourly fold closed within the hour after its reset, its ratio the rise over the share as stored. */
+const reconciled = (accountId: string, window: string, endMs: number, readings: [number, number], observedRise: number, predictedShare: number, requests: number): Reconciliation => ({
+  accountId,
+  computedAt: iso(endMs + 37 * MINUTE),
+  estimated: 0,
+  firstReadingAt: iso(readings[0]),
+  lastReadingAt: iso(readings[1]),
+  observedRise,
+  predictedShare,
+  ratio: observedRise / predictedShare,
+  requests,
+  window,
+  windowEnd: iso(endMs),
+});
+
+/**
+ * The story's completed windows, newest first as the route orders them, an account's newest of each window ending where
+ * its current one began. Every ratio sits near 1 but nightly's newest 5-hour window, which ended at the 13:11 reset of
+ * the window the poll read at its limit at 12:01: its readings rose 0.3 against the 0.15 the router priced, twice the
+ * table.
+ */
+export const RECONCILIATIONS: Reconciliation[] = [
+  reconciled('nightly', 'five_hour', clock(13, 11), [clock(10, 52), clock(13, 10)], 0.3, 0.15, 64),
+  reconciled('primary', 'five_hour', clock(11, 44), [clock(7, 3), clock(11, 38)], 0.52, 0.5, 212),
+  reconciled('studio', 'five_hour', clock(10, 29), [clock(6, 9), clock(10, 26)], 0.38, 0.4, 37),
+  reconciled('nightly', 'five_hour', NOW - 15 * HOUR - 50 * MINUTE, [NOW - 20 * HOUR - 20 * MINUTE, NOW - 16 * HOUR], 0.41, 0.43, 88),
+  reconciled('studio', 'seven_day_fable', NOW - 2 * DAY - 14 * HOUR - 40 * MINUTE, [NOW - 9 * DAY - 8 * HOUR, NOW - 2 * DAY - 15 * HOUR], 0.21, 0.2, 19),
+  reconciled('primary', 'seven_day', NOW - 3 * DAY - 18 * HOUR - 20 * MINUTE, [NOW - 10 * DAY - 16 * HOUR, NOW - 3 * DAY - 18 * HOUR - 32 * MINUTE], 0.64, 0.62, 2_350),
+  reconciled('nightly', 'seven_day', NOW - 5 * DAY - 5 * HOUR - 48 * MINUTE, [NOW - 12 * DAY - 2 * HOUR, NOW - 5 * DAY - 6 * HOUR - 13 * MINUTE], 0.71, 0.69, 1_480),
+];
+
+/** The reconciled windows as the route answers them, narrowed to the Accounts filter, every account's without one. */
+export function reconciliationsOf(rows: Reconciliation[], filters: Pick<AnalyticsQuery, 'accountIds'> = {}): ReconciliationsAnswer {
+  const accounts = filters.accountIds ?? [];
+  return { reconciliations: rows.filter((r) => accounts.length === 0 || accounts.includes(r.accountId)).map((r) => ({ ...r })), requestRetentionDays: REQUEST_RETENTION_DAYS };
 }

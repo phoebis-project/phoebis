@@ -541,7 +541,7 @@ async function sidebarBrand(theme) {
 /**
  * The dashboard's attention line above the tiles: one 22 px row per line of badges with the lead on the first and a
  * 6 px gap between rows, every badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges, the
- * line inside the content box and clear of the tiles. The mock pass draws the story's fifteen items. The router pass
+ * line inside the content box and clear of the tiles. The mock pass draws the story's sixteen items. The router pass
  * seeds an exhaustion of its main pool, which any request the pool serves later in the run (a keepalive probe among
  * them) clears: the light pass, which reaches the dashboard first, requires that item, so a route answering an empty
  * list fails it, and the dark pass draws that item or the quiet line, never the unavailable one.
@@ -571,7 +571,7 @@ async function attentionLine(theme) {
   if (read.bottom > read.gridTop) say('reaches into the tiles');
   const texts = read.badges.map((b) => b.text);
   if (mock) {
-    if (read.lead !== '15 need attention' || texts.length !== 15) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the story's fifteen items`);
+    if (read.lead !== '16 need attention' || texts.length !== 16) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the story's sixteen items`);
   } else if (theme === 'light') {
     if (read.lead === null || !texts.includes('Pool exhausted: Main')) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the seeded exhaustion`);
   } else if (read.lead === null ? JSON.stringify(texts) !== '["Nothing needs attention"]' : !texts.includes('Pool exhausted: Main')) {
@@ -2927,8 +2927,11 @@ async function planLegend(theme) {
  * 20x figure, so its width is recorded at 1280 by 800 and every column sits inside its wrap, and in the mock's story a
  * row draws that second line. Every budget row draws its bar, one row per budgeted period, and in the mock's story the
  * member past its budget carries the at-budget badge, and the subscription member's spend leads with the muted word
- * metered in the figure's own type. The router's seed places nothing and budgets no member, so there the tables draw
- * their empty rows. Each section shows on its own tab, so the Cache tables are read there and Member budgets on Burn.
+ * metered in the figure's own type. Meter reconciliation sits in the Burn section beside Member budgets and is read
+ * against it on the title and head types, the card width and, where both draw figures, their type, and in the mock's
+ * story its one badge marks nightly's 5-hour window. The router's seed places nothing and budgets no member, so there
+ * the tables draw their empty rows. Each section shows on its own tab, so the Cache tables are read there and Member
+ * budgets and Meter reconciliation on Burn.
  */
 async function analyticsTables(theme) {
   const say = (what) => failures.push(`${theme} /analytics: ${what}`);
@@ -2963,6 +2966,7 @@ async function analyticsTables(theme) {
         };
       };
       const budgetRows = [...(card('Member budgets')?.querySelectorAll('tbody tr') ?? [])].filter((tr) => tr.children.length === 5);
+      const reconciledRows = [...(card('Meter reconciliation')?.querySelectorAll('tbody tr') ?? [])].filter((tr) => tr.children.length === 7);
       const atBudget = (tr) => [...tr.querySelectorAll('.badge')].find((b) => b.textContent?.trim() === 'at budget');
       const spent = (tr) => tr.children[2].querySelector('.num');
       const word = (el) => (el ? `${getComputedStyle(el).fontFamily}/${getComputedStyle(el).fontSize}` : null);
@@ -2977,7 +2981,9 @@ async function analyticsTables(theme) {
         metered: budgetRows
           .filter((tr) => spent(tr)?.querySelector('.muted'))
           .map((tr) => ({ account: tr.children[1].textContent?.trim(), figure: word(spent(tr)), text: spent(tr)?.textContent, word: word(spent(tr)?.querySelector('.muted')) })),
+        offWindows: reconciledRows.filter((tr) => tr.querySelector('.badge')).map((tr) => [tr.children[0].textContent?.trim(), tr.children[1].textContent?.trim()]),
         placements: box('Placements by rung'),
+        reconciliation: box('Meter reconciliation'),
       };
     });
   try {
@@ -2994,6 +3000,8 @@ async function analyticsTables(theme) {
     failures.push(...compare(read.budgets, read.placements, ['title', 'head'], `${theme} /analytics: "Member budgets" against "Placements by rung"`));
     if (read.placements?.section !== 'cache') say(`the placements card sits in ${read.placements?.section}, not the Cache section`);
     if (read.budgets?.section !== 'burn') say(`the member budgets card sits in ${read.budgets?.section}, not the Burn section`);
+    failures.push(...compare(read.reconciliation, read.budgets, ['title', 'head', 'width', ...drawn(read.reconciliation, read.budgets, ['figure'])], `${theme} /analytics: "Meter reconciliation" against "Member budgets"`));
+    if (read.reconciliation?.section !== 'burn') say(`the meter reconciliation card sits in ${read.reconciliation?.section}, not the Burn section`);
     for (const bar of read.bars.filter((b) => b === null || !/^[0-9]{3,}x4$/.test(b))) say(`a member budget row draws its bar as ${bar}`);
     if (mock) {
       if (!read.placements?.rows) say('the story places requests by rung, yet the placements card draws no figure');
@@ -3002,6 +3010,7 @@ async function analyticsTables(theme) {
       if (JSON.stringify(read.atBudget.map((r) => r.account)) !== JSON.stringify(['research'])) say(`the at-budget mark sits on ${JSON.stringify(read.atBudget.map((r) => r.account))}, not on research alone`);
       if (JSON.stringify(read.metered.map((r) => [r.account, r.text])) !== JSON.stringify([['primary', 'metered $12.50']])) say(`the metered word sits on ${JSON.stringify(read.metered.map((r) => [r.account, r.text]))}, not on primary alone`);
       for (const r of read.metered.filter((r) => r.word !== r.figure)) say(`the metered word on ${r.account} reads ${r.word}, not the figure's ${r.figure}`);
+      if (JSON.stringify(read.offWindows) !== JSON.stringify([['nightly', '5h']])) say(`the off ratio's badge sits on ${JSON.stringify(read.offWindows)}, not on nightly's 5-hour window alone`);
     }
   } finally {
     await tabTo(theme, 'Traffic');
@@ -3013,8 +3022,8 @@ async function analyticsTables(theme) {
  * the landing tab (its group column the fill, Key under the default grouping), the misses-by-reason breakdown (Key
  * again, its nine figure headers wrapped so the group column keeps its room, each known reason's header its short
  * word with the full label on its title) and the placements table on Cache (Rung), and the member budgets on Burn
- * (Pool and Account, the Spent column as wide as its meter's floor). The view returns to Traffic afterwards, as the
- * other Analytics checks leave it.
+ * (Pool and Account, the Spent column as wide as its meter's floor) with the meter reconciliation (Upstream). The view
+ * returns to Traffic afterwards, as the other Analytics checks leave it.
  */
 async function analyticsColumns(theme) {
   await tableColumns(theme, 'analytics', '#traffic .card--table table', ['Key']);
@@ -3037,6 +3046,7 @@ async function analyticsColumns(theme) {
     await tableColumns(theme, 'analytics', '.placements-table', ['Rung']);
     if (!(await tabTo(theme, 'Burn'))) return;
     await tableColumns(theme, 'analytics', '.budgets-table', ['Pool', 'Account']);
+    await tableColumns(theme, 'analytics', '.reconciliations-table', ['Upstream']);
   } finally {
     await tabTo(theme, 'Traffic');
   }

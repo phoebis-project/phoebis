@@ -1,5 +1,5 @@
 import type { Api } from '@/api/client';
-import type { Account, AccountRollup, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, HeldPoint, PinMigrationReason, Placement, PlacementRow, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
+import type { Account, AccountRollup, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, HeldPoint, PinMigrationReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
 import { tierCapacity, tierRow, type CostWindow } from '@/lib/costs';
 import { earlierHolderLabel, equivalentShort, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtShare, fmtUsd, withEstimate } from '@/lib/format';
 import { ageWord } from '@/lib/time';
@@ -697,3 +697,11 @@ export const placementCells = (row: PlacementRow): string[] => [
   fmtCompact(row.cacheReadTokens),
   row.rung === 'with_main' ? '-' : fmtCompact(row.promisedTokens),
 ];
+
+/** The least rise a ratio counts after: the readings move in whole percents, so a smaller rise makes a coarse ratio. */
+export const MIN_RISE = 0.05;
+/** The band a completed window's ratio agrees with the table inside, symmetric in log terms, as the ledger reads it. */
+export const RATIO_HIGH = 1.25;
+export const RATIO_LOW = 0.8;
+/** A ratio the condition marks: outside the band after a rise the readings' whole-percent steps can carry. */
+export const ratioOff = (row: Pick<Reconciliation, 'observedRise' | 'ratio'>): boolean => row.observedRise >= MIN_RISE && (row.ratio < RATIO_LOW || row.ratio > RATIO_HIGH);

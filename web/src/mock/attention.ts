@@ -1,7 +1,9 @@
-import type { AttentionItem, RoutingEvent } from '@/api/types';
+import type { AttentionItem, Reconciliation, RoutingEvent } from '@/api/types';
+import { MIN_RISE, ratioOff } from '@/lib/analytics';
 import { latestWeighted, modelTierOf } from '@/lib/costs';
 import { undatedModel } from '@/lib/format';
 import { ACCOUNTS, accountById } from './accounts';
+import { RECONCILIATIONS } from './analytics';
 import { KEYS, POOLS } from './pools';
 import { REQUESTS } from './requests';
 import { ROUTING_EVENTS } from './routingLog';
@@ -164,14 +166,39 @@ export function slowedLongOf(rows: readonly SpanRow[], accountId: string, now: n
   };
 }
 
-const CONDITION_ORDER: AttentionItem['kind'][] = ['wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'];
+/**
+ * An account's meter drift as the fold reads the reconciled windows: per window the newest row whose rise reaches
+ * `MIN_RISE`, holding while any of them reads off the band, with the off ones in window order and dated from the
+ * oldest one's end. Null where every such row reads inside.
+ */
+function drift(accountId: string): Pick<AttentionItem, 'detail' | 'since'> | null {
+  // The rows run newest first, so the first of a window is its newest.
+  const newest = new Map<string, Reconciliation>();
+  for (const r of RECONCILIATIONS) if (r.accountId === accountId && r.observedRise >= MIN_RISE && !newest.has(r.window)) newest.set(r.window, r);
+  const off = [...newest.values()].filter((r) => ratioOff(r)).sort((x, y) => x.window.localeCompare(y.window));
+  if (off.length === 0) return null;
+  return {
+    detail: {
+      effective: TABLES.effective,
+      source: 'shipped',
+      windows: off.map((r) => ({ observed_rise: r.observedRise, predicted_share: r.predictedShare, ratio: r.ratio, requests: r.requests, window: r.window, window_end: Date.parse(r.windowEnd) })),
+    },
+    since: iso(Math.min(...off.map((r) => Date.parse(r.windowEnd)))),
+  };
+}
+
+const CONDITION_ORDER: AttentionItem['kind'][] = ['meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'];
 
 /**
- * The four routing conditions as the reader builds them, one per subject the fold holds: every OAuth account for the
- * walls, the spent destinations and the slow-downs, every pool for the rounds without runway. The route lists them by
- * kind, then by when each began, then by subject.
+ * The meter drift and the four routing conditions as the reader builds them, one per subject the fold holds: every
+ * OAuth account for the meter drift, the walls, the spent destinations and the slow-downs, every pool for the rounds
+ * without runway. The route lists them by kind, then by when each began, then by subject.
  */
 const CONDITIONS: AttentionItem[] = [
+  ...ACCOUNTS.filter((a) => a.kind === 'oauth').flatMap((a) => {
+    const held = drift(a.id);
+    return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), ...held, kind: 'meter_drift' as const }] : [];
+  }),
   ...ACCOUNTS.filter((a) => a.kind === 'oauth').flatMap((a) => {
     const held = walls(a.id);
     return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), ...held, kind: 'wall_reached' as const }] : [];
@@ -197,9 +224,10 @@ const CONDITIONS: AttentionItem[] = [
  * its writes in memory, legacy's lapsed credential, the Overflow workspace out of funding as its account reads,
  * legacy's refreshes failing, the proxy listener's certificate 12 days from its end, a priced record of the jobs pool's
  * one member parked in the ledger file, the backoff secondary's poll is in, Sonnet 4.6 priced at its model tier's
- * weight, nightly's wall at 12:01 and secondary's after the 11:00 round, nightly spent after the least-bad move onto
- * it, the all pool's round that found no destination with runway, and studio slowed in work for 2 h 8 min of the day.
- * The four routing conditions read the routing log's events as the ledger folds them.
+ * weight, nightly's 5-hour window charged twice the table up to its 13:11 reset, nightly's wall at 12:01 and
+ * secondary's after the 11:00 round, nightly spent after the least-bad move onto it, the all pool's round that found
+ * no destination with runway, and studio slowed in work for 2 h 8 min of the day. The meter drift reads the reconciled
+ * windows and the four routing conditions the routing log's events, as the ledger folds them.
  */
 export const ATTENTION: AttentionItem[] = [
   ...(jobsExhausted

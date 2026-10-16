@@ -1,4 +1,5 @@
 import type { AttentionItem, AttentionKind } from '@/api/types';
+import { ANALYTICS_CODEC } from './address';
 import { fmtAbsolute, fmtRelative, instant as clockInstant } from './format';
 import { WINDOW_WORD, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
 import { speedWord } from './selection';
@@ -10,6 +11,7 @@ export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   destination_spent: 'Destination spent within the hour',
   funding_required: 'Funding required',
   ledger_record_parked: 'Priced record parked',
+  meter_drift: 'Meter drift against the table',
   model_unweighted: 'Model weight estimated',
   poll_backoff: 'Usage poll backing off',
   pool_exhausted: 'Pool exhausted',
@@ -27,6 +29,7 @@ export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'serious' | 'war
   destination_spent: 'warning',
   funding_required: 'serious',
   ledger_record_parked: 'serious',
+  meter_drift: 'warning',
   model_unweighted: 'warning',
   poll_backoff: 'warning',
   pool_exhausted: 'critical',
@@ -65,8 +68,9 @@ function conditionLog({ kind, link }: LinkedItem): { log: Pick<LogLink, 'account
 
 /**
  * A `pool_exhausted` item opens the routing log on the pool's exhausted decisions from the condition's start, and a
- * routing condition on its subject's rounds, moves, walls and slow-downs since then. Every other kind opens the
- * account, pool, key or model where it is fixed. Null when the item names none.
+ * routing condition on its subject's rounds, moves, walls and slow-downs since then. A meter drift opens Analytics on
+ * the account with the Burn section in view, where the reconciled windows behind it are listed. Every other kind opens
+ * the account, pool, key or model where it is fixed. Null when the item names none.
  */
 export function attentionHref(item: LinkedItem, now: number): string | null {
   const { link } = item;
@@ -76,6 +80,7 @@ export function attentionHref(item: LinkedItem, now: number): string | null {
   if (pool !== null) return logHref({ pools: [pool], kinds: ['exhausted'], ...since });
   const condition = conditionLog(item);
   if (condition !== null) return logHref({ ...condition.log, ...since });
+  if (item.kind === 'meter_drift' && link.page === 'accounts') return `/analytics?${ANALYTICS_CODEC.toParams({ ...ANALYTICS_CODEC.fromParams(new URLSearchParams()), accounts: [link.id] })}#burn`;
   const id = encodeURIComponent(link.id);
   return link.page === 'accounts' ? `/accounts/${id}` : `/${link.page}#${id}`;
 }
@@ -164,6 +169,8 @@ export function attentionDetail(item: AttentionItem, now: number): string {
       return conditionWords(item, now);
     case 'slowed_long':
       return slowedWords(item, now);
+    case 'meter_drift':
+      return driftWords(item, now);
   }
 }
 
@@ -226,12 +233,33 @@ function slowedWords(item: AttentionItem, now: number): string {
   return [`slowed ${formatFact(count(d.slowed_ms), 'ms', now)} of the last 24 h`, ...bar, ...slowest, ...(settings ? [settings] : []), `since ${clockInstant(Date.parse(item.since), now)}`].join(', ');
 }
 
+/** A ratio with two decimals and one trailing zero dropped (`2.0`, `1.25`, `0.8`), as the meter drift words print it. */
+const ratioWord = (ratio: number): string => {
+  const fixed = ratio.toFixed(2);
+  return fixed.endsWith('0') ? fixed.slice(0, -1) : fixed;
+};
+
 /**
- * A routing condition's sentence as the dashboard's line draws it, its subject first, or null for any other kind, which
- * keeps its label and subject.
+ * An account's off windows, each with the ratio the meter charged against the table, and the start, without the
+ * subject. The first window carries the verb, the later ones their word and ratio alone, so the line stays short.
+ */
+function driftWords(item: AttentionItem, now: number): string {
+  const windows = (Array.isArray(item.detail.windows) ? item.detail.windows : []).map((w: unknown) => (w !== null && typeof w === 'object' ? (w as Record<string, unknown>) : {}));
+  const ratios = windows.map((w, i) => {
+    const word = text(w.window) ?? '';
+    const ratio = `${ratioWord(count(w.ratio))}x`;
+    return i === 0 ? `${WINDOW_WORD[word] ?? word} charged ${ratio} the table` : `${WINDOW_WORD[word] ?? word} ${ratio}`;
+  });
+  return [...ratios, `since ${clockInstant(Date.parse(item.since), now)}`].join(', ');
+}
+
+/**
+ * A routing condition's or a meter drift's sentence as the dashboard's line draws it, its subject first, or null for
+ * any other kind, which keeps its label and subject.
  */
 export function attentionWords(item: AttentionItem, now: number): string | null {
   if (item.kind === 'slowed_long') return `${item.subject.label}: ${slowedWords(item, now)}`;
+  if (item.kind === 'meter_drift') return `${item.subject.label}: ${driftWords(item, now)}`;
   if (item.kind !== 'wall_reached' && item.kind !== 'destination_spent' && item.kind !== 'shed_no_runway') return null;
   return `${item.subject.label}: ${conditionWords(item, now)}`;
 }

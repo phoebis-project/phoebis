@@ -1,7 +1,7 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, CostRevision, CostSplit, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, MoveCause, Overview, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, ReturnToPlan, RewritesAnswer,
+  ModelsState, MoveCause, Overview, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, ReturnToPlan, RewritesAnswer,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SharedEquivalent, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId, WindowSample,
 } from './types';
 import { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES, AUTO_MODE_VALUES, DIAGNOSTICS_SOURCE_VALUES } from './types';
@@ -787,6 +787,14 @@ export function decodeMemberBudget(v: unknown): MemberBudget {
     spentUsd: numOrNull(m.spent_usd),
   };
 }
+export function decodeReconciliation(v: unknown): Reconciliation {
+  const r = rec(v);
+  return {
+    accountId: str(r.account_id), computedAt: isoOr(r.computed_at, epoch), estimated: num(r.estimated), firstReadingAt: isoOr(r.first_reading_at, epoch), lastReadingAt: isoOr(r.last_reading_at, epoch),
+    observedRise: num(r.observed_rise), predictedShare: num(r.predicted_share), ratio: num(r.ratio), requests: num(r.requests), window: str(r.window), windowEnd: isoOr(r.window_end, epoch),
+  };
+}
+export const decodeReconciliations = (v: unknown): ReconciliationsAnswer => ({ reconciliations: list(rec(v).reconciliations).map(decodeReconciliation), requestRetentionDays: num(rec(v).request_retention_days) });
 
 export function decodeAccountRollups(v: unknown): AccountRollup[] {
   return list(rec(v).accounts).map(rec).flatMap((a) => list(a.hours).map(rec).map((h) => {

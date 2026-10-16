@@ -1985,6 +1985,22 @@ test('a placement row and a member budget keep the figures the routes leave null
   assert.equal(d.decodeMemberBudget({ ...member, kind: 'robot' }).kind, 'oauth', "a kind outside the two reads as the pool member's decoder reads it");
 });
 
+test("decodeReconciliations reads the fixture's rows and an empty list", () => {
+  const body = fixture('analytics_reconciliations');
+  const answer = d.decodeReconciliations(body);
+  const rows = answer.reconciliations;
+  assert.ok(rows.length >= 1, 'the capture holds a completed window');
+  for (const [i, row] of rows.entries()) {
+    assert.deepEqual(Object.keys(row).sort(), ['accountId', 'computedAt', 'estimated', 'firstReadingAt', 'lastReadingAt', 'observedRise', 'predictedShare', 'ratio', 'requests', 'window', 'windowEnd']);
+    assert.deepEqual([typeof row.accountId, typeof row.window], ['string', 'string']);
+    for (const key of ['estimated', 'observedRise', 'predictedShare', 'ratio', 'requests']) assert.equal(typeof row[key], 'number', key);
+    for (const key of ['computedAt', 'firstReadingAt', 'lastReadingAt', 'windowEnd']) assert.ok(isIso(row[key]), `${key} reads ${row[key]}, an ISO instant`);
+    assert.equal(Date.parse(row.windowEnd), body.reconciliations[i].window_end, 'the instant is the route\'s milliseconds');
+  }
+  assert.equal(typeof answer.requestRetentionDays, 'number');
+  assert.deepEqual(d.decodeReconciliations({ reconciliations: [], request_retention_days: 30 }), { reconciliations: [], requestRetentionDays: 30 }, 'an empty list decodes to none');
+});
+
 test('settings decode the members the route answers and nothing more', () => {
   const wire = fixture('settings');
   const s = d.decodeSettings(wire);

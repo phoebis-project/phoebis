@@ -8,7 +8,7 @@ const item = (kind, over = {}) => ({ detail: {}, kind, link: null, pools: [], si
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 test('the attention kinds rank worst first, the order the route answers in', () => {
-  assert.deepEqual([...ATTENTION_KIND_VALUES], ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'model_unweighted', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long']);
+  assert.deepEqual([...ATTENTION_KIND_VALUES], ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'model_unweighted', 'meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long']);
 });
 
 test("a listener's two certificate kinds decode as themselves, never as the worst kind", () => {
@@ -25,6 +25,7 @@ test('each attention kind has its word and its tone, a client drift serious', ()
     destination_spent: 'Destination spent within the hour',
     funding_required: 'Funding required',
     ledger_record_parked: 'Priced record parked',
+    meter_drift: 'Meter drift against the table',
     model_unweighted: 'Model weight estimated',
     poll_backoff: 'Usage poll backing off',
     pool_exhausted: 'Pool exhausted',
@@ -35,7 +36,7 @@ test('each attention kind has its word and its tone, a client drift serious', ()
     wall_reached: 'Wall reached under the ceiling',
     writer_degraded: 'State writer degraded',
   });
-  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'serious', 'critical', 'serious', 'critical', 'warning', 'serious', 'warning', 'warning', 'warning', 'warning', 'warning', 'warning']);
+  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'serious', 'critical', 'serious', 'critical', 'warning', 'serious', 'warning', 'warning', 'warning', 'warning', 'warning', 'warning', 'warning']);
 });
 
 test('an item opens the page where its condition is fixed, and an item without a link opens nothing', () => {
@@ -216,6 +217,25 @@ test('the four routing conditions read the count, the setting and the start on t
   assert.equal(words('slowed_long', studio, { ...slowed, bar_ms: null }), `studio: slowed 2 h 8 min of the last 24 h, slowest 0.35x, slow_down_stretch_seconds 1800, since ${at}`, 'a detail without a bar names none');
   assert.equal(attentionWords(item('pool_exhausted', { detail: { pool: 'jobs' } }), NOW), null, 'another kind keeps its label and subject');
   for (const kind of ['wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long']) assert.equal(attentionDetail(item(kind, { ...account, detail: {} }), NOW), attentionWords(item(kind, { ...account, detail: {} }), NOW).replace(/^primary: /, ''), `${kind}'s row reads the words without the subject`);
+});
+
+test('a meter drift item words its off windows and opens the Burn tab on the account', () => {
+  // A local clock time, so the words read 14:20 in any zone; it lies within a day of NOW there.
+  const since = new Date(2026, 8, 18, 14, 20).toISOString();
+  const account = { link: { id: 'acct-a', page: 'accounts' }, pools: ['main'], since, subject: { id: 'acct-a', label: 'acct-a', type: 'account' } };
+  const windows = [
+    { observed_rise: 0.3, predicted_share: 0.15, ratio: 2.0, requests: 40, window: 'five_hour', window_end: Date.parse(since) },
+    { observed_rise: 0.26, predicted_share: 0.2, ratio: 1.3, requests: 120, window: 'seven_day', window_end: Date.parse(since) + 3_600_000 },
+  ];
+  const drift = item('meter_drift', { ...account, detail: { effective: '2026-09-01', source: 'shipped', windows } });
+  assert.equal(attentionWords(drift, NOW), 'acct-a: 5h charged 2.0x the table, 7d 1.3x, since 14:20', 'the first window carries the verb and the table, each later one its word and ratio');
+  assert.equal(attentionDetail(drift, NOW), '5h charged 2.0x the table, 7d 1.3x, since 14:20', "the pool card's row reads the words without the subject");
+  const fable = item('meter_drift', { ...account, detail: { effective: '2026-09-01', source: 'file', windows: [{ observed_rise: 0.12, predicted_share: 0.18, ratio: 0.7, requests: 9, window: 'seven_day_fable', window_end: Date.parse(since) }] } });
+  assert.equal(attentionWords(fable, NOW), 'acct-a: Fable charged 0.7x the table, since 14:20', 'a ratio drops its one trailing zero');
+  assert.equal(ATTENTION_TONE.meter_drift, 'warning');
+  const url = new URL(attentionHref(drift, NOW), 'http://console.test');
+  assert.deepEqual([url.pathname, Object.fromEntries(url.searchParams), url.hash], ['/analytics', { accounts: 'acct-a' }, '#burn'], 'Analytics on the account with the Burn section in view');
+  assert.equal(attentionLogLine(drift, NOW), null, 'the item opens no routing log');
 });
 
 test('the pool exhausted title names the day of a condition that began more than a day ago', () => {

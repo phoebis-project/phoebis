@@ -266,7 +266,7 @@ export interface QuotaSnapshot {
  * The conditions that need the operator, worst first: the order the route ranks by and the dashboard's line draws,
  * so not alphabetical.
  */
-export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'model_unweighted', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'] as const;
+export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'model_unweighted', 'meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'] as const;
 export type AttentionKind = (typeof ATTENTION_KIND_VALUES)[number];
 
 /** One condition that holds now, as `GET /admin/attention` answers it. */
@@ -1542,6 +1542,37 @@ export interface RewritesAnswer {
   /** Each reason's moves by the fit of the destination they landed on (`fits`, `rewrite_only`, `least_bad`, `unknown`). */
   movesByReasonAndFit: Record<string, Record<string, number>>;
   points: RewritePoint[];
+}
+
+/** One completed window of an account against the meter, as `GET /admin/analytics/reconciliations` answers it. */
+export interface Reconciliation {
+  accountId: string;
+  /** When the ledger reconciled the window, as an ISO instant. */
+  computedAt: string;
+  /** The attempts priced at a model tier's estimate. */
+  estimated: number;
+  firstReadingAt: string;
+  lastReadingAt: string;
+  /** The last reading's utilization less the first's, as a fraction of the window. */
+  observedRise: number;
+  /** The share of the window the router priced its own attempts between the two readings at. */
+  predictedShare: number;
+  /** `observedRise` over `predictedShare`: 1.1 means the meter charged 1.1 times the table. */
+  ratio: number;
+  /** The attempts priced. */
+  requests: number;
+  /** `five_hour`, `seven_day` or `seven_day_fable`, as the route spells it. */
+  window: string;
+  /** The reset the window's readings named, as an ISO instant. */
+  windowEnd: string;
+}
+
+/** The windows that ended in the trailing 30 days, newest first, and the request retention that bounds them. */
+export interface ReconciliationsAnswer {
+  reconciliations: Reconciliation[];
+  /** The days the ledger keeps a request row, 0 for no limit: a window whose first reading is older finds no request
+   *  to price, so it is never reconciled. */
+  requestRetentionDays: number;
 }
 
 /** The keepalive mod's lifecycle word for an agent. */

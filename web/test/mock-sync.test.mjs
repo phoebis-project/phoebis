@@ -49,6 +49,7 @@ const SYNC = {
   analytics_budgets: { decode: (b) => b.members.map(d.decodeMemberBudget), mock: (api) => api.analyticsBudgets() },
   analytics_burn: { decode: (b) => d.decodeBurn(b), mock: (api) => api.getAnalyticsBurn(query, 'account') },
   analytics_placements: { decode: (b) => b.rows.map(d.decodePlacementRow), mock: (api) => api.analyticsPlacements(query) },
+  analytics_reconciliations: { decode: (b) => d.decodeReconciliations(b), mock: (api) => api.getAnalyticsReconciliations() },
   // Its moves by reason and fit are a map of maps keyed by data on both levels, which the mock's consistency test holds
   // to the moves.
   analytics_rewrites: { decode: (b) => d.decodeRewrites(b), mock: (api) => api.getAnalyticsRewrites(query), opaque: (path) => (path === '.movesByReasonAndFit' ? ['object'] : false) },
@@ -79,7 +80,7 @@ const SYNC = {
   settings: { decode: (b) => d.decodeSettings(b), mock: (api) => api.getSettings() },
 };
 /** Fixtures no decoder and no `Api` method reads: captured for their route's shape, or read by a test of their own. */
-const UNCONSUMED = ['analytics_reconciliations', 'bound_refusals', 'pool_traffic', 'pricing', 'replay_held', 'sessions_costs', 'system', 'test_tables'];
+const UNCONSUMED = ['bound_refusals', 'pool_traffic', 'pricing', 'replay_held', 'sessions_costs', 'system', 'test_tables'];
 
 test('the generated fixtures module is a fresh render', () => {
   const committed = readFileSync(new URL('../src/mock/generated/fixtures.ts', import.meta.url), 'utf8');

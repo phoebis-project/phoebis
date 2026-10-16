@@ -12,7 +12,7 @@ import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { isFastScope } from '@/lib/quota';
 import { ACCOUNTS, QUOTA_HISTORY, usageOf } from './accounts';
-import { breakdownOf, burnOf, placementsOf, rewritesOf, seriesOf } from './analytics';
+import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, rewritesOf, seriesOf } from './analytics';
 import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE, memberPins } from './operations';
@@ -637,6 +637,10 @@ export class MockApi implements Api {
 
   getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup, filters?: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'>) {
     return latency(burnOf(emptyStore() ? [] : ALL_ROLLUPS, range, groupBy, filters));
+  }
+
+  getAnalyticsReconciliations(filters?: Pick<AnalyticsQuery, 'accountIds'>) {
+    return latency(reconciliationsOf(emptyStore() ? [] : RECONCILIATIONS, filters));
   }
 
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>) {

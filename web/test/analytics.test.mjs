@@ -922,3 +922,12 @@ test("a share note names the half that applies: the filter for one account's who
   assert.ok(d.GROUPED_SHARE_NOTE.includes('Accounts filter') && d.GROUPED_SHARE_NOTE.includes('group by account'), d.GROUPED_SHARE_NOTE);
   assert.ok(d.ONE_ACCOUNT_SHARE_NOTE.startsWith(d.GROUPED_SHARE_NOTE.slice(0, d.GROUPED_SHARE_NOTE.indexOf(':') + 1)), 'the two notes open on one sentence');
 });
+
+test('ratioOff marks a ratio outside the band after a rise of five percent', () => {
+  assert.equal(d.ratioOff({ observedRise: 0.3, ratio: 2 }), true, 'a window charged twice the table');
+  assert.equal(d.ratioOff({ observedRise: 0.3, ratio: 0.7 }), true, 'a window charged under the table');
+  assert.equal(d.ratioOff({ observedRise: 0.04, ratio: 3 }), false, 'a rise under five percent marks nothing, since whole-percent readings make it coarse');
+  assert.equal(d.ratioOff({ observedRise: 0.05, ratio: 3 }), true, 'a rise of five percent counts');
+  assert.equal(d.ratioOff({ observedRise: 0.3, ratio: 1.1 }), false);
+  assert.deepEqual([0.8, 1.25].map((ratio) => d.ratioOff({ observedRise: 0.3, ratio })), [false, false], 'the edges sit inside the band');
+});

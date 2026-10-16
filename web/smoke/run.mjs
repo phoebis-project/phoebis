@@ -519,6 +519,8 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   // The model's item counts the story's own Sonnet 4.6 plan requests and names its tier's latest weighted model, so
   // its members are read off the mock's answer rather than written here.
   const unweighted = (await api.getAttention()).find((i) => i.kind === 'model_unweighted');
+  // The meter drift's windows carry their ends in the route's milliseconds, so its members are read off the answer too.
+  const drift = (await api.getAttention()).find((i) => i.kind === 'meter_drift');
   const want = [
     ['Pool exhausted: jobs', 'badge--critical', '/routing-log', ['key: ci', 'pool: jobs']],
     ['Client drift: 2.1.271', 'badge--serious', '/keys#laptop', ['client_version: 2.1.271', 'key: laptop', 'trigger: hash']],
@@ -533,6 +535,9 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     ...(unweighted
       ? [['Model weight estimated: claude-sonnet-4-6', 'badge--warning', '/models#claude-sonnet-4-6', [attentionDetail(unweighted, Date.now()), `model: ${unweighted.detail.model}`, `requests: ${unweighted.detail.requests}`, `tier: ${unweighted.detail.tier}`, `weight_of: ${unweighted.detail.weight_of}`]]]
       : []),
+    // Nightly's meter drift ranks after the model's item and before the routing conditions, reads its off window and
+    // opens Analytics on the account.
+    ['nightly: 5h charged 2.0x the table, since 13:11', 'badge--warning', '/analytics', [`effective: ${drift?.detail.effective}`, 'source: shipped', `windows: ${JSON.stringify(drift?.detail.windows)}`]],
     // A routing condition's badge reads its words, the count, the setting and the start, and opens the routing log.
     // Nightly's wall has no round before it, so it names no projection.
     ['nightly: 1 wall reached on the 5h window, shed_cap and window_ceiling, since 12:01', 'badge--warning', '/routing-log', ['setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]']],
@@ -562,8 +567,9 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   results.push({
     name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log and an unweighted model's the Models page, and titled with its detail and age, its sentence first where no pool card draws it",
     ok:
-      lead() === '15 need attention' &&
+      lead() === '16 need attention' &&
       unweighted !== undefined &&
+      drift !== undefined &&
       JSON.stringify(read) === JSON.stringify(want) &&
       /^started 1[34]m ago$/.test(ages[0] ?? '') &&
       ages[6] === 'started 18d 0h ago' &&
@@ -629,7 +635,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   results.push({ name: '/ the window regaining focus reads the attention list again, and an answer clears the failure', ok: reads === 1 && quiet(), missing: [`reads ${reads}`, line()?.textContent ?? 'no line'] });
   localStorage.removeItem('phoebis.mockEmpty');
   await tick();
-  results.push({ name: '/ the story back, the next tick draws its fifteen items again', ok: lead() === '15 need attention', missing: [lead() ?? 'no lead'] });
+  results.push({ name: '/ the story back, the next tick draws its sixteen items again', ok: lead() === '16 need attention', missing: [lead() ?? 'no lead'] });
   dash.unmount();
 }
 
@@ -3482,9 +3488,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const attentionRows = (name) =>
     [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.children[1]?.textContent?.trim(), li.children[1]?.getAttribute('href')?.split('?')[0] ?? null]);
   // The story's items: jobs is exhausted and holds a parked record. all draws the laptop key's client drift, the
-  // Overflow workspace out of funding, secondary's poll backoff and the three routing conditions (the walls on nightly
-  // and secondary, nightly spent within the hour of a move, and all's round without a destination). work draws studio
-  // slowed past twice the stretch, and the routing state writer belongs to no pool's card.
+  // Overflow workspace out of funding, secondary's poll backoff, nightly's meter drift and the three routing conditions
+  // (the walls on nightly and secondary, nightly spent within the hour of a move, and all's round without a
+  // destination). work draws studio slowed past twice the stretch, and the routing state writer belongs to no pool's
+  // card.
   const workDetail = [...(card('work')?.querySelectorAll('ul.attention .attention__detail') ?? [])].map((x) => x.textContent);
   results.push({
     name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, and an account's slow-down as the words without the subject",
@@ -3495,6 +3502,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
           ['Client drift', '2.1.271', '/keys#laptop'],
           ['Funding required', 'Overflow workspace', '/accounts/overflow'],
           ['Usage poll backing off', 'secondary', '/accounts/secondary'],
+          ['Meter drift against the table', 'nightly', '/analytics'],
           ['Wall reached under the ceiling', 'nightly', '/routing-log'],
           ['Wall reached under the ceiling', 'secondary', '/routing-log'],
           ['Destination spent within the hour', 'nightly', '/routing-log'],
@@ -3715,6 +3723,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
           ['Client drift', '/keys#laptop'],
           ['Funding required', '/accounts/overflow'],
           ['Usage poll backing off', '/accounts/secondary'],
+          ['Meter drift against the table', '/analytics?accounts=nightly#burn'],
           ['Wall reached under the ceiling', sinceThen({ accounts: 'nightly', kinds: 'window_spent' }, since('wall_reached', 'nightly'))],
           ['Wall reached under the ceiling', sinceThen({ accounts: 'secondary', kinds: 'window_spent' }, since('wall_reached', 'secondary'))],
           ['Destination spent within the hour', sinceThen({ accounts: 'nightly', kinds: 'pin_migrated,window_spent' }, since('destination_spent', 'nightly'))],
@@ -15235,6 +15244,30 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       JSON.stringify(atBudget.map((tr) => tr.children[1]?.textContent?.trim())) === JSON.stringify(reached.map((b) => b.accountId)) &&
       JSON.stringify(budgetRows.filter((tr) => tr.children[2]?.textContent?.includes('not reported')).map((tr) => tr.children[1]?.textContent?.trim())) === JSON.stringify(unreported),
     missing: budgeted.rows.map((r) => r.join(' | ')),
+  });
+  // The reconciled windows sit between the burn charts and the budgets. The story's one off window is nightly's newest
+  // 5-hour one, charged twice the table.
+  columnsMarked('/analytics the reconciliation table marks Upstream as its fill column', m.container.querySelector('.reconciliations-table'), ['Upstream']);
+  fillTitles('/analytics every Upstream cell of the reconciliation table carries its own text as its title', m.container.querySelector('.reconciliations-table'));
+  const reconciled = tableOf('Meter reconciliation');
+  const reconciledRows = [...(card('Meter reconciliation')?.querySelectorAll('tbody tr') ?? [])];
+  const badged = reconciledRows.filter((tr) => tr.querySelector('.badge') !== null);
+  const burnCards = [...(card('Meter reconciliation')?.closest('.analytics-section')?.querySelectorAll('.card__title') ?? [])].map((t) => t.textContent?.trim());
+  results.push({
+    name: '/analytics the Meter reconciliation card lists each completed window with the off ratio badged',
+    ok:
+      card('Meter reconciliation')?.closest('.analytics-section')?.id === 'burn' &&
+      burnCards.indexOf('Meter reconciliation') > 0 &&
+      burnCards.indexOf('Meter reconciliation') === burnCards.indexOf('Member budgets') - 1 &&
+      card('Meter reconciliation')?.querySelector('.card__subtitle')?.textContent ===
+        "For each completed 5-hour, 7-day and Fable window, the rise the upstream's readings showed against the share the router priced for its own requests in it: 1.1 means the meter charged 1.1 times the table. A ratio under 0.8 or over 1.25 after a rise of at least 5% is marked." &&
+      JSON.stringify(reconciled.heads) === JSON.stringify(['Upstream', 'Window', 'Ended', 'Rise', 'Predicted', 'Ratio', 'Requests']) &&
+      reconciledRows.length > 2 &&
+      reconciledRows.every((tr, i) => tr.classList.contains('is-alt') === (i % 2 === 1)) &&
+      JSON.stringify([...new Set(reconciled.rows.map((r) => r[1]))].sort()) === JSON.stringify(['5h', '7d', 'Fable']) &&
+      JSON.stringify(badged.map((tr) => [tr.children[0]?.textContent?.trim(), tr.children[1]?.textContent?.trim(), [...tr.children[5].querySelectorAll('.badge')].map((b) => [b.className, b.textContent?.trim()])])) ===
+        JSON.stringify([['nightly', '5h', [['badge badge--warning', '2.00']]]]),
+    missing: [JSON.stringify(burnCards), JSON.stringify(reconciled.heads), ...reconciledRows.map((tr) => `${tr.className || 'no class'}: ${[...tr.children].map((td) => td.textContent?.trim()).join(' | ')}`)],
   });
 }
 {
