@@ -537,10 +537,10 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     // Nightly's wall has no round before it, so it names no projection.
     ['nightly: 1 wall reached on the 5h window, shed_cap and window_ceiling, since 12:01', 'badge--warning', '/routing-log', ['setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]']],
     [
-      'secondary: 1 wall reached on the 5h window, the last round projected 111 %, shed_cap and window_ceiling, since 14:02',
+      'secondary: 1 wall reached on the 5h window, the last round projected 109 %, shed_cap and window_ceiling, since 14:02',
       'badge--warning',
       '/routing-log',
-      ['projection_error: -0.111', 'setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]'],
+      ['projection_error: -0.087', 'setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]'],
     ],
     ['nightly: 1 move landed and the 5h window was spent within the hour, window_ceiling, since 11:01', 'badge--warning', '/routing-log', ['fits: {"least_bad":1}', 'moves: 1', 'setting: ["window_ceiling"]', 'windows: ["five_hour"]']],
     [
@@ -11960,6 +11960,40 @@ m.unmount();
     round.page.unmount();
   }
   {
+    // The Fable-week round on nightly at 08:30: the 5-hour window opened 19 minutes before, under all's hold of an
+    // hour, so the shed rule's Round group reads the window's age and hold, and the Fable week fires in its place. The
+    // round lists the Opus pin off the window after the Fable pin, its member's last, so it marks nothing.
+    const name = "/routing-log the Fable-week round's card lists the Opus pin off the window and marks nothing";
+    const id = 'req_3e7a5c19-f84';
+    if ((await api.getDecision(id, 1)) === null) results.push({ name, ok: false, missing: ['no decision of the story at 08:30 on nightly'] });
+    else {
+      const { card, page, record } = await story(id);
+      scan('Fable-week round', card);
+      stripDrawn('Fable-week round', card, RENEWAL_STATIONS);
+      await popoversOpen('Fable-week round', page, card, record);
+      const round = groupOfPopover(await popoverOf(page, stationButton(card, 'move:shed')), 'Round');
+      const labels = [...(round?.querySelectorAll('.kv__row') ?? [])].map((r) => r.querySelector('dt')?.textContent ?? '');
+      const at = Date.parse(record.request.at);
+      const e = (await api.listRoutingLog({ from: iso(at - MINUTE), kinds: ['shedding_round'], limit: 25, request: id, to: iso(at + MINUTE) })).rows[0];
+      const facts = [...((e && rowOf(page, `event/${e.id}`)?.querySelectorAll('.fact__pair')) ?? [])].map((p) => `${p.querySelector('.fact__label')?.textContent} ${p.querySelector('.fact__value')?.textContent}`);
+      const detail = e === undefined ? null : ((await openRow(page, `event/${e.id}`))?.querySelector('.event-detail') ?? null);
+      scan('Fable-week round event', detail);
+      const pins = [...(detail?.querySelectorAll('.event-detail__pins tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent ?? ''));
+      const pairs = Object.fromEntries(kvRows(detail?.querySelector(':scope > .kv')).map((p) => [p.label, ddWords(p.dd)]));
+      results.push({
+        name,
+        ok:
+          JSON.stringify(labels) === JSON.stringify(['trigger', 'excess', 'fired by', 'age 5h', 'age hold 5h', 'target', 'round', 'marked', 'marks', 'skipped']) &&
+          (popoverRowOf(round, 'age 5h') ?? []).includes('age 5h 19 min') && (popoverRowOf(round, 'age hold 5h') ?? []).includes('age hold 5h 1 h') && (popoverRowOf(round, 'round') ?? []).includes('round ran') &&
+          JSON.stringify(facts) === JSON.stringify(['pins 0 of 2']) &&
+          JSON.stringify(pins.map((cells) => [cells[3] === '-', cells[5], cells[7]])) === JSON.stringify([[false, '-', 'last pin'], [true, '-', 'off window']]) &&
+          JSON.stringify(pairs.Outcome) === JSON.stringify(['nothing to mark: last pin']),
+        missing: [labels.join(' / '), rowsRead(round), facts.join(' / '), JSON.stringify(pins), JSON.stringify(pairs.Outcome ?? null)],
+      });
+      page.unmount();
+    }
+  }
+  {
     const { card, page, record } = await story('req_69e30548-32e', 1);
     scan('hold', card);
     stripDrawn('hold', card, modelPairs(record));
@@ -12208,11 +12242,16 @@ m.unmount();
           const detail = e === undefined ? null : ((await openRow(page, `event/${e.id}`))?.querySelector('.event-detail') ?? null);
           scan('round fired by the stretch', detail);
           const pairs = Object.fromEntries(kvRows(detail?.querySelector(':scope > .kv')).map((p) => [p.label, ddWords(p.dd)]));
+          // Each marked pin's Rewrite cell reads its rewrite as the Max 20x equivalent of the 7-day window, on the
+          // API-key annex the pick planned it for as much as on a plan.
+          const rewrites = [...(detail?.querySelectorAll('.event-detail__pins tbody tr') ?? [])].map((tr) => tr.children[5]?.textContent ?? '');
+          const marked = (e?.detail.pins ?? []).flatMap((p, i) => (p.marked ? [[rewrites[i], p.rewrite === null ? null : `${fmtShare(p.rewrite)} of 20x 7d`]] : []));
           return (
             named &&
             (popoverRowOf(round, 'fired by') ?? []).includes('fired by slow-down') && (popoverRowOf(round, 'stretch') ?? []).includes('stretch 42 min') && (popoverRowOf(round, 'round') ?? []).includes('round ran') &&
             e?.detail.trigger === 'slow_down' &&
-            JSON.stringify([pairs.Trigger, pairs.Demand, pairs['Fired by']]) === JSON.stringify([['5h stretch 42 min over the threshold 30 min'], ['12.9 %/h to the reset at 15:29'], ['the slow-down']])
+            JSON.stringify([pairs.Trigger, pairs.Demand, pairs['Fired by']]) === JSON.stringify([['5h stretch 42 min over the threshold 30 min'], ['12.9 %/h to the reset at 15:29'], ['the slow-down']]) &&
+            marked.length === 2 && marked.every(([cell, want]) => want !== null && cell === want)
           );
         },
         what: 'round fired by the stretch',

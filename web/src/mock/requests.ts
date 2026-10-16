@@ -144,6 +144,10 @@ const walkBack = (w: RateLimitWindow, atMs: number, olderFactor: () => number): 
 export const oauthWindows = (accountId: string, atMs: number, olderFactor: () => number = () => rng.float(0.4, 1.1)): AttemptWindow[] => {
   const account = ACCOUNTS.find((a) => a.id === accountId);
   if (!account || account.kind !== 'oauth') return [];
+  // The drawn day's ids are pinned by the checks and the site's screenshots, so a story edit that moves a request
+  // between windows keeps the stream's number of draws. A walk back of secondary from 09:55 to 10:42 reads the live
+  // window the story opens at 09:55 and draws nothing, so it draws one older factor here and drops it.
+  if (accountId === 'secondary' && atMs >= clock(9, 55) && atMs < clock(10, 42)) olderFactor();
   // A head reports the two shared windows and the overage week; a week only the poll reads never reaches an attempt.
   const reported = account.windows.filter((w) => w.id === '5h' || w.id === '7d').map((w) => storyReading(accountId, w, walkBack(w, atMs, olderFactor), atMs));
   // Plans that serve Fable send its weekly headers alongside the other two; the
@@ -248,13 +252,13 @@ export const clock = (h: number, m: number, s = 0): number => NOW - ((14 - h) * 
 
 /**
  * The story's own readings of a window where the walk back's even climb would not tell it, per account and window:
- * secondary's 5-hour window runs hot from its opening at 10:42, so it leads its pace by the pool's 0.9 margin through
+ * secondary's 5-hour window runs hot from its opening at 09:55, so it leads its pace by the pool's 0.9 margin through
  * the 11:00 shedding round and the shed move after it, and reads spent from the head of 14:02:11.
  */
 const STORY_READINGS: Record<string, Partial<Record<WindowId, { at: number; utilization: number }[]>>> = {
   secondary: {
     '5h': [
-      { at: clock(10, 42), utilization: 0 },
+      { at: clock(9, 55), utilization: 0 },
       { at: clock(11, 0), utilization: 0.97 },
       { at: clock(11, 8, 30), utilization: 0.99 },
       { at: clock(14, 2, 10), utilization: 0.99 },
@@ -281,13 +285,13 @@ export const HAIKU = 'claude-haiku-4-5-20251001';
 /**
  * Whether an account could take a request at `atMs` by the story's own account facts, so no attempt lands where the
  * decision card would show the account out: secondary, which serves Sonnet 4.6 alone, reads its 5-hour window spent
- * from 14:02:11 and cools on it from 14:07:51 to 15:42. Primary's fast lane cools from 14:27:00 to 14:42 and it
+ * from 14:02:11 and cools on it from 14:07:51 to 14:55. Primary's fast lane cools from 14:27:00 to 14:42 and it
  * rejects Haiku from 14:24:10 to 15:24. Nightly's usage credits take a fast request once its spend cap is raised at
  * 11:30:12. The Overflow workspace needs funding from 11:30:12, and research spends its day's budget at 12:41:07.
  */
 export function servable(accountId: string, atMs: number, model: string, fast: boolean): boolean {
   const within = (from: number, to: number) => atMs >= from && atMs < to;
-  if (accountId === 'secondary') return !within(clock(14, 2, 11), clock(15, 42));
+  if (accountId === 'secondary') return !within(clock(14, 2, 11), clock(14, 55));
   if (accountId === 'primary') return !(fast && within(clock(14, 27), clock(14, 42))) && !(model === HAIKU && within(clock(14, 24, 10), clock(15, 24)));
   if (accountId === 'nightly') return !fast || atMs >= clock(11, 30, 12);
   if (accountId === 'overflow') return atMs < clock(11, 30, 12);
@@ -832,13 +836,14 @@ interface StorySeed {
 }
 
 /**
- * The routing log's hand-written requests: the story hour, the morning's shedding round and its move, the least-bad
- * move onto nightly, the hold for nightly's reset, and studio's slowed sessions in work with the round their stretch
- * fires.
+ * The routing log's hand-written requests: the story hour, the morning's shedding round and its move, nightly's
+ * Fable-week round, the least-bad move onto nightly, the hold for nightly's reset, and studio's slowed sessions in work
+ * with the round their stretch fires.
  */
 export const STORY_IDS = new Set([
   'req_0b7c2d94-e61', 'req_1d9c3e55-0b2', 'req_1eaa9bc1-a18', 'req_2b9e4c7f-d36', 'req_2c7d9f15-b63', 'req_2e7c90a1-6d4',
-  'req_2f9a6c4e-d84', 'req_31f0b7c2-6e1', 'req_3b8e51f4-0a9', 'req_3d7b9e2f-a41', 'req_4a9c3e7b-a27', 'req_4b0e9d17-c31',
+  'req_2f9a6c4e-d84', 'req_31f0b7c2-6e1', 'req_3b8e51f4-0a9', 'req_3d7b9e2f-a41', 'req_3e2b9d47-c18', 'req_3e7a5c19-f84',
+  'req_4a9c3e7b-a27', 'req_4b0e9d17-c31',
   'req_4e8b1d36-f72', 'req_4f2a8d6e-b7a', 'req_51d0e2b8-7a0', 'req_5b2e8d47-c19', 'req_5c7e2a9d-b14', 'req_5e2f7a19-b03',
   'req_69e30548-32e', 'req_6b3e8d1a-c73', 'req_6c3a9e27-5b1', 'req_6e1f3b98-a24', 'req_7a2d4c18-e95', 'req_7a3f0c26-d81',
   'req_7e4f1a9c-f16', 'req_868264bc-611', 'req_8d4b7f2c-f58', 'req_8e1c4a6d-b52', 'req_9a07c4e1-d55', 'req_9d4c1a73-e58',
@@ -1127,6 +1132,10 @@ function storyRequests(): RequestLog[] {
       session: 'f19a6c2e-8b4d-4e73-a5c0-3d2b7e1f9a08',
       usage: { cacheWrite1h: 41_200, input: 1_800, output: 1_350 },
     },
+    // Two turns of nightly's Fable session in the morning, before its overage: the first places the session, and the
+    // second's renewal runs the round its Fable week fires while the 5-hour window is under the hold.
+    { agentId: 'main', at: t(8, 21, 40), attempts: [{ accountId: 'nightly', at: t(8, 21, 40), ms: 11_200, status: 200 }], id: 'req_3e2b9d47-c18', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '89cd1c92', usage: { cacheWrite1h: 78_400, input: 2_600, output: 1_720, thinking: 610 } },
+    { agentId: 'main', at: t(8, 30), attempts: [{ accountId: 'nightly', at: t(8, 30), ms: 9_400, status: 200 }], id: 'req_3e7a5c19-f84', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '89cd1c92', usage: { cacheRead: 81_000, cacheWrite1h: 2_600, input: 2_400, output: 1_480, thinking: 520 } },
     // A fresh session placed by the spare rate: secondary falls short of the ceiling and its burn outruns its pace.
     { agentId: 'main', at: t(13, 45), attempts: [{ accountId: 'primary', at: t(13, 45), ms: 3_800, status: 200 }], id: 'req_2c7d9f15-b63', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: 'b81e4f2a-7c3d-4a90-8e65-2d1f0c9b7a34', usage: { cacheWrite5m: 24_500, input: 2_900, output: 640 } },
     // A fresh placement whose reservation the answer's usage replaces.
@@ -1140,7 +1149,7 @@ function storyRequests(): RequestLog[] {
       agentId: 'main',
       at: t(14, 7, 50),
       attempts: [
-        { accountId: 'secondary', at: t(14, 7, 50), cooldown: rateLimited(t(15, 42)), head5h: 1, ms: 900, status: 429 },
+        { accountId: 'secondary', at: t(14, 7, 50), cooldown: rateLimited(t(14, 55)), head5h: 1, ms: 900, status: 429 },
         { accountId: 'primary', at: t(14, 7, 51), ms: 7_400, status: 200 },
       ],
       id: 'req_b8c3e9d4-e61',

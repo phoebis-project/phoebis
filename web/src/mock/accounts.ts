@@ -99,7 +99,7 @@ export const ACCOUNTS: Account[] = ([
     // Cancelled, with both ends set: the stored one the operator saved, the derived one the form would
     // otherwise have prefilled.
     cancelled: true,
-    windows: [win('5h', 1, 1 * HOUR + 12 * MINUTE), win('7d', 0.88, 5 * DAY + 2 * HOUR + 5 * MINUTE)],
+    windows: [win('5h', 1, 25 * MINUTE), win('7d', 0.88, 5 * DAY + 2 * HOUR + 5 * MINUTE)],
     fableWindow: null,
     extraUsage: null,
     fastLane: null,
@@ -117,7 +117,7 @@ export const ACCOUNTS: Account[] = ([
         reason: 'rate_limit (5h window exhausted)',
         scope: 'account',
         setAt: ago(20 * MINUTE + 29_000),
-        until: ahead(1 * HOUR + 12 * MINUTE),
+        until: ahead(25 * MINUTE),
         windowId: '5h',
       },
       // A second scope, one model, so the account's cooling-down block has an account row and a model row. Set
@@ -141,7 +141,8 @@ export const ACCOUNTS: Account[] = ([
     routingEnabled: true,
     // Past every pool's ceiling at its reset, 104%.
     windows: [win('5h', 0.97, 3 * HOUR + 41 * MINUTE, 40_000, 0.019), win('7d', 0.35, 1 * DAY + 18 * HOUR + 12 * MINUTE)],
-    fableWindow: win('7d_fable', 0.41, 1 * DAY + 18 * HOUR + 12 * MINUTE),
+    // The Fable week reads under all's ceiling, near enough for the morning's Fable session to project it past.
+    fableWindow: win('7d_fable', 0.66, 1 * DAY + 18 * HOUR + 12 * MINUTE),
     extraUsage: { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
     fastLane: null,
     // In plan overage from the first head after its spend cap was raised at 11:30:12, which `requests.ts` dates once

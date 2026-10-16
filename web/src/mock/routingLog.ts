@@ -31,6 +31,8 @@ const round5 = (x: number) => Math.round(x * 100_000) / 100_000;
 /** A rewrite of `tokens` per plan window the model draws, in window share. */
 export const rewriteOf = (tokens: number, model: string): Record<string, number> =>
   Object.fromEntries(drawnWindows(model).map((w) => [w, round5(tokens * WRITE_SHARE[w] * familyWeight(model))]));
+/** The weekly window the pick prices a pin's rewrite in: the model's week where it draws one, else the 7-day window. */
+const rewriteWindowOf = (model: string): string => (drawnWindows(model).includes('seven_day_fable') ? 'seven_day_fable' : 'seven_day');
 /**
  * The tokens a request's body carries, the relay's estimate a fresh session's rewrite is priced from. The mock holds no
  * estimate of its own and reads the usage the request reported, so a request that ended with no usage, which the
@@ -115,10 +117,13 @@ interface Spec {
   story?: boolean;
 }
 
-/** A pin of a round in the round's order, with its burn per hour on the window that fired. */
+/**
+ * A pin of a round in the round's order, with its burn per hour on the window that fired. A pin whose model does not
+ * draw that window leaves the round before the order with no burn.
+ */
 interface RoundPin {
   agentId: string;
-  burn: number;
+  burn: number | null;
   cold: boolean;
   keyId: string;
   lastInputTokens: number;
@@ -507,8 +512,10 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
 const NO_RUNWAY_ROUND = { accountId: 'primary', at: clock(14, 12, 30) };
 /** Studio's round fired by the stretch, at the renewal its slowed request's hold led to. */
 const STRETCH_ROUND = { accountId: 'studio', at: clock(14, 5) };
-/** The story's three rounds, which a later decision on the account reads as within the dwell. */
-const ROUNDS = [SHED_ROUND, NO_RUNWAY_ROUND, STRETCH_ROUND];
+/** Nightly's morning round on its Fable week, fired while the 5-hour window is under the hold. */
+const FABLE_WEEK_ROUND = { accountId: 'nightly', at: clock(8, 30) };
+/** The story's four rounds, which a later decision on the account reads as within the dwell. */
+const ROUNDS = [SHED_ROUND, NO_RUNWAY_ROUND, STRETCH_ROUND, FABLE_WEEK_ROUND];
 
 /** What the gate read of one candidate for a pin: the verdict, the runway and its window, and the fit table's row. */
 interface FitRead {
@@ -728,19 +735,25 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   }
   // The one trigger: the first plan window, in the windows' order, whose projection at its horizon reads over the
   // ceiling, or on a pool that slows its pins the 5-hour window's stretch past the threshold once the safety wait has
-  // passed. The line names every projection it read, and how long the stretch has read over while the wait holds.
+  // passed, a 5-hour window under the hold yielding to the next. The line names every projection it read, the 5-hour
+  // window's age and hold inside the hold, and how long the stretch has read over while the wait holds.
   const facts: WalkFact[] = [];
   for (const w of windows) {
     const x = source.windows[w];
     if (x?.projection === null || x?.projection === undefined || x.horizon === null) continue;
     facts.push(fact(`projection_${w}`, x.projection, 'percent'), fact(`horizon_${w}`, Date.parse(x.horizon), 'time'));
   }
+  const held = fiveHourHeld(source, pool, at);
+  if (held) facts.push(fact('age_five_hour', held.ageMs, 'ms'), fact('hold_five_hour', held.holdMs, 'ms'));
   facts.push(fact('ceiling', pool.windowCeiling, 'percent'));
   const overSince = slowReadAt(source.accountId, pool, at)?.overSince ?? null;
   const waiting = overSince !== null && at - overSince < SLOW_DOWN_WAIT_MS;
   if (waiting) facts.push(fact('over_ms', at - overSince, 'ms'));
-  const trigger = pool.slowDown ? (stretchTriggerOf(source, pool, at) ?? triggerOf(source, windows.filter((w) => w !== 'five_hour'), pool.windowCeiling, at)) : triggerOf(source, windows, pool.windowCeiling, at);
-  if (trigger === null && !waiting) {
+  const trigger = pool.slowDown
+    ? (stretchTriggerOf(source, pool, at) ?? triggerOf(source, windows.filter((w) => w !== 'five_hour'), pool.windowCeiling, at, pool))
+    : triggerOf(source, windows, pool.windowCeiling, at, pool);
+  // The hold holds back the round alone, as a wait does, so a held line goes on to the cooldown and the mark.
+  if (trigger === null && !waiting && held === null) {
     no(4, facts);
     return none;
   }
@@ -766,23 +779,44 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
 }
 
 /**
- * The 5-hour round under the slow-down: the stretch has read over the threshold for the safety wait, and the horizon
- * moved to the reset less the threshold lies ahead. The excess is the demand's past the ceiling there, per hour to it.
+ * The 5-hour window's start off the source's reading, as the router reads it, and whether `at` lies under the hold:
+ * the reset less five hours where it lies ahead, the passed reset itself, and no hold where no reset is read. The burn
+ * average still carries the previous window's burst over the reset, so no 5-hour round fires while the window is younger
+ * than twice it.
+ */
+const fiveHourHeld = (source: RecordCandidate, pool: PoolSeed, at: number): { ageMs: number; holdMs: number } | null => {
+  const reset = source.windows.five_hour?.reset;
+  if (reset === null || reset === undefined) return null;
+  const resetAt = Date.parse(reset);
+  const start = resetAt > at ? resetAt - FIVE_HOURS : resetAt;
+  const holdMs = 2 * pool.burnAverageSeconds * 1_000;
+  // A start at or after `at` is no reading of a fresh window.
+  return start < at && at - start < holdMs ? { ageMs: at - start, holdMs } : null;
+};
+
+/**
+ * The 5-hour round under the slow-down: the stretch has read over the threshold for the safety wait, the horizon
+ * moved to the reset less the threshold lies ahead, and the window is past the hold. The excess is the demand's past the
+ * ceiling there, per hour to it.
  */
 function stretchTriggerOf(source: RecordCandidate, pool: PoolSeed, at: number): { excess: number; slowed: true; window: string } | null {
   const overSince = slowReadAt(source.accountId, pool, at)?.overSince ?? null;
   const x = source.windows.five_hour;
-  if (overSince === null || at - overSince < SLOW_DOWN_WAIT_MS || x?.reset === null || x?.reset === undefined || x.demand === null) return null;
+  if (overSince === null || at - overSince < SLOW_DOWN_WAIT_MS || x?.reset === null || x?.reset === undefined || x.demand === null || fiveHourHeld(source, pool, at) !== null) return null;
   const hours = (Date.parse(x.reset) - pool.slowDownStretchSeconds * 1_000 - at) / HOUR;
   const excess = round5((x.utilization + x.demand * hours - pool.windowCeiling) / hours);
   return hours > 0 && excess > 0 ? { excess, slowed: true, window: 'five_hour' } : null;
 }
 
-/** The window a round on `source` fires on, and the excess per hour that lands its projection on the ceiling. */
-function triggerOf(source: RecordCandidate, windows: string[], ceiling: number, at: number): { excess: number; slowed?: true; window: string } | null {
+/**
+ * The window a round on `source` fires on, and the excess per hour that lands its projection on the ceiling. A 5-hour
+ * window under the hold yields to the next window in the order.
+ */
+function triggerOf(source: RecordCandidate, windows: string[], ceiling: number, at: number, pool: PoolSeed): { excess: number; slowed?: true; window: string } | null {
+  const held = fiveHourHeld(source, pool, at) !== null;
   for (const w of windows) {
     const x = source.windows[w];
-    if (x?.projection === null || x?.projection === undefined || x.horizon === null || x.projection <= ceiling) continue;
+    if (x?.projection === null || x?.projection === undefined || x.horizon === null || x.projection <= ceiling || (w === 'five_hour' && held)) continue;
     const hours = Math.max((Date.parse(x.horizon) - at) / HOUR, 1 / 60);
     return { excess: round5((x.projection - ceiling) / hours), window: w };
   }
@@ -794,14 +828,14 @@ function triggerOf(source: RecordCandidate, windows: string[], ceiling: number, 
  * pins it skipped as the shed line names them, and its outcome with the reason a round that marked nothing records.
  */
 function roundOf(round: ShedRound, excess: number, pool: PoolSeed) {
-  const burnSum = round5(round.pins.reduce((n, p) => n + p.burn, 0));
+  const burnSum = round5(round.pins.reduce((n, p) => n + (p.burn ?? 0), 0));
   const skips = round.pins.flatMap((p) => (p.skip === null ? [] : [p.skip]));
   const reason = round.marks.length > 0 ? null : (['no_runway', 'unpriced', 'last_pin', 'standing'].find((w) => skips.includes(w)) ?? 'unpriced');
   return {
     burnSum,
     outcome: round.marks.length > 0 ? `marked ${round.marks.length}` : 'nothing_to_mark',
     reason,
-    removed: round5(round.pins.filter((p) => p.marked).reduce((n, p) => n + p.burn, 0)),
+    removed: round5(round.pins.filter((p) => p.marked).reduce((n, p) => n + (p.burn ?? 0), 0)),
     skipped: round.pins.flatMap((p) => (p.skip === null ? [] : [`${pinText(p)}: ${p.skip}`])),
     target: round5(Math.min(excess, pool.shedCap * burnSum)),
   };
@@ -1515,6 +1549,16 @@ const STRETCH_PINS: RoundPin[] = [
   { agentId: 'main', burn: 0.025, cold: false, keyId: 'notebook', lastInputTokens: 72_000, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: SLOWED_SESSION_ID, skip: null },
 ];
 
+/**
+ * Nightly's Fable-week round, its two pins in the round's order: the Fable session's pin, then an Opus pin, whose model
+ * draws no Fable week and so burns nothing there. The Opus pin leaves the round before the order and counts toward no
+ * total, which leaves the Fable pin its member's last on the week, so the walk marks nothing.
+ */
+const FABLE_WEEK_PINS: RoundPin[] = [
+  { agentId: 'main', burn: 0.03, cold: false, keyId: 'desktop', lastInputTokens: 81_000, marked: false, model: 'claude-fable-5-1', note: 'current', sessionId: sessionId('89cd1c92'), skip: 'last_pin' },
+  { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 61_000, marked: false, model: 'claude-opus-5', note: null, sessionId: 'e3b8d1f6-4a29-4c71-9d05-6b2a8f3c7e14', skip: 'off_window' },
+];
+
 const roundOfPins = (pins: RoundPin[]): ShedRound => ({ marks: pins.filter((p) => p.marked).map((p) => ({ agentId: p.agentId, keyId: p.keyId, model: p.model, sessionId: p.sessionId })), pins });
 
 /**
@@ -1530,7 +1574,7 @@ function storySpecs(): Spec[] {
   const message = (session: string, depth: number, prefixTokens: number, when: number, writtenAt: number, ttlMs: number) => entry(`message|${sessionId(session)}|${depth}`, { at: when, depth, prefixTokens, ttlMs, writtenAt });
   const placedStatic: Placement = { depth: 2, prefixTokens: 31_200, rung: 'static' };
   // Secondary's sessions burn its 5-hour window at their sum while the round runs and its marks are pending.
-  const roundBurn = { secondary: { five_hour: round5(ROUND_PINS.reduce((n, p) => n + p.burn, 0)) } };
+  const roundBurn = { secondary: { five_hour: round5(ROUND_PINS.reduce((n, p) => n + (p.burn ?? 0), 0)) } };
   // The Overflow workspace sits at its in-flight cap through the round and the move. With a free slot an API-key
   // sibling fits with no end to its runway, the longest of all, so the shed rule would plan and move both marks there.
   const overflowFull = { overflow: 16 };
@@ -1538,6 +1582,8 @@ function storySpecs(): Spec[] {
   const spentNightly = (when: number) => oauthWindows('nightly', when, () => OLDER_FACTOR).map((w) => (w.id === '5h' ? { ...w, utilization: 1 } : w));
   // Studio's 5-hour reading where a hold reads it before any answer's head: the utilization the slow-down read.
   const studioAt = (when: number, utilization: number) => ({ studio: oauthWindows('studio', when, () => OLDER_FACTOR).map((w) => (w.id === '5h' ? { ...w, utilization } : w)) });
+  // Nightly's Fable week where the morning's Fable session runs it ahead of the walk back's even climb.
+  const nightlyAt = (when: number, utilization: number) => ({ nightly: oauthWindows('nightly', when, () => OLDER_FACTOR).map((w) => (w.id === '7d_fable' ? { ...w, utilization } : w)) });
   // A pin's cycle after one more gap, the time-weighted average over the work pool's burn average.
   const averageMs = poolById.get('work')!.burnAverageSeconds * 1_000;
   const foldCycle = (cycleMs: number, gapMs: number) => {
@@ -1549,7 +1595,7 @@ function storySpecs(): Spec[] {
     at('req_e5a1c093-4d7', 1, 1, t(10, 58, 59), 'placed', 'secondary'),
     at('req_f3b6d218-85a', 1, 1, t(10, 59, 10), 'placed', 'secondary'),
     at('req_0b7c2d94-e61', 1, 1, t(10, 59, 30), 'renewed', 'secondary', { pin: live('probe', 31_000, 'untouched') }),
-    // Secondary's 5-hour window opened at 10:42 and runs hot, so its projection to the reset reads past the pool's
+    // Secondary's 5-hour window opened at 09:55 and runs hot, so its projection to the reset reads past the pool's
     // ceiling: this renewal runs the round, which marks two pins.
     at('req_1eaa9bc1-a18', 1, 1, t(11, 0), 'renewed', 'secondary', { burns: roundBurn, inFlight: overflowFull, pin: live('continues_pin', 30_000), round: roundOfPins(ROUND_PINS) }),
     // A marked pin moves at its next request inside the dwell, to the sibling where it fits.
@@ -1647,6 +1693,20 @@ function storySpecs(): Spec[] {
       readings: { nightly: spentNightly(t(13, 10, 21)) },
     }),
     at('req_9d4c1a73-e58', 3, 2, t(13, 11), 'renewed', 'nightly', { holds: [{ accountId: 'nightly', attempt: 2, cohort: null, heldMs: 39_000, ranOut: false }], pin: live('continues_pin', 40_000) }),
+    // The Fable session's first turn places it on nightly, and its next turn's renewal runs nightly's Fable-week round,
+    // before the overage begins at the first head after 11:30:12: from then on the pool's overage rule fires on the
+    // account's pins ahead of the shed rule. The 5-hour window the story spends at 13:10:21 opened at 08:11, so it is
+    // 19 minutes old at the round, under all's hold of an hour, and its projection past the ceiling rides a burn that
+    // still carries the previous window's: the hold keeps it from firing, and the Fable week fires in its place. The
+    // Opus pin draws no Fable week, so the round lists it and counts nothing of it. The burns replace the account's, so
+    // the 5-hour burn stands beside the Fable pin's.
+    at('req_3e2b9d47-c18', 1, 1, t(8, 21, 40), 'placed', 'nightly'),
+    at('req_3e7a5c19-f84', 1, 1, t(8, 30), 'renewed', 'nightly', {
+      burns: { nightly: { five_hour: 0.019, seven_day_fable: 0.03 } },
+      pin: live('continues_pin', 500_000),
+      readings: nightlyAt(t(8, 30), 0.65),
+      round: roundOfPins(FABLE_WEEK_PINS),
+    }),
     // A fresh session placed by the spare rate: secondary falls short of the ceiling, so the no-fit partition passes it
     // over, and its sessions' burn outruns its pace, so its spare rate reads negative.
     at('req_2c7d9f15-b63', 1, 1, t(13, 45), 'placed', 'primary', { burns: { secondary: { five_hour: 0.032, seven_day: 0.004 } } }),
@@ -1832,7 +1892,8 @@ function poolDiff(p: PoolSeed): Record<string, unknown> {
 /**
  * A round's `shedding_round` event off the decision that ran it: the window that fired with its projection, horizon
  * and ceiling from the shed line, the round's figures, and each pin with the rewrite and the runway it would take on
- * the destination planned for it, each planned move counted against the next one's runway there.
+ * the destination planned for it, each planned move counted against the next one's runway there. The rewrite is the
+ * story's 20x equivalent of the pin's weekly window, a figure of the pin alone, so an API-key destination reads it too.
  */
 function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
   const record = DECISIONS.get(decision);
@@ -1863,7 +1924,7 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
     const siblings = record.candidates.filter((c) => c.obstacle === null && c.accountId !== accountId && c.inFlight < c.inFlightCap && (c.kind === 'api_key' || windows.every((w) => (c.windows[w]?.utilization ?? 0) < 1)));
     const reads = siblings.map((c) => {
       const base = planned.get(c.accountId) ?? structuredClone(c);
-      return { base, fit: fitOf(base, at, pool, p.model, p.lastInputTokens, { [window]: p.burn }, true) };
+      return { base, fit: fitOf(base, at, pool, p.model, p.lastInputTokens, { [window]: p.burn ?? 0 }, true) };
     });
     const fitting = reads.filter((x) => x.fit.verdict === 'fits').map((x) => ({ ...x, runwayMs: x.fit.runwayMs }));
     const ranked = [...fitting].sort((x, y) => (tierBefore(x.base.tier, y.base.tier) ? -1 : tierBefore(y.base.tier, x.base.tier) ? 1 : pool.strategy === 'pace' ? scoreOf(y.base) - scoreOf(x.base) : 0));
@@ -1872,10 +1933,9 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
     if (!chosen) return { planned: null, rewrite: null, runway: null };
     const rewrite = rewriteOf(p.lastInputTokens, p.model);
     for (const [w, x] of Object.entries(rewrite)) if (chosen.base.windows[w]) chosen.base.windows[w].reserved = round5((chosen.base.windows[w].reserved ?? 0) + x);
-    chosen.base.burn = { ...chosen.base.burn, [window]: (chosen.base.burn[window] ?? 0) + p.burn };
+    chosen.base.burn = { ...chosen.base.burn, [window]: (chosen.base.burn[window] ?? 0) + (p.burn ?? 0) };
     planned.set(chosen.base.accountId, chosen.base);
-    // An API-key destination bills the rewrite in dollars, so it costs no share of the window that fired.
-    return { planned: chosen.base.accountId, rewrite: chosen.base.kind === 'api_key' ? null : (rewrite[window] ?? null), runway: chosen.fit.runwayMs };
+    return { planned: chosen.base.accountId, rewrite: rewrite[rewriteWindowOf(p.model)] ?? null, runway: chosen.fit.runwayMs };
   };
   return {
     accountId,
@@ -1896,8 +1956,9 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
       pins: pins.map((p) => {
         const figures = read(p);
         return {
-          agent_id: p.agentId, burn: p.burn, cold: p.cold, key_id: p.keyId, last_input_tokens: p.lastInputTokens, marked: p.marked, model: p.model, note: p.note, per_rewrite: Number((p.burn / p.lastInputTokens).toPrecision(7)),
-          planned: figures.planned, rewrite: figures.rewrite, runway_ms: figures.runway, session_id: p.sessionId, skip: p.skip,
+          agent_id: p.agentId, burn: p.burn, cold: p.cold, key_id: p.keyId, last_input_tokens: p.lastInputTokens, marked: p.marked, model: p.model, note: p.note,
+          per_rewrite: p.burn === null ? null : Number((p.burn / p.lastInputTokens).toPrecision(7)), planned: figures.planned, rewrite: figures.rewrite,
+          rewrite_window: figures.rewrite === null ? null : rewriteWindowOf(p.model), runway_ms: figures.runway, session_id: p.sessionId, skip: p.skip,
         };
       }),
       projection,
@@ -2093,7 +2154,7 @@ function buildEvents(): RoutingEvent[] {
   const pool = poolById.get('all')!;
   const beforeReset = oauthWindows('primary', fiveHourReset - 1, () => OLDER_FACTOR).find((w) => w.id === '5h')?.utilization ?? null;
   seeds.push(
-    ...[roundEvent('req_1eaa9bc1-a18/1', ROUND_PINS), roundEvent('req_9f2e7c5a-c49/2', STRETCH_PINS), roundEvent('req_6e1f3b98-a24/1', NO_RUNWAY_PINS)].flatMap((e) => (e === null ? [] : [e])),
+    ...[roundEvent('req_1eaa9bc1-a18/1', ROUND_PINS), roundEvent('req_9f2e7c5a-c49/2', STRETCH_PINS), roundEvent('req_6e1f3b98-a24/1', NO_RUNWAY_PINS), roundEvent('req_3e7a5c19-f84/1', FABLE_WEEK_PINS)].flatMap((e) => (e === null ? [] : [e])),
     ...markCleared(),
     ...expiredReservations(),
     ...slowDownSpans(),

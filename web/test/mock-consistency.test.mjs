@@ -1113,11 +1113,95 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round');
     assert.ok(rounds.length > 0);
     for (const e of rounds) {
-      for (const p of e.detail.pins) {
+      for (const p of e.detail.pins.filter((x) => x.burn !== null)) {
         const want = p.burn / p.last_input_tokens;
         assert.ok(p.per_rewrite > 0 && Math.abs(p.per_rewrite - want) <= want * 1e-6, `${e.requestId}: ${p.session_id} reads ${p.per_rewrite}, not ${want}`);
       }
     }
+  });
+
+  test(`no 5-hour shedding round of the story fires inside the hold of its pool, and a held shed line names the window's age and hold beside its mark, at ${at}`, async () => {
+    const s = await story;
+    const records = await decisionsOf(s);
+    // The window's start as the router reads it off the source's 5-hour reading: the reset less five hours where the
+    // reset lies ahead, the passed reset itself, and none where the reading names no reset.
+    const startOf = (r, accountId) => {
+      const reset = r.candidates.find((c) => c.accountId === accountId)?.windows.five_hour?.reset ?? null;
+      if (reset === null) return null;
+      const at = Date.parse(reset);
+      return at > Date.parse(r.request.at) ? at - 5 * HOUR : at;
+    };
+    const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round' && row.detail.window === 'five_hour');
+    assert.ok(rounds.length > 0);
+    for (const e of rounds) {
+      const r = records.find((x) => x.requestId === e.requestId && x.request.at === e.at);
+      const start = startOf(r, e.accountId);
+      const age = start === null ? null : Date.parse(e.at) - start;
+      assert.ok(age !== null && age >= 2 * e.detail.burn_average_seconds * 1_000, `${e.requestId}: the round fires ${age === null ? 'with no start' : `${age / 60_000} min`} into its window`);
+    }
+    // Every shed line that read the trigger names the pair exactly where its source's 5-hour window is under the hold,
+    // and a held line goes on to the mark, as a line inside a wait does.
+    let held = 0;
+    for (const r of records) {
+      const line = r.walk.find((w) => w.step === 'move:shed');
+      const value = (key) => line?.facts.find((f) => f.key === key);
+      if (!value('ceiling') || r.pin?.accountId === null || r.pin?.accountId === undefined) continue;
+      const at = Date.parse(r.request.at);
+      const start = startOf(r, r.pin.accountId);
+      const hold = 2 * r.settings.burnAverageSeconds * 1_000;
+      const where = `${r.requestId}/${r.seq}`;
+      if (start !== null && start < at && at - start < hold) {
+        held += 1;
+        assert.deepEqual([value('age_five_hour'), value('hold_five_hour')].map((f) => [f?.value, f?.unit]), [[at - start, 'ms'], [hold, 'ms']], where);
+        assert.ok(value('marked') !== undefined || value('cooldown')?.value === true, `${where}: a held line reads no mark`);
+      } else assert.deepEqual([value('age_five_hour'), value('hold_five_hour')], [undefined, undefined], where);
+    }
+    assert.ok(held > 0, 'a held shed line');
+  });
+
+  test(`every round's pin the pick read prices its rewrite as the story's 20x equivalent of its weekly window with the window named, at ${at}`, async () => {
+    const s = await story;
+    const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round');
+    // The model's own week where it draws one, else the 7-day window.
+    const weekOf = (model) => (model.includes('fable') ? 'seven_day_fable' : 'seven_day');
+    const read = { api_key: 0, oauth: 0 };
+    for (const e of rounds) {
+      for (const p of e.detail.pins) {
+        const where = `${e.requestId}: ${p.session_id}`;
+        if (p.planned === null) {
+          assert.deepEqual([p.rewrite, p.rewrite_window], [null, null], where);
+          continue;
+        }
+        assert.equal(p.rewrite_window, weekOf(p.model), where);
+        assert.equal(p.rewrite, s.lib.rewriteOf(p.last_input_tokens, p.model)[p.rewrite_window], where);
+        read[s.accounts.find((a) => a.id === p.planned).kind] += 1;
+      }
+    }
+    assert.ok(read.api_key > 0 && read.oauth > 0, `the pins the pick read by destination kind: ${JSON.stringify(read)}`);
+  });
+
+  test(`the Fable-week round lists its Opus pin off the window after the Fable pin and marks nothing for the last pin, at ${at}`, async () => {
+    const s = await story;
+    const records = await decisionsOf(s);
+    const r = records.find((x) => x.requestId === 'req_3e7a5c19-f84' && x.seq === 1);
+    assert.ok(r, 'the renewal on nightly at 08:30');
+    assert.deepEqual([r.outcome.kind, r.outcome.accountId], ['renewed', 'nightly']);
+    // The walk reaches the shed rule before the round is read: no rule before it fired, and its line ran the round.
+    const at = r.walk.findIndex((w) => w.step === 'move:shed');
+    const line = r.walk[at];
+    const value = (key) => line?.facts.find((f) => f.key === key);
+    assert.ok(at >= 0 && line.verdict !== 'not_run', `the shed line reads ${line?.verdict}`);
+    assert.deepEqual(r.walk.slice(0, at).filter((w) => w.step.startsWith('move:') && w.verdict === 'fired').map((w) => w.step), []);
+    assert.deepEqual([value('trigger')?.value, value('round')?.value], ['seven_day_fable', 'ran']);
+    const e = (await logOf(s)).find((row) => row.type === 'event' && row.kind === 'shedding_round' && row.requestId === r.requestId);
+    assert.ok(e, "the round's event");
+    const [fable, opus] = e.detail.pins;
+    assert.deepEqual(
+      [e.accountId, e.detail.window, e.detail.pins.map((p) => p.model), fable.skip, opus.skip, [opus.burn, opus.per_rewrite, opus.rewrite, opus.planned], e.detail.marks, e.detail.outcome, e.detail.reason],
+      ['nightly', 'seven_day_fable', ['claude-fable-5-1', 'claude-opus-5'], 'last_pin', 'off_window', [null, null, null, null], [], 'nothing_to_mark', 'last_pin'],
+    );
+    // The 5-hour window opened 19 minutes before, under the hold of twice all's half-hour average.
+    assert.deepEqual([value('age_five_hour'), value('hold_five_hour')].map((f) => [f?.value, f?.unit]), [[1_140_000, 'ms'], [3_600_000, 'ms']]);
   });
 
   test(`a booking a request ended without usage expires once at the request's end, with the cause its end carries, at ${at}`, async () => {
