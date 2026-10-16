@@ -276,6 +276,7 @@ test('plan names read the parsed tier, then the flag, and nothing without either
   const sub = { billingType: '', organizationType: '', plan: null, rateLimitTier: '', since: null, trialEndsAt: null };
   assert.equal(d.planName({ ...sub, plan: 'pro', rateLimitTier: 'default_claude_max_5x' }), 'Max 5x', 'the parsed tier wins over the flag');
   assert.equal(d.planName({ ...sub, plan: 'max', rateLimitTier: 'some_new_tier' }), 'Max', 'a tier the pattern does not parse falls to the flag');
+  assert.equal(d.planName({ ...sub, plan: 'pro', rateLimitTier: 'some_new_tier' }), 'Pro', 'and to the Pro flag the same way');
   assert.equal(d.planName({ ...sub, rateLimitTier: 'some_new_tier' }), null, 'a tier the pattern does not parse names no plan without the flag');
   assert.equal(d.planName({ ...sub, rateLimitTier: 'claude_team' }), 'Team');
   assert.equal(d.planName(sub), null, 'an empty tier names no plan');

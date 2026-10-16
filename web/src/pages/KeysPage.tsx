@@ -333,7 +333,7 @@ export function KeysPage() {
                         </tr>
                       )
                     : [0, 1, 2].map((i) => (
-                        <tr key={i}>
+                        <tr key={i} className="table__detail">
                           <td colSpan={8}>
                             <Skeleton />
                           </td>

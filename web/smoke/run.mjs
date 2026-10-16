@@ -1129,8 +1129,9 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   // Each pace order reads that window's lead off the account answer, the account furthest ahead first, and an account
   // whose window is absent, expired or without a lead after every one with a lead, ties by label. The story's 7-day
   // leads lie on both sides of zero, so that order is read across it, and its 5-hour leads all sit above zero, so that
-  // order is read on one side. Each order moves cards past one another. The page mounts on its own frozen instant, so
-  // the shared mount's later checks keep the default order.
+  // order is read on one side. Each order moves cards past one another, so none reads as the list's own order and a
+  // sort left out fails. The page mounts on its own frozen instant, so the shared mount's later checks keep the default
+  // order.
   const at = Date.now();
   const q = await mount('/quota', { now: at });
   const accounts = (await api.listAccounts()).filter((a) => a.kind === 'oauth');
@@ -1167,14 +1168,16 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   await sortBy('default');
   const back = drawn();
   q.unmount();
+  const listed = JSON.stringify(accounts.map((a) => a.label));
   results.push({
     name: '/quota sorts its cards five ways, and each pace order reads the account furthest ahead of that window first and the ones without a lead on it last',
     ok:
       JSON.stringify(options) === JSON.stringify(['default: Default order', 'soonest: Soonest recovery', 'pace5h: 5-hour pace', 'pace7d: 7-day pace', 'paceWeek: 7-day Fable pace']) &&
       orders.every((o) => o.want.length > 0 && JSON.stringify(o.drawn) === JSON.stringify(o.want)) &&
+      orders.every((o) => JSON.stringify(o.want) !== listed) &&
       sides.every(Boolean) &&
-      JSON.stringify(back) === JSON.stringify(accounts.map((a) => a.label)),
-    missing: [JSON.stringify(options), ...orders.map((o) => `${o.value}: ${JSON.stringify(o.drawn)} against ${JSON.stringify(o.want)}`), `leads on both sides of zero on 7d: ${JSON.stringify(sides)}`, `default: ${JSON.stringify(back)}`],
+      JSON.stringify(back) === listed,
+    missing: [JSON.stringify(options), ...orders.map((o) => `${o.value}: ${JSON.stringify(o.drawn)} against ${JSON.stringify(o.want)}`), `the list order ${listed}`, `leads on both sides of zero on 7d: ${JSON.stringify(sides)}`, `default: ${JSON.stringify(back)}`],
   });
 }
 {
@@ -6882,6 +6885,7 @@ localStorage.removeItem('phoebis.expertView');
   await flip();
   const status = () => dlg?.querySelector('.dialog__status');
   const refused = [localStorage.getItem('phoebis.expertView'), cap()?.getAttribute('aria-invalid') ?? 'absent', status()?.textContent ?? '', !!rail(dlg, 'shedding')?.querySelector('.dialog-rail__dot'), lineIn(shed())];
+  const refusedHalves = halvesOf(dlg);
   rail(dlg, 'identity')?.click();
   await p.settle(120);
   [...(status()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Go to Load shedding')?.click();
@@ -6896,6 +6900,12 @@ localStorage.removeItem('phoebis.expertView');
       document.activeElement === cap() &&
       localStorage.getItem('phoebis.expertView') === 'off',
     missing: [JSON.stringify(before), JSON.stringify(refused), document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'],
+  });
+  // The refused cap draws without its mate, the dwell the plain view still hides, so it spans its row alone.
+  results.push({
+    name: '/pools with the mode off a refused shed cap spans the row its hidden dwell leaves, and no half cell stands alone',
+    ok: refusedHalves.alone.length === 0 && JSON.stringify(refusedHalves.pairs) === JSON.stringify(PLAIN_PAIRS) && !!cap(),
+    missing: [...refusedHalves.alone, JSON.stringify(refusedHalves.pairs)],
   });
   {
     // The cap back inside its bound, then a ceiling past 100 on the plain field: its handle stays on the track.
@@ -6923,6 +6933,31 @@ localStorage.removeItem('phoebis.expertView');
       name: "/pools a refused ceiling draws its handle on the track and announces the nearest bound, the field's value in its text",
       ok: JSON.stringify(past) === JSON.stringify(['100', '50', '100', '100%', '120%']) && JSON.stringify(under) === JSON.stringify(['50', '50', '100', '40%', '40%']),
       missing: [...past, ...under].map(String),
+    });
+  }
+  {
+    // The ceiling back inside its bound, then a burn average under its 600 s floor typed in the expert view and the
+    // mode turned off: the refused average stays drawn, so the window ceiling halves its row beside it again.
+    const ceiling = dlg?.querySelector('input[aria-label="Window ceiling (%)"]');
+    if (ceiling) {
+      setter.call(ceiling, '75');
+      ceiling.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await p.settle(120);
+    }
+    await flip();
+    const average = () => [...(group(dlg, 'Windows')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Burn average (s)')?.querySelector('input');
+    if (average()) {
+      setter.call(average(), '300');
+      average().dispatchEvent(new window.Event('input', { bubbles: true }));
+      await p.settle(120);
+    }
+    await flip();
+    const halves = halvesOf(dlg);
+    const windows = halves.pairs.filter(([section]) => section === 'Windows');
+    results.push({
+      name: '/pools with the mode off a refused burn average stays drawn, and the window ceiling halves its row beside it',
+      ok: localStorage.getItem('phoebis.expertView') === 'off' && average()?.getAttribute('aria-invalid') === 'true' && halves.alone.length === 0 && JSON.stringify(windows) === JSON.stringify([['Windows', 'Window ceiling (%)', 'Burn average (s)']]),
+      missing: [String(localStorage.getItem('phoebis.expertView')), average()?.getAttribute('aria-invalid') ?? 'no average drawn', ...halves.alone, JSON.stringify(halves.pairs)],
     });
   }
   foot(dlg, 'Cancel')?.click();
@@ -11109,6 +11144,16 @@ m.unmount();
     });
   }
   {
+    // The Session cell cuts a long agent id behind its ellipsis, so the line carries the whole id on its title.
+    const lines = trs(m).map((tr) => cell(tr, 'session')?.querySelector('.sub.mono') ?? null);
+    const agents = hour.rows.slice(0, 25).flatMap((r, i) => (r.agentId === null ? [] : [{ agent: r.agentId, text: lines[i]?.textContent ?? null, title: lines[i]?.getAttribute('title') ?? null }]));
+    results.push({
+      name: "/routing-log a Session cell's agent line carries the whole agent id on its title",
+      ok: agents.length > 0 && agents.every((a) => a.text === a.agent && a.title === a.agent),
+      missing: [`${agents.length} rows with an agent`, JSON.stringify(agents.slice(0, 5))],
+    });
+  }
+  {
     // The week's state changes put the story's changes of two and three days back on the first page beside today's.
     const DAY = 24 * HOUR;
     const dateText = (at) => new Date(at).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
@@ -12958,22 +13003,25 @@ m.unmount();
     results.push({ name: "/routing-log the candidate table's Fable cell reads a utilization and a reset", ok: /^\d+%$/.test(fableCells[4]?.[0] ?? '') && (fableCells[4]?.[1] ?? '') !== '', missing: [JSON.stringify(fableCells[4])] });
     results.push({ name: "/routing-log the candidate table's Fable cell reads not reported without a Fable window", ok: noFable !== undefined && JSON.stringify(noFableCells[4]) === JSON.stringify(['not reported']), missing: [JSON.stringify(noFableCells[4])] });
     page.unmount();
-    // No story member lacks a 5-hour reading, so the route's answer drops one while the check reads it.
+    // No story member lacks a 5-hour reading, so the route's answer drops one while the check reads it. The table ranks
+    // its rows apart from the record's order, so the row is found by the member's account id.
     const original = api.getDecision;
+    let droppedId = null;
     api.getDecision = async (id, seq) => {
       const r = await original.call(api, id, seq);
       if (!r) return r;
       const [first, ...rest] = r.candidates;
+      droppedId = first.accountId;
       const { five_hour: _, ...windows } = first.windows;
       return { ...r, candidates: [{ ...first, windows }, ...rest] };
     };
     const dropped = await story('req_f8085653-422');
     api.getDecision = original;
-    const first = candidateRows(dropped.card)[0];
+    const unread = candidateRows(dropped.card).find((tr) => tr.querySelector('td a')?.textContent === droppedId);
     results.push({
       name: '/routing-log a window with no reading reads not reported rather than 0%',
-      ok: first?.children[2]?.textContent === 'not reported' && !/^0%/.test(first?.children[2]?.textContent ?? ''),
-      missing: [first?.children[2]?.textContent ?? 'no row'],
+      ok: droppedId !== null && unread?.children[2]?.textContent === 'not reported' && !/^0%/.test(unread?.children[2]?.textContent ?? ''),
+      missing: [`${droppedId ?? 'no member'}: ${unread?.children[2]?.textContent ?? 'no row'}`],
     });
     dropped.page.unmount();
   }
@@ -14749,9 +14797,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     }
     {
       // Under native the plan side alone tones the Net saving tile: a range whose plan credits saved more than their
-      // probes cost and whose billed probes cost more than the billed credits saved draws both nets, the billed one under
-      // zero, in no critical ink. The figures are the stub's own: the plan side nets 1.5% of the 20x 7-day window, the
-      // billed side $0.10 saved less $0.50 of probes.
+      // probes cost and whose billed probes cost more than the billed credits saved draws both nets, the billed one
+      // under zero, in no critical ink. The figures are the stub's own: the plan side nets 1.5% of the 20x 7-day
+      // window, the billed side $0.10 saved less $0.50 of probes.
       const now = Date.now();
       const template = (await api.getAnalyticsBreakdown({ from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() })).find((g) => g.key === 'primary');
       const probesOf = (ok) => ({ failed: 0, held: 0, migrated: 0, ok, skipped: 0 });
@@ -20440,7 +20488,7 @@ m.unmount();
   const tabbedOut = filterBox() === null;
   const wanted = [labels[0], labels[1], labels[0], labels.at(-1), labels[0]];
   results.push({
-    name: 'the Agent type filter opens onto its Select all row and the keys move, close and return focus, and reach a disabled row that stays shut',
+    name: "the Agent type filter opens onto its Select all row and the keys move, close and return focus, and the Add filter list's disabled Key row is reached by the keys and stays shut",
     ok:
       labels.length > 2 &&
       labels[0] === 'Select all' &&

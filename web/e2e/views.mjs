@@ -779,8 +779,9 @@ async function kindLabels() {
  * sets it and no width cuts or wraps it: a block child's own rect spans its cell whatever its text. Time is held to
  * the dated form under the 12-hour setting as well, the widest the console draws, and Kind to a badge per label of
  * `kinds`, since no page draws every kind. The lines cut on purpose come back apart, each with whether it ends behind
- * an ellipsis: the request link under the time, and every Account line, whose column is floored at the longest
- * account id with its padding instead. Null where the table is not drawn.
+ * an ellipsis: the request link under the time, the agent line under the session, and every Account line, whose column
+ * is floored at the longest account id with its padding instead. The rows that carry a model under the account are
+ * counted, and so are the ones that draw it there. Null where the table is not drawn.
  */
 function routingLogCells(kinds) {
   const table = document.querySelector('.routing-log__table');
@@ -851,9 +852,11 @@ function routingLogCells(kinds) {
       for (const nodes of linesOf(td)) {
         const need = probe(td, nodes) + padding(td);
         const text = textOf(nodes);
-        const request = name === 'time' && element(nodes)?.classList.contains('routing-log__cut');
-        if ((request || name === 'account') && need > column + 0.5) cut.push([name, round(need), column, text, ellipsis(element(nodes))]);
-        if (!request) keep(need, text);
+        // The session id is a cut span too, yet its eight characters set the column, so only the `.sub` line under a
+        // time or a session is read as cut.
+        const under = (name === 'time' || name === 'session') && element(nodes)?.matches('.sub.routing-log__cut');
+        if ((under || name === 'account') && need > column + 0.5) cut.push([name, round(need), column, text, ellipsis(element(nodes))]);
+        if (!under) keep(need, text);
       }
       if (name !== 'account') continue;
       for (const a of td.querySelectorAll('a[href^="/accounts/"]')) {
@@ -897,6 +900,8 @@ function routingLogCells(kinds) {
     floor,
     longest,
     model: width('model'),
+    modelUnder: rows.filter((tr) => [...tr.querySelectorAll('.routing-log__model-under')].some((el) => el.getClientRects().length > 0)).length,
+    models: rows.filter((tr) => tr.querySelector('.routing-log__model-under') !== null).length,
     probed,
     rows: rows.length,
     scroll: wrap.scrollWidth,
@@ -908,12 +913,13 @@ function routingLogCells(kinds) {
  * The routing log's columns at 1280 by 800 and at 1440 by 900: Fact 189 px at both, Account 179 then 147, Model only
  * at 1440 at 192, and the table as wide as its card with nothing to scroll sideways. Each column from Time to Link
  * holds its longest cell (`routingLogCells`), so a column narrower than it fails, Account aside: it is the fill, and
- * it fails under the longest account id with its padding. A line cut on purpose (the request link under the time, an
- * Account line past the column) that does not end behind an ellipsis fails. The bare log is read, then the log under
- * the 7-day range on the state changes, where the mock story dates its Time cells on the first page and a Time cell
- * that breaks over two lines fails. The mock pass fails a 7-day page with no dated cell, and the router's seed, which
- * draws no row older than a day, records that the read stands down. The bare log loads again at the pass's viewport
- * after.
+ * it fails under the longest account id with its padding. A line cut on purpose (the request link under the time, the
+ * agent line under the session, an Account line past the column) that does not end behind an ellipsis fails. At 1440
+ * the model stands in its own column alone, so an Account cell that draws it beneath the account fails, and at 1280 a
+ * row with a model that does not draw it there fails. The bare log is read, then the log under the 7-day range on the
+ * state changes, where the mock story dates its Time cells on the first page and a Time cell that breaks over two lines
+ * fails. The mock pass fails a 7-day page with no dated cell, and the router's seed, which draws no row older than a
+ * day, records that the read stands down. The bare log loads again at the pass's viewport after.
  */
 async function routingLogColumns(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -952,6 +958,8 @@ async function routingLogColumns(theme) {
         if (got.fact !== fact) say(`${where} the Fact column is ${got.fact}px, not ${fact}px`);
         if (got.account !== account) say(`${where} the Account column is ${got.account}px, not ${account}px`);
         if (got.model !== model) say(`${where} the Model column is ${got.model === null ? 'hidden' : `${got.model}px`}, not ${model === null ? 'hidden' : `${model}px`}`);
+        if (got.model !== null && got.modelUnder > 0) say(`${where} the Model column draws, and ${got.modelUnder} Account cells draw the model beneath the account as well`);
+        if (got.model === null && got.modelUnder !== got.models) say(`${where} the Model column is hidden, and ${got.models - got.modelUnder} of the ${got.models} rows with a model draw it beneath no account`);
         if (Math.abs(got.table - got.client) > 0.5) say(`${where} the table is ${got.table}px in a ${got.client}px card`);
         if (got.scroll > got.client) say(`${where} the table scrolls sideways (${got.scroll}px in ${got.client}px)`);
         for (const [name, need, column, text] of got.longest) {
@@ -981,6 +989,21 @@ async function loadAtOrigin(path, wait) {
   await booted();
   await advance(LOAD_MS);
   await page.waitForSelector(wait, { timeout: 15_000 }).catch(() => {});
+}
+
+/** A day and an hour: past it, the newest row of the mock's story and of the router's seed is older than a day. */
+const DATED_MS = 25 * 3_600_000;
+/** The beat the pages' `useNow` redraws their relative times on. */
+const NOW_TICK_MS = 15_000;
+
+/**
+ * The view as it loaded, read a day and an hour later: the page's clock moves without a reload, since the mock
+ * anchors its story at load, and runs one beat of the pages' clock so the cells redraw at the new instant. The rows the
+ * view loaded stand, so each of them is older than a day there.
+ */
+async function datedRead() {
+  await page.clock.setSystemTime(clockOrigin + DATED_MS);
+  await advance(NOW_TICK_MS);
 }
 
 /**
@@ -1707,8 +1730,8 @@ async function chevronWeight(label, svg, size, stroke) {
 
 /**
  * The pool dialog in the plain view, then in the expert view: the frame and every group's layout at the pass's
- * viewport, then the frame and the rail's strips at 720 px. The plain rail holds eleven groups under the five parents,
- * the five expert-only groups left out, and the expert rail all sixteen. Every group on the rail is chosen and read
+ * viewport, then the frame and the rail's strips at 720 px. The plain rail holds twelve groups under the five parents,
+ * the five expert-only groups left out, and the expert rail all seventeen. Every group on the rail is chosen and read
  * while it shows: its height against the body's window, every cell against the two columns, every label beside its
  * switch or above its control, every control and hint as wide as its field, every dependent drawn and disabled while
  * its switch is off or its preset is not Custom, the warnings at their ends of their groups, no clipped select, nothing
@@ -2784,9 +2807,9 @@ async function quotaChips(theme) {
  * body and its used fill are each the dot's color mixed into `--surface`, the body at one strength and the fill at a
  * stronger one on every lane, and the label's ink reads at 4.5:1 or better over both. The same holds for every color a
  * lane can take, each series color and the muted one, read off a bar drawn through the bar's own rules off screen.
- * Primary's fill lays out at the share the page computed, within a pixel, and its end stands past the now line where its
- * weekly window answers a lead ahead of pace and short of it where the lead is behind, as the card's meter words the
- * pace. Only the mock pass draws the section.
+ * Primary's fill lays out at the share the page computed, within a pixel, and its end stands past the now line where
+ * its weekly window answers a lead ahead of pace and short of it where the lead is behind, as the card's meter words
+ * the pace. Only the mock pass draws the section.
  */
 async function quotaLaneChips(theme) {
   const say = (what) => failures.push(`${theme} /quota#quota-windows: ${what}`);
@@ -3080,7 +3103,7 @@ const QUOTA_RESET = 150;
  * whose horizon comes just short of five hours out, an idle window at its reset, a window the sessions spend just short
  * of five hours out, the longest reset's own part and an expired line's first clause.
  */
-const QUOTA_WORST_PARTS = ['100% left in 4 h 59 min', '100% left at the reset', 'spent in 4 h 59 min', 'resets in 23h 59m,', 'expired 2d 0h ago,'];
+const QUOTA_WORST_PARTS = ['100% left in 4 h 59 min', '100% left at the reset', 'spent in 4 h 59 min', 'resets in 23h 59m,', 'expired 23h 59m ago,'];
 /** The widest live label whole, which no column holds, so it breaks between its two parts. */
 const QUOTA_WIDEST_LABEL = 'resets in 23h 59m, 100% left in 4 h 59 min';
 
@@ -4018,12 +4041,12 @@ async function readRequestsTable() {
  * The router pass's seed fits the card, so there the fit is asserted. The mock story's rows carry values wider than
  * the 990 px card (its default set runs past 990 px there with the fills at their floors), so in the mock pass the
  * width is recorded and the table scrolls inside its wrap. In both passes each cut Client text
- * holds at least sixteen characters of its font, the fills' floor. A held row's marker reads its wait as waited on
- * one line. The share measure below reads the same width with the Cost column's widest text. Under a `range` the page
- * was loaded on, the Time cells' fit is held as well: a cell whose date and time break over two lines, run past its
- * content box or stand taller than the row's other cells fails. Neither pass draws a request older than a day there,
- * since the mock's story and the router's seed both lie within the day before the pass's clock, so the smoke's clock
- * case holds the dated text and `routingLogDatedTime` lays a dated cell out.
+ * holds at least sixteen characters of its font, the fills' floor. A held row's marker reads its wait as waited
+ * on one line. The share measure below reads the same width with the Cost column's widest text. Under a `range` the
+ * page was loaded on, the Time cells' fit is held as well: the mock's story and the router's seed both lie within the
+ * day before the pass's clock, so the range is read with the page's clock moved past a day on (`datedRead`), where
+ * every row prints its date, and a read with no dated cell fails, as does a cell whose date and time break over two
+ * lines, run past its content box or stand taller than the row's other cells.
  */
 async function requestsTableFits(theme, range = null) {
   const read = await readRequestsTable();
@@ -4045,6 +4068,7 @@ async function requestsTableFits(theme, range = null) {
   for (const marker of read.held.filter((m) => m.lines > 1 || !/^waited \d/.test(m.text))) say(`the held marker "${marker.text}" does not read its wait as waited on one line`);
   if (range === null) return;
   if (read.rows > 0 && read.time.cells === 0) say('no Time cell to measure');
+  if (read.time.dated.length === 0) say('no Time cell prints its date, so the dated form is not measured');
   for (const text of read.time.split) say(`the Time cell "${text}" breaks over two lines`);
   for (const text of read.time.past) say(`the Time cell "${text}" runs past its cell`);
   for (const text of read.time.taller) say(`the Time cell "${text}" stands taller than its row's other cells`);
@@ -6944,8 +6968,8 @@ const STRIPE_TRIES = 10;
  * In the page: the tones the stripes read against, off a probe, and every drawn `.table` with the first four of its
  * data rows that no state of their own paints. A row is placed by its index among the data rows of its `tbody`, which
  * the stripe counts with every row but a detail row, so a passed-by row still moves the parity of the rows after it.
- * The states are the pool card's next member, an open, a new or a selected row, the session the address names and a
- * chosen candidate.
+ * The states are a chosen candidate, a new row, the pool card's next member, an open row, a selected row and the
+ * session the address names.
  */
 function stripeTables() {
   const tone = (name) => {
@@ -6977,29 +7001,50 @@ function stripeTables() {
   return { tables, tones };
 }
 
-/** The fill and the box of a row's first data cell, read where the row is drawn. */
-const firstCell = (row) =>
+/** Every data cell's fill of a row, with the first cell's box, read where the row is drawn. */
+const rowCells = (row) =>
   row.evaluate((tr) => {
-    const td = tr.querySelector(':scope > td');
-    if (!td) return null;
-    const s = getComputedStyle(td);
-    return { background: s.backgroundColor, border: s.borderBottom, height: Math.round(td.getBoundingClientRect().height), padding: s.padding };
+    const cells = [...tr.querySelectorAll(':scope > td')];
+    if (cells.length === 0) return null;
+    const s = getComputedStyle(cells[0]);
+    return { backgrounds: cells.map((td) => getComputedStyle(td).backgroundColor), border: s.borderBottom, height: Math.round(cells[0].getBoundingClientRect().height), padding: s.padding };
   });
 
+/** The cells of a `rowCells` read whose fill is not `want`, each by its place in the row. */
+const offTone = (cells, want) => (cells === null ? ['no cell'] : cells.backgrounds.flatMap((fill, i) => (fill === want ? [] : [`cell ${i + 1} on ${fill}`])));
+
 /**
- * The stripes on a view: every drawn `.table` reads its first four data rows plain, --stripe, plain, --stripe, a row its
- * own state paints passed by, and a `table--plain` one reads them all plain. The --stripe tone is one of its own, apart
- * from no fill, the surface, the hover's --surface-2 and the selected row's --accent-soft. Then the rows that read over
- * a stripe or under it, each on its view: Sessions, the Routing log, Requests and the pool dialog's form tables. Every
- * state a read opens it shuts again with the pointer away, so the view's shot reads the view as it was.
+ * Two tones within this many steps of 255 on every channel read as one: the tolerance `quotaLaneChips` holds a mix to.
+ * The stripe, half way between the two surfaces, stands about 4.5 from either in the light theme and 6 in the dark.
+ */
+const TONE_STEP = 1.5;
+
+/**
+ * The stripes on a view: every drawn `.table` reads its first four data rows plain, --stripe, plain, --stripe, a row
+ * its own state paints passed by, and a `table--plain` one reads them all plain. The --stripe tone is one of its own:
+ * read over the surface, as a cell draws it, it stands more than `TONE_STEP` apart on some channel from no fill, the
+ * surface, the hover's --surface-2 and the selected row's --accent-soft. Then the rows that read over a stripe or under
+ * it, each on its view: Sessions, the Routing log, Requests and the pool dialog's form tables. Every state a read opens
+ * it shuts again with the pointer away, so the view's shot reads the view as it was.
  */
 async function tableStripes(theme, path) {
   const say = (what) => failures.push(`${theme} ${path}: ${what}`);
   const read = await page.evaluate(stripeTables);
   const { tones } = read;
-  measurements.push(`${theme} ${path} table stripes ${JSON.stringify(read)}`);
+  // A translucent tone (the dark theme's --accent-soft) composited over the surface, as the cell under it draws.
+  const surface = colorChannels(tones.surface);
+  const over = (css) => composite(colorChannels(css), surface);
+  const gap = (css) => Math.round(Math.max(...over(tones.stripe).map((c, i) => Math.abs(c - over(css)[i]))) * 10) / 10;
+  const apart = { accentSoft: gap(tones.accentSoft), clear: gap(CLEAR), surface: gap(tones.surface), surface2: gap(tones.surface2) };
+  measurements.push(`${theme} ${path} table stripes ${JSON.stringify({ ...read, apart })}`);
   if (read.tables.length > 0) {
-    if ([CLEAR, tones.surface, tones.surface2, tones.accentSoft].includes(tones.stripe)) say(`the --stripe tone reads ${tones.stripe}, not one of its own apart from no fill, --surface (${tones.surface}), --surface-2 (${tones.surface2}) and --accent-soft (${tones.accentSoft})`);
+    const near = [
+      ['no fill', 'clear', CLEAR],
+      ['--surface', 'surface', tones.surface],
+      ['--surface-2', 'surface2', tones.surface2],
+      ['--accent-soft', 'accentSoft', tones.accentSoft],
+    ].filter(([, key]) => apart[key] <= TONE_STEP);
+    if (near.length > 0) say(`the --stripe tone ${tones.stripe} stands within ${TONE_STEP} of ${near.map(([name, key, css]) => `${name} (${css}, ${apart[key]} apart)`).join(', ')} on every channel, not a tone of its own`);
     for (const t of read.tables) {
       for (const [n, fill] of t.rows) {
         const want = t.plain || n % 2 === 1 ? CLEAR : tones.stripe;
@@ -7138,8 +7183,9 @@ async function routingLogStripes(theme, tones) {
 }
 
 /**
- * On Requests the second data row, a striped one, reads --surface-2 under the pointer and --accent-soft once selected,
- * each in the box it has striped. The pointer moves away after the hover, and the selection closes again by Escape.
+ * On Requests the second data row, a striped one, reads --stripe at rest, --surface-2 under the pointer and
+ * --accent-soft once selected, on every one of its cells, each state in the box it has striped. The pointer moves away
+ * after the hover, and the selection closes again by Escape.
  */
 async function requestRowStripes(theme, tones) {
   const say = (what) => failures.push(`${theme} /requests: ${what}`);
@@ -7151,26 +7197,29 @@ async function requestRowStripes(theme, tones) {
     return;
   }
   const second = rows.nth(1);
-  const striped = await firstCell(second);
+  const striped = await rowCells(second);
   await second.hover();
   await settle();
-  const hovered = await firstCell(second);
+  const hovered = await rowCells(second);
   await page.mouse.move(0, 0);
   await settle();
   await second.locator(':scope > td').first().click({ position: { x: 4, y: 4 } });
   await advance(LOAD_MS);
   await page.mouse.move(0, 0);
   await settle();
-  const selected = { ...(await firstCell(second)), state: (await second.getAttribute('class')) ?? '' };
+  const selected = { ...(await rowCells(second)), state: (await second.getAttribute('class')) ?? '' };
   await page.keyboard.press('Escape');
   await advance(CLOCK_STEP_MS);
   const left = { path: new URL(page.url()).pathname, selected: await page.locator('.requests__table > tbody > tr.is-selected').count() };
   measurements.push(`${theme} /requests stripes under the hover and the selection ${JSON.stringify({ hovered, left, selected, striped, tones })}`);
-  if (striped?.background !== tones.stripe) say(`the second row reads ${striped?.background} at rest, not --stripe (${tones.stripe})`);
-  if (hovered?.background !== tones.surface2) say(`the hovered second row reads ${hovered?.background}, not --surface-2 (${tones.surface2}) over its stripe`);
+  const atRestOff = offTone(striped, tones.stripe);
+  if (atRestOff.length > 0) say(`the second row reads ${atRestOff.join(', ')} at rest, not --stripe (${tones.stripe})`);
+  const hoveredOff = offTone(hovered, tones.surface2);
+  if (hoveredOff.length > 0) say(`the hovered second row reads ${hoveredOff.join(', ')}, not --surface-2 (${tones.surface2}) over its stripe`);
   failures.push(...compare(hovered, striped, ['border', 'height', 'padding'], `${theme} /requests: the hovered second row against itself striped`));
   if (!selected.state.split(' ').includes('is-selected')) say(`a click on the second row left it ${JSON.stringify(selected.state)}, not is-selected`);
-  if (selected.background !== tones.accentSoft) say(`the selected second row reads ${selected.background}, not --accent-soft (${tones.accentSoft}) over its stripe`);
+  const selectedOff = offTone(selected.backgrounds === undefined ? null : selected, tones.accentSoft);
+  if (selectedOff.length > 0) say(`the selected second row reads ${selectedOff.join(', ')}, not --accent-soft (${tones.accentSoft}) over its stripe`);
   failures.push(...compare(selected, striped, ['border', 'padding'], `${theme} /requests: the selected second row against itself striped`));
   if (left.path !== '/requests' || left.selected !== 0) say(`Escape left ${left.path} with ${left.selected} selected rows, not the bare log`);
   await atRest();
@@ -7212,12 +7261,17 @@ async function poolFormTables(theme) {
   await atRest();
 }
 
+/** Real time a wheel's scroll is given to land: it runs on the compositor, which the paused clock does not hold. */
+const WHEEL_MS = 500;
+
 /**
- * The document holds still behind a modal dialog. On the Pools page scrolled 300 px down, the first pool's dialog
- * opens, a wheel over the backdrop leaves the document's scroll where the open found it and the content's box where it
- * stood before the open, and Escape closes the dialog onto the same scroll. The box is read at both edges: the shell
- * anchors the content on the left, so the scrollbar a lock without its gutter takes away widens the content to the
- * right. A page too short to scroll 300 px is recorded and not read.
+ * The document holds still behind a modal dialog. On the Pools page scrolled 300 px down, a wheel over the page with no
+ * dialog open moves it first, so the wait after a wheel is long enough to see one land. Then, from 300 px down again,
+ * the first pool's dialog opens where the page stood, a wheel over the backdrop leaves the document's scroll where the
+ * open found it and the content's box where it stood before the open, and Escape closes the dialog onto the scroll the
+ * page had before it opened. The box is read at both edges: the shell anchors the content on the left, so the scrollbar
+ * a lock without its gutter takes away widens the content to the right, and a page with no `.content` box fails. A
+ * page too short to scroll 300 px is recorded and not read.
  */
 async function dialogScrollLock(theme) {
   const say = (what) => failures.push(`${theme} /pools dialog scroll lock: ${what}`);
@@ -7234,6 +7288,14 @@ async function dialogScrollLock(theme) {
     measurements.push(`${theme} /pools dialog scroll lock skipped: the page scrolls ${rest.room} px, short of 300 ${JSON.stringify(rest)}`);
     return;
   }
+  await page.evaluate(() => window.scrollTo(0, 300));
+  await settle();
+  const unlocked = await read();
+  await page.mouse.move(640, 400);
+  await page.mouse.wheel(0, 400);
+  await page.waitForTimeout(WHEEL_MS);
+  await advance(CLOCK_STEP_MS);
+  const control = await read();
   await page.evaluate(() => window.scrollTo(0, 300));
   await settle();
   const before = await read();
@@ -7256,19 +7318,21 @@ async function dialogScrollLock(theme) {
   // Halfway between the viewport's left edge and the dialog's, on the backdrop.
   await page.mouse.move(Math.max(4, Math.round((frame?.x ?? 120) / 2)), 400);
   await page.mouse.wheel(0, 400);
-  // The wheel's scroll runs on the compositor in real time, which the paused clock does not hold.
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(WHEEL_MS);
   await advance(CLOCK_STEP_MS);
   const wheeled = await read();
   await closeByEscape(dialog, `${theme} /pools dialog after the scroll lock's read`, say);
   await advance(CLOCK_STEP_MS);
   const closed = await read();
-  measurements.push(`${theme} /pools dialog scroll lock ${JSON.stringify({ before, closed, open, wheeled })}`);
+  measurements.push(`${theme} /pools dialog scroll lock ${JSON.stringify({ before, closed, control, open, unlocked, wheeled })}`);
+  if (control.scroll <= unlocked.scroll) say(`a wheel over the page with no dialog open left it ${control.scroll} px down from ${unlocked.scroll}, so a wheel that never landed would read as the lock`);
   if (before.scroll !== 300) say(`the page stands ${before.scroll} px down, not 300, before the dialog opens`);
+  const unboxed = Object.entries({ before, closed, open, wheeled }).filter(([, r]) => r.left === null || r.right === null).map(([name]) => name);
+  if (unboxed.length > 0) say(`no .content box to read ${unboxed.join(', ')}`);
   for (const what of compare(wheeled, open, ['scroll'], 'the wheel over the backdrop against the open dialog')) say(what);
-  for (const what of compare(open, before, ['left', 'right'], "the content's box with the dialog open against it before")) say(what);
+  for (const what of compare(open, before, ['left', 'right', 'scroll'], "the content's box and the scroll with the dialog open against them before")) say(what);
   for (const what of compare(wheeled, before, ['left', 'right'], "the content's box after the wheel against it before")) say(what);
-  for (const what of compare(closed, open, ['scroll'], 'the closed dialog against the open one')) say(what);
+  for (const what of compare(closed, before, ['scroll'], 'the closed dialog against the page before it opened')) say(what);
   await page.evaluate(() => window.scrollTo(0, 0));
   await atRest();
 }
@@ -8093,8 +8157,10 @@ try {
       if (view.path === '/requests') {
         await requestsTableFits(theme);
         if (mock) await requestsTableFitsWithShares(theme);
-        // The 7-day range is read once more, and the bare log loads again for the measures after it and the shot.
+        // The 7-day range is read once more, a day and an hour on, and the bare list loads again for the measures after
+        // it and the shot.
         await loadAtOrigin('/requests?range=7d', '.requests__table');
+        await datedRead();
         await requestsTableFits(theme, '7d');
         if (mock) await requestsTableFitsWithShares(theme, '7d');
         await loadAtOrigin('/requests', '.requests__table');

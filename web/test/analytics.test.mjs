@@ -687,7 +687,8 @@ test("a group whose answered probes are all billed beside priced plan rows adds 
   const window = { cost: 0.002, wasted: 0.001 };
   const windows = { five_hour: window, seven_day: window };
   const probed = accountGroup({ probeEquivalent: windows, probeShares: windows, probes: { ...base.probes, ok: 3 } });
-  // An overage's or an API key member's probes price in dollars alone, beside plan rows the route priced on both windows.
+  // An overage's or an API key member's probes price in dollars alone, beside plan rows the route priced on both
+  // windows.
   const billed = accountGroup({ probeCostUsd: 0.4, probeEquivalent: {}, probeShares: {}, probes: { ...base.probes, ok: 2 } });
   assert.ok(billed.planRequests > 0 && billed.planOutputTokens > 0 && billed.costEquivalent.five_hour !== undefined && billed.costEquivalent.seven_day !== undefined, 'the billed probes sit beside priced plan rows');
   assert.deepEqual(d.sumGroups([probed, billed]).probeEquivalent, windows, 'the sum keeps both windows');
@@ -730,7 +731,7 @@ test('the model week is labeled by the key the share map carries, so a second mo
   assert.equal(d.weekColumnOf([accountGroup({ costShares: { five_hour: 0.2, seven_day: 0.08, seven_day_opus: 0.04 } }), accountGroup({ costShares: null })]), 'seven_day_opus');
   assert.equal(d.weekColumnOf([accountGroup({ costShares: { five_hour: 0.2, seven_day: 0.08, seven_day_fable: 0.04 } }), accountGroup({ costShares: { five_hour: 0.1, seven_day: 0.05, seven_day_opus: 0.02 } })]), '7-day Fable, seven_day_opus', 'each distinct week once');
   assert.equal(d.weekColumnOf([accountGroup({ costShares: { five_hour: 0.2, seven_day: 0.08 } })]), '7-day Fable', 'a table of Sonnet groups keeps the Fable week column');
-  assert.deepEqual(d.shareLines([{ at: '2026-09-16T11:00:00.000Z', groups: [accountGroup({ costShares: { five_hour: 0.1, seven_day: 0.05, seven_day_opus: 0.02 }, key: 'primary' })] }]).weeks, { primary: 'seven_day_opus' }, 'the lines name the week each account charts');
+  assert.deepEqual(d.shareLines([{ at: '2026-09-16T11:00:00.000Z', groups: [accountGroup({ costShares: { five_hour: 0.1, seven_day: 0.05, seven_day_opus: 0.02 }, key: 'primary' })] }], 'account').weeks, { primary: 'seven_day_opus' }, 'the lines name the week each account charts');
 });
 
 test('a share row labels each window and divides the 7-day share per plan request and per 1k plan output', () => {
@@ -751,7 +752,7 @@ test("the share lines carry each account's 7-day and week shares per bucket with
   const { accounts, data } = d.shareLines([
     { at: at(11), groups: [fable, haiku, apiKey] },
     { at: at(12), groups: [{ ...fable, costShares: { five_hour: 0.3, seven_day: 0.1, seven_day_fable: null } }, apiKey] },
-  ]);
+  ], 'account');
   assert.deepEqual(accounts, ['nightly', 'primary'], 'the accounts with a share map, an API key account left out');
   assert.deepEqual(
     data,
@@ -761,9 +762,9 @@ test("the share lines carry each account's 7-day and week shares per bucket with
     ],
     'a bucket an account has no group in, and a window it has no share on, read null, which the chart leaves as a gap',
   );
-  assert.deepEqual(d.shareLines([{ at: at(11), groups: [apiKey] }]), { accounts: [], data: [{ at: Date.UTC(2026, 8, 16, 11) }], labels: {}, weeks: {} }, 'no share map, no line');
+  assert.deepEqual(d.shareLines([{ at: at(11), groups: [apiKey] }], 'account'), { accounts: [], data: [{ at: Date.UTC(2026, 8, 16, 11) }], labels: {}, weeks: {} }, 'no share map, no line');
   const holder = accountGroup({ costShares: { five_hour: 0.1, seven_day: 0.05 }, key: 'desktop@1000', label: 'desktop (deleted)' });
-  assert.deepEqual(d.shareLines([{ at: at(11), groups: [holder] }]).labels, { 'desktop@1000': 'desktop (deleted)' }, 'a line is named by its group label, the grouping the page reads, rather than its key');
+  assert.deepEqual(d.shareLines([{ at: at(11), groups: [holder] }], 'account').labels, { 'desktop@1000': 'desktop (deleted)' }, 'a line is named by its group label, the grouping the page reads, rather than its key');
 });
 
 test('a share line with one priced bucket between two gaps marks it as an isolated slot, which the chart draws as a dot', () => {
@@ -773,11 +774,11 @@ test('a share line with one priced bucket between two gaps marks it as an isolat
     { at: at(11), groups: [primary(null)] },
     { at: at(12), groups: [primary({ five_hour: 0.1, seven_day: 0.05 })] },
     { at: at(13), groups: [primary(null)] },
-  ]);
+  ], 'account');
   assert.deepEqual(data.map((r) => r['primary:7d']), [null, 0.05, null], 'the priced bucket sits between two gaps');
   assert.deepEqual(d.isolatedSlots(data.map((r) => r['primary:7d'])), [false, true, false], 'so it is the one isolated slot');
   assert.deepEqual(d.isolatedSlots(data.map((r) => r['primary:week'])), [false, false, false], 'a window never priced marks none');
-  const edge = d.shareLines([{ at: at(11), groups: [primary({ five_hour: 0.1, seven_day: 0.05 })] }, { at: at(12), groups: [primary(null)] }]).data;
+  const edge = d.shareLines([{ at: at(11), groups: [primary({ five_hour: 0.1, seven_day: 0.05 })] }, { at: at(12), groups: [primary(null)] }], 'account').data;
   assert.deepEqual(d.isolatedSlots(edge.map((r) => r['primary:7d'])), [true, false], "the range's edge counts as a gap");
 });
 

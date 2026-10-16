@@ -12,8 +12,9 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 // The settings provider follows the color scheme through matchMedia, which jsdom lacks, so the shim answers as the
 // smoke run's does.
 window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
-// The provider reads the expert view from the window's storage, which throws on a window without an origin, so the
-// dialogs draw the plain view as they do in a browser that blocks storage.
+// Node 26 carries a `localStorage` global of its own, which the bundle would read in place of the window's, so the
+// getter hands it the window's storage. That storage throws on a window without an origin, so the provider's read of
+// the expert view fails and the dialogs draw the plain view, as they do in a browser that blocks storage.
 Object.defineProperty(globalThis, 'localStorage', { configurable: true, get: () => window.localStorage });
 // jsdom has no showModal, so the shims keep the open attribute in step with the calls, as the smoke run's do.
 window.HTMLDialogElement.prototype.showModal = function () {

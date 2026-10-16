@@ -1291,10 +1291,17 @@ async fn a_window_sampled_without_an_end_leads_by_its_utilization_less_the_share
     let window = five_hour_of(&parts, &cookie).await;
     let elapsed =
         phoebis_routing::elapsed_share_at("five_hour", Some(FIVE_HOUR_RESET), None, common::NOW);
+    let lead = window["lead"].as_f64().expect("a lead to the reset");
     assert_eq!(
-        window["lead"].as_f64(),
-        Some(0.62 - elapsed),
+        lead,
+        0.62 - elapsed,
         "the paced share runs to the reset: {window}"
+    );
+    // The figure on its own, so an error inside the shared arithmetic fails here too: 0.62 used with four of the
+    // window's five hours run.
+    assert!(
+        (lead - -0.18).abs() < 1e-9,
+        "0.62 used four fifths of the way through the window leads by -0.18: {lead}"
     );
 }
 

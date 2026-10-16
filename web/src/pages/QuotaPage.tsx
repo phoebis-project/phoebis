@@ -11,7 +11,7 @@ import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/comp
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinute, fmtPct, fmtRelative, fmtShortTime, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, isExpired, isSubscription, meterTone, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, sortByPace, soonestReset, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, isExpired, isSubscription, meterTone, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, sortByPace, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 
 type Sort = 'default' | 'pace5h' | 'pace7d' | 'paceWeek' | 'soonest';

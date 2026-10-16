@@ -1774,9 +1774,11 @@ textarea.input {
  * The fold's look on the chip line: a neutral badge with a dashed border. A badge draws no border, so the button's own
  * would widen it, and this one takes a pixel of the padding to keep the 22 px row.
  */
+/* Tabular digits keep every count the badge draws no wider than the largest one, which the fold measures it at. */
 .attention-line__more {
   padding: 1px 7px;
   border: 1px dashed var(--hairline);
+  font-variant-numeric: tabular-nums;
 }
 
 /* The badge's display beats the hidden attribute's UA rule, so the fold badge drawn for the measure says so again. */

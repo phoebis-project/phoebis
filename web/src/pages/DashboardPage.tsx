@@ -358,7 +358,7 @@ function RecentTable({ rows, error, settings }: { error: string | null; rows: Re
                   </tr>
                 )
               : Array.from({ length: 6 }, (_, i) => (
-                  <tr key={i}>
+                  <tr key={i} className="table__detail">
                     <td colSpan={8}>
                       <Skeleton />
                     </td>

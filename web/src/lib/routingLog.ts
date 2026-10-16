@@ -1380,7 +1380,7 @@ const VERDICT_ORDER: Record<string, number> = { chosen: 0, renewed: 1, held_on: 
 export function rankCandidates(candidates: RecordCandidate[]): RecordCandidate[] {
   const group = (c: RecordCandidate) => VERDICT_ORDER[c.verdict] ?? 8;
   const rank = (c: RecordCandidate) => (c.verdict === 'ranked' ? (c.rank ?? Number.POSITIVE_INFINITY) : 0);
-  return [...candidates].sort((a, b) => group(a) - group(b) || rank(a) - rank(b) || a.tier[1] - b.tier[1] || a.accountId.localeCompare(b.accountId));
+  return [...candidates].sort((a, b) => group(a) - group(b) || rank(a) - rank(b) || a.priority - b.priority || a.accountId.localeCompare(b.accountId));
 }
 
 /**

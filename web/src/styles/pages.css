@@ -709,8 +709,8 @@
  * reset and its projection, each part whole on its line. The reset column is bounded at 150 px, past the widest single
  * part, "100% left in 4 h 59 min" (140.7 px), past "100% left at the reset" (131.2 px), "spent in 4 h 59 min"
  * (116.7 px), "resets in 23h 59m," (112.7 px) and a bare "resets in 23h 59m" (109 px), so a part never wraps, and past
- * the first clause of an expired window's line, "expired 2d 0h ago," (113 px), so that longer line wraps inside the
- * column after its first clause rather than widening it.
+ * the first clause of an expired window's line, "expired 23h 59m ago," (132.3 px), so that longer line wraps inside
+ * the column after its first clause rather than widening it.
  */
 .qcard__windows {
   --qwin-reset: 150px;
@@ -2168,7 +2168,8 @@
     width: 147px;
   }
 
-  .routing-log__model-under {
+  /* On the table and both of its classes, so it outweighs `.table .sub` and `.routing-log__cut`, which draw it. */
+  .routing-log__table .sub.routing-log__model-under {
     display: none;
   }
 }
@@ -3527,10 +3528,11 @@
   white-space: normal;
 }
 
-/* The cells take 5 px each side, one step wider than 4. Each pixel of padding widens the fit columns by 17 px, so in
-   the 990 px card at 1280 px the mock story's default columns leave 39 px of slack at 4 px and 24 px at 5, and at 6 px
-   only 5 px with the Session cell down to nine characters of its id. The row's first and last cells keep the card's
-   12 px edge, and an expanded row's detail cell keeps its own inset. */
+/* The cells take 5 px each side, one step wider than 4. Each pixel of padding widens the fit columns by 17 px and the
+   Session column's floor by 2, so in the 990 px card at 1280 px the mock story's default columns leave Session about
+   40 px of drawn room above its floor at 4 px and about 21 px at 5, and at 6 px under 2 px with the Session cell down
+   to nine characters of its id. The row's first and last cells keep the card's 12 px edge, and an expanded row's
+   detail cell keeps its own inset. */
 .sessions-table th,
 .sessions-table td {
   padding-left: 5px;

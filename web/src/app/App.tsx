@@ -31,8 +31,8 @@ export const routes = [
     element: <Shell />,
     children: [
       { index: true, element: <DashboardPage /> },
-      // A chunk that fails again after the reload draws its error in the shell's outlet. Every other render error
-      // keeps the router's own screen.
+      // The element catches every render error on these four routes, a chunk that fails again after the reload among
+      // them, and draws it in the shell's outlet. The other routes keep the router's own screen.
       { path: 'accounts', element: lazily(<AccountsPage />), errorElement: <PageLoadFailed /> },
       { path: 'accounts/:accountId', element: lazily(<AccountsPage />), errorElement: <PageLoadFailed /> },
       { path: 'analytics', element: lazily(<AnalyticsPage />), errorElement: <PageLoadFailed /> },

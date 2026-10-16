@@ -154,38 +154,38 @@ Accounts draws a card per account, sorted "Default order", "Soonest recovery", "
 Fable pace", every card with the same slots in the same order: the header with the label (the email on hover) and the
 status badge, one row per window ("5h", "7d" and "Fable"), the Extra usage line, the chips and the poll reading. The
 three pace orders put the account furthest ahead of that window's pace first, the one whose used share runs furthest
-past the share of the window elapsed (the lead the router answers for each window), and the accounts without the
-window or with the window expired last. Each live window's meter reads the share left and its pace,
+past the share of the window elapsed (the lead the router answers for each window), and the accounts without the window,
+with the window expired or without a lead on it last. Each live window's meter reads the share left and its pace,
 `{window}: {pct} left, {n}% ahead of pace`, `{n}% behind pace` or `on pace`, with ` to its end at {time}` where the pace
 runs to the subscription's end rather than the reset, and a mark at the share of the window still to come. On a screen
 under 900 px wide the reset label takes a line of its own under the meter. Under the meter the window reads
 `resets {ago}`, followed on a window the router projects by the share the projection leaves at the window's horizon:
-`resets in 2h 13m, 19% left at the reset` where the horizon is the reset (within a minute), `resets in 3d 5h, 56% left
-in 5 h` where it comes earlier (five hours out on a weekly window, or the account's end), and `{pct} left now` once it
-has come. A window the sessions spend before its horizon reads the time until it runs out, `spent in 2 h 10 min`. The
-reset and the projection split over two lines where the column does not hold them on one, and the hover adds the burn
-behind the projection, `the sessions on this account burn 8.5% an hour`. On a slowed account the 5-hour window's line
-ends in the speed chip, `0.5x` in the warning tone (the account's slow-down factor to two decimals, a trailing zero
-dropped, `0.35x`), whose hover reads `slowed since 17:40: the sessions on this account would pass the ceiling 42 min
-before the reset, over the 30 min threshold` (`under` while no round can fire). The chip draws while the factor is under
-1 and the 5-hour window the read came from has not reset since, and the Dashboard's account cards, the Accounts view,
-the Pools cards and the Sessions view draw the same chip with the same hover ([Slow-down](routing.md#slow-down)). The
-window bars of the Dashboard's account cards and of the Accounts list draw the projection alone in the reset's place, in
-a compact form (`19% left at reset`, `56% left in 5 h`) that splits between the share and the horizon where the bar is
-narrow, with the reset's instant on hover, and keep the reset where the window has no projection. The Accounts detail's
-bars read the whole label, split between its two parts where the bar is narrow, and the 5-hour bar's label carries the
-chip on a slowed account. The Pools dialog's Preview, the Sessions Runway column and the routing log keep the used
-share, the figure that the window ceiling of a pool is measured against. A window whose reset has passed with no reading
-since reads `expired {ago}` instead, with "no reading since the reset, {time}" on hover, and draws no share and an empty
-meter until the next reading, and a window the account does not report reads "not reported". A card with no window yet
-reads "No quota windows reported yet.", and one whose read failed shows the error with `, next attempt {time}` and a
-"Retry" button in the windows' place. The "Extra usage" chip reads `off`, `not in use`, `in use` or `not reported`, with
-the month's spend against its limit while extra usage is enabled, in the serious tone while requests bill as extra
-usage, and the provider's reason inside the line with the whole message on hover. The chips name the plan by its tier
-("Plan"), when the plan of an account marked canceled ends (in the serious tone inside a week), and when a trial ends
-("Trial"). The poll reading says when the poll last asked the endpoint and how it answered, with the whole message and
-the backoff on hover, and "Refresh" reads this account's endpoint now. A card that shows an error, whose last poll
-failed, or that is backing off counts as needing attention.
+`resets in 2h 13m, 19% left at the reset` where the horizon is the reset (within a minute),
+`resets in 3d 5h, 56% left in 5 h` where it comes earlier (five hours out on a weekly window, or the account's end), and
+`{pct} left now` once it has come. A window the sessions spend before its horizon reads the time until it runs out,
+`spent in 2 h 10 min`. The reset and the projection split over two lines where the column does not hold them on one, and
+the hover adds the burn behind the projection, `the sessions on this account burn 8.5% an hour`. On a slowed account the
+5-hour window's line ends in the speed chip, `0.5x` in the warning tone (the account's slow-down factor to two decimals,
+a trailing zero dropped, `0.35x`), whose hover reads `slowed since 17:40: the sessions on this account would pass the
+ceiling 42 min before the reset, over the 30 min threshold` (`under` while no round can fire). The chip draws while the
+factor is under 1 and the 5-hour window the read came from has not reset since, and the Dashboard's account cards, the
+Accounts view, the Pools cards and the Sessions view draw the same chip with the same hover
+([Slow-down](routing.md#slow-down)). The window bars of the Dashboard's account cards and of the Accounts list draw the
+projection alone in the reset's place, in a compact form (`19% left at reset`, `56% left in 5 h`) that splits between
+the share and the horizon where the bar is narrow, with the reset's instant on hover, and keep the reset where the
+window has no projection. The Accounts detail's bars read the whole label, split between its two parts where the bar is
+narrow, and the 5-hour bar's label carries the chip on a slowed account. The Pools dialog's Preview, the Sessions Runway
+column and the routing log keep the used share, the figure that the window ceiling of a pool is measured against. A
+window whose reset has passed with no reading since reads `expired {ago}` instead, with "no reading since the reset,
+{time}" on hover, and draws no share and an empty meter until the next reading, and a window the account does not report
+reads "not reported". A card with no window yet reads "No quota windows reported yet.", and one whose read failed shows
+the error with `, next attempt {time}` and a "Retry" button in the windows' place. The "Extra usage" chip reads `off`,
+`not in use`, `in use` or `not reported`, with the month's spend against its limit while extra usage is enabled, in the
+serious tone while requests bill as extra usage, and the provider's reason inside the line with the whole message on
+hover. The chips name the plan by its tier ("Plan"), when the plan of an account marked canceled ends (in the serious
+tone inside a week), and when a trial ends ("Trial"). The poll reading says when the poll last asked the endpoint and
+how it answered, with the whole message and the backoff on hover, and "Refresh" reads this account's endpoint now. A
+card that shows an error, whose last poll failed, or that is backing off counts as needing attention.
 
 Quota windows lays the same windows across a calendar titled "Quota windows", with its span and length (`two weeks` in
 the Weekly mode, `three days` in the 5-hour mode), "Previous period", "Today" and "Next period" buttons, the mode switch
@@ -213,12 +213,12 @@ or Status, and "Add account", and at the right edge the split Refresh button and
 they stay while an account opens. Auto reload starts at 5 s and waits while a dialog or an editor of the detail is open,
 or while its save runs. The six labels, with the state each stands for, are Cooling down (`cooldown`), Needs funding
 (`funding_required`), Paused (`paused`), Needs re-auth (`reauth_required`), Ready (`ready`) and Not paired (`unpaired`).
-A row reads the label with a badge that names the plan by its tier ("Max 20x", "Max 5x" or "Pro"), the status badge
-with the speed chip beside it on a slowed account, the email, `pool {id}` or "no pool", "Overage" while requests bill as
-extra usage and "extra usage on" while it is enabled and unused. The pane reads "The router holds no account yet" with
-"Add account" before the first account, "No accounts match" with "Clear the search or the status filter." under a
-filter, and "No account to show" until a row is selected. What the states mean and how an account moves between them is
-on [Pairing an account](pairing.md).
+A row reads the label with a badge that names the plan by its tier ("Max 20x", "Max 5x", "Pro" or "Team", none on an
+API-key row), the status badge with the speed chip beside it on a slowed account, the email, `pool {id}` or "no pool",
+"Overage" while requests bill as extra usage and "extra usage on" while it is enabled and unused. The pane reads "The
+router holds no account yet" with "Add account" before the first account, "No accounts match" with "Clear the search or
+the status filter." under a filter, and "No account to show" until a row is selected. What the states mean and how an
+account moves between them is on [Pairing an account](pairing.md).
 
 The detail opens on the account's label with "Edit label", its email and its badges: the status, `quarantined` while
 the last refresh's outcome is uncertain, `cooldown ends {ago}`, "Overage active" and "Routing paused", with `Overage
@@ -922,14 +922,15 @@ candidate or a terminus opens its facts in a popover, and Tab, Enter, Space and 
 "Candidates, by rank" lists every pool member with the chosen or held-on member tinted: Account with its plan beneath,
 Tier (`plan P0`, `overage P0`, `keys P1`), 5h, 7d and Fable as three lines each (the utilization, the reset, the
 reading's source and age), Projection and Runway, In flight against the cap, the Pace score, Prefix, and Verdict. The
-rows list the chosen, renewed or held-on member first, then the ranked members by rank, then the eligible ones the
-strategy did not rank, then the ones a partition or a check dropped with their obstacle. Projection reads one line per
-window the candidate reports, the projection at the window's horizon, `5h 99% at 18:20` where the horizon is the reset
-and `7d 41% in 5 h` where it falls earlier, and Runway a span (`2 h 10 min`), `none` or `unbounded`, each a dash for a
-candidate the gate did not read. The Projection cell's hover names the demand where it differs from the burn the window
-sees, `demand 12.86 %/h over burn 6.43 %/h at 0.5x`, with the candidate's slow-down factor. The Pace score stands under
-a header naming the window it read, `Spare rate, 7-day per hour` or `Spare rate, Fable week per hour` (`Pace` where no
-subscription candidate names one, and `Pace, 7-day left per hour` on a version 1 record), each cell's hover reading
+rows list the chosen, renewed or held-on member first, then a move's source and its other destinations, then the ranked
+members by rank, then the eligible ones the strategy did not rank, then the ones a partition or a check dropped with
+their obstacle. Projection reads one line per window the candidate reports, the projection at the window's horizon,
+`5h 99% at 18:20` where the horizon is the reset and `7d 41% in 5 h` where it falls earlier, and Runway a span
+(`2 h 10 min`), `none` or `unbounded`, each a dash for a candidate the gate did not read. The Projection cell's hover
+names the demand where it differs from the burn the window sees, `demand 12.86 %/h over burn 6.43 %/h at 0.5x`, with the
+candidate's slow-down factor. The Pace score stands under a header naming the window it read,
+`Spare rate, 7-day per hour` or `Spare rate, Fable week per hour` (`Pace` where no subscription candidate names one, and
+`Pace, 7-day left per hour` on a version 1 record), each cell's hover reading
 `{pct} of the 7-day window left over {n} h to its reset at {time}, less {burn} of burn: {rate}.` (or
 `to its subscription's end at {time}`) followed by `Inside its tier, the highest spare rate wins.` Verdict carries the
 one chip that decided it (`429 on 5h until 15:42`, `budget $1.10 of $5.00`), whose hover says why the member was passed

@@ -487,7 +487,9 @@ test("the verdict cell names a destination's fit in its tone, and a fitting one 
 });
 
 test('the candidates rank the placed member first, then the ranked ones by rank, the eligible ones, and the ones dropped last', () => {
-  const member = (accountId, verdict, priority, rank = null) => ({ accountId, priority, rank, tier: [0, priority, 0], verdict });
+  // A record's tier carries the priority as its second member. It runs the other way here, so the order shows which
+  // of the two the sort reads.
+  const member = (accountId, verdict, priority, rank = null) => ({ accountId, priority, rank, tier: [0, 9 - priority, 0], verdict });
   const candidates = [
     member('zeta', 'ranked', 0, 2),
     member('ending', 'not_needed', 0),

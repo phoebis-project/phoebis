@@ -401,8 +401,9 @@ export function AnalyticsPage() {
     [query, funding, funded, fundedTab, warming, generation],
     reload,
   );
-  // The Saved by probes chart's series twin of that breakdown, counting probes under the same funding: the page's series
-  // counts them only when the address asks, and a bucket left with probe rows alone would draw no probe cost there.
+  // The Saved by probes chart's series twin of that breakdown, counting probes under the same funding: the page's
+  // series counts them only when the address asks, and a bucket left with probe rows alone would draw no probe cost
+  // there.
   const warmingSeries = useAsync(
     () => (warming ? api.getAnalyticsSeries({ ...query, funding: funded ? funding : undefined, includeProbes: true }) : Promise.resolve<AnalyticsPoint[] | null>(null)),
     [query, funding, funded, warming, generation],

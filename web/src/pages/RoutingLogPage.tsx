@@ -208,7 +208,7 @@ export function RoutingLogPage() {
             <tbody>
               {log.loading && !log.data
                 ? Array.from({ length: 8 }, (_, i) => (
-                    <tr key={i}>
+                    <tr key={i} className="table__detail">
                       <td colSpan={9}>
                         <Skeleton />
                       </td>
@@ -347,7 +347,11 @@ function LogRow({ isNew, now, onToggle, open, row, rows }: { isNew: boolean; now
             </EntityLink>
           </span>
         )}
-        {row.agentId !== null && <span className="sub mono routing-log__cut">{row.agentId}</span>}
+        {row.agentId !== null && (
+          <span className="sub mono routing-log__cut" title={row.agentId}>
+            {row.agentId}
+          </span>
+        )}
       </td>
       <td className="routing-log__account">
         <AccountCell row={row} />
