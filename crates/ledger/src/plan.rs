@@ -1030,8 +1030,8 @@ impl SubscriptionCosts {
             .is_some_and(Capacity::sizes)
     }
 
-    /// The tiers with a capacity on either window; a listed tier null on both prices nothing. The count sits on the
-    /// model, beside `priced`, so what `check-config` prints follows the rule the pricers read.
+    /// The tiers the base rows size with a capacity on either window, so a tier only a regime sizes is not in the
+    /// count. `check-config` prints it as the base rows' count.
     pub fn sized_tier_count(&self) -> usize {
         self.capacity.values().filter(|c| c.sizes()).count()
     }

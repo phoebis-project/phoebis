@@ -52,7 +52,8 @@ pub struct ReconciliationRow {
     pub window_end: i64,
     pub first_reading_at: i64,
     pub last_reading_at: i64,
-    /// The last reading's utilization less the first's, as a fraction of the window.
+    /// The last reading's utilization less the first's, as a fraction of the window, rounded to six decimals so a
+    /// whole-percent pair's rise compares against `MIN_RISE` as its percents read.
     pub observed_rise: f64,
     /// The share of the window the router priced its plan-funded attempts completed between the two readings at.
     pub predicted_share: f64,
