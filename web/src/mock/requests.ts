@@ -884,6 +884,10 @@ export const OPENING_SESSION_IDS = ['6e3b9d1f-4a27-4c58-b8e1-9f2d7a4c3e06', 'c8f
 export const SLOWED_MORNING_SESSION_ID = 'b4e2c9a7-1f3d-4c86-9a05-7e2d1c8b6f40';
 export const SLOWED_SESSION_ID = '5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65';
 export const MARKED_SESSION_IDS = ['9c2d7e4a-3b81-4f59-a6e0-1d8c5b7a2e93', 'e7a4b2d9-6c15-4e83-b9f2-0a3d8c6e1b57'] as const;
+/** The long-context notebook session that went idle after its one turn, apart from studio's slowed sessions. */
+const IDLE_NOTEBOOK_SESSION_ID = '2d8b5f1a-7c4e-4e92-b6a3-8f0d1c9e5a47';
+/** That session's one request, the turn the work pool's hour recipe probes after. */
+const IDLE_NOTEBOOK_REQUEST_ID = 'req_3c8e1f7a-b29';
 /** The desktop session the 5-hour 429 on secondary fails over to primary. */
 const FAILED_OVER_SESSION_ID = 'd6f1a3c8-2e94-4b07-8a5d-3c9e7f2b1a64';
 /** The session a laptop client sent. */
@@ -1219,6 +1223,19 @@ function storyRequests(): RequestLog[] {
       requestClass: 'main',
       session: SLOWED_SESSION_ID,
       usage: { cacheRead: 67_200, cacheWrite1h: 2_800, input: 2_000, output: 940 },
+    },
+    // A long-context notebook session early in the day, whose one turn writes its prefix on the hour and which never
+    // comes back: the turn `idleWarming` probes after.
+    {
+      agentId: 'main',
+      at: NOW - 20 * HOUR,
+      attempts: [{ accountId: 'studio', at: NOW - 20 * HOUR, ms: 21_000, status: 200 }],
+      id: IDLE_NOTEBOOK_REQUEST_ID,
+      keyId: 'notebook',
+      model: 'claude-opus-5-5',
+      requestClass: 'main',
+      session: IDLE_NOTEBOOK_SESSION_ID,
+      usage: { cacheWrite1h: 150_000, input: 3_100, output: 1_700 },
     },
   ];
   return seeds.map(storyRow);
@@ -2152,17 +2169,18 @@ function historicalRollups(): HourlyRollup[] {
 const HOUR_PROBE_LEAD = 55 * MINUTE;
 
 /**
- * The work pool keeps the notebook's cache warm after the key's one request, and the session never comes back: the hour
- * recipe's one probe reads the cached prefix ahead of its expiry, the pool's one-hour idle window then runs out, and
- * the probe settles wasted on that limit. It kept no request warm, so the pool's probes cost more than they saved,
- * the story's one pool whose net saving reads under zero.
+ * The work pool keeps the idle notebook session's cache warm after its one long-context turn, and the session never
+ * comes back: the hour recipe's one probe finds the entry gone ahead of its expiry and writes the prefix again on the
+ * hour, the pool's one-hour idle window then runs out, and the probe settles wasted on that limit. That write costs more
+ * than the credits studio's sessions earn in the pool, so the pool's probes cost more than they saved, the story's one
+ * pool whose net saving reads under zero.
  */
 function idleWarming(rows: RequestLog[]): HourlyRollup[] {
-  const r = rows.find((x) => x.keyId === 'notebook' && x.kind !== 'probe' && x.status === 200);
+  const r = rows.find((x) => x.id === IDLE_NOTEBOOK_REQUEST_ID);
   if (r === undefined || r.accountId === null) return [];
   const at = Date.parse(r.at) + (r.durationMs ?? 0) + HOUR_PROBE_LEAD;
   const prefix = r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h;
-  const usage: Usage = { cacheRead: prefix, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 1, ...NO_ANSWER_FACTS };
+  const usage: Usage = { cacheRead: 0, cacheWrite1h: prefix, cacheWrite5m: 0, input: 0, output: 1, ...NO_ANSWER_FACTS };
   const costUsd = costOf(r.model, usage, false, at);
   const wastedProbeReasons = emptyWastedProbeReasons();
   wastedProbeReasons.idle_limit = 1;
@@ -2184,9 +2202,9 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
       requests: { client_gone: 0, incomplete: 0, ok: 1, overloaded: 0, rate_limited: 0, undecodable: 0, upstream_error: 0 },
       failovers: 0,
       migrations: 0,
-      tokens: { cacheRead: prefix, cacheWrite1h: 0, cacheWrite5m: 0, output: 1, ...NO_ANSWER_FACTS, uncachedInput: 0 },
-      cacheHits: 1,
-      cacheMisses: 0,
+      tokens: { cacheRead: 0, cacheWrite1h: prefix, cacheWrite5m: 0, output: 1, ...NO_ANSWER_FACTS, uncachedInput: 0 },
+      cacheHits: 0,
+      cacheMisses: 1,
       cacheMissReasons: emptyCacheMissReasons(),
       expiredBetweenTurns: 0,
       uncached: 0,
