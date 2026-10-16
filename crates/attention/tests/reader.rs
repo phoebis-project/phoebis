@@ -1614,16 +1614,16 @@ async fn meter_drift_holds_on_an_off_window_and_clears_when_the_newest_reads_ins
         "the window's newest row charged twice the table, so the condition dates from its end and names the cost \
          model in force"
     );
+    let drift = held.detail.clone();
     let (status, text) = scrape(&rig, &attention).await;
     assert_eq!(status, 200);
     assert!(
         text.contains(r#"phoebis_attention{kind="meter_drift",subject="business"} 1"#),
         "{text}"
     );
-    let cleared = json!({ "effective": null, "source": null, "windows": [] });
-    reconciled(&rig, NOW - HOUR, 0.3, 0.3, 1.0);
+    reconciled(&rig, NOW - HOUR, 0.04, 0.04 / 3.0, 3.0);
     fold_at(&rig, NOW + MINUTE).await;
-    let inside = find(
+    let small = find(
         &read(&attention, NOW + MINUTE),
         Kind::MeterDrift,
         "business",
@@ -1631,13 +1631,14 @@ async fn meter_drift_holds_on_an_off_window_and_clears_when_the_newest_reads_ins
     .cloned()
     .unwrap();
     assert_eq!(
-        (inside.holds, inside.since, &inside.detail),
-        (false, None, &cleared),
-        "a newer row inside the band clears the window"
+        (small.holds, small.since, &small.detail),
+        (true, Some(NOW - 2 * HOUR), &drift),
+        "a rise under five percent is a few quanta of the meter and counts nothing, so the newer row leaves the drift \
+         of the row before it standing"
     );
-    reconciled(&rig, NOW - 30 * MINUTE, 0.04, 0.04 / 3.0, 3.0);
+    reconciled(&rig, NOW - 30 * MINUTE, 0.3, 0.3, 1.0);
     fold_at(&rig, NOW + 2 * MINUTE).await;
-    let small = find(
+    let inside = find(
         &read(&attention, NOW + 2 * MINUTE),
         Kind::MeterDrift,
         "business",
@@ -1645,9 +1646,13 @@ async fn meter_drift_holds_on_an_off_window_and_clears_when_the_newest_reads_ins
     .cloned()
     .unwrap();
     assert_eq!(
-        (small.holds, small.since, &small.detail),
-        (false, None, &cleared),
-        "a rise under five percent is a few quanta of the meter and counts nothing, so the row before it stands"
+        (inside.holds, inside.since, &inside.detail),
+        (
+            false,
+            None,
+            &json!({ "effective": null, "source": null, "windows": [] })
+        ),
+        "a newer row inside the band clears the window"
     );
 }
 

@@ -308,8 +308,8 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// the share the router priced for its own plan-funded attempts between those readings, each attempt under its own
 /// regime, and how many of them priced at a model tier's estimate. The hourly fold writes the rows and reads the
 /// newest of each window for the meter's drift, so a cost model whose figures stray from the upstream's readings is
-/// seen. The table starts empty, and the first fold reconciles every completed window whose readings and requests the
-/// ledger still holds.
+/// seen. The table starts empty, and the first fold reconciles every completed window of the trailing 30 days whose
+/// readings and requests the ledger still holds.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,

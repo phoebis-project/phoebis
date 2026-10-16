@@ -23,6 +23,8 @@ const SONNET: &str = "claude-sonnet-5-5";
 const OPUS: &str = "claude-opus-5-5";
 /// Weight 10, on a week of its own at half the 7-day capacity.
 const FABLE: &str = "claude-fable-5-1";
+/// Unweighted, so it prices through its model tier's latest weighted model, Opus 5.5 at weight 2, as an estimate.
+const OPUS_UNWEIGHTED: &str = "claude-opus-5";
 
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-9 * b.abs().max(1.0)
@@ -52,6 +54,19 @@ fn seed_request(db: &LedgerDb, id: &str, at: i64) {
 /// One request of `client` whose single plan-funded attempt on Max 20x account `a` completed at `completed` with
 /// `input` plain input tokens of `model`.
 fn served(db: &LedgerDb, id: &str, model: &str, completed: i64, input: u64, client: Option<&str>) {
+    answered(db, id, model, completed, input, client, None);
+}
+
+/// `served` with the overage flag the attempt's head carried, `Some(true)` for an answer billed in overage.
+fn answered(
+    db: &LedgerDb,
+    id: &str,
+    model: &str,
+    completed: i64,
+    input: u64,
+    client: Option<&str>,
+    overage_in_use: Option<bool>,
+) {
     let started = completed - 30_000;
     db.insert_request(
         &RequestRecord {
@@ -78,6 +93,7 @@ fn served(db: &LedgerDb, id: &str, model: &str, completed: i64, input: u64, clie
             input_tokens: Some(input),
             output_tokens: Some(0),
             tier: Some(MAX_20X.into()),
+            overage_in_use,
             ..Default::default()
         }],
         None,
@@ -412,4 +428,55 @@ fn a_second_fold_writes_no_duplicate_row() {
         [(reset, reset + 1)],
         "the reset a millisecond behind closes the run, and the next fold keeps the first row"
     );
+}
+
+#[test]
+fn an_estimated_attempt_is_counted_and_an_overage_attempt_draws_nothing() {
+    let reset = SATURDAY + HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    db.insert_samples(
+        &[
+            reading(FIVE_HOUR, SATURDAY, 0.10, reset),
+            reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.40, reset),
+        ],
+        None,
+    )
+    .unwrap();
+    // 0.1 of the window from ten Sonnet units, 0.2 from ten tokens of Opus 5 at Opus 5.5's weight of 2, and nothing
+    // from thirty Sonnet units the head billed in overage.
+    served(&db, "sonnet", SONNET, SATURDAY + 5 * MINUTE, 10, None);
+    served(
+        &db,
+        "fallback",
+        OPUS_UNWEIGHTED,
+        SATURDAY + 10 * MINUTE,
+        10,
+        None,
+    );
+    answered(
+        &db,
+        "overage",
+        SONNET,
+        SATURDAY + 15 * MINUTE,
+        30,
+        None,
+        Some(true),
+    );
+    let now = reset + HOUR;
+    fold(&db, now);
+    let rows = rows(&db, now);
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.requests, r.estimated))
+            .collect::<Vec<_>>(),
+        [(2, 1)],
+        "the two plan-funded attempts, one priced through its model tier: {rows:?}"
+    );
+    assert!(
+        close(rows[0].predicted_share, 0.3),
+        "0.1 and 0.2, the overage answer adding nothing: {}",
+        rows[0].predicted_share
+    );
+    assert!(close(rows[0].ratio, 1.0), "{}", rows[0].ratio);
 }
