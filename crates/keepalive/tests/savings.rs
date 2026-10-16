@@ -1478,6 +1478,39 @@ async fn a_probe_placed_in_overage_whose_answer_reports_the_plan_files_its_row_u
     );
 }
 
+/// The agent's overage follows a real request's head as the relay's unified parse reads it, so the header spelled in
+/// mixed case with spaces around `TRUE` puts the current observation in overage. A probe's answer never reaches that
+/// reading, so the request's own answer carries the header.
+#[tokio::test]
+async fn a_request_whose_answer_spells_the_overage_header_in_mixed_case_reads_the_agent_in_overage()
+{
+    let mut r = rig(plan_funded_spec()).await;
+    let Respond::Json { body, .. } = cold_answer() else {
+        unreachable!("the cold answer is a JSON body")
+    };
+    r.up.push_credential_rule(
+        OAUTH_SECRET,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![(
+                "Anthropic-RateLimit-Unified-Overage-In-Use".into(),
+                " TRUE ".into(),
+            )],
+            body,
+        },
+    );
+    r.observe_with("main", &priced_body()).await;
+    let (_, agents) = r.engine.persist_rows();
+    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    assert_eq!(
+        payload["current"]["in_overage"].as_bool(),
+        Some(true),
+        "the head put the agent in overage: {}",
+        payload["current"]
+    );
+}
+
 /// Each wasted probe files under the funding its own answer took, as its cost row does: one probe on the plan and one in
 /// overage, both wasted at one cost, write one settlement row per funding, and each funding's waste reads against its
 /// own probe dollars at a ratio of one.

@@ -2378,10 +2378,9 @@ impl Engine {
             .unwrap();
         if let Some(observation) = agent.current.as_mut() {
             if observation.attempt == head.attempt {
-                let in_overage = head.headers.iter().any(|(name, value)| {
-                    name.eq_ignore_ascii_case("anthropic-ratelimit-unified-overage-in-use")
-                        && value.trim().eq_ignore_ascii_case("true")
-                });
+                let in_overage = phoebis_relay::UnifiedHeaders::parse_list(&head.headers)
+                    .and_then(|unified| unified.overage_in_use)
+                    == Some(true);
                 let moved = observation.in_overage != in_overage;
                 observation.in_overage = in_overage;
                 // A failed attempt is not evidence about the cache, and the next selection re-arms the attempt.
