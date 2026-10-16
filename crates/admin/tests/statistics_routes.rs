@@ -287,8 +287,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(36), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that adds the rollups' slow-down columns"
+        (Some(39), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that adds the reconciliation table"
     );
     assert_eq!(
         (
@@ -1839,6 +1839,133 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
         pools,
         std::collections::BTreeSet::from(["main"]),
         "the groups are the pools the range's rows name: {by_pool}"
+    );
+}
+
+#[tokio::test]
+async fn the_reconciliations_route_lists_the_trailing_thirty_days_under_the_account_filter() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    const DAY: i64 = 24 * HOUR;
+    // Three windows inside the trailing 30 days on two accounts, and one of `business` that ended a millisecond
+    // before them.
+    let planted = [
+        ("business", "five_hour", now - DAY, 2.0),
+        ("business", "seven_day", now - 3 * DAY, 1.1),
+        ("other", "five_hour", now - 2 * DAY, 0.9),
+        ("business", "five_hour", now - 30 * DAY - 1, 1.0),
+    ];
+    parts
+        .db
+        .write(|c| {
+            for (account, window, window_end, ratio) in planted {
+                c.execute(
+                    "INSERT INTO window_reconciliations (account_id, window, window_end, first_reading_at, \
+                     last_reading_at, observed_rise, predicted_share, ratio, requests, estimated, computed_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, 0.2, ?6, ?7, 3, 1, ?8)",
+                    rusqlite::params![
+                        account,
+                        window,
+                        window_end,
+                        window_end - 4 * HOUR,
+                        window_end - HOUR,
+                        0.2 / ratio,
+                        ratio,
+                        window_end + HOUR
+                    ],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    let ends = |body: &serde_json::Value| {
+        body["reconciliations"]
+            .as_array()
+            .unwrap_or_else(|| panic!("a list of rows: {body}"))
+            .iter()
+            .map(|r| {
+                (
+                    r["account_id"].as_str().unwrap().to_string(),
+                    r["window"].as_str().unwrap().to_string(),
+                    r["window_end"].as_i64().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let every = json(
+        get(
+            &parts.app,
+            "/admin/analytics/reconciliations",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        every.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["reconciliations", "request_retention_days"],
+        "{every}"
+    );
+    assert_eq!(
+        every["request_retention_days"].as_u64(),
+        Some(
+            phoebis_ledger::LedgerConfig::default()
+                .retention_days
+                .into()
+        ),
+        "the requests the ledger keeps, which bound how far back a window can be reconciled"
+    );
+    assert_eq!(
+        ends(&every),
+        [
+            ("business".to_string(), "five_hour".to_string(), now - DAY),
+            ("other".to_string(), "five_hour".to_string(), now - 2 * DAY),
+            (
+                "business".to_string(),
+                "seven_day".to_string(),
+                now - 3 * DAY
+            ),
+        ],
+        "newest first, the window that ended before the trailing 30 days left out"
+    );
+    assert_eq!(
+        every["reconciliations"][0],
+        serde_json::json!({
+            "account_id": "business",
+            "window": "five_hour",
+            "window_end": now - DAY,
+            "first_reading_at": now - DAY - 4 * HOUR,
+            "last_reading_at": now - DAY - HOUR,
+            "observed_rise": 0.2,
+            "predicted_share": 0.1,
+            "ratio": 2.0,
+            "requests": 3,
+            "estimated": 1,
+            "computed_at": now - DAY + HOUR,
+        }),
+        "a row carries its readings, its figures and its counts"
+    );
+    let business = json(
+        get(
+            &parts.app,
+            "/admin/analytics/reconciliations?accounts=business",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        ends(&business),
+        [
+            ("business".to_string(), "five_hour".to_string(), now - DAY),
+            (
+                "business".to_string(),
+                "seven_day".to_string(),
+                now - 3 * DAY
+            ),
+        ],
+        "the filter keeps the named accounts' rows"
     );
 }
 

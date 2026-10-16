@@ -1,4 +1,4 @@
-//! The fifteen conditions, read fresh on every call: the account states and the pools from the registry, the refresh
+//! The sixteen conditions, read fresh on every call: the account states and the pools from the registry, the refresh
 //! runs from the store, the parked records, the ledger's degraded state, the unweighted models its landing saw and
 //! the routing conditions its hourly fold wrote from the ledger, the routing state writer's and the listeners' pairs
 //! from the router, the poll's standing from the usage service, and the exhaustions and drift refusals from the
@@ -54,11 +54,12 @@ const RELEASE_VERSION_MAX_BYTES: usize = 32;
 /// back), a listener serving a pair whose replacement did not load (the next start would refuse the files as they
 /// stand), an account that serves nothing until the operator acts, an account's credential about to lapse, the
 /// router's own certificate about to lapse, priced records the ledger file keeps until the next start or a replay
-/// lands them, windows that read stale, and a model whose window share is an estimate while nothing is broken. The
-/// four routing conditions stop no traffic and rank under every kind that does, worst first among themselves: an
-/// account that reached its wall, a move whose destination was spent within the hour, a pool whose rounds found no
-/// destination with runway, and an account slowed past twice its pool's stretch threshold in the day, a slow-down that
-/// worked for long.
+/// lands them, windows that read stale, a model whose window share is an estimate while nothing is broken, and an
+/// account whose meter charged its windows off the cost model's figures. That last one names a pricing that is off, as
+/// the estimate does, and ranks above the four routing conditions, whose causes it can explain. Those four stop no
+/// traffic and rank under every kind that does, worst first among themselves: an account that reached its wall, a move
+/// whose destination was spent within the hour, a pool whose rounds found no destination with runway, and an account
+/// slowed past twice its pool's stretch threshold in the day, a slow-down that worked for long.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     PoolExhausted,
@@ -72,6 +73,7 @@ pub enum Kind {
     LedgerRecordParked,
     PollBackoff,
     ModelUnweighted,
+    MeterDrift,
     WallReached,
     DestinationSpent,
     ShedNoRunway,
@@ -92,6 +94,7 @@ impl Kind {
             Kind::LedgerRecordParked => "ledger_record_parked",
             Kind::PollBackoff => "poll_backoff",
             Kind::ModelUnweighted => "model_unweighted",
+            Kind::MeterDrift => "meter_drift",
             Kind::WallReached => "wall_reached",
             Kind::DestinationSpent => "destination_spent",
             Kind::ShedNoRunway => "shed_no_runway",
@@ -399,15 +402,15 @@ pub(crate) fn refresh_runs(
         .collect()
 }
 
-/// Every condition the router can tell about now: a series for every subject the kind applies to, holding or clear,
-/// so a cleared condition reads 0 on the scrape rather than vanishing. The metrics listener and the admin route read
-/// this one function, so a scrape and the dashboard never disagree. The caller reads the registry's `accounts` and
-/// their `refresh_runs`, and the parked rows, before it takes the reader's state, and a read that fails fails the
-/// whole answer, since a series answered without its evidence could clear a real alarm. `parked` and `routing` are
-/// `None` where no ledger is built, and neither `ledger_record_parked` nor the four routing conditions (`wall_reached`,
-/// `destination_spent`, `shed_no_runway` and `slowed_long`) then have a series. `pairs` is `None` where no listener is
-/// built, and neither certificate kind then has a series. `unweighted` is the ledger's map, empty where no ledger is
-/// built.
+/// Every condition the router can tell about now: a series for every subject the kind applies to, holding or clear, so
+/// a cleared condition reads 0 on the scrape rather than vanishing. The metrics listener and the admin route read this
+/// one function, so a scrape and the dashboard never disagree. The caller reads the registry's `accounts` and their
+/// `refresh_runs`, and the parked rows, before it takes the reader's state, and a read that fails fails the whole
+/// answer, since a series answered without its evidence could clear a real alarm. `parked` and `routing` are `None`
+/// where no ledger is built, and neither `ledger_record_parked`, `meter_drift` nor the four routing conditions
+/// (`wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long`) then have a series. `pairs` is `None`
+/// where no listener is built, and neither certificate kind then has a series. `unweighted` is the ledger's map, empty
+/// where no ledger is built.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn conditions(
     state: &mut ReaderState,
@@ -683,11 +686,11 @@ pub(crate) fn conditions(
     Ok(out)
 }
 
-/// The four conditions the ledger's hourly fold wrote: one per pool for `shed_no_runway` and one per OAuth account
-/// for `wall_reached`, `destination_spent` and `slowed_long`, each holding where a row names its subject, with the
-/// row's `since` and its detail. A row whose pool the snapshot holds gains `setting_values`, that pool's value of each
-/// setting the row's `setting` names, since the ledger reads no registry. A subject the registry no longer holds keeps
-/// its row's condition, labeled by its id and opening nothing, until the fold's trailing day lets the row go.
+/// The five conditions the ledger's hourly fold wrote: one per pool for `shed_no_runway` and one per OAuth account for
+/// `meter_drift`, `wall_reached`, `destination_spent` and `slowed_long`, each holding where a row names its subject,
+/// with the row's `since` and its detail. A row whose pool the snapshot holds gains `setting_values`, that pool's value
+/// of each setting the row's `setting` names, since the ledger reads no registry. A subject the registry no longer
+/// holds keeps its row's condition, labeled by its id and opening nothing, until the fold no longer writes the row.
 fn routing_conditions(
     snapshot: &RegistrySnapshot,
     accounts: &[AccountRow],
@@ -765,7 +768,8 @@ fn routing_conditions(
         .map(|a| (a.id.clone(), a.label.clone(), true))
         .collect();
     for r in rows.iter().filter(|r| {
-        r.kind == Kind::WallReached.as_str()
+        r.kind == Kind::MeterDrift.as_str()
+            || r.kind == Kind::WallReached.as_str()
             || r.kind == Kind::DestinationSpent.as_str()
             || r.kind == Kind::SlowedLong.as_str()
     }) {
@@ -786,6 +790,10 @@ fn routing_conditions(
             .collect();
         pools.sort();
         for (kind, cleared) in [
+            (
+                Kind::MeterDrift,
+                json!({ "effective": null, "source": null, "windows": [] }),
+            ),
             (
                 Kind::WallReached,
                 json!({

@@ -1,0 +1,21 @@
+{
+  "route": "GET /admin/analytics/reconciliations",
+  "body": {
+    "reconciliations": [
+      {
+        "account_id": "business",
+        "window": "five_hour",
+        "window_end": 1791713800000,
+        "first_reading_at": 1791699400000,
+        "last_reading_at": 1791712000000,
+        "observed_rise": 0.7,
+        "predicted_share": 0.5,
+        "ratio": 1.4,
+        "requests": 3,
+        "estimated": 0,
+        "computed_at": 1791717400000
+      }
+    ],
+    "request_retention_days": 90
+  }
+}

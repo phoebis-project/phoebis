@@ -475,8 +475,11 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         // never reads that one.
         // Migration 34 drops the rollup's eight dollar columns and keys it by band and tier, so the table goes back to
         // the version-33 shape before the drops below, rebuilt since a primary-key column cannot be dropped in place.
-        // Migration 35 creates the conditions' table, so it leaves before the replay creates it again.
-        let mut sql = format!("DROP TABLE routing_conditions; {VERSION_33_ROLLUPS} ");
+        // Migrations 35 and 39 create the conditions' and the reconciliations' tables, so both leave before the replay
+        // creates them again, the second before migration 20 creates a table of its name.
+        let mut sql = format!(
+            "DROP TABLE routing_conditions; DROP TABLE window_reconciliations; {VERSION_33_ROLLUPS} "
+        );
         sql.push_str("ALTER TABLE attempts DROP COLUMN written_at; ALTER TABLE requests DROP COLUMN diagnostics_source; ALTER TABLE requests DROP COLUMN stream_end_at; ALTER TABLE rollups_hourly DROP COLUMN probes_held; ALTER TABLE requests DROP COLUMN key_generation; ALTER TABLE rollups_hourly DROP COLUMN probes_skipped; DROP TABLE kept_warm_marks; ALTER TABLE bodies DROP COLUMN request_len_seen; ALTER TABLE bodies DROP COLUMN response_len_seen; ALTER TABLE account_rollups_hourly DROP COLUMN rewrite_tokens; ALTER TABLE account_rollups_hourly DROP COLUMN migrations_json; ");
         for column in [
             "cleared_input_tokens",
@@ -558,7 +561,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 36);
+    assert_eq!(db.schema_version().await.unwrap(), 39);
     let (_, attempts) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         attempts.len(),

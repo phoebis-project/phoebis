@@ -683,6 +683,40 @@ fn two_reasons_keep_their_own_fit_counts_in_the_moves_by_reason_and_fit() {
     );
 }
 
+/// One reconciled window as the ledger's hourly fold writes it, its readings three hours and one hour before its end.
+#[allow(clippy::too_many_arguments)]
+fn reconciled(
+    db: &LedgerDb,
+    account: &str,
+    window: &str,
+    window_end: i64,
+    rise: f64,
+    predicted: f64,
+    ratio: f64,
+    requests: i64,
+) {
+    db.write(|c| {
+        c.execute(
+            "INSERT INTO window_reconciliations (account_id, window, window_end, first_reading_at, \
+             last_reading_at, observed_rise, predicted_share, ratio, requests, estimated, computed_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?3)",
+            rusqlite::params![
+                account,
+                window,
+                window_end,
+                window_end - 3 * 3_600_000,
+                window_end - 3_600_000,
+                rise,
+                predicted,
+                ratio,
+                requests
+            ],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+}
+
 #[test]
 fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day_passes() {
     const MINUTE: i64 = 60_000;
@@ -747,10 +781,16 @@ fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day
     ] {
         db.insert_event(&row).unwrap();
     }
+    // `g`'s newest 5-hour window charged twice the table. `h`'s older 5-hour window drifted, and its newest read
+    // inside the band, which clears it.
+    reconciled(&db, "g", "five_hour", t + HOUR, 0.5, 0.25, 2.0, 3);
+    reconciled(&db, "h", "five_hour", t - 4 * HOUR, 0.5, 0.25, 2.0, 3);
+    reconciled(&db, "h", "five_hour", t + HOUR, 0.3, 0.3, 1.0, 2);
+    let tables = phoebis_ledger::test_tables::subscription_costs();
     let fold = |now: i64| {
         db.write(|c| {
             let tx = c.transaction()?;
-            phoebis_ledger::fold_routing_conditions(&tx, now)?;
+            phoebis_ledger::fold_routing_conditions(&tx, &tables, now)?;
             tx.commit()?;
             Ok(())
         })
@@ -777,6 +817,7 @@ fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day
             .collect::<Vec<_>>(),
         [
             ("destination_spent", "account", "b", None, t + HOUR, 1, now),
+            ("meter_drift", "account", "g", None, t + HOUR, 1, now),
             ("shed_no_runway", "pool", "p", Some("p"), t, 1, now),
             ("wall_reached", "account", "a", None, t + 2 * HOUR, 1, now),
             (
@@ -816,6 +857,19 @@ fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day
         "walls": 1,
         "windows": ["five_hour"],
     });
+    // The test tables' first entry is in force before its date, as the list's earliest.
+    let drift = serde_json::json!({
+        "effective": "2026-01-01",
+        "source": "test",
+        "windows": [{
+            "observed_rise": 0.5,
+            "predicted_share": 0.25,
+            "ratio": 2.0,
+            "requests": 3,
+            "window": "five_hour",
+            "window_end": t + HOUR,
+        }],
+    });
     assert_eq!(
         rows.iter().map(|r| r.detail.clone()).collect::<Vec<_>>(),
         [
@@ -825,6 +879,7 @@ fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day
                 "setting": ceiling,
                 "windows": ["five_hour"],
             }),
+            drift.clone(),
             serde_json::json!({ "accounts": ["a"], "rounds": 1, "setting": ceiling }),
             serde_json::json!({
                 "projection_error": 1.0 - 0.97,
@@ -842,9 +897,13 @@ fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day
     fold(now + 25 * HOUR);
     assert_eq!(
         db.read_blocking(phoebis_ledger::routing_conditions)
-            .unwrap(),
-        Vec::new(),
-        "a day later the trailing 24 hours hold none of the events, so every condition clears"
+            .unwrap()
+            .iter()
+            .map(|r| (r.kind.as_str(), r.subject_id.as_str(), r.since, &r.detail))
+            .collect::<Vec<_>>(),
+        [("meter_drift", "g", t + HOUR, &drift)],
+        "a day later the trailing 24 hours hold none of the events, so every condition they fed clears, while the \
+         drift reads the reconciled windows"
     );
 }
 
@@ -883,9 +942,12 @@ fn a_weekly_wall_reads_no_projection_error_from_a_round_on_the_five_hour_window(
     ] {
         db.insert_event(&row).unwrap();
     }
+    // `a`'s week charged half the table, under the band's floor.
+    reconciled(&db, "a", "seven_day", t + HOUR, 0.1, 0.2, 0.5, 6);
+    let tables = phoebis_ledger::test_tables::subscription_costs();
     db.write(|c| {
         let tx = c.transaction()?;
-        phoebis_ledger::fold_routing_conditions(&tx, t + 2 * HOUR)?;
+        phoebis_ledger::fold_routing_conditions(&tx, &tables, t + 2 * HOUR)?;
         tx.commit()?;
         Ok(())
     })
@@ -901,6 +963,32 @@ fn a_weekly_wall_reads_no_projection_error_from_a_round_on_the_five_hour_window(
         wall.detail["projection_error"],
         serde_json::Value::Null,
         "a projection is read against its own window's wall alone: {wall:?}"
+    );
+    let drift = rows
+        .iter()
+        .find(|r| r.kind == "meter_drift" && r.subject_id == "a")
+        .unwrap_or_else(|| panic!("no drift on a: {rows:?}"));
+    assert_eq!(
+        (
+            drift.subject_kind.as_str(),
+            drift.since,
+            drift.count,
+            &drift.detail["windows"]
+        ),
+        (
+            "account",
+            t + HOUR,
+            1,
+            &serde_json::json!([{
+                "observed_rise": 0.1,
+                "predicted_share": 0.2,
+                "ratio": 0.5,
+                "requests": 6,
+                "window": "seven_day",
+                "window_end": t + HOUR,
+            }])
+        ),
+        "a week that charged under the band's floor drifts as one over its ceiling does: {drift:?}"
     );
 }
 
@@ -996,9 +1084,10 @@ fn slowed_long_at(
     for row in rows {
         db.insert_event(row).unwrap();
     }
+    let tables = phoebis_ledger::test_tables::subscription_costs();
     db.write(|c| {
         let tx = c.transaction()?;
-        phoebis_ledger::fold_routing_conditions(&tx, now)?;
+        phoebis_ledger::fold_routing_conditions(&tx, &tables, now)?;
         tx.commit()?;
         Ok(())
     })

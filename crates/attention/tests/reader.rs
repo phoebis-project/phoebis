@@ -1,4 +1,4 @@
-//! The fifteen conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear,
+//! The sixteen conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear,
 //! the router's own components among them, a deleted subject's series gone unless a parked record still names it, a
 //! refresh run read back by a second reader, a listener's pair read on the read's clock, an unweighted model the
 //! ledger's landing saw, and the gauge the metrics listener scrapes from the same read.
@@ -55,6 +55,7 @@ async fn every_subject_a_kind_applies_to_has_a_series_at_zero_while_nothing_hold
             ("destination_spent", "business".to_string(), false),
             ("funding_required", "direct".to_string(), false),
             ("ledger_record_parked", "main".to_string(), false),
+            ("meter_drift", "business".to_string(), false),
             ("poll_backoff", "business".to_string(), false),
             ("pool_exhausted", "main".to_string(), false),
             ("reauth_required", "business".to_string(), false),
@@ -67,7 +68,8 @@ async fn every_subject_a_kind_applies_to_has_a_series_at_zero_while_nothing_hold
             ("writer_degraded", "routing".to_string(), false),
         ],
         "every account carries its re-auth state, an API key its funding, and an OAuth account its refresh run, \
-         its spent destinations, its walls and its slowed spans and, before any poll status exists, its backoff, \
+         its spent destinations, its walls, its slowed spans and its meter drift and, before any poll status exists, \
+         its backoff, \
          while every pool carries its parked records and its rounds without runway, and each writer its state"
     );
 }
@@ -91,6 +93,7 @@ async fn each_loaded_pair_has_a_series_of_both_certificate_kinds_at_zero_while_n
             ("destination_spent", "business".to_string(), false),
             ("funding_required", "direct".to_string(), false),
             ("ledger_record_parked", "main".to_string(), false),
+            ("meter_drift", "business".to_string(), false),
             ("poll_backoff", "business".to_string(), false),
             ("pool_exhausted", "main".to_string(), false),
             ("reauth_required", "business".to_string(), false),
@@ -1180,10 +1183,11 @@ async fn fold_at(rig: &Rig, at: i64) {
     })
     .await;
     rig.at(at);
+    let tables = tables_of(COSTS);
     rig.db
         .write(|c| {
             let tx = c.transaction()?;
-            phoebis_ledger::fold_routing_conditions(&tx, at)?;
+            phoebis_ledger::fold_routing_conditions(&tx, &tables, at)?;
             tx.commit()?;
             Ok(())
         })
@@ -1551,6 +1555,99 @@ async fn an_account_slowed_past_twice_its_pools_threshold_in_the_day_holds_the_c
             })
         ),
         "the condition clears once the trailing day holds no span, with no start row to read a bar from"
+    );
+}
+
+/// One reconciled 5-hour window of `business` as the ledger's hourly fold writes it, through the ledger's file.
+fn reconciled(rig: &Rig, window_end: i64, rise: f64, predicted: f64, ratio: f64) {
+    ledger_sql(
+        rig,
+        &format!(
+            "INSERT INTO window_reconciliations (account_id, window, window_end, first_reading_at, \
+             last_reading_at, observed_rise, predicted_share, ratio, requests, estimated, computed_at) \
+             VALUES ('business', 'five_hour', {window_end}, {}, {}, {rise}, {predicted}, {ratio}, 4, 0, {NOW});",
+            window_end - 3 * HOUR,
+            window_end - HOUR,
+        ),
+    );
+}
+
+#[tokio::test]
+async fn meter_drift_holds_on_an_off_window_and_clears_when_the_newest_reads_inside() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    reconciled(&rig, NOW - 2 * HOUR, 0.3, 0.15, 2.0);
+    fold_at(&rig, NOW).await;
+    let conditions = read(&attention, NOW);
+    let held = find(&conditions, Kind::MeterDrift, "business").unwrap();
+    assert_eq!(
+        (
+            held.holds,
+            held.since,
+            &held.subject,
+            &held.pools,
+            &held.link,
+            &held.detail
+        ),
+        (
+            true,
+            Some(NOW - 2 * HOUR),
+            &account_subject("business"),
+            &vec!["main".to_string()],
+            &Some(Link {
+                page: "accounts",
+                id: "business".into()
+            }),
+            &json!({
+                "effective": "2026-01-01",
+                "source": "test",
+                "windows": [{
+                    "observed_rise": 0.3,
+                    "predicted_share": 0.15,
+                    "ratio": 2.0,
+                    "requests": 4,
+                    "window": "five_hour",
+                    "window_end": NOW - 2 * HOUR,
+                }],
+            })
+        ),
+        "the window's newest row charged twice the table, so the condition dates from its end and names the cost \
+         model in force"
+    );
+    let (status, text) = scrape(&rig, &attention).await;
+    assert_eq!(status, 200);
+    assert!(
+        text.contains(r#"phoebis_attention{kind="meter_drift",subject="business"} 1"#),
+        "{text}"
+    );
+    let cleared = json!({ "effective": null, "source": null, "windows": [] });
+    reconciled(&rig, NOW - HOUR, 0.3, 0.3, 1.0);
+    fold_at(&rig, NOW + MINUTE).await;
+    let inside = find(
+        &read(&attention, NOW + MINUTE),
+        Kind::MeterDrift,
+        "business",
+    )
+    .cloned()
+    .unwrap();
+    assert_eq!(
+        (inside.holds, inside.since, &inside.detail),
+        (false, None, &cleared),
+        "a newer row inside the band clears the window"
+    );
+    reconciled(&rig, NOW - 30 * MINUTE, 0.04, 0.04 / 3.0, 3.0);
+    fold_at(&rig, NOW + 2 * MINUTE).await;
+    let small = find(
+        &read(&attention, NOW + 2 * MINUTE),
+        Kind::MeterDrift,
+        "business",
+    )
+    .cloned()
+    .unwrap();
+    assert_eq!(
+        (small.holds, small.since, &small.detail),
+        (false, None, &cleared),
+        "a rise under five percent is a few quanta of the meter and counts nothing, so the row before it stands"
     );
 }
 
@@ -1957,12 +2054,15 @@ async fn a_failed_reload_holds_certificate_reload_failed_until_a_reload_succeeds
 fn the_certificate_kinds_rank_among_the_others() {
     let mut kinds = vec![
         Kind::PollBackoff,
+        Kind::WallReached,
         Kind::CertificateExpiring,
         Kind::ReauthRequired,
+        Kind::MeterDrift,
         Kind::LedgerRecordParked,
         Kind::CertificateReloadFailed,
         Kind::PoolExhausted,
         Kind::RefreshFailed,
+        Kind::ModelUnweighted,
         Kind::WriterDegraded,
         Kind::FundingRequired,
         Kind::ClientDrift,
@@ -1981,6 +2081,9 @@ fn the_certificate_kinds_rank_among_the_others() {
             "certificate_expiring",
             "ledger_record_parked",
             "poll_backoff",
+            "model_unweighted",
+            "meter_drift",
+            "wall_reached",
         ]
     );
 }
@@ -2163,6 +2266,7 @@ async fn a_held_unweighted_model_has_its_series_and_ranks_after_every_degraded_s
             ("destination_spent", "business".to_string(), false),
             ("funding_required", "direct".to_string(), false),
             ("ledger_record_parked", "main".to_string(), false),
+            ("meter_drift", "business".to_string(), false),
             ("model_unweighted", "claude-opus-5".to_string(), true),
             ("poll_backoff", "business".to_string(), false),
             ("pool_exhausted", "main".to_string(), true),

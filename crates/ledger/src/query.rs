@@ -3546,36 +3546,36 @@ pub struct BurnPoint {
 
 /// The columns `burn_series` and `session_burn_series` price into a `BurnPoint`: a rollup row and a session
 /// attempt carry the same five token counts and the keys their price reads under different names.
-struct UsageRow<'a> {
-    canonical_model: &'a str,
+pub(crate) struct UsageRow<'a> {
+    pub(crate) canonical_model: &'a str,
     /// The row's `client` label, whose entrypoint names the regime the row prices under: a rollup row's key word, a
     /// session attempt's request's, `UNATTRIBUTED` where the request carries none.
-    client: &'a str,
-    input_tokens: u64,
-    cache_read_tokens: u64,
-    cache_write_5m_tokens: u64,
-    cache_write_1h_tokens: u64,
-    output_tokens: u64,
+    pub(crate) client: &'a str,
+    pub(crate) input_tokens: u64,
+    pub(crate) cache_read_tokens: u64,
+    pub(crate) cache_write_5m_tokens: u64,
+    pub(crate) cache_write_1h_tokens: u64,
+    pub(crate) output_tokens: u64,
     /// Milliseconds, the instant the band is read at: the row's own hour for a rollup row, which folds by the
     /// request's hour and keeps no completion, and the completion for an attempt, where the meter charges it. Per
     /// row, since a bucket spanning a band edge cannot say which side a charge fell on.
-    at: i64,
+    pub(crate) at: i64,
     /// Milliseconds, the instant that names the revisions the row prices at: the row's own hour for a rollup row and
     /// the request's `received_at` for a session attempt.
-    received_at: i64,
+    pub(crate) received_at: i64,
     /// Who paid for the row: a rollup row's key word, an attempt's three facts. Never the rollup's speed, which
     /// also files a request that asked for fast mode and was served without it.
-    funding: Funding,
+    pub(crate) funding: Funding,
     /// The cells the row's dollars price at: a rollup row's key words, an attempt's reported speed and its own
     /// prompt's band.
-    speed: Speed,
-    band: Band,
+    pub(crate) speed: Speed,
+    pub(crate) band: Band,
     /// A rollup row's own word, or a session attempt's request's `kind`. A burn filter that asks for probes reads
     /// probe rows, which price a model the revision lacks at its dearest listed cells.
-    kind: &'a str,
+    pub(crate) kind: &'a str,
     /// The account tier the row recorded at its landing, `None` for `UNATTRIBUTED` and a session attempt without
     /// one: the tier its shares read.
-    tier: Option<&'a str>,
+    pub(crate) tier: Option<&'a str>,
 }
 
 /// One row's figure added to a window of a burn point: `None` latches the window, whichever row came first, so a
@@ -3609,7 +3609,7 @@ fn latch_zero(value: &mut Option<f64>, unpriced: bool) {
 /// plan row reads 0 there and only an idle bucket reads `None`. A bucket holding a row the table cannot price answers
 /// `None` on that window, whichever row came first, and a row with no token has nothing to price and leaves every
 /// window as the other rows set it.
-fn price_usage(
+pub(crate) fn price_usage(
     point: &mut BurnPoint,
     prices: &PriceRevisions,
     tables: &PlanTables,
@@ -4009,9 +4009,9 @@ pub fn moves_by_reason_and_fit(
 }
 
 /// One routing condition the hourly fold wrote: the kind, its subject, the oldest qualifying event's time (for
-/// `slowed_long` the own start of the oldest span counted), the count and the kind's detail. `pool_id` is the pool the
-/// condition's events name, which an account's `slowed_long` carries as the pool of its newest span, and null for an
-/// account's condition whose events name none.
+/// `slowed_long` the own start of the oldest span counted, for `meter_drift` the `window_end` of the oldest off
+/// window), the count and the kind's detail. `pool_id` is the pool the condition's events name, which an account's
+/// `slowed_long` carries as the pool of its newest span, and null for an account's condition whose events name none.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RoutingCondition {
     pub kind: String,
@@ -4024,7 +4024,8 @@ pub struct RoutingCondition {
     pub computed_at: i64,
 }
 
-/// Every row of `routing_conditions`, by kind and subject: what the last fold found over its trailing day.
+/// Every row of `routing_conditions`, by kind and subject: what the last fold found over its trailing day and in the
+/// newest reconciled windows.
 pub fn routing_conditions(conn: &Connection) -> Result<Vec<RoutingCondition>, LedgerError> {
     let mut stmt = conn.prepare(
         "SELECT kind, subject_kind, subject_id, pool_id, since, count, detail_json, computed_at \

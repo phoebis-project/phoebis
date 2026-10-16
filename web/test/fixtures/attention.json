@@ -66,6 +66,36 @@
         }
       },
       {
+        "kind": "meter_drift",
+        "subject": {
+          "type": "account",
+          "id": "business",
+          "label": "Business"
+        },
+        "link": {
+          "page": "accounts",
+          "id": "business"
+        },
+        "pools": [
+          "main"
+        ],
+        "since": 1791713800000,
+        "detail": {
+          "effective": "2026-10-05",
+          "source": "shipped",
+          "windows": [
+            {
+              "observed_rise": 0.7,
+              "predicted_share": 0.5,
+              "ratio": 1.4,
+              "requests": 3,
+              "window": "five_hour",
+              "window_end": 1791713800000
+            }
+          ]
+        }
+      },
+      {
         "kind": "wall_reached",
         "subject": {
           "type": "account",

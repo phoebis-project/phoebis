@@ -62,8 +62,8 @@ Each operation names its request (path segments, query parameters, or body field
             none of its rows. A probe's cost files under the funding of the probe's own request, while a recipe's \
             settlement, which carries the probes' waste, files under the kind its record carries: `billed` for an API \
             key account, else `fast` for a fast recipe, else `plan`. Absent keeps every row. The two subsets \
-            partition the rows). `GET /admin/analytics/budgets`, `/burn`, `/placements`, and `/rewrites`, elsewhere \
-            under this tag, take their own request shapes."),
+            partition the rows). `GET /admin/analytics/budgets`, `/burn`, `/placements`, `/reconciliations`, and \
+            `/rewrites`, elsewhere under this tag, take their own request shapes."),
         (name = "Attention"),
         (name = "Dashboard"),
         (name = "Keepalive"),
@@ -763,6 +763,7 @@ const FIXTURES: &[(&str, &str, &str)] = &[
     fixture!("analytics_budgets", "200"),
     fixture!("analytics_burn", "200"),
     fixture!("analytics_placements", "200"),
+    fixture!("analytics_reconciliations", "200"),
     fixture!("analytics_rewrites", "200"),
     fixture!("analytics_series", "200"),
     fixture!("analytics_series_accounts", "200"),

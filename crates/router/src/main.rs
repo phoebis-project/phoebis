@@ -153,6 +153,16 @@ fn main() -> anyhow::Result<()> {
             let by_tier = costs.by_tier_count();
             let sized = costs.sized_tier_count();
             let regimes = regime_clause(costs.regimes.keys().map(String::as_str));
+            // `PlanTables::load` replaces the shipped revisions whole, so an instance with a file never sees a shipped
+            // revision and nothing else says so.
+            let shipped = phoebis_ledger::CostRevisions::shipped();
+            let newest = &shipped.latest().effective;
+            let newer = if tables.source == "file" && *newest > tables.revisions.latest().effective
+            {
+                format!(", the built-in model has a newer revision {newest}")
+            } else {
+                String::new()
+            };
             println!(
                 "subscription costs: {}",
                 table_line(
@@ -165,7 +175,7 @@ fn main() -> anyhow::Result<()> {
                         .map(|next| next.effective.as_str()),
                     config.stats.subscription_costs_path.as_deref(),
                     format!(
-                        "{weighted} weighted models, {by_tier} more by model tier, {sized} account tiers{regimes}"
+                        "{weighted} weighted models, {by_tier} more by model tier, {sized} account tiers{regimes}{newer}"
                     )
                 )
             );

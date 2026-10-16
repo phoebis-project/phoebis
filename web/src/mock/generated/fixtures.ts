@@ -3735,6 +3735,27 @@ export const FIXTURES: Record<string, Fixture> = {
       ]
     }
   },
+  "analytics_reconciliations": {
+    "route": "GET /admin/analytics/reconciliations",
+    "body": {
+      "reconciliations": [
+        {
+          "account_id": "business",
+          "window": "five_hour",
+          "window_end": 1791713800000,
+          "first_reading_at": 1791699400000,
+          "last_reading_at": 1791712000000,
+          "observed_rise": 0.7,
+          "predicted_share": 0.5,
+          "ratio": 1.4,
+          "requests": 3,
+          "estimated": 0,
+          "computed_at": 1791717400000
+        }
+      ],
+      "request_retention_days": 90
+    }
+  },
   "analytics_rewrites": {
     "route": "GET /admin/analytics/rewrites?range=24h",
     "body": {
@@ -6564,6 +6585,36 @@ export const FIXTURES: Record<string, Fixture> = {
             "requests": 1,
             "tier": "opus",
             "weight_of": "claude-opus-5-5"
+          }
+        },
+        {
+          "kind": "meter_drift",
+          "subject": {
+            "type": "account",
+            "id": "business",
+            "label": "Business"
+          },
+          "link": {
+            "page": "accounts",
+            "id": "business"
+          },
+          "pools": [
+            "main"
+          ],
+          "since": 1791713800000,
+          "detail": {
+            "effective": "2026-10-05",
+            "source": "shipped",
+            "windows": [
+              {
+                "observed_rise": 0.7,
+                "predicted_share": 0.5,
+                "ratio": 1.4,
+                "requests": 3,
+                "window": "five_hour",
+                "window_end": 1791713800000
+              }
+            ]
           }
         },
         {
@@ -14294,7 +14345,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "ready": true,
       "dead": [],
       "ledger": {
-        "schema_version": 36,
+        "schema_version": 39,
         "written": 19,
         "dropped": 0,
         "write_failures": 0,

@@ -71,6 +71,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .routes(routes!(analytics::budgets))
         .routes(routes!(analytics::burn))
         .routes(routes!(analytics::placements))
+        .routes(routes!(analytics::reconciliations))
         .routes(routes!(analytics::rewrites))
         .routes(routes!(analytics::series))
         .routes(routes!(attention::show))

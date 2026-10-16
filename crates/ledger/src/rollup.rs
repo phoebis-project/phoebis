@@ -15,8 +15,9 @@ use crate::db::LedgerDb;
 #[cfg(test)]
 use crate::histogram::bucket_index;
 use crate::histogram::Histogram;
-use crate::plan::funding_of;
+use crate::plan::{funding_of, PlanTables};
 use crate::pricing::{prompt_tokens, Band, PriceRevisions, Speed};
+use crate::reconcile::{newest_rows, ReconciliationRow};
 use crate::record::{AttemptRecord, EventRecord, KeepaliveDelta, RequestRecord};
 use crate::LedgerError;
 
@@ -1131,7 +1132,7 @@ struct Held {
     detail: serde_json::Value,
 }
 
-/// The four conditions over the trailing 24 hours of events, written whole into `routing_conditions`:
+/// The five routing conditions, written whole into `routing_conditions`. Four read the trailing 24 hours of events:
 /// `shed_no_runway` per pool from its rounds that marked nothing for want of a destination with runway,
 /// `destination_spent` per account from the moves onto it that a spent window of any source followed within the hour,
 /// `wall_reached` per account from its spent windows of any source, a predicted wall among them, and `slowed_long` per
@@ -1139,10 +1140,17 @@ struct Held {
 /// `SLOWED_LONG_STRETCHES` times the `threshold_ms` of the newest counted span's start row, at least
 /// `SLOWED_LONG_FLOOR_MS`. `since` is the oldest qualifying event's time, and for `slowed_long` the own start of the
 /// oldest span counted, which a span open from before the cutoff dates before the day. A wall's `projection_error` is
-/// one less the projection of the newest round on the account's newest wall's window inside that window's length
-/// before the wall, null with none. The ledger reads no registry, so a detail names its settings and the reader adds a
-/// pool's values.
-pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), LedgerError> {
+/// one less the projection of the newest round on the account's newest wall's window inside that window's length before
+/// the wall, null with none. The fifth, `meter_drift`, reads the reconciled windows: per account, the newest row of
+/// each window with a rise of at least `MIN_RISE`, held while any reads outside `RATIO_LOW` to `RATIO_HIGH`, `since`
+/// the oldest off row's `window_end`, its detail naming the off windows and the cost model `tables` holds, since the
+/// fix is that file rather than a pool setting. The ledger reads no registry, so a detail names its settings and the
+/// reader adds a pool's values.
+pub fn fold_routing_conditions(
+    tx: &Transaction<'_>,
+    tables: &PlanTables,
+    now: i64,
+) -> Result<(), LedgerError> {
     struct Row {
         at: i64,
         kind: String,
@@ -1410,6 +1418,39 @@ pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), Led
                     "setting": setting(SLOW_SETTINGS),
                     "slowed_ms": slowed_ms,
                     "spans": spans.len(),
+                }),
+            },
+        );
+    }
+
+    for (account, rows) in newest_rows(tx)? {
+        let off: Vec<&ReconciliationRow> = rows.iter().filter(|row| row.off()).collect();
+        let Some(since) = off.iter().map(|row| row.window_end).min() else {
+            continue;
+        };
+        let windows: Vec<serde_json::Value> = off
+            .iter()
+            .map(|row| {
+                serde_json::json!({
+                    "observed_rise": row.observed_rise,
+                    "predicted_share": row.predicted_share,
+                    "ratio": row.ratio,
+                    "requests": row.requests,
+                    "window": row.window,
+                    "window_end": row.window_end,
+                })
+            })
+            .collect();
+        held.insert(
+            ("meter_drift", "account", account),
+            Held {
+                pool_id: None,
+                since,
+                count: off.len() as u64,
+                detail: serde_json::json!({
+                    "effective": tables.revisions.in_force(now).effective,
+                    "source": tables.source,
+                    "windows": windows,
                 }),
             },
         );
@@ -2020,6 +2061,7 @@ mod tests {
         "requests",
         "rollups_hourly",
         "routing_conditions",
+        "window_reconciliations",
     ];
 
     /// What a migration added since version 1 is the migration's alone: a column it adds that `SCHEMA` already
@@ -2279,7 +2321,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 36);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 39);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
@@ -2343,7 +2385,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 36);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 39);
         let columns: Vec<String> = db
             .read_blocking(|c| {
                 let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -2439,7 +2481,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 36);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 39);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -4021,7 +4063,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 36);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 39);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();

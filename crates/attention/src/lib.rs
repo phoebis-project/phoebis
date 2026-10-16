@@ -51,8 +51,8 @@ pub struct AttentionParts {
     pub clock: Clock,
     /// The ledger's degraded flag, its parked rows, the unweighted models its landing saw and the routing conditions
     /// its fold wrote. `None` where a harness builds no ledger, and then `writer_degraded` for the ledger reads 0 and
-    /// none of `ledger_record_parked`, `model_unweighted`, `wall_reached`, `destination_spent`, `shed_no_runway` and
-    /// `slowed_long` has a series.
+    /// none of `ledger_record_parked`, `model_unweighted`, `meter_drift`, `wall_reached`, `destination_spent`,
+    /// `shed_no_runway` and `slowed_long` has a series.
     pub ledger: Option<Ledger>,
     pub router: RouterHandle,
     pub store: Arc<Store>,

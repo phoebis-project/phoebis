@@ -15,6 +15,7 @@ mod price;
 mod pricing;
 mod query;
 mod quota;
+mod reconcile;
 mod record;
 mod refold;
 mod rollup;
@@ -69,6 +70,10 @@ pub use query::{
 pub use quota::{
     lead_over_pace, polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled,
     POLL_INTERVAL, PROFILE_EVERY_POLLS,
+};
+pub use reconcile::{
+    newest_rows, read_reconciliations, reconcile, ReconciliationRow, MIN_RISE, RATIO_HIGH,
+    RATIO_LOW,
 };
 pub use record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,

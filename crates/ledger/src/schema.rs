@@ -303,6 +303,13 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// Version 36: an hourly rollup row counts the slow-down's waits of its requests, the milliseconds summed and the
 /// requests that waited, read off each request's `held` waits under `slow_down`, so the held time reads per bucket by
 /// pool and account without the request rows. No backfill: a row from before reads 0.
+///
+/// Version 39: one row per completed 5-hour, 7-day and Fable window of an account, the rise its readings showed against
+/// the share the router priced for its own plan-funded attempts between those readings, each attempt under its own
+/// regime, and how many of them priced at a model tier's estimate. The hourly fold writes the rows and reads the
+/// newest of each window for the meter's drift, so a cost model whose figures stray from the upstream's readings is
+/// seen. The table starts empty, and the first fold reconciles every completed window whose readings and requests the
+/// ledger still holds.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -951,5 +958,15 @@ CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, acc
         36,
         "ALTER TABLE rollups_hourly ADD COLUMN slow_down_held_ms INTEGER NOT NULL DEFAULT 0; \
          ALTER TABLE rollups_hourly ADD COLUMN slow_down_held INTEGER NOT NULL DEFAULT 0;",
+    ),
+    (
+        39,
+        "CREATE TABLE window_reconciliations (
+  account_id TEXT NOT NULL, window TEXT NOT NULL, window_end INTEGER NOT NULL,
+  first_reading_at INTEGER NOT NULL, last_reading_at INTEGER NOT NULL,
+  observed_rise REAL NOT NULL, predicted_share REAL NOT NULL, ratio REAL NOT NULL,
+  requests INTEGER NOT NULL, estimated INTEGER NOT NULL, computed_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, window, window_end)
+);",
     ),
 ];

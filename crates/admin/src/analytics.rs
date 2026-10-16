@@ -10,9 +10,9 @@ use axum::Json;
 use phoebis_ledger::{
     breakdown_paged, bucket_seconds, burn_groups_paged, held_series, hour_ceil, hour_of,
     hourly_window_samples, lead_over_pace, moves_by_reason_and_fit, names_one_account, parse_range,
-    read_account_rollups, rewrite_series, series_paged, session_burn_series, AccountRollupRow,
-    FundingFilter, HourlyWindowSample, LedgerError, LiveKeys, RollupFilter, SeriesFilter,
-    SharePricing, GROUP_BYS,
+    read_account_rollups, read_reconciliations, rewrite_series, series_paged, session_burn_series,
+    AccountRollupRow, FundingFilter, HourlyWindowSample, LedgerError, LiveKeys, RollupFilter,
+    SeriesFilter, SharePricing, GROUP_BYS,
 };
 use phoebis_routing::{term, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountKind, SubscriptionTerm};
@@ -232,6 +232,16 @@ pub(crate) struct BurnQuery {
     pub accounts: Option<String>,
     /// Newline-separated patterns, each naming a group under `group_by=user_agent` as the Analytics tag describes.
     pub user_agent_groups: Option<String>,
+}
+
+/// `GET /admin/analytics/reconciliations`' query.
+// Declared for the document alone, since the handler reads the request by hand.
+#[allow(dead_code)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct ReconciliationsQuery {
+    /// A comma-separated list. Absent answers every account's windows.
+    pub accounts: Option<String>,
 }
 
 pub(crate) fn ledger_failure(error: phoebis_ledger::LedgerError) -> Response {
@@ -961,6 +971,92 @@ pub(crate) async fn burn(
     .into_response()
 }
 
+/// The reconciled windows of the trailing 30 days, newest first.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Reconciliations {
+    pub reconciliations: Vec<Reconciliation>,
+    /// The days the ledger keeps a request row, 0 for no limit. A window whose first reading is older finds no
+    /// requests to price, so it is never reconciled.
+    pub request_retention_days: u32,
+}
+
+/// One completed window of an account: the rise its readings showed against the share the router priced for its own
+/// plan-funded attempts completed between those readings, each under its own regime.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Reconciliation {
+    pub account_id: String,
+    /// `five_hour`, `seven_day` or `seven_day_fable`.
+    #[schema(example = "five_hour")]
+    pub window: String,
+    /// The reset the window's readings named.
+    pub window_end: i64,
+    pub first_reading_at: i64,
+    pub last_reading_at: i64,
+    /// The last reading's utilization less the first's, as a fraction of the window.
+    pub observed_rise: f64,
+    /// The share of the window the router priced its attempts at.
+    pub predicted_share: f64,
+    /// `observed_rise` over `predicted_share`. A ratio under 0.8 or over 1.25 after a rise of at least 0.05 holds
+    /// `meter_drift` while the row is its window's newest.
+    pub ratio: f64,
+    /// The attempts priced.
+    pub requests: u32,
+    /// The attempts among them priced at a model tier's estimate.
+    pub estimated: u32,
+    pub computed_at: i64,
+}
+
+/// Read the reconciled windows.
+#[utoipa::path(
+    get,
+    path = "/admin/analytics/reconciliations",
+    operation_id = "analytics_reconciliations",
+    tag = "Analytics",
+    params(ReconciliationsQuery),
+    responses(
+        (status = 200, description = "The windows that ended in the trailing 30 days, newest first.", body = Reconciliations),
+        (status = 500, response = LedgerFailure),
+    ),
+)]
+pub(crate) async fn reconciliations(
+    State(state): State<Arc<AdminState>>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let now = (state.clock)();
+    let accounts = list(&q, "accounts");
+    let read = state
+        .ledger
+        .db()
+        .read(move |c| read_reconciliations(c, &accounts, now))
+        .await;
+    let rows = match read {
+        Ok(rows) => rows,
+        Err(e) => return ledger_failure(e),
+    };
+    Json(Reconciliations {
+        reconciliations: rows
+            .into_iter()
+            .map(|r| Reconciliation {
+                account_id: r.account_id,
+                window: r.window,
+                window_end: r.window_end,
+                first_reading_at: r.first_reading_at,
+                last_reading_at: r.last_reading_at,
+                observed_rise: r.observed_rise,
+                predicted_share: r.predicted_share,
+                ratio: r.ratio,
+                requests: r.requests,
+                estimated: r.estimated,
+                computed_at: r.computed_at,
+            })
+            .collect(),
+        request_retention_days: state.ledger.retention_days(),
+    })
+    .into_response()
+}
+
 /// The rewrite tokens per bucket, the moves over the range and the slow-down's held time per bucket.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -1068,7 +1164,9 @@ pub(crate) async fn rewrites(
 
 #[cfg(test)]
 mod tests {
-    use super::{AnalyticsAccounts, Budgets, Burn, Placements, Rewrites, WindowSample};
+    use super::{
+        AnalyticsAccounts, Budgets, Burn, Placements, Reconciliations, Rewrites, WindowSample,
+    };
     use crate::openapi::round_trip::{fixture, round_trips};
     use crate::openapi::{BreakdownRow, SeriesPointView};
 
@@ -1106,6 +1204,7 @@ mod tests {
         round_trips::<Budgets>("analytics_budgets");
         round_trips::<Burn>("analytics_burn");
         round_trips::<Placements>("analytics_placements");
+        round_trips::<Reconciliations>("analytics_reconciliations");
         round_trips::<Rewrites>("analytics_rewrites");
         for stem in ["analytics_series", "analytics_series_accounts"] {
             round_trips::<SeriesTwin>(stem);

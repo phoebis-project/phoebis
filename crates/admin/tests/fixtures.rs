@@ -1115,8 +1115,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // One priced record parked on the harness's pool, so the attention capture carries the parked item beside the
     // exhaustion.
     common::park_unreadable(&parts.db, "main", "business", now);
+    // A 5-hour window of `business` that ended two hours ago and charged 1.4 times the table.
+    let window_end = now - 2 * 3_600_000;
     // One row of each routing condition, as the ledger's hourly fold writes them, so the attention capture carries the
-    // three kinds beside the others.
+    // four kinds beside the others, the drift naming the window above.
     let condition =
         |kind: &str, subject_kind: &str, subject: &str, pool: Option<&str>, since: i64, detail| {
             phoebis_ledger::RoutingCondition {
@@ -1167,9 +1169,48 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 hour_ago + 5 * 60_000,
                 j!({ "accounts": ["business"], "rounds": 1, "setting": ["window_ceiling"] }),
             ),
+            condition(
+                "meter_drift",
+                "account",
+                "business",
+                None,
+                window_end,
+                j!({
+                    "effective": phoebis_ledger::CostRevisions::shipped().in_force(now).effective,
+                    "source": "shipped",
+                    "windows": [{
+                        "observed_rise": 0.7,
+                        "predicted_share": 0.5,
+                        "ratio": 1.4,
+                        "requests": 3,
+                        "window": "five_hour",
+                        "window_end": window_end,
+                    }],
+                }),
+            ),
         ],
     )
     .await;
+    // The window's reconciled row, as the hourly fold writes it, so the reconciliations capture carries a row. It lands
+    // after the ledger's fold at start, which would otherwise read it and write the drift row the seeded one above
+    // collides with.
+    parts
+        .db
+        .write(|c| {
+            c.execute(
+                "INSERT INTO window_reconciliations (account_id, window, window_end, first_reading_at, \
+                 last_reading_at, observed_rise, predicted_share, ratio, requests, estimated, computed_at) \
+                 VALUES ('business', 'five_hour', ?1, ?2, ?3, 0.7, 0.5, 1.4, 3, 0, ?4)",
+                rusqlite::params![
+                    window_end,
+                    window_end - 4 * 3_600_000,
+                    window_end - 30 * 60_000,
+                    now - 3_600_000
+                ],
+            )?;
+            Ok(())
+        })
+        .unwrap();
     // The GET reads no endpoint of its own, so the capture reads a clean poll's snapshot and standing.
     parts.usage.poll("business").await.unwrap();
     // The affinity report above stands for an earlier request, `r-0`, whose decision the ledger never stored, so its
@@ -1227,6 +1268,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         (
             "analytics_placements",
             "/admin/analytics/placements?range=24h",
+        ),
+        (
+            "analytics_reconciliations",
+            "/admin/analytics/reconciliations",
         ),
         ("analytics_rewrites", "/admin/analytics/rewrites?range=24h"),
         (

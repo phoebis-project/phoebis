@@ -369,7 +369,8 @@ revisions:
 /// Counted by hand: two models on the price line (a row priced by prompt length is one model), and on the cost line
 /// four weighted models (Opus 5 left out, Sonnet 5 in through its override, Haiku 4.5 once), one more by model tier
 /// (Opus 5, the one `model_tier` entry neither a weight nor an override prices, in the model tier Opus 5.5 weighs),
-/// three account tiers (Enterprise left out) and no regime, since the file carries no `regimes` map.
+/// three account tiers (Enterprise left out) and no regime, since the file carries no `regimes` map. The file is dated
+/// before the built-in model's newest revision, which the line names after the counts.
 #[test]
 fn files_at_both_paths_count_each_model_a_weight_or_an_override_prices_once_and_each_tier_sized_on_a_window(
 ) {
@@ -397,8 +398,9 @@ fn files_at_both_paths_count_each_model_a_weight_or_an_override_prices_once_and_
     );
     let subscription_costs = format!(
         "subscription costs: {} (file, 1 revision, in force 2026-03-01, 4 weighted models, 1 more by model tier, \
-         3 account tiers, no regime)",
-        costs.display()
+         3 account tiers, no regime, the built-in model has a newer revision {})",
+        costs.display(),
+        phoebis_ledger::CostRevisions::shipped().latest().effective
     );
     assert_eq!(
         lines.get(7..10),
@@ -453,6 +455,60 @@ fn files_whose_one_entry_is_dated_after_now_name_it_in_force_and_no_next_date() 
         Some(&[api_prices.as_str(), subscription_costs.as_str()][..]),
         "{}",
         printed(&out)
+    );
+}
+
+/// An operator file replaces the built-in revisions whole, so the line names the built-in model's newest revision
+/// where it lies after the file's newest: the counted file dated 2026-03-01 reads the clause, and the same file dated
+/// 2099-03-01 reads none. The date is read from the built-in model as the loader reads it, so a new revision edits no
+/// test.
+#[test]
+fn a_cost_model_file_behind_the_built_in_revision_names_the_newer_one() {
+    let newest = phoebis_ledger::CostRevisions::shipped()
+        .latest()
+        .effective
+        .clone();
+    assert!(
+        newest.as_str() > "2026-03-01" && newest.as_str() < "2099-03-01",
+        "the two dates lie on either side of the built-in model's newest, {newest}"
+    );
+    let line = |text: &str, name: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        let costs = dir.path().join("subscription_costs.yaml");
+        std::fs::write(&costs, text).unwrap();
+        let config = config_file(
+            dir.path(),
+            name,
+            &format!("stats:\n  subscription_costs_path: {}\n", costs.display()),
+        );
+        let out = check_config(&mut phoebis(), &config);
+        assert!(out.status.success(), "{}", printed(&out));
+        let line = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .find(|line| line.starts_with("subscription costs: "))
+            .unwrap_or_else(|| panic!("no subscription costs line: {}", printed(&out)))
+            .to_string();
+        (line, costs.display().to_string())
+    };
+    let (behind, path) = line(COUNTED_COSTS, "behind");
+    assert_eq!(
+        behind,
+        format!(
+            "subscription costs: {path} (file, 1 revision, in force 2026-03-01, 4 weighted models, 1 more by model \
+             tier, 3 account tiers, no regime, the built-in model has a newer revision {newest})"
+        ),
+        "a file whose newest revision predates the built-in one hides it"
+    );
+    let ahead_costs = COUNTED_COSTS.replace("effective: 2026-03-01", "effective: 2099-03-01");
+    assert_ne!(ahead_costs, COUNTED_COSTS);
+    let (ahead, path) = line(&ahead_costs, "ahead");
+    assert_eq!(
+        ahead,
+        format!(
+            "subscription costs: {path} (file, 1 revision, in force 2099-03-01, 4 weighted models, 1 more by model \
+             tier, 3 account tiers, no regime)"
+        ),
+        "a file newer than every built-in revision hides none"
     );
 }
 

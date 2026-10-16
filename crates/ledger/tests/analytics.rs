@@ -6386,3 +6386,53 @@ fn a_members_spend_across_a_revision_inside_its_period_prices_each_span_at_its_o
         "a million at each entry's cell: {spent}"
     );
 }
+
+#[test]
+fn the_reconciliations_read_answers_the_named_accounts_newest_first_inside_the_trailing_thirty_days(
+) {
+    let now = WEEKDAY_OFF_PEAK;
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.write(|c| {
+        for (account, window, window_end) in [
+            ("a", "five_hour", now - DAY_MS),
+            ("a", "seven_day", now - 3 * DAY_MS),
+            ("b", "five_hour", now - 2 * DAY_MS),
+            ("c", "seven_day_fable", now - 4 * DAY_MS),
+            ("a", "five_hour", now - 30 * DAY_MS - 1),
+        ] {
+            c.execute(
+                "INSERT INTO window_reconciliations (account_id, window, window_end, first_reading_at, \
+                 last_reading_at, observed_rise, predicted_share, ratio, requests, estimated, computed_at) \
+                 VALUES (?1, ?2, ?3, ?3, ?3, 0.2, 0.2, 1.0, 1, 0, ?3)",
+                rusqlite::params![account, window, window_end],
+            )?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let read = |accounts: &[&str]| {
+        let accounts: Vec<String> = accounts.iter().map(|a| a.to_string()).collect();
+        db.read_blocking(|c| phoebis_ledger::read_reconciliations(c, &accounts, now))
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.account_id, r.window, r.window_end))
+            .collect::<Vec<_>>()
+    };
+    let row = |account: &str, window: &str, window_end: i64| {
+        (account.to_string(), window.to_string(), window_end)
+    };
+    assert_eq!(
+        read(&["a", "c"]),
+        [
+            row("a", "five_hour", now - DAY_MS),
+            row("a", "seven_day", now - 3 * DAY_MS),
+            row("c", "seven_day_fable", now - 4 * DAY_MS),
+        ],
+        "the named accounts' windows, newest first, the one that ended before the trailing 30 days left out"
+    );
+    assert_eq!(
+        read(&[]).len(),
+        4,
+        "an empty filter answers every account's windows of the 30 days"
+    );
+}

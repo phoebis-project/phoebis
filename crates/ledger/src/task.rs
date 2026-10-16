@@ -198,6 +198,8 @@ pub struct Ledger {
     control: mpsc::Sender<Control>,
     /// The writer's clock, which a replay's deadline is read on.
     clock: Clock,
+    /// The days a request row is kept, as the configuration set them at the start.
+    retention_days: u32,
 }
 
 impl Ledger {
@@ -207,6 +209,12 @@ impl Ledger {
 
     pub fn stats(&self) -> Arc<LedgerStats> {
         self.stats.clone()
+    }
+
+    /// The days a request row is kept, 0 for no limit: a window whose first reading is older finds no requests to
+    /// reconcile against.
+    pub fn retention_days(&self) -> u32 {
+        self.retention_days
     }
 
     /// Every model a plan-funded landing priced through its model tier's fallback since the start, by undated model
@@ -384,6 +392,7 @@ pub fn spawn(
         tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
         control,
         clock: clock.clone(),
+        retention_days: config.retention_days,
     };
     let purge_store = store.clone();
     // The writer answers once the batch that carries the start row has left its hands. With no start row the sender
@@ -429,6 +438,8 @@ pub fn spawn(
     let purge_router = router.clone();
     let purge_clock = clock.clone();
     let purge_config = config.clone();
+    let purge_pricing = pricing.clone();
+    let purge_tables = tables.clone();
     let purge = tokio::spawn(async move {
         let mut tick = tokio::time::interval(purge_config.purge_interval);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -438,7 +449,7 @@ pub fn spawn(
         // the fold waits for its commit, at most one purge interval, since a writer held on a full disk must not keep
         // the purge that frees room waiting.
         let _ = tokio::time::timeout(purge_config.purge_interval, start_committed).await;
-        fold_conditions(purging.db(), purge_clock()).await;
+        fold_conditions(purging.db(), &purge_pricing, &purge_tables, purge_clock()).await;
         purging
             .stats
             .condition_folds
@@ -454,7 +465,7 @@ pub fn spawn(
             )
             .await;
             purging.stats.purge_passes.fetch_add(1, Ordering::Relaxed);
-            fold_conditions(purging.db(), purge_clock()).await;
+            fold_conditions(purging.db(), &purge_pricing, &purge_tables, purge_clock()).await;
             purging
                 .stats
                 .condition_folds
@@ -1929,14 +1940,24 @@ fn note_unweighted(
     }
 }
 
-/// One fold of the routing conditions at `now` on the purge task's connection, off the runtime thread. A fold that
-/// fails leaves the last one's rows, which the next tick replaces.
-async fn fold_conditions(db: &Arc<LedgerDb>, now: i64) {
+/// One fold of the routing conditions at `now` on the purge task's connection, off the runtime thread. The windows
+/// completed since the last tick are reconciled first, on the same transaction, so `meter_drift` reads the ratios this
+/// tick wrote and a failed fold writes neither. A fold that fails leaves the last one's rows, which the next tick
+/// replaces.
+async fn fold_conditions(
+    db: &Arc<LedgerDb>,
+    pricing: &Arc<Pricing>,
+    tables: &Arc<PlanTables>,
+    now: i64,
+) {
     let db = db.clone();
+    let prices = pricing.revisions();
+    let tables = tables.clone();
     let folded = tokio::task::spawn_blocking(move || {
         db.purge(|conn| {
             let tx = crate::db::begin_write(conn)?;
-            crate::rollup::fold_routing_conditions(&tx, now)?;
+            crate::reconcile::reconcile(&tx, &prices, &tables, now)?;
+            crate::rollup::fold_routing_conditions(&tx, &tables, now)?;
             tx.commit()?;
             Ok(())
         })
@@ -2004,6 +2025,7 @@ mod tests {
             tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
             control: mpsc::channel::<Control>(1).0,
             clock: Arc::new(|| 0),
+            retention_days: LedgerConfig::default().retention_days,
         };
         (ledger, rx)
     }
