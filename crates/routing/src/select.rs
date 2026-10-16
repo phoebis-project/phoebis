@@ -2212,9 +2212,6 @@ pub(crate) struct Projection {
     pub burn: f64,
     pub horizon: i64,
     pub at_horizon: f64,
-    /// The window's reset as the reading names it, a passed weekly reset rolled forward, `None` for a 5-hour window
-    /// past its reset or a reading that names none.
-    pub reset: Option<i64>,
 }
 
 /// The pins the account's pool keeps: a pin under a key of a pool the account left is retained until it ends and
@@ -2298,7 +2295,6 @@ fn projections_of(
                 burn,
                 horizon,
                 at_horizon: reading.utilization + burn * seconds(horizon - now),
-                reset: reading.reset,
             },
         );
     }
@@ -3237,9 +3233,10 @@ fn move_of<'a>(
     // The shed rule's trigger, tested on every plan window the pool's pins on the account draw, in the windows' order,
     // one round per selection at most: on a pool that slows its pins the 5-hour window's is the stretch over the
     // threshold after the safety wait, every other window's the projection at its horizon over the ceiling after the
-    // projection's wait, a window inside its wait yielding to the next. A wait holds back the round alone, so a
-    // standing mark moves below while a window waits as it does under a fired one. The line names every projection it
-    // read whether or not one fired, with the stamp and the wait of each window inside its wait.
+    // projection's wait, a window inside its wait yielding to the next, as a 5-hour window inside its hold does. A wait
+    // or the hold holds back the round alone, so a standing mark moves below while a window waits or is held as it does
+    // under a fired one. The line names every projection it read whether or not one fired, with the stamp and the wait
+    // of each window inside its wait and the 5-hour window's age and hold inside the hold.
     let source = current.account_id.as_str();
     let tier = snapshot.tier(source).unwrap_or_default();
     let projections = projections_of(state, snapshot, pool, source, tier, now, BurnRead::Achieved);
@@ -3252,29 +3249,27 @@ fn move_of<'a>(
         else {
             continue;
         };
-        let length = if window.starts_with(SEVEN_DAY) {
-            WEEK_MS
-        } else {
-            FIVE_HOUR_MS
-        };
-        // A 5-hour reading past its reset names none until the next sample does, while the window it read ended at
-        // that reset: the passed reset starts the new window, so a stamp from the old one waits again.
-        let start = projection.reset.map(|reset| reset - length).or_else(|| {
-            state
-                .sample(source)
-                .and_then(|sample| sample.reading(window))
-                .and_then(|reading| reading.reset)
-                .filter(|reset| *reset <= now)
-        });
         state.note_projection(
             &pool.id,
             source,
             window,
             projection.at_horizon > ceiling(pool, window),
-            start,
+            state.window_started(source, window, now),
             now,
         );
     }
+    // The hold on the 5-hour round: each pin's burn average still carries the previous window's burst over the reset,
+    // and the projection applies that rate to a horizon of up to five hours, so a round inside the first two averages
+    // of a window would fire on the old window's burst. The age is read from the stored reading at each selection, so
+    // the hold keeps no state, and the stamps above keep running through it.
+    let hold_ms = burn_average_ms(pool).saturating_mul(2);
+    let young = state
+        .window_started(source, FIVE_HOUR, now)
+        // A start at or after `now` is not a reading of a fresh window, so it reads no age and no hold, as a reading
+        // without a reset does.
+        .filter(|start| *start < now)
+        .map(|start| now - start)
+        .filter(|age| *age < hold_ms);
     let over_since = slowed
         .and(state.slow_down_state(&pool.id, source))
         .and_then(|entry| entry.over_since);
@@ -3286,6 +3281,7 @@ fn move_of<'a>(
         &projections,
         slowed,
         over_since,
+        young,
         &windows,
         &|window| state.projection_over_since(&pool.id, source, window),
         dwell_ms,
@@ -3310,6 +3306,10 @@ fn move_of<'a>(
             facts.push(Fact::int(since, waits.over_since).unit("time"));
             facts.push(Fact::int(wait, waits.wait_ms).unit("ms"));
         }
+    }
+    if let Some(age) = young {
+        facts.push(Fact::int("age_five_hour", age).unit("ms"));
+        facts.push(Fact::int("hold_five_hour", hold_ms).unit("ms"));
     }
     facts.push(Fact::number("ceiling", ceiling(pool, FIVE_HOUR)).unit("percent"));
     let stretch_waits = over_since.filter(|since| now - since < SLOW_DOWN_WAIT_MS);
@@ -3362,7 +3362,7 @@ fn move_of<'a>(
         } else {
             facts.push(Fact::text("round", "within_dwell"));
         }
-    } else if waiting.is_empty() && stretch_waits.is_none() {
+    } else if waiting.is_empty() && stretch_waits.is_none() && young.is_none() {
         rule_line(rec, 4, "no", facts, &slow_down_facts);
         return MoveVerdict::Stay;
     }
@@ -3838,21 +3838,26 @@ struct Waiting {
 /// `stamp` names for `min((horizon - over_since) / 4, dwell_ms)`: a quarter of the time from the first reading over to
 /// the horizon read now, at most the dwell, so one large turn's charge, which moves the prediction before the burn
 /// average has absorbed it, does not fire a round on its own. A window inside its wait yields to the next.
+///
+/// A 5-hour window whose age `young` names, under twice the pool's burn average, fires under neither test and yields to
+/// the next window as a waiting one does, since the burn average still carries the previous window's burst over the
+/// reset. Its wait is read first, so the line names the wait beside the age where both hold.
 #[allow(clippy::too_many_arguments)]
 fn trigger_of(
     pool: &PoolRow,
     projections: &BTreeMap<String, Projection>,
     read: Option<&SlowDownRead>,
     over_since: Option<i64>,
+    young: Option<i64>,
     windows: &[&'static str],
     stamp: &dyn Fn(&str) -> Option<i64>,
     dwell_ms: i64,
     now: i64,
 ) -> TriggerRead {
     let mut waiting = Vec::new();
-    let fired = windows.iter().find_map(|window| {
+    let mut test = |window: &'static str| -> Option<Trigger> {
         let limit = ceiling(pool, window);
-        if *window == FIVE_HOUR && slow_down(pool) {
+        if window == FIVE_HOUR && slow_down(pool) {
             let read = read?;
             over_since.filter(|since| now - since >= SLOW_DOWN_WAIT_MS)?;
             let horizon = read.horizon - read.threshold_ms;
@@ -3877,7 +3882,7 @@ fn trigger_of(
             });
         }
         let projection = projections
-            .get(*window)
+            .get(window)
             .filter(|projection| projection.at_horizon > limit)?;
         // The shed rule stamped every window over the ceiling before the test, so a missing stamp starts the wait now.
         let since = stamp(window).unwrap_or(now);
@@ -3904,7 +3909,13 @@ fn trigger_of(
             factor: read.map(|read| read.factor),
             speed: read.map(|read| read.speed),
         })
-    });
+    };
+    // The hold on the 5-hour round sits after the window's test so the line names the wait beside the age where both
+    // hold. A window younger than twice the pool's burn average fires under neither source and yields to the next
+    // window, since the burn average still carries the previous window's burst over the reset.
+    let fired = windows
+        .iter()
+        .find_map(|window| test(window).filter(|_| !(*window == FIVE_HOUR && young.is_some())));
     TriggerRead { fired, waiting }
 }
 

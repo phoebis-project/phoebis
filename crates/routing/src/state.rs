@@ -1738,6 +1738,30 @@ impl RoutingState {
         }
     }
 
+    /// When the account's `window` started, read from the stored reading and never from `predicted`, which drops a
+    /// passed 5-hour reset: the reset less the window's length while the reset lies after `now`, the passed reset
+    /// itself for a 5-hour reading at or before `now` (the window opened there with the account's next request, and the
+    /// next reading names the new reset), a passed weekly reset rolled forward by whole weeks as `predicted` rolls it,
+    /// less `WEEK_MS`, and `None` for a reading that names no reset or for no reading at all. The stamp's start and the
+    /// hold on the 5-hour round read it. The start lies at or after `now` for a reset more than a window's length
+    /// ahead, which the hold reads as no age.
+    pub fn window_started(&self, account_id: &str, window: &str, now: i64) -> Option<i64> {
+        let reset = self.samples.get(account_id)?.reading(window)?.reset?;
+        Some(if window.starts_with(SEVEN_DAY) {
+            // A weekly reset names every later one, so a passed reset rolls forward as `predicted` rolls it.
+            let next = if reset > now {
+                reset
+            } else {
+                reset + ((now - reset) / WEEK_MS + 1) * WEEK_MS
+            };
+            next - WEEK_MS
+        } else if reset > now {
+            reset - crate::select::FIVE_HOUR_MS
+        } else {
+            reset
+        })
+    }
+
     /// The account's sample with each plan window replaced by its prediction at `now`, the api_key and fast-lane
     /// buckets as read; what `RouterHandle::samples` answers.
     pub fn predicted_sample(&self, account_id: &str, now: i64) -> Option<UtilizationSample> {
@@ -4056,6 +4080,86 @@ mod tests {
         assert!(
             close(fresh[FIVE_HOUR], 0.01),
             "no time passed, no decay: {fresh:?}"
+        );
+    }
+
+    /// The start `window_started` reads at `now` from one reading of `window` naming `reset`, observed an hour before
+    /// the earlier of the reset and `now`.
+    fn started(window: &str, reset: Option<i64>, now: i64) -> Option<i64> {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        let observed_at = reset.map_or(now, |reset| reset.min(now)) - HOUR_MS;
+        read(&mut state, window, 0.5, reset, observed_at);
+        state.window_started("a", window, now)
+    }
+
+    #[test]
+    fn window_started_reads_the_reset_less_the_length_ahead_the_passed_reset_behind_and_none_without_one(
+    ) {
+        let now = 10 * WEEK_MS;
+        let day = 24 * HOUR_MS;
+        let ahead = now + HOUR_MS;
+        assert_eq!(
+            started(FIVE_HOUR, Some(ahead), now),
+            Some(ahead - crate::select::FIVE_HOUR_MS),
+            "a 5-hour reset ahead"
+        );
+        let behind = now - 3_000;
+        assert_eq!(
+            started(FIVE_HOUR, Some(behind), now),
+            Some(behind),
+            "a passed 5-hour reset starts the window the next request opened"
+        );
+        assert_eq!(
+            started(FIVE_HOUR, Some(now), now),
+            Some(now),
+            "a 5-hour reset at now has passed"
+        );
+        let next_week = now + day;
+        assert_eq!(
+            started(SEVEN_DAY, Some(next_week), now),
+            Some(next_week - WEEK_MS),
+            "a weekly reset ahead"
+        );
+        // A reset nine days behind rolls forward two whole weeks to the first reset after now, and the window started a
+        // week before that one.
+        let last_week = now - 9 * day;
+        assert_eq!(
+            started(SEVEN_DAY, Some(last_week), now),
+            Some(last_week + 2 * WEEK_MS - WEEK_MS),
+            "a passed weekly reset"
+        );
+        assert_eq!(
+            started(FIVE_HOUR, None, now),
+            None,
+            "a reading naming no reset"
+        );
+        assert_eq!(
+            RoutingState::from_load(RoutingLoad::default()).window_started("a", FIVE_HOUR, now),
+            None,
+            "an account with no reading"
+        );
+    }
+
+    #[test]
+    fn window_started_reads_a_start_ahead_of_now_for_a_reset_more_than_a_windows_length_ahead() {
+        let now = 10 * WEEK_MS;
+        let day = 24 * HOUR_MS;
+        let reset = now + 9 * HOUR_MS;
+        assert_eq!(
+            started(FIVE_HOUR, Some(reset), now),
+            Some(reset - crate::select::FIVE_HOUR_MS),
+            "four hours after now"
+        );
+        let reset = now + 9 * day;
+        assert_eq!(
+            started(SEVEN_DAY, Some(reset), now),
+            Some(reset - WEEK_MS),
+            "two days after now"
+        );
+        assert_eq!(
+            started(FIVE_HOUR, Some(now + crate::select::FIVE_HOUR_MS), now),
+            Some(now),
+            "a reset exactly a window's length ahead"
         );
     }
 

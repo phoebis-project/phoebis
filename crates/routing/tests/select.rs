@@ -22983,3 +22983,434 @@ fn a_standing_mark_moves_at_its_pins_next_request_while_a_projection_window_wait
     );
     assert!(d.shed_round.is_none());
 }
+
+/// The round pins on `a`, `a` read once from `sample`, whose 5-hour reset places the window's age, and `b` at 0.1 an
+/// hour from its reset, fitting every pin.
+fn three_pins_with_a(sample: UtilizationSample) -> RoutingState {
+    let mut st = rounding(vec![
+        burning("s1", "a", 16.0, false, T),
+        burning("s2", "a", 14.0, false, T),
+        burning("s3", "a", 12.0, false, T),
+    ]);
+    st.record_sample("a", sample);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st
+}
+
+/// `projection_pool` over `a` and `b` with the burn average the case sets, so the hold on the 5-hour round is twice the
+/// case's own figure.
+fn held_pool(average_seconds: u64) -> RegistrySnapshot {
+    tiered(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 1)],
+        shedding: Shedding {
+            burn_average_seconds: average_seconds,
+            ..Shedding::default()
+        },
+        ..Pool::default()
+    })
+}
+
+#[test]
+fn a_five_hour_round_inside_the_hold_of_two_burn_averages_is_held_back() {
+    let s = held_pool(1200);
+    let dwell = shed_dwell_ms(s.pool("p").expect("the pool"));
+    assert!(dwell < 40 * MINUTE - 4 * SECOND);
+    // a's window opened 3 s before T and its pins take it over the ceiling. The first selection stamps the window, so
+    // its wait runs too.
+    let mut st = three_pins_with_a(refreshing(
+        0.80,
+        T + 5 * HOUR - 3 * SECOND,
+        T + 72 * HOUR,
+        T,
+    ));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(shed.verdict, "no");
+    assert!(
+        no_fact(shed, "trigger") && no_fact(shed, "round"),
+        "{:?}",
+        shed.facts
+    );
+    assert_eq!(
+        fact_unit(shed, "over_since_five_hour"),
+        (&FactValue::Int(T), Some("time"))
+    );
+    assert_eq!(
+        fact_unit(shed, "wait_five_hour"),
+        (&FactValue::Int(dwell), Some("ms"))
+    );
+    assert_eq!(
+        fact_unit(shed, "age_five_hour"),
+        (&FactValue::Int(3_000), Some("ms"))
+    );
+    assert_eq!(
+        fact_unit(shed, "hold_five_hour"),
+        (&FactValue::Int(2_400_000), Some("ms"))
+    );
+    assert!(d.shed_round.is_none());
+    // At the last held instant the wait has run, and the hold alone holds the round back.
+    let at = T + 40 * MINUTE - 4 * SECOND;
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", at), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(shed.verdict, "no", "{:?}", shed.facts);
+    assert!(
+        no_fact(shed, "trigger") && no_fact(shed, "round"),
+        "the hold holds the round back: {:?}",
+        shed.facts
+    );
+    assert_eq!(
+        fact_unit(shed, "age_five_hour"),
+        (&FactValue::Int(2_399_000), Some("ms"))
+    );
+    assert_eq!(
+        fact_unit(shed, "hold_five_hour"),
+        (&FactValue::Int(2_400_000), Some("ms"))
+    );
+    assert!(
+        no_fact(shed, "over_since_five_hour") && no_fact(shed, "wait_five_hour"),
+        "the wait has run: {:?}",
+        shed.facts
+    );
+    assert!(d.shed_round.is_none());
+    assert_eq!(st.last_shed("p", "a"), None);
+}
+
+#[test]
+fn a_five_hour_round_fires_once_the_window_is_as_old_as_the_hold() {
+    let s = held_pool(1200);
+    fn fires(d: &Decided) {
+        let shed = line(&d.record, "move:shed");
+        assert_eq!(shed.verdict, "fired", "{:?}", shed.facts);
+        assert_eq!(fact(shed, "trigger"), &FactValue::Text("five_hour".into()));
+        assert_eq!(fact(shed, "round"), &FactValue::Text("ran".into()));
+        assert!(
+            no_fact(shed, "age_five_hour") && no_fact(shed, "hold_five_hour"),
+            "{:?}",
+            shed.facts
+        );
+    }
+    // a's window opened 3 s before T, so 40 minutes less those 3 s later it is as old as the hold of 40 minutes.
+    let mut st = three_pins_with_a(refreshing(
+        0.80,
+        T + 5 * HOUR - 3 * SECOND,
+        T + 72 * HOUR,
+        T,
+    ));
+    decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let d = decide(
+        &mut st,
+        &s,
+        &auxiliary(&s, "s1", T + 40 * MINUTE - 3 * SECOND),
+        &mut rng(),
+    );
+    fires(&d);
+    // A window 61 minutes old at T, over the ceiling past its wait.
+    let mut st = three_pins_with_a(refreshing(
+        0.80,
+        T + 5 * HOUR - 61 * MINUTE,
+        T + 72 * HOUR,
+        T,
+    ));
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    fires(&d);
+}
+
+#[test]
+fn a_weekly_window_fires_in_the_place_of_a_five_hour_window_inside_the_hold() {
+    let s = held_pool(1200);
+    let dwell = shed_dwell_ms(s.pool("p").expect("the pool"));
+    // Both of a's windows read over the ceiling past their waits: the 5-hour window since it opened 20 minutes before
+    // T, inside the hold, and the week since a dwell ago.
+    let mut st = three_pins_with_a(
+        refreshing(0.80, T + 5 * HOUR - 20 * MINUTE, T + 72 * HOUR, T).with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 0.93,
+                reset: Some(T + 72 * HOUR),
+                observed_at: T,
+                source: WindowSource::Poll,
+            },
+        ),
+    );
+    st.stamp_projection_over("p", "a", FIVE_HOUR, T - 20 * MINUTE);
+    st.stamp_projection_over("p", "a", SEVEN_DAY, T - dwell);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s3", T), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(fact(shed, "trigger"), &FactValue::Text("seven_day".into()));
+    assert_eq!(fact(shed, "round"), &FactValue::Text("ran".into()));
+    assert_eq!(
+        fact_unit(shed, "age_five_hour"),
+        (&FactValue::Int(20 * MINUTE), Some("ms"))
+    );
+    assert_eq!(
+        fact_unit(shed, "hold_five_hour"),
+        (&FactValue::Int(40 * MINUTE), Some("ms"))
+    );
+    assert!(
+        no_fact(shed, "wait_five_hour"),
+        "the 5-hour window is past its wait: {:?}",
+        shed.facts
+    );
+    assert_eq!(d.shed_round.expect("the round ran").facts.window, SEVEN_DAY);
+}
+
+#[test]
+fn a_standing_mark_moves_at_its_pins_next_request_inside_the_hold() {
+    let s = held_pool(1200);
+    // s1 stands marked on the 5-hour window from a round whose dwell has passed. a's window opened 20 minutes before T
+    // and reads over the ceiling since then, past its wait and inside the hold, and b, an hour from its reset, fits
+    // s1's burn.
+    let mut st = marked_s1(10.0, 5.0, 0.80);
+    st.record_sample(
+        "a",
+        refreshing(0.80, T + 5 * HOUR - 20 * MINUTE, T + 72 * HOUR, T),
+    );
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    st.stamp_projection_over("p", "a", FIVE_HOUR, T - 20 * MINUTE);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert!(
+        no_fact(shed, "trigger") && no_fact(shed, "round") && no_fact(shed, "wait_five_hour"),
+        "the hold holds back the round alone: {:?}",
+        shed.facts
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "the standing mark moves inside the hold"
+    );
+    assert_eq!(shed.verdict, "fired");
+    assert_eq!(fact(shed, "marked"), &FactValue::Bool(true));
+    assert_eq!(
+        fact_unit(shed, "age_five_hour"),
+        (&FactValue::Int(20 * MINUTE), Some("ms"))
+    );
+    assert!(d.shed_round.is_none());
+}
+
+#[test]
+fn the_stretch_fires_no_round_inside_the_hold_and_fires_at_the_first_selection_past_it() {
+    let s = tiered(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 1)],
+        shedding: Shedding {
+            burn_average_seconds: 1200,
+            ..Shedding::default()
+        },
+        slow_down: SlowDown {
+            slow_down: true,
+            slow_down_stretch_seconds: 1800,
+            slow_down_hold_seconds: 120,
+        },
+        ..Pool::default()
+    });
+    // a's window opened 10 minutes before T. The stretch reads over the threshold from the first read on, so its safety
+    // wait runs out two minutes later, inside the hold.
+    let start = T - 10 * MINUTE;
+    let mut st = three_pins_with_a(refreshing(0.80, start + 5 * HOUR, T + 72 * HOUR, T));
+    let mut decisions = Vec::new();
+    for (at, over_ms) in [(T, Some(0)), (T + 2 * MINUTE, None)] {
+        decisions.push((
+            at,
+            over_ms,
+            decide(&mut st, &s, &auxiliary(&s, "s1", at), &mut rng()),
+        ));
+    }
+    for (at, _, d) in &decisions {
+        let shed = line(&d.record, "move:shed");
+        assert!(
+            no_fact(shed, "trigger") && no_fact(shed, "round"),
+            "the hold holds the round back at {at}: {:?}",
+            shed.facts
+        );
+        assert!(d.shed_round.is_none());
+    }
+    for (at, over_ms, d) in &decisions {
+        let shed = line(&d.record, "move:shed");
+        assert_eq!(shed.verdict, "no", "at {at}");
+        assert_eq!(
+            fact_unit(shed, "age_five_hour"),
+            (&FactValue::Int(at - start), Some("ms"))
+        );
+        assert_eq!(
+            shed.facts
+                .iter()
+                .find(|f| f.key == "over_ms")
+                .map(|f| &f.value),
+            over_ms.map(FactValue::Int).as_ref(),
+            "at {at}"
+        );
+    }
+    // A window 41 minutes old at T is past the hold, so the stretch fires once its safety wait has run.
+    let mut st = three_pins_with_a(refreshing(
+        0.80,
+        T + 5 * HOUR - 41 * MINUTE,
+        T + 72 * HOUR,
+        T,
+    ));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(shed.verdict, "no");
+    assert_eq!(fact(shed, "over_ms"), &FactValue::Int(0));
+    assert!(no_fact(shed, "age_five_hour"), "{:?}", shed.facts);
+    let d = decide(
+        &mut st,
+        &s,
+        &auxiliary(&s, "s1", T + 2 * MINUTE),
+        &mut rng(),
+    );
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(shed.verdict, "fired", "{:?}", shed.facts);
+    assert_eq!(fact(shed, "fired_by"), &FactValue::Text("slow_down".into()));
+    assert_eq!(fact(shed, "round"), &FactValue::Text("ran".into()));
+}
+
+#[test]
+fn a_reading_past_its_reset_with_no_new_one_counts_the_hold_from_the_passed_reset() {
+    let s = held_pool(1200);
+    let dwell = shed_dwell_ms(s.pool("p").expect("the pool"));
+    // a's reading named a reset 3 s before T and no reading names the next one yet: the prediction names no reset, so
+    // the horizon lies five hours out, while the window opened at the passed reset.
+    let mut st = three_pins_with_a(refreshing(0.80, T - 3 * SECOND, T + 72 * HOUR, T - 500));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(shed.verdict, "no");
+    assert!(
+        no_fact(shed, "trigger") && no_fact(shed, "round"),
+        "{:?}",
+        shed.facts
+    );
+    assert_eq!(
+        fact(shed, "horizon_five_hour"),
+        &FactValue::Int(T + 5 * HOUR)
+    );
+    assert_eq!(fact(shed, "over_since_five_hour"), &FactValue::Int(T));
+    assert_eq!(fact(shed, "wait_five_hour"), &FactValue::Int(dwell));
+    assert_eq!(
+        fact_unit(shed, "age_five_hour"),
+        (&FactValue::Int(3_000), Some("ms"))
+    );
+    assert_eq!(
+        fact_unit(shed, "hold_five_hour"),
+        (&FactValue::Int(2_400_000), Some("ms"))
+    );
+    assert!(d.shed_round.is_none());
+    // The next reading names the reset five hours after the passed one, so the window's start does not move and the
+    // stamp stands.
+    st.record_sample(
+        "a",
+        refreshing(0.80, T + 5 * HOUR - 3 * SECOND, T + 72 * HOUR, T + MINUTE),
+    );
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T + MINUTE), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert!(
+        no_fact(shed, "trigger") && no_fact(shed, "round"),
+        "{:?}",
+        shed.facts
+    );
+    assert_eq!(
+        fact_unit(shed, "age_five_hour"),
+        (&FactValue::Int(63_000), Some("ms"))
+    );
+    assert!(d.shed_round.is_none());
+    assert_eq!(st.projection_over_since("p", "a", FIVE_HOUR), Some(T));
+}
+
+#[test]
+fn the_hold_follows_the_pools_burn_average() {
+    // An average of 15 minutes holds the round for half an hour.
+    let s = held_pool(900);
+    let mut st = three_pins_with_a(refreshing(
+        0.80,
+        T + 5 * HOUR - 31 * MINUTE,
+        T + 72 * HOUR,
+        T,
+    ));
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(fact(shed, "trigger"), &FactValue::Text("five_hour".into()));
+    assert_eq!(fact(shed, "round"), &FactValue::Text("ran".into()));
+    assert!(no_fact(shed, "age_five_hour"), "{:?}", shed.facts);
+    let mut st = three_pins_with_a(refreshing(
+        0.80,
+        T + 5 * HOUR - 29 * MINUTE,
+        T + 72 * HOUR,
+        T,
+    ));
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert!(
+        no_fact(shed, "trigger") && no_fact(shed, "round"),
+        "a window 29 minutes old is held: {:?}",
+        shed.facts
+    );
+    assert_eq!(
+        fact_unit(shed, "age_five_hour"),
+        (&FactValue::Int(1_740_000), Some("ms"))
+    );
+    assert_eq!(
+        fact_unit(shed, "hold_five_hour"),
+        (&FactValue::Int(1_800_000), Some("ms"))
+    );
+    assert!(d.shed_round.is_none());
+}
+
+#[test]
+fn a_window_whose_wait_ran_inside_the_hold_fires_at_the_first_selection_past_the_hold() {
+    let s = held_pool(1200);
+    // a's window opened 39 minutes before T and reads over the ceiling since then, so its wait ran inside the hold.
+    let mut st = three_pins_with_a(refreshing(
+        0.80,
+        T + 5 * HOUR - 39 * MINUTE,
+        T + 72 * HOUR,
+        T,
+    ));
+    st.stamp_projection_over("p", "a", FIVE_HOUR, T - 39 * MINUTE);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert!(
+        no_fact(shed, "trigger") && no_fact(shed, "round"),
+        "the hold holds the round back: {:?}",
+        shed.facts
+    );
+    assert_eq!(shed.verdict, "no");
+    assert_eq!(
+        fact_unit(shed, "age_five_hour"),
+        (&FactValue::Int(39 * MINUTE), Some("ms"))
+    );
+    assert_eq!(
+        fact_unit(shed, "hold_five_hour"),
+        (&FactValue::Int(40 * MINUTE), Some("ms"))
+    );
+    assert!(no_fact(shed, "wait_five_hour"), "{:?}", shed.facts);
+    // A minute later the window is as old as the hold, and the round fires at once: the hold restarts no wait.
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T + MINUTE), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(shed.verdict, "fired", "{:?}", shed.facts);
+    assert_eq!(fact(shed, "trigger"), &FactValue::Text("five_hour".into()));
+    assert_eq!(fact(shed, "round"), &FactValue::Text("ran".into()));
+}
+
+#[test]
+fn a_reading_whose_reset_lies_more_than_a_window_ahead_reads_no_hold() {
+    let s = held_pool(1200);
+    let dwell = shed_dwell_ms(s.pool("p").expect("the pool"));
+    // A reset nine hours out puts the window's start four hours after T, which is no reading of a fresh window.
+    let mut st = three_pins_with_a(refreshing(0.80, T + 9 * HOUR, T + 72 * HOUR, T));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(shed.verdict, "no");
+    assert_eq!(fact(shed, "over_since_five_hour"), &FactValue::Int(T));
+    assert_eq!(fact(shed, "wait_five_hour"), &FactValue::Int(dwell));
+    assert!(
+        no_fact(shed, "age_five_hour") && no_fact(shed, "hold_five_hour"),
+        "{:?}",
+        shed.facts
+    );
+}
