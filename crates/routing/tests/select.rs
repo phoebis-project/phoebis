@@ -18665,6 +18665,45 @@ fn a_pin_with_no_entrypoint_prices_at_the_base_regime() {
 }
 
 #[test]
+fn a_fresh_sessions_prior_prices_under_the_requests_regime_and_not_the_warm_pins() {
+    let s = tiered(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    // Three warm pins of `a` under the regime `desk`, each burning 20 input tokens a second: 0.20 of the 5-hour window
+    // an hour at the base and 0.10 under `desk`, so the median reads one pin's figure under the regime it is priced at.
+    let booked_prior = |entrypoint: Option<&str>| {
+        let mut st = rounding(
+            ["s1", "s2", "s3"]
+                .into_iter()
+                .map(|session| PinRow {
+                    entrypoint: "desk".into(),
+                    ..burning(session, "a", 20.0, true, T)
+                })
+                .collect(),
+        );
+        st.record_sample("a", sample(0.5, 0.1, T));
+        let req = SelectRequest {
+            body_tokens: 1_000,
+            entrypoint: entrypoint.map(String::from),
+            ..placing(&s, "r-1", "s9", T)
+        };
+        select(&mut st, &s, &req, &mut rng());
+        st.reservation("r-1").expect("the placement books").burn[FIVE_HOUR] * 3_600.0
+    };
+    let base = booked_prior(None);
+    assert!(
+        close(base, 0.20),
+        "a request without an entrypoint prices its prior at the base, whatever the warm pins carry: {base}"
+    );
+    let interactive = booked_prior(Some("desk"));
+    assert!(
+        close(interactive, 0.10),
+        "a request under the regime prices its prior under it: {interactive}"
+    );
+}
+
+#[test]
 fn a_round_counts_a_siblings_headroom_once_across_its_marks() {
     // b holds room for one pin's rewrite and burn to its horizon, c for one more.
     let with_c = projection_pool(vec![("a", 0), ("b", 1), ("c", 2)]);

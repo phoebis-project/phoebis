@@ -676,9 +676,9 @@ pub(crate) fn pin_figures(
     let model = request.canonical_model.as_str();
     let average_ms = burn_average_ms(pool);
     let write = rewrite_write(request, figures.pin());
-    let priced = |window: &str, p: &PinRow| {
+    let priced = |window: &str, entrypoint: Option<&str>, p: &PinRow| {
         share
-            .rate(window, entrypoint_of(p), tier, &p.model, &p.burn, now)
+            .rate(window, entrypoint, tier, &p.model, &p.burn, now)
             .map(|rate| burn_decayed(rate, p.burn_at, now, average_ms))
     };
     let mut rewrite = BTreeMap::new();
@@ -701,27 +701,28 @@ pub(crate) fn pin_figures(
         // A slowed pin's burn is what its source's holds let through, so a destination reads the demand: the burn over
         // the source's speed, which the pin runs at there until the destination's own factor says otherwise.
         let rate = match figures {
-            Figures::Pin(pin) => {
-                priced(window, pin).map(|rate| rate / state.slow_down_speed(pool, &pin.account_id))
-            }
+            Figures::Pin(pin) => priced(window, entrypoint_of(pin), pin)
+                .map(|rate| rate / state.slow_down_speed(pool, &pin.account_id)),
             // A failover's landing knows the session's own burn, while the destination's cache is cold, so the
             // rewrite above stays the body's.
             Figures::Fresh(_) if request.failed_over.is_some() => {
                 request.failed_over.as_ref().and_then(|failed_over| {
-                    priced(window, &failed_over.row).map(|rate| {
+                    priced(window, entrypoint_of(&failed_over.row), &failed_over.row).map(|rate| {
                         rate / state.slow_down_speed(pool, &failed_over.from_account_id)
                     })
                 })
             }
             // A pin burns the windows its own model draws, so a Sonnet pin adds nothing to a Fable week's prior. The
             // unpriced ones are left out of the median so one of them does not zero it. A fresh session starts
-            // unslowed, so each warm pin counts at its unslowed rate, over its own account's speed.
+            // unslowed, so each warm pin counts at its unslowed rate, over its own account's speed. The meter charges
+            // the new session under the request's regime, which its pin carries and its booking names, so every warm
+            // pin's tokens price under that regime and not their own.
             Figures::Fresh(warm_pins) => median(
                 warm_pins
                     .iter()
                     .filter(|p| plan_windows(&p.model).any(|w| w == window))
                     .filter_map(|p| {
-                        priced(window, p)
+                        priced(window, request.entrypoint.as_deref(), p)
                             .map(|rate| rate / state.slow_down_speed(pool, &p.account_id))
                     })
                     .collect(),
