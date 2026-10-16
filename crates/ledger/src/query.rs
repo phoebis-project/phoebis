@@ -2853,7 +2853,7 @@ pub struct Totals {
 
 /// The price columns and the hour a SQL sum groups by beside its own column, and the sums it answers in the order
 /// `price_group` reads them, spelled once for both totals. The client is a price column, since its entrypoint names
-/// the regime a group's shares price under.
+/// the regime a group's equivalent prices under.
 const PRICE_GROUP_COLUMNS: &str = "canonical_model, speed, band, funding, client, hour";
 const PRICE_GROUP_SUMS: &str = "SUM(requests), SUM(input_tokens), SUM(cache_read_tokens), \
      SUM(cache_write_5m_tokens), SUM(cache_write_1h_tokens), SUM(output_tokens)";

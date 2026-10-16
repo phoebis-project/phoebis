@@ -5,8 +5,9 @@
 
 use phoebis_ledger::test_tables::{self, JANUARY_2026, SUBSCRIPTION_COSTS};
 use phoebis_ledger::{
-    effective_instant, funding_of, price_equivalent, price_shares, CostRevisions, Funding,
-    LedgerError, PlanTables, SubscriptionCosts, BILLED_FUNDING, FAST_FUNDING,
+    effective_instant, entrypoint_of_client, funding_of, price_equivalent, price_shares,
+    CostRevisions, Funding, LedgerError, PlanTables, SubscriptionCosts, BILLED_FUNDING,
+    FAST_FUNDING,
 };
 use phoebis_routing::{PinUsage, Rates, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::PinBurn;
@@ -1219,6 +1220,16 @@ fn regime_of_names_the_regime_for_a_listed_token_and_none_otherwise() {
     assert_eq!(tables.regime_of(None), None);
 }
 
+// The relay labels a Claude Code request `claude-code/<entrypoint>`, so that token names the row's regime, and every
+// other label, the rollups' `-` among them, prices at the base.
+#[test]
+fn entrypoint_of_client_reads_the_claude_code_token_and_none_for_any_other_label() {
+    assert_eq!(entrypoint_of_client("claude-code/desk"), Some("desk"));
+    for label in ["other", "sdk/py", "-"] {
+        assert_eq!(entrypoint_of_client(label), None, "{label}");
+    }
+}
+
 #[test]
 fn a_file_without_the_regimes_map_prices_every_entrypoint_at_the_base() {
     let text = test_tables::first_entry_costs_text();
@@ -1379,7 +1390,7 @@ fn a_malformed_regime_is_refused_by_key() {
 // The shipped interactive regime lists `claude-desktop-3p`, so the alphabet carries the digits, and the client spells
 // some entrypoints with an underscore (`local_agent`), so it carries that too.
 #[test]
-fn a_token_with_a_digit_is_a_bare_token() {
+fn a_token_with_a_digit_or_an_underscore_is_a_bare_token() {
     for member in ["pane-3p", "pane_2"] {
         let text = SUBSCRIPTION_COSTS.replacen("desk:", "desk-2:", 1).replacen(
             "[desk, pane]",
