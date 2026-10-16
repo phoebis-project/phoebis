@@ -2,8 +2,9 @@ import type {
   Account, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordOutcome,
   RecordPin, RecordRequest, RecordSettings, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
-import { aheadOf, endOf } from '@/lib/quota';
+import { endOf } from '@/lib/quota';
 import { ACCOUNTS } from './accounts';
+import { leadOf } from './lead';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
 import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, clock, failsOver, oauthWindows, requestById } from './requests';
 import { createRng } from './rng';
@@ -437,7 +438,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
       for (const w of readingsOf(spec, a.id)) {
         const name = WINDOW_OF[w.id];
         if (name === undefined || w.utilization === null) continue;
-        const ahead = aheadOf({ resetsAt: w.resetsAt, utilization: w.utilization }, WINDOW_MS[name], at, end);
+        const ahead = leadOf({ resetsAt: w.resetsAt, utilization: w.utilization }, WINDOW_MS[name], at, end);
         const horizon = horizonOf(name, w.resetsAt, end, at);
         windows[name] = {
           ageMs, ahead: name === 'seven_day_fable' ? null : Math.round(ahead * 1000) / 1000,

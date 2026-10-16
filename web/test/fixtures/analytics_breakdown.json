@@ -340,7 +340,8 @@
         },
         "kept_warm": {
           "requests": 0,
-          "tokens": 0
+          "tokens_5m": 0,
+          "tokens_1h": 0
         },
         "probes": {
           "failed": 0,
@@ -373,6 +374,9 @@
           }
         },
         "probe_equivalent": {},
+        "saving_usd": 0.0,
+        "saving_shares": null,
+        "saving_equivalent": {},
         "billed_usd": 0.0107,
         "billed": {
           "cache_read": 0.0002,
@@ -721,7 +725,8 @@
         },
         "kept_warm": {
           "requests": 0,
-          "tokens": 0
+          "tokens_5m": 0,
+          "tokens_1h": 0
         },
         "probes": {
           "failed": 0,
@@ -754,6 +759,9 @@
           }
         },
         "probe_equivalent": {},
+        "saving_usd": 0.0,
+        "saving_shares": null,
+        "saving_equivalent": {},
         "billed_usd": 0.0,
         "billed": {
           "cache_read": 0.0,

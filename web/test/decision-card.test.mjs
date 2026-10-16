@@ -11,7 +11,7 @@ globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
 const { act, api, createElement: h, createRoot, DecisionCard, Descriptions, MemoryRouter } = await import('./dist/ui.js');
-const { formatFact, MockApi, stationModel } = await import('./dist/api.js');
+const { formatFact, MockApi, rankCandidates, stationModel } = await import('./dist/api.js');
 
 const roots = [];
 const getDecision = api.getDecision;
@@ -113,11 +113,13 @@ test("the Projection cell's hover names the demand where it differs from the bur
   act(() => root.render(h(MemoryRouter, null, h(DecisionCard, { now: Date.parse(row.at), onWiden() {}, row }))));
   await settled();
   const column = [...container.querySelectorAll('.decision-card__candidates thead th')].findIndex((th) => th.textContent === 'Projection');
-  const cells = [...container.querySelectorAll('.decision-card__candidates tbody tr')].map((tr) => tr.children[column]);
-  assert.equal(cells.length, 2);
-  assert.equal(cells[0].getAttribute('title'), 'demand 12.86 %/h over burn 6.43 %/h at 0.5x');
-  assert.equal(cells[1].getAttribute('title'), null, 'a demand equal to the burn names nothing');
-  assert.ok(cells[0].textContent.startsWith('5h 91%'), `the cell keeps its projection: ${cells[0].textContent}`);
+  // The table ranks its rows, so each cell is read off its account's row rather than the record's order.
+  const rows = [...container.querySelectorAll('.decision-card__candidates tbody tr')];
+  const cell = (accountId) => rows.find((tr) => tr.querySelector('td a')?.textContent === accountId)?.children[column];
+  assert.equal(rows.length, 2);
+  assert.equal(cell('studio')?.getAttribute('title'), 'demand 12.86 %/h over burn 6.43 %/h at 0.5x');
+  assert.equal(cell('primary')?.getAttribute('title'), null, 'a demand equal to the burn names nothing');
+  assert.ok(cell('studio')?.textContent.startsWith('5h 91%'), `the cell keeps its projection: ${cell('studio')?.textContent}`);
 });
 
 test("each Pace cell is described by its hover through the host the card sits under", async () => {
@@ -137,16 +139,58 @@ test("each Pace cell is described by its hover through the host the card sits un
   // The routing log's card holds its open panel under a description host, which the case stands in for.
   act(() => root.render(h(MemoryRouter, null, h(Descriptions, null, h(DecisionCard, { now: Date.parse(row.at), onWiden() {}, row })))));
   await settled();
-  // Pace sits third from the end of a row whatever a key's merged windows span.
-  const cells = [...container.querySelectorAll('.decision-card__candidates tbody tr')].map((tr) => tr.children[tr.children.length - 3]);
-  assert.equal(cells.length, 2);
+  // Pace sits third from the end of a row whatever a key's merged windows span. The table ranks its rows, so each is
+  // read by its account.
+  const rows = [...container.querySelectorAll('.decision-card__candidates tbody tr')];
+  assert.equal(rows.length, 2);
+  const paceOf = (id) => {
+    const tr = rows.find((r) => r.querySelector('td a')?.textContent === id);
+    return tr ? tr.children[tr.children.length - 3] : null;
+  };
+  const cells = ['primary', 'overflow'].map(paceOf);
+  assert.ok(cells.every(Boolean), 'a row per member');
   for (const td of cells) {
     const title = td.getAttribute('title');
     assert.ok(title, `a Pace cell carries its hover: ${td.textContent}`);
-    assert.equal(document.getElementById(td.getAttribute('aria-describedby') ?? '')?.textContent, title, `the cell's description is its hover: ${td.textContent}`);
+    const entry = document.getElementById(td.getAttribute('aria-describedby') ?? '');
+    assert.equal(entry?.textContent, title, `the cell's description is its hover: ${td.textContent}`);
+    assert.equal(entry?.closest('[data-descriptions]')?.hasAttribute('hidden'), true, `the cell's description sits in a hidden host: ${td.textContent}`);
   }
   // The spare rate's hover names the share left, the hours, the burn already on the account and the rate.
-  assert.equal(cells[0].getAttribute('title'), '100% of the 7-day window left over 168 h with no reset read, less 0.10 %/h of burn: 0.50 %/h. Inside its tier, the highest spare rate wins.');
+  assert.equal(paceOf('primary').getAttribute('title'), '100% of the 7-day window left over 168 h with no reset read, less 0.10 %/h of burn: 0.50 %/h. Inside its tier, the highest spare rate wins.');
+});
+
+test("a long hover's description id is its host's base and eight hex digits, and two cells with one hover share it", async () => {
+  const mock = new MockApi();
+  const page = await mock.listRoutingLog({ from: new Date(0).toISOString(), limit: 200, to: new Date(Date.now() + 86_400_000).toISOString() });
+  const row = page.rows.find((r) => r.type === 'decision' && r.kind === 'placed');
+  assert.ok(row, 'the mock holds a placement');
+  const placed = await mock.getDecision(row.requestId, row.seq);
+  const [first] = placed.candidates;
+  const pace = { burn: 0.001, deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168 - 0.001, window: 'seven_day' };
+  const key = { ...first, accountId: 'overflow', kind: 'api_key', pace: { ...pace, burn: null, hours: null, score: 1, window: null }, planTier: null, windows: {} };
+  api.getDecision = async () => ({ ...placed, candidates: [{ ...first, accountId: 'primary', kind: 'oauth', pace }, { ...first, accountId: 'secondary', kind: 'oauth', pace }, key] });
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  act(() => root.render(h(MemoryRouter, null, h(Descriptions, null, h(DecisionCard, { now: Date.parse(row.at), onWiden() {}, row })))));
+  await settled();
+  const rows = [...container.querySelectorAll('.decision-card__candidates tbody tr')];
+  assert.equal(rows.length, 3);
+  // The table ranks its rows, so each Pace cell is read by its account.
+  const paceOf = (id) => {
+    const tr = rows.find((r) => r.querySelector('td a')?.textContent === id);
+    const td = tr?.children[tr.children.length - 3];
+    return { id: td?.getAttribute('aria-describedby') ?? '', title: td?.getAttribute('title') ?? '' };
+  };
+  const [one, two, other] = ['primary', 'secondary', 'overflow'].map(paceOf);
+  assert.ok(one.title.length > 100 && one.title === two.title && other.title !== one.title, `two cells share a long hover and the key's differs: ${one.title}`);
+  const parts = [one, other].map(({ id }) => /^(.+)-([0-9a-f]{8})$/.exec(id));
+  assert.ok(parts.every(Boolean), `each id is a base and eight hex digits: ${one.id}, ${other.id}`);
+  assert.deepEqual([parts[0][1] === parts[1][1], parts[0][2] === parts[1][2]], [true, false], "the host's base leads both ids, and the texts hash apart");
+  assert.equal(two.id, one.id, 'two cells with one hover point at one id');
+  assert.equal(container.querySelectorAll(`[data-descriptions] [id="${one.id}"]`).length, 1, 'the host draws the shared hover once');
 });
 
 test("the card draws the strip in the walk's place", async () => {
@@ -436,7 +480,56 @@ test("the verdict cell names a destination's fit in its tone, and a fitting one 
     const badge = tr.querySelector('.decision-card__why .badge');
     return badge ? [badge.textContent, [...badge.classList].find((c) => c.startsWith('badge--'))] : null;
   };
-  assert.deepEqual([...container.querySelectorAll('.decision-card__candidates tbody tr')].map(why), [null, ['rewrite only', 'badge--warning'], ['least bad', 'badge--warning'], ['ending', 'badge--neutral']]);
+  const rows = [...container.querySelectorAll('.decision-card__candidates tbody tr')];
+  // The chosen member, then the destinations by id, then the eligible one.
+  assert.deepEqual(rows.map((tr) => tr.querySelector('td a')?.textContent), ['primary', 'ending', 'secondary', 'nightly']);
+  assert.deepEqual(rows.map(why), [null, ['ending', 'badge--neutral'], ['least bad', 'badge--warning'], ['rewrite only', 'badge--warning']]);
+});
+
+test('the candidates rank the placed member first, then the ranked ones by rank, the eligible ones, and the ones dropped last', () => {
+  // A record's tier carries the priority as its second member. It runs the other way here, so the order shows which
+  // of the two the sort reads.
+  const member = (accountId, verdict, priority, rank = null) => ({ accountId, priority, rank, tier: [0, 9 - priority, 0], verdict });
+  const candidates = [
+    member('zeta', 'ranked', 0, 2),
+    member('ending', 'not_needed', 0),
+    member('alpha', 'ranked', 1, 1),
+    // Behind a ranked member of a higher priority, the chosen one still leads.
+    member('primary', 'chosen', 2),
+    member('quota', 'out', 1),
+    member('beta', 'eligible', 1),
+    member('gamma', 'eligible', 0),
+    member('delta', 'eligible', 0),
+    member('source', 'source', 0),
+    member('destination', 'destination', 0),
+    member('held', 'held_on', 3),
+    member('renewed', 'renewed', 1),
+    member('omega', 'out', 0),
+  ];
+  const before = candidates.map((c) => c.accountId);
+  const ranked = rankCandidates(candidates).map((c) => c.accountId);
+  assert.deepEqual(ranked.slice(0, 5), ['primary', 'renewed', 'held', 'source', 'destination'], 'the placed, renewed, held-on, source and destination members in that order');
+  assert.deepEqual(ranked.slice(5, 7), ['alpha', 'zeta'], 'the ranked members by rank over their priority');
+  assert.deepEqual(ranked.slice(7, 10), ['delta', 'gamma', 'beta'], 'the eligible ones by priority, then by id');
+  assert.deepEqual(ranked.slice(10), ['ending', 'omega', 'quota'], 'the out and not needed ones together last, by priority, then by id');
+  assert.deepEqual(candidates.map((c) => c.accountId), before, "the record's own order stands for the strip");
+});
+
+test("a story card's candidate table leads with the member the decision placed, tinted, whatever the record's order", async () => {
+  // The renewal is the card the log opens first, and the fast failover's record lists the member it placed third.
+  const drawn = [];
+  const expected = [];
+  for (const [requestId, seq] of [['req_f8085653-422', 1], ['req_4b0e9d17-c31', 2]]) {
+    const { record } = await storyRecord(requestId, seq);
+    const container = await storyCard(requestId, seq);
+    const table = container.querySelector('.decision-card__candidates');
+    const rows = [...(table?.querySelectorAll('tbody tr') ?? [])];
+    drawn.push({ first: rows[0]?.querySelector('td a')?.textContent ?? null, request: requestId, rows: rows.length, tinted: rows[0]?.classList.contains('is-chosen') ?? false, title: table?.closest('section')?.querySelector('.decision-card__title')?.textContent ?? null });
+    expected.push({ first: record.outcome.accountId, request: requestId, rows: record.candidates.length, tinted: true, title: 'Candidates, by rank' });
+  }
+  assert.deepEqual(drawn, expected);
+  const { record } = await storyRecord('req_4b0e9d17-c31', 2);
+  assert.notEqual(record.candidates[0].accountId, record.outcome.accountId, "the fast failover's record leads with another member");
 });
 
 test('the settings fold lists the twenty-four settings in the card order with Load shedding on or off, and a version 1 record its three removed after them', async () => {

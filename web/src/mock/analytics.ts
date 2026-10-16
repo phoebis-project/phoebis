@@ -51,8 +51,8 @@ export interface HourlyRollup {
   funding: 'billed' | 'fast' | 'overage' | 'plan';
   histograms: LatencyHistograms;
   hour: string;
-  /** Requests whose cache read was kept alive by a probe, and the tokens they read. */
-  keptWarm: { requests: number; tokens: number };
+  /** Requests whose cache read was kept alive by a probe, and the tokens they read under each TTL. */
+  keptWarm: { requests: number; tokens1h: number; tokens5m: number };
   keyId: string;
   /** The `created_at` of the key the row belongs to; the live key's for a current row, an earlier one's for a deleted holder's. */
   keyGeneration: number;
@@ -70,6 +70,8 @@ export interface HourlyRollup {
   requestClass: string;
   /** `client_gone` counts the streams the client closed, which the relay files as failed under that code. */
   requests: { client_gone: number; incomplete: number; ok: number; overloaded: number; rate_limited: number; undecodable: number; upstream_error: number };
+  /** The kept-warm requests' saving in dollars, each priced at the cells its own prompt selects. */
+  savingUsd: number;
   /** The fixture rolls up per session, which keeps its lanes as fine as the ledger's; no route groups on one. */
   sessionId: string;
   /**
@@ -159,10 +161,10 @@ interface WindowSum {
   unpriced: boolean;
 }
 
-/** The three share members of a group, folded from its plan-funded rows or all null. */
-type GroupShares = Pick<AnalyticsGroup, 'cacheShares' | 'costShares' | 'probeShares'>;
+/** The four share members of a group, folded from its plan-funded rows or all null. */
+type GroupShares = Pick<AnalyticsGroup, 'cacheShares' | 'costShares' | 'probeShares' | 'savingShares'>;
 
-const NO_SHARES: GroupShares = { cacheShares: null, costShares: null, probeShares: null };
+const NO_SHARES: GroupShares = { cacheShares: null, costShares: null, probeShares: null, savingShares: null };
 
 const tokensOfRow = (r: HourlyRollup) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
 const planRows = (list: HourlyRollup[]) => list.filter((r) => r.funding === 'plan');
@@ -217,7 +219,32 @@ function sharesOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[], tier:
     cacheShares: s.cache,
     costShares: s.cost,
     probeShares: Object.fromEntries(Object.entries(s.probe).map(([window, cost]) => [window, { cost, wasted: s.ratio === null ? null : cost * s.ratio }])),
+    savingShares: savingOf(counted, (r) => sharesOf(r, tier, keptUsageOf(r))),
   };
+}
+
+/** A row's kept-warm counts as the usage their saving prices: each count the write it avoided at its TTL, and the two
+ *  together the read the requests paid instead. */
+const keptUsageOf = (r: HourlyRollup): Usage => ({ cacheRead: r.keptWarm.tokens1h + r.keptWarm.tokens5m, cacheWrite1h: r.keptWarm.tokens1h, cacheWrite5m: r.keptWarm.tokens5m, input: 0, output: 0 });
+
+/**
+ * The kept-warm saving per window over a group's plan-funded rows, the write half of each row's kept-warm counts less
+ * its read half (`halves`), at the row's hour. A window any credit prices null is left out, as the route answers it.
+ */
+function savingOf(counted: HourlyRollup[], halves: (r: HourlyRollup) => Record<'read' | 'write', Record<string, number | null>>): Record<string, number> {
+  const sums = new Map<string, WindowSum>();
+  for (const r of planRows(counted)) {
+    if (r.keptWarm.tokens1h + r.keptWarm.tokens5m === 0) continue;
+    const { read, write } = halves(r);
+    for (const [window, paid] of Object.entries(read)) {
+      const avoided = write[window] ?? null;
+      const s = sums.get(window) ?? { sum: 0, unpriced: false };
+      if (paid === null || avoided === null) s.unpriced = true;
+      else s.sum += avoided - paid;
+      sums.set(window, s);
+    }
+  }
+  return Object.fromEntries([...sums.entries()].filter(([, s]) => !s.unpriced).map(([window, s]) => [window, s.sum]));
 }
 
 const TOKEN_KINDS: Record<keyof CostSplit, (u: Usage) => Usage> = {
@@ -232,7 +259,7 @@ const TOKEN_KINDS: Record<keyof CostSplit, (u: Usage) => Usage> = {
  * so they add across accounts and read under every grouping, with the 7-day equivalent split by token kind at each
  * row's hour and the wasted probes' equivalent at the probe share's ratio.
  */
-function equivalentsOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[]): Pick<AnalyticsGroup, 'cacheEquivalent' | 'costEquivalent' | 'equivalentSplit' | 'estimated' | 'probeEquivalent'> {
+function equivalentsOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[]): Pick<AnalyticsGroup, 'cacheEquivalent' | 'costEquivalent' | 'equivalentSplit' | 'estimated' | 'probeEquivalent' | 'savingEquivalent'> {
   const s = windowSums(counted, probeRows, (r) => r.equivalents, equivalentsOf);
   const split: CostSplit = { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 };
   for (const r of planRows(counted)) {
@@ -245,6 +272,7 @@ function equivalentsOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[]):
     equivalentSplit: split,
     estimated: [...planRows(counted), ...planRows(probeRows)].some((r) => r.estimated),
     probeEquivalent: Object.fromEntries(Object.entries(s.probe).map(([window, cost]) => [window, { cost, wasted: s.ratio === null ? 0 : cost * s.ratio }])),
+    savingEquivalent: savingOf(counted, (r) => equivalentsOf(r, keptUsageOf(r))),
   };
 }
 
@@ -318,7 +346,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     failovers,
     histograms,
     incomplete,
-    keptWarm: { requests: sum(counted, (r) => r.keptWarm.requests), tokens: sum(counted, (r) => r.keptWarm.tokens) },
+    keptWarm: { requests: sum(counted, (r) => r.keptWarm.requests), tokens1h: sum(counted, (r) => r.keptWarm.tokens1h), tokens5m: sum(counted, (r) => r.keptWarm.tokens5m) },
     key,
     keyCreatedAt: null,
     keyId: null,
@@ -332,6 +360,8 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     rateLimited,
     rejected: 0,
     requests,
+    savingShares: shares.savingShares,
+    savingUsd: sum(counted, (r) => r.savingUsd),
     succeeded,
     tokens: {
       cacheRead: sum(counted, (r) => r.tokens.cacheRead), cacheWrite1h: sum(counted, (r) => r.tokens.cacheWrite1h), cacheWrite5m: sum(counted, (r) => r.tokens.cacheWrite5m), output: sum(counted, (r) => r.tokens.output),
@@ -424,10 +454,10 @@ const usageOf = (r: HourlyRollup): Usage => ({ cacheRead: r.tokens.cacheRead, ca
 
 /**
  * A row's figure on each window its model applies to (the two shared windows and its model weeks) through `price`,
- * completing at the row's hour: the whole usage's, the cache read's alone and the cache writes' alone.
+ * completing at the row's hour: the whole usage's, the cache read's alone and the cache writes' alone. `usage` is the
+ * row's own unless a caller prices other counts of it, as the kept-warm saving does.
  */
-function atHour(r: HourlyRollup, price: (window: string, usage: Usage, at: number) => number | null): Record<'cost' | 'read' | 'write', Record<string, number | null>> {
-  const usage = usageOf(r);
+function atHour(r: HourlyRollup, price: (window: string, usage: Usage, at: number) => number | null, usage = usageOf(r)): Record<'cost' | 'read' | 'write', Record<string, number | null>> {
   const windows = ['five_hour', 'seven_day', ...modelWeeks(TABLES, r.model)];
   const over = (u: Usage) => Object.fromEntries(windows.map((window) => [window, price(window, u, Date.parse(r.hour))]));
   return { cost: over(usage), read: over({ ...usage, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }), write: over({ ...usage, cacheRead: 0, input: 0, output: 0 }) };
@@ -435,11 +465,11 @@ function atHour(r: HourlyRollup, price: (window: string, usage: Usage, at: numbe
 
 /** A subscription row's shares through the cost model, the model tier's fallback weight standing in for a model with
  *  none, each null for an account tier or a model the cost model does not price. */
-const sharesOf = (r: HourlyRollup, tier: string) => atHour(r, (window, usage, at) => shareOrFallback(TABLES, window, tier, r.model, usage, at)?.share ?? null);
+const sharesOf = (r: HourlyRollup, tier: string, usage = usageOf(r)) => atHour(r, (window, u, at) => shareOrFallback(TABLES, window, tier, r.model, u, at)?.share ?? null, usage);
 
 /** A row's 20x window equivalents, the shares under the anchor tier, each null for a model the cost model does not
  *  price. */
-const equivalentsOf = (r: HourlyRollup) => atHour(r, (window, usage, at) => equivalentOf(TABLES, window, r.model, usage, at)?.equivalent ?? null);
+const equivalentsOf = (r: HourlyRollup, usage = usageOf(r)) => atHour(r, (window, u, at) => equivalentOf(TABLES, window, r.model, u, at)?.equivalent ?? null, usage);
 
 /** A bucket's sums, each window's shares and equivalents kept per row so one unpriced row nulls the window, as the
  *  route reads it. The model week's lists hold the rows on a model with a week of its own alone. */

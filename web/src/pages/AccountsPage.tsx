@@ -28,7 +28,7 @@ import { joinTrend } from '@/lib/trend';
 const STATUS_OPTIONS = { status: ACCOUNT_STATUSES.map((s) => ({ label: STATUS_LABEL[s], value: s })) };
 /** A save the router refused, as the editor's callout draws it. `stale` marks a row that moved under the editor. */
 type EditorRefusal = { message: string; stale: boolean };
-const END_HINT = "Prefilled from the plan's start and its monthly renewal. Correct it from the date the plan's billing settings show. An annual plan is marked cancelled in its final month only.";
+const END_HINT = "The date the plan's billing settings show as its end. An annual plan is marked cancelled in its final month only.";
 
 export function AccountsPage() {
   const { accountId } = useParams();
@@ -569,7 +569,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
           {endForm && (
             <div className="capture" style={{ marginTop: 12 }}>
               <label className="row">
-                <input type="checkbox" checked={endForm.cancelled} disabled={busy} onChange={(e) => setEndForm(tickCancelled(endForm, e.target.checked, account.subscription?.derivedEndsAt ?? null))} />
+                <input type="checkbox" checked={endForm.cancelled} disabled={busy} onChange={(e) => setEndForm(tickCancelled(endForm, e.target.checked))} />
                 <span className="field__label">Cancelled</span>
               </label>
               <Field label="Ends" hint={END_HINT}>

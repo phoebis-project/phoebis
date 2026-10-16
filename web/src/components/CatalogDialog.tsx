@@ -2,11 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api';
 import type { AccountCatalog } from '@/api/types';
 import { IconRefresh, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Dialog, Skeleton } from '@/components/ui/primitives';
+import { Button, Dialog, Skeleton } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtDate, fmtInt, fmtRelative } from '@/lib/format';
-
-/** The window the models listing gives a `[1m]` twin above, so the badge marks the same models the twins do. */
-const LONG_CONTEXT_ABOVE = 200_000;
 
 const tokens = (n: number | null) => (n === null ? '-' : fmtInt(n));
 // `created_at` reaches the console as the upstream sent it, which may be empty or not a date at all.
@@ -109,7 +106,6 @@ export function CatalogDialog({ accountId, label, now, onClose, open }: { accoun
                   <td className="col-fill" title={m.id}>
                     <div className="catalog__model">
                       <span className="mono catalog__id">{m.id}</span>
-                      {(m.maxInputTokens ?? 0) > LONG_CONTEXT_ABOVE && <Badge tone="neutral">long context</Badge>}
                     </div>
                   </td>
                   <td className="col-fill" title={m.displayName || undefined}>{m.displayName || '-'}</td>

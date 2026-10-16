@@ -340,15 +340,15 @@ with a spent window joins the overage group with the flag on, and with it off so
 whatever the priorities. The strategy picks inside the first non-empty tier. `pace` reads each account's sample as a
 window map: a subscription account scores by its spare rate, the remaining allowance in its own window (the model's own
 Fable week where the model has one, else the 7-day window) over the hours to the earlier of that window's reset and the
-account's derived end, less the burn of the sessions already pinned to the account on that window, in share per hour.
-The burn it subtracts is the burn those sessions would make unheld (see **The demand**, below), so an account calm only
-because the slow-down holds its sessions reads as full. An account at 0.3 used with two heavy sessions can thus rank
-below an idle one at 0.6, and the score reads negative where the account spends faster than its pace allows. An API-key
-account scores by one minus its worst live rate-limit bucket's utilization alone, with no division by hours and no burn,
-since a bucket refills within a minute and its own reset never enters the score. Either way a window nobody has read
-reads as untouched: remaining 1 over the full week. A subscription window read past its reset reads as the router's own
-use since it, while an API-key bucket past its reset is refunded and reads as untouched, with no share of the router's
-own. Ties are random. `priority` and `round_robin` read no sample at all.
+account's end ([Subscription end](#subscription-end)), less the burn of the sessions already pinned to the account on
+that window, in share per hour. The burn it subtracts is the burn those sessions would make unheld (see **The demand**,
+below), so an account calm only because the slow-down holds its sessions reads as full. An account at 0.3 used with two
+heavy sessions can thus rank below an idle one at 0.6, and the score reads negative where the account spends faster than
+its pace allows. An API-key account scores by one minus its worst live rate-limit bucket's utilization alone, with no
+division by hours and no burn, since a bucket refills within a minute and its own reset never enters the score. Either
+way a window nobody has read reads as untouched: remaining 1 over the full week. A subscription window read past its
+reset reads as the router's own use since it, while an API-key bucket past its reset is refunded and reads as untouched,
+with no share of the router's own. Ties are random. `priority` and `round_robin` read no sample at all.
 
 
 A non-portable request, one whose body references a `file_id`, a `container` or a server-tool result, is answered by
@@ -1019,10 +1019,9 @@ account in overage.
 
 ## Subscription end
 
-An operator can mark an OAuth account cancelled and save the end it stops serving at. The account form prefills that
-end from the profile's start, or a trial end already passed, advanced to the next occurrence of the same day of the
-month and time of day, editable before it is saved. A trial end still ahead counts as an end the same way, even on an
-account nobody has cancelled.
+An operator can mark an OAuth account cancelled and save the end it stops serving at. The account form opens the end
+empty for a running plan, and the operator types the date the provider's billing page shows once the plan is cancelled.
+A trial end still ahead counts as an end the same way, even on an account nobody has cancelled.
 
 Inside `wind_down_minutes` (default 30) of its end, an account is no destination for any move, leaves the set a fresh
 placement keeps for its fit, takes a fresh session only as the last resort, and a cold pin moves off it once another

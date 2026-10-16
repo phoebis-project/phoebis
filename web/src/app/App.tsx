@@ -1,7 +1,7 @@
 import { lazy, Suspense, type ReactNode } from 'react';
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom';
 import { Shell } from '@/components/shell/Shell';
-import { Skeleton } from '@/components/ui/primitives';
+import { PageLoadFailed, Skeleton } from '@/components/ui/primitives';
 import { reloadOnChunkFailure } from '@/lib/chunks';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { KeysPage } from '@/pages/KeysPage';
@@ -31,14 +31,16 @@ export const routes = [
     element: <Shell />,
     children: [
       { index: true, element: <DashboardPage /> },
-      { path: 'accounts', element: lazily(<AccountsPage />) },
-      { path: 'accounts/:accountId', element: lazily(<AccountsPage />) },
-      { path: 'analytics', element: lazily(<AnalyticsPage />) },
+      // The element catches every render error on these four routes, a chunk that fails again after the reload among
+      // them, and draws it in the shell's outlet. The other routes keep the router's own screen.
+      { path: 'accounts', element: lazily(<AccountsPage />), errorElement: <PageLoadFailed /> },
+      { path: 'accounts/:accountId', element: lazily(<AccountsPage />), errorElement: <PageLoadFailed /> },
+      { path: 'analytics', element: lazily(<AnalyticsPage />), errorElement: <PageLoadFailed /> },
       // Bookmarks and links out there still point at the old path.
       { path: 'keepalive', element: <Navigate to="/sessions" replace /> },
       { path: 'keys', element: <KeysPage /> },
       { path: 'models', element: <ModelsPage /> },
-      { path: 'pools', element: lazily(<PoolsPage />) },
+      { path: 'pools', element: lazily(<PoolsPage />), errorElement: <PageLoadFailed /> },
       { path: 'quota', element: <QuotaPage /> },
       { path: 'requests', element: <RequestsPage /> },
       { path: 'requests/:requestId', element: <RequestsPage /> },

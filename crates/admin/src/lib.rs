@@ -217,8 +217,8 @@ impl PairingVault {
         );
     }
 
-    /// Fails when the record is gone, which is how a disconnect that landed during the exchange takes
-    /// the bundle with it: the caller drops what it just fetched.
+    /// Fails when the record is gone, or no longer `Started`: a disconnect that landed during the exchange discarded
+    /// it, and a record already exchanged or confirmed takes no second bundle. The caller drops what it just fetched.
     pub fn record_exchange(
         &self,
         session_id: &str,
@@ -231,6 +231,9 @@ impl PairingVault {
         let Some(record) = records.get_mut(session_id) else {
             return false;
         };
+        if record.status != VaultStatus::Started {
+            return false;
+        }
         record.exchange = Some(Exchange {
             bundle,
             identity,

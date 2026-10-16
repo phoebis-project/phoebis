@@ -31,14 +31,37 @@ test('a Max 20x account at 10% left and a Pro account at 90% left weigh to 1.05 
   assert.deepEqual(
     figures.rows.map((r) => [r.id, r.weight]),
     [
-      ['primary', 1],
       ['secondary', 0.05],
+      ['primary', 1],
     ],
   );
   assert.deepEqual(figures.leftOut, []);
   assert.equal(d.fmtPct(figures.left / figures.capacity, 1), '13.8%');
   assert.equal(d.fmtWindows(figures.capacity), '1.05');
   assert.equal(d.fmtWindows(1.3), '1.30');
+});
+
+test("the ring's rows read the account with the most of its own window left first", () => {
+  const tier = 'default_claude_max_5x';
+  const figures = d.ringFigures([account('low', tier, [window('5h', 0.8)]), account('high', tier, [window('5h', 0.1)]), account('half', tier, [window('5h', 0.5)])], '5h', COSTS, NOW);
+  assert.deepEqual(
+    figures.rows.map((r) => [r.id, Number(r.remaining.toFixed(9))]),
+    [
+      ['high', 0.9],
+      ['half', 0.5],
+      ['low', 0.2],
+    ],
+    'shares of 0.2, 0.9 and 0.5 left read 0.9, 0.5, 0.2',
+  );
+});
+
+test("two of the ring's rows with equal shares left read by label", () => {
+  const tier = 'default_claude_max_5x';
+  const figures = d.ringFigures([account('b', tier, [window('5h', 0.6)]), account('a', tier, [window('5h', 0.6)])], '5h', COSTS, NOW);
+  assert.deepEqual(
+    figures.rows.map((r) => r.id),
+    ['a', 'b'],
+  );
 });
 
 test('an unsized tier and a null 7-day capacity are left out with their reasons', () => {

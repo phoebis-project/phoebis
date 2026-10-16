@@ -885,18 +885,6 @@ async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
     .await;
     assert_eq!(confirmed.status(), 200);
     let acct = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
-    // Computed rather than a literal, so the assertion holds whichever anchor day `derived_end` settles on.
-    let derived = phoebis_routing::term::derived_end(
-        &phoebis_store::SubscriptionTerm {
-            account_id: "business".into(),
-            since: Some(1_773_482_400_000),
-            trial_ends_at: Some(1_790_899_200_000),
-            cancelled: false,
-            ends_at: None,
-            tier: None,
-        },
-        common::NOW,
-    );
     assert_eq!(
         acct["subscription"],
         serde_json::json!({
@@ -905,7 +893,6 @@ async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
             "since": 1_773_482_400_000_i64,
             "trial_ends_at": 1_790_899_200_000_i64,
             "ends_at": null,
-            "derived_ends_at": derived,
         }),
         "the confirm stored the plan and the start with no poll having run"
     );
@@ -1722,14 +1709,21 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
     .await;
     // The 5-hour window's reset has passed, so the router predicts it empty until the next reading names one. No pin
     // burns, so each window projects its prediction at its horizon: five hours on, the weekly windows' resets lying
-    // further out. The Fable week reads under the endpoint's key, mapped from the routing name.
+    // further out. The Fable week reads under the endpoint's key, mapped from the routing name, and its lead paces it
+    // as the week the routing name says it is.
+    let lead = |window: &str, utilization: f64, reset: Option<i64>| {
+        utilization - phoebis_routing::elapsed_share_at(window, reset, None, NOW)
+    };
     let held = serde_json::json!([
         { "id": "five_hour", "observed_at": read_at, "resets_at": null, "utilization": 0.0,
-          "projection": 0.0, "horizon": NOW + 5 * HOUR, "burn": 0.0, "demand": 0.0 },
+          "projection": 0.0, "horizon": NOW + 5 * HOUR, "burn": 0.0, "demand": 0.0,
+          "lead": lead(FIVE_HOUR, 0.0, None) },
         { "id": "seven_day", "observed_at": read_at, "resets_at": NOW + 72 * HOUR, "utilization": 0.5,
-          "projection": 0.5, "horizon": NOW + 5 * HOUR, "burn": 0.0, "demand": 0.0 },
+          "projection": 0.5, "horizon": NOW + 5 * HOUR, "burn": 0.0, "demand": 0.0,
+          "lead": lead(SEVEN_DAY, 0.5, Some(NOW + 72 * HOUR)) },
         { "id": "fable", "observed_at": read_at, "resets_at": NOW + 72 * HOUR, "utilization": 0.2,
-          "projection": 0.2, "horizon": NOW + 5 * HOUR, "burn": 0.0, "demand": 0.0 },
+          "projection": 0.2, "horizon": NOW + 5 * HOUR, "burn": 0.0, "demand": 0.0,
+          "lead": lead(SEVEN_DAY_FABLE, 0.2, Some(NOW + 72 * HOUR)) },
     ]);
     let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
     assert_eq!(account["windows"], held, "{account}");
@@ -1840,6 +1834,55 @@ async fn disconnect_bumps_the_lifecycle_and_a_late_confirm_is_rejected() {
         .status(),
         409,
         "the pairing session was invalidated by the disconnect"
+    );
+}
+
+/// A disconnect that discards the vault's record while the code is being exchanged leaves the pairing session itself
+/// in flight, so the exchange runs and its bundle reaches a record no confirm may take.
+#[tokio::test]
+async fn an_exchange_landing_on_a_record_a_disconnect_discarded_answers_409_and_keeps_no_bundle() {
+    use common::{json, login, post};
+    let (app, _up, _store, _router, vault) = common::admin_parts_with_vault().await;
+    let cookie = login(&app, "admin-secret").await;
+    let started = json(
+        post(
+            &app,
+            "/admin/oauth/sessions",
+            r#"{"account_id":"business","login":"claude_ai"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let id = started["id"].as_str().unwrap().to_string();
+    let redirect = started["redirect_uri"].as_str().unwrap().to_string();
+    let state = started["authorization_url"]
+        .as_str()
+        .unwrap()
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        vault.discard_for_account("business", common::NOW).len(),
+        1,
+        "the pairing in flight is the one the disconnect cancels"
+    );
+    let callback = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/callback"),
+        &format!(r#"{{"url":"{redirect}?code=CODE123&state={state}"}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(callback.status(), 409);
+    assert_eq!(
+        json(callback).await["error"],
+        "the pairing session was closed while the code was being exchanged"
+    );
+    assert!(
+        vault.take_exchange(&id, common::NOW).is_none(),
+        "the discarded record took no bundle"
     );
 }
 
@@ -2422,17 +2465,6 @@ async fn a_start_with_new_confirms_into_a_ready_row_with_its_identity_plan_and_s
     );
     assert_eq!(acct["identity"]["account_uuid"], common::ACCOUNT_UUID);
     assert!(acct["credential"]["access_expires_at"].is_number());
-    let derived = phoebis_routing::term::derived_end(
-        &phoebis_store::SubscriptionTerm {
-            account_id: "fresh".into(),
-            since: Some(1_773_482_400_000),
-            trial_ends_at: Some(1_790_899_200_000),
-            cancelled: false,
-            ends_at: None,
-            tier: None,
-        },
-        common::NOW,
-    );
     assert_eq!(
         acct["subscription"],
         serde_json::json!({
@@ -2441,7 +2473,6 @@ async fn a_start_with_new_confirms_into_a_ready_row_with_its_identity_plan_and_s
             "since": 1_773_482_400_000_i64,
             "trial_ends_at": 1_790_899_200_000_i64,
             "ends_at": null,
-            "derived_ends_at": derived,
         }),
         "the one write stored the plan and the start with the row"
     );

@@ -1,6 +1,6 @@
 import type {
   AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
-  QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
+  PriceCells, QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
 } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
@@ -8,10 +8,11 @@ import { equivalentOf, fundingOf, modelWeeks, shareOrFallback } from '@/lib/cost
 import { NO_CLASS, NO_EFFORT, foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
-import { aheadOf, endOf } from '@/lib/quota';
+import { endOf } from '@/lib/quota';
 import { ACCOUNTS, QUOTA_HISTORY, accountById } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor } from './catalog';
+import { leadOf } from './lead';
 import { keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';
 import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE, TABLES } from './samples';
@@ -204,6 +205,26 @@ export function costOf(model: string, u: Usage, fast: boolean, at: string | numb
   const c = costSplitOf(model, u, fast, at);
   return c.input + c.cacheRead + c.cacheWrite + c.output;
 }
+
+/** The cells `cellsFor` selects for a prompt of `prompt` tokens, whatever tokens the figure it prices counts. Null for
+ *  a model the entry lacks. */
+function cellsAtPrompt(model: string, prompt: number, fast: boolean, at: string | number): PriceCells | null {
+  return cellsFor(model, { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: prompt }, fast, at);
+}
+
+/**
+ * A kept-warm credit's saving in dollars, the write each count avoided at its TTL's rate less the read the two paid, at
+ * the cells the credited requests' own prompt of `prompt` tokens selects, as the ledger keys the credit by its
+ * request's band. The saving's tokens select nothing themselves: the read and the writes count the kept tokens twice.
+ */
+function savingUsdOf(model: string, kept: { tokens1h: number; tokens5m: number }, prompt: number, fast: boolean, at: string | number): number {
+  const p = cellsAtPrompt(model, prompt, fast, at);
+  if (p === null) return 0;
+  return (kept.tokens5m * p.cacheWrite5mPerM + kept.tokens1h * p.cacheWrite1hPerM - (kept.tokens1h + kept.tokens5m) * p.cacheReadPerM) / 1_000_000;
+}
+
+/** A kept request's read under the TTL its own write took, five minutes for a request that wrote none. */
+const keptOf = (r: RequestLog) => (r.usage.cacheWrite1h > 0 ? { tokens1h: r.usage.cacheRead, tokens5m: 0 } : { tokens1h: 0, tokens5m: r.usage.cacheRead });
 
 const sumSplit = (parts: CostSplit[]): CostSplit => parts.reduce((s, c) => ({ cacheRead: s.cacheRead + c.cacheRead, cacheWrite: s.cacheWrite + c.cacheWrite, input: s.input + c.input, output: s.output + c.output }), { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 });
 
@@ -869,6 +890,10 @@ export const OPENING_SESSION_IDS = ['6e3b9d1f-4a27-4c58-b8e1-9f2d7a4c3e06', 'c8f
 export const SLOWED_MORNING_SESSION_ID = 'b4e2c9a7-1f3d-4c86-9a05-7e2d1c8b6f40';
 export const SLOWED_SESSION_ID = '5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65';
 export const MARKED_SESSION_IDS = ['9c2d7e4a-3b81-4f59-a6e0-1d8c5b7a2e93', 'e7a4b2d9-6c15-4e83-b9f2-0a3d8c6e1b57'] as const;
+/** The long-context notebook session that went idle after its one turn, apart from studio's slowed sessions. */
+const IDLE_NOTEBOOK_SESSION_ID = '2d8b5f1a-7c4e-4e92-b6a3-8f0d1c9e5a47';
+/** That session's one request, the turn the work pool's hour recipe probes after. */
+const IDLE_NOTEBOOK_REQUEST_ID = 'req_3c8e1f7a-b29';
 /** The desktop session the 5-hour 429 on secondary fails over to primary. */
 const FAILED_OVER_SESSION_ID = 'd6f1a3c8-2e94-4b07-8a5d-3c9e7f2b1a64';
 /** The session a laptop client sent. */
@@ -1019,8 +1044,9 @@ function storyRequests(): RequestLog[] {
       usage: { input: 19_600, output: 820 },
     },
     { agentId: 'main', at: t(14, 19, 2), attempts: [{ accountId: 'primary', at: t(14, 19, 2), ms: 7_100, status: 200 }], errorCode: 'overloaded_error', id: 'req_9a07c4e1-d55', outcome: 'failed', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 44_900, cacheWrite1h: 1_800, input: 2_600, output: 960 } },
-    // The runner sends again on its key after its revocation at 14:17:30, which the selection refuses.
-    { agentId: 'main', at: t(14, 18, 5), attempts: [], errorCode: 'auth_unknown', id: 'req_6c3a9e27-5b1', keyId: 'ci', model: HAIKU, outcome: 'rejected', requestClass: 'main', session: 'cd9a5904', status: 401 },
+    // The runner sends again on its key after its revocation at 14:17:30, which the selection refuses. Refused before
+    // routing, the request carries no model, as the router records it.
+    { agentId: 'main', at: t(14, 18, 5), attempts: [], errorCode: 'auth_unknown', id: 'req_6c3a9e27-5b1', keyId: 'ci', model: '', outcome: 'rejected', requestClass: 'main', session: 'cd9a5904', status: 401 },
     // A compacted conversation renews its pin cold and writes its prefix afresh.
     { agentId: 'main', at: t(14, 17, 52), attempts: [{ accountId: 'primary', at: t(14, 17, 52), ms: 3_300, status: 200 }], contextCompacted: 'auto', errorCode: 'stream_incomplete', id: 'req_31f0b7c2-6e1', outcome: 'incomplete', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 22_900, input: 1_100, output: 410 } },
     { agentId: 'main', at: t(14, 16, 40), attempts: [], errorCode: 'accounts_exhausted', id: 'req_51d0e2b8-7a0', keyId: 'ci', model: HAIKU, outcome: 'exhausted', requestClass: 'main', session: 'cd9a5904', status: 429 },
@@ -1207,6 +1233,19 @@ function storyRequests(): RequestLog[] {
       requestClass: 'main',
       session: SLOWED_SESSION_ID,
       usage: { cacheRead: 67_200, cacheWrite1h: 2_800, input: 2_000, output: 940 },
+    },
+    // A long-context notebook session early in the day, whose one turn writes its prefix on the hour and which never
+    // comes back: the turn `idleWarming` probes after.
+    {
+      agentId: 'main',
+      at: NOW - 20 * HOUR,
+      attempts: [{ accountId: 'studio', at: NOW - 20 * HOUR, ms: 21_000, status: 200 }],
+      id: IDLE_NOTEBOOK_REQUEST_ID,
+      keyId: 'notebook',
+      model: 'claude-opus-5-5',
+      requestClass: 'main',
+      session: IDLE_NOTEBOOK_SESSION_ID,
+      usage: { cacheWrite1h: 150_000, input: 3_100, output: 1_700 },
     },
   ];
   return seeds.map(storyRow);
@@ -1926,7 +1965,8 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         ...hourShares(accountId, partRows[0].canonicalModel, partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage }))),
         tier: accountTier(accountId),
         histograms: histogramsOf(partRows),
-        keptWarm: { requests: keptHere.length, tokens: keptHere.reduce((s, r) => s + r.usage.cacheRead, 0) },
+        keptWarm: { requests: keptHere.length, tokens1h: keptHere.reduce((s, r) => s + keptOf(r).tokens1h, 0), tokens5m: keptHere.reduce((s, r) => s + keptOf(r).tokens5m, 0) },
+        savingUsd: keptHere.reduce((s, r) => s + savingUsdOf(r.model, keptOf(r), r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h, r.attempts[r.attempts.length - 1]?.response.speed === 'fast', r.at), 0),
         probes: probes ?? { ok: 0, failed: 0, held: 0, skipped: 0 },
         probeMigrated,
         probeCostUsd,
@@ -2031,6 +2071,10 @@ function historicalRollups(): HourlyRollup[] {
       const duration = sampled(h, ok, big ? 14_000 : 6_000, 0.6);
       const keptRequests = warmsCaches(lane.keyId, lane.poolId) ? Math.round(ok * h.float(0.2, 0.45)) : 0;
       const keptTokens = Math.round((cacheRead / Math.max(1, ok)) * keptRequests);
+      // The hour's requests are one aggregate, so its kept tokens split by the share its hour entries wrote.
+      const written = tokens.cacheWrite1h + tokens.cacheWrite5m;
+      const kept1h = written === 0 ? 0 : Math.round((keptTokens * tokens.cacheWrite1h) / written);
+      const keptSplit = { tokens1h: kept1h, tokens5m: keptTokens - kept1h };
       // Six days back, so the hour sits well inside the week and the month the console offers rather than on
       // the edge of the synthesized month, where a range bound would cut it.
       const takesMaxEffort = lane.keyId === 'laptop' && maxEffortOwed && t >= startOfHour(NOW) - 6 * DAY;
@@ -2070,7 +2114,9 @@ function historicalRollups(): HourlyRollup[] {
           ttfbMs: histogramOf(ttfb),
           ttftMs: histogramOf(ttft),
         },
-        keptWarm: { requests: keptRequests, tokens: keptTokens },
+        keptWarm: { requests: keptRequests, ...keptSplit },
+        // A synthesized hour's kept requests carry its mean prompt, which selects the cells their saving prices at.
+        savingUsd: savingUsdOf(model, keptSplit, ok === 0 ? 0 : (usage.input + usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h) / ok, fast, t),
         probes: { ok: 0, failed: 0, held: 0, skipped: 0 },
         probeMigrated: 0,
         probeCostUsd: 0,
@@ -2116,7 +2162,8 @@ function historicalRollups(): HourlyRollup[] {
           ...hourShares(accountId, model, [{ at: t, usage: probeUsage }]),
           tier: accountTier(accountId),
           histograms: { durationMs: histogramOf(sampled(h, probes, 600, 0.3)), outputTps: emptyHistogram(), ttfbMs: histogramOf(sampled(h, probes, 320, 0.3)), ttftMs: emptyHistogram() },
-          keptWarm: { requests: 0, tokens: 0 },
+          keptWarm: { requests: 0, tokens1h: 0, tokens5m: 0 },
+          savingUsd: 0,
           probes: { ok: probes, failed, held: heldRng.chance(0.04) ? 1 : 0, skipped: h.int(0, 2) },
           probeMigrated: h.chance(0.3) ? 1 : 0,
           probeCostUsd: probeCost,
@@ -2128,7 +2175,68 @@ function historicalRollups(): HourlyRollup[] {
   return out;
 }
 
-export const ALL_ROLLUPS: HourlyRollup[] = [...historicalRollups(), ...ROLLUPS];
+/** How long after a request's answer its hour-TTL recipe probes, ahead of the entry's expiry. */
+const HOUR_PROBE_LEAD = 55 * MINUTE;
+
+/**
+ * The work pool keeps the idle notebook session's cache warm after its one long-context turn, and the session never
+ * comes back: the hour recipe's one probe finds the entry gone ahead of its expiry and writes the prefix again on the
+ * hour, the pool's one-hour idle window then runs out, and the probe settles wasted on that limit. That write costs more
+ * than the credits studio's sessions earn in the pool, so the pool's probes cost more than they saved, the story's one
+ * pool whose net saving reads under zero.
+ */
+function idleWarming(rows: RequestLog[]): HourlyRollup[] {
+  const r = rows.find((x) => x.id === IDLE_NOTEBOOK_REQUEST_ID);
+  if (r === undefined || r.accountId === null) return [];
+  const at = Date.parse(r.at) + (r.durationMs ?? 0) + HOUR_PROBE_LEAD;
+  const prefix = r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h;
+  const usage: Usage = { cacheRead: 0, cacheWrite1h: prefix, cacheWrite5m: 0, input: 0, output: 1, ...NO_ANSWER_FACTS };
+  const costUsd = costOf(r.model, usage, false, at);
+  const wastedProbeReasons = emptyWastedProbeReasons();
+  wastedProbeReasons.idle_limit = 1;
+  return [
+    {
+      hour: iso(startOfHour(at)),
+      client: CLIENTS[r.keyId ?? ''] ?? '-',
+      effort: NO_EFFORT,
+      keyId: 'notebook',
+      keyGeneration: r.keyGeneration,
+      kind: 'probe',
+      poolId: r.poolId ?? '-',
+      accountId: r.accountId,
+      model: r.model,
+      requestClass: NO_CLASS,
+      sessionId: r.sessionId ?? '-',
+      funding: kindOf(r.accountId) === 'api_key' ? 'billed' : 'plan',
+      speed: 'standard',
+      requests: { client_gone: 0, incomplete: 0, ok: 1, overloaded: 0, rate_limited: 0, undecodable: 0, upstream_error: 0 },
+      failovers: 0,
+      migrations: 0,
+      tokens: { cacheRead: 0, cacheWrite1h: prefix, cacheWrite5m: 0, output: 1, ...NO_ANSWER_FACTS, uncachedInput: 0 },
+      cacheHits: 0,
+      cacheMisses: 1,
+      cacheMissReasons: emptyCacheMissReasons(),
+      expiredBetweenTurns: 0,
+      uncached: 0,
+      costUsd,
+      cost: costSplitOf(r.model, usage, false, at),
+      ...hourShares(r.accountId, r.canonicalModel, [{ at, usage }]),
+      tier: accountTier(r.accountId),
+      histograms: { durationMs: histogramOf([600]), outputTps: emptyHistogram(), ttfbMs: histogramOf([320]), ttftMs: emptyHistogram() },
+      keptWarm: { requests: 0, tokens1h: 0, tokens5m: 0 },
+      savingUsd: 0,
+      probes: { failed: 0, held: 0, ok: 1, skipped: 0 },
+      probeMigrated: 0,
+      probeCostUsd: costUsd,
+      wastedProbeReasons,
+      wastedProbeUsd: costUsd,
+      wastedProbes: 1,
+    },
+  ];
+}
+
+// The idle warming sits before the logged hours, so the rows' last entry stays the current hour's.
+export const ALL_ROLLUPS: HourlyRollup[] = [...historicalRollups(), ...idleWarming(REQUESTS), ...ROLLUPS];
 
 const counted = (from: number) => REQUESTS.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= from);
 /** The rows the dashboard counts. A probe is the router's own traffic, which the routes leave out. */
@@ -2250,7 +2358,7 @@ function accountRollups(): AccountRollup[] {
       if (key === undefined || sample === undefined) continue;
       const sampledMs = Date.parse(sample.at);
       const { resetsAt } = walkBack(w, sampledMs, () => SERVED_FACTOR);
-      const read: WindowSample = { lead: aheadOf({ resetsAt, utilization: sample.utilization }, w.periodHours * HOUR, sampledMs, endOf(account, sampledMs)), resetsAt, sampledAt: sample.at, utilization: sample.utilization };
+      const read: WindowSample = { lead: leadOf({ resetsAt, utilization: sample.utilization }, w.periodHours * HOUR, sampledMs, endOf(account, sampledMs)), resetsAt, sampledAt: sample.at, utilization: sample.utilization };
       windows[key] = read;
     }
     return windows;

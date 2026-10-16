@@ -201,15 +201,22 @@ export async function readBurn(
   return { accounts, answer };
 }
 
+/**
+ * A group's label under the page's grouping: "no model" for the model grouping's empty key (the requests the router
+ * rejected before routing), else the label the route answered.
+ */
+export const modelGroupLabel = (g: Pick<AnalyticsGroup, 'key' | 'label'>, groupBy: BurnGroup): string => (groupBy === 'model' && g.key === '' ? 'no model' : g.label);
+
 /** An earlier holder of a key id groups under `<id>@<generation>`, which the breakdown labels by its creation. */
 const EARLIER_HOLDER = /^(.+)@(\d+)$/;
 /**
- * A burn group's label: the breakdown's for an earlier key holder, `unattributed` for what the router never attributed.
+ * A burn group's label: the breakdown's for an earlier key holder and for the group without a model, `unattributed` for
+ * what the router never attributed.
  */
 function burnLabelOf(groupBy: BurnGroup, key: string): string {
   if (key === '-') return 'unattributed';
   const holder = groupBy === 'key' ? EARLIER_HOLDER.exec(key) : null;
-  return holder === null ? key : earlierHolderLabel(holder[1], Number(holder[2]));
+  return holder === null ? modelGroupLabel({ key, label: key }, groupBy) : earlierHolderLabel(holder[1], Number(holder[2]));
 }
 
 /**
@@ -275,12 +282,32 @@ export function oneAccountShares<T>(groups: AnalyticsGroup[], read: (g: Analytic
 export const planRowsRequired = (g: AnalyticsGroup): boolean => (g.planRequests === null ? Object.keys(g.costEquivalent).length > 0 : g.planRequests > 0 && g.planOutputTokens !== 0);
 export const addReadWrite = (a: { read: number; write: number }, b: { read: number; write: number }) => ({ read: a.read + b.read, write: a.write + b.write });
 /**
- * Whether a group's probes oblige it to carry both shared probe windows: answered probes alone, since a held or skipped
- * probe never ran, on a group with chargeable plan usage, since the routes answer no count of the plan-funded probes
- * apart from the billed ones and a group of billed traffic alone (an API-key account's, or one in overage) runs billed
- * probes, which carry no plan window to lack.
+ * Whether a group's plan side shows the probes or the credits whose windows `maps` carry. The routes answer no count of
+ * the plan-funded probes or credits apart from the billed ones, so a plan figure shows by a window the ledger priced it
+ * on in one of its maps, and one on a model the revision cannot price by the shared cost window the group's own plan
+ * rows lack too. A group whose probes or credits are all billed (an API key member's, an overage's) shows neither.
  */
-export const probesRequired = (g: AnalyticsGroup): boolean => g.probes.ok > 0 && planRowsRequired(g);
+const planSideShows = (g: AnalyticsGroup, maps: (Record<string, unknown> | null)[]): boolean =>
+  maps.some((map) => map !== null && Object.keys(map).length > 0) || SHARED_WINDOWS.some((w) => !own(g.costEquivalent, w));
+/**
+ * Whether a group's probes oblige it to carry both shared probe windows: answered probes alone, since a held or skipped
+ * probe never ran, that the plan funded, on a group with chargeable plan usage. A group whose answered probes are all
+ * billed carries no plan window to lack, so it adds no probe window and drops none.
+ */
+export const probesRequired = (g: AnalyticsGroup): boolean => g.probes.ok > 0 && planRowsRequired(g) && planSideShows(g, [g.probeEquivalent, g.probeShares]);
+/**
+ * The probes that reached the upstream, the answered and the failed ones, the count a side's probe cost latches on: a
+ * held or skipped probe never ran, so a group whose probes were all held or skipped spent nothing on probes and its
+ * saving stands.
+ */
+export const upstreamProbes = (g: Pick<AnalyticsGroup, 'probes'>): number => g.probes.ok + g.probes.failed;
+/**
+ * Whether a group's kept-warm credits oblige it to carry both shared saving windows: credits the plan funded, on a
+ * group with chargeable plan usage. A group whose probes kept nothing warm, or whose credits are all billed, carries no
+ * plan saving to lack, so it adds no saving window and drops none.
+ */
+export const savingRequired = (g: AnalyticsGroup): boolean =>
+  keptWarmTokens(g.keptWarm ?? { tokens1h: 0, tokens5m: 0 }) > 0 && planRowsRequired(g) && planSideShows(g, [g.savingEquivalent, g.savingShares]);
 /**
  * The named account's whole: the position's totals with its shares summed over the groups the route answered them on.
  */
@@ -289,7 +316,17 @@ export const oneAccountGroupOf = (totals: AnalyticsGroup, groups: AnalyticsGroup
   cacheShares: oneAccountShares(groups, (g) => g.cacheShares, addReadWrite, planRowsRequired),
   costShares: oneAccountShares(groups, (g) => g.costShares, (a, b) => a + b, planRowsRequired),
   probeShares: oneAccountShares(groups, (g) => g.probeShares, (a, b) => ({ cost: a.cost + b.cost, wasted: a.wasted === null || b.wasted === null ? null : a.wasted + b.wasted }), probesRequired),
+  savingShares: oneAccountShares(groups, (g) => g.savingShares, (a, b) => a + b, savingRequired),
 });
+
+/** The two counts summed, the one figure the charts and the by-pool table print per group. */
+export const keptWarmTokens = (k: { tokens1h: number; tokens5m: number }): number => k.tokens1h + k.tokens5m;
+/** The net saving, the gross less the probe cost, in whatever unit both figures came in. */
+export const netSaving = (gross: number, probeCost: number): number => gross - probeCost;
+/** The two counts' note: "12,345 tokens read warm, 8,000 at five minutes and 4,345 at an hour". */
+export function keptWarmNote(k: { requests: number; tokens1h: number; tokens5m: number }): string {
+  return `${fmtInt(keptWarmTokens(k))} tokens read warm, ${fmtInt(k.tokens5m)} at five minutes and ${fmtInt(k.tokens1h)} at an hour`;
+}
 
 /** The model week's key in a share map, the one key beside the two shared windows, undefined where the map has none. */
 export const weekKeyOf = (shares: Record<string, unknown>): string | undefined => Object.keys(shares).find((k) => !SHARED_WINDOWS.includes(k));
@@ -434,15 +471,15 @@ export function costHeadOf(unit: UnitPosition, totals: AnalyticsGroup): CostHead
 /**
  * Per group the 7-day share (solid) and the model week's (dashed) per bucket as `<group>:7d` and `<group>:week`, the
  * 5-hour share beside them as `<group>:5h` for the tooltip, a gap (null) where a bucket has none, per group the key its
- * model week is charted under (`weeks`), undefined where no bucket names one, and the group's label, which names the
- * line under the page's grouping. The groups are the ones carrying a share map: each account under the account
- * grouping, an API key account drawing no line, or each group of the one account the Accounts filter names.
+ * model week is charted under (`weeks`), undefined where no bucket names one, and the group's label under `groupBy`,
+ * which names the line under the page's grouping. The groups are the ones carrying a share map: each account under the
+ * account grouping, an API key account drawing no line, or each group of the one account the Accounts filter names.
  */
-export function shareLines(points: AnalyticsPoint[]): { accounts: string[]; data: Record<string, number | null>[]; labels: Record<string, string>; weeks: Record<string, string | undefined> } {
+export function shareLines(points: AnalyticsPoint[], groupBy: BurnGroup): { accounts: string[]; data: Record<string, number | null>[]; labels: Record<string, string>; weeks: Record<string, string | undefined> } {
   const accounts = [...new Set(points.flatMap((p) => p.groups.filter((g) => g.costShares !== null).map((g) => g.key)))].sort((a, b) => a.localeCompare(b));
   const weeks: Record<string, string | undefined> = Object.fromEntries(accounts.map((a) => [a, undefined]));
   const labels: Record<string, string> = {};
-  for (const p of points) for (const g of p.groups) if (g.costShares !== null) labels[g.key] ??= g.label;
+  for (const p of points) for (const g of p.groups) if (g.costShares !== null) labels[g.key] ??= modelGroupLabel(g, groupBy);
   const data = points.map((p) => {
     const row: Record<string, number | null> = { at: Date.parse(p.at) };
     for (const a of accounts) for (const w of ['5h', '7d', 'week']) row[`${a}:${w}`] = null;

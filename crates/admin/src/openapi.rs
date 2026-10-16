@@ -584,6 +584,15 @@ pub(crate) struct BreakdownRow {
     pub cache_equivalent: BTreeMap<String, CacheEquivalentView>,
     /// Each `cost` and `wasted`, keyed and summed as `cost_equivalent`, the probe rows always joining.
     pub probe_equivalent: BTreeMap<String, ProbeEquivalentView>,
+    /// The kept-warm requests' saving, gross of the probes: the write each count avoided at its TTL's rate less the
+    /// read it paid, summed over the group's rows.
+    pub saving_usd: f64,
+    /// The saving as a share of the account tier's windows, keyed and summed as `cost_shares` and null under the same
+    /// rule.
+    pub saving_shares: Option<BTreeMap<String, f64>>,
+    /// The saving in the 20x window equivalent per window, under every grouping, a window absent where a row could not
+    /// be priced on it.
+    pub saving_equivalent: BTreeMap<String, f64>,
     /// The dollars of the billed rows alone (fast mode, overage and API key accounts), a part of `cost_usd`.
     pub billed_usd: f64,
     /// `billed_usd` by token kind.
@@ -652,7 +661,10 @@ pub(crate) struct PercentilesView {
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeptWarmView {
     pub requests: u64,
-    pub tokens: u64,
+    /// The kept-warm requests' cache reads booked under any TTL but an hour.
+    pub tokens_5m: u64,
+    /// The kept-warm requests' cache reads booked under an hour's TTL.
+    pub tokens_1h: u64,
 }
 
 /// The read and write halves of a window's cache share, as fractions of the window.

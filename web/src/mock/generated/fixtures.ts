@@ -55,8 +55,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "tier": "default_claude_max_20x",
         "since": 1773482400000,
         "trial_ends_at": null,
-        "ends_at": null,
-        "derived_ends_at": 1791972000000
+        "ends_at": null
       },
       "windows": [
         {
@@ -67,7 +66,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "projection": null,
           "horizon": null,
           "burn": null,
-          "demand": null
+          "demand": null,
+          "lead": -0.18000000000000005
         },
         {
           "id": "seven_day",
@@ -77,7 +77,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "projection": null,
           "horizon": null,
           "burn": null,
-          "demand": null
+          "demand": null,
+          "lead": -0.4471428571428571
         },
         {
           "id": "seven_day_fable",
@@ -87,7 +88,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "projection": null,
           "horizon": null,
           "burn": null,
-          "demand": null
+          "demand": null,
+          "lead": -0.7371428571428571
         },
         {
           "id": "seven_day_opus",
@@ -97,7 +99,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "projection": null,
           "horizon": null,
           "burn": null,
-          "demand": null
+          "demand": null,
+          "lead": -0.8271428571428571
         }
       ],
       "slow_down": null,
@@ -334,8 +337,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "tier": "default_claude_max_20x",
             "since": 1773482400000,
             "trial_ends_at": null,
-            "ends_at": null,
-            "derived_ends_at": 1791972000000
+            "ends_at": null
           },
           "windows": [
             {
@@ -346,7 +348,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "projection": null,
               "horizon": null,
               "burn": null,
-              "demand": null
+              "demand": null,
+              "lead": -0.18000000000000005
             },
             {
               "id": "seven_day",
@@ -356,7 +359,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "projection": null,
               "horizon": null,
               "burn": null,
-              "demand": null
+              "demand": null,
+              "lead": -0.4471428571428571
             },
             {
               "id": "seven_day_fable",
@@ -366,7 +370,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "projection": null,
               "horizon": null,
               "burn": null,
-              "demand": null
+              "demand": null,
+              "lead": -0.7371428571428571
             },
             {
               "id": "seven_day_opus",
@@ -376,7 +381,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "projection": null,
               "horizon": null,
               "burn": null,
-              "demand": null
+              "demand": null,
+              "lead": -0.8271428571428571
             }
           ],
           "slow_down": null,
@@ -930,7 +936,8 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "kept_warm": {
             "requests": 0,
-            "tokens": 0
+            "tokens_5m": 0,
+            "tokens_1h": 0
           },
           "probes": {
             "failed": 0,
@@ -963,6 +970,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           },
           "probe_equivalent": {},
+          "saving_usd": 0,
+          "saving_shares": null,
+          "saving_equivalent": {},
           "billed_usd": 0.0107,
           "billed": {
             "cache_read": 0.0002,
@@ -1311,7 +1321,8 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "kept_warm": {
             "requests": 0,
-            "tokens": 0
+            "tokens_5m": 0,
+            "tokens_1h": 0
           },
           "probes": {
             "failed": 0,
@@ -1344,6 +1355,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           },
           "probe_equivalent": {},
+          "saving_usd": 0,
+          "saving_shares": null,
+          "saving_equivalent": {},
           "billed_usd": 0,
           "billed": {
             "cache_read": 0,
@@ -1703,7 +1717,8 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "kept_warm": {
             "requests": 0,
-            "tokens": 0
+            "tokens_5m": 0,
+            "tokens_1h": 0
           },
           "probes": {
             "failed": 0,
@@ -1748,6 +1763,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           },
           "probe_equivalent": {},
+          "saving_usd": 0,
+          "saving_shares": {},
+          "saving_equivalent": {},
           "billed_usd": 0.0071,
           "billed": {
             "cache_read": 0.0001,
@@ -2094,7 +2112,8 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "kept_warm": {
             "requests": 0,
-            "tokens": 0
+            "tokens_5m": 0,
+            "tokens_1h": 0
           },
           "probes": {
             "failed": 0,
@@ -2115,6 +2134,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_equivalent": {},
           "cache_equivalent": {},
           "probe_equivalent": {},
+          "saving_usd": 0,
+          "saving_shares": null,
+          "saving_equivalent": {},
           "billed_usd": 0.0036,
           "billed": {
             "cache_read": 0.0001,
@@ -2466,7 +2488,8 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "kept_warm": {
             "requests": 0,
-            "tokens": 0
+            "tokens_5m": 0,
+            "tokens_1h": 0
           },
           "probes": {
             "failed": 0,
@@ -2487,6 +2510,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_equivalent": {},
           "cache_equivalent": {},
           "probe_equivalent": {},
+          "saving_usd": 0,
+          "saving_shares": null,
+          "saving_equivalent": {},
           "billed_usd": 0.00355,
           "billed": {
             "cache_read": 0.00005,
@@ -2831,7 +2857,8 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "kept_warm": {
             "requests": 0,
-            "tokens": 0
+            "tokens_5m": 0,
+            "tokens_1h": 0
           },
           "probes": {
             "failed": 0,
@@ -2864,6 +2891,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           },
           "probe_equivalent": {},
+          "saving_usd": 0,
+          "saving_shares": null,
+          "saving_equivalent": {},
           "billed_usd": 0.00715,
           "billed": {
             "cache_read": 0.00015,
@@ -4438,7 +4468,8 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "kept_warm": {
                 "requests": 0,
-                "tokens": 0
+                "tokens_5m": 0,
+                "tokens_1h": 0
               },
               "probes": {
                 "failed": 0,
@@ -4471,6 +4502,9 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "probe_equivalent": {},
+              "saving_usd": 0,
+              "saving_shares": null,
+              "saving_equivalent": {},
               "billed_usd": 0.0071,
               "billed": {
                 "cache_read": 0.0001,
@@ -4819,7 +4853,8 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "kept_warm": {
                 "requests": 0,
-                "tokens": 0
+                "tokens_5m": 0,
+                "tokens_1h": 0
               },
               "probes": {
                 "failed": 0,
@@ -4852,6 +4887,9 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "probe_equivalent": {},
+              "saving_usd": 0,
+              "saving_shares": null,
+              "saving_equivalent": {},
               "billed_usd": 0,
               "billed": {
                 "cache_read": 0,
@@ -5206,7 +5244,8 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "kept_warm": {
                 "requests": 0,
-                "tokens": 0
+                "tokens_5m": 0,
+                "tokens_1h": 0
               },
               "probes": {
                 "failed": 0,
@@ -5239,6 +5278,9 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "probe_equivalent": {},
+              "saving_usd": 0,
+              "saving_shares": null,
+              "saving_equivalent": {},
               "billed_usd": 0.0036,
               "billed": {
                 "cache_read": 0.0001,
@@ -5695,7 +5737,8 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "kept_warm": {
                 "requests": 0,
-                "tokens": 0
+                "tokens_5m": 0,
+                "tokens_1h": 0
               },
               "probes": {
                 "failed": 0,
@@ -5740,6 +5783,9 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "probe_equivalent": {},
+              "saving_usd": 0,
+              "saving_shares": {},
+              "saving_equivalent": {},
               "billed_usd": 0.0071,
               "billed": {
                 "cache_read": 0.0001,
@@ -6093,7 +6139,8 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "kept_warm": {
                 "requests": 0,
-                "tokens": 0
+                "tokens_5m": 0,
+                "tokens_1h": 0
               },
               "probes": {
                 "failed": 0,
@@ -6138,6 +6185,9 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "probe_equivalent": {},
+              "saving_usd": 0,
+              "saving_shares": {},
+              "saving_equivalent": {},
               "billed_usd": 0,
               "billed": {
                 "cache_read": 0,
@@ -6484,7 +6534,8 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "kept_warm": {
                 "requests": 0,
-                "tokens": 0
+                "tokens_5m": 0,
+                "tokens_1h": 0
               },
               "probes": {
                 "failed": 0,
@@ -6505,6 +6556,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "cost_equivalent": {},
               "cache_equivalent": {},
               "probe_equivalent": {},
+              "saving_usd": 0,
+              "saving_shares": null,
+              "saving_equivalent": {},
               "billed_usd": 0.0036,
               "billed": {
                 "cache_read": 0.0001,

@@ -30,8 +30,9 @@ export interface OptionListProps {
   value: string[];
 }
 
-// A row a list holds shut, such as a filter whose options did not load, is no stop for the keys.
-const ROWS = '[role="option"]:not([aria-disabled="true"]), [role="radio"]:not([aria-disabled="true"])';
+// A disabled row is a stop for the keys, so its reason reaches a reader who walks the list, and the row's own handler
+// keeps it inert.
+const ROWS = '[role="option"], [role="radio"]';
 
 /**
  * The list's keys: ArrowDown and ArrowUp walk the list's field and its rows, wrapping at either end, and Home and End

@@ -20,6 +20,7 @@ import {
   outcomeRows,
   paceHeader,
   pinRows,
+  rankCandidates,
   requestRows,
   settingsRows,
   verdictChips,
@@ -88,7 +89,7 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
 
       {record.candidates.length > 0 && (
         <section>
-          <h4 className="decision-card__title">Candidates, in the walk&apos;s order</h4>
+          <h4 className="decision-card__title">Candidates, by rank</h4>
           <div className="table-wrap">
             <table className="table decision-card__candidates">
               <thead>
@@ -107,7 +108,7 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
                 </tr>
               </thead>
               <tbody>
-                {record.candidates.map((c) => {
+                {rankCandidates(record.candidates).map((c) => {
                   const cells = candidateCells(c, record, now);
                   const tinted = ['chosen', 'held_on', 'renewed'].includes(c.verdict);
                   return (

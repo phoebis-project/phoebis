@@ -64,7 +64,7 @@ async function storyAt(at) {
   const totalled = requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= totalsFrom);
   const rollups = d.ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
   const settings = await api.getSettings();
-  return { accounts, aheadOf: d.aheadOf, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, lib: d, now, overview, pools, requests, rollups, sessions, settings, totalled, totalledFrom: totalsFrom, weekFrom };
+  return { accounts, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, leadOf: d.leadOf, lib: d, now, overview, pools, requests, rollups, sessions, settings, totalled, totalledFrom: totalsFrom, weekFrom };
 }
 
 /** Every decision record of the story, read as the routing log answers them, newest first. */
@@ -1027,14 +1027,40 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const lead = (accountId, windowId) => {
       const account = s.accounts.find((a) => a.id === accountId);
       const w = account.windows.find((x) => x.id === windowId);
-      return s.aheadOf(w, w.periodHours * HOUR, s.now, s.lib.endOf(account, s.now));
+      return s.leadOf(w, w.periodHours * HOUR, s.now, s.lib.endOf(account, s.now));
     };
     assert.ok(lead('primary', '5h') > 0.05, `primary's 5h window reads ${lead('primary', '5h')}, not ahead of pace`);
     assert.ok(lead('primary', '7d') < -0.05, `primary's 7d window reads ${lead('primary', '7d')}, not behind pace`);
     assert.ok(lead('secondary', '5h') > 0 && lead('secondary', '7d') > 0, `secondary's windows read ${lead('secondary', '5h')} and ${lead('secondary', '7d')}, not both ahead of pace`);
   });
 
-  test(`every decision record reads a plan window's lead as the console's arithmetic does and projects it to its horizon, at ${at}`, async () => {
+  test(`every account window answers the lead the router's arithmetic gives its own reading, at ${at}`, async () => {
+    const s = await story;
+    let read = 0;
+    for (const a of s.accounts) {
+      const end = s.lib.endOf(a, s.now);
+      for (const w of [...a.windows, ...(a.fableWindow === null ? [] : [a.fableWindow])]) {
+        const want = s.leadOf(w, w.periodHours * HOUR, s.now, end);
+        assert.ok(typeof w.lead === 'number' && near(w.lead, want), `${a.id}'s ${w.id} leads ${w.lead}, not ${want}`);
+        read += 1;
+      }
+    }
+    assert.ok(read > 0, 'the story holds windows');
+  });
+
+  test(`the default range's kept-warm saving nets a figure per pool, a saving where the pool keeps caches warm and a loss on one whose probes cost more than they saved, at ${at}`, async () => {
+    const s = await story;
+    const groups = s.lib.groupsOf(defaultRange(s), { groupBy: 'pool', includeProbes: false });
+    const nets = groups.map((g) => ({ kept: g.keptWarm.tokens1h + g.keptWarm.tokens5m, net: g.savingUsd - g.probeCostUsd, pool: g.key }));
+    assert.ok(nets.every((n) => Number.isFinite(n.net)), `every pool nets a figure: ${JSON.stringify(nets)}`);
+    assert.ok(nets.some((n) => n.kept > 0 && n.net > 0), `a pool that keeps caches warm nets a saving: ${JSON.stringify(nets)}`);
+    assert.equal(nets.filter((n) => n.net < 0).length, 1, `one pool's probes cost more than they saved: ${JSON.stringify(nets)}`);
+    assert.ok(nets.filter((n) => n.net >= 0).every((n) => n.kept > 0 || n.net === 0), `every other pool that kept nothing warm nets nothing: ${JSON.stringify(nets)}`);
+    const warmed = groups.filter((g) => g.keptWarm.tokens1h > 0 && g.keptWarm.tokens5m > 0);
+    assert.ok(warmed.length > 0, 'the kept tokens split between the two TTLs');
+  });
+
+  test(`every decision record reads a plan window's lead and projects it to its horizon, at ${at}`, async () => {
     const s = await story;
     let capped = 0;
     let burning = 0;
@@ -1047,7 +1073,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         for (const [name, hours] of [['five_hour', 5], ['seven_day', 168]]) {
           const w = c.windows[name];
           if (!w || w.ahead === null) continue;
-          const want = Math.round(s.aheadOf({ resetsAt: w.reset, utilization: w.utilization }, hours * HOUR, t, end) * 1000) / 1000;
+          const want = Math.round(s.leadOf({ resetsAt: w.reset, utilization: w.utilization }, hours * HOUR, t, end) * 1000) / 1000;
           assert.ok(near(w.ahead, want), `${r.requestId}: ${c.accountId}'s ${name} reads ${w.ahead}, not ${want}`);
         }
         // The 5-hour window runs to its reset and a weekly one five hours out at most, each to the end where it comes

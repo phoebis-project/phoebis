@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, minuteSpan, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, minuteSpan, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -156,6 +156,23 @@ const escapeOn = async (m) => {
   document.activeElement?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }));
   await m.settle(200);
 };
+/**
+ * The attention line's items as an operator reaches them, in rank order: the badges its row shows, then, where the row
+ * folds some behind "+N more", the rest from the list that badge opens, which Escape closes again. A line no layout
+ * measured folds nothing, so there the row holds them all. Each item reads its text, tone, title and target.
+ */
+async function attentionItems(m) {
+  const line = m.container.querySelector('.attention-line');
+  const read = (b) => ({ href: b.getAttribute('href'), text: b.textContent?.trim() ?? '', title: b.getAttribute('title') ?? '', tone: [...b.classList].find((c) => c.startsWith('badge--')) ?? 'none' });
+  const row = [...(line?.querySelectorAll('.attention-line__items .badge') ?? [])].filter((b) => b.closest('[hidden]') === null).map(read);
+  const fold = line?.querySelector('.attention-line__more:not([hidden])');
+  if (!fold) return row;
+  fold.click();
+  await m.settle(200);
+  const list = [...document.querySelectorAll('.attention-line__list .badge')].map(read);
+  await escapeOn(m);
+  return [...row, ...list.slice(row.length)];
+}
 /**
  * A Discard check: the open dialogs counted before `act` and after it, each against its expected count, so a dialog
  * that never opened fails the check too. `extra` is the check's own reading after the click and `detail` what its
@@ -497,8 +514,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   globalThis.setInterval = realSetInterval;
   const line = () => dash.container.querySelector('.attention-line');
   const lead = () => line()?.querySelector('.attention-line__lead')?.textContent?.trim() ?? null;
-  const badges = () =>
-    [...(line()?.querySelectorAll('.badge') ?? [])].map((b) => ({ href: b.getAttribute('href'), text: b.textContent?.trim() ?? '', title: b.getAttribute('title') ?? '', tone: [...b.classList].find((c) => c.startsWith('badge--')) ?? 'none' }));
+  const badges = () => attentionItems(dash);
   const tick = async () => {
     ticks[0]?.();
     await dash.settle(300);
@@ -515,7 +531,8 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   // The exhausted pool's badge opens the routing log on a range that ends now, which its own check reads; here the
   // address's path stands for it.
   const target = (href) => href?.split('?')[0] ?? null;
-  const read = badges().map((b) => [b.text, b.tone, target(b.href), members(b.title)]);
+  const listed = await badges();
+  const read = listed.map((b) => [b.text, b.tone, target(b.href), members(b.title)]);
   // The model's item counts the story's own Sonnet 4.6 plan requests and names its tier's latest weighted model, so
   // its members are read off the mock's answer rather than written here.
   const unweighted = (await api.getAttention()).find((i) => i.kind === 'model_unweighted');
@@ -527,7 +544,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     ['State writer degraded: routing', 'badge--serious', null, ['routing state is kept in memory until the registry file takes writes again', 'component: routing']],
     ['Re-auth required: legacy', 'badge--critical', '/accounts/legacy', ['serves nothing until its credential is renewed', 'account: legacy', 'label: legacy']],
     ['Funding required: Overflow workspace', 'badge--serious', '/accounts/overflow', ['account: overflow', 'label: Overflow workspace']],
-    ['Credential refresh failed: legacy', 'badge--critical', '/accounts/legacy', ['5 refreshes failed in a row: refresh_token rejected: invalid_grant', 'account: legacy', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
+    ['Credential refresh failed: legacy', 'badge--serious', '/accounts/legacy', ['5 refreshes failed in a row: refresh_token rejected: invalid_grant', 'account: legacy', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
     ['Certificate expiring: proxy.tls', 'badge--warning', null, ["The proxy listener's certificate /etc/phoebis/proxy.pem expires in 12 days (<instant>). Replace the pair and run phoebis tls reload.", 'cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', 'expires: <instant>']],
     ['Priced record parked: jobs', 'badge--serious', '/pools#jobs', ['accounts: ["research"]', 'count: 1', 'pool: jobs']],
     ['Usage poll backing off: secondary', 'badge--warning', '/accounts/secondary', ['account: secondary', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
@@ -563,17 +580,17 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
       ['bar_ms: 3600000', 'factor_min: 0.35', 'open: true', 'setting: ["slow_down_stretch_seconds"]', 'setting_values: {"slow_down_stretch_seconds":1800}', 'slowed_ms: 7700000', 'spans: 2'],
     ],
   ];
-  const ages = badges().map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
+  const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
-    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log and an unweighted model's the Models page, and titled with its detail and age, its sentence first where no pool card draws it",
+    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log and an unweighted model's the Models page, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all sixteen while no layout folds it",
     ok:
       lead() === '16 need attention' &&
       unweighted !== undefined &&
       drift !== undefined &&
       JSON.stringify(read) === JSON.stringify(want) &&
       /^started 1[34]m ago$/.test(ages[0] ?? '') &&
-      ages[6] === 'started 18d 0h ago' &&
-      /^started 1h [01]m ago$/.test(ages[7] ?? '') &&
+      ages[6] === 'started 18d ago' &&
+      /^started 1h( 1m)? ago$/.test(ages[7] ?? '') &&
       /^started 4[23]m ago$/.test(ages[8] ?? '') &&
       ages.every((a) => /^started (\d+[dhm] ?)+ ago$/.test(a ?? '')) &&
       line()?.nextElementSibling?.classList.contains('stat-grid') === true,
@@ -581,8 +598,8 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   });
   // The writers are the router's own components, so their badge opens nothing; a parked record opens its pool's card,
   // and neither is drawn as the pool's exhaustion.
-  const writer = badges().find((b) => b.text.startsWith('State writer degraded'));
-  const parked = badges().find((b) => b.text.startsWith('Priced record parked'));
+  const writer = listed.find((b) => b.text.startsWith('State writer degraded'));
+  const parked = listed.find((b) => b.text.startsWith('Priced record parked'));
   results.push({
     name: "/ the attention line draws the routing state writer's badge as one that opens nothing and a parked record's as one that opens its pool's card, neither as an exhausted pool",
     ok:
@@ -590,7 +607,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
       writer.href === null &&
       parked?.text === 'Priced record parked: jobs' &&
       parked.href === '/pools#jobs' &&
-      badges().filter((b) => b.text.startsWith('Pool exhausted')).length === 1,
+      listed.filter((b) => b.text.startsWith('Pool exhausted')).length === 1,
     missing: [JSON.stringify(writer ?? null), JSON.stringify(parked ?? null)],
   });
   localStorage.setItem('phoebis.mockEmpty', '1');
@@ -603,7 +620,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   const keyless = { detail: { client_version: '2.1.272', trigger: 'hash' }, kind: 'client_drift', link: null, pools: [], since: new Date(Date.now() - 2 * 60_000).toISOString(), subject: { id: '2.1.272', label: '2.1.272', type: 'client' } };
   api.getAttention = async () => [exhausted, keyless];
   await tick();
-  const gained = [lead(), JSON.stringify(badges().map((b) => [b.text, b.tone, target(b.href)])), line()?.querySelectorAll('a').length];
+  const gained = [lead(), JSON.stringify((await badges()).map((b) => [b.text, b.tone, target(b.href)])), line()?.querySelectorAll('a').length];
   api.getAttention = getAttention;
   await tick();
   const lost = quiet();
@@ -637,6 +654,116 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   await tick();
   results.push({ name: '/ the story back, the next tick draws its sixteen items again', ok: lead() === '16 need attention', missing: [lead() ?? 'no lead'] });
   dash.unmount();
+
+  {
+    // jsdom lays nothing out, so the line reads a browser's sizes here: the lead 120 px, each badge 80, the fold badge
+    // 70 and the Replay pill 150 on a 700 px row, and no stylesheet sets a gap. The row holds the lead, four badges,
+    // the fold badge and the pill, where it would hold eight badges without the room for its other parts. The line
+    // measures as it draws, so the sizes stand before the mount.
+    const measure = window.HTMLElement.prototype.getBoundingClientRect;
+    const widths = [
+      ['attention-line__item', 80],
+      ['attention-line__lead', 120],
+      ['attention-line__more', 70],
+      ['pill', 150],
+    ];
+    let room = 700;
+    window.HTMLElement.prototype.getBoundingClientRect = function () {
+      const width = widths.find(([c]) => this.classList.contains(c))?.[1];
+      return width === undefined ? measure.call(this) : { bottom: 22, height: 22, left: 0, right: width, top: 0, width, x: 0, y: 0 };
+    };
+    Object.defineProperty(window.HTMLElement.prototype, 'clientWidth', {
+      configurable: true,
+      get() {
+        return this.classList.contains('attention-line') ? room : 0;
+      },
+    });
+    const page = await mount('/');
+    const narrow = page.container.querySelector('.attention-line');
+    const rowBadges = [...(narrow?.querySelectorAll('.attention-line__items .badge') ?? [])];
+    const shown = rowBadges.filter((b) => b.closest('[hidden]') === null).map((b) => b.textContent?.trim());
+    const fold = narrow?.querySelector('button.attention-line__more') ?? null;
+    const foldRead = [fold?.textContent?.trim(), fold?.getAttribute('title'), fold?.className, fold?.getAttribute('aria-haspopup'), fold?.getAttribute('aria-expanded'), fold?.getAttribute('aria-controls') ?? null];
+    const oneRow = [narrow?.className, fold?.nextElementSibling?.className, narrow?.querySelector('.attention-line__tail')?.firstElementChild?.textContent?.trim()];
+    const box = () => document.querySelector('.attention-line__list');
+    fold?.click();
+    await page.settle(200);
+    const entries = [...(box()?.children ?? [])].map((entry) => entry.querySelector('.badge'));
+    const listed = entries.map((b) => [b?.textContent?.trim(), [...(b?.classList ?? [])].find((c) => c.startsWith('badge--')), target(b?.getAttribute('href'))]);
+    const sameTitles = entries.length === rowBadges.length && entries.every((b, i) => b?.getAttribute('title') === rowBadges[i].getAttribute('title'));
+    const opened = [box()?.getAttribute('role'), box()?.getAttribute('aria-label'), fold?.getAttribute('aria-expanded'), box()?.contains(document.activeElement) ?? false, box() !== null && fold?.getAttribute('aria-controls') === box()?.id];
+    await escapeOn(page);
+    const closed = [box() === null, fold?.getAttribute('aria-expanded'), document.activeElement === fold];
+    fold?.click();
+    await page.settle(200);
+    const link = [...(box()?.querySelectorAll('a.badge') ?? [])].find((a) => a.textContent?.trim() === 'Re-auth required: legacy');
+    link?.click();
+    await page.settle(300);
+    const went = [page.location().pathname, box() === null];
+    page.unmount();
+    // At 300 px the lead, the fold badge and the pill alone need 340, so the pill takes a second row and the first
+    // holds the lead, one badge and the fold badge.
+    room = 300;
+    const tight = await mount('/');
+    const lineRead = (m) => {
+      const l = m.container.querySelector('.attention-line');
+      return [
+        l?.className ?? null,
+        [...(l?.querySelectorAll('.attention-line__items .badge') ?? [])].filter((b) => b.closest('[hidden]') === null).map((b) => b.textContent?.trim()),
+        l?.querySelector('.attention-line__more:not([hidden])')?.textContent?.trim() ?? null,
+        [...(l?.querySelector('.attention-line__tail')?.children ?? [])].map((c) => c.textContent?.trim()),
+      ];
+    };
+    const wrapped = lineRead(tight);
+    tight.unmount();
+    // One parked record at 380 px with a 200 px badge, a 130 px lead, a 100 px fold badge and a 160 px pill: the
+    // badge beside the lead and the pill needs 490 and the fold badge beside them 390, so the pill takes a second row
+    // and the badge stands on the first. The answer must hold from one draw to the next, the line redrawn by a read.
+    const storyAttention = api.getAttention;
+    const parkedOnly = (await storyAttention.call(api)).filter((i) => i.kind === 'ledger_record_parked');
+    api.getAttention = async () => parkedOnly;
+    widths.splice(0, widths.length, ['attention-line__item', 200], ['attention-line__lead', 130], ['attention-line__more', 100], ['pill', 160]);
+    room = 380;
+    const raisedFrom = problems.length;
+    const lone = await mount('/');
+    const loneFirst = lineRead(lone);
+    window.dispatchEvent(new window.Event('focus'));
+    await lone.settle(300);
+    const loneSecond = lineRead(lone);
+    const raised = problems.slice(raisedFrom);
+    lone.unmount();
+    api.getAttention = storyAttention;
+    window.HTMLElement.prototype.getBoundingClientRect = measure;
+    delete window.HTMLElement.prototype.clientWidth;
+    const texts = want.map(([text]) => text);
+    results.push({
+      name: "/ an attention line too narrow for its sixteen items shows the four that fit and folds the other twelve behind \"+12 more\" titled with their words one per line, whose list holds all sixteen worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
+      ok:
+        JSON.stringify(shown) === JSON.stringify(texts.slice(0, 4)) &&
+        JSON.stringify(foldRead) === JSON.stringify(['+12 more', ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
+        JSON.stringify(listed) === JSON.stringify(want.map(([text, tone, href]) => [text, tone, href])) &&
+        sameTitles &&
+        JSON.stringify(opened) === JSON.stringify(['dialog', 'Needs attention', 'true', true, true]) &&
+        JSON.stringify(closed) === JSON.stringify([true, 'false', true]) &&
+        JSON.stringify(went) === JSON.stringify(['/accounts/legacy', true]),
+      missing: [JSON.stringify(shown), JSON.stringify(foldRead), ...listed.map((l) => JSON.stringify(l)), `same titles ${sameTitles}`, JSON.stringify(opened), JSON.stringify(closed), JSON.stringify(went)],
+    });
+    results.push({
+      name: "/ the Replay button stands on the badges' row while the lead, the fold badge and the button fit beside each other, and takes a second row of its own where they do not",
+      ok:
+        JSON.stringify(oneRow) === JSON.stringify(['attention-line', 'attention-line__tail', 'Replay parked records']) &&
+        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+15 more', ['Replay parked records']]),
+      missing: [JSON.stringify(oneRow), JSON.stringify(wrapped)],
+    });
+    results.push({
+      name: '/ a lone parked record beside a Replay button too wide for one row draws the button on a second row and the badge unfolded, and holds that draw from one read to the next',
+      ok:
+        raised.length === 0 &&
+        JSON.stringify(loneFirst) === JSON.stringify(['attention-line is-wrapped', ['Priced record parked: jobs'], null, ['Replay parked records']]) &&
+        JSON.stringify(loneSecond) === JSON.stringify(loneFirst),
+      missing: [JSON.stringify(loneFirst), JSON.stringify(loneSecond), ...raised.map((p) => p.slice(0, 160))],
+    });
+  }
 }
 
 {
@@ -647,22 +774,26 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   const line = () => dash.container.querySelector('.attention-line');
   const button = () => [...(line()?.querySelectorAll('button.pill') ?? [])].find((b) => b.textContent?.trim() === 'Replay parked records');
   const slot = () => line()?.querySelector('.attention-line__replay')?.textContent ?? null;
-  const parked = () => [...(line()?.querySelectorAll('.badge') ?? [])].some((b) => b.textContent?.trim().startsWith('Priced record parked'));
-  const lastBadge = [...(line()?.querySelectorAll('.badge') ?? [])].pop();
+  const parked = async () => (await attentionItems(dash)).some((b) => b.text.startsWith('Priced record parked'));
+  // The pill leads the part after the fold badge, which stands hidden while nothing folds.
+  const before = line()?.querySelector('.attention-line__more') ?? line()?.querySelector('.attention-line__items');
+  const tail = line()?.querySelector('.attention-line__tail') ?? null;
+  const parkedFirst = await parked();
   results.push({
     name: '/ the attention line carries the Replay button after its badges while a parked record shows, and no answer yet',
-    ok: parked() && button() !== undefined && button()?.disabled === false && lastBadge?.nextElementSibling === button() && slot() === null,
-    missing: [`parked ${parked()}`, button()?.outerHTML.slice(0, 160) ?? 'no button', `after ${lastBadge?.textContent ?? 'no badge'}`, `slot ${JSON.stringify(slot())}`],
+    ok: parkedFirst && button() !== undefined && button()?.disabled === false && before !== null && tail !== null && before?.nextElementSibling === tail && tail.firstElementChild === button() && slot() === null,
+    missing: [`parked ${parkedFirst}`, button()?.outerHTML.slice(0, 160) ?? 'no button', `after ${before?.className ?? 'no row'}: ${before?.nextElementSibling?.className ?? 'nothing'}`, `slot ${JSON.stringify(slot())}`],
   });
   localStorage.setItem('phoebis.mockHeldWriter', '1');
   button()?.click();
   await dash.settle(500);
   localStorage.removeItem('phoebis.mockHeldWriter');
   const toasts = dash.container.querySelectorAll('[role="status"]').length;
+  const parkedHeld = await parked();
   results.push({
     name: "/ a replay under the held writer reads the route's refusal in the slot beside the button, in no toast, and the parked badge stays",
-    ok: slot() === 'the ledger writer is held, try again' && toasts === 0 && parked() && button()?.disabled === false,
-    missing: [`slot ${JSON.stringify(slot())}`, `toasts ${toasts}`, `parked ${parked()}`, button()?.outerHTML.slice(0, 160) ?? 'no button'],
+    ok: slot() === 'the ledger writer is held, try again' && toasts === 0 && parkedHeld && button()?.disabled === false,
+    missing: [`slot ${JSON.stringify(slot())}`, `toasts ${toasts}`, `parked ${parkedHeld}`, button()?.outerHTML.slice(0, 160) ?? 'no button'],
   });
   // The answer is held until the check releases it, so the button is read while the replay runs, whatever the timing.
   const answer = deferNextCall('replayParked');
@@ -672,10 +803,11 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   answer.release();
   answer.restore();
   await dash.settle(700);
+  const parkedAfter = await parked();
   results.push({
     name: '/ a replay reads its counts in the slot, and the read after it takes the parked badge and the button off the line',
-    ok: running[0] === 1 && running[1] === true && slot() === 'Landed 1, 0 still parked' && !parked() && button() === undefined,
-    missing: [`calls ${running[0]}, disabled while it runs ${running[1]}`, `slot ${JSON.stringify(slot())}`, `parked ${parked()}`, button()?.outerHTML.slice(0, 160) ?? 'no button'],
+    ok: running[0] === 1 && running[1] === true && slot() === 'Landed 1, 0 still parked' && !parkedAfter && button() === undefined,
+    missing: [`calls ${running[0]}, disabled while it runs ${running[1]}`, `slot ${JSON.stringify(slot())}`, `parked ${parkedAfter}`, button()?.outerHTML.slice(0, 160) ?? 'no button'],
   });
   // The replay landed the story's record for good, and the checks below read it on the jobs card, so the story takes
   // it back.
@@ -789,6 +921,22 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: "/ an account's cooldown line reads the row that cools it, never its fast lane's", ok: /^cooldown ends in 5[34]m$/.test(cooldownLine ?? ''), missing: [cooldownLine ?? 'no cooldown line on primary'] });
 }
 {
+  // Each remaining list reads in its ring's order, the account with the most of its own window left first, so the
+  // shares it prints run down the list. On the story the registry's order of its four routable subscription accounts
+  // runs down on neither window.
+  const listOf = (title) => {
+    const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
+    return [...(card?.querySelectorAll('.remaining__list li') ?? [])].map((li) => [li.querySelector('a')?.textContent ?? '', li.querySelector('.num')?.textContent ?? '']);
+  };
+  const lists = ['5h remaining', '7d remaining'].map((title) => ({ rows: listOf(title), title }));
+  const descending = (rows) => rows.every(([, share], i) => i === 0 || Number.parseFloat(share) <= Number.parseFloat(rows[i - 1][1]));
+  results.push({
+    name: '/ each remaining list reads the account with the most of its own window left first, the shares it prints running down the list',
+    ok: lists.every((l) => l.rows.length === 4 && l.rows.every(([label, share]) => label !== '' && /^\d+%$/.test(share)) && descending(l.rows)),
+    missing: lists.map((l) => `${l.title}: ${JSON.stringify(l.rows)}`),
+  });
+}
+{
   // The account cards draw the compact bars three to a card, each window with a projection reading the compact phrase
   // in its reset's place, at one frozen instant so the span to a weekly horizon is the page's own.
   const at = Date.now();
@@ -800,8 +948,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   });
   const primary = read.find((r) => r.account === 'primary' && r.label === '5h')?.text ?? '';
   results.push({
-    name: "/ each account card's window bars read the compact projection in the reset's place, primary's 5-hour 81% at reset",
-    ok: read.some((r) => r.want !== null) && barsOff(read).length === 0 && primary === '81% at reset',
+    name: "/ each account card's window bars read the compact projection in the reset's place, primary's 5-hour 19% left at reset",
+    ok: read.some((r) => r.want !== null) && barsOff(read).length === 0 && primary === '19% left at reset',
     missing: [...barsOff(read).map((r) => JSON.stringify(r)), primary || 'no 5h bar on primary'],
   });
   page.unmount();
@@ -984,6 +1132,61 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   });
 }
 {
+  // Each pace order reads that window's lead off the account answer, the account furthest ahead first, and an account
+  // whose window is absent, expired or without a lead after every one with a lead, ties by label. The story's 7-day
+  // leads lie on both sides of zero, so that order is read across it, and its 5-hour leads all sit above zero, so that
+  // order is read on one side. Each order moves cards past one another, so none reads as the list's own order and a
+  // sort left out fails. The page mounts on its own frozen instant, so the shared mount's later checks keep the default
+  // order.
+  const at = Date.now();
+  const q = await mount('/quota', { now: at });
+  const accounts = (await api.listAccounts()).filter((a) => a.kind === 'oauth');
+  const select = q.container.querySelector('#accounts select[aria-label="Sort"]');
+  const options = [...(select?.options ?? [])].map((o) => `${o.value}: ${o.textContent}`);
+  const drawn = () => [...q.container.querySelectorAll('.qcard__name')].map((n) => n.textContent?.trim() ?? '');
+  const leadOn = (a, id) => {
+    const w = id === '7d_fable' ? a.fableWindow : (a.windows.find((x) => x.id === id) ?? null);
+    return w === null || (w.resetsAt !== null && Date.parse(w.resetsAt) < at) ? null : w.lead;
+  };
+  const wanted = (id) =>
+    [...accounts]
+      .sort((a, b) => {
+        const [la, lb] = [leadOn(a, id), leadOn(b, id)];
+        if (la === null || lb === null) return la === lb ? a.label.localeCompare(b.label) : la === null ? 1 : -1;
+        return lb - la || a.label.localeCompare(b.label);
+      })
+      .map((a) => a.label);
+  const sortBy = async (value) => {
+    if (select) setSelect.call(select, value);
+    select?.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await q.settle();
+  };
+  const orders = [];
+  for (const [value, id] of [
+    ['pace5h', '5h'],
+    ['pace7d', '7d'],
+    ['paceWeek', '7d_fable'],
+  ]) {
+    await sortBy(value);
+    orders.push({ drawn: drawn(), value, want: wanted(id) });
+  }
+  const sides = ['7d'].map((id) => accounts.map((a) => leadOn(a, id)).filter((l) => l !== null)).map((leads) => leads.some((l) => l > 0) && leads.some((l) => l < 0));
+  await sortBy('default');
+  const back = drawn();
+  q.unmount();
+  const listed = JSON.stringify(accounts.map((a) => a.label));
+  results.push({
+    name: '/quota sorts its cards five ways, and each pace order reads the account furthest ahead of that window first and the ones without a lead on it last',
+    ok:
+      JSON.stringify(options) === JSON.stringify(['default: Default order', 'soonest: Soonest recovery', 'pace5h: 5-hour pace', 'pace7d: 7-day pace', 'paceWeek: 7-day Fable pace']) &&
+      orders.every((o) => o.want.length > 0 && JSON.stringify(o.drawn) === JSON.stringify(o.want)) &&
+      orders.every((o) => JSON.stringify(o.want) !== listed) &&
+      sides.every(Boolean) &&
+      JSON.stringify(back) === listed,
+    missing: [JSON.stringify(options), ...orders.map((o) => `${o.value}: ${JSON.stringify(o.drawn)} against ${JSON.stringify(o.want)}`), `the list order ${listed}`, `leads on both sides of zero on 7d: ${JSON.stringify(sides)}`, `default: ${JSON.stringify(back)}`],
+  });
+}
+{
   const cardOf = (label) => [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
   const chipsOf = (label) =>
     [...(cardOf(label)?.querySelectorAll('.qcard__chips .chip') ?? [])]
@@ -1070,7 +1273,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   const wanted = {
     chip: ['5h', true, '5-hour: expired, no reading since the reset'],
     meter: true,
-    reset: ['expired 2d 0h ago', true, true],
+    reset: ['expired 2d ago', true, true],
   };
   results.push({
     name: '/quota the expired cell reads ago with the reset on its title',
@@ -1082,7 +1285,8 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   // The projection rides the reset label after the reset, on one line, read at one frozen instant so the span to a
   // weekly horizon is the one the page drew: the smoke's clock runs past the mock's anchor, so the phrase comes from the
   // shared words and the mock's own windows rather than a literal span. The story's figures are the burns its windows
-  // carry: nightly's 5-hour window and primary's reach their reset, and primary's 7-day window reads its five hours.
+  // carry: nightly's 5-hour window runs out before its reset, primary's reaches its reset with a share left, and
+  // primary's 7-day window reads its five hours.
   const at = Date.now();
   const q = await mount('/quota', { now: at });
   const accounts = (await api.listAccounts()).filter((a) => a.kind === 'oauth');
@@ -1114,15 +1318,20 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   const wOf = (id, label) => accounts.find((a) => a.id === id)?.windows.find((w) => w.id === label) ?? null;
   const weekly = wOf('primary', '7d');
   const story = { nightly5h: cellOf('nightly', '5h').text, primary5h: cellOf('primary', '5h').text, primary7d: cellOf('primary', '7d').text };
+  // nightly's forecast reads 104% at its reset 3 h 41 min out on a burn of 1.9% an hour, so it reaches the whole window
+  // 2 h 6 min before the reset: 1 h 35 min after the story's start, and less as the clock runs on.
+  const nightly = wOf('nightly', '5h');
+  const spentIn = nightly === null ? null : Date.parse(nightly.horizon) - ((nightly.projection - 1) / nightly.burn) * 3_600_000 - at;
   results.push({
-    name: "/quota nightly's 5-hour window reads 104% at the reset, primary's 81% at the reset and its 7-day window 44% in the span to its horizon",
+    name: "/quota nightly's 5-hour window reads spent in the 1 h 35 min its forecast leaves from the story's start, primary's 19% left at the reset and its 7-day window 56% left in the span to its horizon",
     ok:
-      story.nightly5h.endsWith(', 104% at the reset') &&
-      story.primary5h.endsWith(', 81% at the reset') &&
+      spentIn !== null && spentIn > 85 * 60_000 && spentIn < 95 * 60_000 &&
+      story.nightly5h.endsWith(`, spent in ${minuteSpan(spentIn)}`) &&
+      story.primary5h.endsWith(', 19% left at the reset') &&
       weekly !== null &&
-      projectionWords(weekly, at)?.startsWith('44% in ') === true &&
+      projectionWords(weekly, at)?.startsWith('56% left in ') === true &&
       story.primary7d.endsWith(`, ${projectionWords(weekly, at)}`),
-    missing: [JSON.stringify(story), weekly ? String(projectionWords(weekly, at)) : 'no 7-day window on primary'],
+    missing: [JSON.stringify(story), `nightly spent in ${spentIn} ms`, weekly ? String(projectionWords(weekly, at)) : 'no 7-day window on primary'],
   });
   const burned = live.filter((r) => burnWords(r.w) !== null);
   const offBurn = burned.filter((r) => !r.title.endsWith(`, ${burnWords(r.w)}`));
@@ -1156,7 +1365,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
       const meter = chip?.nextElementSibling;
       const marks = [...(meter?.querySelectorAll('.meter__mark') ?? [])];
       const live = w !== null && !(w.resetsAt !== null && Date.parse(w.resetsAt) < at);
-      const share = live ? remainingTimeShare(w, at, endOf(a, at)) : null;
+      const share = live ? remainingTimeShare(w) : null;
       rows.push({ account: a.label, left: marks[0]?.style.left ?? null, marks: marks.length, name, title: meter?.getAttribute('title') ?? '', want: share === null ? null : `${share * 100}%` });
     }
   }
@@ -1339,7 +1548,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   });
 }
 // The card chips' tones by account and window, read before the section switch hides the cards, for the timeline's
-// chips and fills to be read against: the cards and the lanes draw the three windows in one order.
+// chips to be read against: the cards and the lanes draw the three windows in one order.
 const cardToneOf = new Map([...m.container.querySelectorAll('.qcard')].map((c) => [c.querySelector('.qcard__name')?.textContent?.trim() ?? '', [...c.querySelectorAll('.qchip')].map((q) => [...q.classList].find((n) => n.startsWith('qchip--'))?.slice('qchip--'.length) ?? 'none')]));
 const cardTone = (label, window) => cardToneOf.get(label)?.[['5h', '7d', 'fable'].indexOf(window)] ?? 'no card chip';
 await quotaSection(m, 'Quota windows');
@@ -1418,7 +1627,13 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   const laneOf = (label) => [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === label);
   const accounts = await api.listAccounts();
   const expired = (w) => w.resetsAt !== null && Date.parse(w.resetsAt) < Date.now();
-  const toneOf = (fill) => [...(fill?.classList ?? [])].find((n) => n.startsWith('lane__used--'))?.slice('lane__used--'.length) ?? null;
+  // jsdom computes no color, so the read is the variable: a fill that carries no class but its own reads `--lane-color`
+  // from the lane whose dot, the account's swatch, reads it too, the nearest element that sets it the same for both.
+  const carrierOf = (el) => {
+    for (let at = el ?? null; at !== null; at = at.parentElement) if (at.style?.getPropertyValue('--lane-color')) return at;
+    return null;
+  };
+  const inLaneColor = (fill, lane) => fill !== null && fill !== undefined && fill.className === 'lane__used' && carrierOf(fill) === lane && carrierOf(lane?.querySelector('.lane__dot')) === lane;
   // The page's span: the weekly zoom opens three days before today's midnight and runs two weeks, the 5-hour zoom one
   // day before and three days.
   const fillOf = (label, windowId, days) => {
@@ -1430,7 +1645,7 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
     const to = from + (parseFloat(bar?.style.width ?? 'NaN') / 100) * days * DAY;
     const period = (w?.periodHours ?? 0) * 3_600_000;
     const usedEnd = Date.parse(w?.resetsAt ?? '') - period + Math.min(1, w?.utilization ?? 0) * period;
-    return { drawn: parseFloat(fills[0]?.style.width ?? 'NaN'), fills: fills.length, tone: toneOf(fills[0]), want: Math.max(0, (Math.min(usedEnd, to) - from) / (to - from)) * 100 };
+    return { classes: fills[0]?.className ?? null, color: inLaneColor(fills[0], laneOf(label)), drawn: parseFloat(fills[0]?.style.width ?? 'NaN'), fills: fills.length, want: Math.max(0, (Math.min(usedEnd, to) - from) / (to - from)) * 100 };
   };
   const weekly = fillOf('primary', '7d', 14);
   results.push({ name: "/quota the live bar of primary's lane fills to its window's used share on the weekly zoom", ok: weekly.fills === 1 && Math.abs(weekly.drawn - weekly.want) <= 0.5, missing: [JSON.stringify(weekly)] });
@@ -1438,11 +1653,11 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
     const label = l.querySelector('.lane__name')?.textContent?.trim() ?? '';
     const w = accounts.find((a) => a.label === label)?.windows.find((x) => x.id === '7d') ?? null;
     const bar = l.querySelector('.lane__bar--live');
-    return { fills: bar?.querySelectorAll('.lane__used').length ?? null, label, share: w !== null && !expired(w), tone: toneOf(bar?.querySelector('.lane__used')), utilization: w?.utilization ?? null, width: bar?.querySelector('.lane__used')?.style.width ?? null };
+    return { classes: bar?.querySelector('.lane__used')?.className ?? null, color: inLaneColor(bar?.querySelector('.lane__used'), l), fills: bar?.querySelectorAll('.lane__used').length ?? null, label, share: w !== null && !expired(w), utilization: w?.utilization ?? null, width: bar?.querySelector('.lane__used')?.style.width ?? null };
   });
   const withShare = lanes.filter((l) => l.share);
-  const fillOff = withShare.filter((l) => l.tone !== cardTone(l.label, '7d')).map((l) => `${l.label}: ${l.tone} where the card chip reads ${cardTone(l.label, '7d')}`);
-  results.push({ name: "/quota each live bar's fill on the weekly zoom carries the tone of the same account's 7-day card chip", ok: withShare.length > 0 && fillOff.length === 0, missing: fillOff });
+  const fillOff = withShare.filter((l) => !l.color).map((l) => `${l.label}: ${l.classes ?? 'no fill'}, not on its lane's color variable`);
+  results.push({ name: "/quota each live bar's fill on the weekly zoom carries no meter tone and takes its lane's color variable, the one its lane's dot reads", ok: withShare.length > 0 && fillOff.length === 0, missing: fillOff });
   const alike = withShare.flatMap((a) => withShare.filter((b) => a.label < b.label && a.utilization !== b.utilization && a.width === b.width).map((b) => `${a.label} and ${b.label} at ${a.width}`));
   results.push({
     name: '/quota no two live bars of windows at different shares fill alike',
@@ -1457,7 +1672,7 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   zoom('Weekly');
   await m.settle();
   results.push({ name: "/quota the live bar of primary's lane fills to its window's used share on the 5-hour zoom", ok: session.fills === 1 && Math.abs(session.drawn - session.want) <= 0.5, missing: [JSON.stringify(session)] });
-  results.push({ name: "/quota the fill of primary's 5-hour bar carries the tone of its 5-hour card chip", ok: session.tone !== null && session.tone === cardTone('primary', '5h'), missing: [String(session.tone), cardTone('primary', '5h')] });
+  results.push({ name: "/quota the fill of primary's 5-hour bar carries no meter tone and takes its lane's color variable, the one its lane's dot reads", ok: session.color, missing: [String(session.classes)] });
 }
 {
   // secondary is cancelled with its saved end five days after the anchor, inside the weekly zoom's current period, so
@@ -1538,7 +1753,7 @@ m.unmount();
   results.push({
     name: '/accounts a fast lane reading past its reset reads refilled, a lane past both says when it refilled, and one beside a reading with no reset says nothing of when',
     ok:
-      /^Fast modeinput 0% used, output 0% used, refilled 2h 0m ago$/.test(lanes.primary.text) &&
+      /^Fast modeinput 0% used, output 0% used, refilled 2h ago$/.test(lanes.primary.text) &&
       /^Fast modeinput 0% used, output 5% used, resets in [45]m$/.test(lanes.overflow.text) &&
       lanes.secondary.text === 'Fast modeinput 50% used, output 0% used',
     missing: [lanes.primary.text || 'no line on primary', lanes.overflow.text || 'no line on overflow', lanes.secondary.text || 'no line on secondary'],
@@ -1678,6 +1893,18 @@ await readsAgain('/', 'getOverview', 30_000);
   });
   page.unmount();
 }
+{
+  // A page loaded as its own chunk answers a load that fails again after the reload with its own element, drawn in the
+  // shell's outlet, and every other route keeps the router's default screen for a render error.
+  const { PageLoadFailed, routes } = await import('./dist/entry.js');
+  const children = routes.find((r) => r.path === '/')?.children ?? [];
+  const carried = children.filter((r) => r.errorElement !== undefined).map((r) => [r.path, PageLoadFailed !== undefined && r.errorElement?.type === PageLoadFailed]);
+  results.push({
+    name: "the lazy pages' routes, and no other, carry the page load's error element",
+    ok: JSON.stringify(carried) === JSON.stringify([['accounts', true], ['accounts/:accountId', true], ['analytics', true], ['pools', true]]) && routes.every((r) => r.errorElement === undefined),
+    missing: [JSON.stringify(carried), `${children.length} child routes`],
+  });
+}
 
 // The memory router exposes no location, so the page in place is read off what the route drew: the heading, the
 // active nav link, and the selected row's link.
@@ -1701,7 +1928,7 @@ results.push({ name: 'nav calls the pages Accounts and Keys, and no text names t
   const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
   results.push({ name: 'nav has Quota after Dashboard and Sessions, the navigation lists no live view, Keepalive or Plugins', ok: JSON.stringify(nav) === JSON.stringify(['Dashboard', 'Quota', 'Accounts', 'Pools', 'Keys', 'Models', 'Requests', 'Analytics', 'Sessions', 'Settings']), missing: nav });
 }
-expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Identity', 'OAuth login', 'Max since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete account', 'Extra usage this month', 'Add account']);
+expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Identity', 'OAuth login', 'Max 20x since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete account', 'Extra usage this month', 'Add account']);
 {
   // An account belongs to one pool: the list row's foot names it or says there is none, and the Pool card holds the
   // one membership.
@@ -1838,8 +2065,8 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     results.push({ name: '/accounts/primary the identity card draws no Trial ends row for a profile without a trial', ok: labels.join('|') === 'Type|Plan|Rate-limit tier|Organization|Billing type', missing: labels });
   }
   {
-    // The subscription end edits in place on the identity card: ticking prefills the derived end, a cleared date is
-    // refused, and a saved end reads as a countdown row until the flag is cleared again.
+    // The subscription end edits in place on the identity card: ticking leaves the date to the operator and the editor
+    // refuses the empty field, and a typed end saves and reads as a countdown row until the flag is cleared again.
     const identity = () => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
     const labels = () => [...(identity()?.querySelectorAll('.kv__row dt') ?? [])].map((d) => d.textContent?.trim() ?? '');
     const button = (text) => [...(identity()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === text);
@@ -1850,17 +2077,16 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     expect('/accounts/primary the subscription end editor', identity()?.textContent ?? '', [
       'Cancelled',
       'Ends',
-      "Prefilled from the plan's start and its monthly renewal. Correct it from the date the plan's billing settings show. An annual plan is marked cancelled in its final month only.",
+      "The date the plan's billing settings show as its end. An annual plan is marked cancelled in its final month only.",
     ]);
     const before = field()?.value;
     box()?.click();
     await m.settle(100);
-    const derived = (await api.listAccounts()).find((a) => a.id === 'primary')?.subscription?.derivedEndsAt ?? '';
-    // The smoke runs in UTC, so the field's local value is the instant's own minute.
+    const asked = identity()?.querySelector('[role="alert"]')?.textContent ?? '';
     results.push({
-      name: '/accounts/primary ticking Cancelled prefills the end the plan derives',
-      ok: before === '' && box()?.checked === true && derived !== '' && field()?.value === derived.slice(0, 16),
-      missing: [String(before), String(box()?.checked), field()?.value ?? 'no field', derived],
+      name: '/accounts/primary ticking Cancelled leaves the Ends field empty and the refusal names the date',
+      ok: before === '' && box()?.checked === true && field()?.value === '' && asked.includes('A cancelled plan needs the date it ends.'),
+      missing: [String(before), String(box()?.checked), field()?.value ?? 'no field', asked || 'no callout'],
     });
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
     setter.call(field(), '');
@@ -1872,10 +2098,17 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
       ok: refusal.includes('A cancelled plan needs the date it ends.') && button('Save')?.disabled === true,
       missing: [refusal || 'no callout', String(button('Save')?.disabled)],
     });
+    setter.call(field(), new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 16));
+    field()?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(80);
     box()?.click();
     await m.settle(80);
     const cleared = field()?.value;
     box()?.click();
+    await m.settle(80);
+    // The smoke runs in UTC, so the field's local value is the instant's own minute.
+    setter.call(field(), new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 16));
+    field()?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(80);
     button('Save')?.click();
     await m.settle(600);
@@ -1949,8 +2182,8 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   const rowText = rows.find((r) => r.account === 'primary' && r.label === '5h')?.text ?? '';
   const detailText = detail.find((r) => r.label === '5-hour')?.text ?? '';
   results.push({
-    name: "/accounts each row's window bars read the compact projection in the reset's place, primary's 5-hour 81% at reset",
-    ok: rows.some((r) => r.want !== null) && barsOff(rows).length === 0 && rowText === '81% at reset',
+    name: "/accounts each row's window bars read the compact projection in the reset's place, primary's 5-hour 19% left at reset",
+    ok: rows.some((r) => r.want !== null) && barsOff(rows).length === 0 && rowText === '19% left at reset',
     missing: [...barsOff(rows).map((r) => JSON.stringify(r)), rowText || 'no 5h bar on primary'],
   });
   const opus = primary?.windows.find((w) => w.id === 'seven_day_opus') ?? null;
@@ -1961,8 +2194,8 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     missing: [opusText, JSON.stringify(opus)],
   });
   results.push({
-    name: "/accounts the detail card's window bars read the whole projection after the reset, primary's 5-hour 81% at the reset",
-    ok: detail.length === 4 && barsOff(detail).length === 0 && /^resets in .+, 81% at the reset$/.test(detailText),
+    name: "/accounts the detail card's window bars read the whole projection after the reset, primary's 5-hour 19% left at the reset",
+    ok: detail.length === 4 && barsOff(detail).length === 0 && /^resets in .+, 19% left at the reset$/.test(detailText),
     missing: [...barsOff(detail).map((r) => JSON.stringify(r)), detailText || 'no 5-hour bar on the detail'],
   });
   page.unmount();
@@ -2421,7 +2654,7 @@ expect('/accounts/nightly', m.text(), ['in use', 'Overage since 2h 5']);
   const listed = await openCatalog();
   const heads = [...(listed?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
   const ids = [...(listed?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.querySelector('.catalog__id')?.textContent ?? '');
-  expect('/accounts/primary the catalog popup lists the live catalog', listed?.textContent ?? '', ['As of', 'Refresh', 'claude-sonnet-5', 'Claude Sonnet 5', 'long context', '1,000,000', '128,000']);
+  expect('/accounts/primary the catalog popup lists the live catalog', listed?.textContent ?? '', ['As of', 'Refresh', 'claude-sonnet-5', 'Claude Sonnet 5', '1,000,000', '128,000']);
   results.push({
     name: '/accounts/primary the catalog popup reads six columns, sorted by id',
     ok: JSON.stringify(heads) === JSON.stringify(['Model', 'Name', 'Released', 'Input tokens', 'Output tokens', 'Effort levels']) && ids.length > 1 && ids.every(Boolean) && ids.every((id, i) => i === 0 || ids[i - 1].localeCompare(id) <= 0),
@@ -3487,6 +3720,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // path stands for it.
   const attentionRows = (name) =>
     [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.children[1]?.textContent?.trim(), li.children[1]?.getAttribute('href')?.split('?')[0] ?? null]);
+  // A row's age as its last cell draws it, beside the age its title carries. Both read the page's own clock, which a
+  // check frozen elsewhere in the run can have moved, so the two are held to each other and to the formatter's shape.
+  const ageOf = (li) => {
+    const cell = li.lastElementChild;
+    const titled = / \(([^()]+)\)$/.exec((li.getAttribute('title') ?? '').split('\n')[0])?.[1] ?? null;
+    return [cell?.matches('span.attention__age.num') ? cell.textContent : null, titled];
+  };
+  const aged = ([age, titled]) => age !== null && age === titled && /^(now|\d+[dhms]( \d+[hm])? ago)$/.test(age);
+  const rowAges = (name) => [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map(ageOf);
   // The story's items: jobs is exhausted and holds a parked record. all draws the laptop key's client drift, the
   // Overflow workspace out of funding, secondary's poll backoff, nightly's meter drift and the three routing conditions
   // (the walls on nightly and secondary, nightly spent within the hour of a move, and all's round without a
@@ -3494,8 +3736,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // card.
   const workDetail = [...(card('work')?.querySelectorAll('ul.attention .attention__detail') ?? [])].map((x) => x.textContent);
   results.push({
-    name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, and an account's slow-down as the words without the subject",
+    name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, each row ending with its age, and an account's slow-down as the words without the subject",
     ok:
+      rowAges('jobs').length === 2 &&
+      rowAges('all').length === 8 &&
+      rowAges('work').length === 1 &&
+      [...rowAges('jobs'), ...rowAges('all'), ...rowAges('work')].every(aged) &&
       JSON.stringify(attentionRows('jobs')) === JSON.stringify([['Pool exhausted', 'jobs', '/routing-log'], ['Priced record parked', 'jobs', null]]) &&
       JSON.stringify(attentionRows('all')) ===
         JSON.stringify([
@@ -3510,15 +3756,16 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         ]) &&
       JSON.stringify(attentionRows('work')) === JSON.stringify([['Slowed past twice the stretch', 'studio', '/routing-log']]) &&
       JSON.stringify(workDetail) === JSON.stringify(['slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12']),
-    missing: [...['jobs', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))}`), ...workDetail],
+    missing: [...['jobs', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))} ${JSON.stringify(rowAges(name))}`), ...workDetail],
   });
   {
     const parkedRow = [...(card('jobs')?.querySelectorAll('ul.attention > li.attention__row') ?? [])].find((li) => li.querySelector('.badge')?.textContent?.trim() === 'Priced record parked');
     const writerRows = [...cards.values()].filter((c) => [...c.querySelectorAll('ul.attention .badge')].some((b) => b.textContent?.trim() === 'State writer degraded')).length;
+    const parkedAge = parkedRow ? ageOf(parkedRow) : [null, null];
     results.push({
-      name: "/pools a pool's card draws its parked records' row with the count and the accounts, and no card draws the state writer",
-      ok: parkedRow?.querySelector('.attention__detail')?.textContent === "1 priced record parked, landing at the next start or on the dashboard's Replay (research)" && writerRows === 0,
-      missing: [parkedRow?.querySelector('.attention__detail')?.textContent ?? 'no parked row', `writer rows ${writerRows}`],
+      name: "/pools a pool's card draws its parked records' row with the count, the accounts and its age, and no card draws the state writer",
+      ok: parkedRow?.querySelector('.attention__detail')?.textContent === "1 priced record parked, landing at the next start or on the dashboard's Replay (research)" && aged(parkedAge) && writerRows === 0,
+      missing: [parkedRow?.querySelector('.attention__detail')?.textContent ?? 'no parked row', JSON.stringify(parkedAge), `writer rows ${writerRows}`],
     });
   }
   const caption = (name) => card(name)?.querySelector('.serving caption');
@@ -3785,23 +4032,24 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     li.children[1]?.tagName,
     li.querySelector('a')?.getAttribute('href') ?? null,
     li.querySelector('.attention__detail')?.textContent,
+    li.lastElementChild?.matches('span.attention__age.num') ? li.lastElementChild.textContent : null,
     li.getAttribute('title'),
   ]);
-  const row = (label, tone, subject, href, detail, age, log) => [label, tone, subject, href ? 'A' : 'SPAN', href, detail, `${detail} (${age})${log ? `\n${log}` : ''}`];
+  const row = (label, tone, subject, href, detail, age, log) => [label, tone, subject, href ? 'A' : 'SPAN', href, detail, age, `${detail} (${age})${log ? `\n${log}` : ''}`];
   const exhaustedSince = at(1);
   const want = [
-    row('Pool exhausted', 'badge--critical', 'jobs', `/routing-log?${new URLSearchParams({ kinds: 'exhausted', pools: 'jobs', from: exhaustedSince, to: isoAt(now) })}`, 'no member could take a request from key ci', '1h 0m ago', `Opens the Routing log: pool jobs, exhausted, since ${exhaustedSince.slice(11, 16)}`),
-    row('Client drift', 'badge--serious', '2.1.271', '/keys#laptop', 'its billing hash differs from the pinned build, newest refusal from key laptop', '3h 0m ago'),
-    row('Client drift', 'badge--serious', '2.1.272', null, 'its version suffix differs from the pinned build', '2h 0m ago'),
-    row('State writer degraded', 'badge--serious', 'ledger', null, 'ledger batches are being retried, and budgeted members are held back until a batch lands', '1h 0m ago'),
-    row('Re-auth required', 'badge--critical', 'legacy', '/accounts/legacy', 'serves nothing until its credential is renewed', '5h 0m ago'),
-    row('Funding required', 'badge--serious', 'Research workspace', '/accounts/research', 'serves nothing until its organization is funded again', '4h 0m ago'),
-    row('Credential refresh failed', 'badge--critical', 'legacy', '/accounts/legacy', '3 refreshes failed in a row: invalid_grant', '6h 0m ago'),
-    row('Priced record parked', 'badge--serious', 'jobs', null, "2 priced records parked, landing at the next start or on the dashboard's Replay (research, secondary)", '8h 0m ago'),
-    row('Usage poll backing off', 'badge--warning', 'secondary', '/accounts/secondary', '6 rate-limited answers in a row', '2h 0m ago'),
+    row('Pool exhausted', 'badge--critical', 'jobs', `/routing-log?${new URLSearchParams({ kinds: 'exhausted', pools: 'jobs', from: exhaustedSince, to: isoAt(now) })}`, 'no member could take a request from key ci', '1h ago', `Opens the Routing log: pool jobs, exhausted, since ${exhaustedSince.slice(11, 16)}`),
+    row('Client drift', 'badge--serious', '2.1.271', '/keys#laptop', 'its billing hash differs from the pinned build, newest refusal from key laptop', '3h ago'),
+    row('Client drift', 'badge--serious', '2.1.272', null, 'its version suffix differs from the pinned build', '2h ago'),
+    row('State writer degraded', 'badge--serious', 'ledger', null, 'ledger batches are being retried, and budgeted members are held back until a batch lands', '1h ago'),
+    row('Re-auth required', 'badge--critical', 'legacy', '/accounts/legacy', 'serves nothing until its credential is renewed', '5h ago'),
+    row('Funding required', 'badge--serious', 'Research workspace', '/accounts/research', 'serves nothing until its organization is funded again', '4h ago'),
+    row('Credential refresh failed', 'badge--serious', 'legacy', '/accounts/legacy', '3 refreshes failed in a row: invalid_grant', '6h ago'),
+    row('Priced record parked', 'badge--serious', 'jobs', null, "2 priced records parked, landing at the next start or on the dashboard's Replay (research, secondary)", '8h ago'),
+    row('Usage poll backing off', 'badge--warning', 'secondary', '/accounts/secondary', '6 rate-limited answers in a row', '2h ago'),
   ];
   results.push({
-    name: "the attention rows keep the route's order, link a subject through the item's link and the pool's exhaustion to the routing log, name the pool's other own row, a keyless drift and a router component alone, and read each detail as one sentence titled with its age",
+    name: "the attention rows keep the route's order, link a subject through the item's link and the pool's exhaustion to the routing log, name the pool's other own row, a keyless drift and a router component alone, and read each detail as one sentence, the age ending the row and closing its title",
     ok: JSON.stringify(rows) === JSON.stringify(want),
     missing: rows.map((r) => r.join(' | ')),
   });
@@ -4012,7 +4260,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await setIdle('3600');
     results.push({
       name: '/pools an idle window past the break-even, or 0, reads the break-even it runs to beside the saved window\'s share',
-      ok: past === 'Costs 2% of one re-write at the saved 1h 0m · capped at the break-even, 1d 20h' && zero === past && linesOf(dlg)[0] === 'Costs 2% of one re-write',
+      ok: past === 'Costs 2% of one re-write at the saved 1h · capped at the break-even, 1d 20h' && zero === past && linesOf(dlg)[0] === 'Costs 2% of one re-write',
       missing: [String(past), String(zero), String(linesOf(dlg)[0])],
     });
     // The router caps the parked and the scheduled ceilings at the same break-even, so one switched on past it reads
@@ -4049,7 +4297,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await m.settle(120);
     results.push({
       name: '/pools a pool whose combinations differ reads both ends on its card and in its dialog',
-      ok: allLine === 'idle 46m to 1h · parked 46m to 44h · horizon 46m to 44h' && JSON.stringify(linesOf(dlg)) === JSON.stringify(['Costs 2% to 92% of one re-write · capped at the break-even, 46m to 1h 0m', 'Break-even: 46m to 1d 20h', 'Break-even: 46m to 1d 20h']),
+      ok: allLine === 'idle 46m to 1h · parked 46m to 44h · horizon 46m to 44h' && JSON.stringify(linesOf(dlg)) === JSON.stringify(['Costs 2% to 92% of one re-write · capped at the break-even, 46m to 1h', 'Break-even: 46m to 1d 20h', 'Break-even: 46m to 1d 20h']),
       missing: [String(allLine), ...linesOf(dlg).map(String)],
     });
     await cancel(dlg);
@@ -4329,6 +4577,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       'Return dwell (s)',
       'Wind down',
     ]);
+    results.push({
+      name: '/pools the Retry in place hint names the 180 seconds after which Claude Code retries a request on its own',
+      ok:
+        hintOf('Failover', 'Retry in place (s)') ===
+        'The longest throttle a request waits out on its member before failing over, and the longest wait for a free slot. At 0 a request fails over at once. Claude Code gives up on a request that has waited about 180 seconds without an answer and retries it on its own, so a longer wait is spent for nothing.',
+      missing: [String(hintOf('Failover', 'Retry in place (s)'))],
+    });
     const ceilingField = () => field('Windows', 'Window ceiling (%)');
     results.push({
       name: '/pools the Windows group opens with its intro and draws the ceiling from 50 to 100 with its hint, the burn average, then the bar',
@@ -6423,6 +6678,38 @@ localStorage.removeItem('phoebis.expertView');
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const labelsIn = (section) => [...(section?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
   const lineIn = (section) => section?.querySelector('.dialog-group__more')?.firstChild?.textContent ?? null;
+  // jsdom lays nothing out, so a row is read in the grid's order: an expert wrapper draws no box, so its cells stand in
+  // its place, and two halves in a row share one. Answers each group's pairs and every half alone on its row.
+  const halvesOf = (dlg) => {
+    const pairs = [];
+    const alone = [];
+    const nameOf = (cell) => cell.querySelector('.field__label')?.textContent?.trim() ?? cell.className;
+    for (const section of dlg?.querySelectorAll('section.dialog-group') ?? []) {
+      for (const cells of section.querySelectorAll('.cells')) {
+        const placed = [...cells.children].flatMap((child) => (child.classList.contains('expert') ? [...child.children] : [child]));
+        for (let i = 0; i < placed.length; i += 1) {
+          if (!placed[i].classList.contains('cell--half')) continue;
+          if (placed[i + 1]?.classList.contains('cell--half')) {
+            pairs.push([section.getAttribute('aria-label'), nameOf(placed[i]), nameOf(placed[i + 1])]);
+            i += 1;
+          } else alone.push(`${section.getAttribute('aria-label')}: ${nameOf(placed[i])}`);
+        }
+      }
+    }
+    return { alone, pairs };
+  };
+  const PLAIN_PAIRS = [
+    ['Identity', 'Name', 'Status'],
+    ['Keepalive', 'Max parked (s)', 'Scheduled horizon (s)'],
+  ];
+  const EXPERT_PAIRS = [
+    ['Identity', 'Name', 'Status'],
+    ['Windows', 'Window ceiling (%)', 'Burn average (s)'],
+    ['Load shedding', 'Shed cap (%)', 'Shed dwell (s)'],
+    ['Slow-down', 'Stretch (s)', 'Hold (s)'],
+    ['Failover', 'In flight', 'Retry in place (s)'],
+    ['Keepalive', 'Max parked (s)', 'Scheduled horizon (s)'],
+  ];
   const parentsOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const railOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const headingsOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])].map((h) => h.textContent?.trim());
@@ -6485,6 +6772,12 @@ localStorage.removeItem('phoebis.expertView');
       .filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(PLAIN_FIELDS[label]))
       .map(([label, read]) => `${label}: ${JSON.stringify(read)}`),
   });
+  const plainHalves = halvesOf(dlg);
+  results.push({
+    name: '/pools with the mode off no half cell stands alone on its row, so the window ceiling spans the row its hidden average leaves',
+    ok: plainHalves.alone.length === 0 && JSON.stringify(plainHalves.pairs) === JSON.stringify(PLAIN_PAIRS),
+    missing: [...plainHalves.alone, JSON.stringify(plainHalves.pairs)],
+  });
   const memberHint = () => [...(group(dlg, 'Windows')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Member utilization')?.querySelector('.field__hint')?.textContent ?? 'no hint';
   const plainHint = memberHint();
   results.push({
@@ -6507,6 +6800,12 @@ localStorage.removeItem('phoebis.expertView');
       JSON.stringify(expertRead) === JSON.stringify(EXPERT_FIELDS) &&
       dlg?.querySelector('.dialog-group__more') === null,
     missing: [localStorage.getItem('phoebis.expertView'), ...expertRail.map((x) => JSON.stringify(x)), ...Object.entries(expertRead).filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(EXPERT_FIELDS[label])).map(([label, read]) => `${label}: ${JSON.stringify(read)}`)],
+  });
+  const expertHalves = halvesOf(dlg);
+  results.push({
+    name: '/pools with the mode on the half cells stand in their six pairs, the window ceiling beside the burn average',
+    ok: expertHalves.alone.length === 0 && JSON.stringify(expertHalves.pairs) === JSON.stringify(EXPERT_PAIRS),
+    missing: [...expertHalves.alone, JSON.stringify(expertHalves.pairs)],
   });
   foot(dlg, 'Cancel')?.click();
   await p.settle(200);
@@ -6600,6 +6899,7 @@ localStorage.removeItem('phoebis.expertView');
   await flip();
   const status = () => dlg?.querySelector('.dialog__status');
   const refused = [localStorage.getItem('phoebis.expertView'), cap()?.getAttribute('aria-invalid') ?? 'absent', status()?.textContent ?? '', !!rail(dlg, 'shedding')?.querySelector('.dialog-rail__dot'), lineIn(shed())];
+  const refusedHalves = halvesOf(dlg);
   rail(dlg, 'identity')?.click();
   await p.settle(120);
   [...(status()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Go to Load shedding')?.click();
@@ -6614,6 +6914,12 @@ localStorage.removeItem('phoebis.expertView');
       document.activeElement === cap() &&
       localStorage.getItem('phoebis.expertView') === 'off',
     missing: [JSON.stringify(before), JSON.stringify(refused), document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'],
+  });
+  // The refused cap draws without its mate, the dwell the plain view still hides, so it spans its row alone.
+  results.push({
+    name: '/pools with the mode off a refused shed cap spans the row its hidden dwell leaves, and no half cell stands alone',
+    ok: refusedHalves.alone.length === 0 && JSON.stringify(refusedHalves.pairs) === JSON.stringify(PLAIN_PAIRS) && !!cap(),
+    missing: [...refusedHalves.alone, JSON.stringify(refusedHalves.pairs)],
   });
   {
     // The cap back inside its bound, then a ceiling past 100 on the plain field: its handle stays on the track.
@@ -6641,6 +6947,31 @@ localStorage.removeItem('phoebis.expertView');
       name: "/pools a refused ceiling draws its handle on the track and announces the nearest bound, the field's value in its text",
       ok: JSON.stringify(past) === JSON.stringify(['100', '50', '100', '100%', '120%']) && JSON.stringify(under) === JSON.stringify(['50', '50', '100', '40%', '40%']),
       missing: [...past, ...under].map(String),
+    });
+  }
+  {
+    // The ceiling back inside its bound, then a burn average under its 600 s floor typed in the expert view and the
+    // mode turned off: the refused average stays drawn, so the window ceiling halves its row beside it again.
+    const ceiling = dlg?.querySelector('input[aria-label="Window ceiling (%)"]');
+    if (ceiling) {
+      setter.call(ceiling, '75');
+      ceiling.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await p.settle(120);
+    }
+    await flip();
+    const average = () => [...(group(dlg, 'Windows')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Burn average (s)')?.querySelector('input');
+    if (average()) {
+      setter.call(average(), '300');
+      average().dispatchEvent(new window.Event('input', { bubbles: true }));
+      await p.settle(120);
+    }
+    await flip();
+    const halves = halvesOf(dlg);
+    const windows = halves.pairs.filter(([section]) => section === 'Windows');
+    results.push({
+      name: '/pools with the mode off a refused burn average stays drawn, and the window ceiling halves its row beside it',
+      ok: localStorage.getItem('phoebis.expertView') === 'off' && average()?.getAttribute('aria-invalid') === 'true' && halves.alone.length === 0 && JSON.stringify(windows) === JSON.stringify([['Windows', 'Window ceiling (%)', 'Burn average (s)']]),
+      missing: [String(localStorage.getItem('phoebis.expertView')), average()?.getAttribute('aria-invalid') ?? 'no average drawn', ...halves.alone, JSON.stringify(halves.pairs)],
     });
   }
   foot(dlg, 'Cancel')?.click();
@@ -9361,6 +9692,33 @@ m.unmount();
   page.unmount();
 }
 
+// The story's requests span the day before its clock, so the 7-day range read at that clock dates no row, and read a
+// day and an hour later dates every one. A row is paired with the story's by the id under its time.
+{
+  const HOUR = 3_600_000;
+  const clockText = (at) => new Date(at).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit', second: '2-digit' });
+  const datedText = (at) => `${new Date(at).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${clockText(at)}`;
+  const byId = new Map(requests.map((r) => [r.id, r]));
+  const timesAt = async (now) => {
+    const page = await mount('/requests?range=7d', { now });
+    const at = [...page.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Time');
+    const read = [...page.container.querySelectorAll('.requests__table tbody tr')]
+      .map((tr) => tr.children[at])
+      .filter(Boolean)
+      .map((td) => ({ row: byId.get(td.querySelector('.sub.mono')?.getAttribute('title') ?? '') ?? null, text: td.firstChild?.textContent ?? '', title: td.getAttribute('title') }));
+    page.unmount();
+    return read;
+  };
+  const story = await timesAt(CLOCK_ORIGIN);
+  const later = await timesAt(CLOCK_ORIGIN + 25 * HOUR);
+  const wrong = (read, expected) => read.filter((c) => c.row === null || c.text !== expected(c.row.at) || c.title !== fmtAbsolute(c.row.at)).map((c) => `${c.row?.id ?? 'unpaired'}: ${c.text}`);
+  results.push({
+    name: '/requests under the 7-day range a row older than a day prints its date before the time, and the newest row within the day the time alone',
+    ok: story.length > 0 && later.length > 0 && wrong(story, clockText).length === 0 && wrong(later, datedText).length === 0 && later.every((c) => /^[A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}:\d{2}$/.test(c.text)),
+    missing: [`${story.length} rows at the story's clock, ${later.length} a day and an hour later`, ...wrong(story, clockText).slice(0, 3), ...wrong(later, datedText).slice(0, 3)],
+  });
+}
+
 // The open drawer narrows the table to the columns that leave it room, and the chosen set returns when it closes.
 {
   const COMPACT = ['Time', 'Model', 'Status', 'Attempts', ''];
@@ -10173,7 +10531,7 @@ m.unmount();
 }
 
 // A dimension fed by a list that did not load offers nothing to pick, so its Add filter row is disabled and says why on
-// its title, and a click on it leaves the list where it is. The rows beside it stay as they are.
+// its title and its description, and a click on it leaves the list where it is. The rows beside it stay as they are.
 {
   const sentence = 'The key list did not load: the registry is unavailable';
   failNextCall('listKeys', '/admin/keys', 'the registry is unavailable');
@@ -10183,14 +10541,15 @@ m.unmount();
   const rowOf = (label) => filterRows().find((r) => r.firstElementChild?.textContent?.trim() === label);
   const keyRow = rowOf('Key');
   const poolRow = rowOf('Pool');
-  const read = { disabled: keyRow?.getAttribute('aria-disabled') ?? null, pool: [poolRow?.getAttribute('aria-disabled') ?? null, poolRow?.getAttribute('title') ?? null], title: keyRow?.getAttribute('title') ?? null };
+  const described = document.getElementById(keyRow?.getAttribute('aria-describedby') ?? '')?.textContent ?? null;
+  const read = { described, disabled: keyRow?.getAttribute('aria-disabled') ?? null, pool: [poolRow?.getAttribute('aria-disabled') ?? null, poolRow?.getAttribute('title') ?? null], title: keyRow?.getAttribute('title') ?? null };
   keyRow?.click();
   await page.settle(100);
   const stayed = filterBox()?.querySelector('.add-filter__search') !== null && filterBox()?.querySelector('[aria-label="Back to the filter list"]') === null;
   await closeBoxes(page);
   results.push({
     name: '/requests a failed keys read disables the Key row of Add filter and names the failure',
-    ok: read.disabled === 'true' && read.title === sentence && stayed && read.pool[0] === null && read.pool[1] === null,
+    ok: read.disabled === 'true' && read.title === sentence && read.described === sentence && stayed && read.pool[0] === null && read.pool[1] === null,
     missing: [JSON.stringify(read), `stayed on the list ${stayed}`],
   });
   page.unmount();
@@ -10564,7 +10923,7 @@ m.unmount();
   }
   {
     // A chip's body opens its dimension's values with Back, the label and Remove, and Remove clears the value, closes
-    // the box and leaves the focus on Add filter once no chip stands. A dimension whose list did not load is skipped by
+    // the box and leaves the focus on Add filter once no chip stands. A dimension whose list did not load is a stop for
     // the keys and says why on its row's title.
     const [model] = (await api.listCatalog()).map((c) => c.id);
     const page = await mount(`/requests?models=${encodeURIComponent(model ?? '')}`, { now: CLOCK_ORIGIN });
@@ -10603,7 +10962,7 @@ m.unmount();
         JSON.stringify(removed) === JSON.stringify({ chip: 'no model chip', focus: true, models: null, open: false }) &&
         pool?.getAttribute('aria-disabled') === 'true' &&
         pool.getAttribute('title') === 'The pool list did not load: the registry is unavailable' &&
-        JSON.stringify(walked) === JSON.stringify(['Account', 'Key', 'Model', 'Cache miss reason']),
+        JSON.stringify(walked) === JSON.stringify(['Account', 'Key', 'Model', 'Pool']),
       missing: [String(model), JSON.stringify(opened), JSON.stringify(removed), `${pool?.getAttribute('aria-disabled')} ${pool?.getAttribute('title')}`, JSON.stringify(walked)],
     });
   }
@@ -10796,6 +11155,37 @@ m.unmount();
         JSON.stringify(ids) === JSON.stringify(expected.map((r) => (r.type === 'decision' ? r.requestId : null))) &&
         named.rows.some((r) => r.type === 'decision' && r.probe) && named.rows.some((r) => r.type === 'event' && r.kind === 'warm_prefix_expired') && named.rows.every((r) => listed.has(rowKeyOf(r))),
       missing: [JSON.stringify(sent), `${hour.rows.length} rows in the hour, ${drawn.length} drawn`, `named ${named.rows.map((r) => `${r.kind}${r.probe ? ' probe' : ''}`).join(',')}`, times.join(' ')],
+    });
+  }
+  {
+    // The Session cell cuts a long agent id behind its ellipsis, so the line carries the whole id on its title.
+    const lines = trs(m).map((tr) => cell(tr, 'session')?.querySelector('.sub.mono') ?? null);
+    const agents = hour.rows.slice(0, 25).flatMap((r, i) => (r.agentId === null ? [] : [{ agent: r.agentId, text: lines[i]?.textContent ?? null, title: lines[i]?.getAttribute('title') ?? null }]));
+    results.push({
+      name: "/routing-log a Session cell's agent line carries the whole agent id on its title",
+      ok: agents.length > 0 && agents.every((a) => a.text === a.agent && a.title === a.agent),
+      missing: [`${agents.length} rows with an agent`, JSON.stringify(agents.slice(0, 5))],
+    });
+  }
+  {
+    // The week's state changes put the story's changes of two and three days back on the first page beside today's.
+    const DAY = 24 * HOUR;
+    const dateText = (at) => new Date(at).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+    const spied = countCalls('listRoutingLog');
+    const week = await mount('/routing-log?range=7d&kinds=account_state_changed', { now: CLOCK_ORIGIN });
+    spied.restore();
+    const asked = spied.calls[0]?.[0] ?? {};
+    const answered = (await api.listRoutingLog(asked)).rows;
+    const read = trs(week).map((tr) => ({ text: cell(tr, 'time')?.firstChild?.textContent ?? '', title: cell(tr, 'time')?.getAttribute('title') ?? null }));
+    week.unmount();
+    const older = answered.filter((r) => CLOCK_ORIGIN - Date.parse(r.at) >= DAY);
+    const expected = answered.map((r) => (CLOCK_ORIGIN - Date.parse(r.at) >= DAY ? `${dateText(r.at)} ${clockText(r.at)}` : clockText(r.at)));
+    results.push({
+      name: '/routing-log under the 7-day range a row older than a day prints its date before the time, and the newest row within the day the time alone',
+      ok:
+        asked.from === iso(CLOCK_ORIGIN - 7 * DAY) && older.length > 0 && answered.length > older.length && CLOCK_ORIGIN - Date.parse(answered[0].at) < DAY &&
+        read.length === answered.length && JSON.stringify(read.map((r) => r.text)) === JSON.stringify(expected) && read.every((r, i) => r.title === fmtAbsolute(answered[i].at)),
+      missing: [JSON.stringify(asked), `${older.length} of ${answered.length} rows older than a day`, `read ${JSON.stringify(read)}`, `expected ${JSON.stringify(expected)}`],
     });
   }
   {
@@ -11669,19 +12059,27 @@ m.unmount();
     if (root) scanned.push({ root: root.cloneNode(true), where });
   };
   /**
-   * The open card draws the strip where the walk list stood: its stations in order, a leaf per candidate table row in
-   * the table's order up to eight and then "and N more", and the one taken terminus reading the kind's word.
+   * The open card draws the strip where the walk list stood: its stations in order, a leaf per candidate table row up
+   * to eight and then "and N more", and the one taken terminus reading the kind's word. The table ranks its rows while
+   * the strip keeps the walk, so the leaves are the rows' members as a set, in the record's order.
    */
-  const stripDrawn = (what, card, expected) => {
+  const stripDrawn = (what, card, expected, record) => {
     const rows = candidateRows(card).map((tr) => [tr.querySelector('td a')?.textContent ?? '', tr.querySelector('.decision-card__judged .badge')?.textContent ?? '']);
     const leaves = leavesOf(card).map((l) => [l.account, l.badge]);
-    const fanned = rows.length <= 8 ? JSON.stringify(leaves) === JSON.stringify(rows) : leaves.length === 9 && leaves[8][1] === `and ${rows.length - 8} more` && leaves.slice(0, 8).every(([a, b]) => rows.some(([x, y]) => x === a && y === b));
+    const recorded = record.candidates.map((c) => c.accountId);
+    const asSet = (pairs) => JSON.stringify(pairs.map((p) => p.join(' ')).sort());
+    // Past eight the strip shows the record's first members, the placed one in the last place where it stands later.
+    const walked = (shown) => shown.every(([a], i) => recorded.indexOf(a) >= 0 && (i === 0 || recorded.indexOf(a) > recorded.indexOf(shown[i - 1][0])));
+    const fanned =
+      rows.length <= 8
+        ? asSet(leaves) === asSet(rows) && JSON.stringify(leaves.map(([a]) => a)) === JSON.stringify(recorded)
+        : leaves.length === 9 && leaves[8][1] === `and ${rows.length - 8} more` && leaves.slice(0, 8).every(([a, b]) => rows.some(([x, y]) => x === a && y === b)) && walked(leaves.slice(0, 8));
     const taken = terminiOf(card).filter((t) => t.taken);
     const kind = card?.querySelector('.decision-card__verdict > .badge')?.textContent ?? null;
     results.push({
       name: `/routing-log the ${what}'s card draws the strip in the walk's place with its stations in order`,
       ok: card !== null && card.querySelector('.decision-card__walk') === null && card.querySelectorAll('.decision-strip').length === 1 && JSON.stringify(pairsOf(card)) === JSON.stringify(expected) && fanned && taken.length === 1 && kind !== null && taken[0].badge === kind,
-      missing: [pairsOf(card).map((x) => x.join(' ')).join(' / '), `expected ${JSON.stringify(expected)}`, `leaves ${JSON.stringify(leaves)}`, `rows ${JSON.stringify(rows)}`, JSON.stringify(terminiOf(card))],
+      missing: [pairsOf(card).map((x) => x.join(' ')).join(' / '), `expected ${JSON.stringify(expected)}`, `leaves ${JSON.stringify(leaves)}`, `rows ${JSON.stringify(rows)}`, `record ${JSON.stringify(recorded)}`, JSON.stringify(terminiOf(card))],
     });
   };
 
@@ -11752,7 +12150,7 @@ m.unmount();
   {
     const { card, page, panel, record } = await story('req_f8085653-422');
     scan('renewal', card);
-    stripDrawn('renewal', card, RENEWAL_STATIONS);
+    stripDrawn('renewal', card, RENEWAL_STATIONS, record);
     await popoversOpen('renewal', page, card, record);
     const stations = stationsOf(card);
     // The engine recorded all five rules `no` before it renewed, so each one is on the taken path under its bracket.
@@ -11842,7 +12240,7 @@ m.unmount();
     // The static placement's chosen member carries a deeper static entry the TTL refused beside the one the rung took.
     const { card, page, record } = await story('req_b2bed817-a58');
     scan('static placement', card);
-    stripDrawn('static placement', card, modelPairs(record));
+    stripDrawn('static placement', card, modelPairs(record), record);
     await popoversOpen('static placement', page, card, record);
     const rungs = stationsOf(card).filter((s) => ['content', 'with main', 'static'].includes(s.step));
     const chosen = record.candidates.find((c) => c.accountId === record.outcome.accountId);
@@ -11891,7 +12289,7 @@ m.unmount();
   {
     const { card, page, record } = await story('req_da52d141-a5a');
     scan('spent move', card);
-    stripDrawn('spent move', card, modelPairs(record));
+    stripDrawn('spent move', card, modelPairs(record), record);
     await popoversOpen('spent move', page, card, record);
     const stations = stationsOf(card);
     const steps = stations.map((s) => `${s.step} ${s.verdict}`);
@@ -11930,7 +12328,7 @@ m.unmount();
     stripDrawn('shed move', card, [
       ...[['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'fired'], ['Renew', 'not run']],
       ...[['Move', 'moved'], ['Fit', 'fits'], ['Cap filter', 'passed'], ['Partitions', 'match'], ['content', 'none'], ['with main', 'none'], ['static', 'none'], ['Pick', 'chosen'], ['Reserve', 'booked']],
-    ]);
+    ], record);
     await popoversOpen('shed move', page, card, record);
     const shed = stationsOf(card).find((s) => s.step === 'shed');
     // The fired rule's popover reads its round in the Round group.
@@ -11947,7 +12345,7 @@ m.unmount();
     page.unmount();
     const round = await story('req_1eaa9bc1-a18');
     scan('shedding round', round.card);
-    stripDrawn('shedding round', round.card, RENEWAL_STATIONS);
+    stripDrawn('shedding round', round.card, RENEWAL_STATIONS, round.record);
     await popoversOpen('shedding round', round.page, round.card, round.record);
     const ran = stationsOf(round.card).find((s) => s.step === 'shed');
     // The round's shed rule reads its marks in its popover's Round group, each a chip linking its session.
@@ -11978,7 +12376,7 @@ m.unmount();
     else {
       const { card, page, record } = await story(id);
       scan('Fable-week round', card);
-      stripDrawn('Fable-week round', card, RENEWAL_STATIONS);
+      stripDrawn('Fable-week round', card, RENEWAL_STATIONS, record);
       await popoversOpen('Fable-week round', page, card, record);
       const round = groupOfPopover(await popoverOf(page, stationButton(card, 'move:shed')), 'Round');
       const labels = [...(round?.querySelectorAll('.kv__row') ?? [])].map((r) => r.querySelector('dt')?.textContent ?? '');
@@ -12005,7 +12403,7 @@ m.unmount();
   {
     const { card, page, record } = await story('req_69e30548-32e', 1);
     scan('hold', card);
-    stripDrawn('hold', card, modelPairs(record));
+    stripDrawn('hold', card, modelPairs(record), record);
     await popoversOpen('hold', page, card, record);
     const hold = stationsOf(card).find((s) => s.step === 'Hold');
     const held = await popoverOf(page, hold?.button);
@@ -12030,7 +12428,7 @@ m.unmount();
     const placed = after?.querySelector('.decision-card');
     scan('placement after the hold', placed);
     const second = await api.getDecision('req_69e30548-32e', 2);
-    stripDrawn('placement after the hold', placed, modelPairs(second));
+    stripDrawn('placement after the hold', placed, modelPairs(second), second);
     await popoversOpen('placement after the hold', page, placed, second);
     const { cohort, heldMs } = second.outcome.cohortHold;
     results.push({
@@ -12044,7 +12442,7 @@ m.unmount();
     // A hold on the strategy's pick names no cohort, and the placement after it reads the account it waited on.
     const { card, page, record } = await story('req_e8b7eb13-060', 1);
     scan('strategy hold', card);
-    stripDrawn('strategy hold', card, modelPairs(record));
+    stripDrawn('strategy hold', card, modelPairs(record), record);
     await popoversOpen('strategy hold', page, card, record);
     const hold = stationsOf(card).find((s) => s.step === 'Hold');
     const held = await popoverOf(page, hold?.button);
@@ -12056,7 +12454,7 @@ m.unmount();
     const after = (await openRow(page, 'req_e8b7eb13-060/2'))?.querySelector('.decision-card');
     scan('placement after a strategy hold', after);
     const second = await api.getDecision('req_e8b7eb13-060', 2);
-    stripDrawn('placement after a strategy hold', after, modelPairs(second));
+    stripDrawn('placement after a strategy hold', after, modelPairs(second), second);
     await popoversOpen('placement after a strategy hold', page, after, second);
     const { heldMs, waitedOn } = second.outcome.cohortHold;
     results.push({
@@ -12072,7 +12470,7 @@ m.unmount();
     const [id, seq] = ['req_77634945-72b', 2];
     const { card, page, record } = await story(id, seq);
     scan('exhaustion after a hold', card);
-    stripDrawn('exhaustion after a hold', card, modelPairs(record));
+    stripDrawn('exhaustion after a hold', card, modelPairs(record), record);
     await popoversOpen('exhaustion after a hold', page, card, record);
     const answered = requests.find((r) => r.id === id)?.status;
     results.push({
@@ -12087,7 +12485,7 @@ m.unmount();
   {
     const { card, page, record } = await story('req_51d0e2b8-7a0');
     scan('exhaustion', card);
-    stripDrawn('exhaustion', card, modelPairs(record));
+    stripDrawn('exhaustion', card, modelPairs(record), record);
     await popoversOpen('exhaustion', page, card, record);
     const line = stationsOf(card).find((s) => s.step === 'Exhausted');
     const weighed = record.walk.find((s) => s.step === 'exhausted')?.facts.find((f) => f.key === 'obstacles')?.value ?? [];
@@ -12115,7 +12513,7 @@ m.unmount();
   {
     const { card, page, record } = await story('req_e0a4c6f2-118');
     scan('refusal', card);
-    stripDrawn('refusal', card, [['Admission', 'refused'], ['Rest of the walk', 'not run']]);
+    stripDrawn('refusal', card, [['Admission', 'refused'], ['Rest of the walk', 'not run']], record);
     await popoversOpen('refusal', page, card, record);
     const stations = stationsOf(card);
     // The admission's popover reads the refusal's reason, and the rest of the walk's says what did not run.
@@ -12143,7 +12541,7 @@ m.unmount();
     // A probe's decision keeps its kind, so it opens to the same card, its probe line among the steps.
     const { card, page, record } = await story('req_c41d0311-200', 1, 'probe');
     scan('probe', card);
-    stripDrawn('probe', card, modelPairs(record));
+    stripDrawn('probe', card, modelPairs(record), record);
     await popoversOpen('probe', page, card, record);
     const steps = stationsOf(card).map((s) => s.step);
     results.push({
@@ -12156,7 +12554,7 @@ m.unmount();
   {
     const { card, page, record, row } = await story('req_1d9c3e55-0b2', 2);
     scan('failover attempt', card);
-    stripDrawn('failover attempt', card, modelPairs(record));
+    stripDrawn('failover attempt', card, modelPairs(record), record);
     await popoversOpen('failover attempt', page, card, record);
     results.push({
       name: "/routing-log a failover attempt's card reads attempt n of m",
@@ -12181,7 +12579,7 @@ m.unmount();
       ['static', 'none'],
       ['Pick', 'chosen'],
       ['Reserve', 'booked'],
-    ]);
+    ], record);
     await popoversOpen('fresh placement', page, card, record);
     const stations = stationsOf(card);
     const pick = stations.find((s) => s.step === 'Pick');
@@ -12326,7 +12724,7 @@ m.unmount();
     for (const { expected, id, own, seq, terminus, what } of cards) {
       const { card, page, record } = await story(id, seq);
       scan(what, card);
-      stripDrawn(what, card, expected);
+      stripDrawn(what, card, expected, record);
       await popoversOpen(what, page, card, record);
       const taken = [...(card?.querySelectorAll('.decision-strip .strip-terminus.is-taken') ?? [])].map((b) => [b.dataset.terminus, b.querySelector('.strip-terminus__word')?.textContent, b.querySelector('.badge')?.textContent]);
       const holds = await own(card, record, page);
@@ -12603,7 +13001,7 @@ m.unmount();
     // The fast request's failover passed over a member whose usage credits are out, which its chip's hover says.
     const { card, page, record } = await story('req_4b0e9d17-c31', 2);
     scan('fast failover', card);
-    stripDrawn('fast failover', card, modelPairs(record));
+    stripDrawn('fast failover', card, modelPairs(record), record);
     await popoversOpen('fast failover', page, card, record);
     const out = record.candidates.find((c) => c.obstacle?.name === 'credits');
     const chip = candidateRows(card).find((tr) => tr.querySelector('td a')?.textContent === out?.accountId)?.querySelector('.decision-card__why .chip');
@@ -12618,7 +13016,7 @@ m.unmount();
     // A placement beside the main conversation promised no size, so its cache read is weighed against the input.
     const { card, page, record } = await story('req_52f62e67-839');
     scan('with main placement', card);
-    stripDrawn('with main placement', card, modelPairs(record));
+    stripDrawn('with main placement', card, modelPairs(record), record);
     await popoversOpen('with main placement', page, card, record);
     const line = stationsOf(card).find((s) => s.step === 'with main');
     // A placement beside the main conversation names no entry, so its rung's popover draws no Entry group and no hash.
@@ -12658,24 +13056,49 @@ m.unmount();
     results.push({ name: "/routing-log the candidate table's Fable cell reads a utilization and a reset", ok: /^\d+%$/.test(fableCells[4]?.[0] ?? '') && (fableCells[4]?.[1] ?? '') !== '', missing: [JSON.stringify(fableCells[4])] });
     results.push({ name: "/routing-log the candidate table's Fable cell reads not reported without a Fable window", ok: noFable !== undefined && JSON.stringify(noFableCells[4]) === JSON.stringify(['not reported']), missing: [JSON.stringify(noFableCells[4])] });
     page.unmount();
-    // No story member lacks a 5-hour reading, so the route's answer drops one while the check reads it.
+    // No story member lacks a 5-hour reading, so the route's answer drops one while the check reads it. The table ranks
+    // its rows apart from the record's order, so the row is found by the member's account id.
     const original = api.getDecision;
+    let droppedId = null;
     api.getDecision = async (id, seq) => {
       const r = await original.call(api, id, seq);
       if (!r) return r;
       const [first, ...rest] = r.candidates;
+      droppedId = first.accountId;
       const { five_hour: _, ...windows } = first.windows;
       return { ...r, candidates: [{ ...first, windows }, ...rest] };
     };
     const dropped = await story('req_f8085653-422');
     api.getDecision = original;
-    const first = candidateRows(dropped.card)[0];
+    const unread = candidateRows(dropped.card).find((tr) => tr.querySelector('td a')?.textContent === droppedId);
     results.push({
       name: '/routing-log a window with no reading reads not reported rather than 0%',
-      ok: first?.children[2]?.textContent === 'not reported' && !/^0%/.test(first?.children[2]?.textContent ?? ''),
-      missing: [first?.children[2]?.textContent ?? 'no row'],
+      ok: droppedId !== null && unread?.children[2]?.textContent === 'not reported' && !/^0%/.test(unread?.children[2]?.textContent ?? ''),
+      missing: [`${droppedId ?? 'no member'}: ${unread?.children[2]?.textContent ?? 'no row'}`],
     });
     dropped.page.unmount();
+  }
+  {
+    // The card the log opens first is a renewal, and the fast failover's record lists the member it placed third.
+    const read = async (id, seq) => {
+      const { card, page, record } = await story(id, seq);
+      const first = candidateRows(card)[0];
+      const got = {
+        first: first?.querySelector('td a')?.textContent ?? null,
+        placed: record.outcome.accountId,
+        recorded: record.candidates[0]?.accountId ?? null,
+        tinted: first?.classList.contains('is-chosen') ?? false,
+        title: card?.querySelector('.decision-card__candidates')?.closest('section')?.querySelector('.decision-card__title')?.textContent ?? null,
+      };
+      page.unmount();
+      return got;
+    };
+    const cards = [await read('req_f8085653-422', 1), await read('req_4b0e9d17-c31', 2)];
+    results.push({
+      name: "/routing-log the candidate table reads Candidates, by rank and leads with the member the decision placed, tinted, whatever the record's order",
+      ok: cards.every((c) => c.title === 'Candidates, by rank' && c.first !== null && c.first === c.placed && c.tinted) && cards[1].recorded !== cards[1].placed,
+      missing: cards.map((c) => JSON.stringify(c)),
+    });
   }
   {
     // The answer has not ended, so the attempt has no usage and wrote no cache-map entry yet.
@@ -13330,14 +13753,42 @@ await tab(m, 'Latency');
 expect('/analytics latency tab', m.text(), ['Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key']);
 await tab(m, 'Cache');
 expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'expired between turns', 'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h']);
+{
+  // A request the router rejected before routing read no cache, so Cache by model lists it under no name, neither the
+  // empty label the route answers for it nor the name the breakdowns by model give it.
+  const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cache by model');
+  const labels = [...(table?.querySelectorAll('tbody tr') ?? [])].filter((tr) => tr.children.length > 1).map((tr) => tr.children[0]?.textContent?.trim() ?? '');
+  results.push({ name: '/analytics cache tab: Cache by model lists no row for the requests without a model', ok: labels.length > 0 && !labels.includes('') && !labels.includes('no model'), missing: labels.map((l) => JSON.stringify(l)) });
+}
 await tab(m, 'Cost');
 expect('/analytics cost tab', m.text(), ['Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read']);
 await tab(m, 'Cache warming');
-expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Probe cost', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used. A high parked-limit or horizon share says the parked ceilings do.", 'Cache warming by pool']);
+expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Probe cost', 'Saved by probes', 'Net saving', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used. A high parked-limit or horizon share says the parked ceilings do.", 'Cache warming by pool']);
 {
   const titles = [...m.container.querySelectorAll('.card__title')].map((t) => t.textContent?.trim());
   const left = ['Gross saved', 'Net saved'].filter((w) => m.text().includes(w));
-  results.push({ name: '/analytics cache warming draws no savings figure: no saved tile or column and no Savings chart', ok: left.length === 0 && !titles.includes('Savings'), missing: [...left, titles.includes('Savings') ? 'Savings chart' : ''].filter(Boolean) });
+  results.push({ name: '/analytics cache warming names its saving Saved by probes and Net saving, under no Gross saved or Net saved figure and no Savings chart', ok: left.length === 0 && !titles.includes('Savings') && titles.includes('Saved by probes'), missing: [...left, titles.includes('Savings') ? 'Savings chart' : '', titles.includes('Saved by probes') ? '' : 'no Saved by probes chart'].filter(Boolean) });
+}
+{
+  // The four tiles in order, Kept warm's note summing the two counts per TTL, the chart's legend the range's gross,
+  // cost and net, and the by-pool table's Saved column after Probe cost, each read by its own element.
+  const tiles = [...m.container.querySelectorAll('#cache-warming > .tiles-row > .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim() ?? '', t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
+  const chart = [...m.container.querySelectorAll('#cache-warming .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Saved by probes');
+  const legend = [...(chart?.querySelectorAll('.legend li') ?? [])].map((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''));
+  const warming = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Cache warming by pool'));
+  const columns = [...(warming?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+  const cards = [...m.container.querySelectorAll('#cache-warming .grid-2 > .card')].map((c) => c.querySelector('.card__title')?.textContent?.trim() ?? '');
+  results.push({
+    name: '/analytics cache warming draws Probe cost, Saved by probes, Net saving and Kept warm with the two counts in its note, a Saved by probes chart before the kept-warm charts and a Saved column after Probe cost',
+    ok:
+      JSON.stringify(tiles.map(([label]) => label)) === JSON.stringify(['Probe cost', 'Saved by probes', 'Net saving', 'Kept warm']) &&
+      /^[\d,]+ tokens read warm, [\d,]+ at five minutes and [\d,]+ at an hour$/.test(tiles[3]?.[1] ?? '') &&
+      chart?.querySelector('.card__subtitle')?.textContent?.trim() === "Per bucket, the gross saving against the probes' cost" &&
+      JSON.stringify(legend) === JSON.stringify(['Saved by probes', 'Probe cost', 'Net saving']) &&
+      cards.indexOf('Saved by probes') >= 0 && cards.indexOf('Saved by probes') === cards.indexOf('Kept-warm requests') - 1 &&
+      columns.indexOf('Saved') === columns.indexOf('Probe cost') + 1 && columns.at(-1) === 'Saved',
+    missing: [JSON.stringify(tiles), JSON.stringify(legend), cards.join(','), columns.join(',')],
+  });
 }
 await tab(m, 'Accounts');
 expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak 7d, extra usage', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']);
@@ -13618,9 +14069,20 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       ending: cardIn('Wasted probes')?.querySelector('.card__subtitle')?.textContent?.trim().endsWith("says the parked ceilings do. In the one account's window shares.") ?? false,
       tiles: [...(cardIn('Wasted probes')?.querySelectorAll('.stat') ?? [])].slice(1).map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']),
     });
+    // A tile's value, its note and whether the value carries the critical ink.
+    const tileRead = (label) => {
+      const t = [...shares.container.querySelectorAll('#cache-warming > .tiles-row > .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === label);
+      return [t?.querySelector('.stat__value')?.textContent?.trim(), t?.querySelector('.stat__note')?.textContent?.trim(), t?.querySelector('.stat__value')?.classList.contains('is-critical') ?? false];
+    };
     const probeNoted = probeTile();
     const wastedNoted = wastedRead();
+    const savingNoted = [tileRead('Saved by probes'), tileRead('Net saving')];
     const poolNoted = costCells('Cache warming by pool', 6);
+    results.push({
+      name: "/analytics under Window shares grouped by account with no account named the Saved by probes and Net saving tiles dash under the note that names the Accounts filter",
+      ok: JSON.stringify(savingNoted) === JSON.stringify([['-', ONE_ACCOUNT_SHARE_NOTE, false], ['-', ONE_ACCOUNT_SHARE_NOTE, false]]),
+      missing: [JSON.stringify(savingNoted)],
+    });
     results.push({
       name: "/analytics under Window shares grouped by account with no account named the cache cost card, Cache by model, the Probe cost tile and the Wasted cost tile dash under the note that names the Accounts filter alone, and the by-pool table dashes, the blurb ending in the one account's window shares",
       ok:
@@ -13628,7 +14090,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         modelNoted.cells.length > 0 && modelNoted.cells.every(([, cells]) => JSON.stringify(cells) === '["-","-"]') && modelNoted.subtitle === ONE_ACCOUNT_SHARE_NOTE &&
         JSON.stringify(probeNoted) === JSON.stringify(['-', ONE_ACCOUNT_SHARE_NOTE]) &&
         wastedNoted.ending && JSON.stringify(wastedNoted.tiles) === JSON.stringify([['Wasted cost', '-', ONE_ACCOUNT_SHARE_NOTE], ['Share of probe cost', '-', '']]) &&
-        poolNoted.length > 0 && poolNoted.every(([, cells]) => JSON.stringify(cells) === '["-"]'),
+        poolNoted.length > 0 && poolNoted.every(([, cells]) => JSON.stringify(cells) === '["-","-"]'),
       missing: [`unit on Cache ${cacheUnit}`, `unit on Cache warming ${warmingUnit}`, `cache note ${cacheNote}`, `model ${JSON.stringify(modelNoted)}`, `probe tile ${JSON.stringify(probeNoted)}`, `wasted ${JSON.stringify(wastedNoted)}`, `pools ${JSON.stringify(poolNoted)}`],
     });
     // One account named, nightly, whose plan rows price every window: the cache card's legend reads its two 7-day
@@ -13640,6 +14102,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await shares.settle(200);
     const probeNamed = probeTile();
     const wastedNamed = wastedRead();
+    const savingNamed = [tileRead('Saved by probes'), tileRead('Net saving')];
     const poolNamed = costCells('Cache warming by pool', 6);
     await tab(shares, 'Cache');
     const namedCard = cardIn('Write cost vs read cost');
@@ -13668,7 +14131,33 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       ['Wasted cost', shareOrDashOf(nightlyProbes, (x) => x.wasted), wastedOthers.join(', ')],
       ['Share of probe cost', fmtPct(nightlyProbes.seven_day.wasted / nightlyProbes.seven_day.cost, 1), `of ${shareLabel('seven_day', nightlyProbes.seven_day.cost)} on probes`],
     ];
-    const poolWant = (await namedAnswer((q) => q.groupBy === 'pool')).map((g) => [g.label, [markedShare(g, g.probeShares, (x) => x.cost)]]);
+    const poolWant = (await namedAnswer((q) => q.groupBy === 'pool')).map((g) => [g.label, [markedShare(g, g.probeShares, (x) => x.cost), markedShare(g, g.savingShares, (x) => x)]]);
+    {
+      // The account's saving reads its 7-day saving share with the other windows and its credited requests in the
+      // note, and the net each window's saving less its probe share: a window with no credit or no probe behind it
+      // counts zero, and so does a model week its rows ran off, while a shared window the route priced none on reads a
+      // dash.
+      const nightly = (await namedAnswer((q) => q.groupBy === 'account' && q.includeProbes === true)).find((g) => g.key === 'nightly') ?? null;
+      const kept = nightly?.keptWarm ? nightly.keptWarm.tokens1h + nightly.keptWarm.tokens5m : 0;
+      const probed = nightly ? nightly.probes.ok + nightly.probes.held + nightly.probes.skipped + nightly.probes.failed : 0;
+      const shared = (k) => k === 'five_hour' || k === 'seven_day';
+      const savingAt = (k) => (kept <= 0 ? 0 : nightly?.savingShares && Object.hasOwn(nightly.savingShares, k) ? nightly.savingShares[k] : shared(k) ? null : 0);
+      const probeAt = (k) => (probed <= 0 ? 0 : nightly?.probeShares && Object.hasOwn(nightly.probeShares, k) ? nightly.probeShares[k].cost : shared(k) ? null : 0);
+      const netAt = (k) => (savingAt(k) === null || probeAt(k) === null ? null : savingAt(k) - probeAt(k));
+      const weekKey = probeWeekOf(nightly?.savingShares) ?? probeWeekOf(nightly?.probeShares);
+      const credits = `${fmtInt(nightly?.keptWarm?.requests ?? 0)} requests kept warm`;
+      const savingOthers = ['five_hour', probeWeekOf(nightly?.savingShares)].flatMap((k) => (k === undefined || !nightly?.savingShares || !Object.hasOwn(nightly.savingShares, k) ? [] : [shareLabel(k, nightly.savingShares[k])]));
+      const netOthers = ['five_hour', weekKey].flatMap((k) => (k === undefined || netAt(k) === null ? [] : [shareLabel(k, netAt(k))]));
+      const want = nightly === null ? null : [
+        [shareOrDashOf(nightly.savingShares, (x) => x), [...savingOthers, credits].join(', '), false],
+        [netAt('seven_day') === null ? '-' : shareLabel('seven_day', netAt('seven_day')), [...netOthers, 'less the probe cost'].join(', '), netAt('seven_day') !== null && netAt('seven_day') < 0],
+      ];
+      results.push({
+        name: "/analytics under Window shares with one account named the Saved by probes tile reads the account's 7-day saving share over the other windows and the credited requests, and Net saving each window's saving less its probe share",
+        ok: want !== null && kept > 0 && JSON.stringify(savingNamed) === JSON.stringify(want),
+        missing: [JSON.stringify(savingNamed), `want ${JSON.stringify(want)}`],
+      });
+    }
     results.push({
       name: "/analytics under Window shares with one account named Cache by model reads each model's 7-day read and write shares as the route answers them under the account and the model grouping, and the Wasted probes card and the by-pool table the account's probe shares",
       ok:
@@ -13693,6 +14182,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const models = cellsOf('Cache by model');
       await tab(estimatedPage, 'Cache warming');
       const pools = cellsOf('Cache warming by pool');
+      // The cells skip the label column, so a column's cell sits one before its head.
+      const probeColumn = [...([...estimatedPage.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cache warming by pool')?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '').indexOf('Probe cost') - 1;
       estimatedPage.unmount();
       asked.restore();
       localStorage.removeItem('phoebis.unit');
@@ -13710,8 +14201,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         ok:
           model !== undefined && modelRow !== undefined && modelRow.title === `${model.label}. ${ESTIMATED_TITLE}.` &&
           marked(modelRow.cells.at(-2), shareLabel('seven_day', model.cacheShares.seven_day.read)) && marked(modelRow.cells.at(-1), shareLabel('seven_day', model.cacheShares.seven_day.write)) &&
-          pool !== undefined && marked(poolRow?.cells.at(-1), shareLabel('seven_day', pool.probeShares.seven_day.cost)),
-        missing: [`model ${model?.label}: ${JSON.stringify(modelRow)}`, `pool ${pool?.label}: ${JSON.stringify(poolRow)}`],
+          pool !== undefined && probeColumn >= 0 && marked(poolRow?.cells[probeColumn], shareLabel('seven_day', pool.probeShares.seven_day.cost)),
+        missing: [`model ${model?.label}: ${JSON.stringify(modelRow)}`, `pool ${pool?.label}: ${JSON.stringify(poolRow)} at ${probeColumn}`],
       });
     }
     await tab(shares, 'Cost');
@@ -14233,6 +14724,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
       await tab(native, 'Cache warming');
       const probeCount = (g) => g.probes.ok + g.probes.held + g.probes.skipped + g.probes.failed;
+      // A side's probe cost latches on the probes that reached the upstream, since a held or skipped probe never ran.
+      const upstreamCount = (g) => g.probes.ok + g.probes.failed;
       const whole = sumGroups((await answerOf((q) => q.groupBy === 'key' && q.funding === undefined && q.includeProbes === true)) ?? []);
       const billedAnswer = await answerOf((q) => q.groupBy === 'key' && q.funding === 'billed' && q.includeProbes === true);
       const billed = sumGroups(billedAnswer ?? []);
@@ -14255,6 +14748,52 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
           JSON.stringify(probeTile.lines) === JSON.stringify(pairOf(probe.cost, billed.probeCostUsd)) && probeTile.note === `${fmtInt(probeCount(whole))} probes, ${NATIVE_7D_SUBSET}` && probeTile.title === (whole.estimated ? ESTIMATED_TITLE : null),
         missing: [JSON.stringify(probeTile), JSON.stringify({ billed: billed.probeCostUsd, probe, probes: [probeCount(whole), probeCount(billed)] })],
       });
+      // The saving's sides are told apart by their kept-warm credits, the plan side the whole read's less the billed
+      // read's: the gross a side with a credit, the net a side with a credit or a probe, each side's saving less its
+      // probe cost. A side with nothing behind it counts zero, and one the route priced nothing on reads a dash.
+      const keptIn = (g) => (g?.keptWarm ? g.keptWarm.tokens1h + g.keptWarm.tokens5m : 0);
+      const savingSides = (wholeGroup, billedGroup, net) => {
+        const billedCredits = keptIn(billedGroup);
+        const planCredits = keptIn(wholeGroup) - billedCredits;
+        const billedProbes = billedGroup ? upstreamCount(billedGroup) : 0;
+        const planProbes = upstreamCount(wholeGroup) - billedProbes;
+        const planSaving = planCredits <= 0 ? 0 : (wholeGroup.savingEquivalent.seven_day ?? null);
+        const planCost = planProbes <= 0 ? 0 : (wholeGroup.probeEquivalent.seven_day?.cost ?? null);
+        const plan = planCredits > 0 || (net && planProbes > 0);
+        const paid = billedCredits > 0 || (net && billedProbes > 0);
+        const equivalent = !net ? planSaving : planSaving === null || planCost === null ? null : planSaving - planCost;
+        const dollars = (billedGroup?.savingUsd ?? 0) - (net ? (billedGroup?.probeCostUsd ?? 0) : 0);
+        if (!plan && !paid) return { billed: dollars, equivalent: equivalent ?? 0, estimated: false };
+        return { billed: paid ? dollars : undefined, equivalent: plan ? equivalent : undefined, estimated: wholeGroup.estimated && plan && equivalent !== null };
+      };
+      const linesOf = (s) => [...(s.equivalent === undefined ? [] : [[s.equivalent === null ? '-' : `${mark(s.estimated)}${fmtEquivalent('seven_day', s.equivalent)}`, 'subscription']]), ...(s.billed === undefined ? [] : [[fmtUsd(s.billed), 'billed']])];
+      {
+        const tiles = native.container.querySelector('#cache-warming > .tiles-row');
+        const gross = savingSides(whole, billed, false);
+        const net = savingSides(whole, billed, true);
+        const savedTile = tileOf(tiles, 'Saved by probes');
+        const netTile = tileOf(tiles, 'Net saving');
+        const netCritical = [...(tiles?.querySelectorAll('.stat') ?? [])].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Net saving')?.querySelector('.stat__value')?.classList.contains('is-critical') ?? null;
+        results.push({
+          name: "/analytics under native the Saved by probes tile stacks the plan credits' 20x 7-day saving over the billed credits' dollars, and Net saving each side less its probes, critical while the plan side is under zero",
+          ok:
+            keptIn(billed) > 0 && keptIn(whole) > keptIn(billed) &&
+            JSON.stringify(savedTile.lines) === JSON.stringify(linesOf(gross)) && savedTile.lines.length === 2 && savedTile.note === `${fmtInt(whole.keptWarm.requests)} requests kept warm, ${NATIVE_7D_SUBSET}` && savedTile.title === (gross.estimated ? ESTIMATED_TITLE : null) &&
+            JSON.stringify(netTile.lines) === JSON.stringify(linesOf(net)) && netTile.note === `less the probe cost, ${NATIVE_7D_SUBSET}` && netTile.title === (net.estimated ? ESTIMATED_TITLE : null) &&
+            netCritical === (typeof net.equivalent === 'number' && net.equivalent < 0),
+          missing: [JSON.stringify(savedTile), JSON.stringify(netTile), `critical ${netCritical}`, JSON.stringify({ gross, kept: [keptIn(whole), keptIn(billed)], net })],
+        });
+        // The chart sums the series' groups of every bucket, where a group's probes can all be billed beside its plan
+        // rows, and its legend still reads the range's plan side as the tiles read it off the breakdown.
+        const legend = legendOf('Saved by probes').map(({ label, value }) => [label, value]);
+        const subscription = (tile) => tile.lines.find(([, word]) => word === 'subscription')?.[0] ?? null;
+        const want = [['Saved by probes', subscription(savedTile)], ['Probe cost', subscription(probeTile)], ['Net saving', subscription(netTile)]];
+        results.push({
+          name: "/analytics under native the Saved by probes chart's legend reads the range's plan side in the 20x 7-day equivalent, the tiles' subscription figures",
+          ok: want.every(([, figure]) => figure !== null && figure !== '-') && JSON.stringify(legend) === JSON.stringify(want),
+          missing: [JSON.stringify(legend), `want ${JSON.stringify(want)}`],
+        });
+      }
       const wastedCard = cardOf('Wasted probes');
       const wasted = { count: tileOf(wastedCard, 'Wasted probes'), cost: tileOf(wastedCard, 'Wasted cost'), share: tileOf(wastedCard, 'Share of probe cost'), subtitle: wastedCard?.querySelector('.card__subtitle')?.textContent?.trim() ?? '' };
       results.push({
@@ -14273,8 +14812,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const billedPools = await answerOf((q) => q.groupBy === 'pool' && q.funding === 'billed' && q.includeProbes === true);
       const poolCellOf = (g) => {
         const b = (billedPools ?? []).find((x) => x.key === g.key);
-        const billedProbes = b === undefined ? 0 : probeCount(b);
-        const planProbes = probeCount(g) - billedProbes;
+        const billedProbes = b === undefined ? 0 : upstreamCount(b);
+        const planProbes = upstreamCount(g) - billedProbes;
         const sides = sidesIn(planProbes > 0, billedProbes > 0);
         // A window the plan probes priced nothing on reads a dash, and a pool with no probe its zero, unmarked.
         const equivalent = g.probeEquivalent.seven_day?.cost ?? (planProbes > 0 ? null : 0);
@@ -14285,19 +14824,99 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         ];
         return { main: shown[0].short, sub: shown[1]?.full ?? '', title: titleOf(shown.flatMap((s) => (s.full === null ? [] : [s.full])).join(', '), marked) };
       };
+      const savedCellOf = (g) => {
+        const s = savingSides(g, (billedPools ?? []).find((x) => x.key === g.key), false);
+        const shown = [
+          ...(s.equivalent === undefined ? [] : [s.equivalent === null ? { full: null, short: '-' } : { full: fmtEquivalent('seven_day', s.equivalent), short: `${mark(s.estimated)}${equivalentShort('seven_day', s.equivalent)}` }]),
+          ...(s.billed === undefined ? [] : [{ full: `${fmtUsd(s.billed)} billed`, short: fmtUsd(s.billed) }]),
+        ];
+        return { main: shown[0].short, sub: shown[1]?.full ?? '', title: titleOf(shown.flatMap((x) => (x.full === null ? [] : [x.full])).join(', '), s.estimated) };
+      };
       const poolRows = rowsOf('Cache warming by pool');
+      // The cells skip the label column, so a column's cell sits one before its head.
+      const poolHeads = [...(cardOf('Cache warming by pool')?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+      const [probeAt, savedAt] = [poolHeads.indexOf('Probe cost') - 1, poolHeads.indexOf('Saved') - 1];
       const poolWrong = poolRows.flatMap((r) => {
         const g = pools.find((x) => x.label === r.label);
-        const want = g === undefined ? null : poolCellOf(g);
-        return JSON.stringify(r.cells.at(-1)) === JSON.stringify(want) ? [] : [`${r.label}: ${JSON.stringify(r.cells.at(-1))} against ${JSON.stringify(want)}`];
+        const want = g === undefined ? null : [poolCellOf(g), savedCellOf(g)];
+        const got = [r.cells[probeAt], r.cells[savedAt]];
+        return JSON.stringify(got) === JSON.stringify(want) ? [] : [`${r.label}: ${JSON.stringify(got)} against ${JSON.stringify(want)}`];
       });
       results.push({
-        name: "/analytics under native the by-pool table's Probe cost cell reads the pool's plan probes in the short 20x 7-day form with its billed probes' dollars on a line under it",
-        ok: billedPools !== null && poolRows.length > 0 && poolWrong.length === 0 && poolRows.some((r) => /^~?\d[\d.]*% 20x 7d$/.test(r.cells.at(-1)?.main ?? '') && (r.cells.at(-1)?.sub ?? '').endsWith(' billed')),
-        missing: [`${poolRows.length} rows`, ...poolWrong.slice(0, 4)],
+        name: "/analytics under native the by-pool table's Probe cost and Saved cells read the pool's plan side in the short 20x 7-day form with its billed side's dollars on a line under it",
+        ok: billedPools !== null && probeAt >= 0 && savedAt === probeAt + 1 && poolRows.length > 0 && poolWrong.length === 0 && poolRows.some((r) => /^~?\d[\d.]*% 20x 7d$/.test(r.cells[probeAt]?.main ?? '') && (r.cells[probeAt]?.sub ?? '').endsWith(' billed')) && poolRows.some((r) => /^~?\d[\d.]*% 20x 7d$/.test(r.cells[savedAt]?.main ?? '')),
+        missing: [`${poolRows.length} rows, heads ${poolHeads.join(',')}`, ...poolWrong.slice(0, 4)],
       });
       asked.restore();
       native.unmount();
+    }
+    {
+      // Under native the plan side alone tones the Net saving tile: a range whose plan credits saved more than their
+      // probes cost and whose billed probes cost more than the billed credits saved draws both nets, the billed one
+      // under zero, in no critical ink. The figures are the stub's own: the plan side nets 1.5% of the 20x 7-day
+      // window, the billed side $0.10 saved less $0.50 of probes.
+      const now = Date.now();
+      const template = (await api.getAnalyticsBreakdown({ from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() })).find((g) => g.key === 'primary');
+      const probesOf = (ok) => ({ failed: 0, held: 0, migrated: 0, ok, skipped: 0 });
+      const whole = template === undefined ? null : { ...template, estimated: false, keptWarm: { requests: 5, tokens1h: 0, tokens5m: 5_000 }, probeCostUsd: 0.7, probeEquivalent: { five_hour: { cost: 0.03, wasted: 0 }, seven_day: { cost: 0.005, wasted: 0 } }, probes: probesOf(10), savingEquivalent: { five_hour: 0.1, seven_day: 0.02 }, savingUsd: 0.6 };
+      const paid = template === undefined ? null : { ...template, cacheEquivalent: {}, costEquivalent: {}, estimated: false, keptWarm: { requests: 1, tokens1h: 0, tokens5m: 1_000 }, planOutputTokens: 0, planRequests: 0, probeCostUsd: 0.5, probeEquivalent: {}, probes: probesOf(4), savingEquivalent: {}, savingUsd: 0.1 };
+      api.getAnalyticsBreakdown = async (q) => (whole === null ? [] : [q.funding === 'billed' ? paid : whole]);
+      localStorage.removeItem('phoebis.unit');
+      const page = await mount('/analytics#cache-warming', { now: CLOCK_ORIGIN });
+      const tile = [...page.container.querySelectorAll('#cache-warming > .tiles-row > .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Net saving');
+      const lines = [...(tile?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => {
+        const figure = l.cloneNode(true);
+        figure.querySelector('.stat__pair-word')?.remove();
+        return [figure.textContent?.trim() ?? '', l.querySelector('.stat__pair-word')?.textContent?.trim() ?? ''];
+      });
+      const critical = tile?.querySelector('.stat__value')?.classList.contains('is-critical') ?? null;
+      page.unmount();
+      delete api.getAnalyticsBreakdown;
+      results.push({
+        name: '/analytics under native a billed net under zero beside a plan net above it leaves the Net saving tile out of the critical ink',
+        ok: template !== undefined && JSON.stringify(lines) === JSON.stringify([[fmtEquivalent('seven_day', 0.015), 'subscription'], ['-$0.40', 'billed']]) && critical === false,
+        missing: [`template ${template?.key}`, JSON.stringify(lines), `critical ${critical}`],
+      });
+    }
+    {
+      // A probe the router held or a gate skipped never reached the upstream, so a range whose probes were all held or
+      // skipped spent nothing on probes: under native the Probe cost tile reads its zero in each unit, and the Net
+      // saving tile and the chart's legend the plan credits' saving whole. The figures are the stub's own: the plan
+      // credits saved 2% of the 20x 7-day window, and no probe priced a window.
+      const now = Date.now();
+      const template = (await api.getAnalyticsBreakdown({ from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() })).find((g) => g.key === 'primary');
+      const none = { failed: 0, held: 0, migrated: 0, ok: 0, skipped: 0 };
+      const whole = template === undefined ? null : { ...template, estimated: false, keptWarm: { requests: 4, tokens1h: 0, tokens5m: 4_000 }, probeCostUsd: 0, probeEquivalent: {}, probes: { ...none, held: 3, skipped: 2 }, savingEquivalent: { five_hour: 0.1, seven_day: 0.02 }, savingUsd: 0.5, wastedProbeUsd: 0, wastedProbes: 0 };
+      const paid = template === undefined ? null : { ...template, cacheEquivalent: {}, costEquivalent: {}, estimated: false, keptWarm: { requests: 0, tokens1h: 0, tokens5m: 0 }, planOutputTokens: 0, planRequests: 0, probeCostUsd: 0, probeEquivalent: {}, probes: none, savingEquivalent: {}, savingUsd: 0, wastedProbeUsd: 0, wastedProbes: 0 };
+      const at = new Date(Math.floor((CLOCK_ORIGIN - 2 * 3_600_000) / 3_600_000) * 3_600_000).toISOString();
+      api.getAnalyticsBreakdown = async (q) => (whole === null ? [] : [q.funding === 'billed' ? paid : whole]);
+      api.getAnalyticsSeries = async (q) => (whole === null ? [] : [{ at, groups: [q.funding === 'billed' ? paid : whole] }]);
+      localStorage.removeItem('phoebis.unit');
+      const page = await mount('/analytics#cache-warming', { now: CLOCK_ORIGIN });
+      await page.settle();
+      const linesOf = (label) => {
+        const tile = [...page.container.querySelectorAll('#cache-warming > .tiles-row > .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === label);
+        return [...(tile?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => {
+          const figure = l.cloneNode(true);
+          figure.querySelector('.stat__pair-word')?.remove();
+          return [figure.textContent?.trim() ?? '', l.querySelector('.stat__pair-word')?.textContent?.trim() ?? ''];
+        });
+      };
+      const tiles = { net: linesOf('Net saving'), probe: linesOf('Probe cost') };
+      const chart = [...page.container.querySelectorAll('#cache-warming .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Saved by probes');
+      const legend = [...(chart?.querySelectorAll('.legend li') ?? [])].map((li) => [[...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''), li.querySelector('.legend__value')?.textContent?.trim() ?? '']);
+      page.unmount();
+      delete api.getAnalyticsBreakdown;
+      delete api.getAnalyticsSeries;
+      const [zero, saved] = [fmtEquivalent('seven_day', 0), fmtEquivalent('seven_day', 0.02)];
+      results.push({
+        name: "/analytics under native a range whose probes were all held or skipped reads a zero probe cost, and Net saving and the chart's legend the plan credits' saving whole",
+        ok:
+          template !== undefined &&
+          JSON.stringify(tiles) === JSON.stringify({ net: [[saved, 'subscription']], probe: [[zero, 'subscription'], ['$0.00', 'billed']] }) &&
+          JSON.stringify(legend) === JSON.stringify([['Saved by probes', saved], ['Probe cost', zero], ['Net saving', saved]]),
+        missing: [`template ${template?.key}`, JSON.stringify(tiles), JSON.stringify(legend)],
+      });
     }
     {
       // A read that does not count probes drops a group left with probe rows alone, which the route does and the mock
@@ -14369,12 +14988,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const tableOf = (t) => [...page.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
       const rowsOf = (t) => Object.fromEntries([...(tableOf(t)?.querySelectorAll('tbody tr') ?? [])].map((tr) => [tr.children[0]?.textContent?.trim() ?? '', [...tr.querySelectorAll('td.num')].map((td) => td.textContent?.trim() ?? '')]));
       const wastedCost = () => [...page.container.querySelectorAll('.card .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Wasted cost')?.querySelector('.stat__value')?.textContent?.trim() ?? '';
+      const tileValue = (label) => [...page.container.querySelectorAll('#cache-warming > .tiles-row > .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === label)?.querySelector('.stat__value')?.textContent?.trim() ?? '';
+      // The cells skip the label column, so a column's cell sits one before its head.
+      const columnOf = (t, head) => [...(tableOf(t)?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '').indexOf(head) - 1;
       const under = {};
       for (const unit of ['all', 'usd', 'equivalent']) {
         await chooseUnit(page, unit);
         const models = rowsOf('Cache by model');
         await tab(page, 'Cache warming');
-        under[unit] = { models, pools: rowsOf('Cache warming by pool'), wasted: wastedCost() };
+        under[unit] = { models, net: tileValue('Net saving'), pools: rowsOf('Cache warming by pool'), probeAt: columnOf('Cache warming by pool', 'Probe cost'), saved: tileValue('Saved by probes'), savedAt: columnOf('Cache warming by pool', 'Saved'), wasted: wastedCost() };
         await tab(page, 'Cache');
       }
       asked.restore();
@@ -14393,14 +15015,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const adds = (all, usd, equivalent) => Math.abs(usdOf(usd) + usdOf(equivalent) - usdOf(all)) < 0.015;
       const sums = [
         ...Object.entries(under.all.models).flatMap(([model, cells]) => [5, 6].map((i) => [`${model} ${i}`, cells[i], under.usd.models[model]?.[i], under.equivalent.models[model]?.[i]])),
-        ...Object.entries(under.all.pools).map(([pool, cells]) => [pool, cells.at(-1), under.usd.pools[pool]?.at(-1), under.equivalent.pools[pool]?.at(-1)]),
+        ...['probeAt', 'savedAt'].flatMap((column) => Object.entries(under.all.pools).map(([pool, cells]) => [`${pool} ${column}`, cells[under.all[column]], under.usd.pools[pool]?.[under.usd[column]], under.equivalent.pools[pool]?.[under.equivalent[column]]])),
         ['wasted', under.all.wasted, under.usd.wasted, under.equivalent.wasted],
+        ['saved', under.all.saved, under.usd.saved, under.equivalent.saved],
+        ['net', under.all.net, under.usd.net, under.equivalent.net],
       ];
       const tokensKept = ['usd', 'equivalent'].every((unit) => Object.entries(under.all.models).every(([model, cells]) => JSON.stringify(under[unit].models[model]?.slice(0, 5)) === JSON.stringify(cells.slice(0, 5))));
       const wrong = [...sideWrong('usd', billedModels), ...sideWrong('equivalent', planModels)];
+      const columns = ['all', 'usd', 'equivalent'].every((unit) => under[unit].probeAt >= 0 && under[unit].savedAt === under[unit].probeAt + 1);
       results.push({
-        name: "/analytics under Billed dollars and Dollar equivalent Cache by model's cost cells, the Wasted cost tile and the by-pool Probe cost cells read their side's dollars while the token columns keep every row, and the two sides add up to All in dollars within a cent",
-        ok: Object.keys(under.all.models).length > 0 && Object.keys(under.all.pools).length > 0 && wrong.length === 0 && tokensKept && sums.every(([, all, usd, equivalent]) => adds(all, usd, equivalent)) && usdOf(under.usd.wasted) > 0 && usdOf(under.equivalent.wasted) > 0,
+        name: "/analytics under Billed dollars and Dollar equivalent Cache by model's cost cells, the Wasted cost, Saved by probes and Net saving tiles and the by-pool Probe cost and Saved cells read their side's dollars while the token columns keep every row, and the two sides add up to All in dollars within a cent",
+        ok: Object.keys(under.all.models).length > 0 && Object.keys(under.all.pools).length > 0 && columns && wrong.length === 0 && tokensKept && sums.every(([, all, usd, equivalent]) => adds(all, usd, equivalent)) && usdOf(under.usd.wasted) > 0 && usdOf(under.equivalent.wasted) > 0 && usdOf(under.all.saved) > 0,
         missing: [...wrong.slice(0, 4), `tokens kept ${tokensKept}`, ...sums.filter(([, all, usd, equivalent]) => !adds(all, usd, equivalent)).map((s) => s.join(' ')).slice(0, 4)],
       });
     }
@@ -14583,25 +15208,30 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const query = { from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() };
       const template = (await api.getAnalyticsBreakdown(query)).find((g) => g.key === 'primary');
       const probesOf = (ok) => ({ failed: 0, held: 0, migrated: 0, ok, skipped: 0 });
+      // The plan paid for the requests the probes kept warm, so their saving lives on the plan side alone.
+      const zero = { requests: 0, tokens1h: 0, tokens5m: 0 };
       api.getAnalyticsBreakdown = async (q) => {
         const real = q.funding !== 'billed';
         const probed = q.funding !== 'plan';
-        const mixed = real || q.includeProbes ? [{ ...template, probeCostUsd: probed ? 0.5 : 0, probes: probesOf(probed ? 5 : 0), requests: (real ? 10 : 0) + (probed && q.includeProbes ? 5 : 0) }] : [];
-        const probeOnly = probed && q.includeProbes ? [{ ...template, key: 'warmer', label: 'warmer', probeCostUsd: 0.3, probes: probesOf(3), requests: 3 }] : [];
+        const mixed = real || q.includeProbes ? [{ ...template, keptWarm: real ? { requests: 2, tokens1h: 0, tokens5m: 1_000 } : zero, probeCostUsd: probed ? 0.5 : 0, probes: probesOf(probed ? 5 : 0), requests: (real ? 10 : 0) + (probed && q.includeProbes ? 5 : 0), savingUsd: real ? 0.2 : 0 }] : [];
+        const probeOnly = probed && q.includeProbes ? [{ ...template, key: 'warmer', keptWarm: zero, label: 'warmer', probeCostUsd: 0.3, probes: probesOf(3), requests: 3, savingUsd: 0 }] : [];
         return [...mixed, ...probeOnly];
       };
       const tileUnder = async (unit) => {
         localStorage.removeItem('phoebis.unit');
         const page = await mount(`/analytics${unit ? `?unit=${unit}` : ''}#cache-warming`);
         await page.settle(900);
-        const tile = [...page.container.querySelectorAll('#cache-warming .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
-        const read = [tile?.querySelector('.stat__value')?.textContent?.trim() ?? '', tile?.querySelector('.stat__note')?.textContent?.trim() ?? ''];
+        const tileOf = (label) => [...page.container.querySelectorAll('#cache-warming > .tiles-row > .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === label);
+        const readOf = (label) => [tileOf(label)?.querySelector('.stat__value')?.textContent?.trim() ?? '', tileOf(label)?.querySelector('.stat__note')?.textContent?.trim() ?? '', tileOf(label)?.querySelector('.stat__value')?.classList.contains('is-critical') ?? false];
+        const read = readOf('Probe cost').slice(0, 2);
+        const saving = [readOf('Saved by probes'), readOf('Net saving')];
         page.unmount();
-        return read;
+        return { read, saving };
       };
-      const whole = await tileUnder('all');
-      const billed = await tileUnder('usd');
-      const plan = await tileUnder('equivalent');
+      const underWhole = await tileUnder('all');
+      const underBilled = await tileUnder('usd');
+      const underPlan = await tileUnder('equivalent');
+      const [whole, billed, plan] = [underWhole.read, underBilled.read, underPlan.read];
       const usd = (read) => Number(/^\$([\d,.]+)/.exec(read[0])?.[1].replace(/,/g, '') ?? NaN);
       const count = (read) => Number(/^(\d[\d,]*) probes, /.exec(read[1])?.[1].replace(/,/g, '') ?? NaN);
       results.push({
@@ -14609,7 +15239,99 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         ok: template !== undefined && usd(whole) === 0.8 && count(whole) === 8 && usd(billed) === 0.8 && count(billed) === 8 && billed[1].endsWith(', billed') && usd(plan) === 0 && count(plan) === 0 && Math.abs(usd(billed) + usd(plan) - usd(whole)) < 0.005 && count(billed) + count(plan) === count(whole),
         missing: [`template ${template?.key}`, `whole ${JSON.stringify(whole)}`, `billed ${JSON.stringify(billed)}`, `plan ${JSON.stringify(plan)}`],
       });
+      // The tiles' figures are the stub's own: the plan side's credits saved $0.20, the probes cost $0.50 beside them
+      // and $0.30 on the probe-only group, all of them billed.
+      const savingWant = {
+        all: [['$0.20', '2 requests kept warm, all requests', false], ['-$0.60', 'less the probe cost, all requests', true]],
+        equivalent: [['$0.20', "2 requests kept warm, the subscription requests' equivalent", false], ['$0.20', "less the probe cost, the subscription requests' equivalent", false]],
+        usd: [['$0.00', '0 requests kept warm, billed', false], ['-$0.80', 'less the probe cost, billed', true]],
+      };
+      const savingGot = { all: underWhole.saving, equivalent: underPlan.saving, usd: underBilled.saving };
+      results.push({
+        name: '/analytics under All in dollars, Billed dollars and Dollar equivalent the Saved by probes tile reads the credited requests and their dollars, and Net saving that less the probes in the critical ink while under zero, the two positions adding up to the whole',
+        ok: template !== undefined && JSON.stringify(savingGot) === JSON.stringify(savingWant),
+        missing: [JSON.stringify(savingGot), `want ${JSON.stringify(savingWant)}`],
+      });
       delete api.getAnalyticsBreakdown;
+    }
+    {
+      // The Saved by probes chart reads a series of its own that counts probes under the position's funding, as the
+      // Probe cost tile reads its breakdown: the route answers a group left with probe rows alone only to a query that
+      // counts them, so the second bucket's probe-only group reaches the legend through that read alone. A dollar side
+      // narrows the rows as the breakdown stub above does, and the figures are the stub's own.
+      const now = Date.now();
+      const query = { from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() };
+      const template = (await api.getAnalyticsBreakdown(query)).find((g) => g.key === 'primary');
+      const hours = [3, 2].map((h) => new Date(Math.floor((now - h * 3_600_000) / 3_600_000) * 3_600_000).toISOString());
+      const probesOf = (ok) => ({ failed: 0, held: 0, migrated: 0, ok, skipped: 0 });
+      const zero = { requests: 0, tokens1h: 0, tokens5m: 0 };
+      const asked = [];
+      api.getAnalyticsSeries = async (q) => {
+        asked.push({ funding: q.funding ?? null, includeProbes: q.includeProbes === true });
+        const real = q.funding !== 'billed';
+        const probed = q.funding !== 'plan';
+        const first = real || q.includeProbes ? [{ ...template, keptWarm: real ? { requests: 2, tokens1h: 0, tokens5m: 1_000 } : zero, probeCostUsd: probed ? 0.5 : 0, probes: probesOf(probed ? 5 : 0), requests: (real ? 10 : 0) + (probed && q.includeProbes ? 5 : 0), savingUsd: real ? 0.2 : 0 }] : [];
+        const second = probed && q.includeProbes ? [{ ...template, key: 'warmer', keptWarm: zero, label: 'warmer', probeCostUsd: 0.3, probes: probesOf(3), requests: 3, savingUsd: 0 }] : [];
+        return [{ at: hours[0], groups: first }, { at: hours[1], groups: second }];
+      };
+      const legendUnder = async (unit) => {
+        localStorage.removeItem('phoebis.unit');
+        const from = asked.length;
+        const page = await mount(`/analytics?unit=${unit}#cache-warming`);
+        await page.settle(900);
+        const chart = [...page.container.querySelectorAll('#cache-warming .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Saved by probes');
+        const legend = [...(chart?.querySelectorAll('.legend li') ?? [])].map((li) => [[...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''), li.querySelector('.legend__value')?.textContent?.trim() ?? '', li.querySelector('.legend__value .is-negative') !== null]);
+        page.unmount();
+        return { legend, queries: asked.slice(from) };
+      };
+      const whole = await legendUnder('all');
+      const billed = await legendUnder('usd');
+      delete api.getAnalyticsSeries;
+      localStorage.removeItem('phoebis.unit');
+      const asks = (read, funding) => read.queries.some((q) => q.includeProbes && q.funding === funding);
+      results.push({
+        name: "/analytics the Saved by probes chart's legend counts the probe cost of a bucket that holds probes alone, read off a series that counts probes under the position's funding, and its net is the gross less that cost",
+        ok:
+          template !== undefined && asks(whole, null) && asks(billed, 'billed') &&
+          JSON.stringify(whole.legend) === JSON.stringify([['Saved by probes', '$0.20', false], ['Probe cost', '$0.80', false], ['Net saving', '-$0.60', true]]) &&
+          JSON.stringify(billed.legend) === JSON.stringify([['Saved by probes', '$0.00', false], ['Probe cost', '$0.80', false], ['Net saving', '-$0.80', true]]),
+        missing: [`template ${template?.key}`, `all ${JSON.stringify(whole)}`, `usd ${JSON.stringify(billed)}`],
+      });
+    }
+    {
+      // The story's work pool kept the notebook's cache warm with probes no request came back for, so its probes cost
+      // more than they saved: the by-pool table nets it under zero beside the pools that net a saving or nothing, and
+      // filtered to it the Net saving tile and the chart's net take the critical ink, where the all pool's take none.
+      const usdOf = (v) => Number(String(v ?? '').replace(/[$,]/g, ''));
+      localStorage.removeItem('phoebis.unit');
+      const page = await mount('/analytics?unit=all#cache-warming', { now: CLOCK_ORIGIN });
+      const table = [...page.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cache warming by pool');
+      const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+      const nets = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => {
+        const cells = [...tr.children].map((td) => td.textContent?.trim() ?? '');
+        return { net: Math.round((usdOf(cells[heads.indexOf('Saved')]) - usdOf(cells[heads.indexOf('Probe cost')])) * 10_000) / 10_000, pool: cells[0] };
+      });
+      page.unmount();
+      const toneOf = async (search) => {
+        localStorage.removeItem('phoebis.unit');
+        const filtered = await mount(`/analytics${search}#cache-warming`, { now: CLOCK_ORIGIN });
+        const tile = [...filtered.container.querySelectorAll('#cache-warming > .tiles-row > .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Net saving');
+        const chart = [...filtered.container.querySelectorAll('#cache-warming .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Saved by probes');
+        const read = { legend: chart === undefined ? null : chart.querySelector('.legend__value .is-negative') !== null, tile: tile?.querySelector('.stat__value')?.classList.contains('is-critical') ?? null, value: tile?.querySelector('.stat__value')?.textContent?.trim() ?? '' };
+        filtered.unmount();
+        return read;
+      };
+      const tones = { all: await toneOf('?unit=all&pools=all'), allNative: await toneOf('?pools=all'), work: await toneOf('?unit=all&pools=work'), workNative: await toneOf('?pools=work') };
+      localStorage.removeItem('phoebis.unit');
+      const under = nets.filter((n) => n.net < 0);
+      results.push({
+        name: "/analytics the story's by-pool nets carry one pool under zero, its probes costing more than they saved, and only that pool's Net saving tile and chart net take the critical ink",
+        ok:
+          nets.length > 1 && under.length === 1 && under[0].pool === 'work' && nets.some((n) => n.pool === 'all' && n.net > 0) &&
+          tones.work.tile === true && tones.work.legend === true && tones.workNative.tile === true && tones.workNative.legend === true &&
+          tones.all.tile === false && tones.all.legend === false && tones.allNative.tile === false && tones.allNative.legend === false,
+        missing: [heads.join(','), JSON.stringify(nets), JSON.stringify(tones)],
+      });
     }
     // The setting outlives a mount and the shared page keeps its last choice, so the shared page goes back to native
     // and the checks after this block read a fresh browser's position.
@@ -15370,6 +16092,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     };
 
     await groupBy('Model');
+    {
+      // The story's revoked key sends one request the router rejects before routing, so it carries no model. Its row
+      // counts the request as an error, with no answer.
+      const row = trafficRows('model').find((cells) => cells[0] === 'no model') ?? [];
+      const figure = (i) => Number((row[i] ?? '').replace(/,/g, ''));
+      results.push({
+        name: '/analytics grouped by model the Traffic table names the requests the router rejected before routing "no model", with their figures',
+        ok: row.length === 12 && figure(1) > 0 && figure(2) === 0 && row[8] === '100.0%',
+        missing: row.length ? row : trafficRows('model').map((cells) => JSON.stringify(cells[0])),
+      });
+    }
     const heads = [...(traffic('model')?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
     results.push({ name: '/analytics the traffic table ends with the server-tool calls', ok: JSON.stringify(heads.slice(-3)) === JSON.stringify(['Failovers', 'Search', 'Fetch']), missing: heads });
     const fable = trafficRows('model').find((row) => row[0] === 'claude-fable-5-1') ?? [];
@@ -18083,7 +18816,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       state: line?.querySelector('.agents__state > .badge:first-child')?.textContent?.trim() ?? null,
     });
     const background = read(lineOf(/^parked · background · deadline in \d+h \d+m$/));
-    const scheduled = read(lineOf(/^parked · scheduled · wakes in \d+d \d+h$/));
+    const scheduled = read(lineOf(/^parked · scheduled · wakes in \d+d( \d+h)?$/));
     pinned.unmount();
     const PARKED = 'Stopped while a background command, a subagent or a scheduled wakeup is open. Probed under the parked and horizon rules and the idle window.';
     results.push({
@@ -18127,13 +18860,16 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     // The request log carries one cost total and no probe or kept-warm facts, so a session view draws those
     // figures as unavailable rather than as zero.
     const tiles = [...m.container.querySelectorAll('#cache-warming > .tiles-row .stat__value')].map((v) => v.textContent?.trim());
+    const savingCard = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Saved by probes');
+    const savingLegend = [...(savingCard?.querySelectorAll('.legend__value') ?? [])].map((v) => v.textContent?.trim());
+    const savingBars = savingCard?.querySelectorAll('.recharts-bar-rectangle').length ?? 0;
     await tab(m, 'Cache');
     const costCard = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Write cost vs read cost');
     const costLegend = [...(costCard?.querySelectorAll('.legend__value') ?? [])].map((v) => v.textContent?.trim());
     results.push({
-      name: '/analytics a session view reads its warming tiles and cache costs as unavailable',
-      ok: tiles.length === 2 && tiles.every((v) => v === '-') && costLegend.length === 2 && costLegend.every((v) => v === '-'),
-      missing: [...tiles, ...costLegend],
+      name: '/analytics a session view reads its warming tiles, the Saved by probes legend and cache costs as unavailable',
+      ok: tiles.length === 4 && tiles.every((v) => v === '-') && savingLegend.length === 3 && savingLegend.every((v) => v === '-') && savingBars === 0 && costLegend.length === 2 && costLegend.every((v) => v === '-'),
+      missing: [...tiles, `saving ${JSON.stringify(savingLegend)} with ${savingBars} bars`, ...costLegend],
     });
   }
   {
@@ -19966,6 +20702,29 @@ m.unmount();
   const press = (key, at = document.activeElement) => at?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key }));
   const named = (el) => (el === document.body ? 'the body' : `${el?.tagName.toLowerCase()} ${el?.className} ${el?.textContent?.trim().slice(0, 30)}`);
 
+  // A dimension whose list did not load is a stop for the keys, so a reader who walks the rows reaches its reason, and
+  // the row stays shut: its Enter is held and a click opens no step. The Key row is the second stop after the field.
+  failNextCall('listKeys', '/admin/keys', 'the registry is unavailable');
+  const shut = await mount('/requests');
+  addFilterButton(shut)?.click();
+  await shut.settle(100);
+  const rowAt = () => (document.activeElement?.classList.contains('add-filter__row') ? document.activeElement.firstElementChild?.textContent?.trim() : named(document.activeElement));
+  const toDisabled = [];
+  for (let i = 0; i < 2; i += 1) {
+    press('ArrowDown');
+    await shut.settle(50);
+    toDisabled.push(rowAt());
+  }
+  const disabledRow = document.activeElement;
+  const enterHeld = press('Enter') === false;
+  await shut.settle(50);
+  disabledRow?.click();
+  await shut.settle(50);
+  const firstStep = filterBox()?.querySelector('.add-filter__search') != null && filterBox()?.querySelector('[aria-label="Back to the filter list"]') == null;
+  const disabledRead = { disabled: disabledRow?.getAttribute('aria-disabled') ?? null, enterHeld, firstStep, walk: toDisabled };
+  await closeBoxes(shut);
+  shut.unmount();
+
   let page = await mount('/requests');
   // Each list opens in Add filter's values step, anchored to Add filter, which takes the focus back on Escape.
   const agentType = await addFilter(page, 'Agent type');
@@ -19988,9 +20747,16 @@ m.unmount();
   const tabbedOut = filterBox() === null;
   const wanted = [labels[0], labels[1], labels[0], labels.at(-1), labels[0]];
   results.push({
-    name: 'the Agent type filter opens onto its Select all row and the keys move, close and return focus',
-    ok: labels.length > 2 && labels[0] === 'Select all' && JSON.stringify(moves) === JSON.stringify(wanted) && escaped.every(Boolean) && reopened && tabbedOut,
-    missing: [`moves ${JSON.stringify(moves)} against ${JSON.stringify(wanted)}`, `Escape closed ${escaped[0]}, on Add filter ${escaped[1]}`, `reopened ${reopened}, a Tab out closed ${tabbedOut}`],
+    name: "the Agent type filter opens onto its Select all row and the keys move, close and return focus, and the Add filter list's disabled Key row is reached by the keys and stays shut",
+    ok:
+      labels.length > 2 &&
+      labels[0] === 'Select all' &&
+      JSON.stringify(moves) === JSON.stringify(wanted) &&
+      escaped.every(Boolean) &&
+      reopened &&
+      tabbedOut &&
+      JSON.stringify(disabledRead) === JSON.stringify({ disabled: 'true', enterHeld: true, firstStep: true, walk: ['Account', 'Key'] }),
+    missing: [`moves ${JSON.stringify(moves)} against ${JSON.stringify(wanted)}`, `Escape closed ${escaped[0]}, on Add filter ${escaped[1]}`, `reopened ${reopened}, a Tab out closed ${tabbedOut}`, `disabled row ${JSON.stringify(disabledRead)}`],
   });
 
   // A list past twelve options opens with its search field: on this story the status codes, past the six models.

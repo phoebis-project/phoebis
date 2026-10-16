@@ -713,7 +713,7 @@ function SessionRows({
         </td>
       </tr>
       {open && (
-        <tr className="srow__detail">
+        <tr className="srow__detail table__detail">
           <td colSpan={columns}>
             <p className="agents__created">
               {session.createdAt === null ? 'Created: unknown' : `Created ${fmtAbsolute(session.createdAt)}, ${fmtRelative(session.createdAt, now)}`}

@@ -137,8 +137,13 @@ async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
     .await;
     let credit = inference_rows(&rows);
     assert_eq!(
-        (credit.kept_warm_requests, credit.kept_warm_tokens),
-        (1, 2_000)
+        (
+            credit.kept_warm_requests,
+            credit.kept_warm_5m_tokens,
+            credit.kept_warm_1h_tokens
+        ),
+        (1, 2_000, 0),
+        "a five-minute recipe's credit books the five-minute count"
     );
     assert!(
         read_dollars(&r, &rows).0 > 0.0,
@@ -216,9 +221,10 @@ async fn a_request_under_the_dated_id_keeps_the_credit_of_a_probe_on_a_recipe_re
     let second = r.observe("main").await;
     assert_eq!(r.status("main").canonical_model, dated);
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    let credit = inference_rows(&rows);
     assert_eq!(
-        inference_rows(&rows).kept_warm_tokens,
-        2_000,
+        (credit.kept_warm_5m_tokens, credit.kept_warm_1h_tokens),
+        (2_000, 0),
         "the probe covered the recipe the request continues, whichever name each was taken under"
     );
     assert!(row(&r, &second).await.kept_warm);
@@ -325,7 +331,11 @@ async fn a_probe_during_a_long_stream_and_a_shortened_ttl_credit_nothing() {
     while let Some(Ok(_)) = http_body_util::BodyExt::frame(&mut streaming).await {}
     r.pump(Some(&id)).await;
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
-    assert_eq!(inference_rows(&rows).kept_warm_tokens, 2_000);
+    let credit = inference_rows(&rows);
+    assert_eq!(
+        (credit.kept_warm_5m_tokens, credit.kept_warm_1h_tokens),
+        (2_000, 0)
+    );
     assert!(
         row(&r, &id).await.kept_warm,
         "the covering probe before the stream started credits it"
@@ -355,6 +365,35 @@ async fn a_probe_during_a_long_stream_and_a_shortened_ttl_credit_nothing() {
         300_000,
         "this request's own evidence shortened the TTL after the check"
     );
+}
+
+/// An hour recipe's credit books the hour's count: past the hour the first request wrote for, a request inside the
+/// entry the probe refreshed reads it warm under the hour its own markers ask for.
+#[tokio::test]
+async fn a_request_kept_warm_by_an_hour_recipes_probe_books_the_hours_count() {
+    let mut r = rig(RigSpec::default()).await;
+    let hour = priced_body().replace(
+        r#""cache_control":{"type":"ephemeral"}"#,
+        r#""cache_control":{"type":"ephemeral","ttl":"1h"}"#,
+    );
+    r.up.push_credential_rule(A, "/v1/messages", Respond::Json { status: 200, headers: vec![], body: br#"{"id":"m","type":"message","content":[],"usage":{"input_tokens":10,"cache_creation_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2000},"output_tokens":10}}"#.to_vec() });
+    r.observe_with("main", &hour).await;
+    assert_eq!(r.status("main").cache_ttl_ms, 3_600_000);
+    r.advance(3_600_000 - 360_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    // Past the hour the first request's entry lived, and inside the hour the probe refreshed.
+    r.advance(420_000);
+    r.up.push_credential_rule(A, "/v1/messages", warm_answer());
+    let kept = r.observe_with("main", &hour).await;
+    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    let credit = inference_rows(&rows);
+    assert_eq!(
+        (credit.kept_warm_5m_tokens, credit.kept_warm_1h_tokens),
+        (0, 2_000),
+        "an hour recipe's credit books the hour's count alone"
+    );
+    assert!(row(&r, &kept).await.kept_warm);
 }
 
 #[tokio::test]
@@ -441,7 +480,11 @@ async fn a_migrated_probe_is_priced_and_the_next_request_counts_as_kept_warm() {
         "the pin moved with the probe"
     );
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
-    assert_eq!(inference_rows(&rows).kept_warm_tokens, 2_000);
+    let credit = inference_rows(&rows);
+    assert_eq!(
+        (credit.kept_warm_5m_tokens, credit.kept_warm_1h_tokens),
+        (2_000, 0)
+    );
     assert!(
         row(&r, &second).await.kept_warm,
         "the write the probe paid on the new account is the one the request would have paid"
@@ -1881,11 +1924,12 @@ async fn a_covering_probe_whose_entry_lapsed_settles_expired_while_the_rewrite_a
     assert_eq!(
         (
             credit.kept_warm_requests,
-            credit.kept_warm_tokens,
+            credit.kept_warm_5m_tokens,
+            credit.kept_warm_1h_tokens,
             probe.wasted_probes,
             probe.wasted_probe_reasons.clone()
         ),
-        (1, 2_000, 1, BTreeMap::from([("expired".to_string(), 1)])),
+        (1, 2_000, 0, 1, BTreeMap::from([("expired".to_string(), 1)])),
         "the rewrite kept the entry the request read, and the first probe's had lapsed"
     );
     assert!(
@@ -2200,8 +2244,12 @@ async fn a_fast_probe_keeps_a_fast_request_warm_and_a_switch_of_speed_earns_noth
         on_fast.add(row);
     }
     assert_eq!(
-        (on_fast.kept_warm_requests, on_fast.kept_warm_tokens),
-        (1, 2_000),
+        (
+            on_fast.kept_warm_requests,
+            on_fast.kept_warm_5m_tokens,
+            on_fast.kept_warm_1h_tokens
+        ),
+        (1, 2_000, 0),
         "the credit files under speed fast"
     );
     let probe_speeds: Vec<&str> = rows
@@ -2298,8 +2346,12 @@ async fn a_kept_warm_request_on_an_unpriced_model_counts_and_its_recipe_keeps_pr
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
     let credit = inference_rows(&rows);
     assert_eq!(
-        (credit.kept_warm_requests, credit.kept_warm_tokens),
-        (1, 2_000),
+        (
+            credit.kept_warm_requests,
+            credit.kept_warm_5m_tokens,
+            credit.kept_warm_1h_tokens
+        ),
+        (1, 2_000, 0),
         "the mark and the tokens count on a model the price table does not know"
     );
     assert!(row(&r, &second).await.kept_warm);
@@ -2513,7 +2565,11 @@ async fn a_request_that_failed_over_earns_no_credit_from_the_probes_account() {
     let here = r.observe_with("main", &body).await;
     assert_eq!(r.status("main").account_id.as_deref(), Some("a"));
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
-    assert_eq!(inference_rows(&rows).kept_warm_tokens, 2_000);
+    let credit = inference_rows(&rows);
+    assert_eq!(
+        (credit.kept_warm_5m_tokens, credit.kept_warm_1h_tokens),
+        (2_000, 0)
+    );
     assert!(row(&r, &here).await.kept_warm);
 }
 
@@ -2609,8 +2665,228 @@ async fn a_request_kept_warm_on_a_plan_funded_account_is_credited() {
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
     let kept = r.observe_with("main", &body).await;
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
-    assert_eq!(inference_rows(&rows).kept_warm_tokens, 2_000);
+    let credit = inference_rows(&rows);
+    assert_eq!(
+        (credit.kept_warm_5m_tokens, credit.kept_warm_1h_tokens),
+        (2_000, 0)
+    );
     assert!(row(&r, &kept).await.kept_warm);
+}
+
+/// A credit files beside its request's own row: a Haiku 5.5 request in January whose prompt passes that month's
+/// long-context threshold, kept warm on a Max 20x account, keys the credit under `long` and the account's tier, so the
+/// saving prices at the long-context cells and reaches the account's window shares.
+#[tokio::test]
+async fn a_credit_keys_its_requests_tier_and_band_and_reaches_the_saving_shares() {
+    const HAIKU: &str = "claude-haiku-5-5";
+    let mut r = rig(RigSpec {
+        pricing: phoebis_ledger::test_tables::api_prices(),
+        tables: phoebis_ledger::test_tables::subscription_costs(),
+        tier: Some("default_claude_max_20x"),
+        ..plan_funded_spec()
+    })
+    .await;
+    r.advance(phoebis_ledger::test_tables::JANUARY_2026 - r.now());
+    r.event(Event {
+        event: "session_start".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let body = body_on(HAIKU);
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    r.advance_attended(60_000);
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
+    let kept = r.observe_with("main", &body).await;
+    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    assert!(row(&r, &kept).await.kept_warm);
+    let long = r.pricing.in_force(r.now()).models[HAIKU]
+        .long_context
+        .as_ref()
+        .expect("the test list prices Haiku 5.5 by prompt length")
+        .over;
+    assert!(
+        2_000 > long,
+        "the request read back more than the threshold"
+    );
+    let credit = rows
+        .iter()
+        .find(|row| row.kept_warm_requests > 0)
+        .expect("the credit's row");
+    assert_eq!(
+        (credit.band.as_str(), credit.tier.as_str()),
+        ("long", "default_claude_max_20x"),
+        "the credited request's band and the serving account's tier"
+    );
+    let groups = phoebis_ledger::breakdown(
+        &rows,
+        "account",
+        false,
+        &phoebis_ledger::LiveKeys::default(),
+        &[],
+        Some(phoebis_ledger::SharePricing { tables: &r.tables }),
+        &r.pricing,
+        &r.tables,
+    );
+    let saving = groups
+        .iter()
+        .find(|group| group.key == "o")
+        .and_then(|group| group.saving_shares.clone())
+        .expect("the account grouping answers the account's saving shares");
+    let key = phoebis_ledger::RowKey {
+        model: &credit.canonical_model,
+        speed: phoebis_ledger::Speed::of(Some(credit.speed.as_str())),
+        band: phoebis_ledger::Band::of_rollup(&credit.band),
+        funding: phoebis_ledger::Funding::of_rollup(&credit.funding),
+        kind: &credit.kind,
+        tier: Some(&credit.tier),
+        entrypoint: None,
+        at: credit.hour * 1_000,
+        band_at: None,
+    };
+    let shares = |usage: PinUsage| {
+        phoebis_ledger::price_row(&r.pricing, &r.tables, &key, usage)
+            .shares
+            .expect("the tier's windows price the credit")
+    };
+    let write = shares(PinUsage {
+        write_5m: credit.kept_warm_5m_tokens,
+        write_1h: credit.kept_warm_1h_tokens,
+        ..PinUsage::default()
+    });
+    let read = shares(PinUsage {
+        cache_read: credit.kept_warm_5m_tokens + credit.kept_warm_1h_tokens,
+        ..PinUsage::default()
+    });
+    assert!(!saving.is_empty(), "the credit priced on the windows");
+    for (window, saved) in &saving {
+        let (Some(write), Some(read)) = (write[window], read[window]) else {
+            panic!("{window} priced both halves");
+        };
+        assert_eq!(
+            *saved,
+            write - read,
+            "{window}: the write's share less the read's at the credit's own key"
+        );
+    }
+}
+
+/// A credit keys the hour and the band its request's own row keys, read at the relay's receipt: a Haiku 5.5 request
+/// received a minute and a half before February, whose prompt passes January's long-context threshold and not
+/// February's, and observed by the engine and answered after midnight, files its credit in the January hour under
+/// `long` beside its request row, so its saving prices at the January long-context cells.
+#[tokio::test]
+async fn a_credit_answered_across_a_revision_boundary_files_at_its_requests_arrival() {
+    const HAIKU: &str = "claude-haiku-5-5";
+    const PROMPT: u64 = 1_510;
+    let mut r = rig(RigSpec {
+        pricing: phoebis_ledger::test_tables::api_prices(),
+        ..RigSpec::default()
+    })
+    .await;
+    let february = phoebis_ledger::effective_instant("2026-02-01").expect("a date");
+    // The first request at 23:53 on January 31, its probe at 23:57:30 and the credited request at 23:58:30, the
+    // session started again past the jump.
+    r.advance(february - 420_000 - r.now());
+    r.event(Event {
+        event: "session_start".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let body = body_on(HAIKU);
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    r.advance_attended(60_000);
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(Respond::Json { status: 200, headers: vec![], body: br#"{"id":"m","type":"message","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":10,"cache_read_input_tokens":1500,"output_tokens":10}}"#.to_vec() })),
+    );
+    let sent = r.up.requests().len();
+    let app = r.h.app.clone();
+    let request = r.request_with("main", &body);
+    let pending = tokio::spawn(async move { app.oneshot(request).await.unwrap() });
+    wait_for(Duration::from_secs(5), || {
+        (r.up.requests().len() > sent).then_some(())
+    })
+    .await;
+    let received = r.now();
+    assert!(
+        received < february,
+        "the relay received the request on January 31"
+    );
+    // The engine observes the request only after midnight, so its own clock at the observation reads February.
+    r.advance_attended(february + 60_000 - received);
+    r.pump(None).await;
+    r.up.release();
+    let resp = pending.await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = relay_common::outcome(&resp).request_id;
+    let _ = http_body_util::BodyExt::collect(resp.into_body())
+        .await
+        .unwrap();
+    r.pump(Some(&id)).await;
+    assert_eq!(
+        (
+            r.pricing.in_force(received).band_of(HAIKU, PROMPT),
+            r.pricing.in_force(r.now()).band_of(HAIKU, PROMPT)
+        ),
+        (
+            phoebis_ledger::Band::LongContext,
+            phoebis_ledger::Band::Standard
+        ),
+        "the prompt passes January's threshold and not February's"
+    );
+    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    let request = row(&r, &id).await;
+    assert!(request.kept_warm);
+    let credit = rows
+        .iter()
+        .find(|row| row.kept_warm_requests > 0)
+        .expect("the credit's row");
+    assert_eq!(
+        credit.band, "long",
+        "the credit keys the band of its request's arrival, not of its answer"
+    );
+    assert_eq!(
+        (credit.hour, hour_of(request.received_at)),
+        (hour_of(received), hour_of(received)),
+        "the credit files in its request row's January hour, not in the hour of its answer"
+    );
+    // The answer read 1,500 tokens back on a five-minute entry, so the credit saved the write at the January
+    // long-context cells less the read it paid.
+    assert_eq!(
+        (credit.kept_warm_5m_tokens, credit.kept_warm_1h_tokens),
+        (1_500, 0)
+    );
+    let long = r.pricing.in_force(received).models[HAIKU]
+        .long_context
+        .as_ref()
+        .expect("the test list prices Haiku 5.5 by prompt length")
+        .clone();
+    let january = 1_500.0 * (long.cells.cache_write_5m - long.cells.cache_read) / 1_000_000.0;
+    let saving = phoebis_ledger::breakdown(
+        &rows,
+        "all",
+        true,
+        &phoebis_ledger::LiveKeys::default(),
+        &[],
+        None,
+        &r.pricing,
+        &r.tables,
+    )
+    .first()
+    .map_or(0.0, |group| group.saving_usd);
+    assert!(
+        (saving - january).abs() < 1e-12,
+        "the saving at the January long-context cells: {saving} against {january}"
+    );
 }
 
 /// A plan-funded probe on a model the cost model leaves unweighted settles in the window share when its model tier

@@ -1635,15 +1635,25 @@ textarea.input {
   border-bottom: 0;
 }
 
+/* Every data table alternates its rows on --stripe, a half step between the surfaces, so a hovered row (--surface-2)
+   and a selected one (--accent-soft) still read over it. A row under one of the rows (table__detail) is not counted
+   and takes its parent's tone, and a form table opts out with table--plain. The child combinators make a table nested
+   in a cell its own striping scope. The rule is wrapped in :where() so it stays under the hover, the selected and the
+   open-row rules, which keep their specificity. */
+.table:where(:not(.table--plain)) > tbody > :where(tr:nth-child(even of :not(.table__detail))) > td,
+.table:where(:not(.table--plain)) > tbody > :where(tr:nth-child(even of :not(.table__detail))) + :where(tr.table__detail) > td {
+  background: var(--stripe);
+}
+
 .table--hover tbody tr {
   cursor: pointer;
 }
 
-.table--hover tbody tr:hover td {
+.table--hover > tbody > tr:hover > td {
   background: var(--surface-2);
 }
 
-.table tr.is-selected td {
+.table > tbody > tr.is-selected > td {
   background: var(--accent-soft);
 }
 
@@ -1692,22 +1702,105 @@ textarea.input {
 
 /* Stat tiles */
 /*
- * The dashboard's attention line. A badge row is 22 px (18 px of line and 2 px of padding each side), and the quiet,
- * loading and failed states hold that one row, so the tiles below stay where they are; many items wrap onto more rows
- * rather than hide one.
+ * The dashboard's attention line. A badge row is 22 px (18 px of line and 2 px of padding each side), and the line
+ * holds one row of items in every state, so the tiles below hold still. The badges past the row fold behind "+N more",
+ * and the Replay button with its answer takes a second row only where the lead, the fold badge and the button with its
+ * answer alone do not fit.
  */
 .attention-line {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px 8px;
   align-items: center;
-  min-height: 22px;
+  height: 22px;
+}
+
+.attention-line.is-wrapped {
+  flex-wrap: wrap;
+  height: auto;
 }
 
 .attention-line__lead {
   font-size: 13px;
   font-weight: 600;
   color: var(--ink-2);
+}
+
+/* The fold reads each part at its own width, which a part shrunk to fit the line would hide. */
+.attention-line__lead,
+.attention-line__more,
+.attention-line__tail,
+.attention-line__tail > .pill,
+.attention-line__replay {
+  flex: none;
+}
+
+.attention-line__tail {
+  display: flex;
+  gap: 6px 8px;
+  align-items: center;
+}
+
+/* On its own row the tail spans the line, and an answer too long for that row wraps under the button. */
+.attention-line.is-wrapped > .attention-line__tail {
+  flex-basis: 100%;
+  flex-wrap: wrap;
+}
+
+.attention-line.is-wrapped .attention-line__replay {
+  max-width: 100%;
+}
+
+.attention-line__items {
+  display: flex;
+  flex: 0 1 auto;
+  gap: 6px 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+/* A flex box rather than a line box, so the wrapper is exactly its badge's size. */
+.attention-line__item {
+  display: flex;
+  flex: none;
+}
+
+/* An author display beats the hidden attribute's UA rule, so a badge the fold hides says so again here. */
+.attention-line__item[hidden] {
+  display: none;
+}
+
+/*
+ * The fold's look on the chip line: a neutral badge with a dashed border. A badge draws no border, so the button's own
+ * would widen it, and this one takes a pixel of the padding to keep the 22 px row.
+ */
+/* Tabular digits keep every count the badge draws no wider than the largest one, which the fold measures it at. */
+.attention-line__more {
+  padding: 1px 7px;
+  border: 1px dashed var(--hairline);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The badge's display beats the hidden attribute's UA rule, so the fold badge drawn for the measure says so again. */
+.attention-line__more[hidden] {
+  display: none;
+}
+
+/*
+ * One badge per row at its own width, which a grid would stretch to the longest. The box keeps a reading width that
+ * fits a phone's window, and a long badge wraps inside it. The badges keep the inset the other popovers' content keeps:
+ * the box's 4 px and a row's 8 px at the sides, 4 px more above and below.
+ */
+.attention-line__list {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  max-width: min(480px, calc(100vw - 32px));
+  padding: 8px 12px;
+}
+
+.attention-line__list .badge {
+  white-space: normal;
 }
 
 /* A failure's message can run past the line, so it cuts there and reads whole in the title. */
@@ -1722,7 +1815,7 @@ textarea.input {
 }
 
 /* The Replay button sits in a badge row, so it takes the badges' 22 px and the row keeps its height. */
-.attention-line > .pill {
+.attention-line__tail > .pill {
   height: 22px;
   padding-block: 0;
 }

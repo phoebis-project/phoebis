@@ -9,8 +9,13 @@ import type { BadgeTone } from '@/lib/quota';
 import { IconCheck, IconChevron, IconCopy, IconSearch, IconWarning, IconX } from './icons';
 
 const DescriptionHost = createContext<{ base: string; register: (text: string) => () => void } | null>(null);
+const fnv1a = (text: string): string => {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193) >>> 0;
+  return hash.toString(16).padStart(8, '0');
+};
 // The id derives from the text, so a described element points at its entry in its first render, before the entry draws.
-const entryId = (base: string, text: string) => `${base}-${encodeURIComponent(text)}`;
+const entryId = (base: string, text: string) => `${base}-${fnv1a(text)}`;
 
 /**
  * Holds the descriptions of the titled elements inside it in one hidden node after its content. A node beside each
@@ -34,9 +39,10 @@ export function Descriptions({ children }: { children: ReactNode }) {
   return (
     <DescriptionHost.Provider value={host}>
       {children}
-      {/* Marked so a whole-page text read can leave out the copies no sighted reader sees. */}
+      {/* Marked so a whole-page text read can leave out the copies no sighted reader sees. Hidden rather than clipped:
+          a reader still hears a node an `aria-describedby` names, and no scroll can bring a hidden node into view. */}
       {counts.size > 0 && (
-        <div className="sr-only" data-descriptions="">
+        <div hidden data-descriptions="">
           {[...counts.keys()].map((t) => (
             <span key={t} id={entryId(base, t)}>
               {t}
@@ -70,7 +76,7 @@ export function Described({ children, hostedOnly = false, text }: { children: (d
     <>
       {children(hosted ?? own ?? undefined)}
       {own !== null && (
-        <span id={own} className="sr-only" data-descriptions="">
+        <span id={own} hidden data-descriptions="">
           {text}
         </span>
       )}
@@ -198,6 +204,20 @@ export function ErrorState({ title = 'Could not load', body, action }: { action?
       {body && <p className="empty__body">{body}</p>}
       {action}
     </div>
+  );
+}
+
+/**
+ * The error element of the routes whose page loads as its own chunk. It sits with the primitives rather than beside the
+ * routes, since `App.tsx` builds its router as it loads, which an import of the element from there would run.
+ */
+export function PageLoadFailed(): JSX.Element {
+  return (
+    <ErrorState
+      title="This page could not load"
+      body="The console's files changed under this tab, and a reload did not fetch the current ones. Reload to try again."
+      action={<Button onClick={() => window.location.reload()}>Reload</Button>}
+    />
   );
 }
 
@@ -1082,7 +1102,7 @@ export function KeyValue({ rows, className = '' }: { className?: string; rows: {
             {r.value}
           </dd>
           {r.title && (
-            <span id={`${base}-${i}`} className="sr-only" data-descriptions="">
+            <span id={`${base}-${i}`} hidden data-descriptions="">
               {r.title}
             </span>
           )}

@@ -450,9 +450,10 @@ pub fn json_200() -> fake_upstream::Respond {
 }
 
 /// The rollup table as version 33 held it, rebuilt over a file the current schema built: the band, the tier and the
-/// wasted counts out and the eight dollar columns back at zero, so a replay from an earlier version runs the older
-/// rebuilds, which name the dollar columns, and then migration 34 over the table it was written for. SQLite cannot
-/// drop a primary-key column in place, so the table is rebuilt as the migrations rebuild it.
+/// wasted counts out, the two kept-warm counts summed back into the one, and the eight dollar columns back at zero, so
+/// a replay from an earlier version runs the older rebuilds, which name the dollar columns, and then migration 34 over
+/// the table it was written for. SQLite cannot drop a primary-key column in place, so the table is rebuilt as the
+/// migrations rebuild it.
 pub const VERSION_33_ROLLUPS: &str = "CREATE TABLE rollups_hourly_v33 (hour INTEGER NOT NULL, key_id TEXT NOT NULL, \
      key_generation INTEGER NOT NULL DEFAULT 0, pool_id TEXT NOT NULL, account_id TEXT NOT NULL, \
      canonical_model TEXT NOT NULL, kind TEXT NOT NULL, user_agent TEXT NOT NULL, client TEXT NOT NULL DEFAULT '-', \
@@ -485,9 +486,10 @@ pub const VERSION_33_ROLLUPS: &str = "CREATE TABLE rollups_hourly_v33 (hour INTE
      canonical_model, kind, user_agent, client, effort, request_class, speed, funding, requests, succeeded, \
      rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, \
      input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, \
-     web_search_requests, web_fetch_requests, 0.0, 0.0, 0.0, 0.0, 0.0, kept_warm_requests, kept_warm_tokens, 0.0, \
-     0.0, probe_migrated, wasted_probes, 0.0, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, \
-     duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held \
+     web_search_requests, web_fetch_requests, 0.0, 0.0, 0.0, 0.0, 0.0, kept_warm_requests, \
+     kept_warm_5m_tokens + kept_warm_1h_tokens, 0.0, 0.0, probe_migrated, wasted_probes, 0.0, \
+     wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, \
+     cache_miss_reasons_json, incomplete, probes_held \
      FROM rollups_hourly; \
      DROP TABLE rollups_hourly; \
      ALTER TABLE rollups_hourly_v33 RENAME TO rollups_hourly; \

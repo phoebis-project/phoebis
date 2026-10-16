@@ -1,4 +1,4 @@
-import { planRowsRequired, probesRequired } from '@/lib/analytics';
+import { planRowsRequired, probesRequired, savingRequired } from '@/lib/analytics';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { fundingOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
@@ -38,7 +38,7 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   failovers: 0,
   histograms: { durationMs: emptyHistogram(), outputTps: emptyHistogram(), ttfbMs: emptyHistogram(), ttftMs: emptyHistogram() },
   incomplete: 0,
-  keptWarm: { requests: 0, tokens: 0 },
+  keptWarm: { requests: 0, tokens1h: 0, tokens5m: 0 },
   key,
   keyCreatedAt: null,
   keyId: null,
@@ -53,6 +53,9 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   rateLimited: 0,
   rejected: 0,
   requests: 0,
+  savingEquivalent: {},
+  savingShares: null,
+  savingUsd: 0,
   succeeded: 0,
   tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, thinking: 0, uncachedInput: 0, webFetch: 0, webSearch: 0 },
   uncached: 0,
@@ -346,12 +349,13 @@ function latchShared<P>(sum: Record<string, unknown>, parts: P[], obliged: (part
 export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
   const out = empty('all');
   for (const g of groups) {
-    for (const k of ['attempts', 'billedUsd', 'cacheHits', 'cacheMisses', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'incomplete', 'probeCostUsd', 'rateLimited', 'rejected', 'requests', 'succeeded', 'uncached', 'wastedProbeUsd', 'wastedProbes'] as const) out[k] += g[k];
+    for (const k of ['attempts', 'billedUsd', 'cacheHits', 'cacheMisses', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'incomplete', 'probeCostUsd', 'rateLimited', 'rejected', 'requests', 'savingUsd', 'succeeded', 'uncached', 'wastedProbeUsd', 'wastedProbes'] as const) out[k] += g[k];
     out.cost = plusSplit(out.cost, g.cost);
     out.billed = plusSplit(out.billed, g.billed);
     addByWindow(out.costEquivalent, g.costEquivalent, (a, b) => a + b);
     addByWindow(out.cacheEquivalent, g.cacheEquivalent, (a, b) => ({ read: a.read + b.read, write: a.write + b.write }));
     addByWindow(out.probeEquivalent, g.probeEquivalent, (a, b) => ({ cost: a.cost + b.cost, wasted: a.wasted + b.wasted }));
+    addByWindow(out.savingEquivalent, g.savingEquivalent, (a, b) => a + b);
     const split = out.equivalentSplit;
     out.equivalentSplit = split === null || g.equivalentSplit === null ? null : { cacheRead: split.cacheRead + g.equivalentSplit.cacheRead, cacheWrite: split.cacheWrite + g.equivalentSplit.cacheWrite, input: split.input + g.equivalentSplit.input, output: split.output + g.equivalentSplit.output };
     if (g.estimated) out.estimated = true;
@@ -361,13 +365,14 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
     for (const [code, n] of Object.entries(g.errors)) out.errors[code] = countOf(out.errors, code) + n;
     for (const [reason, n] of Object.entries(g.cacheMissReasons)) out.cacheMissReasons[reason] = missCount(out.cacheMissReasons, reason) + n;
     if (g.fromRequests) out.fromRequests = true;
-    out.keptWarm = out.keptWarm && g.keptWarm ? { requests: out.keptWarm.requests + g.keptWarm.requests, tokens: out.keptWarm.tokens + g.keptWarm.tokens } : null;
+    out.keptWarm = out.keptWarm && g.keptWarm ? { requests: out.keptWarm.requests + g.keptWarm.requests, tokens1h: out.keptWarm.tokens1h + g.keptWarm.tokens1h, tokens5m: out.keptWarm.tokens5m + g.keptWarm.tokens5m } : null;
     for (const k of ['failed', 'held', 'migrated', 'ok', 'skipped'] as const) out.probes[k] += g.probes[k];
     for (const reason of WASTED_PROBE_REASONS) out.wastedProbeReasons[reason] += g.wastedProbeReasons[reason];
   }
   latchShared(out.costEquivalent, groups, planRowsRequired, (g) => g.costEquivalent);
   latchShared(out.cacheEquivalent, groups, planRowsRequired, (g) => g.cacheEquivalent);
   latchShared(out.probeEquivalent, groups, probesRequired, (g) => g.probeEquivalent);
+  latchShared(out.savingEquivalent, groups, savingRequired, (g) => g.savingEquivalent);
   for (const m of METRICS) {
     out.histograms[m] = mergeHistograms(groups.map((g) => g.histograms[m]));
     out.percentiles[m] = quartet(out.histograms[m]);

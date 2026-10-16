@@ -251,7 +251,8 @@ pub(crate) fn ledger_failure(error: phoebis_ledger::LedgerError) -> Response {
 
 /// The series bucketed to the range. Under `group_by=key` a point's `groups` entries carry `key` in the same form
 /// as the breakdown route's key row. Each entry carries the breakdown row's `cost_shares`, `cache_shares`,
-/// `probe_shares`, `plan_requests` and `plan_output_tokens` under the same rules, summed over the bucket's rows.
+/// `probe_shares`, `saving_shares`, `plan_requests` and `plan_output_tokens` under the same rules, summed over the
+/// bucket's rows.
 // `GroupRow` serializes alone, so the series does too and the test-only `SeriesTwin` carries the round trip.
 #[derive(serde::Serialize, ToSchema)]
 pub(crate) struct Series {

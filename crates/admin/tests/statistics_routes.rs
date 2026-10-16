@@ -2120,16 +2120,22 @@ fn request_counts(body: &serde_json::Value) -> Vec<(String, u64)> {
         .collect()
 }
 
-const SHARE_MEMBERS: [&str; 5] = [
+const SHARE_MEMBERS: [&str; 6] = [
     "cache_shares",
     "cost_shares",
     "plan_output_tokens",
     "plan_requests",
     "probe_shares",
+    "saving_shares",
 ];
 
 /// The share members alone: the plan-funded counts beside them answer under every grouping.
-const SHARES: [&str; 3] = ["cache_shares", "cost_shares", "probe_shares"];
+const SHARES: [&str; 4] = [
+    "cache_shares",
+    "cost_shares",
+    "probe_shares",
+    "saving_shares",
+];
 
 fn positive(v: &serde_json::Value) -> bool {
     v.as_f64().is_some_and(|x| x > 0.0)
@@ -2164,6 +2170,24 @@ async fn the_breakdown_answers_shares_for_an_oauth_group_under_the_account_group
         positive(&business["probe_shares"]["five_hour"]["cost"])
             && business["probe_shares"]["five_hour"]["wasted"].is_null(),
         "the probe's share with no waste recorded: {business}"
+    );
+    assert_eq!(
+        business["kept_warm"].as_object().map(|kept| kept
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>()),
+        Some(std::collections::BTreeSet::from([
+            "requests",
+            "tokens_1h",
+            "tokens_5m"
+        ])),
+        "the kept-warm requests and their tokens per TTL, with no sum: {business}"
+    );
+    assert!(
+        business["saving_usd"].is_number()
+            && business["saving_shares"].is_object()
+            && business["saving_equivalent"].is_object(),
+        "the saving's three members beside the probe cost: {business}"
     );
     assert_eq!(
         (&business["plan_requests"], &business["plan_output_tokens"]),

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import type { Account, AccountSlowDown, ExtraUsage, QuotaPoll, QuotaSnapshot, RateLimitWindow } from '@/api/types';
@@ -11,10 +11,10 @@ import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/comp
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinute, fmtPct, fmtRelative, fmtShortTime, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, isExpired, isSubscription, meterTone, paceWords, planChip, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, isExpired, isSubscription, meterTone, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, sortByPace, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 
-type Sort = 'default' | 'soonest';
+type Sort = 'default' | 'pace5h' | 'pace7d' | 'paceWeek' | 'soonest';
 
 const QUOTA_SECTIONS = [
   { id: 'accounts', label: 'Accounts' },
@@ -51,6 +51,9 @@ export function QuotaPage() {
   const snapById = useMemo(() => new Map(subscriptions.flatMap((a) => (a.usage ? [[a.id, a.usage] as const] : []))), [subscriptions]);
 
   const visible = useMemo(() => {
+    if (sort === 'pace5h') return sortByPace(subscriptions, '5h', now);
+    if (sort === 'pace7d') return sortByPace(subscriptions, '7d', now);
+    if (sort === 'paceWeek') return sortByPace(subscriptions, '7d_fable', now);
     if (sort === 'soonest') {
       const nextReset = (a: Account) => {
         const future = a.windows.flatMap((w) => (w.resetsAt === null ? [] : [Date.parse(w.resetsAt)])).filter((t) => t > now);
@@ -109,6 +112,9 @@ export function QuotaPage() {
             <Select value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sort">
               <option value="default">Default order</option>
               <option value="soonest">Soonest recovery</option>
+              <option value="pace5h">5-hour pace</option>
+              <option value="pace7d">7-day pace</option>
+              <option value="paceWeek">7-day Fable pace</option>
             </Select>
           </div>
           {failure ?? (
@@ -190,7 +196,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   const w5 = windowOf(account, '5h');
   const w7 = windowOf(account, '7d');
   const end = endOf(account, now);
-  const plan = planChip(account);
+  const plan = account.plan;
   const trialEndsAt = account.subscription?.trialEndsAt ?? null;
   const endsAt = account.cancelled ? (account.subscription?.endsAt ?? null) : null;
   const soon = (at: string) => Date.parse(at) - now < 7 * DAY;
@@ -320,7 +326,7 @@ function QuotaWindow({ end, name, window: w, now, slowDown = null, soon }: { end
     <>
       <WindowChip name={name} window={w} now={now} className="qwin__chip" />
       {live ? (
-        <Meter value={remainingOf(live)} tone={meterTone(remainingOf(live))} thin label={reading} title={reading} mark={remainingTimeShare(live, now, end) ?? undefined} />
+        <Meter value={remainingOf(live)} tone={meterTone(remainingOf(live))} thin label={reading} title={reading} mark={remainingTimeShare(live) ?? undefined} />
       ) : (
         <div className="meter meter--thin meter--absent" role="presentation">
           <div className="meter__fill" style={{ width: '100%' }} />
@@ -357,6 +363,8 @@ function QuotaWindow({ end, name, window: w, now, slowDown = null, soon }: { end
 /* Reset timeline */
 
 type Mode = 'session' | 'weekly';
+/** A bar label's fallback: 0 the whole label, 1 the share alone, 2 none, the bar's title keeping it. */
+type LabelStep = 0 | 1 | 2;
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 
@@ -408,14 +416,69 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
     const at = span.startMs + i * span.cellMs;
     const d = new Date(at);
     const dayStart = d.getHours() === 0;
+    const head = mode === 'weekly' ? d.toLocaleDateString('en-US', { weekday: 'short' }) : dayStart ? fmtDayShort(at) : '';
+    const day = d.toLocaleDateString('en-US', { day: 'numeric' });
+    const time = fmtShortTime(new Date(at).toISOString());
     return {
       at,
-      head: mode === 'weekly' ? d.toLocaleDateString('en-US', { weekday: 'short' }) : dayStart ? fmtDayShort(at) : '',
-      sub: mode === 'weekly' ? fmtDayShort(at) : fmtShortTime(new Date(at).toISOString()),
+      head,
+      shortHead: mode === 'weekly' ? head.charAt(0) : dayStart ? day : '',
+      shortSub: mode === 'weekly' ? day : time.replace(':00', ''),
+      sub: mode === 'weekly' ? fmtDayShort(at) : time,
       today: new Date(at).setHours(0, 0, 0, 0) === new Date(now).setHours(0, 0, 0, 0),
       weekend: [0, 6].includes(d.getDay()),
     };
   });
+
+  // Under 40 px, the width "Sep 13" takes in the axis's mono face, a day cell prints its short pair with the full words
+  // on its title. A cell no layout measured (jsdom) reads 0 and keeps the full pair.
+  const [narrow, setNarrow] = useState(false);
+  // Each bar label's step, keyed by its account and its start, since two lanes can open a window at the same instant.
+  const [steps, setSteps] = useState<ReadonlyMap<string, LabelStep>>(() => new Map());
+  const chartRef = useRef<HTMLDivElement>(null);
+  const cellsRef = useRef<HTMLDivElement>(null);
+  // Every label is shown whole for the reading and its hidden parts restored before paint, so a label that fell back on
+  // a narrow chart draws whole again once its bar holds it. A label no layout measured (jsdom) reads as fitting.
+  const measure = () => {
+    const cell = cellsRef.current?.firstElementChild?.getBoundingClientRect().width ?? 0;
+    setNarrow(cell > 0 && cell < 40);
+    const chart = chartRef.current;
+    if (chart === null) return;
+    // A live bar's label carries its reset as a part of its own, which the share-alone step hides.
+    const labels = [...chart.querySelectorAll<HTMLElement>('.lane__label')].map((label) => ({ hidden: label.hidden, label, reset: label.querySelector<HTMLElement>('.lane__label-reset') }));
+    const resetsHidden = labels.map(({ reset }) => reset?.hidden ?? false);
+    const show = (withReset: boolean) => {
+      for (const { label, reset } of labels) {
+        label.hidden = false;
+        if (reset !== null) reset.hidden = !withReset;
+      }
+    };
+    const cut = ({ label }: { label: HTMLElement }) => label.scrollWidth > label.clientWidth;
+    show(true);
+    const wholeCut = labels.map(cut);
+    show(false);
+    const shareCut = labels.map(cut);
+    labels.forEach(({ hidden, label, reset }, i) => {
+      label.hidden = hidden;
+      if (reset !== null) reset.hidden = resetsHidden[i];
+    });
+    const next = new Map<string, LabelStep>(labels.map(({ label, reset }, i) => [label.dataset.bar ?? '', !wholeCut[i] ? 0 : reset !== null && !shareCut[i] ? 1 : 2]));
+    setSteps((was) => (was.size === next.size && [...next].every(([key, step]) => was.get(key) === step) ? was : next));
+  };
+  const measureRef = useRef(measure);
+  // Every draw can move a bar or change its words (a mode switch, a period paged, a new reading), so each one measures
+  // again, and the observer covers a resize, since the tracks span the cells' width.
+  useLayoutEffect(() => {
+    measureRef.current = measure;
+    measure();
+  });
+  useEffect(() => {
+    const row = cellsRef.current;
+    if (row === null || typeof ResizeObserver !== 'function') return;
+    const observer = new ResizeObserver(() => measureRef.current());
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, []);
 
   const lanes = accounts
     .map((a) => ({ account: a, window: windowOf(a, mode === 'session' ? '5h' : '7d') }))
@@ -458,22 +521,30 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
         </div>
       </header>
 
-      <div className="timeline__chart">
+      <div ref={chartRef} className="timeline__chart">
         <div className="timeline__axis">
           <div className="timeline__axis-label">Account</div>
-          <div className="timeline__cells">
+          <div ref={cellsRef} className="timeline__cells">
             {cells.map((c) => (
-              <div key={c.at} className={`timeline__cell ${c.today ? 'is-today' : ''}`}>
-                <span className="timeline__cell-head">{c.head}</span>
-                <span className="timeline__cell-sub">{c.sub}</span>
+              <div key={c.at} className={`timeline__cell ${c.today ? 'is-today' : ''}`} title={narrow ? [c.head, c.sub].filter((part) => part !== '').join(' ') : undefined}>
+                <span className="timeline__cell-head">{narrow ? c.shortHead : c.head}</span>
+                <span className="timeline__cell-sub">{narrow ? c.shortSub : c.sub}</span>
               </div>
             ))}
+            {/* The now line's pill in the stacked shape, in the axis row above every lane's head. */}
+            {nowPct !== null && (
+              <span className="timeline__now-pill" style={{ left: `${nowPct}%` }}>
+                now
+              </span>
+            )}
           </div>
         </div>
 
         <div className="timeline__lanes">
           {/* One raster and one now line for the whole chart rather than a copy
-              per lane, so both read as a single ruler down the rows. */}
+              per lane, so both read as a single ruler down the rows. Under
+              900 px the stacked heads cross the chart, so each track draws its
+              own piece of the line there (`lane__now`). */}
           <div className="timeline__raster" aria-hidden>
             {cells.map((c) => (
               <span key={c.at} className={c.weekend ? 'is-weekend' : ''} />
@@ -528,7 +599,8 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
                     const from = Math.max(b.start, span.startMs);
                     const to = Math.min(b.stop, span.endMs);
                     const wPct = ((to - from) / width) * 100;
-                    const showLabel = wPct > (mode === 'session' ? 5 : 9);
+                    const key = `${account.id} ${b.start}`;
+                    const step = steps.get(key) ?? 0;
                     // The fill is the window's used share placed from the window's start and cut to the drawn part,
                     // so a fill past the now line reads as ahead of pace and one short of it as behind. It draws only
                     // while the sample is current: an expired sample's bar is projected past its reset, and the
@@ -545,15 +617,25 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
                       >
                         {b.state === 'live' && share !== null && (
                           <span className="lane__clip">
-                            <span className={`lane__used lane__used--${meterTone(remainingOf(w))}`} style={{ width: `${used}%` }} />
+                            <span className="lane__used" style={{ width: `${used}%` }} />
                           </span>
                         )}
-                        {b.stop === b.end && b.end <= span.endMs && <span className="lane__reset-mark" aria-hidden />}
-                        {showLabel && <span className="lane__label">{b.state === 'live' && share ? `${share} · ${stamp(b.end)}` : stamp(b.end)}</span>}
+                        {/* A live bar's label falls back to its share alone, and a reset stamp alone straight to the title. */}
+                        {b.state === 'live' && share !== null ? (
+                          <span className="lane__label" data-bar={key} hidden={step === 2}>
+                            {share}
+                            <span className="lane__label-reset" hidden={step !== 0}> · {stamp(b.end)}</span>
+                          </span>
+                        ) : (
+                          <span className="lane__label" data-bar={key} hidden={step !== 0}>
+                            {stamp(b.end)}
+                          </span>
+                        )}
                       </div>
                     );
                   })}
                   {endPct !== null && <span className="lane__end" style={{ left: `${endPct}%` }} title={`${account.label} ends ${fmtAbsolute(endsAt)}`} aria-hidden />}
+                  {nowPct !== null && <span className="lane__now" style={{ left: `${nowPct}%` }} aria-hidden />}
                 </div>
               </div>
             );

@@ -50,6 +50,8 @@ export function ringFigures(accounts: Account[], windowId: WindowId, costs: Subs
   }
   const capacity = rows.reduce((s, r) => s + r.weight, 0);
   const left = rows.reduce((s, r) => s + r.weight * r.remaining, 0);
+  // The ring's slices and the list beside it read one order, the most of its own window left first, so the legend reads the ring.
+  rows.sort((a, b) => b.remaining - a.remaining || a.label.localeCompare(b.label));
   return { anchor: planLabel(anchor), capacity, left, leftOut, rows };
 }
 

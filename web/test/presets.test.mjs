@@ -50,25 +50,7 @@ test('a preset sets the cap, the average and the dwell and never the switch, so 
 const NOW = Date.parse('2026-09-16T14:30:00Z');
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
-const WEEK = 168 * HOUR;
 const at = (ms) => new Date(ms).toISOString();
-
-test('a window leads its pace by its utilization less the share of it that has elapsed', () => {
-  const lead = (resetsAt, end = null) => d.aheadOf({ resetsAt, utilization: 0.5 }, WEEK, NOW, end);
-  assert.equal(lead(at(NOW + WEEK * 0.9)).toFixed(2), '0.40', 'a tenth of the week gone');
-  assert.equal(lead(at(NOW + WEEK * 0.4)).toFixed(2), '-0.10', 'six tenths of the week gone');
-  assert.equal(lead(null), 0.5, 'a window with no reset reads nothing elapsed');
-  assert.equal(lead(at(NOW + WEEK * 2)), 0.5, 'a reset more than a window out reads nothing elapsed');
-  assert.equal(lead(at(NOW - MINUTE)), -0.5, 'a window past its reset reads fully elapsed');
-  // The share runs to the earlier of the reset and the account's end, as the router's `elapsed_share_at` reads it.
-  const reset = at(NOW + WEEK * 0.9);
-  assert.equal(lead(reset, NOW + WEEK / 10).toFixed(2), '0.00', 'an end a tenth of the week out: half the span to it gone');
-  assert.equal(lead(reset, NOW + WEEK * 0.9).toFixed(2), '0.40', 'an end at the reset reads the reset');
-  assert.equal(lead(reset, NOW + WEEK * 3).toFixed(2), '0.40', 'an end past the reset reads the reset');
-  assert.equal(lead(reset, NOW - WEEK / 10), -0.5, "an end at the window's start reads fully elapsed");
-  assert.equal(lead(reset, NOW - WEEK), -0.5, "an end before the window's start reads fully elapsed");
-  assert.equal(lead(null, NOW + MINUTE), 0.5, 'without a reset nothing has elapsed, whatever the end');
-});
 
 /**
  * A window as the account routes serve it: its projection runs to the horizon `horizonIn` from now, and `burn` is the
@@ -191,10 +173,10 @@ test('the preview names the member closest to the ceiling when none projects ove
   const near = oauth('near', 0.85, 0.3);
   assert.equal(line([near, cool], []), `No member projects over the ceiling on any window: the closest is near, 5h 85 % at ${d.instant(NOW + 2 * HOUR, NOW)}.`, 'a 5-hour horizon reads its clock time');
   const weekly = oauth('weekly', 0.4, 0.884);
-  assert.equal(line([cool, weekly], []), 'No member projects over the ceiling on any window: the closest is weekly, 7d 88 % in 5h 0m.', 'a weekly horizon reads the span to it');
+  assert.equal(line([cool, weekly], []), 'No member projects over the ceiling on any window: the closest is weekly, 7d 88 % in 5h.', 'a weekly horizon reads the span to it');
   const fable = oauth('fable', 0.4, 0.5, 0.87);
-  assert.equal(line([fable], [pin('fable', 'f', 0.01, false, { model: 'claude-fable-5-1' })]), 'No member projects over the ceiling on any window: the closest is fable, Fable week 87 % in 5h 0m.', "the Fable week reads where a pin's model draws it");
-  assert.equal(line([fable], [pin('fable', 's', 0.01, false)]), 'No member projects over the ceiling on any window: the closest is fable, 7d 50 % in 5h 0m.', 'and only there');
+  assert.equal(line([fable], [pin('fable', 'f', 0.01, false, { model: 'claude-fable-5-1' })]), 'No member projects over the ceiling on any window: the closest is fable, Fable week 87 % in 5h.', "the Fable week reads where a pin's model draws it");
+  assert.equal(line([fable], [pin('fable', 's', 0.01, false)]), 'No member projects over the ceiling on any window: the closest is fable, 7d 50 % in 5h.', 'and only there');
   assert.equal(line([{ id: 'key', kind: 'api_key', label: 'key', windows: [], fableWindow: null }], []), 'No member projects over the ceiling on any window.', 'a pool of API-key members alone has no window to read');
 });
 

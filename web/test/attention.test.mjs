@@ -17,7 +17,7 @@ test("a listener's two certificate kinds decode as themselves, never as the wors
   assert.deepEqual(kinds, ['certificate_expiring', 'certificate_reload_failed']);
 });
 
-test('each attention kind has its word and its tone, a client drift serious', () => {
+test('each attention kind has its word and its tone, a client drift and a failed refresh serious', () => {
   assert.deepEqual(ATTENTION_LABEL, {
     certificate_expiring: 'Certificate expiring',
     certificate_reload_failed: 'Certificate reload failed',
@@ -36,7 +36,7 @@ test('each attention kind has its word and its tone, a client drift serious', ()
     wall_reached: 'Wall reached under the ceiling',
     writer_degraded: 'State writer degraded',
   });
-  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'serious', 'critical', 'serious', 'critical', 'warning', 'serious', 'warning', 'warning', 'warning', 'warning', 'warning', 'warning', 'warning']);
+  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'serious', 'critical', 'serious', 'serious', 'warning', 'serious', 'warning', 'warning', 'warning', 'warning', 'warning', 'warning', 'warning']);
 });
 
 test('an item opens the page where its condition is fixed, and an item without a link opens nothing', () => {
@@ -138,7 +138,7 @@ test("a certificate item reads its last day and its first day past the end as to
 test("a badge's title lists the detail's members, an instant read as one, then the age", () => {
   const backoff = item('poll_backoff', { detail: { account: 'secondary', backoff_since: NOW - 42 * 60_000, next_attempt_at: null, rate_limited_in_a_row: 6 }, pools: ['all'], since: new Date(NOW - 42 * 60_000).toISOString() });
   assert.equal(attentionTitle(backoff, NOW), ['account: secondary', `backoff_since: ${fmtAbsolute(new Date(NOW - 42 * 60_000).toISOString())}`, 'rate_limited_in_a_row: 6', 'started 42m ago'].join('\n'));
-  assert.equal(attentionTitle(item('ledger_record_parked', { detail: { pool: 'jobs', count: 1 }, pools: ['jobs'] }), NOW), ['count: 1', 'pool: jobs', 'started 2h 0m ago'].join('\n'), 'the members read in name order');
+  assert.equal(attentionTitle(item('ledger_record_parked', { detail: { pool: 'jobs', count: 1 }, pools: ['jobs'] }), NOW), ['count: 1', 'pool: jobs', 'started 2h ago'].join('\n'), 'the members read in name order');
 });
 
 test("a badge's title for an item that carries no pool leads with its sentence, which no pool card's row draws", () => {
@@ -146,15 +146,15 @@ test("a badge's title for an item that carries no pool leads with its sentence, 
   const expiring = item('certificate_expiring', { detail: { cert_file: '/etc/phoebis/proxy.pem', days_left: 12, expires }, since: new Date(NOW - 18 * 86_400_000).toISOString(), subject: { id: 'proxy.tls', label: 'proxy.tls', type: 'router' } });
   assert.equal(
     attentionTitle(expiring, NOW),
-    [`The proxy listener's certificate /etc/phoebis/proxy.pem expires in 12 days (${fmtAbsolute(new Date(expires).toISOString())}). Replace the pair and run phoebis tls reload.`, 'cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', `expires: ${fmtAbsolute(new Date(expires).toISOString())}`, 'started 18d 0h ago'].join('\n'),
+    [`The proxy listener's certificate /etc/phoebis/proxy.pem expires in 12 days (${fmtAbsolute(new Date(expires).toISOString())}). Replace the pair and run phoebis tls reload.`, 'cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', `expires: ${fmtAbsolute(new Date(expires).toISOString())}`, 'started 18d ago'].join('\n'),
     "a certificate's end reads as an instant",
   );
   const degraded = item('writer_degraded', { detail: { component: 'ledger' } });
-  assert.equal(attentionTitle(degraded, NOW), [attentionDetail(degraded, NOW), 'component: ledger', 'started 2h 0m ago'].join('\n'));
+  assert.equal(attentionTitle(degraded, NOW), [attentionDetail(degraded, NOW), 'component: ledger', 'started 2h ago'].join('\n'));
   const model = item('model_unweighted', { detail: { model: 'claude-sonnet-4-6', requests: 12, tier: 'sonnet', weight_of: 'claude-sonnet-5-5' }, subject: { id: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6', type: 'model' } });
   assert.equal(attentionTitle(model, NOW).split('\n')[0], attentionDetail(model, NOW), "a model's item belongs to no pool card, so its title leads with its sentence");
   const pooled = item('writer_degraded', { detail: { component: 'ledger' }, pools: ['all'] });
-  assert.equal(attentionTitle(pooled, NOW), ['component: ledger', 'started 2h 0m ago'].join('\n'), "an item a pool carries reads its sentence on that pool's card");
+  assert.equal(attentionTitle(pooled, NOW), ['component: ledger', 'started 2h ago'].join('\n'), "an item a pool carries reads its sentence on that pool's card");
 });
 
 test('a kind this build does not know opens its link, never a pool log named by an account', () => {
@@ -163,7 +163,7 @@ test('a kind this build does not know opens its link, never a pool log named by 
   const later = decodeAttention({ detail: { account: 'legacy' }, kind: 'quota_drift', link: { id: 'legacy', page: 'accounts' }, pools: [], since, subject: { id: 'legacy', label: 'legacy', type: 'account' } });
   assert.equal(later.kind, 'pool_exhausted', 'the decoder reads an unknown kind as the worst one');
   assert.equal(attentionHref(later, NOW), '/accounts/legacy');
-  assert.equal(attentionTitle(later, NOW).split('\n').pop(), 'started 2h 0m ago', 'and its title names no log');
+  assert.equal(attentionTitle(later, NOW).split('\n').pop(), 'started 2h ago', 'and its title names no log');
   const pooled = decodeAttention({ detail: {}, kind: 'quota_drift', link: { id: 'jobs', page: 'pools' }, pools: ['jobs'], since, subject: { id: 'jobs', label: 'jobs', type: 'pool' } });
   assert.equal(new URL(attentionHref(pooled, NOW), 'http://console.test').pathname, '/routing-log', 'one that names a pool opens its log');
   const known = ['wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'].map((kind) => decodeAttention({ detail: {}, kind, link: null, pools: [], since, subject: { id: 'x', label: 'x', type: 'account' } }).kind);

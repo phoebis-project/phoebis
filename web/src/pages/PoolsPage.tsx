@@ -445,7 +445,7 @@ function CacheTtlGrid({ disabled, hint, metered, onChange, plan }: { disabled: b
   return (
     <div className="field">
       <div className="table-wrap">
-        <table className="table ttl-grid">
+        <table className="table ttl-grid table--plain">
           <thead>
             <tr>
               <th />
@@ -505,7 +505,7 @@ function CacheTtlOverrides({
     <Field plain label={label} data-rule-set={name} hint="A model absent here takes the rule above.">
       {rules.models.length > 0 && (
         <div className="table-wrap">
-          <table className="table rules-table">
+          <table className="table rules-table table--plain">
             <thead>
               <tr>
                 <th className="col-fill">Model</th>
@@ -1187,7 +1187,10 @@ export function PoolDialog({
   const [stale, setStale] = useState<string | null>(null);
   const [chosen, setChosen] = useState<PoolGroup>('identity');
   const settings = useAsync(() => api.getSettings(), []);
-  const captureMaxHours = settings.data?.retention.bodyCaptureMaxHours ?? 72;
+  const captureMaxHours = settings.data?.retention.bodyCaptureMaxHours;
+  // The flag `GroupedDialog` hands its expert wrappers, whose registry the bodies built here cannot reach: a half cell
+  // whose row-mate is expert spans the row while the mate is hidden.
+  const { expertView } = useAppSettings();
   const [keyOpen, setKeyOpen] = useState(false);
   const [created, setCreated] = useState<CreatedApiKey | null>(null);
   // Keys created from inside the dialog appear in the list before the parent reloads.
@@ -1489,7 +1492,7 @@ export function PoolDialog({
           />
         ) : (
           <div className="table-wrap">
-            <table className="table members-table">
+            <table className="table members-table table--plain">
               <thead>
                 <tr>
                   <th className="col-fill">Account</th>
@@ -1596,6 +1599,8 @@ export function PoolDialog({
                         <input
                           type="checkbox"
                           checked
+                          disabled={!accountsLoaded}
+                          title={accountsLoaded ? undefined : 'Waiting for the account list'}
                           onChange={() => {
                             const next = { ...form.members };
                             delete next[id];
@@ -1643,7 +1648,7 @@ export function PoolDialog({
             <p className="muted">{pool ? 'No keys belong to this pool yet.' : 'Keys can be created once the pool is saved.'}</p>
           ) : (
             <div className="table-wrap">
-              <table className="table keys-table">
+              <table className="table keys-table table--plain">
                 <thead>
                   <tr>
                     <th className="col-fill">Key</th>
@@ -1863,7 +1868,7 @@ export function PoolDialog({
         <div className="cells">
           <Field
             label="Window ceiling (%)"
-            className="cell--half"
+            className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.burnAverageSeconds) ? 'cell--half' : undefined}
             hint="A move or a new session lands on a member only where its windows stay under this share until they reset, or for the next five hours on a weekly window. A round runs on a member whose window would pass it."
           >
             <Input
@@ -1922,8 +1927,10 @@ export function PoolDialog({
               <PresetPills label="Load shedding preset" value={sheddingPill} onPick={pickShedding} hints={SHEDDING_HINT} />
             </Field>
           </Expert>
+          {/* An expert half halves its row only while its mate draws, in the expert view or under the mate's refusal,
+              so a refused half drawn alone in the plain view spans its row. */}
           <Expert refused={refusedFields.has('Shed cap (%)')}>
-            <Field label="Shed cap (%)" className="cell--half" hint="The most of the member's burn one round removes. The round removes what brings the window under the ceiling, up to this.">
+            <Field label="Shed cap (%)" className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.shedDwellSeconds) ? 'cell--half' : undefined} hint="The most of the member's burn one round removes. The round removes what brings the window under the ceiling, up to this.">
               <Input
                 type="number"
                 min={CAP_PERCENT.min}
@@ -1936,7 +1943,7 @@ export function PoolDialog({
             </Field>
           </Expert>
           <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.shedDwellSeconds)}>
-            <Field label={ENGINE_FIELD_LABELS.shedDwellSeconds} className="cell--half" hint="The least time between two rounds on one member, and how long a moved session stays off it.">
+            <Field label={ENGINE_FIELD_LABELS.shedDwellSeconds} className={expertView || refusedFields.has('Shed cap (%)') ? 'cell--half' : undefined} hint="The least time between two rounds on one member, and how long a moved session stays off it.">
               <Input
                 type="number"
                 min={ENGINE_BOUNDS.shedDwellSeconds.min}
@@ -1994,7 +2001,7 @@ export function PoolDialog({
           <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.slowDownStretchSeconds)}>
             <Field
               label={ENGINE_FIELD_LABELS.slowDownStretchSeconds}
-              className="cell--half"
+              className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.slowDownHoldSeconds) ? 'cell--half' : undefined}
               hint="The time the slow-down may add to a session before a round moves sessions off the member, with load shedding on. Under it the slow-down holds alone."
             >
               <Input
@@ -2009,7 +2016,7 @@ export function PoolDialog({
             </Field>
           </Expert>
           <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.slowDownHoldSeconds)}>
-            <Field label={ENGINE_FIELD_LABELS.slowDownHoldSeconds} className="cell--half" hint="The longest one request waits. 120 s leaves 60 s of the client's 180 s first-byte window for the upstream's head.">
+            <Field label={ENGINE_FIELD_LABELS.slowDownHoldSeconds} className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.slowDownStretchSeconds) ? 'cell--half' : undefined} hint="The longest one request waits. 120 s leaves 60 s of the client's 180 s first-byte window for the upstream's head.">
               <Input
                 type="number"
                 min={ENGINE_BOUNDS.slowDownHoldSeconds.min}
@@ -2045,7 +2052,7 @@ export function PoolDialog({
           <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.inFlightCap)}>
             <Field
               label={ENGINE_FIELD_LABELS.inFlightCap}
-              className="cell--half"
+              className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.retryInPlaceSeconds) ? 'cell--half' : undefined}
               hint="Requests one member serves at once. A member at the cap takes no fresh session while a sibling has room. With every member full, a request waits up to Retry in place for a slot."
             >
               <Input
@@ -2059,7 +2066,7 @@ export function PoolDialog({
             </Field>
           </Expert>
           <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.retryInPlaceSeconds)}>
-            <Field label={ENGINE_FIELD_LABELS.retryInPlaceSeconds} className="cell--half" hint="The longest throttle a request waits out on its member before failing over, and the longest wait for a free slot. At 0 a request fails over at once.">
+            <Field label={ENGINE_FIELD_LABELS.retryInPlaceSeconds} className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.inFlightCap) ? 'cell--half' : undefined} hint="The longest throttle a request waits out on its member before failing over, and the longest wait for a free slot. At 0 a request fails over at once. Claude Code gives up on a request that has waited about 180 seconds without an answer and retries it on its own, so a longer wait is spent for nothing.">
               <Input
                 type="number"
                 min={ENGINE_BOUNDS.retryInPlaceSeconds.min}
@@ -2336,7 +2343,7 @@ export function PoolDialog({
           label="Retention (hours)"
           hint={
             <>
-              At most the bootstrap&apos;s body capture limit, {captureMaxHours} hours here, shown on the <PageLink to="/settings">Settings page</PageLink>.
+              At most the bootstrap&apos;s body capture limit, {captureMaxHours !== undefined && `${captureMaxHours} hours here, `}shown on the <PageLink to="/settings">Settings page</PageLink>.
             </>
           }
         >

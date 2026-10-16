@@ -21,6 +21,15 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* The document holds still behind a modal dialog: `overflow: hidden` keeps `scrollTop` where it was, so the close
+   restores scrolling there, and the stable gutter keeps the content from shifting as the scrollbar leaves. Both sit on
+   the root, the document's scrolling element, since the viewport takes its gutter from the root alone. A rule rather
+   than a class the open effect toggles cannot drift from the dialog's state. A dialog's own scroll stays its own. */
+:root:has(dialog[open]) {
+  overflow: hidden;
+  scrollbar-gutter: stable;
+}
+
 h1,
 h2,
 h3,

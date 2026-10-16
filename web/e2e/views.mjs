@@ -19,8 +19,9 @@ if (Number.isNaN(clockOrigin)) {
   console.error('PHOEBIS_E2E_CLOCK is not an instant');
   process.exit(2);
 }
-// The dashboard's remaining cards and its empty state are read against the router's seeded registry (one API-key
-// account, a list with nothing in it); the mock's story has subscription accounts and no empty list there.
+// The dashboard's empty state is read against the router's seeded registry, where a list holds nothing, and the mock's
+// story draws no empty list there. The remaining cards read empty on the seed's one API-key account and weighed on the
+// story's subscription accounts.
 const mock = process.env.PHOEBIS_E2E_MOCK === '1';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -539,12 +540,15 @@ async function sidebarBrand(theme) {
 }
 
 /**
- * The dashboard's attention line above the tiles: one 22 px row per line of badges with the lead on the first and a
- * 6 px gap between rows, every badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges, the
- * line inside the content box and clear of the tiles. The mock pass draws the story's sixteen items. The router pass
- * seeds an exhaustion of its main pool, which any request the pool serves later in the run (a keepalive probe among
- * them) clears: the light pass, which reaches the dashboard first, requires that item, so a route answering an empty
- * list fails it, and the dark pass draws that item or the quiet line, never the unavailable one.
+ * The dashboard's attention line above the tiles: one 22 px row in every state, every badge it shows and its "+N more"
+ * badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges on the row's one top edge, none past
+ * the content box, and the line on the tiles' left edge and clear of them. The mock pass draws the story's sixteen
+ * items, more than the row holds at 1280 by 800: the badges shown and the fold's count add up to sixteen, the fold
+ * badge draws its dashed border, and its list opens under it inside the window with all sixteen, closing on Escape with
+ * the focus back on the badge. The router pass seeds an exhaustion of its main pool, which any request the pool serves
+ * later in the run (a keepalive probe among them) clears: the light pass, which reaches the dashboard first, requires
+ * that item, so a route answering an empty list fails it, and the dark pass draws that item or the quiet line, never
+ * the unavailable one.
  */
 async function attentionLine(theme) {
   const say = (what) => failures.push(`${theme} /: the attention line ${what}`);
@@ -553,30 +557,162 @@ async function attentionLine(theme) {
     const grid = document.querySelector('.stat-grid');
     if (!line || !grid) return null;
     const box = line.getBoundingClientRect();
-    const badges = [...line.querySelectorAll('.badge')].map((b) => {
+    const tiles = grid.getBoundingClientRect();
+    const badgeOf = (b) => {
       const at = b.getBoundingClientRect();
       const style = getComputedStyle(b);
       return { font: `${style.fontSize} ${style.fontWeight}`, height: at.height, right: at.right, text: b.textContent?.trim() ?? '', top: Math.round(at.top) };
-    });
-    return { badges, bottom: box.bottom, contentRight: line.parentElement.getBoundingClientRect().right, gridTop: grid.getBoundingClientRect().top, height: box.height, lead: line.querySelector('.attention-line__lead')?.textContent?.trim() ?? null };
+    };
+    // A badge the fold hides stands in a hidden wrapper and draws no box.
+    const badges = [...line.querySelectorAll('.badge')].filter((b) => b.closest('[hidden]') === null && !b.classList.contains('attention-line__more')).map(badgeOf);
+    const fold = line.querySelector('.attention-line__more:not([hidden])');
+    return {
+      badges,
+      bottom: box.bottom,
+      contentRight: line.parentElement.getBoundingClientRect().right,
+      grid: { left: Math.round(tiles.left), top: tiles.top },
+      height: box.height,
+      lead: line.querySelector('.attention-line__lead')?.textContent?.trim() ?? null,
+      left: Math.round(box.left),
+      more: fold ? { ...badgeOf(fold), border: getComputedStyle(fold).borderTopStyle, title: fold.getAttribute('title') } : null,
+    };
   });
   measurements.push(`${theme} / attention line ${JSON.stringify(read)}`);
   if (!read) return say('is not drawn above the tiles');
-  const rows = new Set(read.badges.map((b) => b.top)).size;
-  if (Math.abs(read.height - (rows * 22 + (rows - 1) * 6)) > 0.5) say(`is ${read.height} px tall over ${rows} rows of badges`);
-  for (const b of read.badges) {
+  if (Math.abs(read.height - 22) > 0.5) say(`is ${read.height} px tall, not one 22 px row`);
+  for (const b of read.more ? [...read.badges, read.more] : read.badges) {
     if (Math.abs(b.height - 22) > 0.5 || b.font !== '12px 500') say(`draws ${JSON.stringify(b.text)} ${b.height} px tall in ${b.font}, not the strip badge's 22 px in 12px 500`);
     if (b.right > read.contentRight + 0.5) say(`runs ${JSON.stringify(b.text)} past the content box`);
   }
-  if (read.bottom > read.gridTop) say('reaches into the tiles');
+  if (read.more && read.badges.length > 0) failures.push(...compare(read.more, read.badges[0], ['font', 'height', 'top'], `${theme} /: the attention line's "+N more" badge against its first badge`));
+  failures.push(...compare({ left: read.left }, { left: read.grid.left }, ['left'], `${theme} /: the attention line against the tiles under it`));
+  if (read.bottom > read.grid.top) say('reaches into the tiles');
   const texts = read.badges.map((b) => b.text);
+  const folded = Number(/^\+(\d+) more$/.exec(read.more?.text ?? '')?.[1] ?? 0);
   if (mock) {
-    if (read.lead !== '16 need attention' || texts.length !== 16) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the story's sixteen items`);
+    if (read.lead !== '16 need attention' || texts.length + folded !== 16 || folded === 0 || read.more?.border !== 'dashed') say(`reads ${read.lead} over ${JSON.stringify(texts)} and ${JSON.stringify(read.more?.text ?? null)}, not the story's sixteen items folded behind a dashed "+N more" at 1280 by 800`);
+    else {
+      await attentionList(theme);
+      await attentionLineNarrow(theme);
+    }
   } else if (theme === 'light') {
     if (read.lead === null || !texts.includes('Pool exhausted: Main')) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the seeded exhaustion`);
   } else if (read.lead === null ? JSON.stringify(texts) !== '["Nothing needs attention"]' : !texts.includes('Pool exhausted: Main')) {
     say(`reads ${read.lead} over ${JSON.stringify(texts)}, neither the seeded exhaustion nor the quiet line`);
   }
+}
+
+/**
+ * The list the attention line's "+N more" badge opens: every item, one badge per row, each inside the box, the box 8 px
+ * under the badge and 8 px inside the window, the badge marked expanded while it stands. Escape closes it and hands the
+ * focus back to the badge.
+ */
+async function attentionList(theme) {
+  const say = (what) => failures.push(`${theme} /: the attention line's list ${what}`);
+  await page.locator('.attention-line__more').click();
+  await settle();
+  const read = await page.evaluate(() => {
+    const box = document.querySelector('.attention-line__list');
+    const fold = document.querySelector('.attention-line__more');
+    if (!box || !fold) return null;
+    const r = box.getBoundingClientRect();
+    const at = fold.getBoundingClientRect();
+    const rows = [...box.children].map((row) => row.getBoundingClientRect());
+    const badges = [...box.querySelectorAll('.badge')].map((b) => b.getBoundingClientRect());
+    return {
+      badges: badges.length,
+      bottom: Math.round(r.bottom),
+      expanded: fold.getAttribute('aria-expanded'),
+      gap: Math.round((r.top - at.bottom) * 10) / 10,
+      inside: badges.every((b) => b.left >= r.left && b.right <= r.right && b.bottom <= r.bottom),
+      label: box.getAttribute('aria-label'),
+      left: Math.round(r.left),
+      oneRowEach: rows.every((row, i) => i === 0 || row.top >= rows[i - 1].bottom),
+      right: Math.round(r.right),
+      role: box.getAttribute('role'),
+      rows: rows.length,
+      top: Math.round(r.top),
+      view: { height: window.innerHeight, width: document.documentElement.clientWidth },
+      width: Math.round(r.width),
+    };
+  });
+  measurements.push(`${theme} / attention line list ${JSON.stringify(read)}`);
+  if (!read) say('did not open');
+  else {
+    if (read.badges !== 16 || read.rows !== 16 || !read.oneRowEach) say(`holds ${read.badges} badges over ${read.rows} rows, not the story's sixteen items one per row`);
+    if (!read.inside) say('draws a badge past its box');
+    if (read.role !== 'dialog' || read.label !== 'Needs attention' || read.expanded !== 'true') say(`is ${read.role} named ${JSON.stringify(read.label)} under a badge expanded ${read.expanded}`);
+    if (read.gap !== 8) say(`stands ${read.gap} px under its badge, not 8`);
+    if (read.left < 8 || read.right > read.view.width - 8 || read.bottom > read.view.height - 8) say(`spans ${read.left} to ${read.right} and down to ${read.bottom}, outside the window less 8 px`);
+  }
+  await page.keyboard.press('Escape');
+  await settle();
+  const after = await page.evaluate(() => ({ focus: document.activeElement?.classList.contains('attention-line__more') ?? false, open: document.querySelector('.attention-line__list') !== null }));
+  if (after.open || !after.focus) say(`after Escape reads ${JSON.stringify(after)}, not closed with the focus on "+N more"`);
+  await atRest();
+}
+
+/**
+ * The attention line at phone widths, 360 to 414 by 800, with the story's Replay button. The first row stays one 22 px
+ * row of the lead, the badges that fit and the fold badge. Where the lead, the fold badge and the button need more than
+ * the line's width (at 400 px they need 395 of 368) the button takes a second row and the line is 50 px tall, else the
+ * button stands on the first row. Every part stays inside the line's box, the line ends above the tiles, and a second
+ * read two frames on finds the same draw. Back at 1280 by 800 the line is one 22 px row again.
+ */
+async function attentionLineNarrow(theme) {
+  const read = () =>
+    page.evaluate(() => {
+      const line = document.querySelector('.attention-line');
+      const grid = document.querySelector('.stat-grid');
+      if (!line || !grid) return null;
+      const top = line.getBoundingClientRect().top;
+      const box = (el) => {
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { height: Math.round(r.height * 10) / 10, left: Math.round(r.left * 10) / 10, middle: Math.round(r.top + r.height / 2 - top), right: Math.round(r.right * 10) / 10, top: Math.round(r.top - top) };
+      };
+      const r = line.getBoundingClientRect();
+      return {
+        badges: [...line.querySelectorAll('.attention-line__item:not([hidden]) > .badge')].map(box),
+        bottom: Math.round(r.bottom),
+        gridTop: Math.round(grid.getBoundingClientRect().top),
+        height: Math.round(r.height * 10) / 10,
+        lead: box(line.querySelector('.attention-line__lead')),
+        left: Math.round(r.left * 10) / 10,
+        more: box(line.querySelector('.attention-line__more:not([hidden])')),
+        pill: box(line.querySelector('.attention-line__tail > .pill')),
+        right: Math.round(r.right * 10) / 10,
+        wrapped: line.classList.contains('is-wrapped'),
+      };
+    });
+  for (const width of [360, 375, 390, 400, 414]) {
+    const say = (what) => failures.push(`${theme} /: at ${width} px the attention line ${what}`);
+    await page.setViewportSize({ height: 800, width });
+    await settle();
+    const narrow = await read();
+    await settle();
+    const again = await read();
+    measurements.push(`${theme} / attention line at ${width} px ${JSON.stringify(narrow)}`);
+    if (JSON.stringify(again) !== JSON.stringify(narrow)) say(`changes between two reads, ${JSON.stringify(narrow)} then ${JSON.stringify(again)}`);
+    if (!narrow?.more || !narrow.pill || !narrow.lead) {
+      say(`draws ${JSON.stringify(narrow)}, not the lead, the fold badge and the Replay button`);
+      continue;
+    }
+    if (width === 400 && !narrow.wrapped) say("keeps the Replay button on the badges' row, where the lead, the fold badge and the button need more than the line");
+    if (Math.abs(narrow.height - (narrow.wrapped ? 50 : 22)) > 0.5) say(`is ${narrow.height} px tall, wrapped ${narrow.wrapped}`);
+    if (narrow.more.height !== 22 || narrow.more.middle !== 11) say(`draws its fold badge ${narrow.more.height} px tall at ${narrow.more.middle} px, not on a 22 px first row`);
+    failures.push(...compare(narrow.lead, narrow.more, ['middle'], `${theme} /: at ${width} px the attention line's lead against its fold badge`));
+    for (const b of narrow.badges) failures.push(...compare(b, narrow.more, ['height', 'middle'], `${theme} /: at ${width} px the attention line's badge against its fold badge`));
+    if (narrow.wrapped ? narrow.pill.top < narrow.more.top + narrow.more.height : narrow.pill.middle !== narrow.more.middle) say(`draws the Replay button at ${narrow.pill.top} px with the line wrapped ${narrow.wrapped}`);
+    for (const part of [narrow.lead, narrow.more, narrow.pill, ...narrow.badges]) {
+      if (part.left < narrow.left - 0.5 || part.right > narrow.right + 0.5) say(`draws a part at ${part.left} to ${part.right}, outside its box at ${narrow.left} to ${narrow.right}`);
+    }
+    if (narrow.bottom > narrow.gridTop) say('reaches into the tiles');
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  const wide = await read();
+  if (!wide || wide.wrapped || Math.abs(wide.height - 22) > 0.5) failures.push(`${theme} /: back at 1280 px the attention line reads ${JSON.stringify(wide)}, not one 22 px row`);
 }
 
 /** The top bar's controls under the one control height: "Log out" and the theme control at 32 px, one top edge. */
@@ -610,51 +746,283 @@ async function expertRow(theme) {
 }
 
 /**
- * The routing log's columns at 1280 by 800 and at 1440 by 900: Fact 150 px at both, Account 246 then 256, Model only
- * at 1440, and the table as wide as its card with nothing to scroll sideways. The pass's viewport is put back for the
- * shot.
+ * The labels the Kinds list offers, read off the list the Add filter control opens (the every-kind default draws no
+ * Kinds chip), each in the words a Kind cell prints and with whether it names an event: the list capitalizes the
+ * first letter, and its Probe decisions row names the probes among the decision kinds, which no cell prints. The
+ * list closes again.
+ */
+async function kindLabels() {
+  await page.locator('.filter-bar__row > button', { hasText: /^Add filter$/ }).click();
+  await advance(CLOCK_STEP_MS);
+  await page.locator('.popover .add-filter__row').filter({ has: page.locator('.add-filter__label', { hasText: /^Kinds$/ }) }).click();
+  await advance(CLOCK_STEP_MS);
+  const rows = await page.evaluate(() => {
+    let group = null;
+    const out = [];
+    for (const el of document.querySelector('.popover .option-list')?.children ?? []) {
+      if (el.classList.contains('mselect__group')) group = el.textContent?.trim() ?? null;
+      else if (el.matches('.mselect__option:not(.mselect__option--all):not(.mselect__option--preset)')) out.push({ group, text: el.textContent?.trim() ?? '' });
+    }
+    return out;
+  });
+  await page.keyboard.press('Escape');
+  await advance(CLOCK_STEP_MS);
+  await atRest();
+  return rows.filter((r) => r.text !== 'Probe decisions').map((r) => ({ event: r.group === 'Events', label: r.text.charAt(0).toLowerCase() + r.text.slice(1) }));
+}
+
+/**
+ * The routing log's columns as the browser lays them out, run in the page: the card, the table, the widths of Fact,
+ * Account and Model, and for each of the eight columns Time to Link that is drawn its width against the widest line a
+ * body cell of it draws, with that cell's horizontal padding. A line (a run of inline nodes, or a block child, a flex
+ * row whole) is cloned into a probe in its own cell, out of the flow and as wide as its content, so the cell's font
+ * sets it and no width cuts or wraps it: a block child's own rect spans its cell whatever its text. Time is held to
+ * the dated form under the 12-hour setting as well, the widest the console draws, and Kind to a badge per label of
+ * `kinds`, since no page draws every kind. The lines cut on purpose come back apart, each with whether it ends behind
+ * an ellipsis: the request link under the time, the agent line under the session, and every Account line, whose column
+ * is floored at the longest account id with its padding instead. The rows that carry a model under the account are
+ * counted, and so are the ones that draw it there. Null where the table is not drawn.
+ */
+function routingLogCells(kinds) {
+  const table = document.querySelector('.routing-log__table');
+  const wrap = table?.closest('.table-wrap');
+  if (!table || !wrap) return null;
+  const round = (n) => Math.round(n * 10) / 10;
+  const style = (el) => getComputedStyle(el);
+  const shown = (el) => style(el).display !== 'none' && !['absolute', 'fixed'].includes(style(el).position);
+  const inline = (el) => style(el).display.startsWith('inline') || style(el).display === 'contents';
+  const probe = (td, nodes) => {
+    const box = document.createElement('span');
+    box.style.cssText = 'position:absolute;left:0;top:0;width:max-content;white-space:nowrap;visibility:hidden';
+    for (const n of nodes) box.appendChild(n.cloneNode(true));
+    td.appendChild(box);
+    const width = box.getBoundingClientRect().width;
+    box.remove();
+    return width;
+  };
+  // A block that stacks blocks of its own (a fact's pairs) is read by its lines, and one that lays its items in a row
+  // is one line.
+  const linesOf = (el) => {
+    const out = [];
+    let run = [];
+    const flush = () => {
+      if (run.some((n) => (n.textContent ?? '').trim() !== '')) out.push(run);
+      run = [];
+    };
+    for (const node of el.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) run.push(node);
+      else if (node.nodeType !== Node.ELEMENT_NODE || !shown(node)) continue;
+      else if (inline(node)) run.push(node);
+      else {
+        flush();
+        const stacks = !['flex', 'grid'].includes(style(node).display) && [...node.children].some((c) => shown(c) && !inline(c));
+        out.push(...(stacks ? linesOf(node) : [[node]]));
+      }
+    }
+    flush();
+    return out;
+  };
+  const padding = (td) => parseFloat(style(td).paddingLeft) + parseFloat(style(td).paddingRight);
+  // A flex row's items carry no space between them in the text (a fact's label and value), so one is put back.
+  const textOf = (nodes) =>
+    nodes
+      .map((n) => (n.nodeType === Node.ELEMENT_NODE && style(n).display === 'flex' ? [...n.childNodes].map((c) => c.textContent ?? '').join(' ') : (n.textContent ?? '')))
+      .join('')
+      .trim();
+  const element = (nodes) => (nodes.length === 1 && nodes[0].nodeType === Node.ELEMENT_NODE ? nodes[0] : null);
+  const ellipsis = (el) => el !== null && style(el).textOverflow === 'ellipsis' && style(el).overflowX === 'hidden' && style(el).whiteSpace === 'nowrap';
+  const rows = [...table.querySelectorAll('tbody tr.routing-log__row')];
+  const width = (name) => {
+    const th = table.querySelector(`thead th.routing-log__${name}`);
+    return th && style(th).display !== 'none' ? round(th.getBoundingClientRect().width) : null;
+  };
+  const longest = [];
+  const probed = {};
+  const cut = [];
+  let floor = null;
+  for (const name of ['time', 'kind', 'session', 'account', 'model', 'by', 'fact', 'link']) {
+    const column = width(name);
+    if (column === null) continue;
+    const cells = rows.map((tr) => tr.querySelector(`td.routing-log__${name}`)).filter(Boolean);
+    let best = null;
+    const keep = (need, text) => {
+      if (best === null || need > best[0]) best = [round(need), text];
+    };
+    for (const td of cells) {
+      for (const nodes of linesOf(td)) {
+        const need = probe(td, nodes) + padding(td);
+        const text = textOf(nodes);
+        // The session id is a cut span too, yet its eight characters set the column, so only the `.sub` line under a
+        // time or a session is read as cut.
+        const under = (name === 'time' || name === 'session') && element(nodes)?.matches('.sub.routing-log__cut');
+        if ((under || name === 'account') && need > column + 0.5) cut.push([name, round(need), column, text, ellipsis(element(nodes))]);
+        if (!under) keep(need, text);
+      }
+      if (name !== 'account') continue;
+      for (const a of td.querySelectorAll('a[href^="/accounts/"]')) {
+        if (a.closest('.routing-log__model-under')) continue;
+        const need = round(probe(td, [a]) + padding(td));
+        if (floor === null || need > floor[0]) floor = [need, a.textContent ?? ''];
+      }
+    }
+    const first = cells[0];
+    let held = null;
+    const hold = (need, text) => {
+      if (held === null || need > held[0]) held = [round(need), text];
+    };
+    if (first && name === 'time') {
+      // Under the cell's tabular figures the month's name is the one part whose width varies, so every month is held.
+      for (let month = 0; month < 12; month += 1) {
+        const at = new Date(2026, month, 28, 21, 12, 5);
+        const text = `${at.toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${at.toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h12', minute: '2-digit', second: '2-digit' })}`;
+        hold(probe(first, [document.createTextNode(text)]) + padding(first), text);
+      }
+    }
+    if (first && name === 'kind') {
+      for (const { event, label } of kinds) {
+        const badge = document.createElement('span');
+        badge.className = `badge badge--neutral${event ? ' routing-log__outline' : ''}`;
+        badge.textContent = label;
+        hold(probe(first, [badge]) + padding(first), label);
+      }
+    }
+    if (held !== null) {
+      probed[name] = held;
+      keep(held[0], held[1]);
+    }
+    longest.push([name, best?.[0] ?? null, column, best?.[1] ?? null]);
+  }
+  return {
+    account: width('account'),
+    client: wrap.clientWidth,
+    cut,
+    fact: width('fact'),
+    floor,
+    longest,
+    model: width('model'),
+    modelUnder: rows.filter((tr) => [...tr.querySelectorAll('.routing-log__model-under')].some((el) => el.getClientRects().length > 0)).length,
+    models: rows.filter((tr) => tr.querySelector('.routing-log__model-under') !== null).length,
+    probed,
+    rows: rows.length,
+    scroll: wrap.scrollWidth,
+    table: round(table.getBoundingClientRect().width),
+  };
+}
+
+/**
+ * The routing log's columns at 1280 by 800 and at 1440 by 900: Fact 189 px at both, Account 179 then 147, Model only
+ * at 1440 at 192, and the table as wide as its card with nothing to scroll sideways. Each column from Time to Link
+ * holds its longest cell (`routingLogCells`), so a column narrower than it fails, Account aside: it is the fill, and
+ * it fails under the longest account id with its padding. A line cut on purpose (the request link under the time, the
+ * agent line under the session, an Account line past the column) that does not end behind an ellipsis fails. At 1440
+ * the model stands in its own column alone, so an Account cell that draws it beneath the account fails, and at 1280 a
+ * row with a model that does not draw it there fails. The bare log is read, then the log under the 7-day range on the
+ * state changes, where the mock story dates its Time cells on the first page and a Time cell that breaks over two lines
+ * fails. The mock pass fails a 7-day page with no dated cell, and the router's seed, which draws no row older than a
+ * day, records that the read stands down. The bare log loads again at the pass's viewport after.
  */
 async function routingLogColumns(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
-  const read = () =>
-    page.evaluate(() => {
-      const table = document.querySelector('.routing-log__table');
-      const wrap = table?.closest('.table-wrap');
-      if (!table || !wrap) return null;
-      const width = (name) => {
-        const th = table.querySelector(`thead th.routing-log__${name}`);
-        return th && getComputedStyle(th).display !== 'none' ? Math.round(th.getBoundingClientRect().width * 10) / 10 : null;
-      };
-      return {
-        account: width('account'),
-        client: wrap.clientWidth,
-        fact: width('fact'),
-        model: width('model'),
-        scroll: wrap.scrollWidth,
-        table: Math.round(table.getBoundingClientRect().width * 10) / 10,
-      };
-    });
-  for (const { account, height, model, width } of [
-    { account: 246, height: 800, model: null, width: 1280 },
-    { account: 256, height: 900, model: 150, width: 1440 },
-  ]) {
-    const where = `at ${width} by ${height}`;
-    await page.setViewportSize({ height, width });
-    await settle();
-    const got = await read();
-    measurements.push(`${theme} /routing-log columns ${where} ${JSON.stringify(got)}`);
-    if (got === null) {
-      say(`${where} no table to measure`);
-      continue;
+  const kinds = await kindLabels();
+  if (kinds.length === 0) say('the Kinds list offers no kind label to measure');
+  const named = { account: 'Account', by: 'By', fact: 'Fact', kind: 'Kind', link: 'Link', model: 'Model', session: 'Session', time: 'Time' };
+  try {
+    for (const [path, under] of [
+      ['/routing-log', ''],
+      ['/routing-log?range=7d&kinds=account_state_changed', 'under 7d on the state changes '],
+    ]) {
+      await page.setViewportSize({ height: 800, width: 1280 });
+      await settle();
+      if (under !== '') await loadAtOrigin(path, '.routing-log__table');
+      for (const { account, fact, height, model, width } of [
+        { account: 179, fact: 189, height: 800, model: null, width: 1280 },
+        { account: 147, fact: 189, height: 900, model: 192, width: 1440 },
+      ]) {
+        const where = `${under}at ${width} by ${height}`;
+        await page.setViewportSize({ height, width });
+        await settle();
+        const got = await page.evaluate(routingLogCells, kinds);
+        if (got === null) {
+          measurements.push(`${theme} /routing-log columns ${where} not drawn`);
+          say(`${where} no table to measure`);
+          continue;
+        }
+        const time = timeFit(await page.evaluate(timeCellsOf, '.routing-log__table'));
+        if (under !== '' && time.dated.length === 0 && !mock) {
+          measurements.push(`${theme} /routing-log columns ${under}skipped: the seed draws no row older than a day (${got.rows} rows under 7d)`);
+          break;
+        }
+        measurements.push(`${theme} /routing-log columns ${where} ${JSON.stringify({ ...got, dated: time.dated.length, split: time.split })}`);
+        if (mock && got.rows === 0) say(`${where} no rows to measure`);
+        if (under !== '' && time.dated.length === 0) say(`${where} no Time cell prints its date, so the dated form is not measured`);
+        if (got.fact !== fact) say(`${where} the Fact column is ${got.fact}px, not ${fact}px`);
+        if (got.account !== account) say(`${where} the Account column is ${got.account}px, not ${account}px`);
+        if (got.model !== model) say(`${where} the Model column is ${got.model === null ? 'hidden' : `${got.model}px`}, not ${model === null ? 'hidden' : `${model}px`}`);
+        if (got.model !== null && got.modelUnder > 0) say(`${where} the Model column draws, and ${got.modelUnder} Account cells draw the model beneath the account as well`);
+        if (got.model === null && got.modelUnder !== got.models) say(`${where} the Model column is hidden, and ${got.models - got.modelUnder} of the ${got.models} rows with a model draw it beneath no account`);
+        if (Math.abs(got.table - got.client) > 0.5) say(`${where} the table is ${got.table}px in a ${got.client}px card`);
+        if (got.scroll > got.client) say(`${where} the table scrolls sideways (${got.scroll}px in ${got.client}px)`);
+        for (const [name, need, column, text] of got.longest) {
+          if (name !== 'account' && need !== null && need > column + 0.5) say(`${where} the ${named[name]} column is ${column}px, narrower than its longest cell "${text}" at ${need}px`);
+        }
+        if (got.floor !== null && got.account !== null && got.floor[0] > got.account + 0.5) say(`${where} the Account column is ${got.account}px, under the longest account id "${got.floor[1]}" at ${got.floor[0]}px`);
+        for (const [name, need, column, text, ellipsis] of got.cut) {
+          if (!ellipsis) say(`${where} the ${named[name]} line "${text}" takes ${need}px of the ${column}px column without an ellipsis`);
+        }
+        for (const text of time.split) say(`${where} the Time cell "${text}" breaks over two lines`);
+      }
     }
-    if (got.fact !== 150) say(`${where} the Fact column is ${got.fact}px, not 150px`);
-    if (got.account !== account) say(`${where} the Account column is ${got.account}px, not ${account}px`);
-    if (got.model !== model) say(`${where} the Model column is ${got.model === null ? 'hidden' : `${got.model}px`}, not ${model === null ? 'hidden' : `${model}px`}`);
-    if (Math.abs(got.table - got.client) > 0.5) say(`${where} the table is ${got.table}px in a ${got.client}px card`);
-    if (got.scroll > got.client) say(`${where} the table scrolls sideways (${got.scroll}px in ${got.client}px)`);
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await loadAtOrigin('/routing-log', '.routing-log__table');
   }
-  await page.setViewportSize({ height: 800, width: 1280 });
-  await settle();
+}
+
+/**
+ * `path` loaded as the view loop loads a view, from the pass's origin, so a measure that leaves the bare view and
+ * loads it again hands the shot and the measures after it the view as it first drew.
+ */
+async function loadAtOrigin(path, wait) {
+  await page.clock.setSystemTime(clockOrigin);
+  await page.goto(`${base}${path}`);
+  await booted();
+  await advance(LOAD_MS);
+  await page.waitForSelector(wait, { timeout: 15_000 }).catch(() => {});
+}
+
+/** A day and an hour: past it, the newest row of the mock's story and of the router's seed is older than a day. */
+const DATED_MS = 25 * 3_600_000;
+/** The beat the pages' `useNow` redraws their relative times on. */
+const NOW_TICK_MS = 15_000;
+
+/**
+ * The view as it loaded, read a day and an hour later: the page's clock moves without a reload, since the mock
+ * anchors its story at load, and runs one beat of the pages' clock so the cells redraw at the new instant. The rows the
+ * view loaded stand, so each of them is older than a day there.
+ */
+async function datedRead() {
+  await page.clock.setSystemTime(clockOrigin + DATED_MS);
+  await advance(NOW_TICK_MS);
+}
+
+/**
+ * The routing log's Time cells under the 7-day range on the state changes alone, where the mock story's changes of two
+ * and three days back stand on the first page beside today's, so a cell prints its date before the time: each cell's
+ * text width against its content box, its lines and its height against the row's other cells are recorded. The mock
+ * pass fails a page that draws no dated cell. The router's seed draws no row older than a day, so its pass records
+ * that the read stands down. The bare log loads again after.
+ */
+async function routingLogDatedTime(theme) {
+  try {
+    await loadAtOrigin('/routing-log?range=7d&kinds=account_state_changed', '.routing-log__table');
+    const read = timeFit(await page.evaluate(timeCellsOf, '.routing-log__table'));
+    if (!mock && read.dated.length === 0) measurements.push(`${theme} /routing-log dated Time cells skipped: the seed draws no row older than a day (${read.cells} rows under 7d)`);
+    else measurements.push(`${theme} /routing-log dated Time cells under 7d ${JSON.stringify(read)}`);
+    if (mock && read.dated.length === 0) failures.push(`${theme} /routing-log: no Time cell under 7d on the state changes prints its date, so the dated form is not measured`);
+  } finally {
+    await loadAtOrigin('/routing-log', '.routing-log__table');
+  }
 }
 
 /**
@@ -1124,6 +1492,7 @@ async function poolCardLayout(theme) {
   else if (wide.tableBottom > wide.cardBottom) say(`the serving table ends at ${wide.tableBottom}, past the card's bottom at ${wide.cardBottom}`);
   if (JSON.stringify(rowsOf(wide.tops)) !== '[3,3,1]') say(`the tiles stand in rows of ${JSON.stringify(rowsOf(wide.tops))}, not rows of three, then one`);
   if (JSON.stringify(wide.lefts) !== JSON.stringify(['0px', '1px', '1px', '0px', '1px', '1px', '0px'])) say(`the tiles' left hairlines read ${wide.lefts.join(' ')}`);
+  await poolCardAges(theme, say, "at the pass's viewport");
   await page.setViewportSize({ height: 800, width: 720 });
   await settle();
   const narrow = await read();
@@ -1159,10 +1528,68 @@ async function poolCardLayout(theme) {
       if (card.wider && !card.clips) say(`at ${width} px the ${card.name} card's serving table is wider than its wrapper and paints past the card`);
     }
     if (tables.overflow > 0) say(`at ${width} px the page overflows its width by ${tables.overflow} px`);
+    if (width === 400) await poolCardAges(theme, say, 'at 400 px');
   }
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
   await atRest();
+}
+
+/**
+ * Every pool card's attention rows end with the age: the row's last cell is `.attention__age`, at the row's end after
+ * the detail and on its line, in the detail's ink and size, uncut, and every cell inside the card's box. A row on one
+ * line holds the badge and the subject on the age's line too. A row a narrow card stacks holds the badge and the
+ * subject on a line of their own above the detail and the age. The count says how many rows the read saw, since a
+ * router pass whose seeded exhaustion cleared draws none.
+ */
+async function poolCardAges(theme, say, where) {
+  const rows = await page.evaluate(() =>
+    [...document.querySelectorAll('.pool')].flatMap((card) => {
+      const box = card.getBoundingClientRect();
+      const name = card.querySelector('.card__title')?.textContent ?? '';
+      return [...card.querySelectorAll('.attention__row')].map((row) => {
+        const r = row.getBoundingClientRect();
+        const cell = (el) => {
+          if (!el) return null;
+          const at = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return { color: style.color, inside: at.left >= box.left - 0.5 && at.right <= box.right + 0.5, left: Math.round(at.left * 10) / 10, middle: Math.round(at.top + at.height / 2 - r.top), right: Math.round(at.right * 10) / 10, size: style.fontSize };
+        };
+        const last = row.lastElementChild;
+        return {
+          age: last?.classList.contains('attention__age') ? { ...cell(last), cut: last.scrollWidth > last.clientWidth, end: Math.abs(last.getBoundingClientRect().right - r.right) <= 0.5, text: last.textContent } : null,
+          badge: cell(row.querySelector('.badge')),
+          card: name,
+          detail: cell(row.querySelector('.attention__detail')),
+          label: row.querySelector('.badge')?.textContent ?? '',
+          stacked: getComputedStyle(row).gridTemplateColumns.split(' ').length === 3,
+          subject: cell(row.children[1] ?? null),
+        };
+      });
+    }),
+  );
+  measurements.push(`${theme} /pools card attention rows ${where} ${JSON.stringify({ count: rows.length, rows })}`);
+  if (mock && rows.length === 0) say(`${where} no card draws an attention row`);
+  for (const row of rows) {
+    const what = `${where} the ${row.card} card's ${row.label} row`;
+    if (!row.age) {
+      say(`${what} ends with no age cell`);
+      continue;
+    }
+    if (!row.age.inside) say(`${what} draws its age past the card's box`);
+    if (!row.age.end) say(`${what} draws its age short of the row's end`);
+    if (row.age.cut) say(`${what} cuts its age`);
+    if (row.detail && row.age.left < row.detail.right - 0.5) say(`${what} draws its age before the detail's end`);
+    failures.push(...compare(row.age, row.detail, ['color', 'inside', 'middle', 'size'], `${theme} /pools card: ${what}'s age against its detail`));
+    if (row.stacked) {
+      failures.push(...compare(row.subject, row.badge, ['inside', 'middle'], `${theme} /pools card: ${what}'s subject against its badge`));
+      failures.push(...compare(row.age, row.badge, ['inside'], `${theme} /pools card: ${what}'s age against its badge`));
+      if (row.badge && row.detail && row.detail.middle <= row.badge.middle) say(`${what} stacks its detail beside its badge rather than under it`);
+    } else {
+      failures.push(...compare(row.age, row.badge, ['inside', 'middle'], `${theme} /pools card: ${what}'s age against its badge`));
+      failures.push(...compare(row.age, row.subject, ['inside', 'middle'], `${theme} /pools card: ${what}'s age against its subject`));
+    }
+  }
 }
 
 /** The pool dialog's groups in rail order. */
@@ -1303,12 +1730,13 @@ async function chevronWeight(label, svg, size, stroke) {
 
 /**
  * The pool dialog in the plain view, then in the expert view: the frame and every group's layout at the pass's
- * viewport, then the frame and the rail's strips at 720 px. The plain rail holds eleven groups under the five parents,
- * the five expert-only groups left out, and the expert rail all sixteen. Every group on the rail is chosen and read
+ * viewport, then the frame and the rail's strips at 720 px. The plain rail holds twelve groups under the five parents,
+ * the five expert-only groups left out, and the expert rail all seventeen. Every group on the rail is chosen and read
  * while it shows: its height against the body's window, every cell against the two columns, every label beside its
  * switch or above its control, every control and hint as wide as its field, every dependent drawn and disabled while
  * its switch is off or its preset is not Custom, the warnings at their ends of their groups, no clipped select, nothing
- * pushed apart or past the frame, and the mono Name input as tall as the Status select beside it. The strips draw their
+ * pushed apart or past the frame, the window ceiling across the grid in the plain view and beside the burn average in
+ * the expert view, and the mono Name input as tall as the Status select beside it. The strips draw their
  * groups without the column rail's indent and hairline, a parent there answers the pointer, and a refusal dot follows
  * its entry's words by 6 px on their line.
  */
@@ -1367,6 +1795,37 @@ async function poolDialogWalk(theme, mode) {
       if (heights.name === null || heights.status === null) found.push('the Name input and the Status select are not both drawn to compare');
       else if (Math.abs(heights.name - heights.status) > 1) found.push(`the Name input is ${heights.name} px tall against the Status select's ${heights.status} px`);
       found.push(...(await chevronWeight(`${theme} /pools ${mode} dialog Identity select`, dialog.locator('section.dialog-group[aria-label="Identity"] .select > svg'), 12, 1.5)));
+    }
+    if (group === 'Windows') {
+      // The ceiling's row-mate, the burn average, draws in the expert view alone: the plain view's ceiling spans the
+      // grid's content box, and the expert view's takes the first column with the average in the second.
+      const cells = await dialog.evaluate((el) => {
+        const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === 'Windows');
+        const grid = section?.querySelector('.cells');
+        if (!grid) return null;
+        const at = (n) => Math.round(n * 100) / 100;
+        const s = getComputedStyle(grid);
+        const box = grid.getBoundingClientRect();
+        const left = box.left + parseFloat(s.paddingLeft) + parseFloat(s.borderLeftWidth);
+        const width = box.width - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight) - parseFloat(s.borderLeftWidth) - parseFloat(s.borderRightWidth);
+        const column = (width - parseFloat(s.columnGap)) / 2;
+        const cell = (text) => {
+          const r = [...section.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text)?.getBoundingClientRect();
+          return r ? { left: at(r.left), top: at(r.top), width: at(r.width) } : null;
+        };
+        return { average: cell('Burn average (s)'), ceiling: cell('Window ceiling (%)'), grid: { left: at(left), width: at(width) }, second: { left: at(left + column + parseFloat(s.columnGap)), width: at(column) } };
+      });
+      measurements.push(`${theme} /pools ${mode} dialog Windows ceiling cell ${JSON.stringify(cells)}`);
+      // Whole pixels, since the grid's tracks and the arithmetic above round apart in the last digits.
+      const px = (o) => o && Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Math.round(v)]));
+      if (!cells) found.push('its cells grid is not drawn to measure the window ceiling against');
+      else if (expert) {
+        found.push(...compare(px(cells.ceiling), px({ left: cells.grid.left, width: cells.second.width }), ['left', 'width'], 'the window ceiling against the first column'));
+        found.push(...compare(px(cells.average), px({ ...cells.second, top: cells.ceiling?.top ?? Number.NaN }), ['left', 'top', 'width'], 'the burn average against the second column beside the ceiling'));
+      } else {
+        if (cells.average) found.push('the burn average draws in the plain view');
+        found.push(...compare(px(cells.ceiling), px(cells.grid), ['left', 'width'], "the window ceiling against the grid's content box"));
+      }
     }
     if (group === 'Keepalive') {
       if (warning && !warning.closes) found.push('its warning does not close the group');
@@ -2038,14 +2497,14 @@ async function deleteAccountButton(theme) {
 
 /**
  * The window bars of the dashboard's account cards and the Accounts page's rows and detail card: each bar's reset line
- * stays inside its bar. A compact bar, three to a card, reads its projection in its reset's place on one line, and a
- * whole bar its reset and its projection each whole on its line, on one line where the bar holds both. A slowed
- * account's speed chip stands where it fits: in a compact card's head, on the status badge's line just before it, the
- * name whole and the chip inside the card, with no compact bar drawing one, and in a whole 5-hour bar's head after the
- * whole label and before the share, the share inside the bar and the bar's meter level with its neighbors'. The mock's
- * story projects its subscription windows and slows studio, so its pass has phrases to read and a chip in the compact
- * cards of `/` and `/accounts` and on studio's own Usage card (`/accounts/studio`), and the router's seed draws no
- * subscription bar.
+ * stays inside its bar. A compact bar, three to a card, reads its projection in its reset's place, its share and its
+ * horizon as two parts, and a whole bar its reset and its projection as two parts, each part whole on its line and
+ * inside its bar, on one line where the bar holds both. A slowed account's speed chip stands where it fits: in a
+ * compact card's head, on the status badge's line just before it, the name whole and the chip inside the card, with no
+ * compact bar drawing one, and in a whole 5-hour bar's head after the whole label and before the share, the share
+ * inside the bar and the bar's meter level with its neighbors'. The mock's story projects its subscription windows and
+ * slows studio, so its pass has phrases to read and a chip in the compact cards of `/` and `/accounts` and on studio's
+ * own Usage card (`/accounts/studio`), and the router's seed draws no subscription bar.
  */
 async function windowBarLines(theme, path) {
   const say = (what) => failures.push(`${theme} ${path}: ${what}`);
@@ -2055,7 +2514,7 @@ async function windowBarLines(theme, path) {
       const range = document.createRange();
       range.selectNodeContents(el);
       const rects = [...range.getClientRects()].filter((r) => r.width > 0);
-      return { lines: new Set(rects.map((r) => Math.round(r.top))).size, width: Math.round(Math.max(0, ...rects.map((r) => r.width)) * 10) / 10 };
+      return { lines: new Set(rects.map((r) => Math.round(r.top))).size, width: Math.round(Math.max(0, ...rects.map((r) => r.width)) * 10) / 10, words: el.textContent?.trim() ?? '' };
     };
     const edges = (el) => {
       const r = el.getBoundingClientRect();
@@ -2115,11 +2574,14 @@ async function windowBarLines(theme, path) {
     }
     if (c.chip.right > c.card.right + 0.5) say(`${kind} ends at ${c.chip.right}px, past its card's ${c.card.right}px`);
   }
-  measurements.push(`${theme} ${path} window bar lines ${JSON.stringify(read.map((r) => [r.compact ? 'compact' : 'whole', r.words, r.line.width, r.line.lines, r.bar]))}`);
-  if (mock && !read.some((r) => r.compact && /^\d+% (at reset|in )/.test(r.words))) say('the story projects its subscription windows, yet no compact window bar reads a projection');
+  measurements.push(`${theme} ${path} window bar lines ${JSON.stringify(read.map((r) => [r.compact ? 'compact' : 'whole', r.words, r.line.width, r.line.lines, r.bar, r.parts.map((part) => part.width)]))}`);
+  const projects = (r) => r.compact && /^\d+% left (at reset|in |now)|^spent in /.test(r.words);
+  if (mock && !read.some(projects)) say('the story projects its subscription windows, yet no compact window bar reads a projection');
   for (const r of read) {
     const kind = r.compact ? 'compact window bar' : 'window bar';
     if (r.line.width > r.bar + 0.5) say(`the ${kind}'s line ${JSON.stringify(r.words)} needs ${r.line.width}px of its ${r.bar}px bar`);
+    for (const part of r.parts.filter((p) => p.width > r.bar + 0.5)) say(`the ${kind}'s part ${JSON.stringify(part.words)} needs ${part.width}px of its ${r.bar}px bar`);
+    if (projects(r) && r.parts.length !== 2) say(`the ${kind}'s projection ${JSON.stringify(r.words)} draws ${r.parts.length} parts, not its share and its horizon as two`);
     if (r.parts.length === 0 ? r.line.lines > 1 : r.parts.some((part) => part.lines > 1) || r.line.lines > r.parts.length) say(`the ${kind}'s line ${JSON.stringify(r.words)} wraps inside ${r.parts.length === 0 ? 'itself' : 'a part'}, over ${r.line.lines} lines`);
   }
   const slowed = read.filter((r) => r.speed !== null);
@@ -2251,6 +2713,12 @@ async function quotaPollLines(theme) {
 let cardTones = {};
 
 /**
+ * Each card's meter titles by the card's name, read on the Accounts section, so the timeline's bars are read against
+ * the pace their windows answer, which the Quota windows section draws in no words. Empty in the router's pass.
+ */
+let cardReadings = {};
+
+/**
  * The Quota cards' chips with their shares read "left" against the columns that hold them: every card's window
  * chip and reset cell fits its column on one line, the window grid stays inside its card, an expired window's
  * longer reset cell may wrap but never runs past its column, and a live label with a projection breaks between its
@@ -2290,6 +2758,7 @@ async function quotaChips(theme) {
     return {
       chips: [...document.querySelectorAll('.qcard__windows .qchip')].map((chip) => ({ ...cell(chip), parts: [...chip.children].map(lines) })),
       grids: [...document.querySelectorAll('.qcard')].filter((c) => c.querySelector('.qcard__windows')).map((c) => ({ card: Math.round(c.getBoundingClientRect().right), grid: Math.round(c.querySelector('.qcard__windows').getBoundingClientRect().right), name: c.querySelector('.qcard__name')?.textContent?.trim() ?? '' })),
+      readings: Object.fromEntries([...document.querySelectorAll('.qcard')].map((c) => [c.querySelector('.qcard__name')?.textContent?.trim() ?? '', [...c.querySelectorAll('.qcard__windows .meter[title]')].map((m) => m.getAttribute('title'))])),
       marks: [...document.querySelectorAll('.qcard__windows .meter--marked')].map((meter) => {
         const track = meter.getBoundingClientRect();
         const mark = meter.querySelector('.meter__mark')?.getBoundingClientRect() ?? null;
@@ -2302,6 +2771,7 @@ async function quotaChips(theme) {
   measurements.push(`${theme} /quota chips ${JSON.stringify({ chips: read.chips.map((c) => [c.text, c.client]), resets: read.resets.map((c) => [c.text, c.client, c.lines, c.parts.map((p) => p.width), ...(c.speed ? [c.speed] : [])]) })}`);
   measurements.push(`${theme} /quota pace marks ${JSON.stringify(read.marks.map((m) => [m.title, m.left, m.height, m.track]))}`);
   cardTones = read.tones;
+  cardReadings = read.readings;
   if (mock && read.chips.length === 0) say('the story has subscription windows, yet no card chip is drawn');
   if (mock && read.marks.length === 0) say('the story has live windows, yet no meter carries a pace mark');
   if (mock && Object.values(read.tones).some((t) => t === null)) say('the story draws all three card tones, yet one is missing');
@@ -2331,12 +2801,15 @@ async function quotaChips(theme) {
 }
 
 /**
- * The timeline's chips on the Quota windows section against the fixed column that holds them: every lane chip fits
- * it on one line, and a chip with a share draws the background and ink of the card chip of the same tone. Primary's
- * current bar lays its used fill out at the share the page computed, within a pixel, and the lane label's ink reads
- * at 4.5:1 or better over every tone's fill, which the mock pass demands a fill of each tone for, since the story
- * fills bars in all three, and over the live bar's neutral `--surface-3` past the fill. Only the mock pass draws the
- * section.
+ * The timeline on the Quota windows section against its lane chips, its lanes' swatches and its now line: every lane
+ * chip fits its fixed column on one line, and a chip with a share draws the background and ink of the card chip of the
+ * same tone. Every live bar draws its account's color at two strengths, read against the dot that names the lane: its
+ * body and its used fill are each the dot's color mixed into `--surface`, the body at one strength and the fill at a
+ * stronger one on every lane, and the label's ink reads at 4.5:1 or better over both. The same holds for every color a
+ * lane can take, each series color and the muted one, read off a bar drawn through the bar's own rules off screen.
+ * Primary's fill lays out at the share the page computed, within a pixel, and its end stands past the now line where
+ * its weekly window answers a lead ahead of pace and short of it where the lead is behind, as the card's meter words
+ * the pace. Only the mock pass draws the section.
  */
 async function quotaLaneChips(theme) {
   const say = (what) => failures.push(`${theme} /quota#quota-windows: ${what}`);
@@ -2344,53 +2817,74 @@ async function quotaLaneChips(theme) {
     const lane = [...document.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'primary');
     const bar = lane?.querySelector('.lane__bar--live') ?? null;
     const used = bar?.querySelector('.lane__used') ?? null;
+    const now = document.querySelector('.timeline__now')?.getBoundingClientRect() ?? null;
+    const probe = document.createElement('span');
+    probe.style.background = 'var(--surface)';
+    document.body.append(probe);
+    const surface = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    // A live bar for each color an account can take, the label over its fill and its body as a lane draws them.
+    const series = [...Array.from({ length: 8 }, (_, i) => `--series-${i + 1}`), '--series-muted'].map((name) => {
+      const lane = document.createElement('div');
+      lane.className = 'lane';
+      lane.style.cssText = `--lane-color: var(${name}); left: -10000px; position: absolute; top: 0`;
+      lane.innerHTML = '<div class="lane__track"><div class="lane__bar lane__bar--live"><span class="lane__clip"><span class="lane__used" style="width: 50%"></span></span><span class="lane__label">50% left</span></div></div>';
+      document.body.append(lane);
+      const drawn = { body: getComputedStyle(lane.querySelector('.lane__bar')).backgroundColor, fill: getComputedStyle(lane.querySelector('.lane__used')).backgroundColor, ink: getComputedStyle(lane.querySelector('.lane__label')).color, name };
+      lane.remove();
+      return drawn;
+    });
     return {
       chips: [...document.querySelectorAll('.tl-chip')].map((el) => ({ background: getComputedStyle(el).backgroundColor, client: el.clientWidth, color: getComputedStyle(el).color, scroll: el.scrollWidth, text: el.textContent?.trim() ?? '', tone: [...el.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? null })),
-      fill: bar && used ? { bar: bar.getBoundingClientRect().width, share: parseFloat(used.style.width), width: used.getBoundingClientRect().width } : null,
-      // The label starts where the fill starts, so each tone's fill is read under the label of its own bar.
-      fills: [...document.querySelectorAll('.lane__bar--live .lane__used')].map((el) => {
-        const bar = el.closest('.lane__bar');
-        return { background: getComputedStyle(el).backgroundColor, ink: getComputedStyle(bar.querySelector('.lane__label') ?? bar).color, tone: [...el.classList].find((n) => n.startsWith('lane__used--'))?.slice('lane__used--'.length) ?? null };
+      fill: bar && used ? { bar: bar.getBoundingClientRect().width, end: Math.round(used.getBoundingClientRect().right * 10) / 10, now: now ? Math.round((now.left + now.width / 2) * 10) / 10 : null, share: parseFloat(used.style.width), width: used.getBoundingClientRect().width } : null,
+      // The label starts where the fill starts, so it crosses the fill and then the body past it.
+      live: [...document.querySelectorAll('.lane__bar--live')].map((el) => {
+        const row = el.closest('.lane');
+        const fill = el.querySelector('.lane__used');
+        const dot = row?.querySelector('.lane__dot');
+        return { body: getComputedStyle(el).backgroundColor, fill: fill ? getComputedStyle(fill).backgroundColor : null, ink: getComputedStyle(el.querySelector('.lane__label') ?? el).color, name: row?.querySelector('.lane__name')?.textContent?.trim() ?? '', swatch: dot ? getComputedStyle(dot).backgroundColor : null };
       }),
-      // Past the used fill the label reads on the live bar's own tint, the neutral `--surface-3`, read off a probe.
-      live: [...document.querySelectorAll('.lane__bar--live')].map((bar) => ({ background: getComputedStyle(bar).backgroundColor, ink: getComputedStyle(bar.querySelector('.lane__label') ?? bar).color })),
-      surface3: (() => {
-        const probe = document.createElement('span');
-        probe.style.background = 'var(--surface-3)';
-        document.body.append(probe);
-        const color = getComputedStyle(probe).backgroundColor;
-        probe.remove();
-        return color;
-      })(),
+      series,
+      surface,
     };
   });
   const lanes = read.chips;
-  measurements.push(`${theme} /quota#quota-windows lane chips ${JSON.stringify(lanes.map((c) => [c.text, c.client]))} primary's used fill ${JSON.stringify(read.fill)}`);
-  // One figure per tone: the lane label's ink over the fill it crosses, by the WCAG contrast formula.
-  const luminance = (rgb) => {
-    const [r, g, b] = (rgb.match(/\d+(\.\d+)?/g) ?? ['0', '0', '0']).slice(0, 3).map((n) => {
-      const c = Number(n) / 255;
-      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-    });
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  // The share of the swatch a mix into the surface carries, read on the channel where the two differ most, and whether
+  // the mix is that share of the swatch on every channel within a step of 255.
+  const surface = colorChannels(read.surface).rgb;
+  const strength = (css, swatch) => {
+    if (css === null || swatch === null) return null;
+    const mixed = colorChannels(css).rgb;
+    const ink = colorChannels(swatch).rgb;
+    const at = [0, 1, 2].reduce((best, i) => (Math.abs(ink[i] - surface[i]) > Math.abs(ink[best] - surface[best]) ? i : best), 0);
+    const share = (mixed[at] - surface[at]) / (ink[at] - surface[at]);
+    return { exact: [0, 1, 2].every((i) => Math.abs(surface[i] + share * (ink[i] - surface[i]) - mixed[i]) <= 1.5), pct: Math.round(share * 100) };
   };
-  const contrast = (a, b) => {
-    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-    return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100;
-  };
-  const byTone = new Map(read.fills.map((f) => [f.tone, { ...f, ratio: contrast(f.ink, f.background) }]));
-  measurements.push(`${theme} /quota#quota-windows label over fill ${JSON.stringify([...byTone.values()].map((f) => [f.tone, f.ink, f.background, f.ratio]))}`);
-  if (mock && ['good', 'low', 'warn'].some((tone) => !byTone.has(tone))) say(`the story fills bars in every tone, yet only ${[...byTone.keys()].join(', ') || 'none'} drew`);
-  for (const f of byTone.values()) {
-    if (f.ratio < 4.5) say(`the label reads ${f.ink} over the ${f.tone} fill ${f.background} at ${f.ratio}:1, under 4.5:1`);
+  const live = read.live.map((b) => {
+    const body = strength(b.body, b.swatch);
+    const fill = strength(b.fill, b.swatch);
+    const ink = colorChannels(b.ink).rgb;
+    return { ...b, bodyPct: body?.pct ?? null, bodyRatio: contrastOf(ink, colorChannels(b.body).rgb), exact: [body, fill].every((s) => s === null || s.exact), fillPct: fill?.pct ?? null, fillRatio: b.fill === null ? null : contrastOf(ink, colorChannels(b.fill).rgb) };
+  });
+  const reading = (cardReadings.primary ?? []).find((t) => t.startsWith('7-day:')) ?? null;
+  const pace = reading === null ? null : /ahead of pace/.test(reading) ? 1 : /behind pace/.test(reading) ? -1 : 0;
+  measurements.push(`${theme} /quota#quota-windows lane chips ${JSON.stringify(lanes.map((c) => [c.text, c.client]))} primary's used fill ${JSON.stringify({ ...read.fill, reading })}`);
+  measurements.push(`${theme} /quota#quota-windows live bars over ${read.surface} ${JSON.stringify(live.map((b) => [b.name, b.swatch, b.body, b.bodyPct, b.bodyRatio, b.fill, b.fillPct, b.fillRatio, b.ink]))}`);
+  const series = read.series.map((s) => ({ ...s, bodyRatio: contrastOf(colorChannels(s.ink).rgb, colorChannels(s.body).rgb), fillRatio: contrastOf(colorChannels(s.ink).rgb, colorChannels(s.fill).rgb) }));
+  measurements.push(`${theme} /quota#quota-windows every lane color ${JSON.stringify(series.map((s) => [s.name, s.bodyRatio, s.fillRatio]))}`);
+  for (const s of series) {
+    if (s.bodyRatio < 4.5 || s.fillRatio < 4.5) say(`the label reads ${s.ink} at ${s.bodyRatio}:1 over a live bar in ${s.name} and ${s.fillRatio}:1 over its fill, under 4.5:1`);
   }
-  // A tinted bar computes to `color(srgb r g b)`, whose 0 to 1 channels the reader above would take for 0 to 255.
-  const live = [...new Map(read.live.map((b) => [`${b.ink} ${b.background}`, { ...b, ratio: contrastOf(colorChannels(b.ink).rgb, colorChannels(b.background).rgb) }])).values()];
-  measurements.push(`${theme} /quota#quota-windows label over the live bar ${JSON.stringify(live.map((b) => [b.ink, b.background, b.ratio]))}, --surface-3 ${read.surface3}`);
   if (mock && live.length === 0) say('the story has current windows, yet no live bar is drawn');
+  if (mock && !live.some((b) => b.fill !== null)) say('the story has current windows with a share, yet no live bar draws a used fill');
+  const first = live.find((b) => b.fill !== null);
   for (const b of live) {
-    if (b.background !== read.surface3) say(`a live bar draws ${b.background}, not the neutral --surface-3 ${read.surface3}`);
-    if (b.ratio < 4.5) say(`the label reads ${b.ink} over the live bar's ${b.background} at ${b.ratio}:1, under 4.5:1`);
+    if (b.swatch === null) say(`${b.name}'s lane draws no dot to read its color against`);
+    else if (!b.exact) say(`${b.name}'s live bar draws ${b.body} and ${b.fill ?? 'no fill'}, not its dot's ${b.swatch} mixed into ${read.surface}`);
+    if (b.fillPct !== null && b.bodyPct !== null && b.fillPct <= b.bodyPct) say(`${b.name}'s fill carries ${b.fillPct}% of its color, no stronger than the body's ${b.bodyPct}%`);
+    if (b.bodyRatio < 4.5) say(`the label reads ${b.ink} over ${b.name}'s live bar ${b.body} at ${b.bodyRatio}:1, under 4.5:1`);
+    if (b.fillRatio !== null && b.fillRatio < 4.5) say(`the label reads ${b.ink} over ${b.name}'s fill ${b.fill} at ${b.fillRatio}:1, under 4.5:1`);
+    if (first && b.fill !== null) failures.push(...compare(b, first, ['bodyPct', 'fillPct'], `${theme} /quota#quota-windows: ${b.name}'s strengths against ${first.name}'s`));
   }
   if (mock && lanes.length === 0) say('the story has subscription windows, yet no lane chip is drawn');
   if (mock && !lanes.some((c) => c.tone !== null)) say('the story has windows with a share, yet no lane chip is toned');
@@ -2403,6 +2897,178 @@ async function quotaLaneChips(theme) {
   }
   if (mock && read.fill === null) say("primary's current bar draws no used fill");
   if (read.fill && Math.abs(read.fill.width - (read.fill.share / 100) * read.fill.bar) > 1) say(`primary's used fill is ${read.fill.width}px of its ${read.fill.bar}px bar, where the page computed ${read.fill.share}%`);
+  if (mock && pace === null) say("primary's 7-day card meter words no pace to read its bar against");
+  if (read.fill && pace !== null) {
+    if (read.fill.now === null) say("primary's live bar has no now line to be read against");
+    else if (pace > 0 && read.fill.end <= read.fill.now) say(`primary's fill ends at ${read.fill.end}px, short of the now line at ${read.fill.now}px, where its window reads ${JSON.stringify(reading)}`);
+    else if (pace < 0 && read.fill.end >= read.fill.now) say(`primary's fill ends at ${read.fill.end}px, past the now line at ${read.fill.now}px, where its window reads ${JSON.stringify(reading)}`);
+  }
+}
+
+/** The phone windows the timeline is read at: the 340 px nothing may scroll sideways from, and a common phone. */
+const TIMELINE_PHONES = [
+  { height: 900, width: 340 },
+  { height: 900, width: 400 },
+];
+
+/**
+ * The Quota windows timeline in two phone windows under the shell's 900 px breakpoint, in either zoom: the axis and
+ * every lane one column, the chart's left column and its gap at 0px and the chips without their indent, so each lane's
+ * head and track start at the lane's content left and the day cells and the raster over the tracks' left, within a
+ * pixel. The now line crosses each lane's track at the chart's now share of the track, within a pixel, and no lane's
+ * head, and its "now" pill stands in the axis row under the day cells' labels at the same share, clear of every head.
+ * Every lane stacks its head above its track, its chips wrap by their width (two rows at 400 px) inside the lane with
+ * none cut, every day cell prints its short labels whole with the full words on its title (a 5-hour cell its day number
+ * on the day's first cell alone), no bar's label is cut, the chart's content fits its box and the document its window,
+ * and the legend stays inside the card. Then it puts the pass's window and the Weekly zoom back, so the view's shot
+ * reads the desktop chart. Only the mock pass draws the section.
+ */
+async function timelinePhone(theme) {
+  const say = (what) => failures.push(`${theme} /quota#quota-windows: ${what}`);
+  const read = () =>
+    page.evaluate(() => {
+      const tenth = (v) => Math.round(v * 10) / 10;
+      const chart = document.querySelector('.timeline__chart');
+      const lanes = document.querySelector('.timeline__lanes');
+      const card = document.querySelector('.timeline');
+      if (!chart || !lanes || !card) return null;
+      const box = (el) => el.getBoundingClientRect();
+      const contentLeft = (el) => tenth(box(el).left + el.clientLeft + parseFloat(getComputedStyle(el).paddingLeft));
+      const style = getComputedStyle(chart);
+      const now = document.querySelector('.timeline__now');
+      // The page writes the now share as the last factor of the line's calc.
+      const share = now ? Number(/\*\s*([-\d.e]+)\)\s*$/.exec(now.style.left)?.[1] ?? NaN) : null;
+      const track = document.querySelector('.lane__track');
+      const cells = document.querySelector('.timeline__cells');
+      const legend = document.querySelector('.timeline__legend');
+      const inside = (inner, outer) => inner.left >= outer.left - 0.5 && inner.right <= outer.right + 0.5 && inner.top >= outer.top - 0.5 && inner.bottom <= outer.bottom + 0.5;
+      const overlap = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5;
+      const visible = (el) => el.getClientRects().length > 0;
+      // Every drawn piece of the now line and its pill, whichever shape the chart takes.
+      const lines = [...document.querySelectorAll('.timeline__now, .lane__now')].filter(visible).map(box);
+      const pills = [...document.querySelectorAll('.timeline__now-label, .timeline__now-pill')].filter(visible).map(box);
+      const heads = [...document.querySelectorAll('.lane__head')].map(box);
+      const subs = [...document.querySelectorAll('.timeline__cell-sub')].map(box);
+      const axisBox = box(document.querySelector('.timeline__axis'));
+      return {
+        axis: getComputedStyle(document.querySelector('.timeline__axis')).gridTemplateColumns,
+        cells: [...document.querySelectorAll('.timeline__cell')].map((cell) => {
+          const [head, sub] = [cell.querySelector('.timeline__cell-head'), cell.querySelector('.timeline__cell-sub')];
+          return { cut: [head, sub].some((el) => el !== null && el.scrollWidth > el.clientWidth), head: head?.textContent ?? '', sub: sub?.textContent ?? '', title: cell.getAttribute('title') ?? '', width: tenth(box(cell).width) };
+        }),
+        cellsLeft: cells ? tenth(box(cells).left) : null,
+        cellsRight: cells ? tenth(box(cells).right) : null,
+        chart: { client: chart.clientWidth, gap: style.getPropertyValue('--tl-gap').trim(), left: style.getPropertyValue('--tl-left').trim(), scroll: chart.scrollWidth },
+        chips: [...document.querySelectorAll('.lane__chips')].map((el) => getComputedStyle(el).paddingLeft),
+        // A label's drawn words, without the reset part its share-alone step hides.
+        cut: [...document.querySelectorAll('.lane__label')].filter((el) => el.getClientRects().length > 0 && el.scrollWidth > el.clientWidth).map((el) => el.innerText),
+        document: { client: document.documentElement.clientWidth, inner: window.innerWidth, scroll: document.documentElement.scrollWidth },
+        labels: [...document.querySelectorAll('.lane__label')].filter((el) => el.getClientRects().length > 0).map((el) => [el.innerText, el.clientWidth]),
+        lanes: [...document.querySelectorAll('.lane')].map((lane) => {
+          const head = lane.querySelector('.lane__head');
+          const row = lane.querySelector('.lane__track');
+          const outer = box(lane);
+          const chips = [...lane.querySelectorAll('.tl-chip')];
+          return {
+            chipRows: new Set(chips.map((chip) => Math.round(box(chip).top))).size,
+            chipsCut: chips.filter((chip) => chip.scrollWidth > chip.clientWidth).map((chip) => chip.textContent?.trim() ?? ''),
+            chipsOut: chips.filter((chip) => !inside(box(chip), outer)).map((chip) => chip.textContent?.trim() ?? ''),
+            columns: getComputedStyle(lane).gridTemplateColumns,
+            content: contentLeft(lane),
+            head: head ? tenth(box(head).left) : null,
+            headBottom: head ? tenth(box(head).bottom) : null,
+            name: lane.querySelector('.lane__name')?.textContent?.trim() ?? '',
+            // Where the line crosses this lane's track, and where the chart's now share of the track lies.
+            nowAt: row ? [...row.querySelectorAll('.lane__now')].filter(visible).map((mark) => tenth(box(mark).left + box(mark).width / 2)) : [],
+            nowOnHead: head !== null && lines.some((line) => overlap(line, box(head))),
+            nowWant: row && share !== null ? tenth(box(row).left + box(row).width * share) : null,
+            track: row ? tenth(box(row).left) : null,
+            trackTop: row ? tenth(box(row).top) : null,
+          };
+        }),
+        legendInside: legend ? inside(box(legend), box(card)) : null,
+        now: share === null ? null : { chartWide: now !== null && visible(now), share },
+        pills: pills.map((pill) => ({ at: tenth(pill.left + pill.width / 2), inAxis: inside(pill, axisBox), onCells: subs.some((sub) => overlap(pill, sub)), onHead: heads.some((head) => overlap(pill, head)), want: cells && share !== null ? tenth(box(cells).left + box(cells).width * share) : null })),
+        raster: (() => {
+          const raster = document.querySelector('.timeline__raster');
+          return raster ? tenth(box(raster).left) : null;
+        })(),
+        trackLeft: track ? tenth(box(track).left) : null,
+        trackRight: track ? tenth(box(track).right) : null,
+      };
+    });
+  const zoom = async (label) => {
+    await page.locator('.timeline .segmented button', { hasText: label }).click();
+    await settle();
+    await settle();
+  };
+  const check = (got, where) => {
+    if (got === null) {
+      say(`${where} no timeline to measure`);
+      return;
+    }
+    const oneTrack = (columns) => columns.trim() !== '' && !/\s/.test(columns.trim());
+    if (!oneTrack(got.axis)) say(`${where} the axis lays out ${got.axis}, not one column`);
+    for (const lane of got.lanes.filter((l) => !oneTrack(l.columns))) say(`${where} ${lane.name}'s lane lays out ${lane.columns}, not one column`);
+    if (got.chart.left !== '0px' || got.chart.gap !== '0px') say(`${where} the chart's left column is ${got.chart.left} and its gap ${got.chart.gap}, not 0px`);
+    for (const padding of got.chips.filter((p) => p !== '0px')) say(`${where} a lane's chips stand ${padding} in from its head`);
+    if (mock && got.lanes.length === 0) say(`${where} the story has subscription windows, yet no lane is drawn`);
+    for (const lane of got.lanes) {
+      // A lane and the axis above it span the chart's content alike, so their one column reads the same width.
+      failures.push(...compare({ columns: lane.columns }, { columns: got.axis }, ['columns'], `${theme} /quota#quota-windows: ${where} ${lane.name}'s lane against the axis`));
+      if (lane.head === null || Math.abs(lane.head - lane.content) > 1) say(`${where} ${lane.name}'s head starts at ${lane.head}px, not its lane's content left ${lane.content}px`);
+      if (lane.track === null || Math.abs(lane.track - lane.content) > 1) say(`${where} ${lane.name}'s track starts at ${lane.track}px, not its lane's content left ${lane.content}px`);
+      if (lane.headBottom === null || lane.trackTop === null || lane.headBottom > lane.trackTop + 0.5) say(`${where} ${lane.name}'s head ends at ${lane.headBottom}px, below its track's top ${lane.trackTop}px, so the lane does not stack`);
+      if (lane.chipsOut.length > 0) say(`${where} ${lane.name}'s chips ${JSON.stringify(lane.chipsOut)} stand outside its lane`);
+      if (lane.chipsCut.length > 0) say(`${where} ${lane.name}'s chips ${JSON.stringify(lane.chipsCut)} are cut`);
+      if (where.startsWith('at 400 ') && lane.chipRows !== 2) say(`${where} ${lane.name}'s three chips take ${lane.chipRows} rows, where two share the first`);
+      if (lane.nowOnHead) say(`${where} the now line crosses ${lane.name}'s head`);
+      if (got.now !== null && (lane.nowAt.length !== 1 || Math.abs(lane.nowAt[0] - lane.nowWant) > 1)) say(`${where} the now line crosses ${lane.name}'s track at ${JSON.stringify(lane.nowAt)}, not once at ${lane.nowWant}px where the chart's now share ${got.now.share} of the track lies`);
+    }
+    if (got.trackLeft !== null) {
+      if (got.raster === null || Math.abs(got.raster - got.trackLeft) > 1) say(`${where} the raster starts at ${got.raster}px, not the tracks' left ${got.trackLeft}px`);
+      if (got.cellsLeft === null || Math.abs(got.cellsLeft - got.trackLeft) > 1 || Math.abs(got.cellsRight - got.trackRight) > 1) say(`${where} the day cells span ${got.cellsLeft}px to ${got.cellsRight}px over tracks from ${got.trackLeft}px to ${got.trackRight}px`);
+    }
+    if (mock && got.now === null) say(`${where} the current period draws no now line`);
+    if (got.now?.chartWide) say(`${where} the now line runs down the whole chart, over the lanes' heads`);
+    if (got.now !== null && got.pills.length !== 1) say(`${where} the now line draws ${got.pills.length} pills, not one`);
+    for (const pill of got.pills) {
+      if (!pill.inAxis || pill.onCells || pill.onHead) say(`${where} the now pill stands ${pill.onHead ? 'over a lane head' : pill.onCells ? "over the day cells' labels" : 'outside the axis row'}, not in the axis row under the cells' labels`);
+      if (pill.want === null || Math.abs(pill.at - pill.want) > 1) say(`${where} the now pill stands at ${pill.at}px, not at ${pill.want}px over the line`);
+    }
+    // A 5-hour cell whose title carries its date is the day's first, which alone prints the day number.
+    const dayOf = (cell) => /^[A-Z][a-z]{2} (\d{1,2}) /.exec(cell.title)?.[1] ?? null;
+    if (where.includes('5-hour') && !got.cells.some((cell) => dayOf(cell) !== null)) say(`${where} no day cell opens a day`);
+    for (const cell of got.cells) {
+      if (cell.width >= 40) say(`${where} a day cell is ${cell.width}px wide, where the phone window leaves it under 40 px`);
+      const day = dayOf(cell);
+      const short = where.includes('5-hour') ? (day === null ? cell.head === '' : /^\d{1,2}$/.test(cell.head) && Number(cell.head) === Number(day)) && /^\d{2}$/.test(cell.sub) : /^[A-Z]$/.test(cell.head) && /^\d{1,2}$/.test(cell.sub);
+      if (!short) say(`${where} a day cell prints ${JSON.stringify([cell.head, cell.sub])}, not its short labels`);
+      if (cell.title === '' || !cell.title.includes(cell.sub) || (cell.head !== '' && !cell.title.includes(cell.head))) say(`${where} a day cell prints ${JSON.stringify([cell.head, cell.sub])} under the title ${JSON.stringify(cell.title)}, which does not carry its full words`);
+      if (cell.cut) say(`${where} the day cell ${JSON.stringify(cell.title)} cuts its short labels`);
+    }
+    for (const text of got.cut) say(`${where} the bar label ${JSON.stringify(text)} is cut`);
+    if (got.chart.scroll !== got.chart.client) say(`${where} the chart's content needs ${got.chart.scroll}px of its ${got.chart.client}px`);
+    if (got.document.scroll > got.document.inner) say(`${where} the document needs ${got.document.scroll}px of the ${got.document.inner}px window, so it scrolls sideways`);
+    if (got.legendInside !== true) say(`${where} the legend runs past the timeline's card`);
+  };
+  for (const size of TIMELINE_PHONES) {
+    await page.setViewportSize(size);
+    await settle();
+    await settle();
+    for (const mode of ['Weekly', '5-hour']) {
+      if (mode === '5-hour') await zoom('5-hour');
+      const where = `at ${size.width} by ${size.height} in the ${mode} zoom`;
+      const got = await read();
+      measurements.push(`${theme} /quota#quota-windows timeline ${where} ${JSON.stringify(got === null ? null : { ...got, cells: got.cells.map((c) => [c.head, c.sub, c.title, c.width]), lanes: got.lanes.map(({ chipsCut, chipsOut, ...lane }) => ({ ...lane, chipsCut: chipsCut.length, chipsOut: chipsOut.length })) })}`);
+      check(got, where);
+    }
+    await zoom('Weekly');
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  await settle();
+  await atRest();
 }
 
 /**
@@ -2429,9 +3095,17 @@ async function quotaCardHeights(theme) {
 }
 
 /** The card grid's floor (`.quota-grid`), the measured figure its comment carries. */
-const QUOTA_FLOOR = 403;
+const QUOTA_FLOOR = 433;
 /** The reset column's bound (`--qwin-reset` on `.qcard__windows`), past the widest single part of a live label. */
-const QUOTA_RESET = 120;
+const QUOTA_RESET = 150;
+/**
+ * The widest single parts a reset label can draw, which the story's windows need not reach: a window with nothing used
+ * whose horizon comes just short of five hours out, an idle window at its reset, a window the sessions spend just short
+ * of five hours out, the longest reset's own part and an expired line's first clause.
+ */
+const QUOTA_WORST_PARTS = ['100% left in 4 h 59 min', '100% left at the reset', 'spent in 4 h 59 min', 'resets in 23h 59m,', 'expired 23h 59m ago,'];
+/** The widest live label whole, which no column holds, so it breaks between its two parts. */
+const QUOTA_WIDEST_LABEL = 'resets in 23h 59m, 100% left in 4 h 59 min';
 
 /** Two phone windows under the shell's 900 px breakpoint, where the content is narrower than the card grid's floor. */
 const QUOTA_NARROW = [
@@ -2443,7 +3117,7 @@ const QUOTA_NARROW = [
  * Every Quota card's window grid holds its three columns: each meter, live or absent, at least 120 px wide, the grid
  * needing no more than its own width, no chip, meter or reset label ending past the room inside the card's border and
  * its body's padding, where the card's `overflow: hidden` would cut it, the chip column no wider than the card's widest
- * chip and the reset column no wider than the card's widest reset label within its 120 px bound, a label split between
+ * chip and the reset column no wider than the card's widest reset label within its 150 px bound, a label split between
  * its reset and its projection read by its wider part. A split label's unbroken width runs past the bound, so its
  * card's column stands at the bound. In the mock pass two cards stand in a row at the pass's 1280 by 800, as the floor
  * is set for. A meter held at its 120 px minimum while the columns run past the card passes a width reading alone, and
@@ -2457,7 +3131,8 @@ const QUOTA_NARROW = [
  * and every card ends inside the window, and the readings above hold except the reset column's, since the reset label
  * takes a row of its own across the grid. Then it puts the pass's window back. A resize arms no timer on this page, and
  * the check steps no clock and scrolls nothing, so the view's shot keeps its instants and its topbar. The router's seed
- * has no subscription account, so only the story's pass has meters to read.
+ * has no subscription account, so only the story's pass has meters to read. In the pass's window the bound also holds
+ * each of the widest parts a label can draw (`QUOTA_WORST_PARTS`), drawn off screen in the card's font.
  */
 async function quotaMeters(theme) {
   const say = (what) => failures.push(`${theme} /quota: ${what}`);
@@ -2571,6 +3246,31 @@ async function quotaMeters(theme) {
     if (mock) say('the page draws no card grid to set the floor beside');
     return;
   }
+  // The bound holds the widest part a label can draw, which no window of the story need reach, so each worst case is
+  // drawn off screen in a part of the card's own font, plain and in the bolder weight of the soonest window's label.
+  const worst = await page.evaluate(({ label, texts }) => {
+    const windows = document.querySelector('.qcard__windows');
+    if (!windows) return null;
+    const probe = document.createElement('span');
+    probe.style.cssText = 'left: -10000px; position: absolute; top: 0';
+    const part = document.createElement('span');
+    part.className = 'qwin__part';
+    probe.append(part);
+    windows.append(probe);
+    const width = (text, soon) => {
+      probe.className = soon ? 'qwin__reset is-soon' : 'qwin__reset';
+      part.textContent = text;
+      return Math.round(part.getBoundingClientRect().width * 10) / 10;
+    };
+    const parts = texts.map((text) => [text, width(text, false), width(text, true)]);
+    const whole = [label, width(label, false)];
+    probe.remove();
+    return { bound: parseFloat(getComputedStyle(windows).getPropertyValue('--qwin-reset')), label: whole, parts };
+  }, { label: QUOTA_WIDEST_LABEL, texts: QUOTA_WORST_PARTS });
+  measurements.push(`${theme} /quota reset parts in a ${first.view}px window ${JSON.stringify(worst)}`);
+  if (mock && worst === null) say('the story has subscription windows, yet no window grid is drawn to measure the reset parts in');
+  if (worst !== null && worst.bound !== QUOTA_RESET) say(`the reset column's bound is ${worst.bound}px, not the ${QUOTA_RESET} px the check reads`);
+  for (const [text, plain, soon] of worst?.parts ?? []) if (Math.max(plain, soon) > worst.bound) say(`the part ${JSON.stringify(text)} needs ${Math.max(plain, soon)}px, past the reset column's ${worst.bound} px bound`);
   // Rounded up, since a window a fraction short of twice the floor and the gap sets one card in a row.
   const floor = Math.ceil(first.gutter + 2 * QUOTA_FLOOR + 14);
   await page.setViewportSize({ height: was.height, width: floor });
@@ -2584,22 +3284,111 @@ async function quotaMeters(theme) {
   await page.setViewportSize(was);
 }
 
+/** The window widths the cards' rows are read at, six under the shell's 900 px breakpoint and one above it. */
+const QUOTA_ROW_WIDTHS = [340, 375, 400, 480, 640, 840, 1280];
+
 /**
- * Both quota donuts against a registry with no subscription account: the seed has one API-key account, so
- * the cards have no window to draw and must say so instead of drawing a ring that reads as exhausted.
+ * Every Quota card's window rows at seven window widths, 900 px tall: from 900 px up each reset label stands on its
+ * meter's row beside a meter of 120 px or more, read by the two boxes overlapping, since the row centers its cells,
+ * and under 900 px each label takes a row of its own under its meter. At every width no label is cut, no part of a
+ * split label runs past its label's box, and the page scrolls nothing sideways. The card grid's floor and the reset
+ * column's bound hold the meter at 120 px or more wherever the label stands beside it, so the read guards that layout.
+ * The router's seed has no subscription account, so its pass records a skip. Then it puts the pass's window back.
+ */
+async function quotaMeterRow(theme) {
+  const say = (what) => failures.push(`${theme} /quota: ${what}`);
+  const read = () =>
+    page.evaluate(() => {
+      const tenth = (v) => Math.round(v * 10) / 10;
+      return {
+        page: { client: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth },
+        rows: [...document.querySelectorAll('.qcard__windows')].flatMap((windows) => {
+          const name = windows.closest('.qcard')?.querySelector('.qcard__name')?.textContent?.trim() ?? '';
+          const cells = [...windows.children];
+          // A window is three cells of the grid: its chip, its meter and its reset label.
+          return Array.from({ length: Math.floor(cells.length / 3) }, (_, i) => {
+            const [chip, meter, reset] = cells.slice(i * 3, i * 3 + 3).map((el) => el.getBoundingClientRect());
+            const label = cells[i * 3 + 2];
+            return {
+              cut: label.scrollWidth > label.clientWidth || [...label.querySelectorAll('.qwin__part')].some((part) => [...part.getClientRects()].some((r) => r.left < reset.left - 0.5 || r.right > reset.right + 0.5)),
+              meter: tenth(meter.width),
+              name,
+              overlap: tenth(Math.min(meter.bottom, reset.bottom) - Math.max(meter.top, reset.top)),
+              text: label.textContent?.trim() ?? '',
+              under: tenth(reset.top - Math.max(meter.bottom, chip.bottom)),
+            };
+          });
+        }),
+        view: window.innerWidth,
+      };
+    });
+  if (!mock && (await read()).rows.length === 0) {
+    measurements.push(`${theme} /quota meter row skipped: the seed draws no card`);
+    return;
+  }
+  const was = page.viewportSize();
+  for (const width of QUOTA_ROW_WIDTHS) {
+    await page.setViewportSize({ height: 900, width });
+    await settle();
+    const got = await read();
+    const at = `in a ${got.view}px window`;
+    const wide = got.view >= 900;
+    measurements.push(`${theme} /quota meter row ${at} ${JSON.stringify({ labels: wide ? 'beside the meter' : 'under the meter', meters: [...new Set(got.rows.map((r) => r.meter))], page: got.page, rows: got.rows.map((r) => [r.name, r.meter, r.overlap, r.under]) })}`);
+    if (got.rows.length === 0) say(`the story has subscription windows, yet no card draws them ${at}`);
+    for (const row of got.rows) {
+      const where = `${row.name}'s reset label ${JSON.stringify(row.text)} ${at}`;
+      if (wide && row.overlap <= 0) say(`${where} stands off its meter's row`);
+      if (wide && row.meter < 120) say(`${where} stands beside a meter of ${row.meter}px, under 120 px`);
+      if (!wide && row.under < -0.5) say(`${where} overlaps its meter's row by ${-row.under}px, where the label takes a row of its own under the meter`);
+      if (row.cut) say(`${where} is cut`);
+    }
+    if (got.page.scroll > got.page.client) say(`the page needs ${got.page.scroll}px of its ${got.page.client}px ${at}, so it scrolls sideways`);
+  }
+  await page.setViewportSize(was);
+  await settle();
+}
+
+/**
+ * Both quota donuts and the lists beside them. The router's seed has one API-key account, so there the cards have no
+ * window to draw and must say so instead of drawing a ring that reads as exhausted. The story weighs subscription
+ * accounts, so there each list reads the account with the most of its own window left first, its printed shares
+ * running down, in the order of its ring's slices (one circle per account in drawn order, the spent arc after them).
  */
 async function remainingCards(theme) {
   const cards = await page.evaluate(() =>
     [...document.querySelectorAll('.card')]
       .filter((c) => /remaining$/.test(c.querySelector('.card__title')?.textContent ?? ''))
-      .map((c) => ({ text: c.textContent ?? '', title: c.querySelector('.card__title')?.textContent ?? '' })),
+      .map((c) => ({
+        rows: [...c.querySelectorAll('.remaining__list li')].map((li) => ({ label: li.querySelector('a')?.textContent ?? '', share: li.querySelector('.num')?.textContent ?? '' })),
+        slices: [...c.querySelectorAll('svg.donut circle > title')]
+          .map((t) => t.textContent ?? '')
+          .filter((t) => !t.startsWith('Spent: '))
+          .map((t) => t.slice(0, t.indexOf(': '))),
+        text: c.textContent ?? '',
+        title: c.querySelector('.card__title')?.textContent ?? '',
+      })),
   );
+  for (const card of cards) measurements.push(`${theme} / remaining list ${JSON.stringify({ rows: card.rows, slices: card.slices, title: card.title })}`);
   if (cards.length !== 2) {
     failures.push(`${theme} /: ${cards.length} remaining cards, expected 5h and 7d`);
     return;
   }
-  for (const card of cards.filter((c) => !c.text.includes('No subscription accounts'))) {
-    failures.push(`${theme} /: the "${card.title}" card draws a ring on a registry with no subscription account (${card.text.slice(0, 80)})`);
+  if (!mock) {
+    for (const card of cards.filter((c) => !c.text.includes('No subscription accounts'))) {
+      failures.push(`${theme} /: the "${card.title}" card draws a ring on a registry with no subscription account (${card.text.slice(0, 80)})`);
+    }
+    return;
+  }
+  for (const card of cards) {
+    const say = (what) => failures.push(`${theme} /: the "${card.title}" list ${what}`);
+    if (card.rows.length === 0) {
+      say('lists no account, yet the story weighs subscription accounts');
+      continue;
+    }
+    const shares = card.rows.map((r) => Number.parseFloat(r.share));
+    const rising = card.rows.filter((r, i) => i > 0 && shares[i] > shares[i - 1]);
+    if (shares.some(Number.isNaN) || rising.length) say(`reads ${card.rows.map((r) => `${r.label} ${r.share}`).join(', ')}, not the most left first`);
+    for (const what of compare({ order: card.rows.map((r) => r.label).join(', ') }, { order: card.slices.join(', ') }, ['order'], 'against its ring')) say(what);
   }
 }
 
@@ -2808,8 +3597,87 @@ async function wastedProbeRows(theme) {
     for (const row of rows.filter((r) => r.middle < r.line.top || r.middle > r.line.bottom)) {
       failures.push(`${theme} /analytics: the "${row.label}" bar is centered on ${row.middle.toFixed(1)}, outside its label's first line from ${row.line.top.toFixed(1)} to ${row.line.bottom.toFixed(1)}`);
     }
+    // The first reason stands as clear of the panel's tiles as each section's tiles row stands of what follows it, so
+    // the gap is read against the Cache warming and the Cost tiles rows.
+    const tile = (id) =>
+      page.evaluate((id) => {
+        const row = document.querySelector(`#${id} > .tiles-row`);
+        return row?.nextElementSibling ? Math.round((row.nextElementSibling.getBoundingClientRect().top - row.getBoundingClientRect().bottom) * 10) / 10 : null;
+      }, id);
+    const gap = await page.evaluate(() => {
+      const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === 'Wasted probes');
+      const tiles = card.querySelector('.tiles-row');
+      const first = card.querySelector('.hbars--reasons li');
+      return tiles ? Math.round((first.getBoundingClientRect().top - tiles.getBoundingClientRect().bottom) * 10) / 10 : null;
+    });
+    const tilesGap = { cacheWarming: await tile('cache-warming'), cost: (await tabTo(theme, 'Cost')) ? await tile('cost') : null };
+    measurements.push(`${theme} /analytics wasted probes gap ${JSON.stringify({ gap, tilesGap })}`);
+    for (const [section, neighbour] of [['Cache warming', tilesGap.cacheWarming], ['Cost', tilesGap.cost]]) {
+      for (const what of compare({ gap }, neighbour === null ? null : { gap: neighbour }, ['gap'], `the wasted probe reasons' gap under their tiles against the ${section} tiles row's`)) failures.push(`${theme} /analytics: ${what}`);
+    }
   } finally {
     await tabTo(theme, 'Traffic');
+  }
+}
+
+/** The top bar's unit positions in its order. The pass reads no module of the console, so it lists them here. */
+const UNIT_POSITIONS = ['native', 'all', 'usd', 'share', 'equivalent'];
+
+/**
+ * The Cache warming tab under each unit position at the pass's 1280 by 800: Probe cost, Saved by probes, Net saving
+ * and Kept warm on one row at one top, the two saving tiles in the Probe cost tile's box and value type, and the Saved
+ * by probes chart in the box and title type of the Kept-warm requests card beside it, the tiles' figures and the
+ * chart's legend recorded per position. Each position loads the page as a view loads, on its `?unit=` address, which
+ * writes the console-wide setting, so the measure ends on a load of `?unit=native`: the measures after it and the view's
+ * shot read a fresh browser's position, on Traffic.
+ */
+async function savingTiles(theme) {
+  const say = (what) => failures.push(`${theme} /analytics: ${what}`);
+  const load = async (search) => {
+    await page.clock.setSystemTime(clockOrigin);
+    await page.goto(`${base}/analytics${search}`);
+    await booted();
+    await advance(LOAD_MS);
+    await page.waitForSelector('.analytics-section#traffic', { timeout: 15_000 });
+  };
+  try {
+    for (const position of UNIT_POSITIONS) {
+      await load(`?unit=${position}`);
+      if (!(await tabTo(theme, 'Cache warming'))) continue;
+      const read = await page.evaluate(() => {
+        const box = (el) => {
+          const b = el.getBoundingClientRect();
+          return { height: Math.round(b.height), top: Math.round(b.top), width: Math.round(b.width) };
+        };
+        const type = (el) => {
+          const s = getComputedStyle(el);
+          return `${s.fontFamily}/${s.fontSize}/${s.fontWeight}/${s.lineHeight}`;
+        };
+        const tiles = [...document.querySelectorAll('#cache-warming > .tiles-row > .stat')].map((t) => {
+          const value = t.querySelector('.stat__value');
+          return { ...box(t), label: t.querySelector('.stat__label')?.textContent?.trim() ?? '', note: t.querySelector('.stat__note')?.textContent?.trim() ?? '', type: value ? type(value) : null, value: value?.textContent?.trim() ?? '' };
+        });
+        const card = (title) => [...document.querySelectorAll('#cache-warming .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+        const cardBox = (title) => {
+          const c = card(title);
+          return c ? { ...box(c), title: type(c.querySelector('.card__title')) } : null;
+        };
+        const legend = [...(card('Saved by probes')?.querySelectorAll('.legend li') ?? [])].map((li) => [[...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''), li.querySelector('.legend__value')?.textContent?.trim() ?? '']);
+        return { chart: cardBox('Saved by probes'), kept: cardBox('Kept-warm requests'), legend, tiles };
+      });
+      measurements.push(`${theme} /analytics saving tiles ${position} ${JSON.stringify({ legend: read.legend, tiles: read.tiles.map(({ label, note, top, value }) => ({ label, note, top, value })) })}`);
+      const labels = read.tiles.map((t) => t.label);
+      if (JSON.stringify(labels) !== JSON.stringify(['Probe cost', 'Saved by probes', 'Net saving', 'Kept warm'])) say(`under ${position} the Cache warming tiles read ${JSON.stringify(labels)}`);
+      if (new Set(read.tiles.map((t) => t.top)).size !== 1) say(`under ${position} the tiles do not share one top: ${JSON.stringify(read.tiles.map((t) => [t.label, t.top]))}`);
+      const probe = read.tiles.find((t) => t.label === 'Probe cost');
+      for (const label of ['Saved by probes', 'Net saving']) {
+        for (const what of compare(read.tiles.find((t) => t.label === label), probe, ['height', 'top', 'type', 'width'], `under ${position} the ${label} tile against the Probe cost tile`)) say(what);
+      }
+      for (const what of compare(read.chart, read.kept, ['height', 'title', 'top', 'width'], `under ${position} the Saved by probes chart against the Kept-warm requests card`)) say(what);
+      if (JSON.stringify(read.legend.map(([label]) => label)) !== JSON.stringify(['Saved by probes', 'Probe cost', 'Net saving'])) say(`under ${position} the Saved by probes legend reads ${JSON.stringify(read.legend)}`);
+    }
+  } finally {
+    await load('?unit=native');
   }
 }
 
@@ -3053,12 +3921,72 @@ async function analyticsColumns(theme) {
 }
 
 /**
- * The request table's room, as the fit measures read it: how much the table needs of its wrap, its narrowest layout,
- * the columns' widths, the Client text's cut, the TTFB cells' lines, the held markers' lines, and the Cost cells that
- * read a share or a 20x equivalent.
+ * A log table's Time cells as the browser lays them out, run in the page: per cell its leading text (the date and the
+ * time, ahead of the id or the request link beneath it), that text's width, its lines and how far it runs past the
+ * cell's content box through a `Range` over it, and the cell's content height against the tallest of its row's other
+ * cells. A cell is dated when its text leads with the month and the day. Null where the table is not drawn.
  */
-function readRequestsTable() {
-  return page.evaluate(() => {
+function timeCellsOf(selector) {
+  const table = document.querySelector(selector);
+  if (!table) return null;
+  const at = [...table.querySelectorAll('thead th')].findIndex((th) => th.textContent?.trim() === 'Time');
+  const round = (n) => Math.round(n * 10) / 10;
+  const contentHeight = (td) => {
+    const range = document.createRange();
+    range.selectNodeContents(td);
+    return range.getBoundingClientRect().height;
+  };
+  // A placeholder or an open row's panel is one cell across the table, so it has no Time cell.
+  return [...table.querySelectorAll('tbody tr')]
+    .filter((tr) => at >= 0 && tr.children.length > at)
+    .map((tr) => {
+      const td = tr.children[at];
+      const lead = td.firstChild?.nodeType === Node.TEXT_NODE ? td.firstChild : null;
+      const range = document.createRange();
+      if (lead) range.selectNode(lead);
+      const rects = lead ? [...range.getClientRects()].filter((r) => r.width > 0) : [];
+      const style = getComputedStyle(td);
+      const box = td.getBoundingClientRect();
+      const left = box.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft);
+      const right = box.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight);
+      const others = [...tr.children].filter((c) => c !== td && getComputedStyle(c).display !== 'none').map(contentHeight);
+      return {
+        box: round(right - left),
+        dated: /^[A-Z][a-z]{2} \d{1,2} /.test(lead?.textContent ?? ''),
+        height: round(contentHeight(td)),
+        lines: new Set(rects.map((r) => Math.round(r.top))).size,
+        others: round(Math.max(0, ...others)),
+        past: round(Math.max(0, ...rects.map((r) => Math.max(left - r.left, r.right - right)))),
+        text: lead?.textContent ?? '',
+        width: round(lead ? range.getBoundingClientRect().width : 0),
+      };
+    });
+}
+
+/**
+ * The Time cells' read for a measurements line: the count, each dated cell's text, width, content box, lines, height and
+ * its row's tallest other cell, the widest cell's figures, and the texts of the cells that break over two lines, run
+ * past their content box by more than half a pixel or stand more than a pixel taller than their row's other cells.
+ */
+function timeFit(cells) {
+  const list = cells ?? [];
+  return {
+    cells: list.length,
+    dated: list.filter((c) => c.dated).map((c) => [c.text, c.width, c.box, c.lines, c.height, c.others]),
+    past: list.filter((c) => c.past > 0.5).map((c) => c.text),
+    split: list.filter((c) => c.lines > 1).map((c) => c.text),
+    taller: list.filter((c) => c.height > c.others + 1).map((c) => c.text),
+    widest: list.reduce((w, c) => (w === null || c.width > w.width ? c : w), null),
+  };
+}
+
+/**
+ * The request table's room, as the fit measures read it: how much the table needs of its wrap, its narrowest layout,
+ * the columns' widths, the Client text's cut, the TTFB cells' lines, the held markers' lines, the Cost cells that read
+ * a share or a 20x equivalent, and the Time cells' fit.
+ */
+async function readRequestsTable() {
+  const read = await page.evaluate(() => {
     const table = document.querySelector('.requests__table');
     const wrap = table?.closest('.table-wrap');
     if (!table || !wrap) return null;
@@ -3113,6 +4041,7 @@ function readRequestsTable() {
       ttfb: { cells: ttfb.length, split: ttfb.filter((td) => lines(td) > 1).map((td) => td.textContent?.trim() ?? '') },
     };
   });
+  return read && { ...read, time: timeFit(await page.evaluate(timeCellsOf, '.requests__table')) };
 }
 
 /**
@@ -3122,25 +4051,37 @@ function readRequestsTable() {
  * The router pass's seed fits the card, so there the fit is asserted. The mock story's rows carry values wider than
  * the 990 px card (its default set runs past 990 px there with the fills at their floors), so in the mock pass the
  * width is recorded and the table scrolls inside its wrap. In both passes each cut Client text
- * holds at least sixteen characters of its font, the fills' floor. A held row's marker reads its wait as waited on
- * one line. The share measure below reads the same width with the Cost column's widest text.
+ * holds at least sixteen characters of its font, the fills' floor. A held row's marker reads its wait as waited
+ * on one line. The share measure below reads the same width with the Cost column's widest text. Under a `range` the
+ * page was loaded on, the Time cells' fit is held as well: the mock's story and the router's seed both lie within the
+ * day before the pass's clock, so the range is read with the page's clock moved past a day on (`datedRead`), where
+ * every row prints its date, and a read with no dated cell fails, as does a cell whose date and time break over two
+ * lines, run past its content box or stand taller than the row's other cells.
  */
-async function requestsTableFits(theme) {
+async function requestsTableFits(theme, range = null) {
   const read = await readRequestsTable();
-  measurements.push(`${theme} /requests table ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}, client text ${JSON.stringify(read.classes)}, floor ${JSON.stringify(read.floor)}, TTFB ${JSON.stringify(read.ttfb)}`}`);
+  const under = range === null ? '' : ` under ${range}`;
+  measurements.push(`${theme} /requests table${under} ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}, client text ${JSON.stringify(read.classes)}, floor ${JSON.stringify(read.floor)}, TTFB ${JSON.stringify(read.ttfb)}, Time ${JSON.stringify(read.time)}`}`);
   if (read === null) {
-    failures.push(`${theme} /requests: no request table to measure`);
+    failures.push(`${theme} /requests${under}: no request table to measure`);
     return;
   }
-  if (read.drawer) failures.push(`${theme} /requests: the drawer is open, so the default set is not measured alone`);
-  if (!mock && read.scroll > read.client) failures.push(`${theme} /requests: the table needs ${read.scroll}px of its wrap's ${read.client}px`);
-  if (read.classes.shown > 0 && JSON.stringify(read.classes.ellipsis) !== JSON.stringify(['ellipsis'])) failures.push(`${theme} /requests: the Client text overflows as ${read.classes.ellipsis.join(', ')}, not behind an ellipsis`);
-  for (const text of read.classes.untitled) failures.push(`${theme} /requests: the cut Client text "${text}" does not carry its whole class on the cell's title`);
-  for (const text of read.floor.short) failures.push(`${theme} /requests: the cut text ${text}`);
-  if (read.rows > 0 && read.ttfb.cells === 0) failures.push(`${theme} /requests: no TTFB cell to measure`);
-  for (const text of read.ttfb.split) failures.push(`${theme} /requests: the TTFB cell "${text}" draws its figure and its unit on two lines`);
-  measurements.push(`${theme} /requests held markers ${JSON.stringify(read.held)}`);
-  for (const marker of read.held.filter((m) => m.lines > 1 || !/^waited \d/.test(m.text))) failures.push(`${theme} /requests: the held marker "${marker.text}" does not read its wait as waited on one line`);
+  const say = (what) => failures.push(`${theme} /requests${under}: ${what}`);
+  if (read.drawer) say('the drawer is open, so the default set is not measured alone');
+  if (!mock && read.scroll > read.client) say(`the table needs ${read.scroll}px of its wrap's ${read.client}px`);
+  if (read.classes.shown > 0 && JSON.stringify(read.classes.ellipsis) !== JSON.stringify(['ellipsis'])) say(`the Client text overflows as ${read.classes.ellipsis.join(', ')}, not behind an ellipsis`);
+  for (const text of read.classes.untitled) say(`the cut Client text "${text}" does not carry its whole class on the cell's title`);
+  for (const text of read.floor.short) say(`the cut text ${text}`);
+  if (read.rows > 0 && read.ttfb.cells === 0) say('no TTFB cell to measure');
+  for (const text of read.ttfb.split) say(`the TTFB cell "${text}" draws its figure and its unit on two lines`);
+  measurements.push(`${theme} /requests${under} held markers ${JSON.stringify(read.held)}`);
+  for (const marker of read.held.filter((m) => m.lines > 1 || !/^waited \d/.test(m.text))) say(`the held marker "${marker.text}" does not read its wait as waited on one line`);
+  if (range === null) return;
+  if (read.rows > 0 && read.time.cells === 0) say('no Time cell to measure');
+  if (read.time.dated.length === 0) say('no Time cell prints its date, so the dated form is not measured');
+  for (const text of read.time.split) say(`the Time cell "${text}" breaks over two lines`);
+  for (const text of read.time.past) say(`the Time cell "${text}" runs past its cell`);
+  for (const text of read.time.taller) say(`the Time cell "${text}" stands taller than its row's other cells`);
 }
 
 /**
@@ -3150,18 +4091,19 @@ async function requestsTableFits(theme) {
  * count of cells whose main line or `.sub` reads one is asserted above zero: a page with no such cell would measure
  * the table without the widest text. The need, the wrap's width and the Cost column's width are recorded: the story's
  * values run wider than the 990 px card with the fills at their floors, so the table scrolls inside its wrap there and
- * the width is a record, as in `requestsTableFits`.
+ * the width is a record, as in `requestsTableFits`, under the `range` the page was loaded on as well.
  */
-async function requestsTableFitsWithShares(theme) {
+async function requestsTableFitsWithShares(theme, range = null) {
   const read = await readRequestsTable();
+  const under = range === null ? '' : ` under ${range}`;
   const cost = read?.columns.find(([label]) => label === 'Cost')?.[1] ?? null;
-  measurements.push(`${theme} /requests table with shares ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, Cost column ${cost}px, ${read.shares} of ${read.rows} Cost cells read a 20x equivalent or a share`}`);
+  measurements.push(`${theme} /requests table with shares${under} ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, Cost column ${cost}px, ${read.shares} of ${read.rows} Cost cells read a 20x equivalent or a share`}`);
   if (read === null) {
-    failures.push(`${theme} /requests: no request table to measure with shares`);
+    failures.push(`${theme} /requests${under}: no request table to measure with shares`);
     return;
   }
-  if (read.drawer) failures.push(`${theme} /requests: the drawer is open, so the default set is not measured with shares alone`);
-  if (read.shares === 0) failures.push(`${theme} /requests: no Cost cell of the default set reads a 20x equivalent or a share, so the table is measured without the widest text`);
+  if (read.drawer) failures.push(`${theme} /requests${under}: the drawer is open, so the default set is not measured with shares alone`);
+  if (read.shares === 0) failures.push(`${theme} /requests${under}: no Cost cell of the default set reads a 20x equivalent or a share, so the table is measured without the widest text`);
 }
 
 /**
@@ -4974,8 +5916,8 @@ const POPOVER_VIEWPORTS = [
  * its table's heads on at most two lines, nothing in it scrolling sideways, its computed visibility `visible`, since
  * the box stays hidden until its placement reveals it, and its computed transition `none`, since the box is measured
  * at the window's corner and then moved under its anchor. `table` holds that it draws a table, and `striped` that its
- * table's second row takes the candidate table's even-row color and its first row does not. Escape closes it after
- * each reading.
+ * table's second row takes the --stripe tone the candidate table's even row takes and its first row does not. Escape
+ * closes it after each reading.
  */
 async function popoverBounds(theme, what, stationOf, { striped = false, table = false, viewports = POPOVER_VIEWPORTS } = {}) {
   const say = (message) => failures.push(`${theme} /routing-log: ${message}`);
@@ -5007,6 +5949,11 @@ async function popoverBounds(theme, what, stationOf, { striped = false, table = 
         return new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top))).size;
       };
       const fill = (td) => (td ? getComputedStyle(td).backgroundColor : null);
+      const probe = document.createElement('div');
+      probe.style.background = 'var(--stripe)';
+      card.append(probe);
+      const stripe = getComputedStyle(probe).backgroundColor;
+      probe.remove();
       return {
         bound: Math.min(720, Math.max(0, view - 16), Math.max(0, c.width - 16), Math.max(0, shown.right - shown.left - 16)),
         card: { left: c.left, right: c.right, width: c.width },
@@ -5023,6 +5970,7 @@ async function popoverBounds(theme, what, stationOf, { striped = false, table = 
         renderer: [...popover.classList].find((n) => n.startsWith('strip-popover--')) ?? null,
         rows: [...popover.querySelectorAll('.strip-popover__table tbody tr')].slice(0, 2).map((tr) => fill(tr.cells[0])),
         shown,
+        stripe,
         transition: getComputedStyle(popover).transitionProperty,
         visibility: getComputedStyle(popover).visibility,
         wraps: [...popover.querySelectorAll('.table-wrap')].map((w) => ({ client: w.clientWidth, scroll: w.scrollWidth })),
@@ -5043,7 +5991,7 @@ async function popoverBounds(theme, what, stationOf, { striped = false, table = 
     if (got.figuresWrapping.length > 0) say(`${where}: its figures may wrap or run to two lines: ${JSON.stringify(got.figuresWrapping)}`);
     if (got.popover.scroll > got.popover.client || got.wraps.some((w) => w.scroll > w.client)) say(`${where} scrolls sideways (${JSON.stringify({ popover: got.popover, wraps: got.wraps })})`);
     if (table && (got.renderer !== 'strip-popover--table' || got.heads.length === 0)) say(`${where} draws no table to read (${got.renderer}, ${got.heads.length} heads)`);
-    if (striped && (got.rows.length < 2 || got.evenRow === null || got.rows[1] !== got.evenRow || got.rows[0] === got.rows[1])) say(`${where}: its rows read ${JSON.stringify(got.rows)}, not the candidate table's even-row ${got.evenRow} on the second row alone`);
+    if (striped && (got.rows.length < 2 || got.evenRow !== got.stripe || got.rows[1] !== got.stripe || got.rows[0] === got.rows[1])) say(`${where}: its rows read ${JSON.stringify(got.rows)} and the candidate table's even row ${got.evenRow}, not --stripe (${got.stripe}) on the second row alone`);
     if (got.visibility !== 'visible') say(`${where} computes visibility ${got.visibility} once placed, not visible`);
     if (got.transition !== 'none') say(`${where} transitions ${got.transition}, where nothing of the box may animate between where it is measured and where it stands`);
     await page.keyboard.press('Escape');
@@ -5502,8 +6450,9 @@ const compare = (mine, neighbour, keys, what) => {
  * The identity card's subscription end editor on an OAuth account: its date field is the box of the Sort select in
  * the bar (the page's other plain control, where the label editor's field takes the heading's type), its checkbox
  * label the field label's type, its Save the size of the Edit end button it opened from, and opening it moves no row
- * of the card. Ticking the box prefills a date. The router's seed has only an API-key account, which has no
- * editor, so there the check stands down; the mock's first account is an OAuth one.
+ * of the card. Ticking the box leaves the date field empty for the operator to type, the refusal callout names the
+ * date and holds the Save, and the hint reads the billing page's words. The router's seed has only an API-key account,
+ * which has no editor, so there the check stands down, and the mock's first account is an OAuth one.
  */
 async function subscriptionEndForm(theme) {
   const say = (what) => failures.push(`${theme} /accounts: ${what}`);
@@ -5539,17 +6488,23 @@ async function subscriptionEndForm(theme) {
     const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
     const ends = card?.querySelector('input[type="datetime-local"]');
     return {
+      callout: card?.querySelector('[role="alert"]')?.textContent?.trim() ?? null,
+      end: ends?.value ?? null,
       ends: box(ends),
       fieldLabel: type(card?.querySelector('.field .field__label')),
+      hint: card?.querySelector('.field .field__hint')?.textContent?.trim() ?? null,
       sort: box(document.querySelector('.filter-bar select[aria-label="Sort"]')),
-      prefill: ends?.value ?? null,
       tickLabel: type(card?.querySelector('label.row .field__label')),
     };
   });
-  const save = await identity.getByRole('button', { name: 'Save', exact: true }).evaluate(button);
+  const saveButton = identity.getByRole('button', { name: 'Save', exact: true });
+  const save = await saveButton.evaluate(button);
+  const held = await saveButton.isDisabled();
   const rowAfter = await firstRow();
-  measurements.push(`${theme} /accounts subscription end ${JSON.stringify({ ...read, save })}`);
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(read.prefill ?? '')) say(`ticking Cancelled left the end ${JSON.stringify(read.prefill)} rather than the derived date`);
+  measurements.push(`${theme} /accounts subscription end ${JSON.stringify({ ...read, held, save })}`);
+  if (read.end !== '') say(`ticking Cancelled filled the end with ${JSON.stringify(read.end)}, where the operator types it`);
+  if (!(read.callout ?? '').includes('A cancelled plan needs the date it ends.') || !held) say(`ticking Cancelled with no end drew ${JSON.stringify(read.callout)} with Save ${held ? 'held' : 'open'}, not the refusal that names the date`);
+  if (read.hint !== "The date the plan's billing settings show as its end. An annual plan is marked cancelled in its final month only.") say(`the Ends hint reads ${JSON.stringify(read.hint)}`);
   for (const finding of [
     // A select keeps room for its chevron, so the padding is left out.
     ...compare(read.ends, read.sort, ['background', 'border', 'font', 'height', 'radius'], 'the Ends field against the Sort select'),
@@ -5608,6 +6563,9 @@ async function addAccountDialog(theme) {
  * tokens heading beside it and its cells the type of the Name cells, the other plain text column; no row's levels
  * wrap and the table fits the dialog without scrolling. The mock pass writes the open popup's shot beside the
  * view's; the router's pass keeps to one shot per view, which its test counts.
+ *
+ * The first row's Model cell holds the id with no badge beside it, reads one line as its Name cell does, and keeps the
+ * Name cell's padding.
  */
 async function catalogDialog(theme) {
   const say = (what) => failures.push(`${theme} /accounts catalog: ${what}`);
@@ -5631,12 +6589,16 @@ async function catalogDialog(theme) {
       const heads = [...el.querySelectorAll('thead th')];
       const rows = [...el.querySelectorAll('tbody tr')];
       const wrap = el.querySelector('.table-wrap');
+      const [model, name] = [rows[0]?.firstElementChild, rows[0]?.children[1]];
       return {
         effortCell: cell(rows[0]?.lastElementChild),
         effortHead: cell(heads.at(-1)),
         headings: heads.map((h) => h.textContent?.trim()),
         levels: rows.map((r) => r.lastElementChild?.textContent?.trim()),
-        nameCell: cell(rows[0]?.children[1]),
+        // The id's own text is counted, since a range over the cell also takes the flex box around the id, whose top
+        // sits a pixel above the text's and would read as a second line.
+        modelCell: model ? { ...cell(model), badges: model.querySelectorAll('.badge').length, lines: lines(model.querySelector('.catalog__id') ?? model) } : null,
+        nameCell: name ? { ...cell(name), lines: lines(name) } : null,
         outputHead: cell(heads.find((h) => h.textContent?.trim() === 'Output tokens')),
         overflow: wrap ? wrap.scrollWidth - wrap.clientWidth : null,
         wrapped: rows.filter((r) => lines(r.lastElementChild) > 1).map((r) => r.firstElementChild?.textContent?.trim()),
@@ -5646,6 +6608,9 @@ async function catalogDialog(theme) {
     if (read.headings.at(-1) !== 'Effort levels') say(`the last heading reads ${JSON.stringify(read.headings.at(-1))}, not "Effort levels"`);
     failures.push(...compare(read.effortHead, read.outputHead, ['color', 'font', 'height', 'padding'], `${theme} /accounts catalog: the Effort levels heading against Output tokens`));
     failures.push(...compare(read.effortCell, read.nameCell, ['color', 'font', 'padding'], `${theme} /accounts catalog: an Effort levels cell against its Name cell`));
+    if (read.modelCell?.badges) say("the first row's Model cell draws a badge beside its id");
+    if (read.modelCell?.lines !== 1 || read.nameCell?.lines !== 1) say(`the first row's Model cell reads ${read.modelCell?.lines} lines and its Name cell ${read.nameCell?.lines}, not one each`);
+    failures.push(...compare(read.modelCell, read.nameCell, ['padding'], `${theme} /accounts catalog: the first row's Model cell against its Name cell`));
     if (read.wrapped.length) say(`the effort levels wrap on ${read.wrapped.join(', ')}`);
     if (read.overflow === null || read.overflow > 0) say(`the table runs ${read.overflow} px past the dialog`);
     await tableColumns(theme, 'accounts catalog', 'dialog[open] table', ['Model', 'Name']);
@@ -6003,12 +6968,391 @@ async function sessionsLead(theme) {
   await atRest();
 }
 
+/** A cell that paints no fill of its own computes to this, and shows the surface under its table. */
+const CLEAR = 'rgba(0, 0, 0, 0)';
+
+/** How many even log rows the Routing log's read opens before it stands down for want of a candidate table to read. */
+const STRIPE_TRIES = 10;
+
+/**
+ * In the page: the tones the stripes read against, off a probe, and every drawn `.table` with the first four of its
+ * data rows that no state of their own paints. A row is placed by its index among the data rows of its `tbody`, which
+ * the stripe counts with every row but a detail row, so a passed-by row still moves the parity of the rows after it.
+ * The states are a chosen candidate, a new row, the pool card's next member, an open row, a selected row and the
+ * session the address names.
+ */
+function stripeTables() {
+  const tone = (name) => {
+    const probe = document.createElement('div');
+    probe.style.background = `var(${name})`;
+    document.body.append(probe);
+    const color = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return color;
+  };
+  const STATES = ['is-chosen', 'is-new', 'is-next', 'is-open', 'is-selected'];
+  const stated = (tr) => STATES.some((name) => tr.classList.contains(name)) || tr.getAttribute('aria-current') === 'true';
+  const fill = (tr) => {
+    const td = tr.querySelector(':scope > td');
+    return td ? getComputedStyle(td).backgroundColor : null;
+  };
+  const tables = [...document.querySelectorAll('table.table')]
+    .filter((table) => table.getClientRects().length > 0)
+    .map((table) => ({
+      name: [...table.classList].filter((c) => c !== 'table').join(' ') || 'table',
+      plain: table.classList.contains('table--plain'),
+      rows: [...table.tBodies]
+        .flatMap((body) => [...body.rows].filter((tr) => !tr.classList.contains('table__detail')).map((tr, i) => [i + 1, tr]))
+        .filter(([, tr]) => !stated(tr))
+        .slice(0, 4)
+        .map(([n, tr]) => [n, fill(tr)]),
+    }));
+  const tones = { accentSoft: tone('--accent-soft'), stripe: tone('--stripe'), surface: tone('--surface'), surface2: tone('--surface-2'), surface3: tone('--surface-3') };
+  return { tables, tones };
+}
+
+/** Every data cell's fill of a row, with the first cell's box, read where the row is drawn. */
+const rowCells = (row) =>
+  row.evaluate((tr) => {
+    const cells = [...tr.querySelectorAll(':scope > td')];
+    if (cells.length === 0) return null;
+    const s = getComputedStyle(cells[0]);
+    return { backgrounds: cells.map((td) => getComputedStyle(td).backgroundColor), border: s.borderBottom, height: Math.round(cells[0].getBoundingClientRect().height), padding: s.padding };
+  });
+
+/** The cells of a `rowCells` read whose fill is not `want`, each by its place in the row. */
+const offTone = (cells, want) => (cells === null ? ['no cell'] : cells.backgrounds.flatMap((fill, i) => (fill === want ? [] : [`cell ${i + 1} on ${fill}`])));
+
+/**
+ * Two tones within this many steps of 255 on every channel read as one: the tolerance `quotaLaneChips` holds a mix to.
+ * The stripe, half way between the two surfaces, stands about 4.5 from either in the light theme and 6 in the dark.
+ */
+const TONE_STEP = 1.5;
+
+/**
+ * The stripes on a view: every drawn `.table` reads its first four data rows plain, --stripe, plain, --stripe, a row
+ * its own state paints passed by, and a `table--plain` one reads them all plain. The --stripe tone is one of its own:
+ * read over the surface, as a cell draws it, it stands more than `TONE_STEP` apart on some channel from no fill, the
+ * surface, the hover's --surface-2 and the selected row's --accent-soft. Then the rows that read over a stripe or under
+ * it, each on its view: Sessions, the Routing log, Requests and the pool dialog's form tables. Every state a read opens
+ * it shuts again with the pointer away, so the view's shot reads the view as it was.
+ */
+async function tableStripes(theme, path) {
+  const say = (what) => failures.push(`${theme} ${path}: ${what}`);
+  const read = await page.evaluate(stripeTables);
+  const { tones } = read;
+  // A translucent tone (the dark theme's --accent-soft) composited over the surface, as the cell under it draws.
+  const surface = colorChannels(tones.surface);
+  const over = (css) => composite(colorChannels(css), surface);
+  const gap = (css) => Math.round(Math.max(...over(tones.stripe).map((c, i) => Math.abs(c - over(css)[i]))) * 10) / 10;
+  const apart = { accentSoft: gap(tones.accentSoft), clear: gap(CLEAR), surface: gap(tones.surface), surface2: gap(tones.surface2) };
+  measurements.push(`${theme} ${path} table stripes ${JSON.stringify({ ...read, apart })}`);
+  if (read.tables.length > 0) {
+    const near = [
+      ['no fill', 'clear', CLEAR],
+      ['--surface', 'surface', tones.surface],
+      ['--surface-2', 'surface2', tones.surface2],
+      ['--accent-soft', 'accentSoft', tones.accentSoft],
+    ].filter(([, key]) => apart[key] <= TONE_STEP);
+    if (near.length > 0) say(`the --stripe tone ${tones.stripe} stands within ${TONE_STEP} of ${near.map(([name, key, css]) => `${name} (${css}, ${apart[key]} apart)`).join(', ')} on every channel, not a tone of its own`);
+    for (const t of read.tables) {
+      for (const [n, fill] of t.rows) {
+        const want = t.plain || n % 2 === 1 ? CLEAR : tones.stripe;
+        if (fill !== want) say(`the ${t.name} table's data row ${n} reads ${fill}, not ${want === CLEAR ? 'plain' : `--stripe (${want})`}${t.plain ? ', as a table--plain one' : ''}`);
+      }
+    }
+  }
+  if (path === '/sessions') await sessionDetailStripes(theme, tones);
+  if (path === '/routing-log') await routingLogStripes(theme, tones);
+  if (path === '/requests') await requestRowStripes(theme, tones);
+  if (path === '/pools') await poolFormTables(theme);
+}
+
+/**
+ * An expanded session's detail row takes its parent's tone: under the first row, a plain one, it reads plain, and under
+ * the second, a striped one, it reads --stripe. Each row opens from its chevron, is read with the pointer away, since
+ * a hovered row paints itself --surface-2, and shuts again.
+ */
+async function sessionDetailStripes(theme, tones) {
+  const say = (what) => failures.push(`${theme} /sessions: ${what}`);
+  const rows = page.locator('.sessions-table > tbody > tr.srow');
+  const count = await rows.count();
+  if (count < 2) {
+    if (mock) say(`the table draws ${count} session rows, short of the two the detail rows' read opens`);
+    else measurements.push(`${theme} /sessions stripes under an expanded row skipped: the seed draws ${count} session rows, short of the two the read opens`);
+    return;
+  }
+  for (const k of [0, 1]) {
+    const row = rows.nth(k);
+    const shut = (await row.getAttribute('aria-expanded')) !== 'true';
+    if (shut) await row.locator('.srow__chevron').click();
+    await settle();
+    await page.mouse.move(0, 0);
+    await settle();
+    const got = await row.evaluate((tr) => {
+      const fill = (el) => (el ? getComputedStyle(el).backgroundColor : null);
+      const detail = tr.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
+      return {
+        detail: { background: fill(detail?.querySelector(':scope > td')), counted: detail ? !detail.classList.contains('table__detail') : null },
+        index: [...tr.parentElement.rows].filter((r) => !r.classList.contains('table__detail')).indexOf(tr) + 1,
+        parent: { background: fill(tr.querySelector(':scope > td')) },
+      };
+    });
+    measurements.push(`${theme} /sessions stripes under expanded row ${got.index} ${JSON.stringify(got)}`);
+    const want = got.index % 2 === 0 ? tones.stripe : CLEAR;
+    if (got.detail.background === null) say(`row ${got.index} opened to no detail row`);
+    else {
+      if (got.detail.counted) say(`row ${got.index}'s detail row carries no table__detail, so the stripes count it`);
+      failures.push(...compare(got.detail, got.parent, ['background'], `${theme} /sessions: row ${got.index}'s detail row against its parent`));
+      if (got.parent.background !== want) say(`row ${got.index} reads ${got.parent.background} with its detail open, not ${want === CLEAR ? 'plain' : `--stripe (${want})`}`);
+    }
+    if (shut) await row.locator('.srow__chevron').click();
+    await settle();
+  }
+  await atRest();
+}
+
+/**
+ * The open row the view opened before its shot and its panel read --surface-3, and an even log row opened with three
+ * candidates or more, one of them chosen, keeps its own stripes in its panel's candidate table: an unchosen even row on
+ * --stripe, an unchosen odd one with no fill of its own and the chosen one on --accent-soft, while the row and its panel
+ * read --surface-3. The row is the first even log row (counted among the log's own rows) whose decision lists such a
+ * table, and it shuts again before the shot. A router's seed may list no such decision, so there the read stands down.
+ */
+async function routingLogStripes(theme, tones) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const tint = (want) => (want === CLEAR ? 'plain' : want === tones.stripe ? `--stripe (${want})` : want === tones.surface3 ? `--surface-3 (${want})` : `--accent-soft (${want})`);
+  const readOpen = (tr) => {
+    const fill = (el) => (el ? getComputedStyle(el).backgroundColor : null);
+    const panel = tr.nextElementSibling?.classList.contains('routing-log__panel') ? tr.nextElementSibling : null;
+    return {
+      candidates: [...(panel?.querySelectorAll('.decision-card__candidates > tbody > tr') ?? [])].map((c, i) => ({ chosen: c.classList.contains('is-chosen'), fill: fill(c.querySelector(':scope > td')), n: i + 1 })),
+      id: tr.dataset.row,
+      index: [...tr.parentElement.rows].filter((r) => !r.classList.contains('table__detail')).indexOf(tr) + 1,
+      panel: { background: fill(panel?.querySelector(':scope > td')), counted: panel ? !panel.classList.contains('table__detail') : null },
+      row: { background: fill(tr.querySelector(':scope > td')) },
+    };
+  };
+  const held = (got, where) => {
+    if (got.panel.background === null) {
+      say(`${where} draws no panel`);
+      return;
+    }
+    if (got.panel.counted) say(`${where}'s panel carries no table__detail, so the stripes count it`);
+    failures.push(...compare(got.panel, got.row, ['background'], `${theme} /routing-log: ${where}'s panel against its row`));
+    if (got.row.background !== tones.surface3) say(`${where} reads ${got.row.background}, not ${tint(tones.surface3)}`);
+  };
+  const opened = page.locator('.routing-log__table > tbody > tr.routing-log__row.is-open').first();
+  if ((await opened.count()) === 0) say('no open row to read the open tint on');
+  else {
+    const got = await opened.evaluate(readOpen);
+    measurements.push(`${theme} /routing-log stripes on the open row ${JSON.stringify(got)}`);
+    held(got, `the open row ${got.index}`);
+  }
+  const rows = page.locator('.routing-log__table > tbody > tr.routing-log__row');
+  const count = await rows.count();
+  let tried = 0;
+  let found = null;
+  for (let k = 1; k < count && tried < STRIPE_TRIES && found === null; k += 2) {
+    const row = rows.nth(k);
+    if ((await row.getAttribute('data-row'))?.startsWith('event/') || (await row.getAttribute('aria-expanded')) === 'true') continue;
+    tried += 1;
+    await row.locator('td.routing-log__kind').click();
+    await advance(LOAD_MS);
+    await row.locator('xpath=following-sibling::tr[1]').locator('.decision-strip').waitFor({ timeout: 15_000 }).catch(() => {});
+    const got = await row.evaluate(readOpen);
+    const unchosen = got.candidates.filter((c) => !c.chosen);
+    const picks = { chosen: got.candidates.find((c) => c.chosen), even: unchosen.find((c) => c.n % 2 === 0), odd: unchosen.find((c) => c.n % 2 === 1) };
+    if (got.index % 2 === 0 && got.candidates.length >= 3 && picks.chosen && picks.even && picks.odd) found = { got, picks, row };
+    else {
+      await row.locator('td.routing-log__kind').click();
+      await advance(CLOCK_STEP_MS);
+    }
+  }
+  if (found === null) {
+    const why = `none of the first ${tried} even decision rows lists three candidates or more with a chosen one`;
+    if (mock) say(`no even row to read a candidate table's stripes under: ${why}`);
+    else measurements.push(`${theme} /routing-log stripes in an even row's candidate table skipped: the seed draws ${count} log rows and ${why}`);
+    await atRest();
+    return;
+  }
+  const { got, picks, row } = found;
+  measurements.push(`${theme} /routing-log stripes in even row ${got.index} (${got.id}) candidates even ${picks.even.n}, odd ${picks.odd.n}, chosen ${picks.chosen.n} ${JSON.stringify(got)}`);
+  held(got, `the even row ${got.index}`);
+  for (const [what, c, want] of [
+    ['an unchosen even', picks.even, tones.stripe],
+    ['an unchosen odd', picks.odd, CLEAR],
+    ['the chosen', picks.chosen, tones.accentSoft],
+  ]) {
+    if (c.fill !== want) say(`the even row ${got.index}'s candidate table reads ${what} candidate, row ${c.n}, on ${c.fill}, not ${tint(want)}`);
+  }
+  await row.locator('td.routing-log__kind').click();
+  await advance(CLOCK_STEP_MS);
+  if ((await row.getAttribute('aria-expanded')) === 'true') say(`the even row ${got.index} stayed open after a second click`);
+  await atRest();
+}
+
+/**
+ * On Requests the second data row, a striped one, reads --stripe at rest, --surface-2 under the pointer and
+ * --accent-soft once selected, on every one of its cells, each state in the box it has striped. The pointer moves away
+ * after the hover, and the selection closes again by Escape.
+ */
+async function requestRowStripes(theme, tones) {
+  const say = (what) => failures.push(`${theme} /requests: ${what}`);
+  const rows = page.locator('.requests__table > tbody > tr:not(.table__detail)');
+  const count = await rows.count();
+  if (count < 2) {
+    if (mock) say(`the table draws ${count} rows, short of the second row the hover and the selection read`);
+    else measurements.push(`${theme} /requests stripes under the hover and the selection skipped: the seed draws ${count} rows`);
+    return;
+  }
+  const second = rows.nth(1);
+  const striped = await rowCells(second);
+  await second.hover();
+  await settle();
+  const hovered = await rowCells(second);
+  await page.mouse.move(0, 0);
+  await settle();
+  await second.locator(':scope > td').first().click({ position: { x: 4, y: 4 } });
+  await advance(LOAD_MS);
+  await page.mouse.move(0, 0);
+  await settle();
+  const selected = { ...(await rowCells(second)), state: (await second.getAttribute('class')) ?? '' };
+  await page.keyboard.press('Escape');
+  await advance(CLOCK_STEP_MS);
+  const left = { path: new URL(page.url()).pathname, selected: await page.locator('.requests__table > tbody > tr.is-selected').count() };
+  measurements.push(`${theme} /requests stripes under the hover and the selection ${JSON.stringify({ hovered, left, selected, striped, tones })}`);
+  const atRestOff = offTone(striped, tones.stripe);
+  if (atRestOff.length > 0) say(`the second row reads ${atRestOff.join(', ')} at rest, not --stripe (${tones.stripe})`);
+  const hoveredOff = offTone(hovered, tones.surface2);
+  if (hoveredOff.length > 0) say(`the hovered second row reads ${hoveredOff.join(', ')}, not --surface-2 (${tones.surface2}) over its stripe`);
+  failures.push(...compare(hovered, striped, ['border', 'height', 'padding'], `${theme} /requests: the hovered second row against itself striped`));
+  if (!selected.state.split(' ').includes('is-selected')) say(`a click on the second row left it ${JSON.stringify(selected.state)}, not is-selected`);
+  const selectedOff = offTone(selected.backgrounds === undefined ? null : selected, tones.accentSoft);
+  if (selectedOff.length > 0) say(`the selected second row reads ${selectedOff.join(', ')}, not --accent-soft (${tones.accentSoft}) over its stripe`);
+  failures.push(...compare(selected, striped, ['border', 'padding'], `${theme} /requests: the selected second row against itself striped`));
+  if (left.path !== '/requests' || left.selected !== 0) say(`Escape left ${left.path} with ${left.selected} selected rows, not the bare log`);
+  await atRest();
+}
+
+/**
+ * The pool dialog's form tables (the TTL grid, the rules, the members and the keys) opt out of the stripes, so every row
+ * reads plain. The dialog shows one group at a time and keeps the rest in the page, so each table drawn for the first
+ * pool is read whatever its group. The rules table is drawn only for a pool with model overrides, so the read names the
+ * tables it found.
+ */
+async function poolFormTables(theme) {
+  const say = (what) => failures.push(`${theme} /pools dialog: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  try {
+    await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await settle();
+  } catch (error) {
+    say(`never opened for the form tables' read (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  const read = await dialog.evaluate((el) =>
+    ['ttl-grid', 'rules-table', 'members-table', 'keys-table'].flatMap((name) =>
+      [...el.querySelectorAll(`table.table.${name}`)].map((table) => ({
+        name,
+        plain: table.classList.contains('table--plain'),
+        rows: [...table.tBodies].flatMap((body) => [...body.rows]).map((tr, i) => [i + 1, tr.querySelector(':scope > td') ? getComputedStyle(tr.querySelector(':scope > td')).backgroundColor : null]),
+      })),
+    ),
+  );
+  measurements.push(`${theme} /pools dialog form tables ${JSON.stringify(read)}`);
+  if (read.length === 0) say('draws none of its form tables');
+  for (const t of read) {
+    if (!t.plain) say(`the ${t.name} table carries no table--plain`);
+    for (const [n, fill] of t.rows) if (fill !== CLEAR) say(`the ${t.name} table's row ${n} reads ${fill}, not plain`);
+  }
+  await closeByEscape(dialog, `${theme} /pools dialog after the form tables' read`, say);
+  await atRest();
+}
+
+/** Real time a wheel's scroll is given to land: it runs on the compositor, which the paused clock does not hold. */
+const WHEEL_MS = 500;
+
+/**
+ * The document holds still behind a modal dialog. On the Pools page scrolled 300 px down, a wheel over the page with no
+ * dialog open moves it first, so the wait after a wheel is long enough to see one land. Then, from 300 px down again,
+ * the first pool's dialog opens where the page stood, a wheel over the backdrop leaves the document's scroll where the
+ * open found it and the content's box where it stood before the open, and Escape closes the dialog onto the scroll the
+ * page had before it opened. The box is read at both edges: the shell anchors the content on the left, so the scrollbar
+ * a lock without its gutter takes away widens the content to the right, and a page with no `.content` box fails. A
+ * page too short to scroll 300 px is recorded and not read.
+ */
+async function dialogScrollLock(theme) {
+  const say = (what) => failures.push(`${theme} /pools dialog scroll lock: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  const read = () =>
+    page.evaluate(() => {
+      const root = document.scrollingElement;
+      const box = document.querySelector('.content')?.getBoundingClientRect();
+      const style = getComputedStyle(root);
+      return { gutter: style.scrollbarGutter, left: box?.left ?? null, overflow: style.overflowY, right: box?.right ?? null, room: root.scrollHeight - root.clientHeight, scroll: root.scrollTop };
+    });
+  const rest = await read();
+  if (rest.room < 300) {
+    measurements.push(`${theme} /pools dialog scroll lock skipped: the page scrolls ${rest.room} px, short of 300 ${JSON.stringify(rest)}`);
+    return;
+  }
+  await page.evaluate(() => window.scrollTo(0, 300));
+  await settle();
+  const unlocked = await read();
+  await page.mouse.move(640, 400);
+  await page.mouse.wheel(0, 400);
+  await page.waitForTimeout(WHEEL_MS);
+  await advance(CLOCK_STEP_MS);
+  const control = await read();
+  await page.evaluate(() => window.scrollTo(0, 300));
+  await settle();
+  const before = await read();
+  // The opener's own click, since a Playwright click scrolls its target into view first and would move the document.
+  const clicked = await page.evaluate(() => {
+    const opener = document.querySelector('.pool button[aria-label^="Edit pool"]');
+    opener?.click();
+    return opener !== null;
+  });
+  try {
+    if (!clicked) throw new Error('no Edit pool button');
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await settle();
+  } catch (error) {
+    say(`the first pool's dialog never opened (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  const open = await read();
+  const frame = await dialog.boundingBox();
+  // Halfway between the viewport's left edge and the dialog's, on the backdrop.
+  await page.mouse.move(Math.max(4, Math.round((frame?.x ?? 120) / 2)), 400);
+  await page.mouse.wheel(0, 400);
+  await page.waitForTimeout(WHEEL_MS);
+  await advance(CLOCK_STEP_MS);
+  const wheeled = await read();
+  await closeByEscape(dialog, `${theme} /pools dialog after the scroll lock's read`, say);
+  await advance(CLOCK_STEP_MS);
+  const closed = await read();
+  measurements.push(`${theme} /pools dialog scroll lock ${JSON.stringify({ before, closed, control, open, unlocked, wheeled })}`);
+  if (control.scroll <= unlocked.scroll) say(`a wheel over the page with no dialog open left it ${control.scroll} px down from ${unlocked.scroll}, so a wheel that never landed would read as the lock`);
+  if (before.scroll !== 300) say(`the page stands ${before.scroll} px down, not 300, before the dialog opens`);
+  const unboxed = Object.entries({ before, closed, open, wheeled }).filter(([, r]) => r.left === null || r.right === null).map(([name]) => name);
+  if (unboxed.length > 0) say(`no .content box to read ${unboxed.join(', ')}`);
+  for (const what of compare(wheeled, open, ['scroll'], 'the wheel over the backdrop against the open dialog')) say(what);
+  for (const what of compare(open, before, ['left', 'right', 'scroll'], "the content's box and the scroll with the dialog open against them before")) say(what);
+  for (const what of compare(wheeled, before, ['left', 'right'], "the content's box after the wheel against it before")) say(what);
+  for (const what of compare(closed, before, ['scroll'], 'the closed dialog against the page before it opened')) say(what);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await atRest();
+}
+
 /**
  * The cost reference from Sessions, walked tab by tab at 1280 by 800 and at 1440 by 900: no table runs past its wrap,
- * every second model sits on --surface-2 against --surface with its sub-rows on its shade, the older models' fold row
- * sits on --surface-3 with the stripes running on through it, the footer's Revision select draws on one line inside
- * the dialog, and Plan rates opens on the interactive regime. The mock pass writes each tab of the open dialog at 1280
- * by 800.
+ * every second model sits on --stripe against --surface with its sub-rows on its shade, the older models' fold row sits
+ * on --surface-3 with the stripes running on through it, the footer's Revision select draws on one line inside the
+ * dialog, and Plan rates opens on the interactive regime. The mock pass writes each tab of the open dialog at 1280 by
+ * 800.
  */
 async function costReference(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -6035,7 +7379,7 @@ async function costReference(theme) {
         probe.remove();
         return color;
       };
-      const tones = { surface: tone('--surface'), surface2: tone('--surface-2'), surface3: tone('--surface-3') };
+      const tones = { stripe: tone('--stripe'), surface: tone('--surface'), surface3: tone('--surface-3') };
       // The color a cell reads on: its own background, else the first ancestor's that paints one.
       const shade = (el) => {
         for (let at = el; at; at = at.parentElement) {
@@ -6057,7 +7401,7 @@ async function costReference(theme) {
             continue;
           }
           if (!row.classList.contains('cost-ref__sub')) n += 1;
-          const want = n % 2 === 1 ? tones.surface2 : tones.surface;
+          const want = n % 2 === 1 ? tones.stripe : tones.surface;
           if (n % 2 === 1) alts += 1;
           if (bg !== want) wrong.push(`${name} on ${bg}, not ${want}`);
         }
@@ -6312,13 +7656,12 @@ async function tableColumns(theme, view, selector, fill, fixed = 0, { overflowRe
 }
 
 /**
- * The Session column shows more of a session id than the thirteen characters a label cuts at: with the default columns
- * at 1280 by 800 the first row's id line holds the whole id as its text, which the cell's ellipsis alone
- * cuts, and the cell's content width holds more than thirteen of its characters (the router's seed names its sessions
- * in thirteen characters, so the characters shown, the smaller of the id's length and that room, are recorded rather
- * than asserted);
- * the id is monospace, so one character's width is read off the line's first eight, which are never behind the
- * ellipsis.
+ * The Session column shows at least eleven characters of a session id, the room the cells' 5 px padding leaves it: with
+ * the default columns at 1280 by 800 the first row's id line holds the whole id as its text, which the cell's ellipsis
+ * alone cuts, and the cell's content width holds at least eleven of its characters. The characters shown, the smaller
+ * of the id's length and that room, are recorded rather than asserted: the mock story's ids run past the room, and the
+ * router's seed names its sessions in thirteen characters, which its wider column draws whole. The id is monospace, so
+ * one character's width is read off the line's first eight, which are never behind the ellipsis.
  */
 async function sessionIdWidth(theme) {
   const say = (what) => failures.push(`${theme} /sessions id width: ${what}`);
@@ -6344,7 +7687,7 @@ async function sessionIdWidth(theme) {
   if (read === null) return say('no session row to measure');
   if (read.line !== 'drawn') return say(`the first row's Session cell draws ${read.line === 'absent' ? 'no id line' : 'an id line without a text node'}`);
   if (read.text !== read.title) say(`the id line reads ${JSON.stringify(read.text)}, not the whole id ${JSON.stringify(read.title)} the cell's title carries`);
-  if (read.fits <= 13) say(`the cell's ${read.content}px hold ${read.fits} characters, not more than thirteen`);
+  if (read.fits < 11) say(`the cell's ${read.content}px hold ${read.fits} characters, fewer than eleven`);
 }
 
 /**
@@ -6753,13 +8096,13 @@ try {
         await diagnosticsNav(theme, view.path);
       }
       if (view.path === '/' && !mock) {
-        await remainingCards(theme);
         await errorStateBox(theme);
       }
       if (view.path === '/') {
         await recentRowsOneLine(theme);
         await tableColumns(theme, '', '.dash__recent', ['Key'], 0, { overflowRecorded: mock });
         if (mock) await recentUnderShares(theme);
+        await remainingCards(theme);
         await ringLinesSpan(theme);
       }
       if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);
@@ -6803,6 +8146,9 @@ try {
         await stickyStrip(theme);
         await unitControl(theme);
         if (mock) await accountsCardToggles(theme);
+        // Last of the view's measures: its loads set the page's clock back to the origin, and the Burn shot above reads
+        // the clock its earlier measures stepped.
+        await savingTiles(theme);
       }
       if (view.path === '/settings') {
         await settingsOrder(theme);
@@ -6827,6 +8173,13 @@ try {
       if (view.path === '/requests') {
         await requestsTableFits(theme);
         if (mock) await requestsTableFitsWithShares(theme);
+        // The 7-day range is read once more, a day and an hour on, and the bare list loads again for the measures after
+        // it and the shot.
+        await loadAtOrigin('/requests?range=7d', '.requests__table');
+        await datedRead();
+        await requestsTableFits(theme, '7d');
+        if (mock) await requestsTableFitsWithShares(theme, '7d');
+        await loadAtOrigin('/requests', '.requests__table');
         // The Status, Attempts and links cells drop their second item under the first, and the links column's header
         // is empty. In the mock pass the story's values run past the card, so the table's width is a record there.
         await tableColumns(theme, 'requests', '.requests__table', ['Client'], 0, { overflowRecorded: mock, wrapping: ['Status', 'Attempts', ''] });
@@ -6836,6 +8189,8 @@ try {
       if (view.path === '/routing-log') {
         await routingLogColumns(theme);
         await diagnosticsNav(theme, view.path);
+        // Before the first decision opens, since the read leaves the bare log and loads it again.
+        await routingLogDatedTime(theme);
         await firstDecisionOpen(theme);
         await pagerControls(theme, view.path);
       }
@@ -6844,8 +8199,14 @@ try {
         await quotaPollLines(theme);
         await quotaCardHeights(theme);
         await quotaMeters(theme);
+        await quotaMeterRow(theme);
       }
-      if (view.path === '/quota#quota-windows') await quotaLaneChips(theme);
+      if (view.path === '/quota#quota-windows') {
+        await quotaLaneChips(theme);
+        await timelinePhone(theme);
+      }
+      // After the view's own measures, so the Routing log's first decision is open and its row reads over the stripes.
+      await tableStripes(theme, view.path);
       // A full-page capture paints the fixed header and sidebar at the window's scroll offset, over the content, and
       // the checks above can leave the page scrolled (`keyDialogGeometry`'s click on the revoked row's menu trigger
       // scrolls that row into view).
@@ -6938,6 +8299,20 @@ try {
     await advance(LOAD_MS);
     await page.waitForSelector('.card--table tbody tr', { timeout: 15_000 });
     await keysPageMenus('light (scrollbars shown)');
+    // The scroll lock keeps the gutter of a scrollbar the hidden ones never draw, so its read runs here alone, on the
+    // mock's Pools page, which its story draws tall enough to scroll.
+    if (mock) {
+      for (const theme of ['light', 'dark']) {
+        at = `${theme} /pools dialog scroll lock with scrollbars shown`;
+        await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+        await page.clock.setSystemTime(clockOrigin);
+        await page.goto(`${base}/pools`);
+        await booted();
+        await advance(LOAD_MS);
+        await page.waitForSelector('.pool .serving', { timeout: 15_000 });
+        await dialogScrollLock(theme);
+      }
+    }
   } finally {
     await shown.close().catch((error) => failures.push(`closing the browser that shows scrollbars: ${error.message}`));
   }

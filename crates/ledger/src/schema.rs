@@ -304,6 +304,10 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// requests that waited, read off each request's `held` waits under `slow_down`, so the held time reads per bucket by
 /// pool and account without the request rows. No backfill: a row from before reads 0.
 ///
+/// Version 37: a kept-warm credit counts the tokens it read under the TTL its request's observation settled on, so the
+/// one count becomes the five-minute count in place and the hour count joins at zero. A row from before keeps its
+/// whole count under five minutes, since its split was never recorded. The table is not rebuilt.
+///
 /// Version 39: one row per completed 5-hour, 7-day and Fable window of an account, the rise its readings showed against
 /// the share the router priced for its own plan-funded attempts between those readings, each attempt under its own
 /// regime, and how many of them priced at a model tier's estimate. The hourly fold writes the rows and reads the
@@ -958,6 +962,11 @@ CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, acc
         36,
         "ALTER TABLE rollups_hourly ADD COLUMN slow_down_held_ms INTEGER NOT NULL DEFAULT 0; \
          ALTER TABLE rollups_hourly ADD COLUMN slow_down_held INTEGER NOT NULL DEFAULT 0;",
+    ),
+    (
+        37,
+        "ALTER TABLE rollups_hourly RENAME COLUMN kept_warm_tokens TO kept_warm_5m_tokens;
+ALTER TABLE rollups_hourly ADD COLUMN kept_warm_1h_tokens INTEGER NOT NULL DEFAULT 0;",
     ),
     (
         39,

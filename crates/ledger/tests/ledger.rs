@@ -3266,7 +3266,9 @@ async fn a_ledger_below_the_slow_down_columns_migrates_and_a_fresh_file_carries_
         db.write(|c| {
             c.execute_batch(VERSION_38_TABLES)?;
             c.execute_batch(
-                "ALTER TABLE rollups_hourly DROP COLUMN slow_down_held_ms; \
+                "ALTER TABLE rollups_hourly DROP COLUMN kept_warm_1h_tokens; \
+                 ALTER TABLE rollups_hourly RENAME COLUMN kept_warm_5m_tokens TO kept_warm_tokens; \
+                 ALTER TABLE rollups_hourly DROP COLUMN slow_down_held_ms; \
                  ALTER TABLE rollups_hourly DROP COLUMN slow_down_held; \
                  UPDATE meta SET value = '35' WHERE key = 'schema_version';",
             )?;

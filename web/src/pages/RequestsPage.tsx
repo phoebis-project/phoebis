@@ -24,7 +24,7 @@ import { clock } from '@/lib/clock';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION } from '@/lib/dimensions';
 import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, FOLLOW_OVERRUN, readEnd, spanEnded } from '@/lib/follow';
-import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, tokensTotal, withEstimate } from '@/lib/format';
+import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtEquivalent, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, tokensTotal, withEstimate } from '@/lib/format';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { planLabel } from '@/lib/quota';
 import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, heldWords, NO_SHARE_TITLE, revisionsTitle } from '@/lib/requests';
@@ -384,7 +384,7 @@ export function RequestsPage() {
               <tbody>
                 {requests.loading && !requests.data
                   ? Array.from({ length: 8 }, (_, i) => (
-                      <tr key={i}>
+                      <tr key={i} className="table__detail">
                         <td colSpan={shown.size + 1}>
                           <Skeleton />
                         </td>
@@ -402,7 +402,7 @@ export function RequestsPage() {
                       >
                         {shown.has('time') && (
                           <td className="num col-fit" title={fmtAbsolute(r.at)}>
-                            {fmtTime(r.at)}
+                            {fmtDatedTime(r.at, now)}
                             <span className="sub mono" title={r.id}>{shortId(r.id, 12)}</span>
                           </td>
                         )}
@@ -471,7 +471,7 @@ export function RequestsPage() {
                       </tr>
                     ))}
                 {!requests.loading && rows.length === 0 && (
-                  <tr>
+                  <tr className="table__detail">
                     <td colSpan={shown.size + 1}>
                       {error ? (
                         <ErrorState title="Could not load the request log" body={error} action={<Button onClick={requests.reload}>Try again</Button>} />

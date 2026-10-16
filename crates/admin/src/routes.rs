@@ -16,7 +16,7 @@ use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Extension, Json, Router};
-use phoebis_ledger::QuotaPoll;
+use phoebis_ledger::{lead_over_pace, QuotaPoll};
 use phoebis_oauth::{
     authorization_url, control_request, ephemeral_port, exchange_body, loopback_redirect_uri,
     parse_profile, parse_token_response, CallbackInput, ControlKind, LoginKind, OauthError,
@@ -725,7 +725,8 @@ async fn usage_latest(State(state): State<Arc<AdminState>>, Path(id): Path<Strin
                 .find_map(|(account_id, sample)| (account_id == id).then_some(sample))
         }),
     };
-    let answer = compose_usage(&id, latest, held);
+    // The usage answer carries no lead, so it reads no term for one.
+    let answer = compose_usage(&id, latest, held, None, (state.clock)());
     Json(usage_json(
         &id,
         answer.as_ref().ok_or(unread),
@@ -2103,8 +2104,6 @@ pub(crate) struct AccountSubscription {
     pub trial_ends_at: Option<i64>,
     /// The end the operator saved, standing only while `cancelled` is set.
     pub ends_at: Option<i64>,
-    /// The account form's prefill derived from `since` and the trial, null with no `since` to derive from.
-    pub derived_ends_at: Option<i64>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -2124,6 +2123,10 @@ pub(crate) struct AccountWindow {
     pub burn: Option<f64>,
     /// The pins' unpaced demand on the window, in share per hour. Null where `projection` is.
     pub demand: Option<f64>,
+    /// The window's lead over pace at the answer's instant: the utilization less the share of the window elapsed
+    /// toward the earlier of its reset and the account's end, the figure the engine sheds and cools by. Null while
+    /// the utilization is unknown.
+    pub lead: Option<f64>,
 }
 
 /// The slow-down entry the account's last pinned selection wrote, the figures its holds apply.
@@ -2324,6 +2327,8 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         .ok()
         .flatten()
         .unwrap_or_default();
+    let now = (state.clock)();
+    let end = phoebis_routing::term::end_of(&term, now);
     // Null until the account has paired and a profile document exists, unless the operator has cancelled it:
     // a cancelled, unpaired OAuth row still has an end to report, so the flag joins `profile.is_some()` here.
     let subscription = (row.kind == AccountKind::Oauth && (profile.is_some() || term.cancelled))
@@ -2344,7 +2349,6 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             since: s.since,
             trial_ends_at: s.trial_ends_at,
             ends_at: term.ends_at,
-            derived_ends_at: phoebis_routing::term::derived_end(&term, (state.clock)()),
         });
     let mut windows: Vec<AccountWindow> = ctx
         .quota
@@ -2362,6 +2366,9 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 horizon,
                 burn,
                 demand,
+                lead: q
+                    .utilization
+                    .map(|u| lead_over_pace(&q.window, u, q.reset_at, end, now)),
             }
         })
         .collect();
@@ -2369,9 +2376,9 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     // restart whose startup read was refused; the card shows what selection reads rather than no windows.
     if windows.is_empty() && row.kind == AccountKind::Oauth {
         if let Some(sample) = ctx.held.get(&row.id) {
-            windows = held_windows(sample)
+            windows = held_windows(sample, end, now)
                 .into_iter()
-                .map(|(key, reading)| {
+                .map(|(key, reading, lead)| {
                     let (projection, horizon, burn) = window_projection(ctx, &row.id, &key);
                     let demand = window_demand(ctx, &row.id, &key);
                     AccountWindow {
@@ -2383,6 +2390,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                         horizon,
                         burn,
                         demand,
+                        lead: Some(lead),
                     }
                 })
                 .collect();
@@ -2402,7 +2410,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             Some(snapshot) if has_windows(snapshot) => None,
             _ => ctx.held.get(&row.id).cloned(),
         };
-        let answer = compose_usage(&row.id, latest, held);
+        let answer = compose_usage(&row.id, latest, held, end, now);
         UsageStanding {
             error: answer
                 .as_ref()
@@ -2507,21 +2515,29 @@ fn has_windows(snapshot: &UsageSnapshot) -> bool {
     !snapshot.windows.is_empty() || snapshot.fable_window.is_some()
 }
 
-/// The router's plan windows under the keys the usage endpoint gives them: what both the usage `GET` and the
-/// account view show when they read the router's windows.
-fn held_windows(sample: &UtilizationSample) -> Vec<(String, WindowReading)> {
+/// The router's plan windows under the keys the usage endpoint gives them, each with its lead over pace at `now`
+/// toward the earlier of its reset and the account's `end`: what both the usage `GET` and the account view show when
+/// they read the router's windows.
+fn held_windows(
+    sample: &UtilizationSample,
+    end: Option<i64>,
+    now: i64,
+) -> Vec<(String, WindowReading, f64)> {
     // The router names every plan window as the endpoint does, except the Fable week it reads from `limits`.
     sample
         .windows
         .iter()
         .filter(|(name, _)| is_plan_window(name))
         .map(|(name, reading)| {
+            // Paced off the router's own name, which says the Fable week is a week, before it takes the endpoint's key.
+            let lead = reading.utilization
+                - phoebis_routing::elapsed_share_at(name, reading.reset, end, now);
             let key = if name == SEVEN_DAY_FABLE {
                 FABLE_WINDOW_KEY
             } else {
                 name.as_str()
             };
-            (key.to_string(), *reading)
+            (key.to_string(), *reading, lead)
         })
         .collect()
 }
@@ -2543,11 +2559,14 @@ fn fast_lane_json(sample: &UtilizationSample) -> Option<FastLane> {
     (input.is_some() || output.is_some()).then_some(FastLane { input, output })
 }
 
-/// What the `GET` answers from the poll's `latest` snapshot and the router's `held` sample of the account.
+/// What the `GET` answers from the poll's `latest` snapshot and the router's `held` sample of the account, whose end
+/// is `end` at `now`.
 fn compose_usage(
     id: &str,
     latest: Option<UsageSnapshot>,
     held: Option<UtilizationSample>,
+    end: Option<i64>,
+    now: i64,
 ) -> Option<UsageSnapshot> {
     if let Some(snapshot) = latest.as_ref().filter(|s| has_windows(s)) {
         return Some(UsageSnapshot {
@@ -2556,25 +2575,25 @@ fn compose_usage(
         });
     }
     // The router reads a utilization as a fraction; the endpoint's windows carry a percentage.
-    let window = |(key, reading): &(String, WindowReading)| UsageWindow {
+    let window = |(key, reading, _): &(String, WindowReading, f64)| UsageWindow {
         key: key.clone(),
         utilization: Some(reading.utilization * 100.0),
         resets_at: reading.reset,
     };
     let held = held.and_then(|sample| {
-        let readings = held_windows(&sample);
+        let readings = held_windows(&sample, end, now);
         let observed_at = readings
             .iter()
-            .map(|(_, reading)| reading.observed_at)
+            .map(|(_, reading, _)| reading.observed_at)
             .max()?;
         let windows: Vec<UsageWindow> = readings
             .iter()
-            .filter(|(key, _)| *key != FABLE_WINDOW_KEY)
+            .filter(|(key, _, _)| *key != FABLE_WINDOW_KEY)
             .map(window)
             .collect();
         let fable = readings
             .iter()
-            .find(|(key, _)| *key == FABLE_WINDOW_KEY)
+            .find(|(key, _, _)| *key == FABLE_WINDOW_KEY)
             .map(window);
         Some((windows, fable, observed_at))
     });

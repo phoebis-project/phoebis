@@ -1,6 +1,8 @@
 import { planName } from '@/api/decode';
 import type { Account, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, WindowId } from '@/api/types';
+import { endOf } from '@/lib/quota';
 import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey } from '@/lib/windows';
+import { leadOf } from './lead';
 import { createRng } from './rng';
 import { ACCOUNT_SAMPLE, QUOTA_SNAPSHOT_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
@@ -24,6 +26,7 @@ function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoM
     horizon: burn === null ? null : ahead(horizonInMs),
     id,
     label: WINDOW_LABEL[id] ?? id,
+    lead: null,
     observedAt: ago(observedAgoMs),
     periodHours: WINDOW_HOURS[id] ?? hoursOfKey(id),
     projection: burn === null ? null : Math.round((utilization + (burn * horizonInMs) / HOUR) * 1_000) / 1_000,
@@ -53,7 +56,8 @@ export const ACCOUNTS: Account[] = ([
     status: 'cooldown',
     routingEnabled: true,
     // The poll's week for a model the family table has no row for: kept and shown under its key, read by no rule.
-    // Its sessions burn the 5-hour window fast enough to reach 81% at the reset, past the all pool's ceiling.
+    // Its sessions burn the 5-hour window fast enough to read 19% left at the reset, so the 81% it projects to use
+    // passes the all pool's ceiling.
     windows: [win('5h', 0.62, 2 * HOUR + 14 * MINUTE, 40_000, 0.085), win('7d', 0.41, 3 * DAY + 5 * HOUR + 40 * MINUTE, 40_000, 0.006), win('seven_day_opus', 0.08, 3 * DAY + 5 * HOUR + 40 * MINUTE)],
     fableWindow: win('7d_fable', 0.12, 3 * DAY + 5 * HOUR + 40 * MINUTE),
     extraUsage: { disabledReason: null, enabled: true, inUse: false, monthlyLimitCredits: 5000, usedCredits: 1234 },
@@ -65,7 +69,7 @@ export const ACCOUNTS: Account[] = ([
       quarantined: false,
       refreshTokenExpiresAt: ahead(58 * DAY),
     },
-    subscription: { billingType: 'annual', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'default_claude_max_20x', since: ago(200 * DAY), trialEndsAt: null, endsAt: null, derivedEndsAt: ahead(160 * DAY) },
+    subscription: { billingType: 'annual', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'default_claude_max_20x', since: ago(200 * DAY), trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 5_380 },
     // A live model-scoped cooldown, which the pool eligibility check leaves alone (that reads the account-wide
     // scope alone) but which the Models view and this account's own status fold in like any other cooldown. The
@@ -96,8 +100,7 @@ export const ACCOUNTS: Account[] = ([
     email: 'operator+second@example.com',
     status: 'cooldown',
     routingEnabled: true,
-    // Cancelled, with both ends set: the stored one the operator saved, the derived one the form would
-    // otherwise have prefilled.
+    // Cancelled, with the end the operator saved before the trial's own, so the pace reads the saved one.
     cancelled: true,
     windows: [win('5h', 1, 25 * MINUTE), win('7d', 0.88, 5 * DAY + 2 * HOUR + 5 * MINUTE)],
     fableWindow: null,
@@ -110,7 +113,7 @@ export const ACCOUNTS: Account[] = ([
       quarantined: false,
       refreshTokenExpiresAt: ahead(31 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: ago(30 * DAY), trialEndsAt: ahead(8 * DAY), endsAt: ahead(5 * DAY), derivedEndsAt: ahead(35 * DAY) },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: ago(30 * DAY), trialEndsAt: ahead(8 * DAY), endsAt: ahead(5 * DAY) },
     requests: { last24h: 0, last7d: 0, lifetime: 1_140 },
     cooldowns: [
       {
@@ -155,7 +158,7 @@ export const ACCOUNTS: Account[] = ([
       quarantined: true,
       refreshTokenExpiresAt: ahead(72 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'default_claude_max_5x', since: ago(400 * DAY), trialEndsAt: null, endsAt: null, derivedEndsAt: ahead(20 * DAY) },
+    subscription: { billingType: 'monthly', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'default_claude_max_5x', since: ago(400 * DAY), trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 7_420 },
     cooldowns: [],
   },
@@ -183,7 +186,7 @@ export const ACCOUNTS: Account[] = ([
       quarantined: false,
       refreshTokenExpiresAt: ahead(64 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'default_claude_max_5x', since: ago(16 * DAY), trialEndsAt: null, endsAt: null, derivedEndsAt: ahead(14 * DAY) },
+    subscription: { billingType: 'monthly', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'default_claude_max_5x', since: ago(16 * DAY), trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 48 },
     cooldowns: [],
     slowDown: { factor: 0.5, holdMs: 120_000, since: ago(42 * MINUTE), speed: 0.5, stretchMs: 2_520_000, thresholdMs: 1_800_000 },
@@ -262,7 +265,7 @@ export const ACCOUNTS: Account[] = ([
       quarantined: false,
       refreshTokenExpiresAt: ago(2 * DAY + 2 * HOUR),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: null, trialEndsAt: null, endsAt: null, derivedEndsAt: null },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: null, trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 3_960 },
     cooldowns: [],
   },
@@ -285,7 +288,12 @@ export const ACCOUNTS: Account[] = ([
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
-] satisfies Account[]).map((a) => ({ ...a, plan: planName(a.subscription), pool: null, usage: usageOf(a) }));
+] satisfies Account[]).map((a) => {
+  // Standing in for the router, which answers each window's lead toward the earlier of its reset and the account's end.
+  const end = endOf(a, NOW);
+  const led = (w: RateLimitWindow): RateLimitWindow => ({ ...w, lead: leadOf(w, w.periodHours * HOUR, NOW, end) });
+  return { ...a, fableWindow: a.fableWindow === null ? null : led(a.fableWindow), plan: planName(a.subscription), pool: null, usage: usageOf(a), windows: a.windows.map(led) };
+});
 
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 

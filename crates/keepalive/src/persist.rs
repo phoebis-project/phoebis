@@ -602,6 +602,8 @@ impl PersistedObservation {
             id: self.id,
             attempt: self.attempt,
             started: self.started,
+            // The request it followed ended with the process, so no credit reads its receipt.
+            received_at: self.started,
             recipe: Recipe {
                 body,
                 headers,

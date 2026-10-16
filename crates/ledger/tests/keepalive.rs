@@ -79,7 +79,7 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
             &KeepaliveDelta {
                 kept_warm_request_id: Some("r1".into()),
                 kept_warm_requests: 1,
-                kept_warm_tokens: 2_000,
+                kept_warm_1h_tokens: 2_000,
                 ..delta(at, "inference")
             },
         )?;
@@ -134,11 +134,12 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     assert_eq!(
         (
             inference.kept_warm_requests,
-            inference.kept_warm_tokens,
+            inference.kept_warm_5m_tokens,
+            inference.kept_warm_1h_tokens,
             inference.requests
         ),
-        (1, 2_000, 0),
-        "the delta touches no request counter"
+        (1, 0, 2_000, 0),
+        "an hour's credit books the hour's count and touches no request counter"
     );
     let probe = rows.iter().find(|r| r.kind == "probe").unwrap();
     assert_eq!(
@@ -356,7 +357,7 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
             &KeepaliveDelta {
                 kept_warm_request_id: Some("r3".into()),
                 kept_warm_requests: 1,
-                kept_warm_tokens: 500,
+                kept_warm_5m_tokens: 500,
                 ..delta(at, "inference")
             },
         )?;
@@ -418,10 +419,11 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         (
             credited.requests,
             credited.kept_warm_requests,
-            credited.kept_warm_tokens
+            credited.kept_warm_5m_tokens,
+            credited.kept_warm_1h_tokens
         ),
-        (0, 3, 2_500),
-        "r1, r2 and r3 were all credited on this key"
+        (0, 3, 500, 2_000),
+        "r1, r2 and r3 were all credited on this key, each count under its own TTL"
     );
     assert_eq!(
         rows.iter()
@@ -595,6 +597,70 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
 }
 
 #[tokio::test]
+async fn migration_thirty_seven_keeps_a_rollup_rows_kept_warm_tokens_under_five_minutes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    {
+        let db = LedgerDb::open(&path).unwrap();
+        db.insert_request(
+            &RequestRecord {
+                id: "r0".into(),
+                received_at: 0,
+                key_id: Some("desktop".into()),
+                pool_id: Some("main".into()),
+                canonical_model: "claude-sonnet-5".into(),
+                model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            &[AttemptRecord {
+                request_id: "r0".into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "api_key".into(),
+                outcome: "succeeded".into(),
+                input_tokens: Some(500),
+                output_tokens: Some(50),
+                ..Default::default()
+            }],
+            None,
+        )
+        .unwrap();
+        // The file as version 36 left it: the one count, holding what a credit booked before the split.
+        db.write(|c| {
+            c.execute_batch(
+                "DROP TABLE window_reconciliations; \
+                 ALTER TABLE rollups_hourly DROP COLUMN kept_warm_1h_tokens; \
+                 ALTER TABLE rollups_hourly RENAME COLUMN kept_warm_5m_tokens TO kept_warm_tokens; \
+                 UPDATE rollups_hourly SET kept_warm_requests = 3, kept_warm_tokens = 2000; \
+                 UPDATE meta SET value = '36' WHERE key = 'schema_version';",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+    let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
+    assert_eq!(db.schema_version().await.unwrap(), 39);
+    let counts: (i64, i64, i64) = db
+        .read_blocking(|c| {
+            Ok(c.query_row(
+                "SELECT kept_warm_requests, kept_warm_5m_tokens, kept_warm_1h_tokens FROM rollups_hourly",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(
+        counts,
+        (3, 2_000, 0),
+        "a past row's count stays whole under five minutes, since its split was never recorded"
+    );
+}
+
+#[tokio::test]
 async fn the_writer_lands_a_keepalive_record_in_its_batch() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
@@ -629,7 +695,7 @@ fn a_fast_recipes_credit_files_under_speed_fast() {
             &tx,
             &KeepaliveDelta {
                 kept_warm_requests: 1,
-                kept_warm_tokens: 5_000,
+                kept_warm_5m_tokens: 5_000,
                 speed: Some(Speed::Fast),
                 ..delta(at, "inference")
             },
@@ -638,7 +704,7 @@ fn a_fast_recipes_credit_files_under_speed_fast() {
             &tx,
             &KeepaliveDelta {
                 kept_warm_requests: 1,
-                kept_warm_tokens: 1_000,
+                kept_warm_5m_tokens: 1_000,
                 ..delta(at, "inference")
             },
         )?;
@@ -658,7 +724,7 @@ fn a_fast_recipes_credit_files_under_speed_fast() {
         .unwrap();
     let mut by_speed: Vec<(&str, u64)> = rows
         .iter()
-        .map(|r| (r.speed.as_str(), r.kept_warm_tokens))
+        .map(|r| (r.speed.as_str(), r.kept_warm_5m_tokens))
         .collect();
     by_speed.sort_by(|a, b| a.0.cmp(b.0));
     assert_eq!(by_speed, [("fast", 5_000), ("standard", 1_000)]);

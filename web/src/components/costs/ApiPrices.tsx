@@ -74,7 +74,7 @@ export function ApiPrices({ costs, olderOpen, onToggleOlder, prices }: { costs: 
         <span className="muted">An API-key account pays these. A subscription account pays them in overage and for fast-mode answers.</span>
       </div>
       <div className="table-wrap cost-ref__wrap">
-        <table className="table cost-ref__table">
+        <table className="table cost-ref__table table--plain">
           <thead>
             <tr>
               <th>Model</th>

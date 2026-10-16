@@ -35,13 +35,17 @@ const isConfirmation = (t: ToastItem) => t.dwellMs === CONFIRMATION_MS;
 
 /**
  * A message already queued adds nothing, and neither does a failure of a route already queued. A confirmation takes
- * the place of the one queued, on screen or waiting, since the newest action's result is the one the operator wants
- * to read; it never displaces a failure. Anything else waits its turn.
+ * the place of a queued confirmation, else the slot behind the toast on screen (a confirmation showing is replaced,
+ * a failure showing keeps its turn), ahead of every queued failure. Anything else waits its turn.
  */
 export function queueToast(queue: ToastItem[], item: ToastItem): ToastItem[] {
   if (queue.some((t) => t.message === item.message || (item.path !== null && t.path === item.path))) return queue;
-  const replaced = isConfirmation(item) ? queue.findIndex(isConfirmation) : -1;
-  return replaced < 0 ? [...queue, item] : queue.map((t, i) => (i === replaced ? item : t));
+  if (!isConfirmation(item)) return [...queue, item];
+  const replaced = queue.findIndex(isConfirmation);
+  if (replaced >= 0) return queue.map((t, i) => (i === replaced ? item : t));
+  // The toast on screen keeps its turn: a failure cut short would lose the route it names.
+  const slot = queue.length === 0 ? 0 : 1;
+  return [...queue.slice(0, slot), item, ...queue.slice(slot)];
 }
 
 /** What the session read found: still asking, no session, no answer (its status, 0 when none came), or the session. */

@@ -15,6 +15,9 @@ import { SETTINGS_SAMPLE } from '@/mock/samples';
 import { fakeClock } from './clock';
 
 export { api, decodeSettings, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, planLabel, SessionNotKept, SETTINGS_WIRE };
+// The console's routes and the page load's error element, so a check reads which routes carry it.
+export { routes };
+export { PageLoadFailed } from '@/components/ui/primitives';
 // The transport itself, for the check that needs its 401 path, which no mock call takes.
 export { call };
 // The fold the Cost section sums its groups by, so a check reads the totals the page draws from one derivation.
@@ -39,8 +42,8 @@ export { anchorTier, bandFactor, bandRuns, fullWindowsAWeek, inBand, nextLocalCh
 // hears from the derivation the strip reads.
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';
 export { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, shareLabel, shortModel, spanText, undatedModel } from '@/lib/format';
-// The pace mark's offset and the end it runs to, so the check and the meter place it by one arithmetic.
-export { endOf, remainingTimeShare } from '@/lib/quota';
+// The pace mark's offset, so the check and the meter place it by one arithmetic.
+export { remainingTimeShare } from '@/lib/quota';
 // The projection's phrase, its burn and the span it spells, so a check computes the words a window draws from the one
 // derivation the pages draw them from, at the instant the page read.
 export { burnWords, minuteSpan, projectionWords } from '@/lib/quota';

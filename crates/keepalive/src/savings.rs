@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use phoebis_ledger::{KeepaliveDelta, PlanTables, Record, Speed, UNATTRIBUTED};
+use phoebis_ledger::{Band, KeepaliveDelta, PlanTables, Record, Speed, UNATTRIBUTED};
 use phoebis_routing::{PinUsage, FIVE_HOUR};
 use phoebis_store::AccountKind;
 
@@ -158,7 +158,11 @@ impl Engine {
 
     /// One request the previous recipe kept warm. The caller reads every part of the key off the agent under
     /// the lock and hands them over, so nothing here needs the lock back. `kind` and `in_overage` are the credited
-    /// request's serving attempt's, so the credit files under the funding word its request row took.
+    /// request's serving attempt's, so the credit files under the funding word its request row took, and `tier` and
+    /// `band` its request row's, so the credit prices at the cells and the windows that row does. `at` is the request's
+    /// receipt, the instant its row files under, so the credit sits in that row's hour and revision whenever the
+    /// answer completes. `ttl_ms` is the TTL the request's observation settled on, the TTL its own write would have
+    /// taken.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_kept_warm(
         &self,
@@ -170,6 +174,9 @@ impl Engine {
         canonical_model: &str,
         request_id: &str,
         tokens: u64,
+        ttl_ms: i64,
+        tier: Option<String>,
+        band: Band,
         fast: bool,
         kind: Option<AccountKind>,
         in_overage: bool,
@@ -186,7 +193,13 @@ impl Engine {
         );
         d.kept_warm_request_id = Some(request_id.to_string());
         d.kept_warm_requests = 1;
-        d.kept_warm_tokens = tokens;
+        if ttl_ms == crate::config::ONE_HOUR_MS {
+            d.kept_warm_1h_tokens = tokens;
+        } else {
+            d.kept_warm_5m_tokens = tokens;
+        }
+        d.tier = tier;
+        d.band = Some(band);
         d.account_kind = kind;
         d.overage_in_use = Some(in_overage);
         self.parts.ledger.record(Record::Keepalive(d));

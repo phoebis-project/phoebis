@@ -339,7 +339,11 @@ pub struct KeepaliveDelta {
     /// The request the credit is for, marked `kept_warm` by id.
     pub kept_warm_request_id: Option<String>,
     pub kept_warm_requests: u64,
-    pub kept_warm_tokens: u64,
+    /// The credited request's cache-read tokens, booked under its observation's TTL: an hour books
+    /// `kept_warm_1h_tokens`, any other TTL (the API's five minutes, and a body with no marker, written at the default)
+    /// `kept_warm_5m_tokens`.
+    pub kept_warm_5m_tokens: u64,
+    pub kept_warm_1h_tokens: u64,
     pub probe_migrated: u64,
     pub probes_skipped: u64,
     pub wasted_probes: u64,
@@ -350,10 +354,12 @@ pub struct KeepaliveDelta {
     pub wasted_cache_write_1h_tokens: u64,
     pub wasted_output_tokens: u64,
     pub wasted_probe_reasons: std::collections::BTreeMap<String, u64>,
-    /// The account tier the settlement read, which keys the credit row. `None` files under `-`.
+    /// The account tier that keys the row: the one a settlement read for its probe, or the one the store names for a
+    /// credited request's serving account. `None` files under `-`.
     pub tier: Option<String>,
-    /// A settled probe's prompt-length band, read at its exchange against the revision in force then, so its wasted
-    /// counts price at the cells the probe ran at. `None` (standard) for a credit, a probe row or a skip.
+    /// The prompt-length band the row's counts price at: a settled probe's, read at its exchange, or a credited
+    /// request's own, read off its usage against the revision in force at its arrival. `None` (standard) for a probe
+    /// row or a skip.
     pub band: Option<crate::pricing::Band>,
     /// The serving account's kind as the engine read it once the probe's answer landed, which files an api_key
     /// account's credit under `billed` beside its request row. `None` for a kept-warm credit, a skip or a

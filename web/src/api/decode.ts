@@ -59,7 +59,7 @@ function decodeWindow(w: Rec): RateLimitWindow | null {
   const id = windowId(str(w.id));
   if (id === null) return null;
   return {
-    burn: numOrNull(w.burn), demand: numOrNull(w.demand), horizon: isoOrNull(w.horizon), id, label: WINDOW_LABEL[id] ?? id, observedAt: isoOr(w.observed_at, epoch), periodHours: WINDOW_HOURS[id] ?? hoursOfKey(id),
+    burn: numOrNull(w.burn), demand: numOrNull(w.demand), horizon: isoOrNull(w.horizon), id, label: WINDOW_LABEL[id] ?? id, lead: numOrNull(w.lead), observedAt: isoOr(w.observed_at, epoch), periodHours: WINDOW_HOURS[id] ?? hoursOfKey(id),
     projection: numOrNull(w.projection), resetsAt: isoOrNull(w.resets_at), utilization: num(w.utilization),
   };
 }
@@ -122,7 +122,6 @@ export function decodeSubscription(profile: Rec | null, sub: Rec | null): Subscr
   if (profile === null && sub === null) return null;
   return {
     billingType: str(profile?.billing_type),
-    derivedEndsAt: isoOrNull(sub?.derived_ends_at),
     endsAt: isoOrNull(sub?.ends_at),
     organizationType: str(profile?.organization_type),
     plan: sub?.plan === 'max' || sub?.plan === 'pro' ? sub.plan : null,
@@ -182,12 +181,16 @@ function fastLaneReading(v: unknown): FastLaneReading | null {
   return { observedAt: isoOr(r.observed_at, epoch), resetsAt: isoOrNull(r.resets_at), utilization: num(r.utilization) };
 }
 
-/** "Max" or "Pro" from the typed subscription's plan; the tier's own label when the document has no flags. */
+/** The plan's name: the tier's parsed label ("Max 20x", "Max 5x", "Pro") where the pattern parses it, else "Max" or
+ *  "Pro" from the profile's flag, else null. */
 export function planName(sub: Subscription | null): string | null {
   if (sub === null) return null;
+  // `planLabel` answers a tier its pattern does not match unchanged, so a changed answer is the parsed one.
+  const parsed = sub.rateLimitTier ? planLabel(sub.rateLimitTier) : null;
+  if (parsed !== null && parsed !== sub.rateLimitTier) return parsed;
   if (sub.plan === 'max') return 'Max';
   if (sub.plan === 'pro') return 'Pro';
-  return sub.rateLimitTier ? planLabel(sub.rateLimitTier) : null;
+  return null;
 }
 
 export function decodeCatalogModel(v: unknown): CatalogModel {
@@ -729,7 +732,9 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     equivalentSplit: g.equivalent_split === null || g.equivalent_split === undefined ? null : costSplit(g.equivalent_split),
     errors: counts(g.errors), estimated: bool(g.estimated), exhausted: num(g.exhausted), expiredBetweenTurns: num(g.expired_between_turns), failed: num(g.failed), failovers: num(g.failovers),
     histograms: { durationMs: histogram(h.duration_ms), outputTps: histogram(h.output_tps), ttfbMs: histogram(h.ttfb_ms), ttftMs: histogram(h.ttft_ms) },
-    incomplete: num(g.incomplete), keptWarm: { requests: num(rec(g.kept_warm).requests), tokens: num(rec(g.kept_warm).tokens) }, key: str(g.key), keyCreatedAt, keyId,
+    incomplete: num(g.incomplete),
+    keptWarm: { requests: num(rec(g.kept_warm).requests), tokens1h: num(rec(g.kept_warm).tokens_1h), tokens5m: num(rec(g.kept_warm).tokens_5m) },
+    key: str(g.key), keyCreatedAt, keyId,
     // The route's label of an earlier holder is fixed to one zone, so the console builds it in the viewer's zone from the
     // holder's members, and keeps the wire's label where the route alone knows it (a live key's id, the reserved id's
     // `unattributed`).
@@ -742,6 +747,9 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     probes: { failed: num(rec(g.probes).failed), held: num(rec(g.probes).held), migrated: num(rec(g.probes).migrated), ok: num(rec(g.probes).ok), skipped: num(rec(g.probes).skipped) },
     probeShares: shareMap(g.probe_shares, (e) => ({ cost: num(e.cost), wasted: numOrNull(e.wasted) })),
     rateLimited: num(g.rate_limited), rejected: num(g.rejected), requests: num(g.requests),
+    savingEquivalent: numberMap(g.saving_equivalent),
+    savingShares: g.saving_shares === null || g.saving_shares === undefined ? null : numberMap(g.saving_shares),
+    savingUsd: num(g.saving_usd),
     succeeded: num(g.succeeded), tokens: { cacheRead: num(t.cache_read), cacheWrite1h: num(t.cache_write_1h), cacheWrite5m: num(t.cache_write_5m), output: num(t.output), thinking: num(t.thinking), uncachedInput: num(t.uncached_input), webFetch: num(t.web_fetch), webSearch: num(t.web_search) }, uncached: num(g.uncached),
     wastedProbeReasons: record(WASTED_PROBE_REASONS, g.wasted_probe_reasons, emptyWastedProbeReasons), wastedProbeUsd: num(g.wasted_probe_usd), wastedProbes: num(g.wasted_probes),
   };

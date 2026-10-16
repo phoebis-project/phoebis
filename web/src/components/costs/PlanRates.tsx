@@ -240,7 +240,7 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
         <span className="muted">A shaded cell is more than one full window. A ~ marks an estimate: the model reads the latest weighed model of its model tier.</span>
       </div>
       <div className="table-wrap cost-ref__wrap">
-        <table className="table cost-ref__table">
+        <table className="table cost-ref__table table--plain">
           <thead>
             <tr>
               <th rowSpan={2}>Model</th>

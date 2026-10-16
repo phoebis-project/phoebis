@@ -293,7 +293,8 @@
   white-space: nowrap;
 }
 
-/* A whole bar's reset and projection each stay whole, so the line breaks between them, never inside one. */
+/* A bar's two parts, a whole bar's reset and projection or a compact bar's share and horizon, each stay whole, so the
+   line breaks between them, never inside one. */
 .wbar__reset--split {
   white-space: normal;
 }
@@ -492,14 +493,14 @@
 
 /* A card always holds a 120 px meter beside the widest chip and reset label the console draws: 2 px of border and
    28 px of body padding, the chip "Fable 100% left" (121 px in DejaVu Sans, against the story's 112 px), two 6 px
-   gaps, the 120 px meter and the reset column's 120 px bound (--qwin-reset on .qcard__windows), so the grid reflows
-   before a meter shrinks under 120 px. Two cards and the 14 px gap take 820 px, so two sit in a row once the content
+   gaps, the 120 px meter and the reset column's 150 px bound (--qwin-reset on .qcard__windows), so the grid reflows
+   before a meter shrinks under 120 px. Two cards and the 14 px gap take 880 px, so two sit in a row once the content
    area reaches that: the window less the 232 px sidebar (--sidebar-w) and the content's 28 px of padding each side.
    Every row takes the tallest card's height, so a card that holds more than the rest (an expired window's wrapped
    reset, a longer error) moves no delimiter against its neighbors in any row. */
 .quota-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(403px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(433px, 1fr));
   grid-auto-rows: 1fr;
   gap: 14px;
 }
@@ -703,15 +704,16 @@
  * One line per window: chip, meter, reset. The chip and the reset size to their content and the meter takes what is
  * left, at least 120 px, so the meters read at the card widths the two-section layout leaves. The meters' starts
  * differ from card to card, by about 16 px in DejaVu Sans between a card with a Fable share and one without, the trade
- * for their room. A live label with its projection runs past any column the card can spare (234 px in DejaVu Sans,
- * the widest fallback the console meets, for "resets in 23h 59m, 104% in 4 h 59 min"), so it breaks between its reset
- * and its projection, each part whole on its line. The reset column is bounded at 120 px, past the widest single part,
- * "104% in 4 h 59 min" (117.5 px), past "resets in 23h 59m," (112.7 px) and a bare "resets in 23h 59m" (109 px), so a
- * part never wraps, and past the first clause of an expired window's line, "expired 2d 0h ago," (113 px), so that
- * longer line wraps inside the column after its first clause rather than widening it.
+ * for their room. A live label with its projection runs past any column the card can spare (257 px in DejaVu Sans,
+ * the widest fallback the console meets, for "resets in 23h 59m, 100% left in 4 h 59 min"), so it breaks between its
+ * reset and its projection, each part whole on its line. The reset column is bounded at 150 px, past the widest single
+ * part, "100% left in 4 h 59 min" (140.7 px), past "100% left at the reset" (131.2 px), "spent in 4 h 59 min"
+ * (116.7 px), "resets in 23h 59m," (112.7 px) and a bare "resets in 23h 59m" (109 px), so a part never wraps, and past
+ * the first clause of an expired window's line, "expired 23h 59m ago," (132.3 px), so that longer line wraps inside
+ * the column after its first clause rather than widening it.
  */
 .qcard__windows {
-  --qwin-reset: 120px;
+  --qwin-reset: 150px;
 
   display: grid;
   grid-template-columns: max-content minmax(120px, 1fr) fit-content(var(--qwin-reset));
@@ -787,7 +789,7 @@
    for the widest chip, the 6 px gap and a meter of 120 px or more. */
 @media (max-width: 900px) {
   .quota-grid {
-    grid-template-columns: repeat(auto-fill, minmax(min(403px, 100%), 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(433px, 100%), 1fr));
   }
 
   .qcard__windows {
@@ -952,11 +954,21 @@
   position: absolute;
   top: 2px;
   left: 3px;
+}
+
+.timeline__now-label,
+.timeline__now-pill {
   padding: 0 5px;
   font-size: 10px;
   color: var(--on-accent);
   background: var(--accent);
   border-radius: var(--radius-pill);
+}
+
+/* The now line's pieces of the stacked shape, drawn under 900 px alone. */
+.timeline__now-pill,
+.lane__now {
+  display: none;
 }
 
 .lane {
@@ -1080,9 +1092,10 @@
   border-radius: var(--radius-pill);
 }
 
-/* A neutral tint, so the used fill's tone reads against it and the label keeps its contrast over both. */
+/* The account's color at two strengths, the body here and the used fill over it. At 22% and 45% of the color over
+   the surface the label's ink holds 4.5:1 or better over both in either theme, on every series color. */
 .lane__bar--live {
-  background: var(--surface-3);
+  background: color-mix(in srgb, var(--lane-color) 22%, var(--surface));
 }
 
 .lane__bar--next {
@@ -1094,7 +1107,7 @@
 }
 
 /* The fill's clip at the pill's own radius, so a fill that reaches the bar's end keeps the rounded corners rather than
-   drawing square ones past them. The reset mark sits outside it, since it stands past the bar's edge. */
+   drawing square ones past them. */
 .lane__clip {
   position: absolute;
   inset: 0;
@@ -1102,37 +1115,14 @@
   border-radius: inherit;
 }
 
-/*
- * The window's used share, in the window's tone, so the bar reads against the now line. The tone's soft background,
- * as the lane chips draw it, keeps the ink label legible where it crosses the fill.
- */
+/* The window's used share in the stronger of the account's two strengths, so the bar reads against the now line. Its
+   end is rounded as the bar's own, a pill inside the pill, and the bar's rounded end is the reset. */
 .lane__used {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 0;
-  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
-}
-
-.lane__used--good {
-  background: var(--good-soft);
-}
-
-.lane__used--warn {
-  background: var(--warning-soft);
-}
-
-.lane__used--low {
-  background: var(--critical-soft);
-}
-
-.lane__reset-mark {
-  position: absolute;
-  top: -3px;
-  right: 0;
-  bottom: -3px;
-  width: 2px;
-  background: var(--lane-color);
+  background: color-mix(in srgb, var(--lane-color) 45%, var(--surface));
   border-radius: var(--radius-pill);
 }
 
@@ -1189,8 +1179,9 @@
   border-radius: var(--radius-pill);
 }
 
+/* The legend samples the bars' two strengths on the first series color, as the upcoming swatch samples its outline. */
 .lane__swatch--live {
-  background: var(--surface-3);
+  background: color-mix(in srgb, var(--series-1) 22%, var(--surface));
 }
 
 .lane__swatch--next {
@@ -1198,7 +1189,7 @@
 }
 
 .lane__swatch--used {
-  background: var(--good-soft);
+  background: color-mix(in srgb, var(--series-1) 45%, var(--surface));
 }
 
 .lane__swatch--past {
@@ -1221,6 +1212,67 @@
 
 .timeline__note {
   flex-basis: 100%;
+}
+
+/* Under 900 px the shell drops its sidebar and each lane stacks: the head above its track, the day cells across the
+   chart's whole width, and the axis without its Account column. */
+@media (max-width: 900px) {
+  .timeline__chart {
+    --tl-left: 0px;
+    --tl-gap: 0px;
+  }
+
+  .timeline__axis,
+  .lane {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .timeline__axis-label {
+    display: none;
+  }
+
+  .lane__head {
+    padding-bottom: 4px;
+  }
+
+  .lane__chips {
+    padding-left: 0;
+  }
+
+  /* Sized to their words, so two chips share a row where the lane holds them. */
+  .tl-chip {
+    width: auto;
+  }
+
+  /* A line down the whole chart would cross every stacked head, so each track draws its own piece of it, and the pill
+     takes a band of the axis row under the day labels. */
+  .timeline__now {
+    display: none;
+  }
+
+  .timeline__cells {
+    position: relative;
+    padding-bottom: 18px;
+  }
+
+  .timeline__now-pill {
+    position: absolute;
+    bottom: 2px;
+    display: block;
+    transform: translateX(-50%);
+  }
+
+  .lane__now {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: 3;
+    display: block;
+    width: 1px;
+    pointer-events: none;
+    background: var(--accent);
+    transform: translateX(-0.5px);
+  }
 }
 
 /* Accounts */
@@ -1394,10 +1446,8 @@
   white-space: nowrap;
 }
 
-/* The id shrinks and cuts while its long-context badge keeps its own width, and the gap stands where a space would. */
 .catalog__model {
   display: flex;
-  gap: 4px;
   align-items: center;
   min-width: 0;
 }
@@ -1407,10 +1457,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.catalog__model > .badge {
-  flex: none;
 }
 
 .req-totals {
@@ -1513,10 +1559,10 @@
   list-style: none;
 }
 
-/* The detail takes the rest of the row and cuts; the whole of it sits in the row's title with its age. */
+/* The detail takes the rest of the row and cuts, the age ends the row, and the whole of it sits in the row's title. */
 .attention__row {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
   font-size: 12.5px;
@@ -1527,6 +1573,33 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--ink-2);
+}
+
+.attention__age {
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.pool {
+  container: pool-card / inline-size;
+}
+
+/*
+ * A card under 480 px has no room for the badge, the subject and the age on one line, so the row takes two: the badge
+ * and the subject, then the detail cut to the rest with the age at the row's end.
+ */
+@container pool-card (width < 480px) {
+  .attention__row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .attention__row > :nth-child(2) {
+    grid-column: 2 / -1;
+  }
+
+  .attention__detail {
+    grid-column: 1 / 3;
+  }
 }
 
 /* The serving table: the caption names the strategy, the next account's row takes the accent tint. */
@@ -1745,6 +1818,11 @@
   padding: 0;
   margin: 0;
   list-style: none;
+}
+
+/* The gap an Analytics section keeps under its tiles row, so the reasons stand as clear of their own tiles. */
+.hbars--under-tiles {
+  margin-top: 14px;
 }
 
 .hbars__head {
@@ -1995,7 +2073,14 @@
 }
 
 /* The routing log. The columns are fixed, so a long value is cut behind an ellipsis rather than widening the table: the
-   chevron and the seven columns fill the 990 px card at 1280 by 800 and the eight the 1150 px card at 1440 by 900. */
+   chevron and the seven columns fill the 990 px card at 1280 by 800 and the eight the 1150 px card at 1440 by 900.
+   Each column is as wide as its longest cell with the cell's padding, measured in the console's fonts over the mock
+   story and the seeded router at both viewports: Time the dated form under the 12-hour setting, the widest it draws
+   ("May 28 09:12:05 PM", 145.3 px), Kind the label "account state changed" (165.6 px), Session the eight characters
+   of an id (69.4 px), By "reservation expired" (151.6 px), Fact "state funding required" (188.8 px), Link "Details"
+   with the row's edge (63.1 px) and Model "claude-haiku-4-5-20251001" (191.3 px). With the chevron they take 811 px
+   of the 990 px card and, Model with them, 1003 px of the 1150 px card, so Account takes the 179 px and the 147 px
+   left, above the longest account id's 67.8 px, and cuts a longer line. */
 .routing-log__table {
   table-layout: fixed;
 }
@@ -2016,7 +2101,7 @@
   padding-right: 12px;
 }
 
-/* The chevron takes its width from the Time column, so the two together keep the time's 128 px. */
+/* The chevron takes its width from the Time column, so the two together keep the time's 170 px. */
 .routing-log__table .routing-log__chevron {
   width: 24px;
   padding-right: 0;
@@ -2040,23 +2125,23 @@
 }
 
 .routing-log__time {
-  width: 104px;
-}
-
-.routing-log__kind {
   width: 146px;
 }
 
+.routing-log__kind {
+  width: 166px;
+}
+
 .routing-log__session {
-  width: 104px;
+  width: 70px;
 }
 
 .routing-log__account {
-  width: 246px;
+  width: 179px;
 }
 
 .routing-log__model {
-  width: 150px;
+  width: 192px;
 }
 
 .routing-log__by {
@@ -2064,7 +2149,7 @@
 }
 
 .routing-log__fact {
-  width: 150px;
+  width: 189px;
 }
 
 .routing-log__link {
@@ -2080,17 +2165,13 @@
 
 @media (min-width: 1420px) {
   .routing-log__table .routing-log__account {
-    width: 256px;
+    width: 147px;
   }
 
-  .routing-log__model-under {
+  /* On the table and both of its classes, so it outweighs `.table .sub` and `.routing-log__cut`, which draw it. */
+  .routing-log__table .sub.routing-log__model-under {
     display: none;
   }
-}
-
-/* The stripes count the log's rows alone, so an open row's panel beneath it moves no stripe. */
-.routing-log__table tbody tr.is-striped td {
-  background: var(--surface-2);
 }
 
 .routing-log__row {
@@ -2098,8 +2179,8 @@
 }
 
 /* The open row and the card or detail beneath it share one tint, apart from the stripes. */
-.routing-log__table tbody tr.is-open td,
-.routing-log__table tbody .routing-log__panel > td {
+.routing-log__table > tbody > tr.is-open > td,
+.routing-log__table > tbody > .routing-log__panel > td {
   background: var(--surface-3);
   border-bottom-color: transparent;
 }
@@ -2613,11 +2694,6 @@
 .decision-card__candidates th:first-child,
 .decision-card__candidates td:first-child {
   padding-left: 10px;
-}
-
-.decision-card__candidates tbody tr:nth-child(even) td,
-.strip-popover .table tbody tr:nth-child(even) td {
-  background: var(--surface-2);
 }
 
 .decision-card__candidates tbody tr.is-chosen td {
@@ -3171,11 +3247,6 @@
     justify-items: center;
   }
 
-  .timeline__axis,
-  .lane {
-    grid-template-columns: 110px 1fr;
-  }
-
   /* Two columns of four rows, the last of one tile: the base rule's left hairline would land on the first column's
      third and fifth tile. */
   .pool__stats {
@@ -3426,6 +3497,11 @@
   color: var(--warning-ink);
 }
 
+/* A chart legend's figure under zero, the Net saving's, in the tile's critical ink: a legend has no stat value. */
+.legend__value .is-negative {
+  color: var(--critical-ink);
+}
+
 /* The Sessions strip reads its counts beside their caps, "40 MiB of 256 MiB" the longest, which a sixth of the page at
    1280 px breaks after "of": the tiles take three to a row there, and each value stays on its line. */
 .stat-grid--caps {
@@ -3457,12 +3533,15 @@
   white-space: normal;
 }
 
-/* The default columns fit a 990px card at 1280px only with the cells 8px apart; the row's first and last cells keep the
-   card's 12px edge, and an expanded row's detail cell keeps its own inset. */
+/* The cells take 5 px each side, one step wider than 4. Each pixel of padding widens the fit columns by 17 px and the
+   Session column's floor by 2, so in the 990 px card at 1280 px the mock story's default columns leave Session about
+   40 px of drawn room above its floor at 4 px and about 21 px at 5, and at 6 px under 2 px with the Session cell down
+   to nine characters of its id. The row's first and last cells keep the card's 12 px edge, and an expanded row's
+   detail cell keeps its own inset. */
 .sessions-table th,
 .sessions-table td {
-  padding-left: 4px;
-  padding-right: 4px;
+  padding-left: 5px;
+  padding-right: 5px;
 }
 
 .sessions-table th:first-child,
@@ -3471,11 +3550,11 @@
 }
 
 /* The two fill columns share what the fit columns leave, but never shrink under the fork badge's widest word with the
-   badge's padding (63.8 px) and the cell's (8 px), so a column set wider than the card scrolls inside its wrap rather
-   than cutting that word. The default set leaves them 112 px at 1280 px. */
+   badge's padding (63.8 px) and the cell's (10 px), so a column set wider than the card scrolls inside its wrap rather
+   than cutting that word. The default set leaves Session, its one fill, 95 px at 1280 px. */
 .sessions-table th.col-fill,
 .sessions-table td.col-fill {
-  min-width: 72px;
+  min-width: 74px;
 }
 
 .sessions-table th:last-child,
@@ -3483,7 +3562,8 @@
   padding-right: 12px;
 }
 
-.sessions-table__gutter {
+/* The table's own selector, so the cells' padding rule above does not widen the gutter past its 30 px. */
+.sessions-table .sessions-table__gutter {
   width: 30px;
   padding-right: 0;
 }
@@ -3546,9 +3626,9 @@
   align-items: baseline;
 }
 
+/* The detail row takes its parent's tone from the table's stripe rule, so it sets no fill of its own. */
 .srow__detail > td {
   padding: 0 12px 12px 42px;
-  background: var(--surface-2);
 }
 
 .agents__created {
@@ -4093,11 +4173,11 @@
   white-space: nowrap;
 }
 
-/* Every second model on --surface-2 over --surface, a model's sub-rows on its shade. The fold row is one step
+/* Every second model on --stripe over --surface, a model's sub-rows on its shade. The fold row is one step
    heavier, so it never reads as a stripe. A cell past a full window takes the warning tint in place of its stripe. */
 .cost-ref__tiers tr.is-alt td,
 .cost-ref__table tr.is-alt td {
-  background: var(--surface-2);
+  background: var(--stripe);
 }
 
 .cost-ref__table tr.cost-ref__fold td {

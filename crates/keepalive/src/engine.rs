@@ -821,6 +821,8 @@ pub(crate) struct Observation {
     pub id: String,
     pub attempt: u8,
     pub started: i64,
+    /// The relay's receipt of the request, the instant its own request row keys its band at.
+    pub received_at: i64,
     pub recipe: Recipe,
     pub ready: bool,
     pub expected: u64,
@@ -2256,6 +2258,7 @@ impl Engine {
             id: observed.request_id.clone(),
             attempt: 0,
             started: now,
+            received_at: observed.received_at,
             recipe,
             ready: false,
             expected: 0,
@@ -2534,6 +2537,15 @@ impl Engine {
             .get(&agent_id)
             .and_then(|a| a.current.as_ref())
             .is_some_and(|o| o.ready && o.expected > 0);
+        // The TTL this request's own evidence settled on, set at a stream's first event or, for an answer without a
+        // stream, by the reading just above. The write a credited request avoided would have taken it, and a discard
+        // below clears the observation. Its receipt picks the hour the credit files in and the revision its band and
+        // its saving price at, as its own request row's does, though the answer may land past either boundary.
+        let (observed_ttl, arrived) = inner.sessions[&key]
+            .agents
+            .get(&agent_id)
+            .and_then(|a| a.current.as_ref())
+            .map_or((0, now), |o| (o.ttl_ms, o.received_at));
         if !proved {
             let poisoned = inner.sessions[&key]
                 .agents
@@ -2566,12 +2578,46 @@ impl Engine {
                 agent.count_credit(now);
             }
         }
+        // The serving account's tier as the store names it, as a settlement reads it, so the credit keys the tier its
+        // request row does. Read under the lock the once-only warning keeps its set behind.
+        let tier = credited
+            .as_ref()
+            .and_then(|(_, _, _, account, ..)| account.as_deref())
+            .and_then(|account| match self.parts.store.subscription(account) {
+                Ok(row) => {
+                    inner.unreadable_tiers.remove(account);
+                    row.and_then(|s| s.tier)
+                }
+                Err(error) => {
+                    if inner.unreadable_tiers.insert(account.to_string()) {
+                        tracing::warn!(
+                            account = %account,
+                            %error,
+                            "the account's tier could not be read, so the kept-warm credit files under no tier"
+                        );
+                    }
+                    None
+                }
+            });
         drop(inner);
         if let Some((read, key_generation, pool_id, account, model, fast, kind, in_overage)) =
             credited
         {
+            // The band the request's own row keys, read off its prompt as the ledger reads the serving attempt's.
+            let band = complete.usage.as_ref().map_or(Band::Standard, |usage| {
+                let counts = crate::savings::typed(ProbeUsage::from_bus(usage));
+                self.parts.pricing.revisions().in_force(arrived).band_of(
+                    &model,
+                    phoebis_ledger::prompt_tokens(
+                        counts.input,
+                        counts.cache_read,
+                        counts.write_5m,
+                        counts.write_1h,
+                    ),
+                )
+            });
             self.record_kept_warm(
-                now,
+                arrived,
                 &key,
                 key_generation,
                 &pool_id,
@@ -2579,6 +2625,9 @@ impl Engine {
                 &model,
                 &complete.request_id,
                 read,
+                observed_ttl,
+                tier,
+                band,
                 fast,
                 kind,
                 in_overage,
@@ -3447,6 +3496,7 @@ mod tests {
             id: "r".into(),
             attempt: 1,
             started: 0,
+            received_at: 0,
             recipe,
             ready: true,
             expected: 2_000,
