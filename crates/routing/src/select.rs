@@ -4380,7 +4380,10 @@ fn shed_round(
 
     // The walk's figures: each pin's burn on the trigger's window in share per second, `None` for a pin the pricer
     // does not weight, the one case left once the partition above took the pins whose model does not draw the window,
-    // and the record's figures per hour. Under the stretch the excess is the demand's, so each pin's rate reads over
+    // and the record's figures per hour. The excess is the average rate to remove over `[now, horizon)` as the band
+    // weighs it, so each pin's rate is its own average over that span under its regime's band: a rate at `now` would
+    // over-read or under-read the pin's relief by the band's factor on a span the band crosses. The span is at least
+    // the one second the excess divides by. Under the stretch the excess is the demand's, so each pin's rate reads over
     // the speed that demand was read at and the round removes what the slow-down cannot cover in the excess's own
     // units.
     let tier = snapshot.tier(account_id).unwrap_or_default();
@@ -4388,6 +4391,7 @@ fn shed_round(
         .speed
         .filter(|speed| trigger.source == "slow_down" && *speed > 0.0)
         .unwrap_or(1.0);
+    let horizon = trigger.horizon.max(now.saturating_add(1_000));
     let share_of = |p: &PinRow| {
         state
             .share()
@@ -4399,7 +4403,16 @@ fn shed_round(
                 &p.burn,
                 now,
             )
-            .map(|rate| burn_decayed(rate, p.burn_at, now, average_ms) / speed)
+            .map(|rate| {
+                let segments =
+                    state
+                        .share()
+                        .band_segments(trigger.window, entrypoint_of(p), now, horizon);
+                Banded::of(burn_decayed(rate, p.burn_at, now, average_ms), &segments)
+                    .divided(speed)
+                    .increase()
+                    / seconds(horizon - now)
+            })
     };
     let per_hour = |share: f64| share * 3_600.0;
     let burn_sum: f64 = ordered.iter().filter_map(share_of).sum();

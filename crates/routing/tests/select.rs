@@ -24292,6 +24292,123 @@ fn the_five_hour_rounds_excess_reads_the_moved_horizons_increase() {
     assert!((number(fact(shed, "excess")) - excess).abs() < 1e-9);
 }
 
+/// The round on `a` at `T` over `three_pins_projecting_over`'s pins, with `a` at `five_hour` on its 5-hour window and
+/// the reset an hour out, `b` at 0.1 on both windows, past the wait and priced under a band of the case's own over
+/// `[band_from, band_to)`.
+fn three_pins_round_under_a_band(five_hour: f64, band_from: i64, band_to: i64) -> Decided {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = rounding(vec![
+        burning("s1", "a", 16.0, false, T),
+        burning("s2", "a", 14.0, false, T),
+        burning("s3", "a", 12.0, false, T),
+    ]);
+    st.set_share(banded_pricer(band_from, band_to));
+    st.record_sample("a", refreshing(five_hour, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    past_the_wait(&mut st, &s, "p", "a", T);
+    decide(&mut st, &s, &auxiliary(&s, "s3", T), &mut rng())
+}
+
+#[test]
+fn a_rounds_pins_read_their_average_over_a_span_leaving_the_band_so_a_pin_covering_at_now_needs_a_second(
+) {
+    // The band ends a quarter hour into the hour to the reset, so each pin's rate read at T, inside it, runs a quarter
+    // hour at that rate and three quarters at half of it, five eighths of it on average. The 0.16 an hour s1 reads at T
+    // would cover the excess alone, while its 0.10 over the span leaves a rest the next pin covers.
+    let d = three_pins_round_under_a_band(0.80, T - HOUR, T + 15 * MINUTE);
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(fact(shed, "trigger"), &FactValue::Text("five_hour".into()));
+    assert_eq!(
+        fact(shed, "marks"),
+        &FactValue::List(vec![
+            "k/s1/main/claude-sonnet-5".into(),
+            "k/s2/main/claude-sonnet-5".into(),
+        ])
+    );
+    let round = d.shed_round.expect("the round ran").facts;
+    let average = |at_now: f64| at_now * 0.625;
+    let excess = 0.80 + average(0.42) - 0.95;
+    for (read, expected) in [
+        (round.projection, 0.80 + average(0.42)),
+        (round.excess, excess),
+        (
+            round.burn_sum,
+            average(0.16) + average(0.14) + average(0.12),
+        ),
+        (round.target, excess),
+        (round.removed, average(0.16) + average(0.14)),
+        (round_burn(&round, "s1"), average(0.16)),
+    ] {
+        assert!((read - expected).abs() < 1e-9, "{read} against {expected}");
+    }
+    assert_eq!(round.outcome, "marked 2");
+}
+
+#[test]
+fn a_rounds_pins_read_their_average_over_a_span_entering_the_band_so_one_pin_covers_where_now_reads_two(
+) {
+    // The band starts half an hour into the hour to the reset, so each pin's rate read at T, outside it, runs half an
+    // hour at that rate and half an hour at twice it, one and a half times it on average. The 0.16 an hour s1 reads at
+    // T falls short of the excess, while its 0.24 over the span covers it.
+    let d = three_pins_round_under_a_band(0.52, T + 30 * MINUTE, T + 10 * HOUR);
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(fact(shed, "trigger"), &FactValue::Text("five_hour".into()));
+    assert_eq!(
+        fact(shed, "marks"),
+        &FactValue::List(vec!["k/s1/main/claude-sonnet-5".into()])
+    );
+    let round = d.shed_round.expect("the round ran").facts;
+    let average = |at_now: f64| at_now * 1.5;
+    let excess = 0.52 + average(0.42) - 0.95;
+    for (read, expected) in [
+        (round.projection, 0.52 + average(0.42)),
+        (round.excess, excess),
+        (
+            round.burn_sum,
+            average(0.16) + average(0.14) + average(0.12),
+        ),
+        (round.target, excess),
+        (round.removed, average(0.16)),
+        (round_burn(&round, "s1"), average(0.16)),
+    ] {
+        assert!((read - expected).abs() < 1e-9, "{read} against {expected}");
+    }
+    assert_eq!(round.outcome, "marked 1");
+}
+
+#[test]
+fn a_rounds_desk_pin_reads_one_rate_over_the_span_beside_a_base_pin_whose_average_weighs_the_band()
+{
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = a_desk_pin_and_a_base_pin();
+    st.set_share(banded_pricer(T + 30 * MINUTE, T + 10 * HOUR));
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let desk_turn = SelectRequest {
+        entrypoint: Some("desk".into()),
+        ..auxiliary(&s, "s0", T)
+    };
+    let d = decide(&mut st, &s, &desk_turn, &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(fact(shed, "trigger"), &FactValue::Text("five_hour".into()));
+    assert_eq!(
+        fact(shed, "marks"),
+        &FactValue::List(vec!["k/s1/main/claude-sonnet-5".into()])
+    );
+    // The desk pin burns 0.10 of the window an hour across the edge, the base pin 0.20 before it and 0.40 after, 0.30
+    // on average over the hour to the reset.
+    let round = d.shed_round.expect("the round ran").facts;
+    for (read, expected) in [
+        (round_burn(&round, "s0"), 0.10),
+        (round_burn(&round, "s1"), 0.30),
+        (round.burn_sum, 0.10 + 0.30),
+        (round.excess, 0.80 + 0.10 + 0.30 - 0.95),
+        (round.target, 0.5 * (0.10 + 0.30)),
+        (round.removed, 0.30),
+    ] {
+        assert!((read - expected).abs() < 1e-9, "{read} against {expected}");
+    }
+}
+
 #[test]
 fn a_pin_under_the_test_regime_projects_at_one_rate_beside_a_base_pin_that_weighs_the_band() {
     let s = projection_pool(vec![("a", 0), ("b", 1)]);
