@@ -4,8 +4,8 @@
 
 use phoebis_ledger::test_tables::{api_prices, subscription_costs, JANUARY_2026};
 use phoebis_ledger::{
-    bucket_of, read_reconciliations, reconcile, AttemptRecord, LedgerDb, QuotaSampleRecord,
-    ReconciliationRow, RequestRecord,
+    bucket_of, newest_rows, read_reconciliations, reconcile, AttemptRecord, LedgerDb,
+    QuotaSampleRecord, ReconciliationRow, RequestRecord, MIN_RISE, RATIO_HIGH, RATIO_LOW,
 };
 use phoebis_routing::{FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 
@@ -197,6 +197,40 @@ fn a_complete_run_prices_its_attempts_and_writes_the_ratio() {
     assert!(close(row.observed_rise, 0.30), "{}", row.observed_rise);
     assert!(close(row.predicted_share, 0.25), "{}", row.predicted_share);
     assert!(close(row.ratio, 1.2), "0.30 over 0.25: {}", row.ratio);
+}
+
+#[test]
+fn a_five_point_rise_between_whole_percent_readings_meets_the_least_rise() {
+    let reset = SATURDAY + HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    db.insert_samples(
+        &[
+            reading(FIVE_HOUR, SATURDAY, 0.10, reset),
+            reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.15, reset),
+        ],
+        None,
+    )
+    .unwrap();
+    // 0.02 of the window from two Sonnet units, so the five points read 2.5 times the priced share.
+    served(&db, "r1", SONNET, SATURDAY + 5 * MINUTE, 2, None);
+    let now = reset + HOUR;
+    fold(&db, now);
+    let newest = db.read_blocking(newest_rows).unwrap();
+    let rows = newest.get("a").map(Vec::as_slice).unwrap_or_default();
+    assert_eq!(
+        rows.iter().map(|r| r.window.as_str()).collect::<Vec<_>>(),
+        [FIVE_HOUR],
+        "a rise of five points counts toward the drift condition: {newest:?}"
+    );
+    let row = &rows[0];
+    assert!(row.observed_rise >= MIN_RISE, "{}", row.observed_rise);
+    assert!(close(row.ratio, 2.5), "0.05 over 0.02: {}", row.ratio);
+    assert!(
+        !(RATIO_LOW..=RATIO_HIGH).contains(&row.ratio),
+        "the row is off by its ratio alone, once its rise counts: {}",
+        row.ratio
+    );
 }
 
 #[test]
