@@ -656,9 +656,10 @@ pub struct ShedRoundFacts {
     pub dwell_until: i64,
 }
 
-/// One of the pool's pins on the account its round ran on: those in the round in its order, then those it left out. A
-/// pin there under a key of a pool the account left is in no round and is not listed here. `burn` and `rewrite` are
-/// shares of the trigger's window, the burn per hour.
+/// One of the pool's pins on the account its round ran on: those in the round in its order, then those it left out, a
+/// fast-lane pin and a pin whose model does not draw the trigger's window. A pin there under a key of a pool the
+/// account left is in no round and is not listed here. `burn` and `rewrite` are shares of the trigger's window, the
+/// burn per hour.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ShedPinFacts {
     pub key_id: String,
@@ -675,7 +676,7 @@ pub struct ShedPinFacts {
     /// The destination the round found for the pin.
     pub planned: Option<String>,
     pub runway_ms: Option<i64>,
-    /// `fast_lane`, `last_pin`, `no_runway`, `standing` or `unpriced`.
+    /// `fast_lane`, `last_pin`, `no_runway`, `off_window`, `standing` or `unpriced`.
     pub skip: Option<&'static str>,
     /// `cheapest` for the pin the round marked as the cheapest one whose burn covers what the target still asked,
     /// else `current` for the request's own pin.

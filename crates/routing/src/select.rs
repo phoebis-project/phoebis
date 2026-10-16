@@ -4071,7 +4071,8 @@ fn destination_of(
 
 /// A shedding round over the pool's pins on the account `current` sits on: every pin of it under one of the pool's
 /// keys, ordered as the anchor table prices them (cold first by burn, then warm by burn over rewrite cost, bounded by
-/// `warm_sessions`, a fast-lane pin out of a window-share round), then walked while the removed burn is under the
+/// `warm_sessions`, a fast-lane pin out of a window-share round and a pin whose model does not draw the trigger's
+/// window out of any round, since neither burns a share of it), then walked while the removed burn is under the
 /// target, `min(excess, shed_cap x burn_sum)` on the trigger's window. Once one pin's burn covers what the target still
 /// asks, the walk marks the covering pin whose move costs the least, `cheapest` on the record, rather than the next in
 /// the order. A standing mark is a move pending, so its burn counts as removed and the pin is skipped. The last
@@ -4105,7 +4106,8 @@ fn shed_round(
             !warm(p, now)
         }
     };
-    let mut left_out = Vec::new();
+    // The only place a left-out pin's skip word is written, so the record and the strip read one spelling.
+    let mut left_out: Vec<(PinRow, &'static str)> = Vec::new();
     if unit == BurnUnit::WindowShare {
         let on_fast_lane = |p: &PinRow| {
             if is_current(p) {
@@ -4114,8 +4116,18 @@ fn shed_round(
                 lane_is_fast(&p.lane)
             }
         };
-        (left_out, pins) = pins.into_iter().partition(|(p, _)| on_fast_lane(p));
+        let (fast, kept): (Vec<_>, Vec<_>) = pins.into_iter().partition(|(p, _)| on_fast_lane(p));
+        left_out.extend(fast.into_iter().map(|(p, _)| (p, "fast_lane")));
+        pins = kept;
     }
+    // A pin whose model does not draw the trigger's window burns nothing there whatever the pricer answers, since
+    // the projection that fired summed the burn of the drawing models alone: it has no share to shed and no place in
+    // the last-pin count, so it leaves before the order under both units. A fast-lane pin leaves first, since it has
+    // no plan share at all.
+    let off_window = |p: &PinRow| !plan_windows(&p.model).any(|window| window == trigger.window);
+    let (off, kept): (Vec<_>, Vec<_>) = pins.into_iter().partition(|(p, _)| off_window(p));
+    left_out.extend(off.into_iter().map(|(p, _)| (p, "off_window")));
+    pins = kept;
     let (mut cold, mut warm_pins): (Vec<_>, Vec<_>) =
         pins.into_iter().partition(|(p, _)| is_cold(p));
     // A pin whose burn cannot be priced ranks after every priced pin of its group: a guess never orders a shed.
@@ -4143,24 +4155,19 @@ fn shed_round(
     let ordered: Vec<PinRow> = ordered.into_iter().map(|(p, _)| p).collect();
 
     // The walk's figures: each pin's burn on the trigger's window in share per second, `None` for a pin the pricer
-    // does not weight, and the record's figures per hour. A pin whose model does not draw the window burns nothing
-    // there whatever the pricer answers, since the projection that fired summed the burn of the drawing models alone.
-    // Under the stretch the excess is the demand's, so each pin's rate reads over the speed that demand was read at
-    // and the round removes what the slow-down cannot cover in the excess's own units.
+    // does not weight, the one case left once the partition above took the pins whose model does not draw the window,
+    // and the record's figures per hour. Under the stretch the excess is the demand's, so each pin's rate reads over
+    // the speed that demand was read at and the round removes what the slow-down cannot cover in the excess's own
+    // units.
     let tier = snapshot.tier(account_id).unwrap_or_default();
     let speed = trigger
         .speed
         .filter(|speed| trigger.source == "slow_down" && *speed > 0.0)
         .unwrap_or(1.0);
     let share_of = |p: &PinRow| {
-        plan_windows(&p.model)
-            .any(|window| window == trigger.window)
-            .then(|| {
-                state
-                    .share()
-                    .rate(trigger.window, tier, &p.model, &p.burn, now)
-            })
-            .flatten()
+        state
+            .share()
+            .rate(trigger.window, tier, &p.model, &p.burn, now)
             .map(|rate| burn_decayed(rate, p.burn_at, now, average_ms) / speed)
     };
     let per_hour = |share: f64| share * 3_600.0;
@@ -4307,9 +4314,11 @@ fn shed_round(
     } else {
         (format!("marked {}", marks.len()), None)
     };
-    let pin_facts = |p: &PinRow, left: bool| {
-        let read = reads.get(&p.key());
-        let burn = share_of(p).map(per_hour);
+    // A left-out pin's row carries no share and no read, so its figures follow the partition's word and never what the
+    // pricer answers for a model off the window.
+    let pin_facts = |p: &PinRow, left: Option<&'static str>| {
+        let read = left.is_none().then(|| reads.get(&p.key())).flatten();
+        let burn = left.is_none().then(|| share_of(p)).flatten().map(per_hour);
         let mark = marks.iter().find(|mark| mark.key == p.key());
         ShedPinFacts {
             key_id: p.key_id.clone(),
@@ -4322,13 +4331,11 @@ fn shed_round(
             per_rewrite: burn.map(|b| b / p.last_input_tokens.max(1) as f64),
             marked: mark.is_some() || mark_holds(p),
             rewrite: read.and_then(|read| read.rewrite),
-            planned: mark.map(|mark| mark.planned.clone()),
+            planned: mark
+                .filter(|_| left.is_none())
+                .map(|mark| mark.planned.clone()),
             runway_ms: read.and_then(|read| read.runway_ms),
-            skip: if left {
-                Some("fast_lane")
-            } else {
-                read.and_then(|read| read.skip)
-            },
+            skip: left.or_else(|| read.and_then(|read| read.skip)),
             note: if cheapest.as_ref() == Some(&p.key()) {
                 Some("cheapest")
             } else {
@@ -4338,8 +4345,8 @@ fn shed_round(
     };
     let pins: Vec<ShedPinFacts> = ordered
         .iter()
-        .map(|p| pin_facts(p, false))
-        .chain(left_out.iter().map(|(p, _)| pin_facts(p, true)))
+        .map(|p| pin_facts(p, None))
+        .chain(left_out.iter().map(|(p, word)| pin_facts(p, Some(*word))))
         .collect();
     let skipped = pins
         .iter()

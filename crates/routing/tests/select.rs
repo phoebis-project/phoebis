@@ -12439,12 +12439,17 @@ fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
 
     // An unpriced pin is never marked and still counts as one of the account's pins: last in the order, since the
     // anchor table prices the guess model at nothing, it is the last unmarked one, so the priced pin before it can be
-    // marked.
+    // marked. A fast pin leaves the window-share round before the order, so the unpriced pin lists among the walked
+    // pins ahead of it.
     let mut st = rounding(vec![
         burning("cold-5", "a", 5.0, false, T),
         PinRow {
             model: "claude-guess".into(),
             ..burning("guess", "a", 9.0, false, T)
+        },
+        PinRow {
+            lane: lane_key("claude-sonnet-5", "fast", "none", "-"),
+            ..burning("fast-2", "a", 2.0, false, T)
         },
     ]);
     st.set_rates(BurnRates {
@@ -12465,8 +12470,13 @@ fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
             .iter()
             .map(|p| (p.session_id.as_str(), p.burn.is_some(), p.marked, p.skip))
             .collect::<Vec<_>>(),
-        [("cold-5", true, true, None), ("guess", false, false, None)],
-        "the priced pin's mark meets the target, so the unpriced one after it is left as it is"
+        [
+            ("cold-5", true, true, None),
+            ("guess", false, false, None),
+            ("fast-2", false, false, Some("fast_lane"))
+        ],
+        "the priced pin's mark meets the target, so the unpriced one after it is left as it is, and the fast pin the \
+         round left out lists last with no share"
     );
 
     // Three unpriced pins on an account over the ceiling: the round can price no burn to remove.
@@ -13616,7 +13626,7 @@ fn with_both_windows_over_the_ceiling_the_five_hour_window_fires_and_the_round_r
 }
 
 #[test]
-fn a_model_week_over_its_ceiling_fires_a_round_that_marks_the_fable_pin_and_reads_the_opus_pin_unpriced(
+fn a_model_week_over_its_ceiling_fires_a_round_that_marks_a_fable_pin_and_leaves_the_opus_pin_off_the_window(
 ) {
     let s = tiered(shedding_pool(Shedding::default()));
     let model_pin = |session: &str, model: &str, burn: f64, warm: bool| PinRow {
@@ -13624,12 +13634,13 @@ fn a_model_week_over_its_ceiling_fires_a_round_that_marks_the_fable_pin_and_read
         lane: lane_key(model, "standard", "none", "-"),
         ..burning(session, "a", burn, warm, T)
     };
-    // The Opus pin is cold and the Fable pin warm, so the Opus pin is walked first. Both shared windows read 0.1 and
-    // project under the ceiling, and the Fable pin's 0.04 / 3 of its week an hour takes the week's 0.93 to 0.9967 at
-    // its horizon five hours out.
+    // The Opus pin is cold, which would walk it first, but it draws no Fable week, so the round walks the two warm
+    // Fable pins alone. Both shared windows read 0.1 and project under the ceiling, and the Fable pins' 0.06 / 3 of
+    // their week an hour takes the week's 0.93 to 1.03 at its horizon five hours out.
     let mut st = rounding(vec![
         model_pin("o1", "claude-opus-5", 2.0, false),
         model_pin("f1", "claude-fable-5", 4.0, true),
+        model_pin("f2", "claude-fable-5", 2.0, true),
     ]);
     st.record_sample(
         "a",
@@ -13651,26 +13662,26 @@ fn a_model_week_over_its_ceiling_fires_a_round_that_marks_the_fable_pin_and_read
     assert_eq!(
         landed(d.result.clone()),
         ("a".into(), None),
-        "the Opus pin is not marked and renews"
+        "the Opus pin is out of the round and renews"
     );
     let shed = line(&d.record, "move:shed");
     assert_eq!(
         fact(shed, "trigger"),
         &FactValue::Text("seven_day_fable".into())
     );
-    assert!((number(fact(shed, "projection_seven_day_fable")) - (0.93 + 0.2 / 3.0)).abs() < 1e-9);
+    assert!((number(fact(shed, "projection_seven_day_fable")) - (0.93 + 0.3 / 3.0)).abs() < 1e-9);
     assert_eq!(
         fact(shed, "horizon_seven_day_fable"),
         &FactValue::Int(T + 5 * HOUR)
     );
-    assert!((number(fact(shed, "projection_five_hour")) - 0.4).abs() < 1e-9);
-    assert!((number(fact(shed, "projection_seven_day")) - 0.15).abs() < 1e-9);
+    assert!((number(fact(shed, "projection_five_hour")) - 0.5).abs() < 1e-9);
+    assert!((number(fact(shed, "projection_seven_day")) - (0.1 + 0.4 / 6.0)).abs() < 1e-9);
     let round = d.shed_round.expect("the round ran").facts;
     assert_eq!(
         (round.window.as_str(), round.outcome.as_str(), round.reason),
         ("seven_day_fable", "marked 1", None)
     );
-    assert!((round.projection - (0.93 + 0.2 / 3.0)).abs() < 1e-9);
+    assert!((round.projection - (0.93 + 0.3 / 3.0)).abs() < 1e-9);
     assert_eq!((round.horizon, round.utilization), (T + 5 * HOUR, 0.93));
     assert_eq!(
         round
@@ -13679,29 +13690,267 @@ fn a_model_week_over_its_ceiling_fires_a_round_that_marks_the_fable_pin_and_read
             .map(|p| (p.session_id.as_str(), p.marked, p.skip, p.planned.as_deref()))
             .collect::<Vec<_>>(),
         [
-            ("o1", false, Some("unpriced"), None),
-            ("f1", true, None, Some("b"))
+            ("f1", true, None, Some("b")),
+            ("f2", false, None, None),
+            ("o1", false, Some("off_window"), None)
         ],
-        "the Opus pin draws no Fable week, so it reads unpriced whatever the pricer says, and the Fable pin is marked"
+        "the round walks the two Fable pins and marks one, and the Opus pin lists after them off the window"
+    );
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.note))
+            .collect::<Vec<_>>(),
+        [
+            ("f1", Some("cheapest")),
+            ("f2", None),
+            ("o1", Some("current"))
+        ]
+    );
+    let burn = |session: &str| {
+        round
+            .pins
+            .iter()
+            .find(|p| p.session_id == session)
+            .and_then(|p| p.burn)
+            .expect("a walked pin's burn")
+    };
+    assert!(
+        burn("f2") < round.target && round.target <= burn("f1"),
+        "the pick marks the pin whose burn covers the target: {} against f1's {} and f2's {}",
+        round.target,
+        burn("f1"),
+        burn("f2")
+    );
+    let opus = &round.pins[2];
+    assert_eq!(
+        (
+            opus.burn,
+            opus.per_rewrite,
+            opus.rewrite,
+            opus.planned.as_deref(),
+            opus.runway_ms
+        ),
+        (None, None, None, None, None),
+        "a pin off the window carries no share and no read, whatever the pricer answers for its model"
     );
     assert!(
-        (round.burn_sum - 0.04 / 3.0).abs() < 1e-9,
-        "the Opus pin adds nothing to the week's sum: {}",
+        (round.burn_sum - 0.06 / 3.0).abs() < 1e-9,
+        "the two Fable pins alone make the week's sum: {}",
         round.burn_sum
     );
     assert_eq!(
         fact(shed, "skipped"),
-        &FactValue::List(vec!["k/o1/main/claude-opus-5: unpriced".into()])
+        &FactValue::List(vec!["k/o1/main/claude-opus-5: off_window".into()])
     );
-    let fable = PinKey {
+    let fable = |session: &str| PinKey {
         model: "claude-fable-5".into(),
-        ..pin_key("f1")
+        ..pin_key(session)
     };
-    assert!(st.shed_marked(&fable));
+    assert!(st.shed_marked(&fable("f1")));
+    assert!(!st.shed_marked(&fable("f2")));
     assert_eq!(
-        st.pin(&fable).and_then(|p| p.marked_window.as_deref()),
+        st.pin(&fable("f1"))
+            .and_then(|p| p.marked_window.as_deref()),
         Some("seven_day_fable"),
         "the mark names the Fable week"
+    );
+}
+
+/// One warm Fable pin and two cold Opus pins on `a` with the request the Opus pin `o1`'s, `a`'s Fable week at 0.93 and
+/// `b`'s at `b_fable_week`. Both shared windows read 0.1 and project under the ceiling, and the Fable pin's 0.04 / 3
+/// of its week an hour takes `a`'s week to 0.9967 at its horizon five hours out.
+fn a_lone_fable_pin_beside_two_opus_pins(
+    b_fable_week: f64,
+) -> (RegistrySnapshot, RoutingState, SelectRequest) {
+    let s = tiered(shedding_pool(Shedding::default()));
+    let model_pin = |session: &str, model: &str, burn: f64, warm: bool| PinRow {
+        model: model.into(),
+        lane: lane_key(model, "standard", "none", "-"),
+        ..burning(session, "a", burn, warm, T)
+    };
+    let mut st = rounding(vec![
+        model_pin("f1", "claude-fable-5", 4.0, true),
+        model_pin("o1", "claude-opus-5", 2.0, false),
+        model_pin("o2", "claude-opus-5", 1.0, false),
+    ]);
+    st.record_sample(
+        "a",
+        with_fable(sample(0.1, 0.1, T - 500), 0.93, Some(T + 96 * HOUR)),
+    );
+    st.record_sample(
+        "b",
+        with_fable(sample(0.1, 0.1, T - 500), b_fable_week, Some(T + 96 * HOUR)),
+    );
+    let req = with_facts(
+        request(&s, Some("o1"), "claude-opus-5", true, &[], T),
+        Some("quota"),
+        false,
+        None,
+        &[],
+    );
+    past_the_wait(&mut st, &s, "p", "a", T);
+    (s, st, req)
+}
+
+#[test]
+fn a_fable_week_round_over_one_fable_pin_and_opus_pins_reads_last_pin_when_a_sibling_fits() {
+    let (s, mut st, req) = a_lone_fable_pin_beside_two_opus_pins(0.1);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("a".into(), None),
+        "the Opus pin is out of the round and renews"
+    );
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        (round.window.as_str(), round.outcome.as_str(), round.reason),
+        ("seven_day_fable", "nothing_to_mark", Some("last_pin")),
+        "the Fable pin is the account's one pin on the week, so the round keeps it though b fits its move"
+    );
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (
+                p.session_id.as_str(),
+                p.marked,
+                p.skip,
+                p.planned.as_deref()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("f1", false, Some("last_pin"), None),
+            ("o1", false, Some("off_window"), None),
+            ("o2", false, Some("off_window"), None)
+        ],
+        "the Opus pins draw no Fable week, so they list after the one walked pin"
+    );
+    assert_eq!(round.pins[1].note, Some("current"));
+    assert!(
+        (round.burn_sum - 0.04 / 3.0).abs() < 1e-9,
+        "the Fable pin alone makes the week's sum: {}",
+        round.burn_sum
+    );
+    for opus in &round.pins[1..] {
+        assert_eq!(
+            (
+                opus.burn,
+                opus.per_rewrite,
+                opus.rewrite,
+                opus.planned.as_deref(),
+                opus.runway_ms
+            ),
+            (None, None, None, None, None),
+            "{} is off the window, so it carries no share and no read",
+            opus.session_id
+        );
+    }
+    assert_eq!(
+        fact(line(&d.record, "move:shed"), "skipped"),
+        &FactValue::List(vec![
+            "k/f1/main/claude-fable-5: last_pin".into(),
+            "k/o1/main/claude-opus-5: off_window".into(),
+            "k/o2/main/claude-opus-5: off_window".into(),
+        ])
+    );
+    assert!(!st.shed_marked(&PinKey {
+        model: "claude-fable-5".into(),
+        ..pin_key("f1")
+    }));
+}
+
+#[test]
+fn a_fable_week_round_over_one_fable_pin_and_opus_pins_reads_last_pin_and_never_no_runway_without_a_sibling(
+) {
+    // `b`'s Fable week over the ceiling fits no move, which the Fable pin's gate would find had the walk reached it.
+    let (s, mut st, req) = a_lone_fable_pin_beside_two_opus_pins(0.99);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        (round.window.as_str(), round.outcome.as_str(), round.reason),
+        ("seven_day_fable", "nothing_to_mark", Some("last_pin")),
+        "the last-pin rule keeps the Fable pin before its gate is read"
+    );
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.skip))
+            .collect::<Vec<_>>(),
+        [
+            ("f1", Some("last_pin")),
+            ("o1", Some("off_window")),
+            ("o2", Some("off_window"))
+        ]
+    );
+    assert!(!st.shed_marked(&PinKey {
+        model: "claude-fable-5".into(),
+        ..pin_key("f1")
+    }));
+}
+
+#[test]
+fn a_dollar_round_on_the_fable_week_leaves_an_opus_pin_off_the_window_and_keeps_a_fast_fable_pin() {
+    let s = tiered(Pool {
+        policy: OveragePolicy::Allow,
+        ..shedding_pool(Shedding::default())
+    });
+    let model_pin = |session: &str, model: &str, speed: &str, burn: f64, warm: bool| PinRow {
+        model: model.into(),
+        lane: lane_key(model, speed, "none", "-"),
+        ..burning(session, "a", burn, warm, T)
+    };
+    // In overage the round reads dollars, which the fast pin spends too, so it stays in the round. The Opus pin draws
+    // no Fable week under either unit.
+    let mut st = rounding(vec![
+        model_pin("fast-3", "claude-fable-5", "fast", 3.0, false),
+        model_pin("f1", "claude-fable-5", "standard", 4.0, true),
+        model_pin("o1", "claude-opus-5", "standard", 2.0, false),
+    ]);
+    st.record_sample(
+        "a",
+        with_fable(sample(0.1, 0.1, T - 500), 0.93, Some(T + 96 * HOUR)),
+    );
+    st.record_sample(
+        "b",
+        with_fable(sample(0.1, 0.1, T - 500), 0.1, Some(T + 96 * HOUR)),
+    );
+    st.record_overage("a", overage(true, T - 500, Some(T + 10 * MINUTE)));
+    let req = with_facts(
+        request(&s, Some("o1"), "claude-opus-5", true, &[], T),
+        Some("quota"),
+        false,
+        None,
+        &[],
+    );
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        (round.window.as_str(), round.unit),
+        ("seven_day_fable", "usd")
+    );
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| p.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["fast-3", "f1", "o1"],
+        "the fast pin and f1 are walked, and the Opus pin lists after them"
+    );
+    assert_eq!(
+        round.pins[2].skip,
+        Some("off_window"),
+        "the Opus pin leaves a dollar round too"
+    );
+    assert!(
+        round.pins.iter().all(|p| p.skip != Some("fast_lane")),
+        "a dollar round keeps its fast pin: {:?}",
+        round.pins.iter().map(|p| p.skip).collect::<Vec<_>>()
     );
 }
 
