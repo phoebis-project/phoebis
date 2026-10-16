@@ -649,8 +649,9 @@ no point, under a "model unlisted" entry, and under Window shares an account who
 reads "tier unknown". Spend per minute charts the dollars alone, a subscription account's among them for its fast-mode
 and overage answers. The Meter reconciliation card stands between the charts and Member budgets, one row per completed
 5-hour, 7-day or Fable window of an account, newest first: Upstream, Window, Ended, Rise (the rise the upstream's
-readings showed), Predicted (the share the router priced for its own requests in it), Ratio, with a warning badge on a
-ratio under 0.8 or over 1.25 after a rise of at least 5%, and Requests. It reads the trailing 30 days under the Accounts
+readings showed), Predicted (the share the router priced for its own requests in it, with the charts' `~` and its
+estimate hover where an attempt in it was priced at a model tier's estimate), Ratio, with a warning badge on a ratio
+under 0.8 or over 1.25 after a rise of at least 5%, and Requests. It reads the trailing 30 days under the Accounts
 filter whatever the range. The section closes on Member budgets, Pool, Account, Spent, Budget and Period ends, one row
 per budget a member carries, a member at its budget marked and one the ledger has not reported on reading "not
 reported".

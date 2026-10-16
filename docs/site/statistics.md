@@ -197,17 +197,17 @@ a token costs its model's weight times its type's multiplier in units on every w
 units per account tier, and a request's share of a window is the units it spent over that capacity, over the peak band's
 capacity factor when the request completes inside the band. A unit is 1/150,000,000 of the Max 20x 5-hour window outside
 the band, so one percent of that window, the step the usage header moves in, is 1,500,000 units. A request prices under
-the regime its client's entrypoint names (the interactive regime, below), so one percent of the Max 20x 5-hour window is
-3,000,000 units for an interactive request and 1,500,000 for any other. The admin routes answer the unit as the 20x
-window equivalent beside the dollars: the share of a Max 20x window the same tokens would spend, so figures of different
-account tiers compare and add, with an `estimated` flag beside it. It comes in up to three members, the 5-hour window
-with the peak band's weight, the 7-day window with the week's factor, and a model week over its capacity factor, and the
-dashboard, key and pool routes answer the first two. One million plain input tokens of Opus 5.5 are 2,200,000 units,
-1.47% of a 20x 5-hour window outside the band and 0.244% of a 20x 7-day window, and the same request on a Pro account
-reads 29.3% of its own 5-hour window. Under the interactive regime the same million tokens are 0.73% of the 20x 5-hour
-window and 0.196% of the 20x week, and 14.7% of a Pro 5-hour window against 29.3%. The console reads the 20x equivalent
-under the top bar's Unit switch, whose default Native position shows a subscription request in it and a billed request
-in dollars ([The shell](console.md#the-shell)).
+the regime that lists its client's entrypoint (the interactive regime, below), so one percent of the Max 20x 5-hour
+window is 3,000,000 units for an interactive request and 1,500,000 for any other. The admin routes answer the unit as
+the 20x window equivalent beside the dollars: the share of a Max 20x window the same tokens would spend, so figures of
+different account tiers compare and add, with an `estimated` flag beside it. It comes in up to three members, the 5-hour
+window with the peak band's weight, the 7-day window with the week's factor, and a model week over its capacity factor,
+and the dashboard, key and pool routes answer the first two. One million plain input tokens of Opus 5.5 are 2,200,000
+units, 1.47% of a 20x 5-hour window outside the band and 0.244% of a 20x 7-day window, and the same request on a Pro
+account reads 29.3% of its own 5-hour window. Under the interactive regime the same million tokens are 0.73% of the 20x
+5-hour window and 0.196% of the 20x week, and 14.7% of a Pro 5-hour window against 29.3%. The console reads the 20x
+equivalent under the top bar's Unit switch, whose default Native position shows a subscription request in it and a
+billed request in dollars ([The shell](console.md#the-shell)).
 
 The base capacities the shipped file carries, in units per window, keyed by the tier the profile reports (a Pro
 subscription reports `default_claude_ai`):
@@ -270,17 +270,18 @@ window's factor is 1, so the week has no band. The interactive regime holds its 
 interactive request's 5-hour share does not move with it. The edges are steps, and Saturday and Sunday are outside the
 band. The meter charges a request when it completes, so the prediction weighs a request's 5-hour share by the band in
 force at its completion, and a session's burn, an average whose time constant is the pool's `burn_average_seconds`,
-keeps a copy weighed by the band at each renewal, which the shedding round prices on the anchor tier's 5-hour rates on
-plan quota so its order reads what the meter charged. The projection reads the plain copy at the band in force when it
-reads, on every window the session's model draws, and carries it forward weighing the band's hours inside the horizon as
-the band weighs them. A projection, a runway and a stretch across a band edge weigh the in-band part of the horizon by
-the factor and the rest at the plain rate. The analytics routes read the hourly rollups instead, which fold a request
-under the hour it arrived in, so their shares and 20x equivalents weigh it by that hour's band rather than by the band
-at its completion. The burn route groups by the analytics' ten dimensions, read from the rollups the same way, and by
-session, which reads the attempts, each weighed by the band at its completion. The shares answer under the account
-grouping, or under every grouping when the filter names exactly one account, since shares of different accounts' windows
-do not add, and the 20x equivalents answer under every grouping. The Tiers and peak band tab of the cost reference names
-this week's hours in your zone ([The cost reference](console.md#the-cost-reference)).
+keeps a copy weighed by the band at each renewal, which the shedding round prices on the anchor tier's 5-hour rates of
+the pin's regime on plan quota so its order reads what the meter charged. The projection reads the plain copy at the
+band in force when it reads, on every window the session's model draws, and carries it forward weighing the band's hours
+inside the horizon as the band weighs them. A projection, a runway and a stretch across a band edge weigh the in-band
+part of the horizon at one over the band factor and the rest at the plain rate. The analytics routes read the hourly
+rollups instead, which fold a request under the hour it arrived in, so their shares and 20x equivalents weigh it by that
+hour's band rather than by the band at its completion. The burn route groups by the analytics' ten dimensions, read from
+the rollups the same way, and by session, which reads the attempts, each weighed by the band at its completion. The
+shares answer under the account grouping, or under every grouping when the filter names exactly one account, since
+shares of different accounts' windows do not add, and the 20x equivalents answer under every grouping. The Tiers and
+peak band tab of the cost reference names this week's hours in your zone ([The cost
+reference](console.md#the-cost-reference)).
 
 The Fable-scoped week is a row of the file, `model_windows.seven_day_fable`, half the 7-day window of the request's
 regime on every tier, so a Fable request's share of it is twice its 7-day share.
@@ -565,10 +566,10 @@ the model clears it. The subject is the model, the dashboard's line reads the it
 opens the [Models](console.md#models) view. It dates from the run's first request, and the detail names the model, its
 model tier, the model whose weight stands in and the requests served since.
 
-**`meter_drift`** holds while, on any of its windows, the account's newest completed window with a rise of at least 5%
+**`meter_drift`** holds while, for any window kind, the account's newest completed window with a rise of at least 5%
 reads a ratio outside 0.8 to 1.25 between the rise the upstream's readings showed and the share the router priced for
-its own requests in it. The ledger closes each account's 5-hour, 7-day and Fable windows every hour, prices the
-plan-funded attempts inside them under each attempt's regime, and keeps the rows for 30 days, which the Meter
+its own requests in it. The ledger reconciles each account's completed 5-hour, 7-day and Fable windows every hour,
+prices the plan-funded attempts inside them under each attempt's regime, and keeps the rows for 30 days, which the Meter
 reconciliation card of the [Analytics](console.md#analytics) view lists. The subject is the account, and the item dates
 from the oldest off window's end. The detail names the off windows with their ratios, the cost model's source and the
 revision in force, since the fix is the cost model file. The dashboard's line reads it under the label "Meter drift

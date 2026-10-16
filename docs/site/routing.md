@@ -498,13 +498,12 @@ window's last half hour over the reset and the projection would apply that rate 
 the hold runs, the routing log's record of the selection reads the shed rule `no` with the window's age
 (`age_five_hour`) against the hold (`hold_five_hour`), the stamp and the wait keep running, a weekly window past its
 wait fires in the 5-hour window's place, and a standing mark still moves. The weekly windows take no hold, since the
-same burst after a weekly reset is a small share of a week over a weekly horizon's five hours. A weekly window's horizon
-lies five hours ahead at most, so a weekly wall is shed only in its last five hours, when the gate also stops placing
-new sessions there. A round runs on an account at most once per `shed_dwell_seconds`, and a selection runs one round at
-most. The excess is the burn that, removed now, lands the fired window's projection on the ceiling at its horizon, the
-demand's projection at the moved horizon under the slow-down. The round's target is the lesser of the excess and
-`shed_cap` (default 0.5) of the burn of the round's pins on that window, so the excess sets the amount and the cap
-bounds it.
+same burst after a weekly reset is a small share of a week over a weekly horizon. A weekly window's horizon lies five
+hours ahead at most, so a weekly wall is shed only in its last five hours, when the gate also stops placing new sessions
+there. A round runs on an account at most once per `shed_dwell_seconds`, and a selection runs one round at most. The
+excess is the burn that, removed now, lands the fired window's projection on the ceiling at its horizon, the demand's
+projection at the moved horizon under the slow-down. The round's target is the lesser of the excess and `shed_cap`
+(default 0.5) of the burn of the round's pins on that window, so the excess sets the amount and the cap bounds it.
 
 With `load_shedding` off no round runs and nothing is marked, and a mark already standing is released at the session's
 next request, which renews the pin in place. The destination gate, the reservations and `window_ceiling` on every move
@@ -539,8 +538,8 @@ windows, since the 5-hour window refills. The pin the pick marked carries the no
 event, every pin the pick read carries the runway the gate read for it and its rewrite in the pick's unit, and a pick
 that finds no covering pin with a destination leaves the walk to the order. A pin whose burn carries the removed burn
 past the target stays marked, and the walk stops there. A round that marks nothing records why: `no_runway` when no
-priced pin had a destination, `last_pin` when the account had one pin, `standing` when every pin walked was a pending
-move, and `unpriced` when no burn was priced. Either way the round is recorded, so the dwell holds.
+priced pin had a destination, `last_pin` when the account had one pin on the window, `standing` when every pin walked
+was a pending move, and `unpriced` when no burn was priced. Either way the round is recorded, so the dwell holds.
 
 A marked session moves at its next request, the request that ran the round included, since the mark check follows the
 round. It moves only to a sibling it fits, the one the strategy ranks first with the longest runway among its ties,
@@ -582,8 +581,8 @@ constant, in three copies: one plain and one weighed by the peak band at each re
 third for its fast answers, priced at the fast cells where the model has them. The registry keeps all three on the pin's
 row, so a restart reads each as saved, and a move carries them onto the pin's new row, so its destination counts the
 session's burn from the moment it lands. Nothing is priced until it is read: the round orders its pins by the banded
-copy as a share of the anchor tier's 5-hour window while a subscription account runs on its plan, and by the plain copy
-in dollars, at the set the pin's last prompt selects on a model priced by prompt length
+copy as a share of the anchor tier's 5-hour window under the pin's regime while a subscription account runs on its plan,
+and by the plain copy in dollars, at the set the pin's last prompt selects on a model priced by prompt length
 ([Pricing](statistics.md#pricing)), with the fast copy added in, on an API-key account or a subscription account in
 overage, so leaving overage switches the reading without a reset and a session that moves between tiers reads the right
 share on both. The projection, the round's walk and the spare rate price the plain copy on the account's tier under the
@@ -624,18 +623,20 @@ With the pool's `slow_down` on, the router holds a slowed account's sessions bef
 a subscription account whose tier the profile has named and whose 5-hour window has a reading, the router reads the
 window's stretch: the time between the instant the account's unheld demand would pass the ceiling and the reset,
 `R - (ceiling - U) / B` for the time `R` to the window's horizon, the window's prediction `U` and the demand `B` of the
-pool's sessions on it (see **The demand**, above). A stretch at or under zero is nothing to do, and a window already at
-the ceiling reads a stretch of at least the time to its reset. The stretch is the time the slow-down adds to every
-session on the account when it spreads their work to the reset, and `slow_down_stretch_seconds` (60 to 18000, default
-9000) is the time the operator lets it add before a round moves sessions off the account. An API-key account has no
-5-hour window and no slow-down.
+pool's sessions on it (see **The demand**, above), the demand's in-band hours weighed at one over the band factor where
+a base-regime span crosses a band edge, as the projection's are. A stretch at or under zero is nothing to do, and a
+window already at the ceiling reads a stretch of at least the time to its reset. The stretch is the time the slow-down
+adds to every session on the account when it spreads their work to the reset, and `slow_down_stretch_seconds` (60 to
+18000, default 9000) is the time the operator lets it add before a round moves sessions off the account. An API-key
+account has no 5-hour window and no slow-down.
 
-From the stretch follows one speed factor per account, `(ceiling - U) / (R x B)` clamped to [0, 1], which is `1 - S / R`
-for the stretch `S`: 1 at a stretch of zero, 0 once the window is at the ceiling, and applied alike to every pin the
-pool keeps on the account, so every session there gets the same stretch. The factor lives in memory beside the
-reservations, written at every pinned selection on the account and read until the next write, so a quiet account reads
-unslowed again at the purge tick and a restart starts from none. The holds realize the factor as a speed, which the
-router averages over `burn_average_seconds` beside the burn, and the demand every reader above divides by is that speed.
+From the stretch follows one speed factor per account, `(ceiling - U) / (R x B)` clamped to [0, 1], the in-band hours
+weighed at one over the band factor across a band edge as above, which is `1 - S / R` for the stretch `S`: 1 at a
+stretch of zero, 0 once the window is at the ceiling, and applied alike to every pin the pool keeps on the account, so
+every session there gets the same stretch. The factor lives in memory beside the reservations, written at every pinned
+selection on the account and read until the next write, so a quiet account reads unslowed again at the purge tick and a
+restart starts from none. The holds realize the factor as a speed, which the router averages over `burn_average_seconds`
+beside the burn, and the demand every reader above divides by is that speed.
 
 The hold is served before the response head, inside the selection, as a `held` decision with the reason `slow_down`: the
 request waits the pin's cycle times `1 / f - 1` for the factor `f`, so a session at half speed waits one cycle before
