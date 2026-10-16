@@ -69,11 +69,11 @@ pub fn price_row(
         };
     }
     let band_at = key.band_at.unwrap_or(key.at);
-    // The account tier alone decides whether shares exist, so on a sized tier a window the model cannot price stays
-    // `None` inside the map, which the readers tell apart from a tier with no window to share.
+    // The account tier under the row's regime alone decides whether shares exist, so on a sized tier a window the
+    // model cannot price stays `None` inside the map, which the readers tell apart from a tier with no window to share.
     let shares = key
         .tier
-        .filter(|tier| costs.revisions.in_force(key.at).sizes(tier))
+        .filter(|tier| costs.revisions.in_force(key.at).sizes(key.entrypoint, tier))
         .map(|tier| {
             price_shares(
                 costs,
@@ -276,6 +276,39 @@ mod tests {
         );
         assert_eq!(priced.shares, None);
         assert!(priced.equivalent.is_some());
+    }
+
+    // An enterprise row null on both base windows that the test regime sizes at 40 and 400 units: the one Opus 5.5
+    // token's 2 units read 2 / 40 and 2 / 400 under the regime's entrypoint, and the base sizes nothing.
+    #[test]
+    fn a_plan_row_on_a_tier_only_a_regime_sizes_answers_shares_under_that_regime_alone() {
+        let text = first_entry_costs_text()
+            .replace(
+                "      default_claude_team:    {five_hour: 10, seven_day: null}\n",
+                "      default_claude_team:    {five_hour: 10, seven_day: null}\n      \
+                 default_claude_enterprise: {five_hour: null, seven_day: null}\n",
+            )
+            .replace(
+                "          default_claude_max_20x: {five_hour: 200, seven_day: 1250}\n",
+                "          default_claude_max_20x: {five_hour: 200, seven_day: 1250}\n          \
+                 default_claude_enterprise: {five_hour: 40, seven_day: 400}\n",
+            );
+        let costs = PlanTables {
+            revisions: CostRevisions::from_yaml(&text).expect("the edited model loads"),
+            path: None,
+            source: "test".to_string(),
+        };
+        let enterprise = |entrypoint| RowKey {
+            tier: Some("default_claude_enterprise"),
+            entrypoint,
+            ..plan_row()
+        };
+        let desk = price_row(&api_prices(), &costs, &enterprise(Some("desk")), input(1));
+        let shares = desk.shares.as_ref().expect("the regime sizes the tier");
+        assert!(close(shares[FIVE_HOUR], 0.05), "{shares:?}");
+        assert!(close(shares[SEVEN_DAY], 0.005), "{shares:?}");
+        let base = price_row(&api_prices(), &costs, &enterprise(None), input(1));
+        assert_eq!(base.shares, None);
     }
 
     // Mystery 2's model tier has no weighted model, so a sized tier keeps both windows, each unpriced, and Team,

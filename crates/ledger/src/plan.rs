@@ -1023,9 +1023,11 @@ impl SubscriptionCosts {
             .collect()
     }
 
-    /// Whether the account tier holds a capacity on either window, the tiers `sized_tier_count` counts.
-    pub(crate) fn sizes(&self, tier: &str) -> bool {
-        tier_row(&self.capacity, tier).is_some_and(Capacity::sizes)
+    /// Whether the account tier holds a capacity on either window under the entrypoint's regime: the regime's row
+    /// where it names the tier, else the base row, as `share_at` reads it.
+    pub(crate) fn sizes(&self, entrypoint: Option<&str>, tier: &str) -> bool {
+        self.capacity_of(entrypoint, tier)
+            .is_some_and(Capacity::sizes)
     }
 
     /// The tiers with a capacity on either window; a listed tier null on both prices nothing. The count sits on the
