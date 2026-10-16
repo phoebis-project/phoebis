@@ -40,20 +40,24 @@ fn read_evidence(request_id: &str, read: u64) -> phoebis_bus::Event {
     })
 }
 
+/// The hour's rollups under the default select, the read every settlement case makes.
+fn rollups(r: &Rig) -> Vec<phoebis_ledger::RollupRow> {
+    r.db.read_blocking(|c| {
+        phoebis_ledger::read_rollups(
+            c,
+            phoebis_ledger::hour_of(NOW) - 3_600,
+            i64::MAX,
+            &phoebis_ledger::RollupSelect::default(),
+        )
+    })
+    .unwrap()
+}
+
 /// The dollars a reader prices the probe rows at, once the probe's own request row has landed with its counts: the
 /// wait names the cost rather than a row.
 async fn ledger_probe_cost(r: &Rig) -> f64 {
     wait_for(std::time::Duration::from_secs(5), || {
-        let rows =
-            r.db.read_blocking(|c| {
-                phoebis_ledger::read_rollups(
-                    c,
-                    phoebis_ledger::hour_of(NOW) - 3_600,
-                    i64::MAX,
-                    &phoebis_ledger::RollupSelect::default(),
-                )
-            })
-            .unwrap();
+        let rows = rollups(r);
         let (cost, _) = read_dollars(r, &rows);
         (cost > 0.0).then_some(cost)
     })
@@ -684,16 +688,7 @@ async fn an_orphaned_probe_whose_agent_survives_settles_under_its_stop() {
         "the late result touched no recipe state: {status:?}"
     );
     let (wasted, wasted_usd, reasons) = wait_for(std::time::Duration::from_secs(5), || {
-        let rows =
-            r.db.read_blocking(|c| {
-                phoebis_ledger::read_rollups(
-                    c,
-                    phoebis_ledger::hour_of(NOW) - 3_600,
-                    i64::MAX,
-                    &phoebis_ledger::RollupSelect::default(),
-                )
-            })
-            .unwrap();
+        let rows = rollups(&r);
         let mut sum = (
             0,
             read_dollars(&r, &rows).1,
@@ -796,16 +791,7 @@ async fn a_probe_answered_after_the_idle_limit_stays_pending_until_its_entry_lap
     // The settlement reaches the ledger with the save that drops the probe, which the production flusher runs.
     r.engine.flush_persisted().await;
     r.ledger.clone().shutdown().await.unwrap();
-    let rows =
-        r.db.read_blocking(|c| {
-            phoebis_ledger::read_rollups(
-                c,
-                phoebis_ledger::hour_of(NOW) - 3_600,
-                i64::MAX,
-                &phoebis_ledger::RollupSelect::default(),
-            )
-        })
-        .unwrap();
+    let rows = rollups(&r);
     let mut reasons = std::collections::BTreeMap::new();
     let (_, wasted_usd) = read_dollars(&r, &rows);
     for row in rows.iter().filter(|row| row.kind == "probe") {
@@ -870,16 +856,7 @@ async fn a_probe_orphaned_by_a_release_and_then_a_revival_settles_under_the_rele
         "the next request arms the revived record"
     );
     let reasons = wait_for(std::time::Duration::from_secs(5), || {
-        let rows =
-            r.db.read_blocking(|c| {
-                phoebis_ledger::read_rollups(
-                    c,
-                    phoebis_ledger::hour_of(NOW) - 3_600,
-                    i64::MAX,
-                    &phoebis_ledger::RollupSelect::default(),
-                )
-            })
-            .unwrap();
+        let rows = rollups(&r);
         let mut reasons = std::collections::BTreeMap::new();
         for row in rows.iter().filter(|row| row.kind == "probe") {
             for (reason, n) in &row.wasted_probe_reasons {
@@ -1982,16 +1959,7 @@ async fn a_fast_recipe_served_standard_prices_at_the_standard_cells() {
 async fn released_and_settled(r: &mut Rig) -> Vec<phoebis_ledger::RollupRow> {
     r.state("main", "released");
     wait_for(std::time::Duration::from_secs(5), || {
-        let rows =
-            r.db.read_blocking(|c| {
-                phoebis_ledger::read_rollups(
-                    c,
-                    phoebis_ledger::hour_of(NOW) - 3_600,
-                    i64::MAX,
-                    &phoebis_ledger::RollupSelect::default(),
-                )
-            })
-            .unwrap();
+        let rows = rollups(r);
         rows.iter().any(|row| row.wasted_probes > 0).then_some(rows)
     })
     .await

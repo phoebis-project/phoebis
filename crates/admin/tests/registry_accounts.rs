@@ -2137,7 +2137,8 @@ async fn an_edit_whose_account_is_replaced_while_its_key_is_verified_is_refused_
 /// A tier the store cannot read leaves the account view answering as it does for an account with none stored, and the
 /// log says why, naming the account and the error, on every read.
 #[tokio::test]
-async fn the_account_view_warns_on_a_tier_it_cannot_read_and_answers_without_it() {
+async fn the_account_view_warns_on_a_tier_it_cannot_read_and_answers_as_if_no_subscription_were_stored(
+) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     let store = Arc::new(

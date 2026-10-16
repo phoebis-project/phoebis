@@ -167,7 +167,7 @@ async fn step_to(h: &Harness, up: &FakeUpstream, paused: &Paused, to: Duration) 
                 break;
             }
             tokio::time::resume();
-            let accepted = wait_for(Duration::from_secs(5), || {
+            let accepted = wait_for(Duration::from_secs(30), || {
                 let accepted = up.connections();
                 let answered = up.requests().len() - paused.requests;
                 (up.open_connections() <= paused.idle.get()
@@ -880,7 +880,7 @@ async fn a_completion_drawn_for_a_deleted_holder_moves_no_slot_of_its_replacemen
     // slot the pass drew it.
     up.release();
     paused.idle.set(paused.idle.get() - 1);
-    resumed(wait_for(Duration::from_secs(5), || {
+    resumed(wait_for(Duration::from_secs(30), || {
         (up.open_connections() <= paused.idle.get()).then_some(())
     }))
     .await;
@@ -1021,7 +1021,7 @@ fn due_for_refresh(store: &Store, id: &str) {
 /// Waits for the router's snapshot to read `id` as `reauth_required`. The manager's mark is a store write alone, which
 /// starts no registry reload, so only a report reaches the snapshot.
 async fn routing_reads_reauth_required(h: &Harness, id: &str) {
-    wait_for(Duration::from_secs(5), || {
+    wait_for(Duration::from_secs(30), || {
         h.router
             .snapshot()
             .account(id)

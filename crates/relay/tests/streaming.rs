@@ -462,11 +462,7 @@ async fn a_gzipped_response_is_decoded_for_a_caller_that_refuses_it() {
 async fn gzip_upstream(body: Vec<u8>) -> FakeUpstream {
     FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
-        respond: Respond::Json {
-            status: 200,
-            headers: vec![("Content-Encoding".into(), "gzip".into())],
-            body,
-        },
+        respond: gzipped_json(body),
     }])
     .await
 }

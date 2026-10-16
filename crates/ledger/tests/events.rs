@@ -1932,10 +1932,12 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
 
 /// The account rows the mirror wrote, in order: each kind with its detail.
 async fn account_rows(h: &Harness) -> Vec<(String, serde_json::Value)> {
-    h.db.events(0, i64::MAX, 100)
-        .await
-        .unwrap()
-        .into_iter()
+    let rows = h.db.events(0, i64::MAX, 100).await.unwrap();
+    assert!(
+        rows.iter().all(|e| e.kind != "reauth_required"),
+        "no event row carries reauth_required, which the mirror folds into account_state_changed"
+    );
+    rows.into_iter()
         .filter(|e| e.kind == "account_state_changed")
         .map(|e| {
             assert_eq!(e.account_id.as_deref(), Some("a"));
