@@ -22887,6 +22887,57 @@ fn an_unsized_and_an_unpriced_covering_pin_cost_nothing_and_the_pick_takes_one_f
         "the two pins whose move costs nothing tie, and the pick takes the first in the order"
     );
     assert_eq!((round.outcome.as_str(), round.reason), ("marked 1", None));
+
+    // Without `unsized`, `sized` rewrites 5 000 tokens and leads the order over `unpriced`'s 10 000. `a` at 0.6
+    // projects 1.001 at its reset, a target of 0.051 that both cover.
+    let mut st = loaded(vec![
+        PinRow {
+            model: "claude-unpriced-5".into(),
+            lane: lane_key("claude-unpriced-5", "standard", "none", "-"),
+            last_input_tokens: 10_000,
+            ..burning("unpriced", "a", 20.0, true, T)
+        },
+        PinRow {
+            last_input_tokens: 5_000,
+            ..burning("sized", "a", 20.0, true, T)
+        },
+        PinRow {
+            last_input_tokens: 10_000,
+            ..burning("small", "a", 0.1, true, T)
+        },
+    ]);
+    st.set_share(unpriced_equivalent_pricer());
+    st.record_sample("a", refreshing(0.6, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng());
+    let round = d.shed_round.expect("the second round ran").facts;
+    assert!(
+        (round.target - 0.051).abs() < 1e-9,
+        "the excess sets the target: {round:?}"
+    );
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (
+                p.session_id.as_str(),
+                p.marked,
+                p.planned.as_deref(),
+                p.rewrite.is_some(),
+                p.rewrite_window,
+                p.note
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("sized", false, None, true, Some("seven_day"), None),
+            ("unpriced", true, Some("b"), false, None, Some("cheapest")),
+            ("small", false, None, false, None, Some("current")),
+        ],
+        "the pick passes over sized, which leads the order and whose rewrite the cost model prices, and marks \
+         unpriced, whose model the equivalent does not weigh, so its move costs nothing"
+    );
+    assert_eq!((round.outcome.as_str(), round.reason), ("marked 1", None));
 }
 
 #[test]

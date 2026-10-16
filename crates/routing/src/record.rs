@@ -672,7 +672,8 @@ pub struct ShedPinFacts {
     pub per_rewrite: Option<f64>,
     pub marked: bool,
     /// The pin's rewrite as the Max 20x equivalent of `rewrite_window`, the share of that window a Max 20x account
-    /// would spend on it, `None` where the cost model cannot size it.
+    /// would spend on it, `None` where the cost model cannot size it, where the pin has no destination, or where the
+    /// pick never read it.
     pub rewrite: Option<f64>,
     /// The window `rewrite` is the equivalent of, `seven_day` or the pin's model week, `None` with no figure.
     pub rewrite_window: Option<&'static str>,

@@ -1127,6 +1127,8 @@ mod tests {
 
     /// The equivalent prices on the anchor tier through the model week's own capacity factor, so on tables whose Fable
     /// week holds a quarter of the 7-day window's capacity, a write's Fable-week figure reads four times its 7-day one.
+    /// The test model's regime `desk` holds twice the base 5-hour capacity on Max 20x, so outside the band a write under
+    /// it reads half the base figure.
     #[test]
     fn the_router_configs_equivalent_closure_prices_a_write_through_the_tables() {
         let quarter_week = phoebis_ledger::test_tables::first_entry_costs_text().replacen(
@@ -1166,6 +1168,25 @@ mod tests {
                 .is_some_and(|(fable_week, week)| week > 0.0
                     && (fable_week - 4.0 * week).abs() < 1e-12),
             "the Fable week's factor of a quarter reads four times the 7-day figure: {fable_week:?} against {week:?}"
+        );
+        // Monday 2026-09-21 at 20:00 UTC, outside the test model's band.
+        let out_of_band = 1_790_020_800_000;
+        let five_hour = |entrypoint: Option<&str>| {
+            config.share.equivalent(
+                phoebis_routing::FIVE_HOUR,
+                entrypoint,
+                model,
+                write,
+                out_of_band,
+            )
+        };
+        assert!(
+            five_hour(Some("desk"))
+                .zip(five_hour(None))
+                .is_some_and(|(desk, base)| base > 0.0 && (desk / base - 0.5).abs() < 1e-12),
+            "the equivalent prices under the regime its entrypoint names: {:?} against {:?}",
+            five_hour(Some("desk")),
+            five_hour(None)
         );
         let shipped = phoebis_ledger::PlanTables::shipped();
         let config = router_config(
