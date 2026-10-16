@@ -113,11 +113,13 @@ test("the Projection cell's hover names the demand where it differs from the bur
   act(() => root.render(h(MemoryRouter, null, h(DecisionCard, { now: Date.parse(row.at), onWiden() {}, row }))));
   await settled();
   const column = [...container.querySelectorAll('.decision-card__candidates thead th')].findIndex((th) => th.textContent === 'Projection');
-  const cells = [...container.querySelectorAll('.decision-card__candidates tbody tr')].map((tr) => tr.children[column]);
-  assert.equal(cells.length, 2);
-  assert.equal(cells[0].getAttribute('title'), 'demand 12.86 %/h over burn 6.43 %/h at 0.5x');
-  assert.equal(cells[1].getAttribute('title'), null, 'a demand equal to the burn names nothing');
-  assert.ok(cells[0].textContent.startsWith('5h 91%'), `the cell keeps its projection: ${cells[0].textContent}`);
+  // The table ranks its rows, so each cell is read off its account's row rather than the record's order.
+  const rows = [...container.querySelectorAll('.decision-card__candidates tbody tr')];
+  const cell = (accountId) => rows.find((tr) => tr.querySelector('td a')?.textContent === accountId)?.children[column];
+  assert.equal(rows.length, 2);
+  assert.equal(cell('studio')?.getAttribute('title'), 'demand 12.86 %/h over burn 6.43 %/h at 0.5x');
+  assert.equal(cell('primary')?.getAttribute('title'), null, 'a demand equal to the burn names nothing');
+  assert.ok(cell('studio')?.textContent.startsWith('5h 91%'), `the cell keeps its projection: ${cell('studio')?.textContent}`);
 });
 
 test("each Pace cell is described by its hover through the host the card sits under", async () => {
