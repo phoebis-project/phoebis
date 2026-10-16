@@ -42,8 +42,9 @@ const LISTENER_DRAIN: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The relay's own ceiling on a silent upstream, above any client's wait: Claude Code 2.1.296 aborts a stream
-/// after 180 s without a byte and gives the head 180 s plus 1 s per 32 KiB of body under its own 600 s cap, so the
-/// client leaves no later than these two guards, which catch a dead upstream behind a client that already left.
+/// after 180 s without a byte and gives the head 180 s plus 1 s per 32 KiB of body under its own 600 s cap, so,
+/// with its watchdog on, the client leaves no later than these two guards, which catch a dead upstream behind a
+/// client that already left.
 const HEAD_TIMEOUT: Duration = Duration::from_secs(600);
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 
