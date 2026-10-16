@@ -1622,22 +1622,6 @@ const sevenDayOf = <T,>(map: Record<string, T>, read: (v: T) => number): number 
 const chartEquivalent = (s: ReturnType<typeof probeSidesOf>): string => equivalentOrDash('seven_day', s.equivalent === undefined ? 0 : s.equivalent, s.estimated);
 
 /**
- * The chart's sum of groups, `totalsOf`'s with the plan probes' 7-day cost read off each group. `sumGroups` leaves the
- * window out wherever a group with answered probes and plan rows carries none, and a group whose probes are all billed
- * (an API key's, an overage's) carries none to carry, which a bucket keyed by the page's grouping often holds. Here
- * such a group adds nothing, and the window stays out only where a group's plan rows lack a shared window too, the mark
- * of a model the revision cannot price, whose plan probes would be unpriced as well.
- */
-function warmingSumOf(groups: AnalyticsGroup[]) {
-  const summed = totalsOf(groups);
-  const { seven_day: _, ...others } = summed.probeEquivalent;
-  const unpriced = groups.some((g) => !own(g.probeEquivalent, 'seven_day') && g.probes.ok > 0 && planRowsRequired(g) && !(own(g.costEquivalent, 'five_hour') && own(g.costEquivalent, 'seven_day')));
-  if (unpriced) return { ...summed, probeEquivalent: others };
-  const sevenDay = groups.reduce((n, g) => (own(g.probeEquivalent, 'seven_day') ? { cost: n.cost + g.probeEquivalent.seven_day.cost, wasted: n.wasted + g.probeEquivalent.seven_day.wasted } : n), { cost: 0, wasted: 0 });
-  return { ...summed, probeEquivalent: { ...others, seven_day: sevenDay } };
-}
-
-/**
  * The Saved by probes chart: two bars per bucket, the gross saving and the probe cost, each bucket's net in the
  * tooltip, and the range's gross, cost and net in the legend, the net in the critical ink under zero. `points` is the
  * series that counts probes under the position's funding and `billed` native's billed twin. The dollar positions draw
@@ -1648,10 +1632,10 @@ function warmingSumOf(groups: AnalyticsGroup[]) {
  */
 function SavingChart({ axis, billed, error, loading, points, session, unit }: { axis: TimeAxis; billed: AnalyticsPoint[] | null; error: string | null; loading: boolean; points: AnalyticsPoint[]; session: boolean; unit: UnitPosition }) {
   const ink = useChartInk();
-  const buckets = useMemo((): Bucket[] => points.map((p) => ({ at: Date.parse(p.at), ...warmingSumOf(p.groups) })), [points]);
+  const buckets = useMemo(() => bucketsOf(points), [points]);
   const billedBuckets = useMemo(() => (billed === null ? null : bucketsOf(billed)), [billed]);
   const billedAt = useMemo(() => new Map((billedBuckets ?? []).map((b) => [b.at, b])), [billedBuckets]);
-  const totals = useMemo(() => warmingSumOf(points.flatMap((p) => p.groups)), [points]);
+  const totals = useMemo(() => totalsOf(points.flatMap((p) => p.groups)), [points]);
   const billedTotals = useMemo(() => (billed === null ? null : totalsOf(billed.flatMap((p) => p.groups))), [billed]);
   const native = unit === 'native';
   const range = { cost: probeSidesOf(totals, billedTotals, 'cost'), gross: savingSidesOf(totals, billedTotals, 'gross'), net: savingSidesOf(totals, billedTotals, 'net') };

@@ -268,24 +268,26 @@ export function oneAccountShares<T>(groups: AnalyticsGroup[], read: (g: Analytic
 export const planRowsRequired = (g: AnalyticsGroup): boolean => (g.planRequests === null ? Object.keys(g.costEquivalent).length > 0 : g.planRequests > 0 && g.planOutputTokens !== 0);
 export const addReadWrite = (a: { read: number; write: number }, b: { read: number; write: number }) => ({ read: a.read + b.read, write: a.write + b.write });
 /**
- * Whether a group's probes oblige it to carry both shared probe windows: answered probes alone, since a held or skipped
- * probe never ran, on a group with chargeable plan usage, since the routes answer no count of the plan-funded probes
- * apart from the billed ones and a group of billed traffic alone (an API-key account's, or one in overage) runs billed
- * probes, which carry no plan window to lack.
+ * Whether a group's plan side shows the probes or the credits whose windows `maps` carry. The routes answer no count of
+ * the plan-funded probes or credits apart from the billed ones, so a plan figure shows by a window the ledger priced it
+ * on in one of its maps, and one on a model the revision cannot price by the shared cost window the group's own plan
+ * rows lack too. A group whose probes or credits are all billed (an API key member's, an overage's) shows neither.
  */
-export const probesRequired = (g: AnalyticsGroup): boolean => g.probes.ok > 0 && planRowsRequired(g);
+const planSideShows = (g: AnalyticsGroup, maps: (Record<string, unknown> | null)[]): boolean =>
+  maps.some((map) => map !== null && Object.keys(map).length > 0) || SHARED_WINDOWS.some((w) => !own(g.costEquivalent, w));
+/**
+ * Whether a group's probes oblige it to carry both shared probe windows: answered probes alone, since a held or skipped
+ * probe never ran, that the plan funded, on a group with chargeable plan usage. A group whose answered probes are all
+ * billed carries no plan window to lack, so it adds no probe window and drops none.
+ */
+export const probesRequired = (g: AnalyticsGroup): boolean => g.probes.ok > 0 && planRowsRequired(g) && planSideShows(g, [g.probeEquivalent, g.probeShares]);
 /**
  * Whether a group's kept-warm credits oblige it to carry both shared saving windows: credits the plan funded, on a
- * group with chargeable plan usage. The routes answer no count of the plan-funded credits apart from the billed ones,
- * so a plan credit shows by a saving window the ledger priced it on, in the equivalent or in the one account's shares,
- * and one on a model the revision cannot price shows by the shared cost window its own request's plan row lacks too.
- * A group whose probes kept nothing warm, or whose credits are all billed (an API key's, an overage's), carries no plan
- * saving to lack, so it adds no saving window and drops none.
+ * group with chargeable plan usage. A group whose probes kept nothing warm, or whose credits are all billed, carries no
+ * plan saving to lack, so it adds no saving window and drops none.
  */
 export const savingRequired = (g: AnalyticsGroup): boolean =>
-  keptWarmTokens(g.keptWarm ?? { tokens1h: 0, tokens5m: 0 }) > 0 &&
-  planRowsRequired(g) &&
-  (Object.keys(g.savingEquivalent).length > 0 || (g.savingShares !== null && Object.keys(g.savingShares).length > 0) || SHARED_WINDOWS.some((w) => !own(g.costEquivalent, w)));
+  keptWarmTokens(g.keptWarm ?? { tokens1h: 0, tokens5m: 0 }) > 0 && planRowsRequired(g) && planSideShows(g, [g.savingEquivalent, g.savingShares]);
 /**
  * The named account's whole: the position's totals with its shares summed over the groups the route answered them on.
  */

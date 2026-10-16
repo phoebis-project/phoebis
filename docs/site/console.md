@@ -650,15 +650,16 @@ warm between five minutes and an hour, then Probes by outcome (OK, Migrated, Hel
 (Wasted probes, Wasted cost, Share of probe cost), Saved by probes, Kept-warm requests, Kept-warm tokens and Cache
 warming by pool (Probes OK, Held, Skipped, Failed, Kept-warm requests, Kept-warm tokens, Probe cost, Saved). Saved by
 probes is what the kept-warm requests saved, the cache write each avoided at its TTL's rate less the read it paid. Net
-saving is that saving less the probe cost, in the critical ink while the probes cost more than they saved. A Saved by
-probes chart draws the gross saving and the probe cost per bucket with the net on hover. The by-pool table's Saved
-column reads each pool's saving beside its Probe cost. Probe cost, Saved by probes, Net saving, Wasted cost, Share of
-probe cost and the by-pool Probe cost and Saved read in the top bar's unit: under Native the plan side's 20x 7-day
-equivalent over the billed side's dollars, under the three dollar positions the position's figures in dollars, and
-under Window shares the named account's share of its 7-day window, a dash under "Shares of one account's windows
-alone: name one account in the Accounts filter." while none is named. The chart draws the 20x 7-day equivalent under
-Native, with the billed dollars on hover, and under Window shares. What a probe is and when it counts as wasted is on
-[Keepalive](keepalive.md).
+saving is that saving less the probe cost, in the critical ink while the probes cost more than they saved, which under
+Native the plan side alone decides. A Saved by probes chart draws the gross saving and the probe cost per bucket with
+the net on hover. The by-pool table's Saved column reads each pool's saving beside its Probe cost. Probe cost, Saved by
+probes, Net saving, Wasted cost, Share of probe cost and the by-pool Probe cost and Saved read in the top bar's unit:
+under Native the plan side's 20x 7-day equivalent over the billed side's dollars, under the three dollar positions the
+position's figures in dollars, and under Window shares the named account's share of its 7-day window, a dash under
+"Shares of one account's windows alone: name one account in the Accounts filter." while none is named. The chart draws
+dollars under the three dollar positions, the 20x 7-day equivalent under Window shares and under Native, with the billed
+dollars on hover, and the billed dollars alone under Native where the range holds no plan side. What a probe is and when
+it counts as wasted is on [Keepalive](keepalive.md).
 
 Accounts draws Peak 5-hour utilization, then Window usage and Pace under a "Window" switch whose positions are the
 windows the range sampled, 5-hour, 7-day, 7-day Fable and "7-day, extra usage". Pace reads "The lead over pace per

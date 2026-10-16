@@ -14291,6 +14291,34 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       native.unmount();
     }
     {
+      // Under native the plan side alone tones the Net saving tile: a range whose plan credits saved more than their
+      // probes cost and whose billed probes cost more than the billed credits saved draws both nets, the billed one under
+      // zero, in no critical ink. The figures are the stub's own: the plan side nets 1.5% of the 20x 7-day window, the
+      // billed side $0.10 saved less $0.50 of probes.
+      const now = Date.now();
+      const template = (await api.getAnalyticsBreakdown({ from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() })).find((g) => g.key === 'primary');
+      const probesOf = (ok) => ({ failed: 0, held: 0, migrated: 0, ok, skipped: 0 });
+      const whole = template === undefined ? null : { ...template, estimated: false, keptWarm: { requests: 5, tokens1h: 0, tokens5m: 5_000 }, probeCostUsd: 0.7, probeEquivalent: { five_hour: { cost: 0.03, wasted: 0 }, seven_day: { cost: 0.005, wasted: 0 } }, probes: probesOf(10), savingEquivalent: { five_hour: 0.1, seven_day: 0.02 }, savingUsd: 0.6 };
+      const paid = template === undefined ? null : { ...template, cacheEquivalent: {}, costEquivalent: {}, estimated: false, keptWarm: { requests: 1, tokens1h: 0, tokens5m: 1_000 }, planOutputTokens: 0, planRequests: 0, probeCostUsd: 0.5, probeEquivalent: {}, probes: probesOf(4), savingEquivalent: {}, savingUsd: 0.1 };
+      api.getAnalyticsBreakdown = async (q) => (whole === null ? [] : [q.funding === 'billed' ? paid : whole]);
+      localStorage.removeItem('phoebis.unit');
+      const page = await mount('/analytics#cache-warming', { now: CLOCK_ORIGIN });
+      const tile = [...page.container.querySelectorAll('#cache-warming > .tiles-row > .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Net saving');
+      const lines = [...(tile?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => {
+        const figure = l.cloneNode(true);
+        figure.querySelector('.stat__pair-word')?.remove();
+        return [figure.textContent?.trim() ?? '', l.querySelector('.stat__pair-word')?.textContent?.trim() ?? ''];
+      });
+      const critical = tile?.querySelector('.stat__value')?.classList.contains('is-critical') ?? null;
+      page.unmount();
+      delete api.getAnalyticsBreakdown;
+      results.push({
+        name: '/analytics under native a billed net under zero beside a plan net above it leaves the Net saving tile out of the critical ink',
+        ok: template !== undefined && JSON.stringify(lines) === JSON.stringify([[fmtEquivalent('seven_day', 0.015), 'subscription'], ['-$0.40', 'billed']]) && critical === false,
+        missing: [`template ${template?.key}`, JSON.stringify(lines), `critical ${critical}`],
+      });
+    }
+    {
       // A read that does not count probes drops a group left with probe rows alone, which the route does and the mock
       // does not, so the wrapper drops it here: grouped by kind with Include probes off, the probe kind is such a
       // group, and the tile keeps its figures only while the Cache warming reads count probes.

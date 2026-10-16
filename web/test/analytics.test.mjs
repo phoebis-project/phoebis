@@ -663,6 +663,22 @@ test('a group whose credits are all billed adds no saving window and drops none,
   assert.deepEqual(d.oneAccountGroupOf(base, [credited, unpriced]).savingShares, {}, "and out of the named account's whole");
 });
 
+test("a group whose answered probes are all billed beside priced plan rows adds no probe window and drops none, in a sum of groups and in the named account's whole", () => {
+  const base = accountGroup();
+  const window = { cost: 0.002, wasted: 0.001 };
+  const windows = { five_hour: window, seven_day: window };
+  const probed = accountGroup({ probeEquivalent: windows, probeShares: windows, probes: { ...base.probes, ok: 3 } });
+  // An overage's or an API key member's probes price in dollars alone, beside plan rows the route priced on both windows.
+  const billed = accountGroup({ probeCostUsd: 0.4, probeEquivalent: {}, probeShares: {}, probes: { ...base.probes, ok: 2 } });
+  assert.ok(billed.planRequests > 0 && billed.planOutputTokens > 0 && billed.costEquivalent.five_hour !== undefined && billed.costEquivalent.seven_day !== undefined, 'the billed probes sit beside priced plan rows');
+  assert.deepEqual(d.sumGroups([probed, billed]).probeEquivalent, windows, 'the sum keeps both windows');
+  assert.deepEqual(d.oneAccountGroupOf(base, [probed, billed]).probeShares, windows, "the named account's whole keeps both windows");
+  // A plan probe on a model the revision cannot price leaves the group's own plan rows without the shared windows too.
+  const unpriced = accountGroup({ costEquivalent: {}, probeEquivalent: {}, probeShares: {}, probes: { ...base.probes, ok: 1 } });
+  assert.deepEqual(d.sumGroups([probed, unpriced]).probeEquivalent, {}, 'an unpriced plan probe leaves both windows out of the sum');
+  assert.deepEqual(d.oneAccountGroupOf(base, [probed, unpriced]).probeShares, {}, "and out of the named account's whole");
+});
+
 test('the net saving is the gross less the probe cost, under zero where the probes cost more', () => {
   assert.equal(d.netSaving(1.5, 0.25), 1.25);
   assert.equal(d.netSaving(0.125, 0.5), -0.375, 'probes that cost more than they saved net below zero');
