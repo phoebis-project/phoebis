@@ -539,7 +539,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     // opens Analytics on the account.
     ['nightly: 5h charged 2.0x the table, since 13:11', 'badge--warning', '/analytics', [`effective: ${drift?.detail.effective}`, 'source: shipped', `windows: ${JSON.stringify(drift?.detail.windows)}`]],
     // A routing condition's badge reads its words, the count, the setting and the start, and opens the routing log.
-    // Nightly's wall has no round before it, so it names no projection.
+    // Nightly's wall has no 5-hour round before it, so it names no projection.
     ['nightly: 1 wall reached on the 5h window, shed_cap and window_ceiling, since 12:01', 'badge--warning', '/routing-log', ['setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]']],
     [
       'secondary: 1 wall reached on the 5h window, the last round projected 109 %, shed_cap and window_ceiling, since 14:02',

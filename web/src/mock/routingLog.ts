@@ -781,8 +781,8 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
 /**
  * The 5-hour window's start off the source's reading, as the router reads it, and whether `at` lies under the hold:
  * the reset less five hours where it lies ahead, the passed reset itself, and no hold where no reset is read. The burn
- * average still carries the previous window's burst over the reset, so no 5-hour round fires while the window is younger
- * than twice it.
+ * average still carries the previous window's burst over the reset, so no 5-hour round fires while the window is
+ * younger than twice it.
  */
 const fiveHourHeld = (source: RecordCandidate, pool: PoolSeed, at: number): { ageMs: number; holdMs: number } | null => {
   const reset = source.windows.five_hour?.reset;
@@ -796,8 +796,8 @@ const fiveHourHeld = (source: RecordCandidate, pool: PoolSeed, at: number): { ag
 
 /**
  * The 5-hour round under the slow-down: the stretch has read over the threshold for the safety wait, the horizon
- * moved to the reset less the threshold lies ahead, and the window is past the hold. The excess is the demand's past the
- * ceiling there, per hour to it.
+ * moved to the reset less the threshold lies ahead, and the window is past the hold. The excess is the demand's past
+ * the ceiling there, per hour to it.
  */
 function stretchTriggerOf(source: RecordCandidate, pool: PoolSeed, at: number): { excess: number; slowed: true; window: string } | null {
   const overSince = slowReadAt(source.accountId, pool, at)?.overSince ?? null;
@@ -1935,7 +1935,12 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
     for (const [w, x] of Object.entries(rewrite)) if (chosen.base.windows[w]) chosen.base.windows[w].reserved = round5((chosen.base.windows[w].reserved ?? 0) + x);
     chosen.base.burn = { ...chosen.base.burn, [window]: (chosen.base.burn[window] ?? 0) + (p.burn ?? 0) };
     planned.set(chosen.base.accountId, chosen.base);
-    return { planned: chosen.base.accountId, rewrite: rewrite[rewriteWindowOf(p.model)] ?? null, runway: chosen.fit.runwayMs };
+    // A pin with no prompt size reported yet is unsized, so its rewrite and the window it is of read nothing.
+    return {
+      planned: chosen.base.accountId,
+      rewrite: p.lastInputTokens === 0 ? null : (rewrite[rewriteWindowOf(p.model)] ?? null),
+      runway: chosen.fit.runwayMs,
+    };
   };
   return {
     accountId,

@@ -1193,6 +1193,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(at >= 0 && line.verdict !== 'not_run', `the shed line reads ${line?.verdict}`);
     assert.deepEqual(r.walk.slice(0, at).filter((w) => w.step.startsWith('move:') && w.verdict === 'fired').map((w) => w.step), []);
     assert.deepEqual([value('trigger')?.value, value('round')?.value], ['seven_day_fable', 'ran']);
+    // A cooldown over nightly would end the line at `cooldown` before its mark, so the line reads the mark alone.
+    assert.deepEqual([value('cooldown'), value('marked')?.value], [undefined, false]);
     const e = (await logOf(s)).find((row) => row.type === 'event' && row.kind === 'shedding_round' && row.requestId === r.requestId);
     assert.ok(e, "the round's event");
     const [fable, opus] = e.detail.pins;

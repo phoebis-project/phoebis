@@ -145,8 +145,9 @@ export const oauthWindows = (accountId: string, atMs: number, olderFactor: () =>
   const account = ACCOUNTS.find((a) => a.id === accountId);
   if (!account || account.kind !== 'oauth') return [];
   // The drawn day's ids are pinned by the checks and the site's screenshots, so a story edit that moves a request
-  // between windows keeps the stream's number of draws. A walk back of secondary from 09:55 to 10:42 reads the live
-  // window the story opens at 09:55 and draws nothing, so it draws one older factor here and drops it.
+  // between windows keeps the stream's number of draws. The drawn day was seeded while secondary's 5-hour window opened
+  // at 10:42, and the story opens it at 09:55, so a walk back of secondary between the two reads the live window and
+  // draws nothing: it draws one older factor here and drops it. Moving either bound shifts every later drawn id.
   if (accountId === 'secondary' && atMs >= clock(9, 55) && atMs < clock(10, 42)) olderFactor();
   // A head reports the two shared windows and the overage week; a week only the poll reads never reaches an attempt.
   const reported = account.windows.filter((w) => w.id === '5h' || w.id === '7d').map((w) => storyReading(accountId, w, walkBack(w, atMs, olderFactor), atMs));
