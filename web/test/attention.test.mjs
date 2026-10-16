@@ -220,7 +220,7 @@ test('the four routing conditions read the count, the setting and the start on t
 });
 
 test('a meter drift item words its off windows and opens the Burn tab on the account', () => {
-  // A local clock time, so the words read 14:20 in any zone; it lies within a day of NOW there.
+  // A local clock time, so the words read 14:20 in any zone, and it lies within a day of NOW there.
   const since = new Date(2026, 8, 18, 14, 20).toISOString();
   const account = { link: { id: 'acct-a', page: 'accounts' }, pools: ['main'], since, subject: { id: 'acct-a', label: 'acct-a', type: 'account' } };
   const windows = [

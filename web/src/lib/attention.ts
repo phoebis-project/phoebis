@@ -233,7 +233,7 @@ function slowedWords(item: AttentionItem, now: number): string {
   return [`slowed ${formatFact(count(d.slowed_ms), 'ms', now)} of the last 24 h`, ...bar, ...slowest, ...(settings ? [settings] : []), `since ${clockInstant(Date.parse(item.since), now)}`].join(', ');
 }
 
-/** A ratio with two decimals and one trailing zero dropped (`2.0`, `1.25`, `0.8`), as the meter drift words print it. */
+/** A ratio as the meter drift words print it: two decimals, one trailing zero dropped (`2.0`, `1.25`, `0.8`). */
 const ratioWord = (ratio: number): string => {
   const fixed = ratio.toFixed(2);
   return fixed.endsWith('0') ? fixed.slice(0, -1) : fixed;

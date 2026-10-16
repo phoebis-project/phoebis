@@ -2421,8 +2421,16 @@ function ReconciliationTable({ answer, error, now }: { answer: ReconciliationsAn
                   <span className="num">{instant(Date.parse(r.windowEnd), now)}</span>
                 </td>
                 <td className="right num col-fit">{fmtShare(r.observedRise)}</td>
-                <td className="right num col-fit">{fmtShare(r.predictedShare)}</td>
-                <td className="right num col-fit">{ratioOff(r) ? <Badge tone="warning">{r.ratio.toFixed(2)}</Badge> : r.ratio.toFixed(2)}</td>
+                <td
+                  className="right num col-fit"
+                  title={r.estimated > 0 ? withEstimate(fmtShare(r.predictedShare), true) : undefined}
+                >
+                  {r.estimated > 0 ? `~${fmtShare(r.predictedShare)}` : fmtShare(r.predictedShare)}
+                </td>
+                {/* A ratio just past an edge prints as the edge at two decimals, so the title carries four. */}
+                <td className="right num col-fit" title={r.ratio.toFixed(4)}>
+                  {ratioOff(r) ? <Badge tone="warning">{r.ratio.toFixed(2)}</Badge> : r.ratio.toFixed(2)}
+                </td>
                 <td className="right num col-fit">{fmtInt(r.requests)}</td>
               </tr>
             ))}
