@@ -746,51 +746,229 @@ async function expertRow(theme) {
 }
 
 /**
- * The routing log's columns at 1280 by 800 and at 1440 by 900: Fact 150 px at both, Account 246 then 256, Model only
- * at 1440, and the table as wide as its card with nothing to scroll sideways. The pass's viewport is put back for the
- * shot.
+ * The labels the Kinds list offers, read off the list the Add filter control opens (the every-kind default draws no
+ * Kinds chip), each in the words a Kind cell prints and with whether it names an event: the list capitalizes the
+ * first letter, and its Probe decisions row names the probes among the decision kinds, which no cell prints. The
+ * list closes again.
+ */
+async function kindLabels() {
+  await page.locator('.filter-bar__row > button', { hasText: /^Add filter$/ }).click();
+  await advance(CLOCK_STEP_MS);
+  await page.locator('.popover .add-filter__row').filter({ has: page.locator('.add-filter__label', { hasText: /^Kinds$/ }) }).click();
+  await advance(CLOCK_STEP_MS);
+  const rows = await page.evaluate(() => {
+    let group = null;
+    const out = [];
+    for (const el of document.querySelector('.popover .option-list')?.children ?? []) {
+      if (el.classList.contains('mselect__group')) group = el.textContent?.trim() ?? null;
+      else if (el.matches('.mselect__option:not(.mselect__option--all):not(.mselect__option--preset)')) out.push({ group, text: el.textContent?.trim() ?? '' });
+    }
+    return out;
+  });
+  await page.keyboard.press('Escape');
+  await advance(CLOCK_STEP_MS);
+  await atRest();
+  return rows.filter((r) => r.text !== 'Probe decisions').map((r) => ({ event: r.group === 'Events', label: r.text.charAt(0).toLowerCase() + r.text.slice(1) }));
+}
+
+/**
+ * The routing log's columns as the browser lays them out, run in the page: the card, the table, the widths of Fact,
+ * Account and Model, and for each of the eight columns Time to Link that is drawn its width against the widest line a
+ * body cell of it draws, with that cell's horizontal padding. A line (a run of inline nodes, or a block child, a flex
+ * row whole) is cloned into a probe in its own cell, out of the flow and as wide as its content, so the cell's font
+ * sets it and no width cuts or wraps it: a block child's own rect spans its cell whatever its text. Time is held to
+ * the dated form under the 12-hour setting as well, the widest the console draws, and Kind to a badge per label of
+ * `kinds`, since no page draws every kind. The lines cut on purpose come back apart, each with whether it ends behind
+ * an ellipsis: the request link under the time, and every Account line, whose column is floored at the longest
+ * account id with its padding instead. Null where the table is not drawn.
+ */
+function routingLogCells(kinds) {
+  const table = document.querySelector('.routing-log__table');
+  const wrap = table?.closest('.table-wrap');
+  if (!table || !wrap) return null;
+  const round = (n) => Math.round(n * 10) / 10;
+  const style = (el) => getComputedStyle(el);
+  const shown = (el) => style(el).display !== 'none' && !['absolute', 'fixed'].includes(style(el).position);
+  const inline = (el) => style(el).display.startsWith('inline') || style(el).display === 'contents';
+  const probe = (td, nodes) => {
+    const box = document.createElement('span');
+    box.style.cssText = 'position:absolute;left:0;top:0;width:max-content;white-space:nowrap;visibility:hidden';
+    for (const n of nodes) box.appendChild(n.cloneNode(true));
+    td.appendChild(box);
+    const width = box.getBoundingClientRect().width;
+    box.remove();
+    return width;
+  };
+  // A block that stacks blocks of its own (a fact's pairs) is read by its lines, and one that lays its items in a row
+  // is one line.
+  const linesOf = (el) => {
+    const out = [];
+    let run = [];
+    const flush = () => {
+      if (run.some((n) => (n.textContent ?? '').trim() !== '')) out.push(run);
+      run = [];
+    };
+    for (const node of el.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) run.push(node);
+      else if (node.nodeType !== Node.ELEMENT_NODE || !shown(node)) continue;
+      else if (inline(node)) run.push(node);
+      else {
+        flush();
+        const stacks = !['flex', 'grid'].includes(style(node).display) && [...node.children].some((c) => shown(c) && !inline(c));
+        out.push(...(stacks ? linesOf(node) : [[node]]));
+      }
+    }
+    flush();
+    return out;
+  };
+  const padding = (td) => parseFloat(style(td).paddingLeft) + parseFloat(style(td).paddingRight);
+  // A flex row's items carry no space between them in the text (a fact's label and value), so one is put back.
+  const textOf = (nodes) =>
+    nodes
+      .map((n) => (n.nodeType === Node.ELEMENT_NODE && style(n).display === 'flex' ? [...n.childNodes].map((c) => c.textContent ?? '').join(' ') : (n.textContent ?? '')))
+      .join('')
+      .trim();
+  const element = (nodes) => (nodes.length === 1 && nodes[0].nodeType === Node.ELEMENT_NODE ? nodes[0] : null);
+  const ellipsis = (el) => el !== null && style(el).textOverflow === 'ellipsis' && style(el).overflowX === 'hidden' && style(el).whiteSpace === 'nowrap';
+  const rows = [...table.querySelectorAll('tbody tr.routing-log__row')];
+  const width = (name) => {
+    const th = table.querySelector(`thead th.routing-log__${name}`);
+    return th && style(th).display !== 'none' ? round(th.getBoundingClientRect().width) : null;
+  };
+  const longest = [];
+  const probed = {};
+  const cut = [];
+  let floor = null;
+  for (const name of ['time', 'kind', 'session', 'account', 'model', 'by', 'fact', 'link']) {
+    const column = width(name);
+    if (column === null) continue;
+    const cells = rows.map((tr) => tr.querySelector(`td.routing-log__${name}`)).filter(Boolean);
+    let best = null;
+    const keep = (need, text) => {
+      if (best === null || need > best[0]) best = [round(need), text];
+    };
+    for (const td of cells) {
+      for (const nodes of linesOf(td)) {
+        const need = probe(td, nodes) + padding(td);
+        const text = textOf(nodes);
+        const request = name === 'time' && element(nodes)?.classList.contains('routing-log__cut');
+        if ((request || name === 'account') && need > column + 0.5) cut.push([name, round(need), column, text, ellipsis(element(nodes))]);
+        if (!request) keep(need, text);
+      }
+      if (name !== 'account') continue;
+      for (const a of td.querySelectorAll('a[href^="/accounts/"]')) {
+        if (a.closest('.routing-log__model-under')) continue;
+        const need = round(probe(td, [a]) + padding(td));
+        if (floor === null || need > floor[0]) floor = [need, a.textContent ?? ''];
+      }
+    }
+    const first = cells[0];
+    let held = null;
+    const hold = (need, text) => {
+      if (held === null || need > held[0]) held = [round(need), text];
+    };
+    if (first && name === 'time') {
+      // Under the cell's tabular figures the month's name is the one part whose width varies, so every month is held.
+      for (let month = 0; month < 12; month += 1) {
+        const at = new Date(2026, month, 28, 21, 12, 5);
+        const text = `${at.toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${at.toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h12', minute: '2-digit', second: '2-digit' })}`;
+        hold(probe(first, [document.createTextNode(text)]) + padding(first), text);
+      }
+    }
+    if (first && name === 'kind') {
+      for (const { event, label } of kinds) {
+        const badge = document.createElement('span');
+        badge.className = `badge badge--neutral${event ? ' routing-log__outline' : ''}`;
+        badge.textContent = label;
+        hold(probe(first, [badge]) + padding(first), label);
+      }
+    }
+    if (held !== null) {
+      probed[name] = held;
+      keep(held[0], held[1]);
+    }
+    longest.push([name, best?.[0] ?? null, column, best?.[1] ?? null]);
+  }
+  return {
+    account: width('account'),
+    client: wrap.clientWidth,
+    cut,
+    fact: width('fact'),
+    floor,
+    longest,
+    model: width('model'),
+    probed,
+    rows: rows.length,
+    scroll: wrap.scrollWidth,
+    table: round(table.getBoundingClientRect().width),
+  };
+}
+
+/**
+ * The routing log's columns at 1280 by 800 and at 1440 by 900: Fact 189 px at both, Account 179 then 147, Model only
+ * at 1440 at 192, and the table as wide as its card with nothing to scroll sideways. Each column from Time to Link
+ * holds its longest cell (`routingLogCells`), so a column narrower than it fails, Account aside: it is the fill, and
+ * it fails under the longest account id with its padding. A line cut on purpose (the request link under the time, an
+ * Account line past the column) that does not end behind an ellipsis fails. The bare log is read, then the log under
+ * the 7-day range on the state changes, where the mock story dates its Time cells on the first page and a Time cell
+ * that breaks over two lines fails. The mock pass fails a 7-day page with no dated cell, and the router's seed, which
+ * draws no row older than a day, records that the read stands down. The bare log loads again at the pass's viewport
+ * after.
  */
 async function routingLogColumns(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
-  const read = () =>
-    page.evaluate(() => {
-      const table = document.querySelector('.routing-log__table');
-      const wrap = table?.closest('.table-wrap');
-      if (!table || !wrap) return null;
-      const width = (name) => {
-        const th = table.querySelector(`thead th.routing-log__${name}`);
-        return th && getComputedStyle(th).display !== 'none' ? Math.round(th.getBoundingClientRect().width * 10) / 10 : null;
-      };
-      return {
-        account: width('account'),
-        client: wrap.clientWidth,
-        fact: width('fact'),
-        model: width('model'),
-        scroll: wrap.scrollWidth,
-        table: Math.round(table.getBoundingClientRect().width * 10) / 10,
-      };
-    });
-  for (const { account, height, model, width } of [
-    { account: 246, height: 800, model: null, width: 1280 },
-    { account: 256, height: 900, model: 150, width: 1440 },
-  ]) {
-    const where = `at ${width} by ${height}`;
-    await page.setViewportSize({ height, width });
-    await settle();
-    const got = await read();
-    measurements.push(`${theme} /routing-log columns ${where} ${JSON.stringify(got)}`);
-    if (got === null) {
-      say(`${where} no table to measure`);
-      continue;
+  const kinds = await kindLabels();
+  if (kinds.length === 0) say('the Kinds list offers no kind label to measure');
+  const named = { account: 'Account', by: 'By', fact: 'Fact', kind: 'Kind', link: 'Link', model: 'Model', session: 'Session', time: 'Time' };
+  try {
+    for (const [path, under] of [
+      ['/routing-log', ''],
+      ['/routing-log?range=7d&kinds=account_state_changed', 'under 7d on the state changes '],
+    ]) {
+      await page.setViewportSize({ height: 800, width: 1280 });
+      await settle();
+      if (under !== '') await loadAtOrigin(path, '.routing-log__table');
+      for (const { account, fact, height, model, width } of [
+        { account: 179, fact: 189, height: 800, model: null, width: 1280 },
+        { account: 147, fact: 189, height: 900, model: 192, width: 1440 },
+      ]) {
+        const where = `${under}at ${width} by ${height}`;
+        await page.setViewportSize({ height, width });
+        await settle();
+        const got = await page.evaluate(routingLogCells, kinds);
+        if (got === null) {
+          measurements.push(`${theme} /routing-log columns ${where} not drawn`);
+          say(`${where} no table to measure`);
+          continue;
+        }
+        const time = timeFit(await page.evaluate(timeCellsOf, '.routing-log__table'));
+        if (under !== '' && time.dated.length === 0 && !mock) {
+          measurements.push(`${theme} /routing-log columns ${under}skipped: the seed draws no row older than a day (${got.rows} rows under 7d)`);
+          break;
+        }
+        measurements.push(`${theme} /routing-log columns ${where} ${JSON.stringify({ ...got, dated: time.dated.length, split: time.split })}`);
+        if (mock && got.rows === 0) say(`${where} no rows to measure`);
+        if (under !== '' && time.dated.length === 0) say(`${where} no Time cell prints its date, so the dated form is not measured`);
+        if (got.fact !== fact) say(`${where} the Fact column is ${got.fact}px, not ${fact}px`);
+        if (got.account !== account) say(`${where} the Account column is ${got.account}px, not ${account}px`);
+        if (got.model !== model) say(`${where} the Model column is ${got.model === null ? 'hidden' : `${got.model}px`}, not ${model === null ? 'hidden' : `${model}px`}`);
+        if (Math.abs(got.table - got.client) > 0.5) say(`${where} the table is ${got.table}px in a ${got.client}px card`);
+        if (got.scroll > got.client) say(`${where} the table scrolls sideways (${got.scroll}px in ${got.client}px)`);
+        for (const [name, need, column, text] of got.longest) {
+          if (name !== 'account' && need !== null && need > column + 0.5) say(`${where} the ${named[name]} column is ${column}px, narrower than its longest cell "${text}" at ${need}px`);
+        }
+        if (got.floor !== null && got.account !== null && got.floor[0] > got.account + 0.5) say(`${where} the Account column is ${got.account}px, under the longest account id "${got.floor[1]}" at ${got.floor[0]}px`);
+        for (const [name, need, column, text, ellipsis] of got.cut) {
+          if (!ellipsis) say(`${where} the ${named[name]} line "${text}" takes ${need}px of the ${column}px column without an ellipsis`);
+        }
+        for (const text of time.split) say(`${where} the Time cell "${text}" breaks over two lines`);
+      }
     }
-    if (got.fact !== 150) say(`${where} the Fact column is ${got.fact}px, not 150px`);
-    if (got.account !== account) say(`${where} the Account column is ${got.account}px, not ${account}px`);
-    if (got.model !== model) say(`${where} the Model column is ${got.model === null ? 'hidden' : `${got.model}px`}, not ${model === null ? 'hidden' : `${model}px`}`);
-    if (Math.abs(got.table - got.client) > 0.5) say(`${where} the table is ${got.table}px in a ${got.client}px card`);
-    if (got.scroll > got.client) say(`${where} the table scrolls sideways (${got.scroll}px in ${got.client}px)`);
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await loadAtOrigin('/routing-log', '.routing-log__table');
   }
-  await page.setViewportSize({ height: 800, width: 1280 });
-  await settle();
 }
 
 /**
@@ -7205,13 +7383,12 @@ async function tableColumns(theme, view, selector, fill, fixed = 0, { overflowRe
 }
 
 /**
- * The Session column shows more of a session id than the thirteen characters a label cuts at: with the default columns
- * at 1280 by 800 the first row's id line holds the whole id as its text, which the cell's ellipsis alone
- * cuts, and the cell's content width holds more than thirteen of its characters (the router's seed names its sessions
- * in thirteen characters, so the characters shown, the smaller of the id's length and that room, are recorded rather
- * than asserted);
- * the id is monospace, so one character's width is read off the line's first eight, which are never behind the
- * ellipsis.
+ * The Session column shows at least eleven characters of a session id, the room the cells' 5 px padding leaves it: with
+ * the default columns at 1280 by 800 the first row's id line holds the whole id as its text, which the cell's ellipsis
+ * alone cuts, and the cell's content width holds at least eleven of its characters. The characters shown, the smaller
+ * of the id's length and that room, are recorded rather than asserted: the mock story's ids run past the room, and the
+ * router's seed names its sessions in thirteen characters, which its wider column draws whole. The id is monospace, so
+ * one character's width is read off the line's first eight, which are never behind the ellipsis.
  */
 async function sessionIdWidth(theme) {
   const say = (what) => failures.push(`${theme} /sessions id width: ${what}`);
@@ -7237,7 +7414,7 @@ async function sessionIdWidth(theme) {
   if (read === null) return say('no session row to measure');
   if (read.line !== 'drawn') return say(`the first row's Session cell draws ${read.line === 'absent' ? 'no id line' : 'an id line without a text node'}`);
   if (read.text !== read.title) say(`the id line reads ${JSON.stringify(read.text)}, not the whole id ${JSON.stringify(read.title)} the cell's title carries`);
-  if (read.fits <= 13) say(`the cell's ${read.content}px hold ${read.fits} characters, not more than thirteen`);
+  if (read.fits < 11) say(`the cell's ${read.content}px hold ${read.fits} characters, fewer than eleven`);
 }
 
 /**

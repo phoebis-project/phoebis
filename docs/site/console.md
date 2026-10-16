@@ -692,7 +692,7 @@ The card "Sessions" ("One row per session. Open a row for the cache-warming reci
 all" or "Collapse all". The Session column is always drawn, and the eleven others, which the bar's Columns control shows
 or hides, are Key, Model, Account, Runway, Last used, Requests, Last request, Agents, Companion, Cache
 warming and Next probe, with Agents, Last request and Next probe hidden by default. Session
-takes the card's free width and keeps at least 72 px, and a set of columns wider than the card scrolls
+takes the card's free width and keeps at least 74 px, and a set of columns wider than the card scrolls
 inside it. Runway reads the time until the projection of the pin's account reaches the ceiling on the window that binds,
 among those the pin's model draws: a span such as `6 h 55 min`, `none` where the runway is gone, `unbounded` where
 nothing burns, and a dash for an unpinned row or a pinned row with no projection. The session cell cuts a long id with

@@ -2057,7 +2057,14 @@
 }
 
 /* The routing log. The columns are fixed, so a long value is cut behind an ellipsis rather than widening the table: the
-   chevron and the seven columns fill the 990 px card at 1280 by 800 and the eight the 1150 px card at 1440 by 900. */
+   chevron and the seven columns fill the 990 px card at 1280 by 800 and the eight the 1150 px card at 1440 by 900.
+   Each column is as wide as its longest cell with the cell's padding, measured in the console's fonts over the mock
+   story and the seeded router at both viewports: Time the dated form under the 12-hour setting, the widest it draws
+   ("May 28 09:12:05 PM", 145.3 px), Kind the label "account state changed" (165.6 px), Session the eight characters
+   of an id (69.4 px), By "reservation expired" (151.6 px), Fact "state funding required" (188.8 px), Link "Details"
+   with the row's edge (63.1 px) and Model "claude-haiku-4-5-20251001" (191.3 px). With the chevron they take 811 px
+   of the 990 px card and, Model with them, 1003 px of the 1150 px card, so Account takes the 179 px and the 147 px
+   left, above the longest account id's 67.8 px, and cuts a longer line. */
 .routing-log__table {
   table-layout: fixed;
 }
@@ -2078,7 +2085,7 @@
   padding-right: 12px;
 }
 
-/* The chevron takes its width from the Time column, so the two together keep the time's 128 px. */
+/* The chevron takes its width from the Time column, so the two together keep the time's 170 px. */
 .routing-log__table .routing-log__chevron {
   width: 24px;
   padding-right: 0;
@@ -2102,23 +2109,23 @@
 }
 
 .routing-log__time {
-  width: 104px;
-}
-
-.routing-log__kind {
   width: 146px;
 }
 
+.routing-log__kind {
+  width: 166px;
+}
+
 .routing-log__session {
-  width: 104px;
+  width: 70px;
 }
 
 .routing-log__account {
-  width: 246px;
+  width: 179px;
 }
 
 .routing-log__model {
-  width: 150px;
+  width: 192px;
 }
 
 .routing-log__by {
@@ -2126,7 +2133,7 @@
 }
 
 .routing-log__fact {
-  width: 150px;
+  width: 189px;
 }
 
 .routing-log__link {
@@ -2142,7 +2149,7 @@
 
 @media (min-width: 1420px) {
   .routing-log__table .routing-log__account {
-    width: 256px;
+    width: 147px;
   }
 
   .routing-log__model-under {
@@ -3504,12 +3511,14 @@
   white-space: normal;
 }
 
-/* The default columns fit a 990px card at 1280px only with the cells 8px apart; the row's first and last cells keep the
-   card's 12px edge, and an expanded row's detail cell keeps its own inset. */
+/* The cells take 5 px each side, one step wider than 4. Each pixel of padding widens the fit columns by 17 px, so in
+   the 990 px card at 1280 px the mock story's default columns leave 39 px of slack at 4 px and 24 px at 5, and at 6 px
+   only 5 px with the Session cell down to nine characters of its id. The row's first and last cells keep the card's
+   12 px edge, and an expanded row's detail cell keeps its own inset. */
 .sessions-table th,
 .sessions-table td {
-  padding-left: 4px;
-  padding-right: 4px;
+  padding-left: 5px;
+  padding-right: 5px;
 }
 
 .sessions-table th:first-child,
@@ -3518,11 +3527,11 @@
 }
 
 /* The two fill columns share what the fit columns leave, but never shrink under the fork badge's widest word with the
-   badge's padding (63.8 px) and the cell's (8 px), so a column set wider than the card scrolls inside its wrap rather
-   than cutting that word. The default set leaves them 112 px at 1280 px. */
+   badge's padding (63.8 px) and the cell's (10 px), so a column set wider than the card scrolls inside its wrap rather
+   than cutting that word. The default set leaves Session, its one fill, 95 px at 1280 px. */
 .sessions-table th.col-fill,
 .sessions-table td.col-fill {
-  min-width: 72px;
+  min-width: 74px;
 }
 
 .sessions-table th:last-child,
@@ -3530,7 +3539,8 @@
   padding-right: 12px;
 }
 
-.sessions-table__gutter {
+/* The table's own selector, so the cells' padding rule above does not widen the gutter past its 30 px. */
+.sessions-table .sessions-table__gutter {
   width: 30px;
   padding-right: 0;
 }
