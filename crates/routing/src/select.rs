@@ -2002,7 +2002,7 @@ fn run(
                 Some(_) => Vec::new(),
                 None => fresh_prior(state, snapshot, pool, request.now),
             };
-            let (rewrite, burn, _) = pin_figures(
+            let (rewrite, burn, regime) = pin_figures(
                 state,
                 pool,
                 request,
@@ -2020,7 +2020,7 @@ fn run(
                         agent_id: request.agent_id.clone(),
                         model: request.canonical_model.clone(),
                     }),
-                    entrypoint: request.entrypoint.clone(),
+                    entrypoint: regime.map(String::from),
                     booked_at: request.now,
                     rewrite,
                     burn,
@@ -4453,7 +4453,7 @@ fn shed_round(
             return (read, None);
         };
         let destination_tier = snapshot.tier(&destination).unwrap_or_default();
-        let (rewrite, pin_burn, _) =
+        let (rewrite, pin_burn, regime) =
             pin_figures(state, pool, &req, Figures::Pin(p), destination_tier, now);
         read.runway_ms = fit.runway_ms;
         let model = req.canonical_model.as_str();
@@ -4475,7 +4475,7 @@ fn shed_round(
             account_id: destination,
             attempt: request.attempt,
             pin: Some(p.key()),
-            entrypoint: req.entrypoint.clone(),
+            entrypoint: regime.map(String::from),
             booked_at: now,
             rewrite,
             burn: pin_burn,

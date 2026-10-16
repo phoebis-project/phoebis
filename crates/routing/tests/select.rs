@@ -24459,6 +24459,50 @@ fn a_live_interactive_reservation_on_a_base_pins_horizon_reads_one_rate_across_t
 }
 
 #[test]
+fn a_moved_pins_booking_names_the_regime_its_burn_was_priced_under_and_weighs_that_regimes_band() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    // `s1`, stored under no entrypoint, burns 0.036 of the 5-hour window an hour under the base regime and moves off a
+    // spent `a` onto `b` on a turn under `desk`. The band starts half an hour after T.
+    let mut st = loaded(vec![gated_pin("s1", "a", 3.6)]);
+    st.set_share(banded_pricer(T + 30 * MINUTE, T + 10 * HOUR));
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    st.record_sample("b", refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    let desk_move = SelectRequest {
+        entrypoint: Some("desk".into()),
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], T)
+    };
+    let d = decide(&mut st, &s, &desk_move, &mut rng());
+    assert_eq!(landed(d.result.clone()).0, "b");
+    let booking = st.reservation("r-1").expect("the move booked on b").clone();
+    assert_eq!(
+        booking.entrypoint, None,
+        "the pin's burn was priced under the base regime"
+    );
+    let burn = booking.burn[FIVE_HOUR];
+    assert!((burn - 0.036 / 3_600.0).abs() < 1e-15, "{burn}");
+    // Another request's selection reads b's projection with the booking live: its burn runs half an hour at the rate
+    // it was booked at and the rest of the span to the reset at twice it, as the base regime's band weighs it.
+    let other = SelectRequest {
+        request_id: "r-2".into(),
+        ..request(&s, Some("s9"), "claude-sonnet-5", true, &[], T)
+    };
+    let d = decide(&mut st, &s, &other, &mut rng());
+    let five_hour = &candidate(&d.record, "b").windows[FIVE_HOUR];
+    let horizon = five_hour.horizon.expect("b's 5-hour horizon");
+    assert_eq!(horizon, T + 3 * HOUR);
+    let increase = burn * 1_800.0 + 2.0 * burn * (horizon - T - 30 * MINUTE) as f64 / 1_000.0;
+    let projection = five_hour.projection.expect("b's 5-hour projection");
+    assert!(
+        (projection - five_hour.utilization - increase).abs() < 1e-9,
+        "{projection} against {}",
+        five_hour.utilization + increase
+    );
+}
+
+#[test]
 fn a_live_reservation_is_not_divided_by_the_speed_under_a_constant_band() {
     // A pin whose rate reads one share a second on every window, a booking of one share a second on the 5-hour window,
     // and the pricer's default segments.

@@ -748,8 +748,10 @@ pub struct Reservation {
     pub attempt: u32,
     /// The pin the selection wrote, `None` for a request that pins nothing and still lands its body.
     pub pin: Option<PinKey>,
-    /// The entrypoint of the request that booked it, the regime `rewrite` and `burn` were priced under at `booked_at`,
-    /// which a reader that weighs the booking over a span prices it under again. `None` is the base regime.
+    /// The entrypoint `burn` was priced under at `booked_at` (the pin's own for a pin's move, the failed-over row's for
+    /// a failover's landing, the request's for a fresh session's median), which a reader that weighs the burn over a
+    /// span reads its band under. `rewrite` is a one-time share priced under the request's regime, which no reader
+    /// weighs over a span. `None` is the base regime.
     pub entrypoint: Option<String>,
     pub booked_at: i64,
     /// The rewrite's share per plan window, what `predicted` adds.
