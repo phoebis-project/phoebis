@@ -2405,25 +2405,34 @@ impl RoutingState {
         speed: f64,
         horizon: &dyn Fn(&str) -> Option<i64>,
     ) -> BTreeMap<String, Banded> {
-        let mut banded: BTreeMap<String, Banded> = BTreeMap::new();
+        // `Banded::of` is linear in the rate, so the pins of one regime on a window sum first and the span is cut once
+        // per regime and window, which keeps the ledger's day walk off the per-pin path.
+        let mut rates: Vec<(&'static str, Option<&str>, f64)> = Vec::new();
         self.pin_rates(
             account_id,
             keep,
             tier,
             now,
             average_ms,
-            &mut |window, entrypoint, rate| {
-                let Some(to) = horizon(window) else {
-                    return;
-                };
-                let piece =
-                    Banded::of(rate, &self.share.band_segments(window, entrypoint, now, to));
-                let sum = banded.entry(window.to_string()).or_default();
-                *sum = sum.plus(&piece);
+            &mut |window, entrypoint, rate| match rates
+                .iter_mut()
+                .find(|(w, e, _)| *w == window && *e == entrypoint)
+            {
+                Some((_, _, sum)) => *sum += rate,
+                None => rates.push((window, entrypoint, rate)),
             },
         );
+        let mut banded: BTreeMap<String, Banded> = BTreeMap::new();
+        for (window, entrypoint, rate) in rates {
+            let Some(to) = horizon(window) else {
+                continue;
+            };
+            let piece = Banded::of(rate, &self.share.band_segments(window, entrypoint, now, to));
+            let sum = banded.entry(window.to_string()).or_default();
+            *sum = sum.plus(&piece);
+        }
         for sum in banded.values_mut() {
-            *sum = sum.scaled(1.0 / speed);
+            *sum = sum.divided(speed);
         }
         for reservation in self.live_bookings(account_id) {
             let entrypoint = reservation.entrypoint.as_deref();
@@ -2477,14 +2486,14 @@ impl RoutingState {
 
     /// Folds `add` over each kept pin's decayed rate at `now` on every plan window its model draws, with the pin's
     /// entrypoint, in the pin map's order. A priced pin alone reaches `add`.
-    fn pin_rates(
-        &self,
+    fn pin_rates<'a>(
+        &'a self,
         account_id: &str,
         keep: &dyn Fn(&PinRow) -> bool,
         tier: &str,
         now: i64,
         average_ms: i64,
-        add: &mut dyn FnMut(&'static str, Option<&str>, f64),
+        add: &mut dyn FnMut(&'static str, Option<&'a str>, f64),
     ) {
         // A pin a live booking on this account names counts through the booking's burn alone, so a moved pin counts
         // once while its move is in flight. The booking is matched on the account and the pin row, never on the key

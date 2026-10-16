@@ -664,15 +664,21 @@ pub(crate) fn rewrite_write(request: &SelectRequest, pin: Option<&PinRow>) -> Pi
 /// (the pin's own decayed burn over its account's speed, or for a fresh session the decayed burn of the row a failover
 /// took off its source over that source's speed, else the median of the pool's priced warm pins, each over its
 /// account's speed, absent with none, which reads as zero), on the windows the request's model draws. A window nothing
-/// prices is absent from both. The destination gate's fit and the shedding round read it.
-pub(crate) fn pin_figures(
+/// prices is absent from both. The destination gate's fit and the shedding round read it. The third member is the
+/// entrypoint the burn is priced under (the pin's, the failed-over row's, or the request's for the median), whose band
+/// a reader that weighs the burn over a span reads it under.
+pub(crate) fn pin_figures<'a>(
     state: &RoutingState,
     pool: &PoolRow,
-    request: &SelectRequest,
-    figures: Figures<'_>,
+    request: &'a SelectRequest,
+    figures: Figures<'a>,
     tier: &str,
     now: i64,
-) -> (BTreeMap<String, f64>, BTreeMap<String, f64>) {
+) -> (
+    BTreeMap<String, f64>,
+    BTreeMap<String, f64>,
+    Option<&'a str>,
+) {
     let share = state.share();
     let model = request.canonical_model.as_str();
     let average_ms = burn_average_ms(pool);
@@ -681,6 +687,13 @@ pub(crate) fn pin_figures(
         share
             .rate(window, entrypoint, tier, &p.model, &p.burn, now)
             .map(|rate| burn_decayed(rate, p.burn_at, now, average_ms))
+    };
+    let regime = match figures {
+        Figures::Pin(pin) => entrypoint_of(pin),
+        Figures::Fresh(_) => match &request.failed_over {
+            Some(failed_over) => entrypoint_of(&failed_over.row),
+            None => request.entrypoint.as_deref(),
+        },
     };
     let mut rewrite = BTreeMap::new();
     let mut burn = BTreeMap::new();
@@ -702,13 +715,13 @@ pub(crate) fn pin_figures(
         // A slowed pin's burn is what its source's holds let through, so a destination reads the demand: the burn over
         // the source's speed, which the pin runs at there until the destination's own factor says otherwise.
         let rate = match figures {
-            Figures::Pin(pin) => priced(window, entrypoint_of(pin), pin)
+            Figures::Pin(pin) => priced(window, regime, pin)
                 .map(|rate| rate / state.slow_down_speed(pool, &pin.account_id)),
             // A failover's landing knows the session's own burn, while the destination's cache is cold, so the
             // rewrite above stays the body's.
             Figures::Fresh(_) if request.failed_over.is_some() => {
                 request.failed_over.as_ref().and_then(|failed_over| {
-                    priced(window, entrypoint_of(&failed_over.row), &failed_over.row).map(|rate| {
+                    priced(window, regime, &failed_over.row).map(|rate| {
                         rate / state.slow_down_speed(pool, &failed_over.from_account_id)
                     })
                 })
@@ -723,7 +736,7 @@ pub(crate) fn pin_figures(
                     .iter()
                     .filter(|p| plan_windows(&p.model).any(|w| w == window))
                     .filter_map(|p| {
-                        priced(window, request.entrypoint.as_deref(), p)
+                        priced(window, regime, p)
                             .map(|rate| rate / state.slow_down_speed(pool, &p.account_id))
                     })
                     .collect(),
@@ -733,7 +746,7 @@ pub(crate) fn pin_figures(
             burn.insert(window.to_string(), rate);
         }
     }
-    (rewrite, burn)
+    (rewrite, burn, regime)
 }
 
 /// Whose rewrite and burn `pin_figures` prices.
@@ -1989,7 +2002,7 @@ fn run(
                 Some(_) => Vec::new(),
                 None => fresh_prior(state, snapshot, pool, request.now),
             };
-            let (rewrite, burn) = pin_figures(
+            let (rewrite, burn, _) = pin_figures(
                 state,
                 pool,
                 request,
@@ -2413,13 +2426,13 @@ impl Banded {
         }
     }
 
-    /// Every rate times `by`, the speed's division.
-    pub(crate) fn scaled(&self, by: f64) -> Banded {
+    /// Every rate over `by`, the speed's division, as `shares` divides the pins' sum, so the two agree to the bit.
+    pub(crate) fn divided(&self, by: f64) -> Banded {
         Banded {
             pieces: self
                 .pieces
                 .iter()
-                .map(|&(from, to, rate)| (from, to, rate * by))
+                .map(|&(from, to, rate)| (from, to, rate / by))
                 .collect(),
         }
     }
@@ -2715,7 +2728,7 @@ pub(crate) fn fit_of(
         read.verdict = "fits";
         return read;
     }
-    let (rewrite, pin_burn) = tier
+    let (rewrite, pin_burn, pin_regime) = tier
         .map(|tier| pin_figures(state, pool, request, figures, tier, now))
         .unwrap_or_default();
     let share = state.share();
@@ -2765,9 +2778,7 @@ pub(crate) fn fit_of(
         let account_burn = projection.banded.plus(&planned_burn);
         let rewrite = rewrite.get(window).copied().unwrap_or(0.0);
         let burn = match pin_burn.get(window) {
-            Some(rate) => {
-                account_burn.plus(&Banded::of(*rate, &segments(request.entrypoint.as_deref())))
-            }
+            Some(rate) => account_burn.plus(&Banded::of(*rate, &segments(pin_regime))),
             None => account_burn.clone(),
         };
         let limit = ceiling(pool, window);
@@ -4026,7 +4037,8 @@ struct Waiting {
 
 /// What fires a round, if anything: the first of `windows` whose test reads over past its wait, with the windows of the
 /// projection test that read over inside their wait before it. The excess is share per second on the fired window: the
-/// burn that, removed now, lands the projection on the ceiling at the horizon.
+/// burn that, removed now, lands the projection on the ceiling at the horizon, and on a span the band crosses, the
+/// average rate to remove over the span.
 ///
 /// On a pool that slows its pins the 5-hour window's test is the stretch: it fires once `over_since`, the instant the
 /// stretch first read over the threshold, is `SLOW_DOWN_WAIT_MS` past, with the horizon at the reset less the
@@ -4428,7 +4440,7 @@ fn shed_round(
             return (read, None);
         };
         let destination_tier = snapshot.tier(&destination).unwrap_or_default();
-        let (rewrite, pin_burn) =
+        let (rewrite, pin_burn, _) =
             pin_figures(state, pool, &req, Figures::Pin(p), destination_tier, now);
         read.runway_ms = fit.runway_ms;
         let model = req.canonical_model.as_str();
@@ -6830,20 +6842,7 @@ mod elapsed_share_tests {
 
 #[cfg(all(test, debug_assertions))]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::sync::Arc;
-
-    use phoebis_store::{
-        AccountKind, AccountRow, AccountState, PoolMember, PoolRow, RegistryLoad, RoutingLoad,
-        StateCause, SubscriptionTerm,
-    };
-
-    use super::{fit_of, lane_key, Banded, Figures, Judge, Recorder, SelectRequest};
-    use crate::state::{
-        BandSegment, Reservation, RoutingState, SharePricer, UtilizationSample, WindowReading,
-        WindowSource, FIVE_HOUR,
-    };
-    use crate::RegistrySnapshot;
+    use super::Recorder;
 
     #[test]
     #[should_panic(expected = "the walk step x/match is not in WALK_STEPS")]
@@ -6856,6 +6855,24 @@ mod tests {
     fn the_recorder_refuses_a_verdict_the_table_does_not_list_for_its_step() {
         Recorder::default().step("pin", "fired", Vec::new());
     }
+}
+
+#[cfg(test)]
+mod banded_tests {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use phoebis_store::{
+        AccountKind, AccountRow, AccountState, PoolMember, PoolRow, RegistryLoad, RoutingLoad,
+        StateCause, SubscriptionTerm,
+    };
+
+    use super::{fit_of, lane_key, Banded, Figures, Judge, SelectRequest};
+    use crate::state::{
+        BandSegment, Reservation, RoutingState, SharePricer, UtilizationSample, WindowReading,
+        WindowSource, FIVE_HOUR,
+    };
+    use crate::RegistrySnapshot;
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-12
@@ -6921,7 +6938,7 @@ mod tests {
             "a rate read inside the band and weighed from outside it reads half the plain rate"
         );
         assert!(close(
-            entering.scaled(0.5).increase(),
+            entering.divided(2.0).increase(),
             entering.increase() / 2.0
         ));
         assert_eq!(Banded::flat(rate, 0, 7_200_000), Banded::of(rate, &whole));

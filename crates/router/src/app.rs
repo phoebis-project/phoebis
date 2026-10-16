@@ -1292,6 +1292,26 @@ mod tests {
             2.0,
             "the base band halves the base capacity"
         );
+        // Monday 2026-09-21 at 12:00 UTC, the test model's band opening.
+        let (opens, hour) = (1_789_992_000_000, 3_600_000);
+        let segments = |entrypoint| {
+            config
+                .share
+                .band_segments(five_hour, entrypoint, opens - hour, opens + hour)
+                .iter()
+                .map(|segment| (segment.from, segment.to, segment.weight))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            segments(None),
+            [(opens - hour, opens, 1.0), (opens, opens + hour, 2.0)],
+            "the base band cuts a span across its opening"
+        );
+        assert_eq!(
+            segments(Some("desk")),
+            [(opens - hour, opens + hour, 1.0)],
+            "the regime's span reads one segment"
+        );
     }
 
     #[test]
