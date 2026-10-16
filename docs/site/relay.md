@@ -422,16 +422,21 @@ never retried. The router's lease covers whatever it misses, a crash or a killed
 | The gap between two stream events | 600 seconds | The same ten minutes |
 | The pre-commit hold | 30 seconds and 64 KiB | The client is waiting, and a longer hold buys no better verdict |
 | A retry in place | The pool's `retry_in_place_seconds`, 0 to 300, default 60 | The operator's bound on waiting out a throttle on the same account |
+| The slow-down's hold | The pool's `slow_down_hold_seconds`, 1 to 300, default 120 | Before the head, so the client's first-byte window covers it |
 
 A connect or handshake that times out counts as unsent, so the request is written once more on a fresh connection. A
 retry in place sleeps the throttle's delay on the same account, with the same credential, before any byte of the
-answer's head reaches the client ([Retry in place](routing.md#retry-in-place)).
+answer's head reaches the client ([Retry in place](routing.md#retry-in-place)). The slow-down's hold sleeps to the pin's
+deadline, which a retry or a sibling request of the pin rejoins, before the request is selected again
+([Slow-down](routing.md#slow-down)).
 
 Beneath these sit Claude Code's own waits. The client cuts a stream that has gone silent for 180 seconds with its
-watchdog on, and gives the first byte of an answer a window of at least 180 seconds ([The client](client.md)). The two
+watchdog on, and gives the first byte of an answer a window of at least 180 seconds ([The client](client.md)). The three
 relay waits that meet them differ. The head and idle guards sit above the client's window, so a dead upstream stream is
-the client's cut at 180 seconds, and the router's 600 seconds stand behind the client's window while the watchdog is
-on. A retry in place holds the head back for
-the throttle's delay, up to the pool's bound, so a bound above the client's first-byte window makes the client end the
-request and send it again. The operator's choice is to keep the bound at or under the window, or to switch the watchdog
-off for a client whose requests may wait that long ([The client](client.md)).
+the client's cut at 180 seconds, and the router's 600 seconds stand behind the client's window while the watchdog is on.
+A retry in place holds the head back for the throttle's delay, up to the pool's bound, so a bound above the client's
+first-byte window makes the client end the request and send it again. The slow-down's hold holds the head back too,
+served before any slot or reset wait and under its own bound, the pin's cycle times the slow-down up to
+`slow_down_hold_seconds`, whose default of 120 seconds leaves 60 of the window for the upstream's head and the
+pre-commit hold. The operator's choice is to keep each bound at or under the window, or to switch the watchdog off for a
+client whose requests may wait that long ([The client](client.md)).

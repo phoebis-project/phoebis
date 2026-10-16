@@ -22,34 +22,35 @@ pub use phoebis_store::canonical_id as canonical_model;
 pub use record::{
     BudgetFacts, By, CacheMapEntry, CandidateFacts, ChainFacts, CooldownFacts, CreditsFacts,
     DecisionRecord, DecisionSummary, ExhaustionFacts, Fact, FactEntity, FactValue, HoldOutcome,
-    LaneFacts, MarkClearedFacts, ObstacleFacts, Outcome, OverageFacts, PaceFacts,
-    PinEventFacts, PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup,
-    RefusalFacts, RefusedRequest, RequestFacts, RequestFlags, ReservationFacts, Score, Settings,
-    ShedPinFacts, ShedRoundFacts, SummaryFact, TermFacts, WalkStep, WarmthFacts, WindowFacts,
-    PARTITION_VALUES, RECORD_VERSION, WALK_STEPS,
+    LaneFacts, MarkClearedFacts, MoveCause, ObstacleFacts, Outcome, OverageFacts,
+    PaceFacts, PinEventFacts, PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry,
+    PrefixLookup, RefusalFacts, RefusedRequest, RequestFacts, RequestFlags, ReservationFacts,
+    Score, Settings, ShedPinFacts, ShedRoundFacts, SummaryFact, TermFacts, WalkStep, WarmthFacts,
+    WindowFacts, PARTITION_VALUES, RECORD_VERSION, WALK_STEPS,
 };
 pub use resolve::{resolve, Candidate, ResolveError};
 pub use select::{
     cohort_hold, decide, effective_warm, elapsed_share_at, exhaustion_status, lane_key,
     release_reasons, seconds_ms, select, warmth_of, ClientClass, CohortHold, Decided, Exhaustion,
-    HoldFacts, MigrateReason, Placement, Refusal, SelectRequest,
-    SelectResult, Selection, SelectionTrace, ShedRoundRecord, Skipped, Warmth, WarmthCause,
-    BUDGET_WINDOW, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MODEL_REJECTED_REASON,
-    REFRESHING_CLASSES,
+    FailedOver, HoldFacts, HoldWait, MigrateReason, PinHold, Placement,
+    Refusal, SelectRequest, SelectResult, Selection, SelectionTrace, ShedRoundRecord, Skipped,
+    SlowDownRead, Warmth, WarmthCause, BUDGET_WINDOW, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON,
+    MODEL_REJECTED_REASON, REFRESHING_CLASSES, SLOW_DOWN_MIN_HOLD_MS, SLOW_DOWN_WAIT_MS,
 };
 pub use snapshot::{KeyRefusal, Presented, RegistrySnapshot};
 pub use state::{
     budget_deadline, burn_average_ms, burn_decayed, ceiling, cooldown_holds, is_plan_window,
-    load_shedding, shed_cap, shed_dwell_ms, warm, AccountTicket, BurnUnit, CreditsState,
-    EvidenceSource, InFlight, KeyPermit, LongContextRates, MemberSpend, OverageEvidence, PinRef,
-    PinUsage, Purged, RateTable, Rates, Reservation, RoutingState, SharePricer, StateWrite,
-    UtilizationSample, WindowReading, WindowSource, BUCKET_LIFE_MS, BUCKET_TTL_MS,
+    load_shedding, return_to_plan_dwell_ms, shed_cap, shed_dwell_ms, slow_down, slow_down_hold_ms,
+    slow_down_stretch_ms, warm, AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight,
+    KeyPermit, LongContextRates, MemberSpend, OverageEvidence, PinPace, PinRef, PinUsage, Purged,
+    RateTable, Rates, Reservation, RoutingState, SharePricer, SlowDownEdge, SlowDownState,
+    StateWrite, UtilizationSample, WindowReading, WindowSource, BUCKET_LIFE_MS, BUCKET_TTL_MS,
     DEFAULT_WINDOW_CEILING, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
     MAX_BUCKETS_PER_ACCOUNT, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 pub use task::{
-    credits_from_usage, sample_from_usage, spawn, AccountProjection, BandWeight, BurnRates,
-    LoadCounts, PinStanding, ReloadError, Report, RouterConfig, RouterEvent, RouterGone,
+    credits_from_usage, sample_from_usage, spawn, AccountProjection, AccountSlowDown, BandWeight,
+    BurnRates, LoadCounts, PinStanding, ReloadError, Report, RouterConfig, RouterEvent, RouterGone,
     RouterHandle, SelectAnswer, WindowProjection, WriterStatus, COMMANDS, UNATTRIBUTED_POOL,
     WRITER_DEPTH,
 };

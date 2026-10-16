@@ -85,6 +85,7 @@ const DECISIONS = [
   ["held on the session's pin", decision({ by: by('hold', 'session_pin'), fact: [fact('in_flight', '1/1', 'text')], kind: 'held' }), 'session pin', ['in flight 1/1']],
   ["held on the strategy's pick", decision({ by: by('hold', 'strategy_pick'), fact: [fact('in_flight', '16/16', 'text')], kind: 'held', tier: [0, 0, 0] }), 'Pace P0', ['in flight 16/16']],
   ['held, the bound ran out', decision({ by: by('hold', 'cohort'), fact: [fact('answer', 429, 'count'), fact('held', 10_000, 'ms')], kind: 'held' }), 'cohort', ['answer 429', 'held 10 s']],
+  ['held for the slow-down', decision({ by: by('hold', 'slow_down'), fact: [fact('until', ms(18, 20), 'time'), fact('factor', 0.5, null)], kind: 'held' }), 'slow-down', ['until 18:20', 'speed 0.5x']],
   ['exhausted, a budget', decision({ accountId: null, by: by('exhaustion', 'timed'), exhaustion: { deadline: iso(MIDNIGHT), kind: 'timed', obstacle: null, reason: null, window: 'overage' }, fact: [fact('retry', MIDNIGHT, 'time')], kind: 'exhausted' }), 'budget', ['retry 00:00']],
   ['exhausted, every account cooling', decision({ accountId: null, by: by('exhaustion', 'timed'), exhaustion: { deadline: iso(ms(15, 42)), kind: 'timed', obstacle: null, reason: null, window: 'five_hour' }, fact: [fact('retry', ms(15, 42), 'time')], kind: 'exhausted' }), 'cooldown', ['retry 15:42']],
   ['exhausted, every account rejects the model', decision({ accountId: null, by: by('exhaustion', 'model_rejected'), exhaustion: { deadline: null, kind: 'model_rejected', obstacle: null, reason: null, window: null }, fact: [fact('retry', 'none', 'text')], kind: 'exhausted' }), 'model rejected', ['retry none']],
@@ -123,6 +124,7 @@ const EVENTS = [
   ['pin moved by the shed rule', event('pin_migrated', { agent_id: 'main', epoch: 23, from_account: 'secondary', reason: 'shed' }), 'shed', ['epoch 23']],
   ['pin moved, a failover', event('pin_migrated', { agent_id: 'main', epoch: 54, from_account: 'secondary', reason: 'cooldown' }, { sessionId: 's-moved' }), d.PIN_MIGRATION_LABEL.cooldown, ['answer 429'], failover('cooldown', 429)],
   ['pin moved, the fast lane', event('pin_migrated', { agent_id: 'main', epoch: 55, from_account: 'secondary', reason: 'fast_lane' }, { sessionId: 's-moved' }), 'fast lane cooling', ['answer 429'], failover('fast_lane', 429)],
+  ['pin moved, a mark', event('pin_migrated', { agent_id: 'main', cause: { cause: 'funding_refused', state: 'funding_required' }, epoch: 56, from_account: 'secondary', reason: 'mark' }, { sessionId: 's-moved' }), d.PIN_MIGRATION_LABEL.mark, ['answer 400'], failover('mark', 400)],
   ['pin expired, found idle by the sweep', event('pin_expired', { agent_id: 'main', reasons: ['expired'] }), 'idle', []],
   ['pin expired, any other reason', event('pin_expired', { agent_id: 'main', reasons: ['cooldown', 'spent'] }), 'account cooled', []],
   ['pin released by hand', event('pin_released', { agent_id: 'main' }, { actor: 'admin' }), 'by hand', []],
@@ -161,6 +163,8 @@ const EVENTS = [
   ['budget reached', event('budget_reached', { budget_usd: 20, period: 'day', period_end: MIDNIGHT, spent_usd: 20.4 }, { poolId: 'jobs' }), 'daily budget', ['spent $20.40 of $20.00']],
   ['budget period ended', event('budget_period_ended', { period: 'month', period_start: at, previous_spent_usd: 18.2 }, { poolId: 'jobs' }), 'monthly budget', ['spent $18.20']],
   ['wind-down started', event('wind_down_started', { end_source: 'cancelled', ends_at: ms(15, 0), wind_down_minutes: 60 }, { poolId: 'all' }), 'subscription ends', ['until 15:00']],
+  ['slow-down started', event('slow_down_started', { demand: 0.12, factor: 0.5, reset: ms(18, 20), stretch_ms: 2_520_000, threshold_ms: 1_800_000 }, { poolId: 'work' }), 'slow-down', ['speed 0.5x']],
+  ['slow-down ended', event('slow_down_ended', { duration_ms: 5_180_000, factor_min: 0.35, held_ms: 36_000, since: at - 5_300_000 }, { poolId: 'work' }), 'slow-down', ['slowest 0.35x']],
   ['catalog changed, a model added', event('catalog_changed', { added: ['claude-opus-5-5'], count: 12, removed: [] }), 'model added', ['models 12']],
   ['catalog changed, a model removed', event('catalog_changed', { added: [], count: 11, removed: ['claude-sonnet-4-5'] }), 'model removed', ['models 11']],
   ['catalog changed, models changed', event('catalog_changed', { added: ['claude-sonnet-5-5'], count: 12, removed: ['claude-sonnet-4-5'] }), 'models changed', ['models 12']],
@@ -205,7 +209,7 @@ test('a pin created with no placement beside it reads the placement word', () =>
 });
 
 test('a failover or fast-lane move whose failed attempt is not drawn reads no answer and never the epoch', () => {
-  for (const reason of ['cooldown', 'fast_lane']) {
+  for (const reason of ['cooldown', 'fast_lane', 'mark']) {
     const move = event('pin_migrated', { agent_id: 'main', epoch: 54, from_account: 'secondary', reason }, { sessionId: 's-moved' });
     const [second] = failover(reason, 429);
     assert.deepEqual(read(move).facts, [], `${reason}, no rows drawn`);
@@ -240,14 +244,20 @@ test('a fact key the console has no label for is dropped rather than drawn under
   assert.deepEqual(read(decision({ fact: [fact('mystery', 1, 'count'), fact('depth', 2, 'count')] })).facts, ['depth 2']);
 });
 
-const TABLE_LABELS = ['5h', '7d', 'Fable', 'answer', 'attempt', 'capture', 'cause', 'client', 'depth', 'epoch', 'field', 'fields', 'fit', 'gap', 'held', 'idle', 'in flight', 'key', 'lasted', 'models', 'next', 'over', 'pick', 'pins', 'prefix', 'rank', 'resets', 'retry', 'runway', 'spent', 'state', 'to', 'turn', 'until', 'was'];
+const TABLE_LABELS = [
+  '5h', '7d', 'Fable', 'answer', 'attempt', 'capture', 'cause', 'client', 'depth', 'epoch', 'field', 'fields', 'fit', 'gap', 'held', 'idle', 'in flight', 'key', 'lasted', 'models', 'next', 'over', 'pick', 'pins', 'prefix',
+  'rank', 'resets', 'retry', 'runway', 'slow-down', 'slowest', 'speed', 'spent', 'state', 'to', 'turn', 'until', 'was',
+];
 
 test('every label of the table is used at least once and no fact key lacks a label', () => {
-  assert.equal(TABLE_LABELS.length, 35);
+  assert.equal(TABLE_LABELS.length, 38);
   assert.deepEqual([...new Set(Object.values(d.FACT_LABEL))].sort(), [...TABLE_LABELS].sort());
-  assert.equal(Object.keys(d.FACT_LABEL).length, 35);
+  assert.equal(Object.keys(d.FACT_LABEL).length, 38);
   const emitted = [...DECISIONS, ...EVENTS].flatMap(([, row, , , page]) => d.factsOf(row, NOW, page).map((p) => p.label));
-  assert.deepEqual([...new Set(emitted)].sort(), [...TABLE_LABELS].sort());
+  // The slow-down's word names the By of its rows, the held decision's and the two events', where no fact carries it.
+  const named = [...DECISIONS, ...EVENTS].map(([, , by]) => by).filter((by) => TABLE_LABELS.includes(by));
+  assert.deepEqual([...new Set([...emitted, ...named])].sort(), [...TABLE_LABELS].sort());
+  assert.deepEqual([...new Set(named)].sort(), ['idle', 'slow-down']);
   for (const label of emitted) assert.ok(Object.values(d.FACT_LABEL).includes(label), label);
 });
 
@@ -255,15 +265,19 @@ test('every event kind has its words and its tone', () => {
   const kinds = [
     'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
     'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
-    'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset', 'window_spent',
+    'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'warm_prefix_expired', 'wind_down_started',
+    'window_reset', 'window_spent',
   ];
   assert.deepEqual(Object.keys(d.EVENT_KIND_LABEL).sort(), kinds);
+  assert.equal(kinds.length, 32);
   assert.equal(d.EVENT_KIND_LABEL.pin_migrated, 'pin moved');
   assert.equal(d.EVENT_KIND_LABEL.shedding_round, 'shedding round');
   // A cleared mark and a booking the request's end let go report no trouble, so both read neutral.
   assert.deepEqual([d.EVENT_KIND_LABEL.mark_cleared, d.EVENT_KIND_LABEL.reservation_expired], ['mark cleared', 'reservation expired']);
+  // A slowed account warns while its requests wait, and the end of the span reports no trouble.
+  assert.deepEqual([d.EVENT_KIND_LABEL.slow_down_started, d.EVENT_KIND_LABEL.slow_down_ended], ['slow-down started', 'slow-down ended']);
   const tones = Object.fromEntries(kinds.map((k) => [k, d.eventTone(k)]).filter(([, t]) => t !== 'neutral'));
-  assert.deepEqual(tones, { account_state_changed: 'serious', budget_reached: 'serious', cooldown_set: 'warning', ledger_gap: 'serious', model_rejected: 'warning', window_spent: 'warning' });
+  assert.deepEqual(tones, { account_state_changed: 'serious', budget_reached: 'serious', cooldown_set: 'warning', ledger_gap: 'serious', model_rejected: 'warning', slow_down_started: 'warning', window_spent: 'warning' });
   assert.equal(d.eventTone('a_kind_added_later'), 'neutral');
   assert.equal(d.eventTone('reauth_required'), 'neutral', 'the ledger folds the kind into the state change, so it has no tone of its own');
 });
@@ -292,6 +306,21 @@ test('the step and verdict words', () => {
   assert.equal(d.verdictTone('none', 'pin'), 'neutral');
   assert.equal(d.verdictTone('match', 'eligible'), 'good');
   assert.equal(d.verdictTone('a_word_added_later'), 'neutral');
+});
+
+test('the walk words name every key the slow-down, the return rule, the pick, the placement and the shed line write', () => {
+  const words = {
+    by_runway: 'by runway', cycle_ms: 'cycle', demand_five_hour: 'demand', dwell_ms: 'dwell', factor: 'speed', fired_by: 'fired by', ladder: 'ladder', mode: 'mode', over_ms: 'over for', over_since: 'over since',
+    over_since_five_hour: 'over since 5h', over_since_seven_day: 'over since 7d', over_since_seven_day_fable: 'over since Fable', slow_down: 'slow-down', slow_down_until: 'slowed until', speed: 'realized',
+    stretch_ms: 'stretch', threshold_ms: 'threshold', wait_five_hour: 'wait 5h', wait_seven_day: 'wait 7d', wait_seven_day_fable: 'wait Fable',
+  };
+  assert.equal(Object.keys(words).length, 21);
+  // Several of the words equal the underscores read as spaces, so the table's own entries are what the case reads.
+  for (const [key, word] of Object.entries(words)) assert.equal(d.WALK_KEY[key], word, key);
+  assert.equal(d.WALK_KEY.wait_ms, 'wait', "the spent rule's wait keeps its word");
+  assert.equal(d.WALK_KEY.demand_seven_day, undefined, 'no line writes a weekly demand');
+  // A window's word follows the noun as the horizon's does.
+  assert.deepEqual(['horizon', 'over_since', 'wait'].map((k) => d.keyWord(`${k}_seven_day_fable`)), ['horizon Fable', 'over since Fable', 'wait Fable']);
 });
 
 test('a fact value is drawn by its unit', () => {
@@ -461,9 +490,11 @@ const candidate = (o) => ({
   accountId: 'primary',
   allowanceKnown: true,
   budget: [],
+  burn: {},
   cooldowns: [],
   credits: null,
   enabled: true,
+  factor: null,
   inFlight: 3,
   inFlightCap: 16,
   inOverage: false,
@@ -488,11 +519,14 @@ const candidate = (o) => ({
 const completion = (o) => ({ cacheMapWritten: null, cacheReadTokens: null, completedAt: null, freed: false, heldMs: null, hit: null, inputTokens: null, promisedTokens: null, status: null, ...o });
 const SETTINGS = {
   affinityMode: 'when_cached', affinityTtlSeconds: 600, burnAverageSeconds: 1_800, inFlightCap: 16, legacy: null, loadShedding: true, migrateWhenSpent: true, minSharedPrefixTokens: 20_000,
-  overageMoveGraceMinutes: 30, overagePolicy: 'prefer_plan', poolUpdatedAt: iso(ms(9, 5, 12)), preferSubscription: true, retryInPlaceSeconds: 60, sessionPlacement: 'by_warm_prefix', shedCap: 0.5,
-  shedDwellSeconds: 900, strategy: 'pace', subagentPlacement: 'by_cohort', warmSessions: 'when_needed', windDownMinutes: 30, windowCeiling: 0.95,
+  overageMoveGraceMinutes: 30, overagePolicy: 'prefer_plan', poolUpdatedAt: iso(ms(9, 5, 12)), preferSubscription: true, retryInPlaceSeconds: 60, returnToPlan: 'when_cold', returnToPlanDwellSeconds: 900,
+  sessionPlacement: 'by_warm_prefix', shedCap: 0.5, shedDwellSeconds: 900, slowDown: true, slowDownHoldSeconds: 120, slowDownStretchSeconds: 1_800, strategy: 'pace', subagentPlacement: 'by_cohort', warmSessions: 'when_needed',
+  windDownMinutes: 30, windowCeiling: 0.95,
 };
+/** The five settings a record written before the slow-down and the return mode carries no value for. */
+const BEFORE_SLOW_DOWN = { returnToPlan: null, returnToPlanDwellSeconds: null, slowDown: null, slowDownHoldSeconds: null, slowDownStretchSeconds: null };
 /** The settings a version 1 record read: the three renamed under their new members, no switch, no ceiling, and the three removed. */
-const LEGACY_SETTINGS = { ...SETTINGS, legacy: { paceFloor: 0.05, selectBelowUtilization: null, shedAheadOfPace: 0.9 }, loadShedding: null, windowCeiling: null };
+const LEGACY_SETTINGS = { ...SETTINGS, ...BEFORE_SLOW_DOWN, legacy: { paceFloor: 0.05, selectBelowUtilization: null, shedAheadOfPace: 0.9 }, loadShedding: null, windowCeiling: null };
 const record = (o = {}) => ({
   candidates: [],
   outcome: {
@@ -676,7 +710,7 @@ test('the outcome rows read the cache tier off the deepest map entry and pending
   assert.deepEqual(rows(promised).find(([label]) => label === 'Cache read'), ['Cache read', ['hit', 'read 31K of 31.2K promised', 'tier 5 min']]);
   const held = record({ outcome: { hold: { accountId: 'primary', boundMs: 10_000, cohort: 'primary' }, kind: 'held' }, walk: [wstep('hold', 'held', [wfact('place', 'cohort')])] });
   assert.deepEqual(rows(held), [['Hold', ['on primary', 'cohort', 'bound 10 s']]]);
-  const freed = record({ outcome: { cohortHold: { cohort: 'primary', heldMs: 2_000, waitedOn: ['primary'] }, completion: completion({ completedAt: iso(NOW), freed: true, heldMs: 2_000, status: 200 }) } });
+  const freed = record({ outcome: { cohortHold: { cohort: 'primary', heldMs: 2_000, waitedOn: ['primary'], waits: [] }, completion: completion({ completedAt: iso(NOW), freed: true, heldMs: 2_000, status: 200 }) } });
   assert.deepEqual(rows(freed).find(([label]) => label === 'Hold'), ['Hold', ['on primary', 'cohort', 'freed after 2.0 s']]);
   const exhausted = record({ outcome: { accountId: null, exhaustion: { deadline: iso(ms(15, 42)), kind: 'timed', obstacle: null, reason: null, window: 'five_hour' }, kind: 'exhausted', upstreamModel: null } });
   assert.deepEqual(rows(exhausted), [['Answer', ['status 429', 'window 5h', 'retry after 15:42']]]);
@@ -736,6 +770,81 @@ test('an exhausted record draws no hold an earlier attempt waited through', () =
   assert.deepEqual(rows(exhausted(2, [hold(1), hold(2)])), [['Hold', ['on primary', 'strategy pick', 'held 1 min']], ['Answer', ['status 404', 'retry none']]], "a hold on the record's own attempt still draws");
 });
 
+test("a held outcome's verdict chips and Hold row read the slow-down's figures one value a chip", () => {
+  const slowHold = (o = {}) => ({ accountId: 'studio', boundMs: 120_000, cohort: null, cycleMs: 20_000, factor: 0.5, reason: 'slow_down', speed: 0.5, stretchMs: 2_520_000, thresholdMs: 1_800_000, until: iso(ms(18, 20)), ...o });
+  const held = (hold) => record({ candidates: [candidate({ accountId: 'studio', verdict: 'held_on' })], outcome: { accountId: 'studio', hold, kind: 'held' } });
+  const row = decision({ accountId: 'studio', by: by('hold', 'slow_down'), fact: [fact('until', ms(18, 20), 'time'), fact('factor', 0.5, null)], kind: 'held' });
+  assert.deepEqual(texts(d.verdictChips(held(slowHold()), row)), ['tier plan quota P0', 'slow-down', 'held for the slow-down until 18:20', '0.5x']);
+  const rows = (r) => d.outcomeRows(r, NOW).map((line) => [line.label, texts(line.chips)]);
+  assert.deepEqual(rows(held(slowHold())), [['Hold', ['on studio', 'for the slow-down until 18:20', 'speed 0.5x', 'stretch 42 min of 30 min', 'bound 2 min', 'cycle 20 s']]]);
+  // The wait is the slow-down's and no slot's, so the row carries no in-flight cap hover.
+  assert.equal(d.outcomeRows(held(slowHold()), NOW)[0].title, undefined);
+  // A pin with no cycle yet draws no cycle chip, and a rejoin on a pool whose switch is off names its deadline alone.
+  assert.deepEqual(rows(held(slowHold({ cycleMs: null }))), [['Hold', ['on studio', 'for the slow-down until 18:20', 'speed 0.5x', 'stretch 42 min of 30 min', 'bound 2 min']]]);
+  const rejoin = held(slowHold({ cycleMs: null, factor: null, speed: null, stretchMs: null, thresholdMs: null }));
+  assert.deepEqual(rows(rejoin), [['Hold', ['on studio', 'for the slow-down until 18:20', 'bound 2 min']]]);
+  assert.deepEqual(texts(d.verdictChips(rejoin, row)).slice(-1), ['held for the slow-down until 18:20']);
+  // The routing log's row reads the deadline and the factor as the chips print it.
+  assert.deepEqual(read(row), { by: 'slow-down', facts: ['until 18:20', 'speed 0.5x'] });
+  assert.deepEqual(read(decision({ ...row, fact: [fact('until', ms(18, 20), 'time'), fact('factor', 0.4, null)] })).facts, ['until 18:20', 'speed 0.4x']);
+});
+
+test("a renewal after a slow-down hold reads the hold's label and one Hold row per wait with its reason", () => {
+  // The router names the hold the renewal followed, as a placement after a hold names its own.
+  assert.deepEqual(read(decision({ by: by('hold', 'slow_down'), fact: [fact('held', 42_000, 'ms')], kind: 'renewed' })), { by: 'slow-down', facts: ['held 42 s'] });
+  assert.deepEqual([read(decision({ kind: 'renewed' })).by, read(decision({ kind: 'renewed', probe: true })).by], ['no rule fired', 'keepalive'], 'every other renewal keeps its words');
+  const rows = (cohortHold, freed = true) =>
+    d
+      .outcomeRows(record({ outcome: { cohortHold, completion: completion({ completedAt: iso(NOW), freed, heldMs: cohortHold.heldMs, status: 200 }), kind: 'renewed' } }), NOW)
+      .filter((line) => line.label === 'Hold')
+      .map((line) => [texts(line.chips), line.title]);
+  // Each wait reads its reason and its own span, oldest first, and the last the form its end took.
+  assert.deepEqual(rows({ cohort: null, heldMs: 81_000, waitedOn: ['studio'], waits: [{ heldMs: 39_000, reason: 'reset' }, { heldMs: 42_000, reason: 'slow_down' }] }), [
+    [['on studio', 'for the reset', 'held 39 s'], undefined],
+    [['on studio', 'for the slow-down', 'freed after 42 s'], undefined],
+  ]);
+  // A slot's wait keeps its place and the in-flight cap's hover, which speaks of no other wait.
+  assert.deepEqual(rows({ cohort: 'primary', heldMs: 44_000, waitedOn: ['primary'], waits: [{ heldMs: 2_000, reason: 'cap' }, { heldMs: 42_000, reason: 'slow_down' }] }, false), [
+    [['on primary', 'cohort', 'held 2.0 s'], d.HOLD_HINT],
+    [['on primary', 'for the slow-down', 'held 42 s'], undefined],
+  ]);
+  // Each wait names the account it waited on: the slow-down's on its pin's account, then a slot's on the strategy's pick.
+  assert.deepEqual(rows({ cohort: null, heldMs: 44_000, waitedOn: ['studio', 'primary'], waits: [{ heldMs: 42_000, reason: 'slow_down' }, { heldMs: 2_000, reason: 'cap' }] }), [
+    [['on studio', 'for the slow-down', 'held 42 s'], undefined],
+    [['on primary', 'strategy pick', 'freed after 2.0 s'], d.HOLD_HINT],
+  ]);
+  // A row written before the waits reads one row of the summed wait.
+  assert.deepEqual(rows({ cohort: null, heldMs: 2_000, waitedOn: ['primary'], waits: [] }), [[['on primary', 'strategy pick', 'freed after 2.0 s'], d.HOLD_HINT]]);
+});
+
+test("an outcome with a cause reads it in the event card's words", () => {
+  const rows = (r) => Object.fromEntries(d.outcomeRows(r, NOW).map((line) => [line.label, texts(line.chips)]));
+  const cooled = { cause: null, reason: 'rate_limit', scope: 'account', state: null, window: 'five_hour' };
+  const marked = { cause: 'funding_refused', reason: null, scope: null, state: 'funding_required', window: null };
+  // A failover's landing is a placement, and a rule's move with a cause draws it too.
+  assert.deepEqual(rows(record({ outcome: { cause: cooled, fromAccountId: 'secondary', kind: 'placed' } })).Cause, ['429 on 5h']);
+  assert.deepEqual(rows(record({ outcome: { cause: marked, fromAccountId: 'secondary', kind: 'moved' } })).Cause, ['funding required by credit balance']);
+  // The event card's row of the same move spells each cause alike.
+  for (const [reason, cause] of [['cooldown', cooled], ['mark', marked], ['fast_lane', { cause: null, reason: 'fast_rate_limit', scope: 'fast', state: null, window: 'fast' }]]) {
+    const pair = d.detailPairs(event('pin_migrated', { agent_id: 'main', cause, epoch: 54, from_account: 'secondary', reason }), NOW, []).find((p) => p.label === 'Cause');
+    assert.deepEqual(texts(pair.chips), rows(record({ outcome: { cause, kind: 'placed' } })).Cause, reason);
+  }
+  assert.equal(rows(record({ outcome: { cause: null, kind: 'placed' } })).Cause, undefined, 'an outcome with no cause draws no Cause row');
+});
+
+test('the pin fold reads the cycle and the slowed-until time', () => {
+  const pin = {
+    accountId: 'studio', createdAt: iso(ms(13, 47, 24)), cycleMs: 42_000, epoch: 208, found: 'live', idleMs: 42_000, incarnation: 1, lane: 'x|standard|enabled|high', lastRefreshAt: iso(ms(14, 3, 36)), lastUsedAt: iso(ms(14, 3, 36)),
+    marked: false, markedAt: null, markedOn: null, markedWindow: null, refreshAgeMs: 42_000, released: [], shed: null, slowDownUntil: iso(ms(14, 5)), warmth: 'refresh', warmthCause: 'continues_pin',
+  };
+  const rows = (p) => d.pinRows(record({ pin: p, pinReason: null }), NOW).map((r) => [r.label, texts(r.chips)]);
+  assert.deepEqual(rows(pin).slice(-2), [['Cycle', ['42 s']], ['Slowed until', ['14:05']]]);
+  assert.deepEqual(rows(pin).map(([label]) => label), ['Pin on', 'Epoch', 'Created', 'Idle', 'Refresh age', 'Pin lane', 'Warmth', 'Cause', 'Cycle', 'Slowed until']);
+  // A pin with no cycle and no standing deadline, a record from before the members among them, draws neither row.
+  assert.deepEqual(rows({ ...pin, cycleMs: null, slowDownUntil: null }).slice(-2).map(([label]) => label), ['Warmth', 'Cause']);
+  assert.deepEqual(rows({ ...pin, slowDownUntil: null }).slice(-1), [['Cycle', ['42 s']]], 'a cycle stands without a deadline');
+});
+
 /** One event per kind, its detail in the shape its writer stores, each naming an account and a pool. */
 const DETAIL_EVENTS = {
   account_state_changed: [{ cause: 'funding_refused', detail: 'Your credit balance is too low', from: 'ready', to: 'funding_required' }, ['From', 'To', 'Cause', 'Detail', 'Effect']],
@@ -753,7 +862,10 @@ const DETAIL_EVENTS = {
   overage_started: [{}, ['Effect']],
   pin_created: [{ agent_id: 'main', epoch: 52 }, ['Key', 'Session', 'Agent', 'Model', 'Epoch']],
   pin_expired: [{ agent_id: 'main', reasons: ['cooldown', 'spent'] }, ['Key', 'Session', 'Agent', 'Model', 'Reasons', 'Found by']],
-  pin_migrated: [{ agent_id: 'main', binding: 'five_hour', epoch: 53, fit: 'least_bad', from_account: 'secondary', reason: 'spent', runway_ms: 0 }, ['From', 'To', 'Reason', 'Moved by', 'Destination fit', 'Runway', 'Key', 'Session', 'Agent', 'Model']],
+  pin_migrated: [
+    { agent_id: 'main', binding: 'five_hour', cause: { cause: 'funding_refused', state: 'funding_required' }, epoch: 53, fit: 'least_bad', from_account: 'secondary', reason: 'mark', runway_ms: 0 },
+    ['From', 'To', 'Reason', 'Cause', 'Moved by', 'Destination fit', 'Runway', 'Key', 'Session', 'Agent', 'Model'],
+  ],
   pin_released: [{ agent_id: 'main' }, ['Actor', 'Key', 'Session', 'Agent', 'Model']],
   poll_backoff_ended: [{ attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) }, ['Backed off', 'Attempts', 'Resumed']],
   poll_backoff_started: [{ attempts: 1, endpoint: 'usage', last_clean_poll_at: ms(13, 43), next_attempt_at: ms(13, 53), reason: '429' }, ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect']],
@@ -765,13 +877,17 @@ const DETAIL_EVENTS = {
   router_started: [{ affinity_entries_loaded: 34, down_since: ms(6, 11, 58), holds_lost: true, pins_loaded: 10, shedding_marks_loaded: 0, shedding_rounds_stale: 0, version: '0.1.0', windows_loaded: 5 }, ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests']],
   shedding_round: [
     {
-      burn_average_seconds: 1_800, burn_sum: 0.12, ceiling: 0.95, dwell_seconds: 900, dwell_until: ms(14, 15), excess: 0.06, horizon: ms(16, 0), marks: [{ agent_id: 'c21e', key_id: 'desktop', model: 'claude-sonnet-5', session_id: 's1' }],
+      burn_average_seconds: 1_800, burn_sum: 0.12, ceiling: 0.95, dwell_seconds: 900, dwell_until: ms(14, 15), excess: 0.06, factor: null, horizon: ms(16, 0),
+      marks: [{ agent_id: 'c21e', key_id: 'desktop', model: 'claude-sonnet-5', session_id: 's1' }],
       outcome: 'marked 1', persisted: true,
       pins: [{ agent_id: 'c21e', burn: 0.07, cold: true, key_id: 'desktop', last_input_tokens: 48_100, marked: true, model: 'claude-sonnet-5', note: null, per_rewrite: 0.004, planned: 'secondary', rewrite: 0.005, runway_ms: null, session_id: 's1', skip: null }],
-      projection: 0.99, reason: null, removed: 0.07, shed_cap: 0.2, target: 0.024, unit: 'window_share', utilization: 0.71, warm_sessions: 'when_needed', window: 'five_hour',
+      projection: 0.99, reason: null, removed: 0.07, shed_cap: 0.2, stretch_ms: null, target: 0.024, threshold_ms: null, trigger: 'projection', unit: 'window_share', utilization: 0.71, warm_sessions: 'when_needed',
+      window: 'five_hour',
     },
-    ['Started by', 'Trigger', 'Excess', 'Cap', 'Unit', 'Burn average', 'Warm sessions', 'Pins', 'Planned destinations', 'Outcome', 'Next round after', 'Dwell', 'Survive a restart'],
+    ['Started by', 'Trigger', 'Fired by', 'Excess', 'Cap', 'Unit', 'Burn average', 'Warm sessions', 'Pins', 'Planned destinations', 'Outcome', 'Next round after', 'Dwell', 'Survive a restart'],
   ],
+  slow_down_ended: [{ duration_ms: 5_180_000, factor_min: 0.35, held_ms: 36_000, since: ms(9, 12) }, ['Lasted', 'Slowest', 'Held', 'Effect']],
+  slow_down_started: [{ demand: 0.12, factor: 0.5, reset: ms(18, 20), stretch_ms: 2_520_000, threshold_ms: 1_800_000 }, ['Speed', 'Stretch', 'Demand', 'Reset', 'Effect']],
   warm_prefix_expired: [{ cause: 'ttl', deepest: { depth: 1, prefix_tokens: 18_400, tier: 'message', ttl_ms: 300_000, written_at: ms(14, 19, 52) }, entries: 1, root: 's0' }, ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed']],
   wind_down_started: [{ end_source: 'cancelled', ends_at: ms(15, 0), wind_down_minutes: 30 }, ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from']],
   window_reset: [{ next_reset: ms(19, 0), observed: 'sample', reset_at: ms(14, 0), utilization_before: 0.92, window: 'five_hour' }, ['Window', 'Before the reset', 'Prediction', 'Next reset']],
@@ -789,6 +905,9 @@ test('every event kind has its detail pairs starting with When, Account and Pool
     assert.deepEqual(pairs.slice(3).map((p) => p.label), own, kind);
     for (const p of pairs) for (const c of p.chips) assert.ok(!/(?<!\d),|,(?!\d)|;/.test(chipText(c)), `${kind} ${p.label}: ${chipText(c)}`);
   }
+  // A mark's move is a failover, and its cause reads in the account state card's words.
+  const marked = Object.fromEntries(d.detailPairs(event('pin_migrated', DETAIL_EVENTS.pin_migrated[0]), NOW, []).map((p) => [p.label, texts(p.chips)]));
+  assert.deepEqual([marked.Reason, marked.Cause, marked['Moved by']], [[d.PIN_MIGRATION_LABEL.mark], ['funding required by credit balance'], ['failover']]);
   const without = d.detailPairs(event('router_started', { pins_loaded: 10 }, { accountId: null }), NOW, []);
   assert.deepEqual(without.slice(0, 2).map((p) => p.label), ['When', 'Pins loaded']);
   const round = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, []).find((p) => p.label === 'Pins');
@@ -796,6 +915,61 @@ test('every event kind has its detail pairs starting with When, Account and Pool
   assert.deepEqual(round.table.rows.map((r) => r.map(chipText)), [['s1', 'c21e', 'cold', '7.0 %/h', '48.1K', '0.5%', 'secondary', 'marked']]);
   const restart = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, []).find((p) => p.label === 'Survive a restart');
   assert.deepEqual(texts(restart.chips), ['persisted']);
+});
+
+test('the two slow-down events read their pairs and effects', () => {
+  const pairs = (kind, detail) => Object.fromEntries(d.detailPairs(event(kind, detail, { poolId: 'work' }), NOW, []).map((p) => [p.label, texts(p.chips)]));
+  const started = pairs('slow_down_started', { demand: 0.12, factor: 0.5, reset: ms(18, 20), stretch_ms: 2_520_000, threshold_ms: 1_800_000 });
+  assert.deepEqual(started, {
+    When: ['2026-09-16 14:00:00 UTC'],
+    Account: ['primary'],
+    Pool: ['work'],
+    Speed: ['0.5x'],
+    Stretch: ['42 min of 30 min'],
+    Demand: ['12.0 %/h'],
+    Reset: ['18:20'],
+    Effect: ["requests of the account's sessions wait their cycle times the slow-down up to the hold"],
+  });
+  // The span runs to the read that returned the factor to 1, without the wait that closes it.
+  const ended = pairs('slow_down_ended', { duration_ms: 5_180_000, factor_min: 0.35, held_ms: 36_000, since: ms(9, 12) });
+  assert.deepEqual(ended, { When: ['2026-09-16 14:00:00 UTC'], Account: ['primary'], Pool: ['work'], Lasted: ['1 h 26 min'], Slowest: ['0.35x'], Held: ['36 s'], Effect: ["requests of the account's sessions pass unheld again"] });
+  // Two decimals with a trailing zero dropped, as the speed chips read the factor.
+  assert.deepEqual(pairs('slow_down_started', { demand: 0.1286, factor: 0.734, reset: ms(18, 20), stretch_ms: 1_620_000, threshold_ms: 1_800_000 }).Speed, ['0.73x']);
+});
+
+test("a round's Trigger reads the stretch under the slow-down, its Demand pair the burn and the reset, and its Fired by pair names the source", () => {
+  const round = (more) =>
+    Object.fromEntries(
+      d.detailPairs(
+        event('shedding_round', { burn_average_seconds: 1_800, burn_sum: 0.12, ceiling: 0.95, dwell_seconds: 900, dwell_until: ms(14, 15), excess: 0.06, horizon: ms(16, 0), marks: [], outcome: 'nothing_to_mark', persisted: true, pins: [], projection: 0.99, reason: 'no_runway', removed: 0, shed_cap: 0.5, target: 0.06, unit: 'window_share', utilization: 0.86, warm_sessions: 'when_needed', window: 'five_hour', ...more }, { requestId: 'req_1', sessionId: 's1-0000-4000' }),
+        NOW,
+        [],
+      ).map((p) => [p.label, texts(p.chips)]),
+    );
+  // Under the slow-down the horizon is the reset less the threshold, so the reset reads the horizon put back.
+  const stretched = round({ factor: 0.5, horizon: ms(17, 50), stretch_ms: 2_520_000, threshold_ms: 1_800_000, trigger: 'slow_down' });
+  assert.deepEqual([stretched.Trigger, stretched.Demand, stretched['Fired by']], [['5h stretch 42 min over the threshold 30 min'], ['12.0 %/h to the reset at 18:20'], ['the slow-down']]);
+  assert.deepEqual(Object.keys(stretched).slice(0, 7), ['When', 'Account', 'Started by', 'Trigger', 'Demand', 'Fired by', 'Excess']);
+  const projected = round({ factor: null, stretch_ms: null, threshold_ms: null, trigger: 'projection' });
+  assert.deepEqual([projected.Trigger, projected.Demand, projected['Fired by']], [['5h projection 99% at 16:00 over the ceiling 95%'], undefined, ['the projection']]);
+  // A round written before the trigger carried its source names none.
+  const unnamed = round({});
+  assert.deepEqual([unnamed.Trigger, unnamed['Fired by']], [['5h projection 99% at 16:00 over the ceiling 95%'], undefined]);
+});
+
+test('a mark healed under the threshold says so', () => {
+  const page = d.decodeRoutingLogPage({
+    counts: null,
+    next_cursor: null,
+    rows: [
+      { type: 'event', account_id: 'studio', actor: null, agent_id: 'main', at: ms(14, 20), detail: { agent_id: 'main', marked_at: ms(14, 5), marked_on: 'studio', marked_window: 'five_hour', projection: 0.93, reason: 'healed', stretch_ms: 1_440_000, threshold_ms: 2_700_000 }, id: 31, key_id: 'notebook', kind: 'mark_cleared', model: 'claude-sonnet-5-5', pool_id: 'work', request_id: null, session_id: 's1-0000-4000' },
+      { type: 'event', account_id: 'secondary', actor: null, agent_id: 'main', at: ms(14, 20), detail: { agent_id: 'main', marked_at: ms(13, 0), marked_on: 'secondary', marked_window: 'five_hour', projection: 0.91, reason: 'healed', stretch_ms: null, threshold_ms: null }, id: 32, key_id: 'desktop', kind: 'mark_cleared', model: 'claude-sonnet-5-5', pool_id: 'all', request_id: null, session_id: 's2-0000-4000' },
+    ],
+  });
+  const reason = (row) => texts(d.detailPairs(row, NOW, []).find((p) => p.label === 'Reason').chips);
+  // The detail's own threshold, 45 minutes here, since the pool's setting may have moved since the heal.
+  assert.deepEqual(reason(page.rows[0]), ['healed: the stretch read 24 min under the threshold 45 min']);
+  assert.deepEqual(reason(page.rows[1]), ['healed: the 5h projection read 91% under the ceiling']);
 });
 
 test("a shedding round's rates read share per hour of the window that fired: the cap with its target and the burn removed, and each pin's burn", () => {
@@ -820,6 +994,12 @@ test('the pin moved, shedding round, cleared mark and expired reservation detail
   assert.deepEqual([moved({ binding: 'five_hour', fit: 'least_bad', runway_ms: 0 })['Destination fit'], moved({ binding: 'five_hour', fit: 'least_bad', runway_ms: 0 }).Runway], [['least bad'], ['none']]);
   assert.deepEqual([moved({ binding: null, fit: 'rewrite_only', runway_ms: null })['Destination fit'], moved({ binding: null, fit: 'rewrite_only', runway_ms: null }).Runway], [['rewrite only'], ['unbounded']]);
   assert.deepEqual(Object.keys(moved({})), ['When', 'Account', 'From', 'To', 'Reason', 'Moved by', 'Session', 'Agent'], 'a move the ledger wrote before the gate reads neither pair');
+  // A failover's cause reads as the cooldown's own words, and a rule's move or a cause-less failover draws no Cause row.
+  const cooled = moved({ cause: { reason: 'rate_limit', scope: 'account', window: 'five_hour' }, reason: 'cooldown' });
+  assert.deepEqual([cooled.Cause, cooled['Moved by']], [['429 on 5h'], ['failover']]);
+  assert.deepEqual(moved({ cause: { reason: 'fast_rate_limit', scope: 'fast', window: 'fast' }, reason: 'fast_lane' }).Cause, ['fast lane 429']);
+  assert.deepEqual(Object.keys(cooled), ['When', 'Account', 'From', 'To', 'Reason', 'Cause', 'Moved by', 'Session', 'Agent']);
+  assert.equal(moved({ cause: null, reason: 'mark' }).Cause, undefined);
 
   const pin = (o) => ({ agent_id: 'c21e', burn: 0.07, cold: false, key_id: 'desktop', last_input_tokens: 48_100, marked: false, model: 'claude-sonnet-5', note: null, per_rewrite: 0.004, planned: null, rewrite: null, runway_ms: null, session_id: 'bcc805b6-0588', skip: null, ...o });
   const round = (more) => pairs('shedding_round', { burn_average_seconds: 1_800, burn_sum: 0.146, ceiling: 0.95, dwell_seconds: 900, dwell_until: ms(14, 15), excess: 0.095, horizon: ms(18, 20), marks: [], outcome: 'nothing_to_mark', persisted: true, projection: 0.99, reason: 'no_runway', removed: 0.073, shed_cap: 0.5, target: 0.075, unit: 'window_share', utilization: 0.9, warm_sessions: 'when_needed', window: 'five_hour', ...more });
@@ -917,18 +1097,28 @@ test('the verdict line words the kind with its accounts and its pool as entities
   assert.deepEqual(texts(d.verdictChips(pending, decision({ by: strategy('pace', [0, 0, 0]) }))).slice(-1), ['cache pending']);
 });
 
-test('the settings in force read the nineteen in the card order, and a version 1 record its three removed after them', () => {
+test('the settings fold lists twenty-four rows, draws the five as not recorded on a record from before, and a return dwell of 0 as at once', () => {
   assert.deepEqual(d.SETTINGS_ROWS.map((s) => s.label), [
     'Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', 'Window ceiling', 'Load shedding', 'Move when spent',
-    'Overage grace', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Warm sessions', 'In-flight cap', 'Retry in place',
+    'Overage grace', 'Return to plan', 'Return dwell', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Slow-down', 'Stretch', 'Hold', 'Warm sessions', 'In-flight cap', 'Retry in place',
   ]);
-  assert.deepEqual(d.SETTINGS_ROWS.map((s) => d.settingValue(s.key, SETTINGS)), ['Pace', 'subscriptions first', 'prefer plan', '10 min', 'when cached', 'by warm prefix', '20K', 'by cohort', '95%', 'on', 'on', '30 min', '30 min', '50%', '30 min', '15 min', 'when needed', '16', '1 min']);
+  assert.deepEqual(d.SETTINGS_ROWS.map((s) => d.settingValue(s.key, SETTINGS)), [
+    'Pace', 'subscriptions first', 'prefer plan', '10 min', 'when cached', 'by warm prefix', '20K', 'by cohort', '95%', 'on', 'on', '30 min', 'when cold', '15 min', '30 min', '50%', '30 min', '15 min', 'on', '30 min',
+    '2 min', 'when needed', '16', '1 min',
+  ]);
   const rows = (settings) => d.settingsRows(record({ settings })).map((r) => [r.label, texts(r.chips)]);
   assert.deepEqual(rows({ ...SETTINGS, loadShedding: false }).find(([label]) => label === 'Load shedding'), ['Load shedding', ['off']]);
+  // Under always a dwell of 0 returns a warm pin at once, where a zero span elsewhere reads the setting off.
+  const atOnce = rows({ ...SETTINGS, returnToPlan: 'always', returnToPlanDwellSeconds: 0, shedDwellSeconds: 0 });
+  assert.deepEqual(['Return to plan', 'Return dwell', 'Shed dwell'].map((label) => atOnce.find(([l]) => l === label)), [['Return to plan', ['always']], ['Return dwell', ['at once']], ['Shed dwell', ['off']]]);
+  assert.deepEqual(rows({ ...SETTINGS, slowDown: false }).find(([label]) => label === 'Slow-down'), ['Slow-down', ['off']]);
+  const before = rows({ ...SETTINGS, ...BEFORE_SLOW_DOWN });
+  assert.deepEqual(['Return to plan', 'Return dwell', 'Slow-down', 'Stretch', 'Hold'].map((label) => before.find(([l]) => l === label)), ['Return to plan', 'Return dwell', 'Slow-down', 'Stretch', 'Hold'].map((label) => [label, ['not recorded']]));
+  assert.equal(before.filter(([, [value]]) => value === 'not recorded').length, 5, 'the switch and the ceiling a version 2 record carries read as recorded');
   const legacy = rows(LEGACY_SETTINGS);
   assert.deepEqual(legacy.slice(8, 10), [['Window ceiling', ['not recorded']], ['Load shedding', ['not recorded']]]);
   assert.deepEqual(legacy.slice(-3), [['Shed above (then)', ['90%']], ['Select below (then)', ['off']], ['Pace floor (then)', ['5%']]]);
-  assert.equal(rows(SETTINGS).length, 19);
+  assert.equal(rows(SETTINGS).length, 24);
   assert.equal(Object.keys(d.OBSTACLE_HINT).length, 14);
   assert.equal(d.OBSTACLE_HINT.budget_unknown, 'its spend unknown while the ledger is degraded');
 });

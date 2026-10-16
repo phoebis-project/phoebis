@@ -69,6 +69,9 @@ pub struct RequestFacts {
     pub attempt: u32,
     pub seq: u32,
     pub at: i64,
+    /// When the relay received the request, which every selection of it carries unchanged. A refusal carries its
+    /// `at`, since it refuses before any selection.
+    pub received_at: i64,
     pub key_id: String,
     pub key_generation: i64,
     pub pool_id: String,
@@ -176,6 +179,11 @@ pub struct PinFacts {
     pub marked_at: Option<i64>,
     pub marked_on: Option<String>,
     pub marked_window: Option<String>,
+    /// The pin's cycle, the time-weighted average of the gaps between a dispatch and the next arrival, `None` before
+    /// its first gap.
+    pub cycle_ms: Option<i64>,
+    /// The end of the slow-down hold standing on the pin, `None` with none.
+    pub slow_down_until: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -201,10 +209,15 @@ pub struct Settings {
     pub migrate_when_spent: bool,
     pub overage_move_grace_minutes: u32,
     pub wind_down_minutes: u32,
+    pub return_to_plan: &'static str,
+    pub return_to_plan_dwell_seconds: u32,
     pub shed_cap: f64,
     pub burn_average_seconds: u64,
     pub shed_dwell_seconds: u64,
     pub warm_sessions: &'static str,
+    pub slow_down: bool,
+    pub slow_down_stretch_seconds: u32,
+    pub slow_down_hold_seconds: u32,
     pub in_flight_cap: u32,
     pub retry_in_place_seconds: u64,
     pub pool_updated_at: i64,
@@ -253,6 +266,9 @@ pub struct CandidateFacts {
     /// The burn of the pool's pins on the member: share per hour per plan window, the unit the record states as
     /// `percent_per_hour`. Empty for an api_key member and an untiered one, which price no burn.
     pub burn: BTreeMap<String, f64>,
+    /// The member's slow-down factor from the entry the last pinned selection on it wrote, `None` with no entry or on a
+    /// pool whose slow-down is off.
+    pub factor: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -276,6 +292,9 @@ pub struct WindowFacts {
     /// The projection at the window's horizon and the horizon, filled for a plan window of a subscription member.
     pub projection: Option<f64>,
     pub horizon: Option<i64>,
+    /// The demand on the 5-hour window of a subscription member, share per hour: the pins' burn over the account's
+    /// speed, the bookings' undivided. `None` on every other window.
+    pub demand: Option<f64>,
     /// The live reservations' rewrite on the window, summed: what `predicted` added to the reading.
     pub reserved: f64,
 }
@@ -293,7 +312,8 @@ pub struct PaceFacts {
     /// The window the score read (`seven_day`, or the model's week such as `seven_day_fable`). `None` for an api_key
     /// member, which the worst bucket scores. The caller holds the window, so the console derives nothing.
     pub window: Option<String>,
-    /// The burn of the pins on the account on `window`, share per hour, what the score subtracts.
+    /// The demand of the pins on the account on `window`, their burn over the account's realized speed, share per
+    /// hour: what the score subtracts.
     pub burn: f64,
 }
 
@@ -477,19 +497,42 @@ pub struct Outcome {
     pub mark_cleared: Option<MarkClearedFacts>,
     /// What the selection booked on the chosen account, `None` for an outcome that books nothing.
     pub reservation: Option<ReservationFacts>,
+    /// Why the failover this decision lands moved the session, `None` for every other decision.
+    pub cause: Option<MoveCause>,
 }
 
-/// A mark the decision cleared: `healed` when the heal check found the trigger gone at the pin's request, `moved` when
-/// the pin left the account the mark was made on, `released` when the pool's load shedding was off at the pin's
-/// request.
+/// Why a failover moved the session: the cooldown's row, or the mark's state. Serialized under `cause` on the outcome
+/// and the event, `None` for a rule's move.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(untagged)]
+pub enum MoveCause {
+    Cooldown {
+        scope: String,
+        reason: String,
+        window: Option<String>,
+    },
+    Mark {
+        state: &'static str,
+        cause: &'static str,
+    },
+}
+
+/// A mark the decision cleared: `healed` when the heal check found the window back under its test at the pin's request
+/// (the projection under the ceiling, or the stretch at or under the threshold on a 5-hour mark of a pool that slows
+/// its pins), `moved` when the pin left the account the mark was made on, `released` when the pool's load shedding was
+/// off at the pin's request.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct MarkClearedFacts {
     pub reason: &'static str,
     pub marked_at: i64,
     pub marked_on: String,
     pub marked_window: String,
-    /// The healing projection, on `healed`.
+    /// The healing projection, on `healed`. Where the stretch healed the mark it is the demand's at the reset less the
+    /// threshold, or the prediction where that instant has passed.
     pub projection: Option<f64>,
+    /// The stretch and the pool's threshold the heal read, on a `healed` mark the stretch made. None otherwise.
+    pub stretch_ms: Option<i64>,
+    pub threshold_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -511,12 +554,25 @@ pub struct PinEventFacts {
 pub struct HoldOutcome {
     pub account_id: String,
     pub cohort: Option<String>,
+    /// The longest the hold may last: the pool's `slow_down_hold_seconds` under `slow_down`, its
+    /// `retry_in_place_seconds` under `cap` and `reset`.
     pub bound_ms: i64,
-    /// `cap` for a hold on a slot, `reset` for a spent window about to reset.
+    /// `cap` for a hold on a slot, `reset` for a spent window about to reset, `slow_down` for a slowed pin's wait
+    /// before its head.
     pub reason: &'static str,
-    /// The instant the request waits for under `reset`: the later of the spent window's reset and the end of the
-    /// account's cooldown. `None` under `cap`.
+    /// The instant the request waits for: under `reset` the later of the spent window's reset and the end of the
+    /// account's cooldown, under `slow_down` the pin's deadline. `None` under `cap`.
     pub until: Option<i64>,
+    /// The account's factor the hold was read under. `Some` under `slow_down`, `None` otherwise.
+    pub factor: Option<f64>,
+    /// The speed the account's holds realize together. `Some` under `slow_down`, `None` otherwise.
+    pub speed: Option<f64>,
+    /// The account's stretch at the read. `Some` under `slow_down`, `None` otherwise.
+    pub stretch_ms: Option<i64>,
+    /// The pool's `slow_down_stretch_seconds`. `Some` under `slow_down`, `None` otherwise.
+    pub threshold_ms: Option<i64>,
+    /// The pin's cycle the hold was sized from. `Some` under `slow_down`, `None` otherwise.
+    pub cycle_ms: Option<i64>,
 }
 
 /// The booking a move or a placement made on its destination, as the `reserve` step states it.
@@ -570,6 +626,16 @@ pub struct ShedRoundFacts {
     pub projection: f64,
     pub horizon: i64,
     pub ceiling: f64,
+    /// `projection` when the projection at the window's horizon fired the round, `slow_down` when the stretch did.
+    /// Under `slow_down` the horizon is the reset less the threshold, and the projection, the excess and the pins' burn
+    /// are the demand's.
+    pub trigger: &'static str,
+    /// The account's stretch when the stretch fired the round, `None` under `projection`.
+    pub stretch_ms: Option<i64>,
+    /// The pool's `slow_down_stretch_seconds` when the stretch fired the round, `None` under `projection`.
+    pub threshold_ms: Option<i64>,
+    /// The account's factor at the round, `None` where the account has no slow-down read.
+    pub factor: Option<f64>,
     /// `window_share` or `usd`, the unit the round's order read the anchor table in.
     pub unit: &'static str,
     pub burn_average_seconds: u64,
@@ -611,7 +677,8 @@ pub struct ShedPinFacts {
     pub runway_ms: Option<i64>,
     /// `fast_lane`, `last_pin`, `no_runway`, `standing` or `unpriced`.
     pub skip: Option<&'static str>,
-    /// `current` for the request's own pin.
+    /// `cheapest` for the pin the round marked as the cheapest one whose burn covers what the target still asked,
+    /// else `current` for the request's own pin.
     pub note: Option<&'static str>,
 }
 
@@ -761,6 +828,7 @@ impl DecisionRecord {
                 attempt: request.attempt,
                 seq: request.seq,
                 at: request.at,
+                received_at: request.at,
                 key_id: request.key_id.clone(),
                 key_generation: request.key_generation,
                 pool_id: key.map(|key| key.pool_id.clone()).unwrap_or_default(),
@@ -812,6 +880,7 @@ impl DecisionRecord {
                 shed_marks: None,
                 mark_cleared: None,
                 reservation: None,
+                cause: None,
             },
         };
         let fact = if refusal.kind == "client" {
@@ -884,10 +953,15 @@ pub(crate) fn settings_of(pool: &PoolRow) -> Settings {
         migrate_when_spent: pool.shedding.migrate_when_spent,
         overage_move_grace_minutes: pool.failover.overage_move_grace_minutes,
         wind_down_minutes: pool.failover.wind_down_minutes,
+        return_to_plan: pool.failover.return_to_plan.as_str(),
+        return_to_plan_dwell_seconds: pool.failover.return_to_plan_dwell_seconds,
         shed_cap: pool.shedding.shed_cap,
         burn_average_seconds: pool.shedding.burn_average_seconds,
         shed_dwell_seconds: pool.shedding.shed_dwell_seconds,
         warm_sessions: pool.shedding.warm_sessions.as_str(),
+        slow_down: pool.slow_down.slow_down,
+        slow_down_stretch_seconds: pool.slow_down.slow_down_stretch_seconds,
+        slow_down_hold_seconds: pool.slow_down.slow_down_hold_seconds,
         in_flight_cap: pool.failover.in_flight_cap,
         retry_in_place_seconds: pool.failover.retry_in_place_seconds,
         pool_updated_at: pool.updated_at,
@@ -918,6 +992,7 @@ mod tests {
                 attempt: 1,
                 seq: 1,
                 at: 2_000,
+                received_at: 1_990,
                 key_id: "k".into(),
                 key_generation: 1,
                 pool_id: "p".into(),
@@ -968,6 +1043,8 @@ mod tests {
                 marked_at: None,
                 marked_on: None,
                 marked_window: None,
+                cycle_ms: None,
+                slow_down_until: None,
             }),
             pin_reason: None,
             settings: Some(Settings {
@@ -984,10 +1061,15 @@ mod tests {
                 migrate_when_spent: true,
                 overage_move_grace_minutes: 30,
                 wind_down_minutes: 60,
+                return_to_plan: "always",
+                return_to_plan_dwell_seconds: 900,
                 shed_cap: 0.5,
                 burn_average_seconds: 1_800,
                 shed_dwell_seconds: 900,
                 warm_sessions: "stop_after_cold",
+                slow_down: false,
+                slow_down_stretch_seconds: 9_000,
+                slow_down_hold_seconds: 120,
                 in_flight_cap: 8,
                 retry_in_place_seconds: 10,
                 pool_updated_at: 100,
@@ -1016,6 +1098,7 @@ mod tests {
                         ahead: Some(-0.1),
                         projection: None,
                         horizon: None,
+                        demand: None,
                         reserved: 0.0,
                     },
                 )]),
@@ -1041,6 +1124,7 @@ mod tests {
                 fit: None,
                 binding: None,
                 burn: BTreeMap::new(),
+                factor: None,
             }],
             walk: vec![WalkStep {
                 step: "pin",
@@ -1077,6 +1161,7 @@ mod tests {
                 shed_marks: None,
                 mark_cleared: None,
                 reservation: None,
+                cause: None,
             },
         }
     }
@@ -1124,10 +1209,15 @@ mod tests {
                 "migrate_when_spent",
                 "overage_move_grace_minutes",
                 "wind_down_minutes",
+                "return_to_plan",
+                "return_to_plan_dwell_seconds",
                 "shed_cap",
                 "burn_average_seconds",
                 "shed_dwell_seconds",
                 "warm_sessions",
+                "slow_down",
+                "slow_down_stretch_seconds",
+                "slow_down_hold_seconds",
                 "in_flight_cap",
                 "retry_in_place_seconds",
                 "pool_updated_at"

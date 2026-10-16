@@ -225,6 +225,30 @@ const drawerChips = (row) =>
   }));
 /** A wait as the TTFB column reads a duration, spelled out here so the checks hold the console's formatter to it. */
 const waitText = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
+/** A wait under an hour as a held row and a cycle read it: whole seconds under a minute, else minutes and seconds. */
+const ageText = (ms) => (ms < 60_000 ? `${Math.round(ms / 1000)} s` : ms % 60_000 >= 1000 ? `${Math.floor(ms / 60_000)} min ${Math.floor((ms % 60_000) / 1000)} s` : `${Math.floor(ms / 60_000)} min`);
+/**
+ * studio's slow-down and the hover its speed chip reads, the clock as the page writes a time of day in the zone the run
+ * pins: the story slows the work pool's subscription member to half its speed, 42 min over its 30 min threshold.
+ */
+const studioSpeed = async () => {
+  const slowDown = (await api.listAccounts()).find((a) => a.id === 'studio')?.slowDown ?? null;
+  const since = slowDown?.since ? new Date(slowDown.since).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit' }) : 'no since';
+  return { factor: slowDown?.factor ?? null, hover: `slowed since ${since}: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min threshold` };
+};
+/**
+ * The speed chips under `root`: where each sits by `whereOf`, what it stands beside (a bar's label by its words where
+ * the chip follows it in the bar's head, `status` where the chip precedes a card's status badge in the card's head),
+ * and its badge's word, tone and hover.
+ */
+const speedChips = (root, whereOf) =>
+  [...root.querySelectorAll('.speed-chip')].map((chip) => {
+    const badge = chip.querySelector('.badge');
+    const before = chip.previousElementSibling;
+    const after = chip.nextElementSibling;
+    const beside = before?.classList.contains('wbar__label') ? before.textContent : after?.classList.contains('badge') && after.querySelector('.badge__dot') !== null ? 'status' : null;
+    return [whereOf(chip), beside, badge?.textContent?.trim() ?? '', badge?.className.replace('badge ', '') ?? '', badge?.getAttribute('title') ?? ''];
+  });
 /**
  * A Sessions row's cell under the header that reads `header`, so a check names its column whatever the control hides.
  */
@@ -542,12 +566,20 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
       '/routing-log',
       ['accounts: ["primary"]', 'rounds: 1', 'setting: ["window_ceiling"]', 'setting_values: {"window_ceiling":0.75}'],
     ],
+    // Studio's two slow-down spans in work: the closed one from 09:12 until its factor read 1 at 10:38:20, and the open
+    // one from 13:48.
+    [
+      'studio: slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12',
+      'badge--warning',
+      '/routing-log',
+      ['bar_ms: 3600000', 'factor_min: 0.35', 'open: true', 'setting: ["slow_down_stretch_seconds"]', 'setting_values: {"slow_down_stretch_seconds":1800}', 'slowed_ms: 7700000', 'spans: 2'],
+    ],
   ];
   const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
-    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log and an unweighted model's the Models page, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all fourteen while no layout folds it",
+    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log and an unweighted model's the Models page, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all fifteen while no layout folds it",
     ok:
-      lead() === '14 need attention' &&
+      lead() === '15 need attention' &&
       unweighted !== undefined &&
       JSON.stringify(read) === JSON.stringify(want) &&
       /^started 1[34]m ago$/.test(ages[0] ?? '') &&
@@ -614,7 +646,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   results.push({ name: '/ the window regaining focus reads the attention list again, and an answer clears the failure', ok: reads === 1 && quiet(), missing: [`reads ${reads}`, line()?.textContent ?? 'no line'] });
   localStorage.removeItem('phoebis.mockEmpty');
   await tick();
-  results.push({ name: '/ the story back, the next tick draws its fourteen items again', ok: lead() === '14 need attention', missing: [lead() ?? 'no lead'] });
+  results.push({ name: '/ the story back, the next tick draws its fifteen items again', ok: lead() === '15 need attention', missing: [lead() ?? 'no lead'] });
   dash.unmount();
 
   {
@@ -699,10 +731,10 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     delete window.HTMLElement.prototype.clientWidth;
     const texts = want.map(([text]) => text);
     results.push({
-      name: "/ an attention line too narrow for its fourteen items shows the four that fit and folds the other ten behind \"+10 more\" titled with their words one per line, whose list holds all fourteen worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
+      name: "/ an attention line too narrow for its fifteen items shows the four that fit and folds the other eleven behind \"+11 more\" titled with their words one per line, whose list holds all fifteen worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
       ok:
         JSON.stringify(shown) === JSON.stringify(texts.slice(0, 4)) &&
-        JSON.stringify(foldRead) === JSON.stringify(['+10 more', ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
+        JSON.stringify(foldRead) === JSON.stringify(['+11 more', ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
         JSON.stringify(listed) === JSON.stringify(want.map(([text, tone, href]) => [text, tone, href])) &&
         sameTitles &&
         JSON.stringify(opened) === JSON.stringify(['dialog', 'Needs attention', 'true', true, true]) &&
@@ -714,7 +746,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
       name: "/ the Replay button stands on the badges' row while the lead, the fold badge and the button fit beside each other, and takes a second row of its own where they do not",
       ok:
         JSON.stringify(oneRow) === JSON.stringify(['attention-line', 'attention-line__tail', 'Replay parked records']) &&
-        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+13 more', ['Replay parked records']]),
+        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+14 more', ['Replay parked records']]),
       missing: [JSON.stringify(oneRow), JSON.stringify(wrapped)],
     });
     results.push({
@@ -811,11 +843,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: 'the theme buttons carry their names', ok: JSON.stringify(named) === JSON.stringify([['Light', 'Light'], ['Dark', 'Dark'], ['System', 'System']]), missing: named.map((n) => n.join(' / ')) });
 }
 {
-  // The story's pools hold 20, 0 and 0 pins, one per key, session, agent and model under their keys, all on primary or
-  // nightly, over 12 pinned rows, so a hero counting the pinned rows or a note counting every row's account reads
-  // otherwise.
+  // The story's pools hold 20, 0 and 5 pins, one per key, session, agent and model under their keys, on primary,
+  // nightly and studio, over 16 pinned rows, so a hero counting the pinned rows or a note counting every row's account
+  // reads otherwise.
   const hero = m.container.querySelector('.sess-summary__hero');
-  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '20' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 2 accounts', missing: [hero?.textContent ?? 'absent'] });
+  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '25' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 3 accounts', missing: [hero?.textContent ?? 'absent'] });
   // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
   // the tier match reads in camelCase.
   const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
@@ -865,6 +897,17 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: '/ account strip greys missing Fable windows', ok: fableAbsent >= 2, missing: [String(fableAbsent)] });
   const triples = [...m.container.querySelectorAll('.account-mini .wbars--3')].filter((el) => el.querySelectorAll('.wbar').length === 3).length;
   results.push({ name: '/ account chips draw three bars', ok: triples >= 4, missing: [String(triples)] });
+  {
+    // studio, the work pool's slowed member, wears the speed chip in its card's head before the status badge, with its
+    // slow-down in the hover, since the compact 5-hour bar has no room for it, and no other card or bar wears one.
+    const want = await studioSpeed();
+    const chips = speedChips(m.container, (chip) => (chip.closest('a.account-mini') ? idOf(chip.closest('a.account-mini')) : 'elsewhere'));
+    results.push({
+      name: "/ studio's card draws its speed chip in its head before the status badge with its slow-down in the hover, and no other card draws one",
+      ok: want.factor === 0.5 && JSON.stringify(chips) === JSON.stringify([['studio', 'status', '0.5x', 'badge--warning', want.hover]]),
+      missing: [String(want.factor), ...chips.map((c) => c.join(' | '))],
+    });
+  }
   await emailLines('/ each account card reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-mini')].map((c) => [idOf(c), c.querySelector('.account-mini__sub')?.textContent ?? null]));
   // primary cools on its fast lane, the first of its rows and the sooner to lift, and on one model.
   const primary = [...m.container.querySelectorAll('a.account-mini')].find((c) => idOf(c) === 'primary');
@@ -1186,6 +1229,28 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   results.push({ name: '/quota every window share on the cards reads N% left', ok: shares.some((t) => /\d+% left/.test(t)) && off.length === 0, missing: [...new Set(off)] });
 }
 {
+  // studio, the work pool's slowed member, closes its 5-hour window's reset cell with the speed chip, its slow-down in
+  // the hover, and no other window or card draws one.
+  const want = await studioSpeed();
+  const chips = [...m.container.querySelectorAll('.qcard .speed-chip')].map((chip) => {
+    const cell = chip.parentElement;
+    const badge = chip.querySelector('.badge');
+    return [
+      chip.closest('.qcard')?.querySelector('.qcard__name')?.textContent?.trim() ?? '',
+      cell?.previousElementSibling?.previousElementSibling?.querySelector('.qchip__name')?.textContent ?? '',
+      cell?.classList.contains('qwin__reset') === true && cell.lastElementChild === chip,
+      badge?.textContent?.trim() ?? '',
+      badge?.className.replace('badge ', '') ?? '',
+      badge?.getAttribute('title') ?? '',
+    ];
+  });
+  results.push({
+    name: "/quota studio's 5-hour window closes its reset cell with the speed chip, its slow-down in the hover, and no other window draws one",
+    ok: want.factor === 0.5 && JSON.stringify(chips) === JSON.stringify([['studio', '5h', true, '0.5x', 'badge--warning', want.hover]]),
+    missing: [String(want.factor), ...chips.map((c) => c.join(' | '))],
+  });
+}
+{
   // The story's legacy was last read two days ago, before its 5-hour window reset, so that window has no reading since.
   const legacy = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'legacy');
   const [chip, meter, reset] = [...(legacy?.querySelector('.qcard__windows')?.children ?? [])];
@@ -1219,7 +1284,9 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
     const card = [...q.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
     const chip = [...(card?.querySelectorAll('.qcard__windows .qwin__chip') ?? [])].find((c) => c.querySelector('.qchip__name')?.textContent === name);
     const reset = chip?.nextElementSibling?.nextElementSibling ?? null;
-    return { parts: [...(reset?.querySelectorAll('.qwin__part') ?? [])].map((p) => p.textContent ?? ''), text: reset?.textContent ?? '', title: reset?.getAttribute('title') ?? '' };
+    // A slowed window's cell closes with its speed chip, which the label's words leave out.
+    const words = [...(reset?.childNodes ?? [])].filter((n) => !(n.nodeType === 1 && n.classList.contains('speed-chip'))).map((n) => n.textContent).join('').trimEnd();
+    return { parts: [...(reset?.querySelectorAll('.qwin__part') ?? [])].map((p) => p.textContent ?? ''), text: words, title: reset?.getAttribute('title') ?? '' };
   };
   const windowsOf = (a) => [['5h', a.windows.find((w) => w.id === '5h') ?? null], ['7d', a.windows.find((w) => w.id === '7d') ?? null], ['Fable', a.fableWindow]];
   const live = accounts.flatMap((a) => windowsOf(a).filter(([, w]) => w !== null && !(w.resetsAt !== null && Date.parse(w.resetsAt) < at)).map(([name, w]) => ({ account: a.label, name, w, ...cellOf(a.label, name) })));
@@ -2058,6 +2125,30 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     name: '/accounts usage card draws the three known windows, then a week no family row names under its key',
     ok: JSON.stringify(usageBars) === JSON.stringify(['5-hour', '7-day', 'Fable', 'seven_day_opus']),
     missing: usageBars,
+  });
+}
+{
+  // studio, the work pool's slowed member, wears the speed chip before the status badge in its list row's head, where
+  // the compact 5-hour bar has no room for it, and right after the 5-hour bar's label in its Usage card, with its
+  // slow-down in the hover, and no other row or bar wears one.
+  const want = await studioSpeed();
+  const page = await mount('/accounts/studio');
+  const whereOf = (chip) => {
+    const row = chip.closest('a.account-row');
+    return row ? `row ${new URL(row.getAttribute('href') ?? '/', 'http://127.0.0.1').pathname.split('/').pop()}` : chip.closest('.detail') ? 'detail' : 'elsewhere';
+  };
+  const chips = speedChips(page.container, whereOf);
+  page.unmount();
+  results.push({
+    name: "/accounts studio's row draws the speed chip before its status badge and its Usage card right after the 5-hour bar's label, with its slow-down in the hover, and no other row or bar draws one",
+    ok:
+      want.factor === 0.5 &&
+      JSON.stringify(chips) ===
+        JSON.stringify([
+          ['row studio', 'status', '0.5x', 'badge--warning', want.hover],
+          ['detail', '5-hour', '0.5x', 'badge--warning', want.hover],
+        ]),
+    missing: [String(want.factor), ...chips.map((c) => c.join(' | '))],
   });
 }
 {
@@ -3335,16 +3426,63 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   }
   const strip = (name) => [...(card(name)?.querySelectorAll('.pool__features .badge') ?? [])].map((b) => [b.textContent?.trim(), b.getAttribute('href'), b.getAttribute('title')]);
   // The shedding badge draws on every card, reading the pool's ceiling with its switch on, so all reads its 75 % and
-  // jobs and work the store's 95 %.
+  // jobs and work the store's 95 %. The slow-down badge draws on work alone, the one pool with the switch on, and reads
+  // its threshold of 30 minutes.
   const shedding = (id, ceiling) => [`sheds above ${ceiling} %`, `/pools?edit=${id}&group=shedding`, 'Opens the pool dialog on Load shedding'];
   results.push({
     name: "/pools the strip badges the features a pool has on, and the shedding's state, and opens the dialog on their groups",
     ok:
       JSON.stringify(strip('all')) === JSON.stringify([shedding('all', 75), ['cache TTL', '/pools?edit=all&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=all&group=keepalive', 'Opens the pool dialog on Keepalive']]) &&
       JSON.stringify(strip('jobs')) === JSON.stringify([shedding('jobs', 95)]) &&
-      JSON.stringify(strip('work')) === JSON.stringify([['server-side auto mode off', '/pools?edit=work&group=autoMode', 'Opens the pool dialog on Auto mode'], shedding('work', 95), ['cache TTL', '/pools?edit=work&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=work&group=keepalive', 'Opens the pool dialog on Keepalive']]),
+      JSON.stringify(strip('work')) ===
+        JSON.stringify([
+          ['server-side auto mode off', '/pools?edit=work&group=autoMode', 'Opens the pool dialog on Auto mode'],
+          shedding('work', 95),
+          ['slows above 30 min', '/pools?edit=work&group=slowDown', 'Opens the pool dialog on Slow-down'],
+          ['cache TTL', '/pools?edit=work&group=cacheTtl', 'Opens the pool dialog on Cache TTL'],
+          ['keepalive', '/pools?edit=work&group=keepalive', 'Opens the pool dialog on Keepalive'],
+        ]),
     missing: [...strip('all'), ...strip('jobs'), ...strip('work')].map((b) => b.join(' | ')),
   });
+  {
+    // studio, work's subscription member, is slowed to half its speed: its Standing cell draws the chip after the next
+    // badge, with the account's slow-down in its hover, and annex, the API-key member, draws none.
+    const studio = (await api.listAccounts()).find((a) => a.id === 'studio')?.slowDown ?? null;
+    const servingRow = (label) => [...(card('work')?.querySelectorAll('.serving tbody tr') ?? [])].find((tr) => tr.children[1]?.querySelector('a')?.textContent?.trim() === label);
+    const chipsOf = (label) => [...(servingRow(label)?.children[2]?.querySelectorAll('.speed-chip .badge') ?? [])].map((b) => [b.textContent?.trim(), b.className.replace('badge ', ''), b.getAttribute('title') ?? '']);
+    const standingOf = (label) => [...(servingRow(label)?.children[2]?.querySelectorAll('.chips > *') ?? [])].map((c) => c.textContent?.trim());
+    // The clock reads as the page writes a time of day, in the zone the run pins.
+    const since = studio?.since ? new Date(studio.since).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit' }) : 'no since';
+    const hover = `slowed since ${since}: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min threshold`;
+    results.push({
+      name: "/pools a slowed member's Standing cell draws its speed chip with the slow-down in its hover, and an unslowed one none",
+      ok:
+        studio?.factor === 0.5 &&
+        JSON.stringify(chipsOf('studio')) === JSON.stringify([['0.5x', 'badge--warning', hover]]) &&
+        JSON.stringify(standingOf('studio')) === '["next","0.5x"]' &&
+        chipsOf('Studio annex').length === 0 &&
+        (card('all')?.querySelector('.speed-chip') ?? null) === null,
+      missing: [JSON.stringify(studio), ...chipsOf('studio').map((c) => c.join(' | ')), JSON.stringify(standingOf('studio')), String(chipsOf('Studio annex').length)],
+    });
+  }
+  {
+    // A pool whose switch is off holds nobody, and the pools route serves its members no speed, so work turned off
+    // draws no chip beside studio though the account still carries the entry the last pinned read wrote.
+    const { listPools } = api;
+    api.listPools = async () => (await listPools.call(api)).map((p) => (p.id === 'work' ? { ...p, members: p.members.map((x) => ({ ...x, speed: null })), slowDown: false } : p));
+    const off = await mount('/pools');
+    api.listPools = listPools;
+    const workCard = [...off.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'work');
+    const studioRow = [...(workCard?.querySelectorAll('.serving tbody tr') ?? [])].find((tr) => tr.children[1]?.querySelector('a')?.textContent?.trim() === 'studio');
+    const read = [studioRow ? 'studio row' : 'no studio row', workCard?.querySelectorAll('.speed-chip').length ?? null];
+    const slowed = (await api.listAccounts()).find((a) => a.id === 'studio')?.slowDown?.factor ?? null;
+    off.unmount();
+    results.push({
+      name: "/pools a card whose pool has the slow-down off draws no speed chip, though its member's account still reads slowed",
+      ok: JSON.stringify(read) === '["studio row",0]' && slowed === 0.5,
+      missing: [...read.map(String), String(slowed)],
+    });
+  }
   const badged = [...cards.entries()].filter(([, c]) => [...c.querySelectorAll('.badge')].some((b) => b.textContent?.trim() === 'server-side auto mode off')).map(([name]) => name);
   results.push({ name: '/pools the card of a pool with server-side auto mode off carries the badge, and no other card does', ok: JSON.stringify(badged) === '["work"]', missing: badged });
   const origin = new Date(CLOCK_ORIGIN);
@@ -3359,7 +3497,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       JSON.stringify(linked('all')) === '["/accounts/primary"]' &&
       sentence('jobs') === `Exhausted: no member can take a request until Research workspace's daily budget resets at ${dayEnd}.` &&
       JSON.stringify(linked('jobs')) === '["/accounts/research"]' &&
-      sentence('work') === 'Active: studio takes every fresh session.',
+      sentence('work') === 'Active: all 2 members take fresh sessions, and the next one goes to studio.',
     missing: [sentence('all'), sentence('jobs'), sentence('work')].map(String),
   });
   // The head totals the day from the hour a full day back, where the bars start, so the head reads the bars' sum.
@@ -3429,7 +3567,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
     // Under Window shares a card whose one member is a subscription account reads that account's own 7-day share of
     // the pool's day, as the breakdown route prices it when the request names the account, so the check reads the
-    // page's own read through the wrapper. Every other card and the tile name no one account and read dashes.
+    // page's own read through the wrapper. Every other card and the tile name no one account and read dashes. Each of
+    // the story's pools holds more than one member, so these checks read work with its subscription member alone, the
+    // page above held still meanwhile, since its own reads would take the staged membership in.
+    await chooseInterval(m, 'Off');
+    const poolsRead = api.listPools;
+    api.listPools = async (...args) => (await poolsRead.apply(api, args)).map((p) => (p.id === 'work' ? { ...p, members: p.members.filter((x) => x.kind === 'oauth') } : p));
+    const alone = await api.listPools();
+    const shared = await mount('/pools');
     const breakdownOf = api.getAnalyticsBreakdown;
     const reads = [];
     api.getAnalyticsBreakdown = async (q) => {
@@ -3437,25 +3582,26 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       reads.push({ groups, q });
       return groups;
     };
-    await chooseUnit(m, 'share');
-    const shareTile = tileRead(m);
-    const single = listed.filter((p) => p.members.length === 1 && p.members[0].kind === 'oauth');
-    const shareCells = listed.map((p) => {
+    await chooseUnit(shared, 'share');
+    const shareTile = tileRead(shared);
+    const single = alone.filter((p) => p.members.length === 1 && p.members[0].kind === 'oauth');
+    const shareCells = alone.map((p) => {
       const read = reads.find((r) => JSON.stringify(r.q.poolIds) === JSON.stringify([p.id]));
       const group = read?.groups.find((g) => g.key === p.id);
       const seven = group?.costShares?.seven_day;
       const want = single.includes(p) ? (typeof seven === 'number' ? `${group.estimated ? '~' : ''}${shareLabel('seven_day', seven)}` : '-') : '-';
-      return { id: p.id, priced: typeof seven === 'number', query: read?.q ?? null, read: costRead(m, p.name), want };
+      return { id: p.id, priced: typeof seven === 'number', query: read?.q ?? null, read: costRead(shared, p.name), want };
     });
-    const dayLong = (q) => q !== null && JSON.stringify(q.accountIds) === JSON.stringify([listed.find((p) => p.id === q.poolIds[0]).members[0].accountId]) && q.groupBy === 'pool' && Date.parse(q.to) - Date.parse(q.from) === 24 * 3_600_000;
+    const dayLong = (q) => q !== null && JSON.stringify(q.accountIds) === JSON.stringify([alone.find((p) => p.id === q.poolIds[0]).members[0].accountId]) && q.groupBy === 'pool' && Date.parse(q.to) - Date.parse(q.from) === 24 * 3_600_000;
     const wrongShares = shareCells.filter((c) => c.read.text !== c.want || (c.want === '-' && !c.read.title) || (single.some((p) => p.id === c.id) ? !dayLong(c.query) : c.query !== null));
     results.push({
       name: "/pools under Window shares the Cost, 24h tile reads a dash titled with the share note, a card of one subscription member reads that account's 7-day share of the pool's last day as the breakdown route answers it, and every other card a dash that says why",
-      ok: shellUnit(m)?.value === 'share' && shareTile.value === '-' && shareTile.title === SHARE_NOTE && single.length > 0 && shareCells.some((c) => c.priced && c.want !== '-') && reads.length === single.length && wrongShares.length === 0,
+      ok: shellUnit(shared)?.value === 'share' && shareTile.value === '-' && shareTile.title === SHARE_NOTE && single.length > 0 && shareCells.some((c) => c.priced && c.want !== '-') && reads.length === single.length && wrongShares.length === 0,
       missing: [JSON.stringify(shareTile), `${reads.length} breakdown reads for ${single.length} cards`, ...shareCells.map((c) => JSON.stringify(c))],
     });
     delete api.getAnalyticsBreakdown;
-    await chooseUnit(m, 'native');
+    await chooseUnit(shared, 'native');
+    shared.unmount();
     localStorage.removeItem('phoebis.unit');
     // The share is the route's, priced row by row at the account tier each row recorded, so the card reads it as
     // answered: a wired figure the pool's equivalent times no tier's capacity ratio reaches, and an answer with no
@@ -3465,7 +3611,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       api.getAnalyticsBreakdown = async (q) => {
         const groups = await breakdownOf.call(api, q);
         if (q.groupBy !== 'pool' || q.accountIds?.length !== 1) return groups;
-        const pool = listed.find((p) => p.id === q.poolIds?.[0]);
+        const pool = alone.find((p) => p.id === q.poolIds?.[0]);
         wired = shares(pool);
         return groups.map((g) => ({ ...g, costShares: wired }));
       };
@@ -3509,6 +3655,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         missing: [JSON.stringify(held)],
       });
     }
+    delete api.listPools;
+    await chooseInterval(m, '5 s');
     // The same day with every plan row weighted, so nothing the tile and the cards draw is an estimate.
     const poolsOf = api.listPools;
     api.listPools = async () => (await poolsOf.call(api)).map((p) => ({ ...p, estimated24h: false }));
@@ -3548,7 +3696,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       name: '/pools while the accounts load the status sentence counts the members that take fresh sessions, then names the next one',
       ok:
         held.calls.length > 0 &&
-        JSON.stringify(waiting) === JSON.stringify([['Degraded: 2 of 4 members take fresh sessions.', 0], ['Exhausted: no member can take a request.', 0], ["Active: the pool's one member takes every fresh session.", 0]]) &&
+        JSON.stringify(waiting) === JSON.stringify([['Degraded: 2 of 4 members take fresh sessions.', 0], ['Exhausted: no member can take a request.', 0], ['Active: all 2 members take fresh sessions.', 0]]) &&
         JSON.stringify(landed) === JSON.stringify([[sentence('all'), 1], [sentence('jobs'), 1], [sentence('work'), 1]]),
       missing: [`held ${held.calls.length}`, ...waiting, ...landed].map((x) => JSON.stringify(x)),
     });
@@ -3568,14 +3716,16 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const rowAges = (name) => [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map(ageOf);
   // The story's items: jobs is exhausted and holds a parked record. all draws the laptop key's client drift, the
   // Overflow workspace out of funding, secondary's poll backoff and the three routing conditions (the walls on nightly
-  // and secondary, nightly spent within the hour of a move, and all's round without a destination). work draws
-  // nothing, since its one member and one key carry no item, and the routing state writer belongs to no pool's card.
+  // and secondary, nightly spent within the hour of a move, and all's round without a destination). work draws studio
+  // slowed past twice the stretch, and the routing state writer belongs to no pool's card.
+  const workDetail = [...(card('work')?.querySelectorAll('ul.attention .attention__detail') ?? [])].map((x) => x.textContent);
   results.push({
-    name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, each row ending with its age, and a card with none draws no list",
+    name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, each row ending with its age, and an account's slow-down as the words without the subject",
     ok:
       rowAges('jobs').length === 2 &&
       rowAges('all').length === 7 &&
-      [...rowAges('jobs'), ...rowAges('all')].every(aged) &&
+      rowAges('work').length === 1 &&
+      [...rowAges('jobs'), ...rowAges('all'), ...rowAges('work')].every(aged) &&
       JSON.stringify(attentionRows('jobs')) === JSON.stringify([['Pool exhausted', 'jobs', '/routing-log'], ['Priced record parked', 'jobs', null]]) &&
       JSON.stringify(attentionRows('all')) ===
         JSON.stringify([
@@ -3587,8 +3737,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
           ['Destination spent within the hour', 'nightly', '/routing-log'],
           ['Rounds without a destination', 'all', '/routing-log'],
         ]) &&
-      card('work')?.querySelector('.attention') === null,
-    missing: ['jobs', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))} ${JSON.stringify(rowAges(name))}`),
+      JSON.stringify(attentionRows('work')) === JSON.stringify([['Slowed past twice the stretch', 'studio', '/routing-log']]) &&
+      JSON.stringify(workDetail) === JSON.stringify(['slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12']),
+    missing: [...['jobs', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))} ${JSON.stringify(rowAges(name))}`), ...workDetail],
   });
   {
     const parkedRow = [...(card('jobs')?.querySelectorAll('ul.attention > li.attention__row') ?? [])].find((li) => li.querySelector('.badge')?.textContent?.trim() === 'Priced record parked');
@@ -3694,12 +3845,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [...spend('jobs', 'Research workspace'), ...research.badges.map((b) => b.join(' | ')), research.why],
   });
   const tiles = (name) => [...(card(name)?.querySelectorAll('.pool__stats > div') ?? [])].map((d) => [d.querySelector('dt')?.textContent?.trim(), d.querySelector('dd')?.textContent?.trim(), d.querySelector('dd')?.getAttribute('title')]);
-  // The story's pool all moved two sessions by the spent rule, two by a failover and one by its fast lane cooling.
+  // The story's pool all moved two sessions by the spent rule, three by a failover and one by its fast lane cooling.
   const allTitle = [
     'Rule moves in the last hour',
     'window spent 2',
     'Failovers left out of the count',
-    'failed over 2',
+    'failed over 3',
     'fast lane cooling 1',
     "Opens the Routing log on pool all and the moved kind for the last hour, which lists a keepalive probe's move only with probe decisions chosen",
   ].join('\n');
@@ -3721,8 +3872,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   });
   {
     // Each warning names the fields it reads, and the tile opens the dialog on the group of the first one's first
-    // field: all's affinity warning reads the affinity first, so Pinning, and jobs' spent moves warning the Load
-    // shedding group that holds Migrate when spent.
+    // field: all's affinity warning reads the affinity first, so Pinning, and jobs' spent moves warning the Failover
+    // group that holds Migrate when spent.
     const tileLink = (name) => card(name)?.querySelector('.pool__stats > div:nth-child(6) dd a');
     const hrefs = ['all', 'jobs', 'work'].map((name) => tileLink(name)?.getAttribute('href') ?? null);
     const opener = await mount('/pools');
@@ -3734,7 +3885,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     opener.unmount();
     results.push({
       name: "/pools the Warnings tile opens the pool dialog on the group of its first warning's first field, and a pool without one draws no link",
-      ok: JSON.stringify(hrefs) === JSON.stringify(['/pools?edit=all&group=pinning', '/pools?edit=jobs&group=shedding', null]) && title === 'Edit pool all' && shownGroup === 'Pinning',
+      ok: JSON.stringify(hrefs) === JSON.stringify(['/pools?edit=all&group=pinning', '/pools?edit=jobs&group=failover', null]) && title === 'Edit pool all' && shownGroup === 'Pinning',
       missing: [...hrefs.map(String), title, shownGroup],
     });
   }
@@ -4002,6 +4153,25 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   });
 }
 {
+  // work keeps the slow-down on and studio reads half its speed, 42 minutes against the pool's 30, so the preview
+  // names it and the wait its sessions take, while annex, its API-key sibling, is never slowed.
+  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  rail(dlg, 'slowDown')?.click();
+  await m.settle(120);
+  const line = group(dlg, 'Slow-down')?.querySelector('.slow-down-preview')?.textContent ?? '';
+  const shownGroup = [...(dlg?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
+  const switchOn = group(dlg, 'Slow-down')?.querySelector('button[role="switch"][aria-label="Slow-down"]')?.getAttribute('aria-checked');
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(300);
+  results.push({
+    name: "/pools the slow-down preview names work's slowed member, its stretch against the threshold and the wait its sessions take",
+    ok: line === '1 member is slowed: studio at 0.5x (42 min of 30 min). A session there waits its cycle times 1.0, up to 120 s.' && shownGroup === 'Slow-down' && switchOn === 'true' && m.container.querySelector('dialog[open]') === null,
+    missing: [line, shownGroup, String(switchOn)],
+  });
+}
+{
   // A warming pool with no member resolves nothing: its card draws the chip and no line, and its dialog no figure.
   const work = (await api.listPools()).find((p) => p.id === 'work');
   await api.createPool({ ...work, members: [], name: 'bare' });
@@ -4020,8 +4190,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 }
 {
   // The card reads the router's figures in whole hours, floored, right after the keepalive chip, and a pool that keeps
-  // no caches warm draws no line. The story's `work` holds one plan member on the hour, so it reads one figure each,
-  // while `all` mixes plan members with the API-key `overflow` on five minutes and reads both ends.
+  // no caches warm draws no line. With its plan member alone on the hour `work` reads one figure each, while `all` mixes
+  // plan members with the API-key `overflow` on five minutes and reads both ends. The story's `work` holds the API-key
+  // annex too, so the checks of one figure read it with its plan member alone.
+  const storyWork = (await api.listPools()).find((p) => p.id === 'work');
+  const memberOf = (x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority });
+  await api.updatePool('work', { ...storyWork, members: storyWork.members.filter((x) => x.kind === 'oauth').map(memberOf) });
+  m.unmount();
+  m = await mount('/pools');
   const cards = [...m.container.querySelectorAll('.pool')];
   const ceilingsOf = (id) => cards.find((c) => c.id === id)?.querySelector('.pool__ceilings') ?? null;
   const work = ceilingsOf('work');
@@ -4092,6 +4268,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
     await cancel(dlg);
   }
+  await api.updatePool('work', { ...storyWork, members: storyWork.members.map(memberOf) });
   // The story's `all` resolves to a range: the card and the dialog read both ends.
   const allLine = ceilingsOf('all')?.textContent;
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
@@ -4121,11 +4298,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({ name: '/pools keys section is not a multi-select', ok: keysGroup !== undefined && keysMulti.length === 0, missing: keysGroup === undefined ? ['no Keys group'] : keysMulti });
 
   // Grouped dialog: a two-level rail beside one group at a time, one heading per group.
-  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Window ceiling', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
+  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
   const railParents = [...(dlg?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const railGroups = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   results.push({
-    name: '/pools dialog rail lists the five parents and the sixteen groups in order',
+    name: '/pools dialog rail lists the five parents and the seventeen groups in order',
     ok: JSON.stringify(railParents) === JSON.stringify(['Pool', 'Routing', 'Load', 'Caching', 'Visibility']) && JSON.stringify(railGroups) === JSON.stringify(groupLabels),
     missing: [...railParents, ...railGroups],
   });
@@ -4147,13 +4324,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const members = group(dlg, 'Members');
     results.push({
       name: '/pools choosing a group hides every other group and marks its rail entry',
-      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 15 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
+      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 16 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
       missing: shown(),
     });
     results.push({ name: "/pools focus lands on the group's heading", ok: !!members && document.activeElement === members.querySelector('h3'), missing: [document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'] });
     dlg?.querySelector('.dialog-rail__parent[data-parent="Load"]')?.click();
     await m.settle(120);
-    results.push({ name: '/pools a parent heading chooses its first group', ok: JSON.stringify(shown()) === '["Window ceiling"]', missing: shown() });
+    results.push({ name: '/pools a parent heading chooses its first group', ok: JSON.stringify(shown()) === '["Windows"]', missing: shown() });
 
     // A refusal typed while another group shows still marks its own group and names itself in the footer.
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -4174,7 +4351,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({
       name: '/pools a refusal marks its group and its parent and fills the footer line, and Go to focuses the field',
       ok:
-        JSON.stringify(marks) === '[true,true,"Window ceiling"]' &&
+        JSON.stringify(marks) === '[true,true,"Windows"]' &&
         held[0] === true &&
         held[1].startsWith('Save is held: The minimum shared prefix is a whole number of tokens, 0 or more.') &&
         goTo !== undefined &&
@@ -4200,7 +4377,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
     expect('/pools the Keys group states that its actions apply at once', group(dlg, 'Keys')?.textContent ?? '', ["A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool. Rotation and expiry are on the Keys page"]);
     const overageLabels = [...(group(dlg, 'Overage and plan end')?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
-    results.push({ name: '/pools Overage and plan end holds Overage policy, Overage grace and Wind down', ok: JSON.stringify(overageLabels) === '["Overage policy","Overage grace (min)","Wind down (min)"]', missing: overageLabels });
+    results.push({
+      name: '/pools Overage and plan end holds Overage policy, Overage grace, Return to plan, Return dwell and Wind down',
+      ok: JSON.stringify(overageLabels) === '["Overage policy","Overage grace (min)","Return to plan","Return dwell (s)","Wind down (min)"]',
+      missing: overageLabels,
+    });
     results.push({ name: '/pools the pool dialog carries no subtitle', ok: !!dlg && dlg.querySelector(':scope > .dialog__inner > .dialog__head .dialog__subtitle') === null, missing: [dlg?.querySelector(':scope > .dialog__inner > .dialog__head .dialog__subtitle')?.textContent ?? ''] });
     const keepalive = group(dlg, 'Keepalive');
     results.push({ name: '/pools the Keepalive warning closes its group', ok: keepalive?.lastElementChild?.classList.contains('callout--warning') === true, missing: [keepalive?.lastElementChild?.className ?? 'no Keepalive group'] });
@@ -4308,14 +4489,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const read = lines.map((c) => [c.textContent?.replace(/\s+/g, ' ').trim(), [...c.querySelectorAll('button')].map((b) => b.textContent?.trim())]);
     const wanted = [
       ['The session affinity ends before the cache TTL the pool injects, so a pin can expire while its cache is warm and the next request can land cold elsewhere. Go to Pinning.', ['Pinning']],
-      ['A ceiling under 80 percent leaves a fifth of every window unused and moves sessions that would have finished the window warm. Go to Window ceiling.', ['Window ceiling']],
+      ['A ceiling under 80 percent leaves a fifth of every window unused and moves sessions that would have finished the window warm. Go to Windows.', ['Windows']],
     ];
     [...(lines[1]?.querySelectorAll('button') ?? [])][0]?.click();
     await m.settle(120);
     const shownNow = [...(dlg?.querySelectorAll('section.dialog-group') ?? [])].filter((s) => !s.hidden).map((s) => s.getAttribute('aria-label'));
     results.push({
       name: "/pools the dialog lists the saved pool's warnings above its groups, each linking to the group of its first field",
-      ok: JSON.stringify(read) === JSON.stringify(wanted) && JSON.stringify(shownNow) === '["Window ceiling"]' && lines.every((c) => c.closest('section.dialog-group') === null),
+      ok: JSON.stringify(read) === JSON.stringify(wanted) && JSON.stringify(shownNow) === '["Windows"]' && lines.every((c) => c.closest('section.dialog-group') === null),
       missing: [...read.map((r) => JSON.stringify(r)), ...shownNow],
     });
   }
@@ -4334,7 +4515,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const introOf = (groupLabel) => card(groupLabel)?.querySelector('.dialog-group__intro')?.textContent ?? null;
     const values = (groupLabel, labels) => labels.map((label) => field(groupLabel, label)?.value ?? null);
     const disabled = (groupLabel, labels) => labels.map((label) => field(groupLabel, label)?.disabled ?? null);
-    const SHED = ['Shed cap (%)', 'Burn average (s)', 'Shed dwell (s)'];
+    const SHED = ['Shed cap (%)', 'Shed dwell (s)'];
+    const AVERAGE = ['Burn average (s)'];
+    // A shedding preset reaches the cap and the dwell in Load shedding and the average under Windows.
+    const shedValues = () => [...values('Load shedding', SHED), ...values('Windows', AVERAGE)];
+    const shedDisabled = () => [...disabled('Load shedding', SHED), ...disabled('Windows', AVERAGE)];
     const FAIL = ['In flight', 'Retry in place (s)'];
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
     const type = async (input, value) => {
@@ -4344,9 +4529,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       await m.settle(120);
     };
     const shedSwitch = () => card('Load shedding')?.querySelector('button[role="switch"][aria-label="Load shedding"]');
+    const slowSwitch = () => card('Slow-down')?.querySelector('button[role="switch"][aria-label="Slow-down"]');
     const preview = () => card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
-    expect('/pools the load groups draw the ceiling, the bar and the shedding, failover and overage controls', ['Window ceiling', 'Load shedding', 'Failover', 'Overage and plan end'].map((label) => card(label)?.textContent ?? '').join(' '), [
+    const slowPreview = () => card('Slow-down')?.querySelector('.slow-down-preview')?.textContent ?? '';
+    expect('/pools the load groups draw the ceiling, the average and the bar, then the shedding, slow-down, failover and overage controls', ['Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end'].map((label) => card(label)?.textContent ?? '').join(' '), [
       'Window ceiling (%)',
+      'Burn average (s)',
       'Member utilization',
       'Load shedding',
       'Balanced',
@@ -4354,33 +4542,37 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       'Conservative',
       'Custom',
       'Shed cap (%)',
-      'Burn average (s)',
       'Shed dwell (s)',
-      'Migrate when spent',
       'Warm sessions',
       'Never:',
       'When needed:',
       'Always:',
       'Preview',
+      'Slow-down',
+      'Stretch (s)',
+      'Hold (s)',
       'Failover',
+      'Migrate when spent',
       'Overage grace',
+      'Return to plan',
+      'When cold:',
+      'Return dwell (s)',
       'Wind down',
     ]);
-    const ceilingField = () => field('Window ceiling', 'Window ceiling (%)');
+    const ceilingField = () => field('Windows', 'Window ceiling (%)');
     results.push({
-      name: '/pools the Window ceiling group opens with its intro and draws the ceiling from 50 to 100 with its hint, then the bar',
+      name: '/pools the Windows group opens with its intro and draws the ceiling from 50 to 100 with its hint, the burn average, then the bar',
       ok:
-        introOf('Window ceiling') ===
-          'The ceiling is the share of a window the router keeps every account under: a session lands only where its rewrite and its burn stay under it until the window resets, and a round moves sessions off an account whose sessions would take it over.' &&
-        JSON.stringify(labelsOf('Window ceiling')) === '["Window ceiling (%)","Member utilization"]' &&
-        hintOf('Window ceiling', 'Window ceiling (%)') === 'A move or a new session lands on a member only where its windows stay under this share until they reset, or for the next five hours on a weekly window. A round runs on a member whose window would pass it.' &&
+        introOf('Windows') === "The windows the router works from: the share of each it keeps every account under, and the span each session's burn is averaged over." &&
+        JSON.stringify(labelsOf('Windows')) === '["Window ceiling (%)","Burn average (s)","Member utilization"]' &&
+        hintOf('Windows', 'Window ceiling (%)') === 'A move or a new session lands on a member only where its windows stay under this share until they reset, or for the next five hours on a weekly window. A round runs on a member whose window would pass it.' &&
         ceilingField()?.value === '75' &&
         ceilingField()?.getAttribute('min') === '50' &&
         ceilingField()?.getAttribute('max') === '100',
-      missing: [String(introOf('Window ceiling')), JSON.stringify(labelsOf('Window ceiling')), String(hintOf('Window ceiling', 'Window ceiling (%)')), String(ceilingField()?.value), String(ceilingField()?.getAttribute('min')), String(ceilingField()?.getAttribute('max'))],
+      missing: [String(introOf('Windows')), JSON.stringify(labelsOf('Windows')), String(hintOf('Windows', 'Window ceiling (%)')), String(ceilingField()?.value), String(ceilingField()?.getAttribute('min')), String(ceilingField()?.getAttribute('max'))],
     });
     {
-      const util = card('Window ceiling');
+      const util = card('Windows');
       const ticks = [...(util?.querySelectorAll('.ubar__track .ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
       const handle = () => util?.querySelector('[role="slider"][aria-label="Window ceiling"]');
       const atStored = [handle()?.className, handle()?.style.left, handle()?.getAttribute('aria-valuetext'), handle()?.getAttribute('aria-valuemin'), handle()?.getAttribute('aria-valuemax')];
@@ -4404,30 +4596,30 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       // A ceiling out of its range reads in the footer and on the rail, with no callout under the bar.
       await type(ceilingField(), '120');
       const status = dlg?.querySelector('.dialog__status')?.textContent ?? '';
-      const outOfRange = [card('Window ceiling')?.querySelector('.callout--critical')?.textContent ?? null, status, !!rail(dlg, 'utilization')?.querySelector('.dialog-rail__dot')];
+      const outOfRange = [card('Windows')?.querySelector('.callout--critical')?.textContent ?? null, status, !!rail(dlg, 'utilization')?.querySelector('.dialog-rail__dot')];
       await type(ceilingField(), '75');
       results.push({
         name: '/pools a ceiling out of range holds the save from the footer and the rail',
-        ok: outOfRange[0] === null && outOfRange[1] === 'Save is held: Window ceiling (%) is from 50 to 100.Go to Window ceiling' && outOfRange[2] === true,
+        ok: outOfRange[0] === null && outOfRange[1] === 'Save is held: Window ceiling (%) is from 50 to 100.Go to Windows' && outOfRange[2] === true,
         missing: outOfRange.map(String),
       });
     }
-    const migrate = card('Load shedding')?.querySelector('button[role="switch"][aria-label="Migrate when spent"]');
+    const migrate = card('Failover')?.querySelector('button[role="switch"][aria-label="Migrate when spent"]');
     results.push({
-      name: '/pools Load shedding opens with its intro and draws its switch first, as Migrate when spent is drawn, then the cap, the average and the dwell with their hints',
+      name: '/pools Load shedding opens with its intro and draws its switch first, as Migrate when spent is drawn under Failover, then the cap and the dwell with their hints, the average under Windows',
       ok:
         introOf('Load shedding') ===
-          'A member whose window would pass the ceiling before its reset, or within five hours on a weekly window, runs a round that marks the sessions that cover the excess, and each moves to a sibling with runway at its next request.' &&
-        JSON.stringify(labelsOf('Load shedding')) === JSON.stringify(['Load shedding', 'Preset', 'Shed cap (%)', 'Burn average (s)', 'Shed dwell (s)', 'Migrate when spent', 'Warm sessions', 'Preview']) &&
+          'A member whose window would pass the ceiling before its reset, or within five hours on a weekly window, runs a round that marks the sessions that cover the excess, and each moves to a sibling with runway at its next request. With the slow-down on, a round fires when the time the slow-down adds passes the stretch threshold, and removes only what the slow-down cannot cover.' &&
+        JSON.stringify(labelsOf('Load shedding')) === JSON.stringify(['Load shedding', 'Preset', 'Shed cap (%)', 'Shed dwell (s)', 'Warm sessions', 'Preview']) &&
         shedSwitch()?.getAttribute('aria-checked') === 'true' &&
         shedSwitch()?.closest('.field')?.className === migrate?.closest('.field')?.className &&
         migrate?.closest('.field')?.classList.contains('field--beside') === true &&
         hintOf('Load shedding', 'Shed cap (%)') === "The most of the member's burn one round removes. The round removes what brings the window under the ceiling, up to this." &&
-        hintOf('Load shedding', 'Burn average (s)') === "The time constant of each session's burn average. The projection and the round read it." &&
+        hintOf('Windows', 'Burn average (s)') === "The time constant of each session's burn average. The projection, the slow-down and the round read it." &&
         hintOf('Load shedding', 'Shed dwell (s)') === 'The least time between two rounds on one member, and how long a moved session stays off it.' &&
         field('Load shedding', 'Shed cap (%)')?.getAttribute('min') === '10' &&
         field('Load shedding', 'Shed cap (%)')?.getAttribute('max') === '100',
-      missing: [String(introOf('Load shedding')), JSON.stringify(labelsOf('Load shedding')), String(shedSwitch()?.getAttribute('aria-checked')), String(shedSwitch()?.closest('.field')?.className), ...SHED.map((label) => String(hintOf('Load shedding', label)))],
+      missing: [String(introOf('Load shedding')), JSON.stringify(labelsOf('Load shedding')), String(shedSwitch()?.getAttribute('aria-checked')), String(shedSwitch()?.closest('.field')?.className), String(migrate?.closest('.field')?.className), ...SHED.map((label) => String(hintOf('Load shedding', label))), String(hintOf('Windows', 'Burn average (s)'))],
     });
     const names = (label) => JSON.stringify(pills(label).map((p) => p.textContent?.trim()));
     results.push({
@@ -4436,30 +4628,33 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         names('Load shedding preset') === '["Balanced","Fast","Conservative","Custom"]' &&
         names('Failover preset') === '["Balanced","Fast","Conservative","Custom"]' &&
         JSON.stringify([pressed('Load shedding preset'), pressed('Failover preset')]) === '[["Balanced"],["Balanced"]]' &&
-        JSON.stringify(disabled('Load shedding', SHED)) === '[true,true,true]' &&
+        JSON.stringify(shedDisabled()) === '[true,true,true]' &&
         JSON.stringify(disabled('Failover', FAIL)) === '[true,true]',
-      missing: [names('Load shedding preset'), names('Failover preset'), JSON.stringify([pressed('Load shedding preset'), pressed('Failover preset')]), JSON.stringify(disabled('Load shedding', SHED)), JSON.stringify(disabled('Failover', FAIL))],
+      missing: [names('Load shedding preset'), names('Failover preset'), JSON.stringify([pressed('Load shedding preset'), pressed('Failover preset')]), JSON.stringify(shedDisabled()), JSON.stringify(disabled('Failover', FAIL))],
     });
     await pick('Load shedding preset', 'Fast');
-    const fast = [values('Load shedding', SHED), disabled('Load shedding', SHED)];
+    const fast = [shedValues(), shedDisabled()];
     await pick('Load shedding preset', 'Custom');
-    const fromFast = [values('Load shedding', SHED), disabled('Load shedding', SHED)];
-    await type(field('Load shedding', 'Burn average (s)'), '1000');
+    const fromFast = [shedValues(), shedDisabled()];
+    await type(field('Windows', 'Burn average (s)'), '1000');
     const edited = pressed('Load shedding preset');
     await pick('Load shedding preset', 'Conservative');
-    const conservative = [values('Load shedding', SHED), disabled('Load shedding', SHED), (card('Load shedding')?.textContent ?? '').includes('Averages over an hour and waits longer between rounds: fewer cache rewrites, slower relief.')];
+    const conservative = [shedValues(), shedDisabled(), (card('Load shedding')?.textContent ?? '').includes('Averages over an hour and waits longer between rounds: fewer cache rewrites, slower relief.')];
+    await pick('Load shedding preset', 'Custom');
+    const customHint = hintOf('Load shedding', 'Preset');
     await pick('Load shedding preset', 'Balanced');
-    const balanced = [values('Load shedding', SHED), disabled('Load shedding', SHED)];
+    const balanced = [shedValues(), shedDisabled()];
     results.push({
-      name: '/pools a shedding pill writes the cap, the average and the dwell into the disabled fields, Custom enables them, and an edit stays custom until a preset is picked',
+      name: '/pools a shedding pill writes the cap and the dwell and the average under Windows into the disabled fields, Custom enables them, and an edit stays custom until a preset is picked',
       ok:
-        JSON.stringify(fast) === '[["50","900","600"],[true,true,true]]' &&
-        JSON.stringify(fromFast) === '[["50","900","600"],[false,false,false]]' &&
+        JSON.stringify(fast) === '[["50","600","900"],[true,true,true]]' &&
+        JSON.stringify(fromFast) === '[["50","600","900"],[false,false,false]]' &&
         JSON.stringify(edited) === '["Custom"]' &&
-        JSON.stringify(conservative) === '[["30","3600","1800"],[true,true,true],true]' &&
+        JSON.stringify(conservative) === '[["30","1800","3600"],[true,true,true],true]' &&
+        customHint === 'Set the cap, the burn average under Windows, and the dwell by hand.' &&
         JSON.stringify(pressed('Load shedding preset')) === '["Balanced"]' &&
-        JSON.stringify(balanced) === '[["50","1800","900"],[true,true,true]]',
-      missing: [JSON.stringify(fast), JSON.stringify(fromFast), JSON.stringify(edited), JSON.stringify(conservative), JSON.stringify(balanced)],
+        JSON.stringify(balanced) === '[["50","900","1800"],[true,true,true]]',
+      missing: [JSON.stringify(fast), JSON.stringify(fromFast), JSON.stringify(edited), JSON.stringify(conservative), String(customHint), JSON.stringify(balanced)],
     });
     // At the mock's clock primary projects 81 % at its 5-hour reset, secondary 100 % and nightly 104 %, all past all's
     // 75 %, and every sibling of each is over it too or out of the rotation. Under a ceiling of 100 nightly alone
@@ -4473,9 +4668,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await type(ceilingField(), '75');
     const offLine = preview();
     await pick('Load shedding preset', 'Fast');
-    const afterPreset = [shedSwitch()?.getAttribute('aria-checked'), disabled('Load shedding', SHED)];
+    const afterPreset = [shedSwitch()?.getAttribute('aria-checked'), shedDisabled()];
     await pick('Load shedding preset', 'Custom');
-    const customOff = disabled('Load shedding', SHED);
+    const customOff = shedDisabled();
     await pick('Load shedding preset', 'Balanced');
     shedSwitch()?.click();
     await m.settle(120);
@@ -4496,6 +4691,41 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         shedSwitch()?.getAttribute('aria-checked') === 'true',
       missing: [offRaised, offLine, JSON.stringify(afterPreset), JSON.stringify(customOff), String(shedSwitch()?.getAttribute('aria-checked'))],
     });
+    {
+      // all keeps the slow-down off, so its preview reads the off line. Turned on in the dialog it reads that no member
+      // is slowed, since the route serves no slow-down on a pool whose stored switch is off.
+      const stretch = field('Slow-down', 'Stretch (s)');
+      const hold = field('Slow-down', 'Hold (s)');
+      const ranges = [stretch?.value, stretch?.getAttribute('min'), stretch?.getAttribute('max'), hold?.value, hold?.getAttribute('min'), hold?.getAttribute('max')];
+      const hints = ['Slow-down', 'Stretch (s)', 'Hold (s)'].map((label) => hintOf('Slow-down', label));
+      const off = [slowSwitch()?.getAttribute('aria-checked'), slowPreview()];
+      slowSwitch()?.click();
+      await m.settle(120);
+      const on = [slowSwitch()?.getAttribute('aria-checked'), slowPreview()];
+      slowSwitch()?.click();
+      await m.settle(120);
+      results.push({
+        name: '/pools Slow-down opens with its intro and draws its switch as Load shedding is drawn, then the stretch and the hold in their bounds with their hints',
+        ok:
+          introOf('Slow-down') ===
+            'The slow-down holds each request of a session before it is forwarded, so an account whose sessions would pass the ceiling before the reset reaches it under the ceiling instead. A session waits its own cycle times the slow-down, so a fast session waits more than a slow one and each keeps its share.' &&
+          JSON.stringify(labelsOf('Slow-down')) === '["Slow-down","Stretch (s)","Hold (s)","Preview"]' &&
+          slowSwitch()?.closest('.field')?.className === shedSwitch()?.closest('.field')?.className &&
+          JSON.stringify(hints) ===
+            JSON.stringify([
+              'Holds requests on a member whose five-hour window would pass the ceiling. Auxiliary requests, compactions, the fast lane, probes and token counts are never held.',
+              'The time the slow-down may add to a session before a round moves sessions off the member, with load shedding on. Under it the slow-down holds alone.',
+              "The longest one request waits. 120 s leaves 60 s of the client's 180 s first-byte window for the upstream's head.",
+            ]) &&
+          JSON.stringify(ranges) === '["9000","60","18000","120","1","300"]',
+        missing: [String(introOf('Slow-down')), JSON.stringify(labelsOf('Slow-down')), String(slowSwitch()?.closest('.field')?.className), ...hints.map(String), JSON.stringify(ranges)],
+      });
+      results.push({
+        name: '/pools the slow-down preview reads its off line on a pool whose switch is off, and no slowed member once the switch is turned on in the dialog',
+        ok: JSON.stringify(off) === JSON.stringify(['false', 'Slow-down is off: no request is held.']) && JSON.stringify(on) === JSON.stringify(['true', 'No member is slowed.']) && slowSwitch()?.getAttribute('aria-checked') === 'false',
+        missing: [JSON.stringify(off), JSON.stringify(on)],
+      });
+    }
     await pick('Failover preset', 'Conservative');
     const failoverConservative = [(card('Failover')?.textContent ?? '').includes('Waits out a longer throttle before moving on.'), values('Failover', FAIL), disabled('Failover', FAIL)];
     await pick('Failover preset', 'Custom');
@@ -4507,14 +4737,65 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       missing: [JSON.stringify(failoverConservative), JSON.stringify(fromConservative), JSON.stringify(pressed('Failover preset'))],
     });
     results.push({
-      name: '/pools Failover draws the preset, the cap and the retry bound alone, and its intro names no Pace',
-      ok: JSON.stringify(labelsOf('Failover')) === '["Preset","In flight","Retry in place (s)"]' && introOf('Failover') === 'How long a request waits out a throttle on its member, and how many requests one member serves at once.',
-      missing: [JSON.stringify(labelsOf('Failover')), String(introOf('Failover'))],
+      name: '/pools Failover draws the preset, the cap, the retry bound and Migrate when spent with its hint, and its intro names no Pace',
+      ok:
+        JSON.stringify(labelsOf('Failover')) === '["Preset","In flight","Retry in place (s)","Migrate when spent"]' &&
+        introOf('Failover') === 'How long a request waits out a throttle on its member, how many requests one member serves at once, and whether a spent window moves the session at once.' &&
+        hintOf('Failover', 'Migrate when spent') === "Moves a session off a member whose window for its model is spent, to a sibling with allowance left, without waiting for a round or the upstream's 429.",
+      missing: [JSON.stringify(labelsOf('Failover')), String(introOf('Failover')), String(hintOf('Failover', 'Migrate when spent'))],
     });
     expect('/pools the overage group states the grace and the wind down', card('Overage and plan end')?.textContent ?? '', [
       'Under Prefer plan quota, a session stays on an account in overage while its window resets within this many minutes. At 0 it moves at once.',
-      'This long before a cancelled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. The end is set on the Accounts page',
+      'This long before a cancelled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. Inside it the account is no destination for a move. The end is set on the Accounts page',
     ]);
+    {
+      // The return dwell is the one Always reads, so the other two modes draw it disabled.
+      const radio = card('Overage and plan end')?.querySelector('[role="radiogroup"][aria-label="Return to plan"]');
+      const items = () => [...(radio?.querySelectorAll('.radio-list__item') ?? [])];
+      const choices = items().map((l) => l.textContent?.replace(/\s+/g, ' ').trim());
+      const choose = async (title) => {
+        items().find((l) => l.textContent?.trim().startsWith(`${title}:`))?.querySelector('input[type="radio"]')?.click();
+        await m.settle(120);
+      };
+      const dwell = () => field('Overage and plan end', 'Return dwell (s)');
+      const atAlways = [items().map((l) => l.querySelector('input')?.checked), dwell()?.value, dwell()?.disabled, dwell()?.getAttribute('min'), dwell()?.getAttribute('max')];
+      await choose('When cold');
+      const cold = [items().map((l) => l.querySelector('input')?.checked), dwell()?.disabled];
+      await choose('Never');
+      const never = [items().map((l) => l.querySelector('input')?.checked), dwell()?.disabled];
+      await choose('Always');
+      // A dwell past its bound typed under Always stays editable when the mode moves on, so the hold it puts on the
+      // save can be cleared where it stands.
+      await type(dwell(), '90000');
+      await choose('Never');
+      const refusedNever = [dwell()?.disabled, dwell()?.getAttribute('aria-invalid')];
+      // The keystroke that brings the value back in bounds leaves the field editable while it holds the focus, and it
+      // draws disabled once the focus leaves it.
+      dwell()?.focus();
+      await type(dwell(), '900');
+      const typedNever = dwell()?.disabled;
+      dwell()?.blur();
+      await m.settle(120);
+      const clearedNever = dwell()?.disabled;
+      await choose('Always');
+      results.push({
+        name: '/pools Return to plan offers Always, When cold and Never with their words and its hint, and Return dwell is drawn disabled unless Always or refused, a refused one staying editable until it loses the focus',
+        ok:
+          JSON.stringify(choices) ===
+            JSON.stringify(['Always: at once when cold, after the dwell when warm', 'When cold: only when the move is free: a compaction, a restart or a lane change', 'Never: the session stays until the member refuses it']) &&
+          hintOf('Overage and plan end', 'Return to plan') === 'When a session on an API-key member returns to a subscription member. Under Never it leaves the metered member on expiry, a cooldown or a mark alone.' &&
+          hintOf('Overage and plan end', 'Return dwell (s)') === 'Under Always, how long a warm session stays on the API-key member before it returns. 0 returns it at once.' &&
+          JSON.stringify(atAlways) === '[[true,false,false],"900",false,"0","86400"]' &&
+          JSON.stringify(cold) === '[[false,true,false],true]' &&
+          JSON.stringify(never) === '[[false,false,true],true]' &&
+          JSON.stringify(refusedNever) === '[false,"true"]' &&
+          typedNever === false &&
+          clearedNever === true &&
+          dwell()?.value === '900' &&
+          dwell()?.disabled === false,
+        missing: [...choices.map(String), String(hintOf('Overage and plan end', 'Return to plan')), String(hintOf('Overage and plan end', 'Return dwell (s)')), JSON.stringify(atAlways), JSON.stringify(cold), JSON.stringify(never), JSON.stringify(refusedNever), String(typedNever), String(clearedNever)],
+      });
+    }
     // Pool all runs the Pace strategy, so the Strategy field draws its hint. The Accounts page link carries its
     // screen-reader note after its words, so the closing sentence is read without its period.
     expect('/pools the Pace strategy hint names the spare rate over the Fable week or the 7-day window', card('Selection')?.textContent ?? '', [
@@ -4586,7 +4867,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
       await emailLines('/pools dialog reads each member\'s email beside its label, and nothing beside one without', memberRows().map((tr) => [byLabel.get(tr.querySelector('td:first-child span')?.textContent ?? '') ?? '', tr.querySelector('td:first-child span.mono')?.textContent ?? null]));
     }
-    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio'];
+    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio', 'Studio annex'];
     results.push({ name: '/pools dialog lists members by priority then label', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     const prio = dlg?.querySelector('input[aria-label="Priority for primary"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -4596,7 +4877,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: '/pools priority keystrokes leave the row where it is', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     prio?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await m.settle(150);
-    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'legacy', 'Research workspace', 'studio']), missing: memberLabels() });
+    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'legacy', 'Research workspace', 'studio', 'Studio annex']), missing: memberLabels() });
     setter.call(prio, '0');
     dlg?.querySelector('input[aria-label="Priority for primary"]')?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(150);
@@ -5161,6 +5442,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   }
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);
+  // The page read work with its plan member alone, so the next checks read the story's membership afresh.
+  m.unmount();
+  m = await mount('/pools');
 }
 {
   // A refused save may come from lists that are out of date: a dialog closed after a refused save reads the lists
@@ -5389,7 +5673,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     // A new pool starts where the route seeds one: the ceiling at 95 % and its switch on. The route computes the
     // warnings, so an unsaved pool lists none.
     const shedSwitch = group(dlg, 'Load shedding')?.querySelector('button[role="switch"][aria-label="Load shedding"]');
-    const ceiling = group(dlg, 'Window ceiling')?.querySelector('input[aria-label="Window ceiling (%)"]');
+    const ceiling = group(dlg, 'Windows')?.querySelector('input[aria-label="Window ceiling (%)"]');
     results.push({
       name: '/pools create dialog starts with Load shedding on under a ceiling of 95 %, and lists no warnings',
       ok: shedSwitch?.getAttribute('aria-checked') === 'true' && ceiling?.value === '95' && dlg?.querySelector('.pool-warnings') === null,
@@ -5701,7 +5985,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const card = [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'work');
   const row = [...(card?.querySelectorAll('.serving tbody tr') ?? [])].find((tr) => tr.children[1]?.querySelector('a')?.textContent?.trim() === 'studio');
   const lines = [...(row?.querySelectorAll('td:nth-child(2) .num') ?? [])].map((c) => c.textContent?.replace(/\s+/g, ' ').trim());
-  const standingBadges = [...(row?.querySelectorAll('td:nth-child(3) .badge') ?? [])].map((b) => b.textContent?.trim());
+  // studio is slowed, so its speed chip stands beside the Standing badges this check reads.
+  const standingBadges = [...(row?.querySelectorAll('td:nth-child(3) .badge') ?? [])].filter((b) => !b.closest('.speed-chip')).map((b) => b.textContent?.trim());
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
@@ -5727,12 +6012,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // A round counts the triggering pool's pins alone: with primary moved from all into work and laptop moved into work,
   // work's two primary pins (the busy laptop sessions) are its slice, so its preview reads them alone, whatever
   // desktop, still all's key, holds there. Their Sonnet 4.6 burns at its model tier's latest weight, so the round marks
-  // one of them, and no pin stays unpriced.
+  // one of them, and no pin stays unpriced. Studio, whose sessions project it past any ceiling under 95 %, leaves work
+  // for the check, and the annex is the sibling with runway.
   const pools = await api.listPools();
   const story = (id) => pools.find((p) => p.id === id);
   const written = (p, members) => ({ ...p, members: members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
   await api.updatePool('all', written(story('all'), story('all').members.filter((x) => x.accountId !== 'primary')));
-  await api.updatePool('work', written(story('work'), [...story('work').members, { accountId: 'primary', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }]));
+  await api.updatePool('work', written(story('work'), [...story('work').members.filter((x) => x.accountId !== 'studio'), { accountId: 'primary', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }]));
   const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
   const moveLaptop = (poolId) =>
     api.updateKey('laptop', {
@@ -5754,8 +6040,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  // primary projects 81 % at its 5-hour reset, so a ceiling of 80 % makes it the one member over the ceiling, and
-  // studio, a sibling under it on every window, has runway for its pins.
+  // primary projects 81 % at its 5-hour reset, so a ceiling of 80 % makes it the one member over the ceiling, and the
+  // annex, an API-key sibling, has runway for its pins.
   const ceiling = dlg?.querySelector('input[aria-label="Window ceiling (%)"]');
   if (ceiling) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(ceiling, '80');
   ceiling?.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -5847,7 +6133,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const eighty = await savedCeiling(dlg);
   results.push({
     name: '/pools a ceiling typed under 50 holds the save, and 80 % typed back saves as 0.8',
-    ok: low[0] === true && low[1] === 'Save is held: Window ceiling (%) is from 50 to 100.Go to Window ceiling' && low[2] === 'true' && eighty === 0.8 && !m.container.querySelector('dialog[open]'),
+    ok: low[0] === true && low[1] === 'Save is held: Window ceiling (%) is from 50 to 100.Go to Windows' && low[2] === 'true' && eighty === 0.8 && !m.container.querySelector('dialog[open]'),
     missing: [...low.map(String), String(eighty)],
   });
   // The story's pool back, so the checks below read the pool the fixture holds.
@@ -5880,7 +6166,7 @@ m.unmount();
       held.startsWith('Save is held: the account list did not load, so the members cannot be checked.') &&
       held.includes('Go to Members') &&
       unchecked &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio', 'Studio annex']) &&
       status() === 'Every group saves together.',
     missing: [...failed.map(String), retry ? 'Try again' : 'no Try again', held, unchecked ? '' : 'a member refusal or a table while the read failed', ...labels.map(String), status()],
   });
@@ -5909,7 +6195,7 @@ m.unmount();
     ok:
       JSON.stringify(early) === JSON.stringify([['nightly', true, true], ['overflow', true, true], ['primary', true, true], ['secondary', true, true]]) &&
       before === 'Every group saves together.' &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio', 'Studio annex']) &&
       status() === 'Every group saves together.',
     missing: [JSON.stringify(early), before, ...labels.map(String), status()],
   });
@@ -6327,7 +6613,7 @@ localStorage.removeItem('phoebis.expertView');
   const labels = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const parents = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   x = await mount('/fixtures/grouped-dialog?expertOnly=autoMode');
-  results.push({ name: 'an expert-only group leaves the rail while the mode is off', ok: !labels(x).includes('Auto mode') && labels(x).length === 15 && parents(x).join() === 'Pool,Routing,Load,Caching,Visibility', missing: labels(x) });
+  results.push({ name: 'an expert-only group leaves the rail while the mode is off', ok: !labels(x).includes('Auto mode') && labels(x).length === 16 && parents(x).join() === 'Pool,Routing,Load,Caching,Visibility', missing: labels(x) });
   [...(group(dialogOf(x), 'Identity')?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'Auto mode')?.click();
   await x.settle(150);
   results.push({
@@ -6340,7 +6626,7 @@ localStorage.removeItem('phoebis.expertView');
   x = await mount('/fixtures/grouped-dialog?expertOnly=identity,members,keys,models,autoMode');
   await x.settle(100);
   const panel = (page) => [...(dialogOf(page)?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
-  results.push({ name: 'an expert-only run leaves with its parent heading', ok: parents(x).join() === 'Routing,Load,Caching,Visibility' && labels(x).length === 11, missing: parents(x) });
+  results.push({ name: 'an expert-only run leaves with its parent heading', ok: parents(x).join() === 'Routing,Load,Caching,Visibility' && labels(x).length === 12, missing: parents(x) });
   results.push({
     name: 'a chosen group the filter takes off gives way to the first shown group',
     ok: panel(x) === 'Selection' && rail(dialogOf(x), 'selection')?.getAttribute('aria-current') === 'true' && localStorage.getItem('phoebis.expertView') === null,
@@ -6372,8 +6658,8 @@ localStorage.removeItem('phoebis.expertView');
   const headingsOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])].map((h) => h.textContent?.trim());
   const foot = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
   const PARENTS = ['Pool', 'Routing', 'Load', 'Caching', 'Visibility'];
-  const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Pinning', 'Window ceiling', 'Load shedding', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture'];
-  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Window ceiling', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
+  const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Pinning', 'Windows', 'Load shedding', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture'];
+  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
   const KEEPALIVE = ['Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Return rate by idle age'];
   // Each group's labels and line with the mode off, the Interfaces' plain fields; the line is null where none draws.
   const PLAIN_FIELDS = {
@@ -6383,9 +6669,9 @@ localStorage.removeItem('phoebis.expertView');
     Models: [['Model rules'], null],
     Selection: [['Strategy', 'Prioritize subscription accounts'], null],
     Pinning: [['Session affinity'], '1 more setting in the '],
-    'Window ceiling': [['Window ceiling (%)', 'Member utilization'], null],
-    'Load shedding': [['Load shedding'], '7 more settings in the '],
-    'Overage and plan end': [['Overage policy'], '2 more settings in the '],
+    Windows: [['Window ceiling (%)', 'Member utilization'], '1 more setting in the '],
+    'Load shedding': [['Load shedding'], '5 more settings in the '],
+    'Overage and plan end': [['Overage policy'], '4 more settings in the '],
     'Cache TTL': [['Set the cache TTL for this pool', 'Write cost'], '3 more settings in the '],
     Keepalive: [KEEPALIVE, null],
     'Body capture': [['Capture request and response bodies', 'Retention (hours)'], null],
@@ -6395,9 +6681,11 @@ localStorage.removeItem('phoebis.expertView');
     'Auto mode': ['Support server-side auto mode'],
     Placement: ['Subagent placement', 'Session placement', 'Minimum shared prefix, tokens'],
     Pinning: ['Session affinity', 'Pin sessions'],
-    'Load shedding': ['Load shedding', 'Preset', 'Shed cap (%)', 'Burn average (s)', 'Shed dwell (s)', 'Migrate when spent', 'Warm sessions', 'Preview'],
-    Failover: ['Preset', 'In flight', 'Retry in place (s)'],
-    'Overage and plan end': ['Overage policy', 'Overage grace (min)', 'Wind down (min)'],
+    Windows: ['Window ceiling (%)', 'Burn average (s)', 'Member utilization'],
+    'Load shedding': ['Load shedding', 'Preset', 'Shed cap (%)', 'Shed dwell (s)', 'Warm sessions', 'Preview'],
+    'Slow-down': ['Slow-down', 'Stretch (s)', 'Hold (s)', 'Preview'],
+    Failover: ['Preset', 'In flight', 'Retry in place (s)', 'Migrate when spent'],
+    'Overage and plan end': ['Overage policy', 'Overage grace (min)', 'Return to plan', 'Return dwell (s)', 'Wind down (min)'],
     'Cache TTL': ['Set the cache TTL for this pool', 'Add a cache marker to a request without one', 'Write cost', 'Plan writes', 'Metered writes'],
     'Cache diagnostics': ['Cache diagnostics'],
   };
@@ -6415,7 +6703,7 @@ localStorage.removeItem('phoebis.expertView');
   let dlg = await open('all');
   const plainRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
   results.push({
-    name: '/pools with the mode off the rail and the body hold twelve groups under the five parents, the four expert-only groups gone',
+    name: '/pools with the mode off the rail and the body hold twelve groups under the five parents, the five expert-only groups gone',
     ok: JSON.stringify(plainRail) === JSON.stringify([PARENTS, PLAIN_GROUPS, PLAIN_GROUPS]) && (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 17,
     missing: plainRail.map((x) => JSON.stringify(x)),
   });
@@ -6427,11 +6715,11 @@ localStorage.removeItem('phoebis.expertView');
       .filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(PLAIN_FIELDS[label]))
       .map(([label, read]) => `${label}: ${JSON.stringify(read)}`),
   });
-  const memberHint = () => [...(group(dlg, 'Window ceiling')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Member utilization')?.querySelector('.field__hint')?.textContent ?? 'no hint';
+  const memberHint = () => [...(group(dlg, 'Windows')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Member utilization')?.querySelector('.field__hint')?.textContent ?? 'no hint';
   const plainHint = memberHint();
   results.push({
     name: "/pools with the mode off the member utilization hint names the ceiling's handle, since every view draws it",
-    ok: plainHint.includes("the ceiling's handle") && plainHint.includes('arrow keys') && group(dlg, 'Window ceiling')?.querySelector('[role="slider"][aria-label="Window ceiling"]') != null,
+    ok: plainHint.includes("the ceiling's handle") && plainHint.includes('arrow keys') && group(dlg, 'Windows')?.querySelector('[role="slider"][aria-label="Window ceiling"]') != null,
     missing: [plainHint],
   });
   const drawnExpert = ['select[aria-label="Pin sessions"]', '[aria-label="Load shedding preset"]', '[aria-label="Failover preset"]', '[data-rule-set]', 'button[role="switch"][aria-label="Add a cache marker to a request without one"]', 'button[role="switch"][aria-label="Cache diagnostics"]', 'button[role="switch"][aria-label="Migrate when spent"]'].filter((s) => dlg?.querySelector(s) !== null);
@@ -6441,11 +6729,11 @@ localStorage.removeItem('phoebis.expertView');
   const expertRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
   const expertRead = Object.fromEntries(Object.keys(EXPERT_FIELDS).map((label) => [label, labelsIn(group(dlg, label))]));
   results.push({
-    name: '/pools the line turns the mode on: the rail holds all 21 entries, every group draws its expert fields, and no line is left',
+    name: '/pools the line turns the mode on: the rail holds all 22 entries, every group draws its expert fields, and no line is left',
     ok:
       localStorage.getItem('phoebis.expertView') === 'on' &&
       JSON.stringify(expertRail) === JSON.stringify([PARENTS, EVERY_GROUP, EVERY_GROUP]) &&
-      (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 21 &&
+      (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 22 &&
       JSON.stringify(expertRead) === JSON.stringify(EXPERT_FIELDS) &&
       dlg?.querySelector('.dialog-group__more') === null,
     missing: [localStorage.getItem('phoebis.expertView'), ...expertRail.map((x) => JSON.stringify(x)), ...Object.entries(expertRead).filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(EXPERT_FIELDS[label])).map(([label, read]) => `${label}: ${JSON.stringify(read)}`)],
@@ -6549,8 +6837,8 @@ localStorage.removeItem('phoebis.expertView');
   results.push({
     name: '/pools a refusal on a field the plain view hides shows the field, and the footer names it and reaches it with the mode still off',
     ok:
-      JSON.stringify(before) === '["hidden","7 more settings in the "]' &&
-      JSON.stringify(refused) === JSON.stringify(['off', 'true', 'Save is held: Shed cap (%) is from 10 to 100.Go to Load shedding', true, '6 more settings in the ']) &&
+      JSON.stringify(before) === '["hidden","5 more settings in the "]' &&
+      JSON.stringify(refused) === JSON.stringify(['off', 'true', 'Save is held: Shed cap (%) is from 10 to 100.Go to Load shedding', true, '4 more settings in the ']) &&
       shed()?.hidden === false &&
       !!cap() &&
       document.activeElement === cap() &&
@@ -6570,7 +6858,7 @@ localStorage.removeItem('phoebis.expertView');
       ceiling.dispatchEvent(new window.Event('input', { bubbles: true }));
       await p.settle(120);
     }
-    const handle = () => group(dlg, 'Window ceiling')?.querySelector('[role="slider"][aria-label="Window ceiling"]');
+    const handle = () => group(dlg, 'Windows')?.querySelector('[role="slider"][aria-label="Window ceiling"]');
     const read = () => [handle()?.getAttribute('aria-valuenow'), handle()?.getAttribute('aria-valuemin'), handle()?.getAttribute('aria-valuemax'), handle()?.style.left, handle()?.getAttribute('aria-valuetext')];
     const past = read();
     if (ceiling) {
@@ -6732,9 +7020,15 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   results.push({ name: '/keys the status filter offers disabled', ok: statuses.includes('Disabled'), missing: statuses });
 }
 {
-  // The story gives notebook one request in its life, so its bar takes the singular.
-  const bar = [...m.container.querySelectorAll('.hbars li')].find((li) => li.querySelector('.hbars__head > span')?.firstChild?.textContent?.trim() === 'notebook');
+  // A key with one request in its life takes the singular. The story's notebook holds the slow-down's turns beside its
+  // one drawn request, so the check reads it with a life of one request.
+  const keysRead = api.listKeys;
+  api.listKeys = async (...args) => (await keysRead.apply(api, args)).map((k) => (k.id === 'notebook' ? { ...k, lifetime: { ...k.lifetime, requests: 1 } } : k));
+  const page = await mount('/keys');
+  const bar = [...page.container.querySelectorAll('.hbars li')].find((li) => li.querySelector('.hbars__head > span')?.firstChild?.textContent?.trim() === 'notebook');
   const count = bar?.querySelector('.hbars__head .num .muted')?.textContent?.trim();
+  page.unmount();
+  delete api.listKeys;
   results.push({ name: '/keys a key with one lifetime request reads 1 request', ok: count === '1 request', missing: [count ?? 'no notebook bar'] });
 }
 {
@@ -8040,7 +8334,8 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   await m.settle(300);
 
   // The marker follows the trail on a row held and served and on a row held with nothing dispatched, and the
-  // switch keeps the held rows alone; the wait reads as the TTFB column reads a duration.
+  // switch keeps the held rows alone. The wait reads in whole seconds under a minute, and the hover names each wait's
+  // reason in its order and the account it waited on.
   const servedHeld = requests.find((r) => r.held?.heldMs === 1250 && r.attempts.length === 1);
   const heldAtCap = requests.find((r) => r.held !== null && r.attempts.length === 0 && r.errorCode === 'accounts_at_cap');
   results.push({ name: 'fixture: a request served after a hold and one held with nothing dispatched', ok: servedHeld !== undefined && heldAtCap !== undefined, missing: [String(servedHeld?.id), String(heldAtCap?.id)] });
@@ -8065,14 +8360,33 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
     const waitedOn = servedHeld.held.cohort ?? servedHeld.held.waitedOn.at(-1);
     results.push({
       name: '/requests a request served after a hold draws the held marker with its wait after its attempts',
-      ok: served.marker === 'held 1.3 s' && served.title === `waited 1,250 ms on ${waitedOn}` && served.bare && served.text === served.marker,
+      ok: served.marker === 'waited 1 s' && served.title === `waited for a slot 1 s on ${waitedOn}` && served.bare && served.text === served.marker,
       missing: [served.text, served.marker, String(served.title), `bare ${served.bare}`],
     });
     const atCap = await attemptsCellOf(heldAtCap.id);
     results.push({
       name: '/requests a request held with nothing dispatched draws no attempt and the held marker',
-      ok: atCap.bare && atCap.text === atCap.marker && atCap.marker === `held ${waitText(heldAtCap.held.heldMs)}`,
+      ok: atCap.bare && atCap.text === atCap.marker && atCap.marker === `waited ${ageText(heldAtCap.held.heldMs)}`,
       missing: [atCap.text, atCap.marker, `bare ${atCap.bare}`],
+    });
+  }
+  {
+    // The story holds one request for the slow-down on studio and one for the reset, each with its one wait.
+    const onlyWait = (reason) => requests.find((r) => r.held?.waits.length === 1 && r.held.waits[0].reason === reason);
+    const read = [];
+    for (const [reason, words] of [
+      ['slow_down', 'for the slow-down'],
+      ['reset', 'for the reset'],
+    ]) {
+      const r = onlyWait(reason);
+      const cell = r ? await attemptsCellOf(r.id) : null;
+      const span = r ? ageText(r.held.heldMs) : '';
+      read.push({ cell, reason, want: r ? { marker: `waited ${span}`, title: `waited ${words} ${span} on ${r.held.cohort ?? r.held.waitedOn.at(-1)}` } : null });
+    }
+    results.push({
+      name: "/requests a held row's marker reads waited, and its hover each wait's reason with its span and the account it waited on",
+      ok: read.every((x) => x.want !== null && x.cell?.marker === x.want.marker && x.cell.title === x.want.title) && read[0].want?.title.endsWith(' on studio') === true,
+      missing: read.map((x) => `${x.reason}: ${JSON.stringify(x.cell)} against ${JSON.stringify(x.want)}`),
     });
   }
   // Under native, the shell's default, the Cost cell reads a row in the unit its funding pays in: dollars over the
@@ -8291,7 +8605,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   }
   await m.navigate('/requests');
   await m.settle(300);
-  const heldCheck = '/requests the Held only filter keeps the requests that waited for a slot';
+  const heldCheck = '/requests the Held only filter keeps the requests that waited';
   // A flag has no values to choose, so its row writes the filter at once and closes the box.
   await addFilter(m, 'Held only');
   await m.settle(700);
@@ -8303,10 +8617,10 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   const heldDay = (await api.listRequests({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), held: true, limit: 25, to: new Date().toISOString() })).requests.length;
   results.push({
     name: heldCheck,
-    ok: heldChip === 'held only' && flagged === '1' && closed && heldRows.length > 0 && heldRows.length === heldDay && heldRows.every((t) => t.startsWith('held ')),
+    ok: heldChip === 'held only' && flagged === '1' && closed && heldRows.length > 0 && heldRows.length === heldDay && heldRows.every((t) => t.startsWith('waited ') && t !== 'waited 0 s'),
     missing: [`${heldRows.length} rows against ${heldDay}`, heldChip, `held=${flagged}`, `box closed ${closed}`, ...new Set(heldRows)],
   });
-  const heldMarkers = [...m.container.querySelectorAll('.requests__table tbody .requests__attempts > .badge')].filter((b) => b.textContent?.trim().startsWith('held '));
+  const heldMarkers = [...m.container.querySelectorAll('.requests__table tbody .requests__attempts > .badge')].filter((b) => b.textContent?.trim().startsWith('waited '));
   results.push({
     name: '/requests the held marker reads in the warning tone',
     ok: heldMarkers.length > 0 && heldMarkers.every((b) => b.classList.contains('badge--warning')),
@@ -10793,7 +11107,7 @@ m.unmount();
       ok:
         box !== null && entries[0] === '+ Select all' && at('Presets') === 1 && JSON.stringify(entries.slice(2, 10)) === JSON.stringify(presets.map((p) => `+ ${p}`)) &&
         at('Decisions') === 10 && JSON.stringify(entries.slice(11, 18)) === JSON.stringify(decisions.map((k) => `+ ${k}`)) && at('Events') === 18 &&
-        events.length === 30 && ['+ Mark cleared', '+ Reservation expired'].every((e) => events.includes(e)) && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
+        events.length === 32 && ['+ Mark cleared', '+ Reservation expired', '+ Slow-down ended', '+ Slow-down started'].every((e) => events.includes(e)) && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
         !entries.some((e) => e.includes('hidden')),
       missing: entries.slice(0, 20),
     });
@@ -10821,7 +11135,7 @@ m.unmount();
       ok:
         rest.address === null && rest.chip === 'no kinds chip' && before === 'true' &&
         one.address === keepalive.join(',') && one.chip === 'kinds: keepalive' && answer.rows.length > 0 && JSON.stringify(one.rows) === JSON.stringify(answer.rows.map(rowKeyOf)) &&
-        back.address === null && back.chip === 'no kinds chip' && back.options === 37 && back.checked === 37,
+        back.address === null && back.chip === 'no kinds chip' && back.options === 39 && back.checked === 39,
       missing: [JSON.stringify(rest), String(before), JSON.stringify(one), `${answer.rows.length} keepalive rows`, JSON.stringify(back)],
     });
   }
@@ -10844,17 +11158,17 @@ m.unmount();
     results.push({
       name: "/routing-log a preset row checks its members and the chip reads the preset's name, a second preset reads both names, and a hand edit reads the kinds' words",
       ok:
-        one.address === 'moved,held,shedding_round,mark_cleared,wind_down_started' && one.chip === 'kinds: moves and holds' &&
-        two.address === 'moved,held,shedding_round,mark_cleared,wind_down_started,cooldown_set,cooldown_cleared,poll_backoff_started,poll_backoff_ended' && two.chip === 'kinds: moves and holds, cooldowns and backoff' &&
-        edited.address === 'moved,shedding_round,mark_cleared,wind_down_started,cooldown_set,cooldown_cleared,poll_backoff_started,poll_backoff_ended' && edited.chip === 'kinds: moved, shedding round, mark cleared +5' &&
-        edited.title === 'moved, shedding round, mark cleared, wind-down started, cooldown set, cooldown cleared, poll backoff started, poll backoff ended' && read === edited.address,
+        one.address === 'moved,held,shedding_round,mark_cleared,wind_down_started,slow_down_started,slow_down_ended' && one.chip === 'kinds: moves and holds' &&
+        two.address === 'moved,held,shedding_round,mark_cleared,wind_down_started,slow_down_started,slow_down_ended,cooldown_set,cooldown_cleared,poll_backoff_started,poll_backoff_ended' && two.chip === 'kinds: moves and holds, cooldowns and backoff' &&
+        edited.address === 'moved,shedding_round,mark_cleared,wind_down_started,slow_down_started,slow_down_ended,cooldown_set,cooldown_cleared,poll_backoff_started,poll_backoff_ended' && edited.chip === 'kinds: moved, shedding round, mark cleared +7' &&
+        edited.title === 'moved, shedding round, mark cleared, wind-down started, slow-down started, slow-down ended, cooldown set, cooldown cleared, poll backoff started, poll backoff ended' && read === edited.address,
       missing: [JSON.stringify(one), JSON.stringify(two), JSON.stringify(edited), String(read)],
     });
   }
   {
     // The links the dashboard, the pool cards and the Models view write name their kinds, which read as any set does.
     const chips = [];
-    for (const kinds of ['exhausted', 'model_rejected,model_permitted', 'moved,held,shedding_round,mark_cleared,wind_down_started', 'wind_down_started,mark_cleared,held,shedding_round,moved']) {
+    for (const kinds of ['exhausted', 'model_rejected,model_permitted', 'moved,held,shedding_round,mark_cleared,wind_down_started,slow_down_started,slow_down_ended', 'slow_down_ended,wind_down_started,mark_cleared,held,slow_down_started,shedding_round,moved']) {
       const page = await mount(`/routing-log?kinds=${kinds}`, { now: CLOCK_ORIGIN });
       chips.push(chipRead(page, 'kinds'));
       page.unmount();
@@ -11774,21 +12088,24 @@ m.unmount();
       await page.settle(50);
       const labels = (f) => kvRows(f?.querySelector('.kv')).map((r) => r.label);
       const settings = kvRows(folds[2]?.querySelector('.kv.decision-card__settings'));
-      const nineteen = ['Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', 'Window ceiling', 'Load shedding', 'Move when spent', 'Overage grace', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Warm sessions', 'In-flight cap', 'Retry in place'];
+      const twentyFour = [
+        'Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', 'Window ceiling', 'Load shedding', 'Move when spent', 'Overage grace', 'Return to plan',
+        'Return dwell', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Slow-down', 'Stretch', 'Hold', 'Warm sessions', 'In-flight cap', 'Retry in place',
+      ];
       const values = Object.fromEntries(settings.map((r) => [r.label, r.dd?.textContent ?? '']));
       // The fold's head names when the pool's settings took force, the settings' own instant.
       const since = folds[2]?.querySelector('summary .decision-card__since')?.textContent ?? null;
       const edited = `since ${new Date(record.settings.poolUpdatedAt).toISOString().slice(11, 16)}`;
       const request = Object.fromEntries(kvRows(folds[0]?.querySelector('.kv')).map((r) => [r.label, r.dd]));
       results.push({
-        name: "/routing-log the three folds open to Request facts, Pin and warmth and the nineteen settings in order, Load shedding on, under the instant the settings took force",
+        name: "/routing-log the three folds open to Request facts, Pin and warmth and the twenty-four settings in order, Load shedding on, under the instant the settings took force",
         ok:
           JSON.stringify(folds.map((f) => f.querySelector('summary')?.firstChild?.textContent)) === JSON.stringify(['Request facts', 'Pin and warmth', 'Settings in force']) && closed.every((o) => o === false) &&
           since === edited && values['Load shedding'] === 'on' && values['Window ceiling'] === fmtPct(record.settings.windowCeiling) && values['Shed cap'] === fmtPct(record.settings.shedCap) &&
           JSON.stringify(labels(folds[0])) === JSON.stringify(['Attempt', 'At', 'Key', 'Pool', 'Agent', 'Class', 'Model resolved', 'Lane', 'Flags']) &&
           request.Key?.querySelector('a')?.getAttribute('href') === `/keys#${record.request.keyId}` && request.Pool?.querySelector('a')?.getAttribute('href') === `/pools#${record.request.poolId}` &&
           JSON.stringify(labels(folds[1])) === JSON.stringify(['Pin on', 'Epoch', 'Created', 'Idle', 'Refresh age', 'Pin lane', 'Warmth', 'Cause']) &&
-          JSON.stringify(settings.map((r) => r.label)) === JSON.stringify(nineteen) && settings.every((r) => (r.dd?.textContent ?? '') !== ''),
+          JSON.stringify(settings.map((r) => r.label)) === JSON.stringify(twentyFour) && settings.every((r) => (r.dd?.textContent ?? '') !== ''),
         missing: [JSON.stringify(closed), String(since), labels(folds[0]).join(','), labels(folds[1]).join(','), settings.map((r) => `${r.label}=${r.dd?.textContent}`).join(',')],
       });
       scan('renewal, folds open', card);
@@ -12149,6 +12466,64 @@ m.unmount();
         what: 'spent move held for the reset',
       },
       {
+        expected: [['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'no'], ['Renew', 'not run'], ['Reserve', 'none']],
+        id: 'req_9f2e7c5a-c49',
+        seq: 1,
+        terminus: ['held_slow_down', 'Held for the slow-down', 'held'],
+        // The hold waits for the pin's deadline at half speed, which its chips, its Hold row and its row's facts name
+        // one value a chip.
+        own: (card, record, page) => {
+          const at = `for the slow-down until ${new Date(record.outcome.hold.until).toISOString().slice(11, 16)}`;
+          const row = rowOf(page, `${record.requestId}/1`);
+          const facts = [...(row?.querySelectorAll('.fact__pair') ?? [])].map((p) => `${p.querySelector('.fact__label')?.textContent} ${p.querySelector('.fact__value')?.textContent}`);
+          return (
+            JSON.stringify(verdictChipsOf(card).slice(-3)) === JSON.stringify([`held ${at}`, '0.5x', 'pin warm']) &&
+            JSON.stringify(outcomeOf(card).Hold) === JSON.stringify(['on studio', at, 'speed 0.5x', 'stretch 42 min 18 s of 30 min', 'bound 2 min', 'cycle 42 s']) &&
+            row?.querySelector('td.routing-log__by .chip')?.textContent === 'slow-down' && JSON.stringify(facts) === JSON.stringify([`until ${at.slice(-5)}`, 'speed 0.5x'])
+          );
+        },
+        what: 'slowed request',
+      },
+      {
+        expected: RENEWAL_STATIONS,
+        id: 'req_9f2e7c5a-c49',
+        seq: 2,
+        terminus: ['chosen', 'Chosen', 'renewed'],
+        // The renewal after the hold names the hold it followed on its row and its verdict line, and its Hold row the
+        // wait's reason and span. It runs the round the stretch fires, which its shed rule's Round group names, and the
+        // round's own row on the request's page reads the stretch, the demand to the reset and the source.
+        own: async (card, record, page) => {
+          const row = rowOf(page, `${record.requestId}/2`);
+          const facts = [...(row?.querySelectorAll('.fact__pair') ?? [])].map((p) => `${p.querySelector('.fact__label')?.textContent} ${p.querySelector('.fact__value')?.textContent}`);
+          const named =
+            row?.querySelector('td.routing-log__by .chip')?.textContent === 'slow-down' && JSON.stringify(facts) === JSON.stringify(['held 42 s']) && verdictChipsOf(card).includes('slow-down') &&
+            JSON.stringify(outcomeOf(card).Hold) === JSON.stringify(['on studio', 'for the slow-down', 'freed after 42 s']);
+          const round = groupOfPopover(await popoverOf(page, stationButton(card, 'move:shed')), 'Round');
+          const at = Date.parse(record.request.at);
+          const e = (await api.listRoutingLog({ from: iso(at - MINUTE), kinds: ['shedding_round'], limit: 25, request: record.requestId, to: iso(at + MINUTE) })).rows[0];
+          const detail = e === undefined ? null : ((await openRow(page, `event/${e.id}`))?.querySelector('.event-detail') ?? null);
+          scan('round fired by the stretch', detail);
+          const pairs = Object.fromEntries(kvRows(detail?.querySelector(':scope > .kv')).map((p) => [p.label, ddWords(p.dd)]));
+          return (
+            named &&
+            (popoverRowOf(round, 'fired by') ?? []).includes('fired by slow-down') && (popoverRowOf(round, 'stretch') ?? []).includes('stretch 42 min') && (popoverRowOf(round, 'round') ?? []).includes('round ran') &&
+            e?.detail.trigger === 'slow_down' &&
+            JSON.stringify([pairs.Trigger, pairs.Demand, pairs['Fired by']]) === JSON.stringify([['5h stretch 42 min over the threshold 30 min'], ['12.9 %/h to the reset at 15:29'], ['the slow-down']])
+          );
+        },
+        what: 'round fired by the stretch',
+      },
+      {
+        expected: [['Pin', 'match'], ['Eligible', 'match'], ['Spent', 'off'], ['At cap', '0 out'], ['No fit', 'fell through'], ['Winding down', '0 out'], ['content', 'none'], ['with main', 'none'], ['static', 'none'], ['Pick', 'chosen'], ['Reserve', 'booked']],
+        id: 'req_b8c3e9d4-e61',
+        seq: 2,
+        terminus: ['chosen', 'Chosen', 'placed'],
+        // The failover lands as a placement that carries the 429 it failed over on, which the card's Outcome names in
+        // the words the move's own row reads below.
+        own: (card) => JSON.stringify(outcomeOf(card).Cause) === JSON.stringify(['429 on 5h']),
+        what: 'failover landing',
+      },
+      {
         expected: [
           ...[['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'fired'], ['drain', 'not run'], ['shed', 'not run'], ['Renew', 'not run']],
           ...[['Move', 'moved'], ['Fit', 'least bad'], ['Cap filter', 'passed'], ['Partitions', 'match'], ['content', 'none'], ['with main', 'none'], ['static', 'none'], ['Pick', 'chosen'], ['Reserve', 'booked']],
@@ -12210,6 +12585,21 @@ m.unmount();
       });
       page.unmount();
     }
+    // The failover landing's move reads the failover and its cause in the words the landing's card reads.
+    const landing = await api.getDecision('req_b8c3e9d4-e61', 2);
+    const at = Date.parse(landing.request.at);
+    const moved = (await api.listRoutingLog({ from: iso(at - MINUTE), kinds: ['pin_migrated'], limit: 25, to: iso(at + MINUTE) })).rows.find((r) => r.accountId === landing.outcome.accountId);
+    const events = await mount(`/routing-log?kinds=pin_migrated&from=${iso(at - MINUTE)}&to=${iso(at + MINUTE)}`, { now: CLOCK_ORIGIN });
+    const detail = moved === undefined ? null : ((await openRow(events, `event/${moved.id}`))?.querySelector('.event-detail') ?? null);
+    scan('failover landing move', detail);
+    const pairs = kvRows(detail?.querySelector(':scope > .kv')).map((p) => [p.label, ddWords(p.dd)]);
+    events.unmount();
+    const pairOf = (label) => pairs.find(([l]) => l === label) ?? null;
+    results.push({
+      name: "/routing-log the failover landing's move reads Moved by failover and its cause, 429 on 5h",
+      ok: moved?.detail.cause?.window === 'five_hour' && JSON.stringify([pairOf('Moved by'), pairOf('Cause')]) === JSON.stringify([['Moved by', ['failover']], ['Cause', ['429 on 5h']]]),
+      missing: [JSON.stringify(moved?.detail ?? null), JSON.stringify(pairs)],
+    });
   }
   {
     // A pinned popover closes on Escape and on a click outside it, and one a hover opened closes on Escape while the
@@ -12646,7 +13036,7 @@ m.unmount();
       overage_started: ['Effect'],
       pin_created: ['Key', 'Session', 'Agent', 'Model', 'Epoch'],
       pin_expired: ['Key', 'Session', 'Agent', 'Model', 'Reasons', 'Found by'],
-      pin_migrated: ['From', 'To', 'Reason', 'Moved by', 'Key', 'Session', 'Agent', 'Model'],
+      pin_migrated: ['From', 'To', 'Reason', 'Cause', 'Moved by', 'Key', 'Session', 'Agent', 'Model'],
       pin_released: ['Actor', 'Key', 'Session', 'Agent', 'Model'],
       poll_backoff_ended: ['Backed off', 'Attempts', 'Resumed'],
       poll_backoff_started: ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect'],
@@ -12656,7 +13046,9 @@ m.unmount();
       registry_changed: ['Change', 'Fields', 'Actor'],
       reservation_expired: ['Request', 'Attempt', 'Cause', 'Reserved', 'Held for', 'Effect'],
       router_started: ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests'],
-      shedding_round: ['Started by', 'Trigger', 'Excess', 'Cap', 'Unit', 'Burn average', 'Warm sessions', 'Pins', 'Skipped', 'Outcome', 'Next round after', 'Dwell', 'Survive a restart'],
+      shedding_round: ['Started by', 'Trigger', 'Fired by', 'Excess', 'Cap', 'Unit', 'Burn average', 'Warm sessions', 'Pins', 'Skipped', 'Outcome', 'Next round after', 'Dwell', 'Survive a restart'],
+      slow_down_ended: ['Lasted', 'Slowest', 'Held', 'Effect'],
+      slow_down_started: ['Speed', 'Stretch', 'Demand', 'Reset', 'Effect'],
       warm_prefix_expired: ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed'],
       wind_down_started: ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from'],
       window_reset: ['Window', 'Before the reset', 'Prediction', 'Next reset'],
@@ -12665,7 +13057,8 @@ m.unmount();
     const EVENT_KINDS = [
       'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
       'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
-      'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset', 'window_spent',
+      'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'warm_prefix_expired', 'wind_down_started',
+      'window_reset', 'window_spent',
     ];
     const utc = (at) => `${new Date(at).toISOString().slice(0, 19).replace('T', ' ')} UTC`;
     const hhmm = (at) => new Date(at).toISOString().slice(11, 16);
@@ -12677,7 +13070,16 @@ m.unmount();
       poll_backoff_ended: (e) => ({ 'Backed off': [`from ${hhmm(e.detail.resumed_at - e.detail.duration_ms)}`, `to ${hhmm(e.detail.resumed_at)}`] }),
       mark_cleared: (e) => ({ Marked: [hhmm(e.detail.marked_at), `on ${e.detail.marked_on}`], Reason: [e.detail.reason] }),
       reservation_expired: (e) => ({ Cause: [e.detail.cause.replace(/_/g, ' ')], Reserved: Object.entries(e.detail.shares).map(([w, v]) => `${{ five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable' }[w]} ${fmtShare(v)}`) }),
-      shedding_round: (e) => ({ Outcome: ['nothing to mark: no runway'], Trigger: [`5h projection ${fmtPct(e.detail.projection)} at ${hhmm(e.detail.horizon)} over the ceiling ${fmtPct(e.detail.ceiling)}`] }),
+      shedding_round: (e) => ({ 'Fired by': ['the projection'], Outcome: ['nothing to mark: no runway'], Trigger: [`5h projection ${fmtPct(e.detail.projection)} at ${hhmm(e.detail.horizon)} over the ceiling ${fmtPct(e.detail.ceiling)}`] }),
+      // The closed span of 09:12 drains its row at 10:40:36, and the open span starts at 13:48 under the threshold.
+      slow_down_ended: (e) => ({ Effect: ["requests of the account's sessions pass unheld again"], Held: ['36 s'], Lasted: ['1 h 26 min'], Slowest: [`${e.detail.factor_min}x`] }),
+      slow_down_started: (e) => ({
+        Demand: [`${(e.detail.demand * 100).toFixed(1)} %/h`],
+        Effect: ["requests of the account's sessions wait their cycle times the slow-down up to the hold"],
+        Reset: [hhmm(e.detail.reset)],
+        Speed: [`${e.detail.factor}x`],
+        Stretch: ['27 min of 30 min'],
+      }),
       window_spent: () => ({ Effect: ['a pinned session moves by the spent rule at its next request or waits in place for a reset within the retry bound'] }),
     };
     const modelLinks = {};
@@ -12810,13 +13212,16 @@ m.unmount();
     pager('Next page')?.click();
     await page.settle(300);
     const third = await openAll();
+    pager('Next page')?.click();
+    await page.settle(300);
+    const fourth = await openAll();
     [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'First page')?.click();
     await page.settle(300);
     const firstPage = await openAll();
     results.push({
       name: '/routing-log every row of a page opens to its card or its detail',
-      ok: [second, third, firstPage].every((p) => p.rows > 0 && p.panels === p.rows && p.drawn === p.rows) && second.rows + third.rows + firstPage.rows === hour.rows.length,
-      missing: [JSON.stringify({ firstPage, second, third }), `${hour.rows.length} rows in the hour`],
+      ok: [second, third, fourth, firstPage].every((p) => p.rows > 0 && p.panels === p.rows && p.drawn === p.rows) && second.rows + third.rows + fourth.rows + firstPage.rows === hour.rows.length,
+      missing: [JSON.stringify({ firstPage, fourth, second, third }), `${hour.rows.length} rows in the hour`],
     });
     page.unmount();
   }
@@ -14807,6 +15212,55 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: [JSON.stringify(drawn), JSON.stringify(want)],
     });
     page.unmount();
+  }
+  {
+    // Under the moves the card draws the slow-down's held time: a legend line naming the chart with the range's sum and
+    // the requests behind it on its hover, a bar for each bucket that held a request, and a bar's hover its requests and
+    // their time, read against the answer the page drew. jsdom lays nothing out, so the chart containers read a
+    // browser's size here, and the hover walks the chart a bucket at a time.
+    const { getAnalyticsRewrites } = api;
+    let answer = null;
+    api.getAnalyticsRewrites = async (...args) => (answer = await getAnalyticsRewrites.apply(api, args));
+    const measure = window.HTMLElement.prototype.getBoundingClientRect;
+    window.HTMLElement.prototype.getBoundingClientRect = function () {
+      return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
+    };
+    const page = await mount('/analytics', { now: Date.now() });
+    api.getAnalyticsRewrites = getAnalyticsRewrites;
+    const rewrites = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Migration rewrites');
+    const held = rewrites?.querySelector('.held-chart') ?? null;
+    const legend = [...(held?.querySelectorAll('.legend li') ?? [])].map((li) => [
+      [...li.childNodes]
+        .filter((n) => n.nodeType === 3)
+        .map((n) => n.textContent?.trim())
+        .join(''),
+      li.querySelector('.legend__value')?.textContent?.trim() ?? '',
+      li.getAttribute('title') ?? '',
+    ]);
+    const points = answer?.held ?? [];
+    const words = (ms, n) => (n === 0 ? 'no request held' : `${fmtInt(n)} ${n === 1 ? 'request' : 'requests'} held ${ageText(Math.max(1000, ms))} in all`);
+    const sumMs = points.reduce((n, p) => n + p.heldMs, 0);
+    const sumRequests = points.reduce((n, p) => n + p.requests, 0);
+    const bars = held?.querySelectorAll('path.recharts-rectangle').length ?? 0;
+    const tips = new Set();
+    for (let i = 0; i < points.length; i += 1) {
+      held?.querySelector('.recharts-wrapper')?.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: Math.round(((i + 0.5) * 600) / points.length), clientY: 60 }));
+      await page.settle(50);
+      for (const label of held?.querySelectorAll('.chart-tip .chart-tip__label') ?? []) tips.add(label.textContent?.trim() ?? '');
+    }
+    window.HTMLElement.prototype.getBoundingClientRect = measure;
+    page.unmount();
+    const wantTips = new Set(points.filter((p) => p.requests > 0).map((p) => words(p.heldMs, p.requests)));
+    results.push({
+      name: "/analytics the rewrites card draws the held time under its moves, a bar per bucket that held a request, the range's sum on its legend line and each bar's requests and time on its hover",
+      ok:
+        sumRequests > 0 &&
+        rewrites?.querySelector('.hbars--moves')?.compareDocumentPosition(held ?? rewrites) === window.Node.DOCUMENT_POSITION_FOLLOWING &&
+        JSON.stringify(legend) === JSON.stringify([['Held by the slow-down', '', ''], ['Held time', ageText(Math.max(1000, sumMs)), words(sumMs, sumRequests)]]) &&
+        bars === points.filter((p) => p.heldMs > 0).length &&
+        [...wantTips].every((t) => tips.has(t)),
+      missing: [JSON.stringify(legend), `${bars} bars of ${points.length} points`, `tips ${JSON.stringify([...tips])} against ${JSON.stringify([...wantTips])}`],
+    });
   }
 
   await tab(m, 'Burn');
@@ -17575,7 +18029,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     ok: heads()[0] === '' && heads()[1] === 'Session' && rows().length > 0 && rows().every((r) => r.lastElementChild?.querySelector('.menu__trigger') !== null && r.lastElementChild?.textContent?.trim() === '···'),
     missing: [JSON.stringify(heads().slice(0, 2)), ...rows().slice(0, 3).map((r) => r.lastElementChild?.innerHTML ?? 'no cell')],
   });
-  results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 19, missing: [String(rows().length)] });
+  results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 23, missing: [String(rows().length)] });
   {
     // The session the mod released whole keeps its row and reads main's released state, though its expanded detail
     // draws no line.
@@ -17602,11 +18056,36 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       const entry = document.getElementById(c.getAttribute('aria-describedby') ?? '');
       return entry === null || entry.closest('[data-descriptions]') === null || entry.textContent !== c.getAttribute('title');
     });
-    const badges = [...m.container.querySelectorAll('.srow__account .badge')].map((b) => b.textContent?.trim() ?? '');
+    // A slowed session's speed chip is the cell's other badge, read by the check after this one.
+    const badges = [...m.container.querySelectorAll('.srow__account .badge')].filter((b) => !b.closest('.speed-chip')).map((b) => b.textContent?.trim() ?? '');
     results.push({
       name: '/sessions account cells carry the account kind on their title and description rather than a badge',
-      ok: kinds.length === 18 && kinds.includes('oauth') && kinds.includes('api_key') && undescribed.length === 0 && badges.every((b) => /^\+\d+$/.test(b)),
+      ok: kinds.length === 22 && kinds.includes('oauth') && kinds.includes('api_key') && undescribed.length === 0 && badges.every((b) => /^\+\d+$/.test(b)),
       missing: [...new Set(kinds), ...badges, ...undescribed.map((c) => `${c.getAttribute('aria-describedby') ?? 'no aria-describedby'} for ${c.getAttribute('title')}`)],
+    });
+  }
+  {
+    // studio's notebook sessions are slowed: each draws the speed chip right after the account's name with the
+    // account's slow-down in its hover, and the Runway cell of a pinned row whose pin has a cycle names the cycle on
+    // its hover. No other row draws either.
+    const want = await studioSpeed();
+    const listed = await api.listSessions();
+    const idOfRow = (s) => `session-${encodeURIComponent(`${s.keyId}:${s.keyGeneration}:${s.sessionId}`)}`;
+    const read = rows().map((tr) => {
+      const s = listed.find((x) => idOfRow(x) === tr.id);
+      const chip = cell(tr, 'Account')?.querySelector('.speed-chip') ?? null;
+      const badge = chip?.querySelector('.badge');
+      return {
+        got: { chip: chip ? [chip.previousElementSibling?.textContent?.trim() ?? '', badge?.textContent?.trim() ?? '', badge?.className.replace('badge ', '') ?? '', badge?.getAttribute('title') ?? ''] : null, runway: cell(tr, 'Runway')?.getAttribute('title') ?? null },
+        row: tr.id.slice(0, 40),
+        want: { chip: s?.speed != null && s.speed < 1 ? [s.accountId, '0.5x', 'badge--warning', want.hover] : null, runway: s?.pinned && s.cycleMs !== null ? `cycle ${ageText(s.cycleMs)}` : null },
+      };
+    });
+    const off = read.filter((r) => JSON.stringify(r.got) !== JSON.stringify(r.want));
+    results.push({
+      name: "/sessions a slowed session draws the speed chip after its account's name with the slow-down in its hover, and a pinned row with a cycle names it on its Runway hover",
+      ok: want.factor === 0.5 && off.length === 0 && read.filter((r) => r.want.chip !== null).length === 4 && read.filter((r) => r.want.runway === 'cycle 42 s').length === 1,
+      missing: [String(want.factor), ...off.slice(0, 6).map((r) => JSON.stringify(r)), `${read.filter((r) => r.want.chip !== null).length} slowed rows`],
     });
   }
   {
@@ -17661,7 +18140,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
 
   // Expiry now rides under the last-used time rather than in a column of its own.
   const expiries = rows().map((r) => cell(r, 'Last used')?.querySelector('.sub')?.textContent?.trim() ?? '');
-  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 19 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 17, missing: expiries.slice(0, 3) });
+  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 23 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 21, missing: expiries.slice(0, 3) });
   const counts = rows().map((r) => Number(cell(r, 'Requests')?.textContent?.trim()));
   results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length >= 12 && counts.includes(0), missing: counts.map(String) });
 
@@ -18032,7 +18511,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   expandAll?.click();
   await m.settle(250);
   const open = m.container.querySelectorAll('.srow__detail').length;
-  results.push({ name: '/sessions Expand all opens every row', ok: open === 19, missing: [String(open)] });
+  results.push({ name: '/sessions Expand all opens every row', ok: open === 23, missing: [String(open)] });
   results.push({ name: '/sessions a session with no creation time says so', ok: m.text().includes('Created: unknown'), missing: [] });
   expect('/sessions states and causes', m.text(), ['retained', 'held', 'paused', 'not retained', 'ended', 'probing', 'scheduled', 'affinity too short', 'awaiting cache evidence', 'entry expired', 'idle limit', 'cold probes', 'overage', 'pool exhausted', 'unsupported shape']);
   results.push({ name: '/sessions no reason reads session bound any more', ok: !m.text().includes('session bound'), missing: [m.text().includes('session bound') ? 'still there' : ''] });
@@ -18322,7 +18801,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
     await m.settle(600);
     const released = rows().filter((r) => cell(r, 'Session')?.getAttribute('title') === id);
-    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 18, missing: [String(rows().length)] });
+    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 22, missing: [String(rows().length)] });
     results.push({
       name: '/sessions releasing the live holder leaves the earlier one in the ledger',
       ok: released.length === 1 && cell(released[0], 'Key')?.querySelector('.sub')?.textContent?.trim() === 'deleted holder',

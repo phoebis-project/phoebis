@@ -302,7 +302,7 @@ export const HAIKU = 'claude-haiku-4-5-20251001';
 /**
  * Whether an account could take a request at `atMs` by the story's own account facts, so no attempt lands where the
  * decision card would show the account out: secondary, which serves Sonnet 4.6 alone, reads its 5-hour window spent
- * from 14:02:11 and cools on it from 14:09:31 to 15:42. Primary's fast lane cools from 14:27:00 to 14:42 and it
+ * from 14:02:11 and cools on it from 14:07:51 to 15:42. Primary's fast lane cools from 14:27:00 to 14:42 and it
  * rejects Haiku from 14:24:10 to 15:24. Nightly's usage credits take a fast request once its spend cap is raised at
  * 11:30:12. The Overflow workspace needs funding from 11:30:12, and research spends its day's budget at 12:41:07.
  */
@@ -633,8 +633,6 @@ function buildRequests(): RequestLog[] {
         poolId: 'work',
         responseTruncated: false,
       });
-      // The key's last use is its one request; its counts derive from the rollups with every other key's.
-      keyById.get('notebook')!.lastUsedAt = moved.at;
     }
   }
   // The routing log's story writes its hour by hand, so the draws inside it give way to the story's own rows, and a
@@ -814,7 +812,10 @@ interface StoryAttempt {
   accountId: string;
   at: number;
   cooldown?: { reason: string; until: number };
-  /** The 5-hour reading the answer's head reported, where it moved past the reading the decision read. */
+  /**
+   * The 5-hour reading the answer's head reported, where it moved past the reading the decision read or where the
+   * story reads its own figure rather than the walk back's.
+   */
   head5h?: number;
   ms: number;
   status: number;
@@ -853,16 +854,19 @@ interface StorySeed {
 
 /**
  * The routing log's hand-written requests: the story hour, the morning's shedding round and its move, the least-bad
- * move onto nightly and the hold for nightly's reset.
+ * move onto nightly, the hold for nightly's reset, and studio's slowed sessions in work with the round their stretch
+ * fires.
  */
 export const STORY_IDS = new Set([
-  'req_0b7c2d94-e61', 'req_1d9c3e55-0b2', 'req_1eaa9bc1-a18', 'req_2c7d9f15-b63', 'req_2e7c90a1-6d4',
-  'req_31f0b7c2-6e1', 'req_3b8e51f4-0a9', 'req_4b0e9d17-c31', 'req_4e8b1d36-f72', 'req_51d0e2b8-7a0',
-  'req_5b2e8d47-c19', 'req_5e2f7a19-b03', 'req_69e30548-32e', 'req_6c3a9e27-5b1', 'req_6e1f3b98-a24',
-  'req_7a2d4c18-e95', 'req_7a3f0c26-d81', 'req_868264bc-611', 'req_9a07c4e1-d55', 'req_9d4c1a73-e58',
-  'req_a1f04c2e-7b3', 'req_a6c19e73-5d2', 'req_b2bed817-a58', 'req_b72e9d05-c14', 'req_c41d0311-200',
-  'req_c90d3f61-a28', 'req_d4e8a7b2-916', 'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_e5a1c093-4d7',
-  'req_ef099b34-453', 'req_f3b6d218-85a', 'req_f8085653-422',
+  'req_0b7c2d94-e61', 'req_1d9c3e55-0b2', 'req_1eaa9bc1-a18', 'req_2b9e4c7f-d36', 'req_2c7d9f15-b63', 'req_2e7c90a1-6d4',
+  'req_2f9a6c4e-d84', 'req_31f0b7c2-6e1', 'req_3b8e51f4-0a9', 'req_3d7b9e2f-a41', 'req_4a9c3e7b-a27', 'req_4b0e9d17-c31',
+  'req_4e8b1d36-f72', 'req_4f2a8d6e-b7a', 'req_51d0e2b8-7a0', 'req_5b2e8d47-c19', 'req_5c7e2a9d-b14', 'req_5e2f7a19-b03',
+  'req_69e30548-32e', 'req_6b3e8d1a-c73', 'req_6c3a9e27-5b1', 'req_6e1f3b98-a24', 'req_7a2d4c18-e95', 'req_7a3f0c26-d81',
+  'req_7e4f1a9c-f16', 'req_868264bc-611', 'req_8d4b7f2c-f58', 'req_8e1c4a6d-b52', 'req_9a07c4e1-d55', 'req_9d4c1a73-e58',
+  'req_9f2e7c5a-c49', 'req_a1f04c2e-7b3', 'req_a3d8f1b6-c25', 'req_a6c19e73-5d2', 'req_b1e7c4a9-a69', 'req_b2bed817-a58',
+  'req_b72e9d05-c14', 'req_b8c3e9d4-e61', 'req_c41d0311-200', 'req_c5d8e2b7-e95', 'req_c90d3f61-a28', 'req_d2a8f6c1-d50',
+  'req_d4e8a7b2-916', 'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_e1b6d4f8-b38', 'req_e5a1c093-4d7', 'req_ef099b34-453',
+  'req_f3b6d218-85a', 'req_f6a1d3e8-e47', 'req_f8085653-422',
 ]);
 /** The four-attempt failover whose first account refused the model the client spelled without its date. */
 export const REJECTION_STORY_ID = 'req_7015b657-290';
@@ -872,6 +876,16 @@ export const FORCED_MOVE_ID = 'req_5b2e8d47-c19';
 const FORCED_SESSION_ID = 'a3e9c5d1-6b2f-4c8e-9d07-5f1a2b3c4d5e';
 /** The jobs request whose completion crossed research's daily budget. */
 export const BUDGET_CROSSING_ID = 'req_7c19e4a0-2f3';
+/**
+ * Studio's notebook sessions: the two whose first turn after their placement read the account and opened each slow-down
+ * span, the morning's slowed one, the slowed one of the hour, and the two the round marks.
+ */
+export const OPENING_SESSION_IDS = ['6e3b9d1f-4a27-4c58-b8e1-9f2d7a4c3e06', 'c8f4a2e7-5d19-4b36-a7c2-1e9b3d6f8a24'] as const;
+export const SLOWED_MORNING_SESSION_ID = 'b4e2c9a7-1f3d-4c86-9a05-7e2d1c8b6f40';
+export const SLOWED_SESSION_ID = '5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65';
+export const MARKED_SESSION_IDS = ['9c2d7e4a-3b81-4f59-a6e0-1d8c5b7a2e93', 'e7a4b2d9-6c15-4e83-b9f2-0a3d8c6e1b57'] as const;
+/** The desktop session the 5-hour 429 on secondary fails over to primary. */
+const FAILED_OVER_SESSION_ID = 'd6f1a3c8-2e94-4b07-8a5d-3c9e7f2b1a64';
 /** The session a laptop client sent. */
 export const CLIENT_SESSION_ID = '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f';
 /** The desktop session the mod released whole after its one turn, written out as its row lists past the drawn ids. */
@@ -880,7 +894,7 @@ export const RELEASED_SESSION_ID = '3c36d663-d074-42f6-8738-f54da7c9f026';
 const sessionOf = (prefix: string) => SESSION_IDS.find((id) => id.startsWith(prefix)) ?? prefix;
 
 function storyRow(seed: StorySeed): RequestLog {
-  const lane = LANES.find((l) => l.keyId === seed.keyId)!;
+  const poolId = keyById.get(seed.keyId)!.poolId;
   const last = seed.attempts[seed.attempts.length - 1];
   const answered = last?.status === 200;
   const usage: Usage = { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS, ...(answered ? seed.usage : {}) };
@@ -948,7 +962,7 @@ function storyRow(seed: StorySeed): RequestLog {
     kind,
     model: seed.model,
     outcome: seed.outcome ?? (answered ? 'succeeded' : 'failed'),
-    poolId: lane.poolId,
+    poolId,
     prevToolMs: null,
     requestClass: seed.requestClass,
     requestTruncated: false,
@@ -1011,7 +1025,7 @@ function storyRequests(): RequestLog[] {
       agentId: 'e90b',
       at: t(14, 21, 12),
       attempts: [{ accountId: 'primary', at: t(14, 21, 14), ms: 5_200, status: 200 }],
-      held: { cohort: 'primary', heldMs: 2_000, waitedOn: ['primary'] },
+      held: { cohort: 'primary', heldMs: 2_000, waitedOn: ['primary'], waits: [{ heldMs: 2_000, reason: 'cap' }] },
       id: 'req_69e30548-32e',
       keyId: 'desktop',
       model: 'claude-sonnet-5-5',
@@ -1030,15 +1044,12 @@ function storyRequests(): RequestLog[] {
     { agentId: 'main', at: t(14, 11, 44), attempts: [{ accountId: 'primary', at: t(14, 11, 44), ms: 8_300, status: 200 }], id: 'req_b2bed817-a58', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 30_900, cacheWrite1h: 21_400, input: 1_900, output: 1_480 } },
     // The model takes no inference geography parameter, so its answer reports the geography as not available.
     { agentId: 'main', at: t(14, 9, 41), attempts: [{ accountId: 'primary', at: t(14, 9, 41), ms: 4_800, status: 200 }], geo: 'not_available', id: 'req_ef099b34-453', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 31_000, input: 9_800, output: 2_100 } },
-    // A token count follows its pin to the spent secondary, whose head rejects the 5-hour window: the 429 starts the
-    // cooldown secondary carries, and the count fails over to primary.
+    // A token count follows its subagent's pin to secondary before its window is spent, so it never meets the cooldown
+    // the 429 at 14:07:50 starts.
     {
       agentId: 'e90b',
-      at: t(14, 9, 30),
-      attempts: [
-        { accountId: 'secondary', at: t(14, 9, 30), cooldown: rateLimited(t(15, 42)), head5h: 1, ms: 1_000, status: 429 },
-        { accountId: 'primary', at: t(14, 9, 31), ms: 300, status: 200 },
-      ],
+      at: t(14, 1, 50),
+      attempts: [{ accountId: 'secondary', at: t(14, 1, 50), ms: 300, status: 200 }],
       id: 'req_3b8e51f4-0a9',
       keyId: 'desktop',
       kind: 'count_tokens',
@@ -1130,7 +1141,7 @@ function storyRequests(): RequestLog[] {
         { accountId: 'nightly', at: t(13, 10, 20), cooldown: rateLimited(t(13, 11)), head5h: 1, ms: 900, status: 429 },
         { accountId: 'nightly', at: t(13, 11), ms: 9_000, status: 200 },
       ],
-      held: { cohort: null, heldMs: 39_000, waitedOn: ['nightly'] },
+      held: { cohort: null, heldMs: 39_000, waitedOn: ['nightly'], waits: [{ heldMs: 39_000, reason: 'reset' }] },
       id: 'req_9d4c1a73-e58',
       keyId: 'desktop',
       model: 'claude-sonnet-5-5',
@@ -1144,6 +1155,71 @@ function storyRequests(): RequestLog[] {
     { agentId: 'main', at: t(13, 41, 15), attempts: [{ accountId: 'primary', at: t(13, 41, 15), ms: 7_200, status: 200 }], id: 'req_7a3f0c26-d81', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'c5d2e8a1-4f6b-4b17-a9c3-6e0d2f8b1a57', usage: { cacheWrite1h: 38_400, input: 2_600, output: 1_150 } },
     // A renewal on primary whose round finds no sibling with runway for either pin.
     { agentId: 'main', at: t(14, 12, 30), attempts: [{ accountId: 'primary', at: t(14, 12, 30), ms: 5_600, status: 200 }], id: 'req_6e1f3b98-a24', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 52_300, cacheWrite1h: 900, input: 2_100, output: 870 } },
+    // A desktop session placed on secondary before its spent edge, whose next turn secondary answers with a 429 on the
+    // spent 5-hour window while primary is full, so the turn fails over to primary.
+    { agentId: 'main', at: t(14, 1, 45), attempts: [{ accountId: 'secondary', at: t(14, 1, 45), ms: 5_000, status: 200 }], id: 'req_d2a8f6c1-d50', keyId: 'desktop', model: 'claude-sonnet-4-6', requestClass: 'main', session: FAILED_OVER_SESSION_ID, usage: { cacheWrite1h: 52_000, input: 1_600, output: 700 } },
+    {
+      agentId: 'main',
+      at: t(14, 7, 50),
+      attempts: [
+        { accountId: 'secondary', at: t(14, 7, 50), cooldown: rateLimited(t(15, 42)), head5h: 1, ms: 900, status: 429 },
+        { accountId: 'primary', at: t(14, 7, 51), ms: 7_400, status: 200 },
+      ],
+      id: 'req_b8c3e9d4-e61',
+      keyId: 'desktop',
+      model: 'claude-sonnet-4-6',
+      requestClass: 'main',
+      session: FAILED_OVER_SESSION_ID,
+      usage: { cacheWrite1h: 54_800, input: 1_900, output: 1_020 },
+    },
+    // Studio's sessions in work, each 5-hour reading the story's own. The closed span: a session placed at 09:11:24
+    // whose first turn after the placement reads the account and opens the span in the last 77 minutes of the window
+    // that resets at 10:29.
+    { agentId: 'main', at: t(9, 11, 24), attempts: [{ accountId: 'studio', at: t(9, 11, 24), head5h: 0.7987, ms: 6_000, status: 200 }], id: 'req_5c7e2a9d-b14', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[0], usage: { cacheWrite1h: 33_000, input: 1_900, output: 820 } },
+    { agentId: 'main', at: t(9, 12), attempts: [{ accountId: 'studio', at: t(9, 12), head5h: 0.8, ms: 5_800, status: 200 }], id: 'req_a3d8f1b6-c25', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[0], usage: { cacheRead: 34_900, cacheWrite1h: 1_600, input: 1_500, output: 640 } },
+    // The morning session: its second turn after the placement waits 36 s for the slow-down and then renews on its
+    // pin, and its turns after the reset read the account at full speed again.
+    { agentId: 'main', at: t(10, 11), attempts: [{ accountId: 'studio', at: t(10, 11), head5h: 0.9332, ms: 6_200, status: 200 }], id: 'req_3d7b9e2f-a41', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_MORNING_SESSION_ID, usage: { cacheWrite1h: 31_000, input: 1_800, output: 760 } },
+    { agentId: 'main', at: t(10, 11, 36), attempts: [{ accountId: 'studio', at: t(10, 11, 36), head5h: 0.9345, ms: 4_900, status: 200 }], id: 'req_2b9e4c7f-d36', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_MORNING_SESSION_ID, usage: { cacheRead: 32_800, cacheWrite1h: 700, input: 1_100, output: 520 } },
+    {
+      agentId: 'main',
+      at: t(10, 12),
+      attempts: [{ accountId: 'studio', at: t(10, 12, 36), head5h: 0.9377, ms: 5_400, status: 200 }],
+      held: { cohort: null, heldMs: 36_000, waitedOn: ['studio'], waits: [{ heldMs: 36_000, reason: 'slow_down' }] },
+      id: 'req_8e1c4a6d-b52',
+      keyId: 'notebook',
+      model: 'claude-sonnet-5-5',
+      requestClass: 'main',
+      session: SLOWED_MORNING_SESSION_ID,
+      usage: { cacheRead: 34_600, cacheWrite1h: 1_200, input: 1_400, output: 690 },
+    },
+    { agentId: 'main', at: t(10, 38, 20), attempts: [{ accountId: 'studio', at: t(10, 38, 20), head5h: 0.01, ms: 5_600, status: 200 }], id: 'req_f6a1d3e8-e47', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_MORNING_SESSION_ID, usage: { cacheRead: 37_200, cacheWrite1h: 1_300, input: 1_500, output: 710 } },
+    { agentId: 'main', at: t(10, 40, 36), attempts: [{ accountId: 'studio', at: t(10, 40, 36), head5h: 0.02, ms: 5_000, status: 200 }], id: 'req_8d4b7f2c-f58', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_MORNING_SESSION_ID, usage: { cacheRead: 40_000, cacheWrite1h: 900, input: 1_200, output: 560 } },
+    // The open span: a session placed at 13:47:24 whose first turn after the placement reads the account and opens it,
+    // then the two the round marks, then the slowed one's main and subagent turns.
+    { agentId: 'main', at: t(13, 47, 24), attempts: [{ accountId: 'studio', at: t(13, 47, 24), head5h: 0.8257, ms: 6_900, status: 200 }], id: 'req_b1e7c4a9-a69', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[1], usage: { cacheWrite1h: 48_600, input: 2_200, output: 930 } },
+    { agentId: 'main', at: t(13, 48), attempts: [{ accountId: 'studio', at: t(13, 48), head5h: 0.8267, ms: 5_200, status: 200 }], id: 'req_4f2a8d6e-b7a', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[1], usage: { cacheRead: 50_800, input: 1_200, output: 610 } },
+    { agentId: 'main', at: t(13, 50, 30), attempts: [{ accountId: 'studio', at: t(13, 50, 30), head5h: 0.832, ms: 6_800, status: 200 }], id: 'req_6b3e8d1a-c73', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: MARKED_SESSION_IDS[0], usage: { cacheWrite1h: 36_000, input: 2_000, output: 820 } },
+    { agentId: 'main', at: t(13, 53, 10), attempts: [{ accountId: 'studio', at: t(13, 53, 10), head5h: 0.8376, ms: 5_900, status: 200 }], id: 'req_2f9a6c4e-d84', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: MARKED_SESSION_IDS[1], usage: { cacheWrite1h: 28_000, input: 2_000, output: 640 } },
+    { agentId: 'main', at: t(13, 58, 40), attempts: [{ accountId: 'studio', at: t(13, 58, 40), head5h: 0.8491, ms: 7_300, status: 200 }], id: 'req_c5d8e2b7-e95', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_SESSION_ID, usage: { cacheWrite1h: 64_000, input: 2_400, output: 910 } },
+    { agentId: '7b2e', at: t(13, 59, 5), attempts: [{ accountId: 'studio', at: t(13, 59, 5), head5h: 0.85, ms: 3_100, status: 200 }], canonical: HAIKU, id: 'req_7e4f1a9c-f16', keyId: 'notebook', model: 'claude-haiku-4-5', requestClass: 'subagent', session: SLOWED_SESSION_ID, usage: { cacheWrite1h: 45_600, input: 2_400, output: 380 } },
+    // The first marked session's next turn reads the stretch past the threshold, which starts the safety wait.
+    { agentId: 'main', at: t(14, 2, 30), attempts: [{ accountId: 'studio', at: t(14, 2, 30), head5h: 0.8572, ms: 6_100, status: 200 }], id: 'req_4a9c3e7b-a27', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: MARKED_SESSION_IDS[0], usage: { cacheRead: 36_000, cacheWrite1h: 2_500, input: 1_500, output: 700 } },
+    { agentId: 'main', at: t(14, 3, 36), attempts: [{ accountId: 'studio', at: t(14, 3, 36), head5h: 0.8584, ms: 6_600, status: 200 }], id: 'req_e1b6d4f8-b38', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_SESSION_ID, usage: { cacheRead: 64_000, cacheWrite1h: 3_200, input: 1_800, output: 880 } },
+    // The slowed request: its pin's cycle is 42 s, so at half speed it waits 42 s before it is forwarded, and its
+    // renewal runs the round the stretch fires once the safety wait has passed.
+    {
+      agentId: 'main',
+      at: t(14, 4, 18),
+      attempts: [{ accountId: 'studio', at: t(14, 5), head5h: 0.86, ms: 7_000, status: 200 }],
+      held: { cohort: null, heldMs: 42_000, waitedOn: ['studio'], waits: [{ heldMs: 42_000, reason: 'slow_down' }] },
+      id: 'req_9f2e7c5a-c49',
+      keyId: 'notebook',
+      model: 'claude-sonnet-5-5',
+      requestClass: 'main',
+      session: SLOWED_SESSION_ID,
+      usage: { cacheRead: 67_200, cacheWrite1h: 2_800, input: 2_000, output: 940 },
+    },
   ];
   return seeds.map(storyRow);
 }
@@ -1154,6 +1230,9 @@ export const requestById = new Map(REQUESTS.map((r) => [r.id, r]));
 // The ci key's last use is its newest request the key check let through: a send after the revocation is refused as an
 // unknown key and uses nothing.
 keyById.get('ci')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'ci' && r.errorCode !== 'auth_unknown')?.at ?? null;
+// The notebook key's last use is its newest request, a turn of studio's story sessions after its one drawn row. Its
+// counts derive from the rollups with every other key's.
+keyById.get('notebook')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'notebook')?.at ?? null;
 
 /**
  * The head that first read nightly in plan overage: the first attempt the day sent it after its spend cap was raised
@@ -1319,6 +1398,7 @@ function storyEvents(): Map<string, RequestEvent[]> {
   moved('req_2e7c90a1-6d4', clock(14, 24, 10), 'primary', 'nightly', 'cooldown');
   moved('req_da52d141-a5a', clock(14, 5, 12), 'secondary', 'primary', 'spent');
   moved('req_c41d0311-200', clock(14, 6, 30), 'secondary', 'primary', 'spent');
+  moved('req_b8c3e9d4-e61', clock(14, 7, 51), 'secondary', 'primary', 'cooldown');
   moved('req_1d9c3e55-0b2', clock(14, 2, 11), 'secondary', 'primary', 'cooldown');
   moved('req_868264bc-611', clock(11, 8, 30), 'secondary', 'primary', 'shed');
   moved(FORCED_MOVE_ID, clock(11, 1, 50), 'overflow', 'nightly', 'return_to_plan');
@@ -1374,12 +1454,15 @@ function placementOf(p: Rng, r: RequestLog): Placement | null {
   return { depth: rung === 'content' ? p.int(2, 9) : p.int(1, 3), prefixTokens: Math.round(read * p.float(0.85, 1.12)), rung };
 }
 
+/** A wait for a slot, as the router writes it: one cap wait of the hold's whole length. */
+const slotHold = (cohort: string | null, heldMs: number, waitedOn: string[]): CohortHold => ({ cohort, heldMs, waitedOn, waits: [{ heldMs, reason: 'cap' }] });
+
 /**
  * Half the subagents placed afresh first waited on their cohort's account, every account at its cap. The wait
  * draws from a stream of its own, so every placement drawn after a hold keeps its values.
  */
 const cohortHoldOf = (p: Rng, w: Rng, r: RequestLog, placement: Placement | null, accountId: string): CohortHold | null =>
-  placement !== null && r.agentId !== 'main' && p.chance(0.5) ? { cohort: placement.rung === 'with_main' ? null : accountId, heldMs: w.int(180, 4_000), waitedOn: [accountId] } : null;
+  placement !== null && r.agentId !== 'main' && p.chance(0.5) ? slotHold(placement.rung === 'with_main' ? null : accountId, w.int(180, 4_000), [accountId]) : null;
 
 /**
  * The drawer's shed move and the two newer release reasons, each on a pin no other event touches, so the checks
@@ -1514,7 +1597,7 @@ function seedDrawerBranches() {
     (s, r) => r.agentId !== 'main' && s.moved === null && s.placement === null && s.cohortHold === null && (s.cacheRead ?? 0) > 0 && !REQUEST_EVENTS.has(r.id),
     (s) => ({ ...placed(s, { depth: 0, prefixTokens: 0, rung: 'with_main' }), renewed: false }),
   );
-  const strategyHold = (r: RequestLog): CohortHold => ({ cohort: null, heldMs: 1250, waitedOn: [r.attempts[0].accountId] });
+  const strategyHold = (r: RequestLog): CohortHold => slotHold(null, 1250, [r.attempts[0].accountId]);
   seed(
     (s, r) => s.moved === null && s.placement === null && !s.renewed && s.cohortHold === null && s.skipped.length > 0 && !REQUEST_EVENTS.has(r.id) && holdFirst(r, strategyHold(r)),
     (s, r) => ({ ...s, cohortHold: strategyHold(r) }),
@@ -1550,7 +1633,7 @@ function seedHolds() {
     const waitedOn = first === undefined ? [] : [first];
     const heldMs = boundOf(atCap);
     keepAttempts(atCap, 0);
-    Object.assign(atCap, { accountId: null, costUsd: 0, durationMs: heldMs, errorCode: 'accounts_at_cap', held: { cohort: null, heldMs, waitedOn } });
+    Object.assign(atCap, { accountId: null, costUsd: 0, durationMs: heldMs, errorCode: 'accounts_at_cap', held: slotHold(null, heldMs, waitedOn) });
   }
   const heldAt = (r: RequestLog) => {
     const drawnAttempts = drawnPart(r);
@@ -1581,7 +1664,7 @@ function seedHolds() {
     accountId: null,
     durationMs: Date.parse(lastKept.startedAt) + (lastKept.durationMs ?? 0) - Date.parse(afterAttempt.at) + bound,
     errorCode: 'accounts_at_cap',
-    held: { cohort: null, heldMs: (before?.heldMs ?? 0) + bound, waitedOn: [...(before?.waitedOn ?? []), next] },
+    held: { cohort: null, heldMs: (before?.heldMs ?? 0) + bound, waitedOn: [...(before?.waitedOn ?? []), next], waits: [...(before?.waits ?? []), { heldMs: bound, reason: 'cap' }] },
     outcome: 'exhausted',
     status: 429,
   });

@@ -113,6 +113,133 @@
       "spent": {
         "unknown": 1
       }
-    }
+    },
+    "held": [
+      {
+        "at": 1791633600000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791637200000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791640800000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791644400000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791648000000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791651600000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791655200000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791658800000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791662400000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791666000000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791669600000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791673200000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791676800000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791680400000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791684000000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791687600000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791691200000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791694800000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791698400000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791702000000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791705600000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791709200000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791712800000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791716400000,
+        "held_ms": 0,
+        "requests": 0
+      },
+      {
+        "at": 1791720000000,
+        "held_ms": 0,
+        "requests": 0
+      }
+    ]
   }
 }

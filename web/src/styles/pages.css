@@ -276,6 +276,13 @@
   text-overflow: ellipsis;
 }
 
+/* The 22 px badge would push the 5-hour meter under its two neighbors, and the auto margin keeps it by the label. */
+.wbar__head .speed-chip {
+  align-self: center;
+  margin-block: -3px;
+  margin-right: auto;
+}
+
 .wbar__pct {
   font-weight: 600;
 }
@@ -333,8 +340,17 @@
   gap: 8px;
 }
 
+/* A long name gives way before the speed chip and the status badge, which stay one group at the head's far end. */
 .account-mini__name {
+  min-width: 0;
   font-weight: 600;
+}
+
+.account-mini__status {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
 }
 
 .account-mini__sub {

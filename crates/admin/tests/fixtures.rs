@@ -155,10 +155,10 @@ const POOL_ROUTE: &str = "PATCH /admin/pools/{id}";
 
 /// The route's answer to every bound the console holds and to one past it: the keepalive policy's, the pool
 /// engine's with its in-flight cap, and the model rule count's.
-/// The burn average, the shed dwell, the window ceiling and the shed cap are probed at both edges of their bounds. A
-/// probe that sends another field beside the probed one names it under `with`, so a replay sends the same body. An
-/// admitted probe is written back at once from the list read taken before the probes, so each probe meets the seeded
-/// pool, as the captures after these do.
+/// The burn average, the shed dwell, the slow-down's stretch and hold, the window ceiling and the shed cap are probed
+/// at both edges of their bounds. A probe that sends another field beside the probed one names it under `with`, so a
+/// replay sends the same body. An admitted probe is written back at once from the list read taken before the probes,
+/// so each probe meets the seeded pool, as the captures after these do.
 async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
     let pools = json(get(app, "/admin/pools", Some(cookie)).await).await;
     let pool = pools["pools"]
@@ -206,9 +206,12 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
     for (field, values) in [
         ("burn_average_seconds", &[600_u64, 599, 7_200, 7_201][..]),
         ("shed_dwell_seconds", &[300, 299, 7_200, 7_201]),
+        ("slow_down_stretch_seconds", &[60, 59, 18_000, 18_001]),
+        ("slow_down_hold_seconds", &[1, 0, 300, 301]),
         ("retry_in_place_seconds", &[0, 300, 301]),
         ("overage_move_grace_minutes", &[0, 300, 301]),
         ("wind_down_minutes", &[0, 10_080, 10_081]),
+        ("return_to_plan_dwell_seconds", &[0, 86_400, 86_401]),
         ("in_flight_cap", &[1, 0, 4_294_967_295, 4_294_967_296]),
     ] {
         for &value in values {
@@ -473,6 +476,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             portable: true,
             attempted: Vec::new(),
             now,
+            received_at: now,
             fallback_ms: 60_000,
             revision: snapshot.revision,
             probe: false,
@@ -485,6 +489,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
+            failed_over: None,
             holds: Vec::new(),
             dialed: false,
             held_out: false,
@@ -558,6 +563,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             portable: true,
             attempted: Vec::new(),
             now,
+            received_at: now,
             fallback_ms: 60_000,
             revision: snapshot.revision,
             probe: false,
@@ -570,6 +576,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
+            failed_over: None,
             holds: vec![phoebis_routing::HoldFacts {
                 account_id: "direct".into(),
                 cohort: Some("direct".into()),
@@ -1520,6 +1527,7 @@ fn asked(
         portable: true,
         attempted: Vec::new(),
         now: common::NOW,
+        received_at: common::NOW,
         fallback_ms: 60_000,
         revision: snapshot.revision,
         probe: false,
@@ -1532,6 +1540,7 @@ fn asked(
         static_boundaries: Arc::from([]),
         marker: false,
         parent_agent_id: None,
+        failed_over: None,
         holds: Vec::new(),
         dialed: false,
         held_out: false,
@@ -1926,8 +1935,8 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
     assert!(matches!(refused.result, SelectResult::Refused(_)));
 
     // The kinds no report or route of this harness writes, each as its writer builds it: the harness's router prices
-    // no burn, so it marks no pin and books no reservation, and the round, its mark leaving with the pin's move and a
-    // booking its request ended without usage are seeded here.
+    // no burn, so it marks no pin, books no reservation and slows no account, and the round, its mark leaving with the
+    // pin's move, a booking its request ended without usage and a slow-down's span are seeded here.
     let at = |minute: i64| hour_ago + minute * 60_000;
     let routed = [
         RouterEvent::SheddingRound {
@@ -1944,6 +1953,10 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
                 projection: 0.99,
                 horizon: at(2) + 2_400_000,
                 ceiling: 0.95,
+                trigger: "projection",
+                stretch_ms: None,
+                threshold_ms: None,
+                factor: None,
                 unit: "window_share",
                 burn_average_seconds: 1_800,
                 shed_cap: 0.2,
@@ -1992,6 +2005,8 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             marked_on: "business".into(),
             marked_window: "five_hour".into(),
             projection: None,
+            stretch_ms: None,
+            threshold_ms: None,
             at: at(7),
         },
         RouterEvent::ReservationExpired {
@@ -2041,6 +2056,25 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             observed: "sample",
             restored: false,
             at: at(5),
+        },
+        RouterEvent::SlowDownStarted {
+            account_id: "business".into(),
+            pool_id: "main".into(),
+            factor: 0.5,
+            stretch_ms: 2_520_000,
+            threshold_ms: 1_800_000,
+            demand: 0.12,
+            reset: Some(at(12) + 5_040_000),
+            at: at(12),
+        },
+        RouterEvent::SlowDownEnded {
+            account_id: "business".into(),
+            pool_id: "main".into(),
+            since: at(12),
+            duration_ms: 1_080_000,
+            factor_min: 0.35,
+            held_ms: 240_000,
+            at: at(32),
         },
     ];
     for event in &routed {

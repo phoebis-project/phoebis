@@ -1,7 +1,7 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, CostRevision, CostSplit, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, RewritesAnswer,
+  ModelsState, MoveCause, Overview, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, ReturnToPlan, RewritesAnswer,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SharedEquivalent, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId, WindowSample,
 } from './types';
 import { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES, AUTO_MODE_VALUES, DIAGNOSTICS_SOURCE_VALUES } from './types';
@@ -59,7 +59,7 @@ function decodeWindow(w: Rec): RateLimitWindow | null {
   const id = windowId(str(w.id));
   if (id === null) return null;
   return {
-    burn: numOrNull(w.burn), horizon: isoOrNull(w.horizon), id, label: WINDOW_LABEL[id] ?? id, lead: numOrNull(w.lead), observedAt: isoOr(w.observed_at, epoch), periodHours: WINDOW_HOURS[id] ?? hoursOfKey(id),
+    burn: numOrNull(w.burn), demand: numOrNull(w.demand), horizon: isoOrNull(w.horizon), id, label: WINDOW_LABEL[id] ?? id, lead: numOrNull(w.lead), observedAt: isoOr(w.observed_at, epoch), periodHours: WINDOW_HOURS[id] ?? hoursOfKey(id),
     projection: numOrNull(w.projection), resetsAt: isoOrNull(w.resets_at), utilization: num(w.utilization),
   };
 }
@@ -141,6 +141,7 @@ export function decodeAccount(v: unknown): Account {
   const pool = a.pool === null || a.pool === undefined ? null : rec(a.pool);
   const profile = a.profile === null || a.profile === undefined ? null : rec(a.profile);
   const sub = a.subscription === null || a.subscription === undefined ? null : rec(a.subscription);
+  const slowDown = a.slow_down === null || a.slow_down === undefined ? null : rec(a.slow_down);
   const identity = rec(a.identity);
   const credential = rec(a.credential);
   const subscription = decodeSubscription(profile, sub);
@@ -164,6 +165,9 @@ export function decodeAccount(v: unknown): Account {
     // than landing over a row it could not vouch for.
     revision: num(a.revision),
     routingEnabled: bool(a.enabled, true),
+    slowDown: slowDown
+      ? { factor: num(slowDown.factor, 1), holdMs: num(slowDown.hold_ms), since: isoOrNull(slowDown.since), speed: num(slowDown.speed, 1), stretchMs: num(slowDown.stretch_ms), thresholdMs: num(slowDown.threshold_ms) }
+      : null,
     status: accountStatus(a, cooldowns),
     subscription,
     usage: a.usage === null || a.usage === undefined ? null : decodeSnapshot(str(a.id), a.usage),
@@ -316,6 +320,7 @@ export const SUBAGENT_PLACEMENT_VALUES = ['by_cohort', 'by_strategy', 'with_main
 export const MODEL_RULES_MODE_VALUES = ['extend', 'replace'] as const satisfies readonly ModelRulesMode[];
 export const OVERAGE_POLICY_VALUES = ['allow', 'never', 'prefer_plan'] as const;
 export const POOL_STATUS_VALUES = ['active', 'degraded', 'disabled', 'exhausted'] as const;
+export const RETURN_TO_PLAN_VALUES = ['always', 'never', 'when_cold'] as const satisfies readonly ReturnToPlan[];
 export const WARM_SESSIONS_VALUES = ['always', 'never', 'when_needed'] as const satisfies readonly WarmSessions[];
 export const POOL_STRATEGY_VALUES = ['pace', 'priority', 'round_robin'] as const;
 const ttl = (v: unknown, fallback: CacheTtl): CacheTtl => (v === '1h' || v === '5m' ? v : fallback);
@@ -396,6 +401,7 @@ export function decodePool(v: unknown): Pool {
       kind: ACCOUNT_KIND_VALUES.find((x) => x === str(m.kind)) ?? 'oauth',
       paceScore: numOrNull(m.pace_score),
       priority: num(m.priority),
+      speed: numOrNull(m.speed),
       spends: list(m.spends).map(rec).map((s) => ({ period: BUDGET_PERIOD_VALUES.find((x) => x === str(s.period)) ?? 'month', periodEnd: isoOrNull(s.period_end), spentUsd: num(s.spent_usd) })),
     })),
     migrateWhenSpent: bool(p.migrate_when_spent, POOL_ENGINE_DEFAULTS.migrateWhenSpent),
@@ -408,12 +414,18 @@ export function decodePool(v: unknown): Pool {
     preferSubscription: bool(p.prefer_subscription),
     requests24h: num(p.requests_24h),
     retryInPlaceSeconds: num(p.retry_in_place_seconds, POOL_ENGINE_DEFAULTS.retryInPlaceSeconds),
+    // A mode this build does not know reads as the default, which returns a session as the router did before the field.
+    returnToPlan: RETURN_TO_PLAN_VALUES.find((x) => x === str(p.return_to_plan)) ?? POOL_ENGINE_DEFAULTS.returnToPlan,
+    returnToPlanDwellSeconds: num(p.return_to_plan_dwell_seconds, POOL_ENGINE_DEFAULTS.returnToPlanDwellSeconds),
     // A row whose answer carried none reads 0, which the route refuses as stale, so the editor offers Reload rather
     // than landing over a row it could not vouch for.
     revision: num(p.revision),
     sessionPlacement: SESSION_PLACEMENT_VALUES.find((x) => x === str(p.session_placement)) ?? POOL_AFFINITY_DEFAULTS.sessionPlacement,
     shedCap: num(p.shed_cap, POOL_ENGINE_DEFAULTS.shedCap),
     shedDwellSeconds: num(p.shed_dwell_seconds, POOL_ENGINE_DEFAULTS.shedDwellSeconds),
+    slowDown: bool(p.slow_down, POOL_ENGINE_DEFAULTS.slowDown),
+    slowDownHoldSeconds: num(p.slow_down_hold_seconds, POOL_ENGINE_DEFAULTS.slowDownHoldSeconds),
+    slowDownStretchSeconds: num(p.slow_down_stretch_seconds, POOL_ENGINE_DEFAULTS.slowDownStretchSeconds),
     status: POOL_STATUS_VALUES.find((x) => x === str(p.status)) ?? 'active',
     strategy: POOL_STRATEGY_VALUES.find((x) => x === str(p.strategy)) ?? 'pace',
     subagentPlacement: SUBAGENT_PLACEMENT_VALUES.find((x) => x === str(p.subagent_placement)) ?? POOL_AFFINITY_DEFAULTS.subagentPlacement,
@@ -462,7 +474,11 @@ const placementOf = (v: unknown): Placement | null => {
   const rung = PLACEMENT_RUNG_VALUES.find((r) => r === str(p.rung));
   return rung === undefined ? null : { depth: num(p.depth), prefixTokens: num(p.prefix_tokens), rung };
 };
-const cohortHoldOf = (v: unknown): CohortHold | null => (v === null || typeof v !== 'object' ? null : { cohort: strOrNull(rec(v).cohort), heldMs: num(rec(v).held_ms), waitedOn: strings(rec(v).waited_on) });
+/** A row from before the waits were recorded reads none, so its hold says it waited and not for what. */
+const cohortHoldOf = (v: unknown): CohortHold | null =>
+  v === null || typeof v !== 'object'
+    ? null
+    : { cohort: strOrNull(rec(v).cohort), heldMs: num(rec(v).held_ms), waitedOn: strings(rec(v).waited_on), waits: list(rec(v).waits).map(rec).map((w) => ({ heldMs: num(w.held_ms), reason: str(w.reason) })) };
 export function decodeSelection(v: unknown): SelectionTrace | null {
   if (v === null || typeof v !== 'object') return null;
   const s = rec(v);
@@ -507,7 +523,13 @@ const decisionKindOf = (v: unknown): DecisionKind | undefined => DECISION_KIND_V
 const orNull = <T,>(v: unknown, read: (r: Rec) => T): T | null => (v === null || typeof v !== 'object' ? null : read(rec(v)));
 const scoreOf = (v: unknown): Score | null => orNull(v, (s) => ({ accountId: str(s.account_id), score: num(s.score), unit: str(s.unit) }));
 /** A hold with no reason is a version 1 record's, which held for a slot alone. */
-const holdOf = (v: unknown): RecordHold | null => orNull(v, (h) => ({ accountId: str(h.account_id), boundMs: num(h.bound_ms), cohort: strOrNull(h.cohort), reason: str(h.reason, 'cap'), until: isoOrNull(h.until) }));
+const holdOf = (v: unknown): RecordHold | null =>
+  orNull(v, (h) => ({
+    accountId: str(h.account_id), boundMs: num(h.bound_ms), cohort: strOrNull(h.cohort), cycleMs: numOrNull(h.cycle_ms), factor: numOrNull(h.factor), reason: str(h.reason, 'cap'), speed: numOrNull(h.speed),
+    stretchMs: numOrNull(h.stretch_ms), thresholdMs: numOrNull(h.threshold_ms), until: isoOrNull(h.until),
+  }));
+/** Both shapes the router writes read through one object, the other shape's members null. */
+const causeOf = (v: unknown): MoveCause | null => orNull(v, (c) => ({ cause: strOrNull(c.cause), reason: strOrNull(c.reason), scope: strOrNull(c.scope), state: strOrNull(c.state), window: strOrNull(c.window) }));
 const exhaustionOf = (v: unknown) => orNull(v, (x) => ({ deadline: isoOrNull(x.deadline), kind: str(x.kind), obstacle: strOrNull(x.obstacle), reason: strOrNull(x.reason), window: strOrNull(x.window) }));
 const refusalOf = (v: unknown) => orNull(v, (x) => ({ code: str(x.code), kind: str(x.kind), reason: str(x.reason) }));
 /** A value the console cannot draw as a number or a word drops its pair rather than drawing a guess. */
@@ -576,7 +598,7 @@ function decodeRecordCandidate(v: unknown): RecordCandidate {
     burn: numberMap(c.burn),
     cooldowns: list(c.cooldowns).map(rec).map((x) => ({ blocking: bool(x.blocking), reason: str(x.reason), scope: str(x.scope), until: isoOr(x.until, epoch), window: str(x.window) })),
     credits: orNull(c.credits, (x) => ({ blocked: strOrNull(x.blocked), disabledReason: strOrNull(x.disabled_reason), enabled: bool(x.enabled), observedAt: isoOr(x.observed_at, epoch), utilization: numOrNull(x.utilization) })),
-    enabled: bool(c.enabled), fit: strOrNull(c.fit), inFlight: num(c.in_flight), inFlightCap: num(c.in_flight_cap), inOverage: bool(c.in_overage), incarnation: num(c.incarnation), kind: str(c.kind) === 'api_key' ? 'api_key' : 'oauth',
+    enabled: bool(c.enabled), factor: numOrNull(c.factor), fit: strOrNull(c.fit), inFlight: num(c.in_flight), inFlightCap: num(c.in_flight_cap), inOverage: bool(c.in_overage), incarnation: num(c.incarnation), kind: str(c.kind) === 'api_key' ? 'api_key' : 'oauth',
     obstacle: orNull(c.obstacle, (o) => ({ name: str(o.name), reason: strOrNull(o.reason), until: isoOrNull(o.until), window: strOrNull(o.window) })),
     overage: orNull(c.overage, (o) => ({ observedAt: isoOr(o.observed_at, epoch), reset: isoOrNull(o.reset), since: isoOr(o.since, epoch), source: str(o.source) })),
     pace: orNull(c.pace, (p) => ({ burn: numOrNull(p.burn), deadline: isoOrNull(p.deadline), end: isoOrNull(p.end), hours: numOrNull(p.hours), remaining: num(p.remaining), reset: isoOrNull(p.reset), score: num(p.score), window: strOrNull(p.window) })),
@@ -588,7 +610,7 @@ function decodeRecordCandidate(v: unknown): RecordCandidate {
     windows: Object.fromEntries(
       Object.entries(rec(c.windows)).map(([name, w]) => {
         const x = rec(w);
-        return [name, { ageMs: num(x.age_ms), ahead: numOrNull(x.ahead), horizon: isoOrNull(x.horizon), observedAt: isoOr(x.observed_at, epoch), projection: numOrNull(x.projection), reserved: numOrNull(x.reserved), reset: isoOrNull(x.reset), source: str(x.source), utilization: num(x.utilization) }];
+        return [name, { ageMs: num(x.age_ms), ahead: numOrNull(x.ahead), demand: numOrNull(x.demand), horizon: isoOrNull(x.horizon), observedAt: isoOr(x.observed_at, epoch), projection: numOrNull(x.projection), reserved: numOrNull(x.reserved), reset: isoOrNull(x.reset), source: str(x.source), utilization: num(x.utilization) }];
       }),
     ),
   };
@@ -597,7 +619,7 @@ function decodeRecordCandidate(v: unknown): RecordCandidate {
 function decodeRecordOutcome(v: unknown): RecordOutcome {
   const o = rec(v);
   return {
-    accountId: strOrNull(o.account_id), cohortHold: cohortHoldOf(o.cohort_hold),
+    accountId: strOrNull(o.account_id), cause: causeOf(o.cause), cohortHold: cohortHoldOf(o.cohort_hold),
     completion: orNull(o.completion, (c) => ({
       cacheMapWritten: Array.isArray(c.cache_map_written) ? c.cache_map_written.map(rec).map((m) => ({ accountId: str(m.account_id), depth: num(m.depth), prefixTokens: num(m.prefix_tokens), tier: str(m.tier), ttlMs: num(m.ttl_ms) })) : null,
       cacheReadTokens: numOrNull(c.cache_read_tokens), completedAt: isoOrNull(c.completed_at), freed: bool(c.freed), heldMs: numOrNull(c.held_ms), hit: typeof c.hit === 'boolean' ? c.hit : null, inputTokens: numOrNull(c.input_tokens), promisedTokens: numOrNull(c.promised_tokens), status: numOrNull(c.status),
@@ -617,14 +639,16 @@ function decodeRecordOutcome(v: unknown): RecordOutcome {
 /**
  * The settings by the record's version: version 2 names the switch, the ceiling, the cap, the average and the dwell, and
  * version 1 the three old names of the last three with its three removed settings, which `legacy` keeps so an old
- * record still shows what it read.
+ * record still shows what it read. The slow-down's three and the return-to-plan's two read null on a record written
+ * before them, so the card draws them as not recorded.
  */
 function decodeRecordSettings(x: Rec, version: number): RecordSettings {
   const shared = {
     affinityMode: str(x.affinity_mode), affinityTtlSeconds: num(x.affinity_ttl_seconds), inFlightCap: num(x.in_flight_cap), migrateWhenSpent: bool(x.migrate_when_spent),
     minSharedPrefixTokens: num(x.min_shared_prefix_tokens), overageMoveGraceMinutes: num(x.overage_move_grace_minutes), overagePolicy: str(x.overage_policy), poolUpdatedAt: isoOr(x.pool_updated_at, epoch),
-    preferSubscription: bool(x.prefer_subscription), retryInPlaceSeconds: num(x.retry_in_place_seconds), sessionPlacement: str(x.session_placement), strategy: str(x.strategy), subagentPlacement: str(x.subagent_placement),
-    warmSessions: str(x.warm_sessions), windDownMinutes: num(x.wind_down_minutes),
+    preferSubscription: bool(x.prefer_subscription), retryInPlaceSeconds: num(x.retry_in_place_seconds), returnToPlan: strOrNull(x.return_to_plan), returnToPlanDwellSeconds: numOrNull(x.return_to_plan_dwell_seconds),
+    sessionPlacement: str(x.session_placement), slowDown: typeof x.slow_down === 'boolean' ? x.slow_down : null, slowDownHoldSeconds: numOrNull(x.slow_down_hold_seconds),
+    slowDownStretchSeconds: numOrNull(x.slow_down_stretch_seconds), strategy: str(x.strategy), subagentPlacement: str(x.subagent_placement), warmSessions: str(x.warm_sessions), windDownMinutes: num(x.wind_down_minutes),
   };
   if (version === 1) {
     return {
@@ -647,9 +671,9 @@ export function decodeDecisionRecord(v: unknown): DecisionRecord {
     candidates: list(r.candidates).map(decodeRecordCandidate),
     outcome: decodeRecordOutcome(r.outcome),
     pin: orNull(r.pin, (p) => ({
-      accountId: strOrNull(p.account_id), createdAt: isoOrNull(p.created_at), epoch: numOrNull(p.epoch), found: str(p.found, 'none'), idleMs: numOrNull(p.idle_ms), incarnation: numOrNull(p.incarnation), lane: strOrNull(p.lane), lastRefreshAt: isoOrNull(p.last_refresh_at), lastUsedAt: isoOrNull(p.last_used_at),
+      accountId: strOrNull(p.account_id), createdAt: isoOrNull(p.created_at), cycleMs: numOrNull(p.cycle_ms), epoch: numOrNull(p.epoch), found: str(p.found, 'none'), idleMs: numOrNull(p.idle_ms), incarnation: numOrNull(p.incarnation), lane: strOrNull(p.lane), lastRefreshAt: isoOrNull(p.last_refresh_at), lastUsedAt: isoOrNull(p.last_used_at),
       marked: bool(p.marked), markedAt: isoOrNull(p.marked_at), markedOn: strOrNull(p.marked_on), markedWindow: strOrNull(p.marked_window), refreshAgeMs: numOrNull(p.refresh_age_ms), released: strings(p.released),
-      shed: orNull(p.shed, (x) => ({ at: isoOr(x.at, epoch), from: str(x.from) })), warmth: strOrNull(p.warmth), warmthCause: strOrNull(p.warmth_cause),
+      shed: orNull(p.shed, (x) => ({ at: isoOr(x.at, epoch), from: str(x.from) })), slowDownUntil: isoOrNull(p.slow_down_until), warmth: strOrNull(p.warmth), warmthCause: strOrNull(p.warmth_cause),
     })),
     // A word this build does not know reads as none, as a poll outcome does. The raw answer still carries it.
     pinReason: PIN_REASON_VALUES.find((x) => x === r.pin_reason) ?? null,
@@ -753,6 +777,7 @@ export const decodeBurnPoint = (v: unknown): BurnPoint => {
 };
 export const decodeBurn = (v: unknown): { bucketSeconds: number; points: BurnPoint[] } => ({ bucketSeconds: num(rec(v).bucket_seconds, 3_600), points: list(rec(v).points).map(decodeBurnPoint) });
 export const decodeRewrites = (v: unknown): RewritesAnswer => ({
+  held: list(rec(v).held).map(rec).map((p) => ({ at: isoOr(p.at, epoch), heldMs: num(p.held_ms), requests: num(p.requests) })),
   moves: numberMap(rec(v).moves),
   movesByReasonAndFit: Object.fromEntries(Object.entries(rec(rec(v).moves_by_reason_and_fit)).map(([reason, fits]) => [reason, numberMap(fits)])),
   points: list(rec(v).points).map(rec).map((p) => ({ at: isoOr(p.at, epoch), rewriteTokens: num(p.rewrite_tokens) })),
@@ -814,7 +839,7 @@ const burnUnit = (v: unknown): BurnUnit | null => BURN_UNIT_VALUES.find((u) => u
 export function decodeSession(v: unknown): Session {
   const s = rec(v);
   const k = rec(s.keepalive);
-  return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnEquivalent: numOrNull(s.burn_equivalent), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), estimated: bool(s.estimated), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: typeof s.runway_bounded === 'boolean' ? s.runway_bounded : null, runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from) };
+  return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnEquivalent: numOrNull(s.burn_equivalent), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), cycleMs: numOrNull(s.cycle_ms), epoch: numOrNull(s.epoch), estimated: bool(s.estimated), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: typeof s.runway_bounded === 'boolean' ? s.runway_bounded : null, runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from), speed: numOrNull(s.speed) };
 }
 
 /** Every cause word the engine serializes, so the decoder never reads one it sends as none. */
@@ -1049,5 +1074,6 @@ export const encodePool = (i: PoolInput) => ({
   min_shared_prefix_tokens: i.minSharedPrefixTokens, overage_policy: i.overagePolicy, prefer_subscription: i.preferSubscription,
   session_placement: i.sessionPlacement, strategy: i.strategy, subagent_placement: i.subagentPlacement,
   burn_average_seconds: i.burnAverageSeconds, in_flight_cap: i.inFlightCap, load_shedding: i.loadShedding, migrate_when_spent: i.migrateWhenSpent, overage_move_grace_minutes: i.overageMoveGraceMinutes,
-  retry_in_place_seconds: i.retryInPlaceSeconds, shed_cap: i.shedCap, shed_dwell_seconds: i.shedDwellSeconds, warm_sessions: i.warmSessions, wind_down_minutes: i.windDownMinutes, window_ceiling: i.windowCeiling,
+  retry_in_place_seconds: i.retryInPlaceSeconds, return_to_plan: i.returnToPlan, return_to_plan_dwell_seconds: i.returnToPlanDwellSeconds, shed_cap: i.shedCap, shed_dwell_seconds: i.shedDwellSeconds,
+  slow_down: i.slowDown, slow_down_hold_seconds: i.slowDownHoldSeconds, slow_down_stretch_seconds: i.slowDownStretchSeconds, warm_sessions: i.warmSessions, wind_down_minutes: i.windDownMinutes, window_ceiling: i.windowCeiling,
 });

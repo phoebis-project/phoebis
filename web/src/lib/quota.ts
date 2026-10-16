@@ -1,4 +1,4 @@
-import type { Account, ExtraUsage, PollOutcome, QuotaPoll, RateLimitWindow, WindowId } from '@/api/types';
+import type { Account, AccountSlowDown, ExtraUsage, PollOutcome, QuotaPoll, RateLimitWindow, WindowId } from '@/api/types';
 import { fmtAbsolute, fmtPct, fmtRelative, instant } from '@/lib/format';
 
 export type MeterTone = 'good' | 'low' | 'warn';
@@ -25,6 +25,16 @@ export const windowOf = (account: Account, id: WindowId) => account.windows.find
 
 /** A window whose reset has passed with no reading since: the card and the timeline agree on this one test. */
 export const isExpired = (w: RateLimitWindow, now: number) => w.resetsAt !== null && Date.parse(w.resetsAt) < now;
+
+/**
+ * The slow-down a page draws the account's speed chip from: its entry while the factor is under 1 and the 5-hour window
+ * the entry was read from has not reset since, null otherwise.
+ */
+export function slowedOf(account: Account, now: number): AccountSlowDown | null {
+  const slowDown = account.slowDown ?? null;
+  const w5 = windowOf(account, '5h');
+  return slowDown !== null && slowDown.factor < 1 && w5 !== null && !isExpired(w5, now) ? slowDown : null;
+}
 
 const HOUR = 3_600_000;
 const MINUTE = 60_000;

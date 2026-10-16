@@ -128,6 +128,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             fit,
             runway_ms,
             binding,
+            cause,
             at,
         } => EventRecord {
             at: *at,
@@ -145,6 +146,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                     "fit": fit,
                     "runway_ms": runway_ms,
                     "binding": binding,
+                    "cause": cause,
                 })
                 .to_string(),
             ),
@@ -162,6 +164,8 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             marked_on,
             marked_window,
             projection,
+            stretch_ms,
+            threshold_ms,
             at,
         } => EventRecord {
             at: *at,
@@ -178,6 +182,8 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                     "marked_on": marked_on,
                     "marked_window": marked_window,
                     "projection": projection,
+                    "stretch_ms": stretch_ms,
+                    "threshold_ms": threshold_ms,
                 })
                 .to_string(),
             ),
@@ -247,6 +253,56 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             pool_id: Some(pool_id.clone()),
             agent_id: Some(agent_id.clone()),
             request_id: Some(request_id.clone()),
+            ..Default::default()
+        },
+        RouterEvent::SlowDownStarted {
+            account_id,
+            pool_id,
+            factor,
+            stretch_ms,
+            threshold_ms,
+            demand,
+            reset,
+            at,
+        } => EventRecord {
+            at: *at,
+            kind: "slow_down_started".into(),
+            account_id: Some(account_id.clone()),
+            detail: Some(
+                json!({
+                    "factor": factor,
+                    "stretch_ms": stretch_ms,
+                    "threshold_ms": threshold_ms,
+                    "demand": demand,
+                    "reset": reset,
+                })
+                .to_string(),
+            ),
+            pool_id: Some(pool_id.clone()),
+            ..Default::default()
+        },
+        RouterEvent::SlowDownEnded {
+            account_id,
+            pool_id,
+            since,
+            duration_ms,
+            factor_min,
+            held_ms,
+            at,
+        } => EventRecord {
+            at: *at,
+            kind: "slow_down_ended".into(),
+            account_id: Some(account_id.clone()),
+            detail: Some(
+                json!({
+                    "since": since,
+                    "duration_ms": duration_ms,
+                    "factor_min": factor_min,
+                    "held_ms": held_ms,
+                })
+                .to_string(),
+            ),
+            pool_id: Some(pool_id.clone()),
             ..Default::default()
         },
         RouterEvent::FastCreditsChanged {
@@ -815,6 +871,64 @@ mod tests {
     use phoebis_routing::RouterEvent;
 
     #[test]
+    fn a_pin_migrated_event_maps_its_cause_into_the_detail_or_null() {
+        let moved = |cause| {
+            let e = event_of(&RouterEvent::PinMigrated {
+                key_id: "k".into(),
+                session_id: "s".into(),
+                agent_id: "main".into(),
+                model: "m".into(),
+                from_account: "a".into(),
+                to_account: "b".into(),
+                epoch: 7,
+                reason: "cooldown".into(),
+                fit: Some("fits"),
+                runway_ms: None,
+                binding: None,
+                cause,
+                at: 5,
+            })
+            .expect("a pin row");
+            serde_json::from_str::<serde_json::Value>(e.detail.as_deref().unwrap()).unwrap()
+        };
+        let detail = moved(Some(phoebis_routing::MoveCause::Cooldown {
+            scope: "account".into(),
+            reason: "rate_limit".into(),
+            window: Some("five_hour".into()),
+        }));
+        assert_eq!(
+            detail["cause"],
+            json!({ "scope": "account", "reason": "rate_limit", "window": "five_hour" }),
+            "a failover's cause is one object"
+        );
+        assert_eq!(
+            detail
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "agent_id",
+                "from_account",
+                "epoch",
+                "reason",
+                "fit",
+                "runway_ms",
+                "binding",
+                "cause"
+            ],
+            "the cause follows the destination's fit"
+        );
+        let detail = moved(None);
+        assert_eq!(
+            detail.get("cause"),
+            Some(&serde_json::Value::Null),
+            "a rule's move writes the key as null"
+        );
+    }
+
+    #[test]
     fn router_events_map_to_rows_with_the_ids_in_their_columns_and_the_rest_in_detail() {
         let e = event_of(&RouterEvent::PinMigrated {
             key_id: "k".into(),
@@ -828,6 +942,7 @@ mod tests {
             fit: Some("rewrite_only"),
             runway_ms: Some(5_400_000),
             binding: Some("five_hour".into()),
+            cause: None,
             at: 5,
         })
         .expect("a pin row");
@@ -969,6 +1084,31 @@ mod tests {
                 },
                 "pin_released",
             ),
+            (
+                RouterEvent::SlowDownStarted {
+                    account_id: "a".into(),
+                    pool_id: "p".into(),
+                    factor: 0.5,
+                    stretch_ms: 1,
+                    threshold_ms: 2,
+                    demand: 0.1,
+                    reset: None,
+                    at: 1,
+                },
+                "slow_down_started",
+            ),
+            (
+                RouterEvent::SlowDownEnded {
+                    account_id: "a".into(),
+                    pool_id: "p".into(),
+                    since: 0,
+                    duration_ms: 1,
+                    factor_min: 0.5,
+                    held_ms: 0,
+                    at: 1,
+                },
+                "slow_down_ended",
+            ),
         ] {
             assert_eq!(event_of(&event).map(|row| row.kind), Some(kind.to_string()));
         }
@@ -1043,6 +1183,10 @@ mod tests {
                 projection: 0.97,
                 horizon: 19_000,
                 ceiling: 0.95,
+                trigger: "slow_down",
+                stretch_ms: Some(2_520_000),
+                threshold_ms: Some(1_800_000),
+                factor: Some(0.3),
                 unit: "window_share",
                 burn_average_seconds: 600,
                 shed_cap: 0.5,
@@ -1099,6 +1243,10 @@ mod tests {
             ("projection", json!(0.97)),
             ("horizon", json!(19_000)),
             ("ceiling", json!(0.95)),
+            ("trigger", json!("slow_down")),
+            ("stretch_ms", json!(2_520_000)),
+            ("threshold_ms", json!(1_800_000)),
+            ("factor", json!(0.3)),
             ("unit", json!("window_share")),
             ("burn_average_seconds", json!(600)),
             ("shed_cap", json!(0.5)),
@@ -1115,7 +1263,7 @@ mod tests {
         ] {
             assert_eq!(detail[field], value, "{field}");
         }
-        for absent in ["ahead", "elapsed_share", "threshold", "trigger"] {
+        for absent in ["ahead", "elapsed_share", "threshold"] {
             assert!(
                 detail.get(absent).is_none(),
                 "{absent} is no member of the round: {detail}"
@@ -1137,6 +1285,7 @@ mod tests {
                 "dwell_seconds",
                 "dwell_until",
                 "excess",
+                "factor",
                 "horizon",
                 "marks",
                 "outcome",
@@ -1146,7 +1295,10 @@ mod tests {
                 "reason",
                 "removed",
                 "shed_cap",
+                "stretch_ms",
                 "target",
+                "threshold_ms",
+                "trigger",
                 "unit",
                 "utilization",
                 "warm_sessions",
@@ -1326,6 +1478,8 @@ mod tests {
             marked_on: "a".into(),
             marked_window: "five_hour".into(),
             projection: Some(0.91),
+            stretch_ms: Some(1_440_000),
+            threshold_ms: Some(1_800_000),
             at: 6_000,
         })
         .expect("a mark row");
@@ -1349,7 +1503,8 @@ mod tests {
             detail_of(&row),
             json!({
                 "agent_id": "sub-1", "reason": "healed", "marked_at": 1_000, "marked_on": "a",
-                "marked_window": "five_hour", "projection": 0.91
+                "marked_window": "five_hour", "projection": 0.91, "stretch_ms": 1_440_000,
+                "threshold_ms": 1_800_000
             })
         );
 
@@ -1419,6 +1574,72 @@ mod tests {
         assert_eq!(
             detail_of(&row),
             json!({"ends_at": 9_000, "wind_down_minutes": 30, "end_source": "cancelled"})
+        );
+
+        let row = event_of(&RouterEvent::SlowDownStarted {
+            account_id: "a".into(),
+            pool_id: "p".into(),
+            factor: 0.5,
+            stretch_ms: 2_520_000,
+            threshold_ms: 1_800_000,
+            demand: 0.12,
+            reset: Some(9_000_000),
+            at: 8_000,
+        })
+        .expect("a slow-down row");
+        assert_eq!(
+            (row.at, columns(&row)),
+            (
+                8_000,
+                (
+                    "slow_down_started",
+                    Some("a"),
+                    Some("p"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None
+                )
+            )
+        );
+        assert_eq!(
+            detail_of(&row),
+            json!({
+                "factor": 0.5, "stretch_ms": 2_520_000, "threshold_ms": 1_800_000, "demand": 0.12,
+                "reset": 9_000_000
+            })
+        );
+
+        let row = event_of(&RouterEvent::SlowDownEnded {
+            account_id: "a".into(),
+            pool_id: "p".into(),
+            since: 8_000,
+            duration_ms: 2_700_000,
+            factor_min: 0.35,
+            held_ms: 600_000,
+            at: 2_828_000,
+        })
+        .expect("a slow-down row");
+        assert_eq!(
+            (row.at, columns(&row)),
+            (
+                2_828_000,
+                (
+                    "slow_down_ended",
+                    Some("a"),
+                    Some("p"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None
+                )
+            )
+        );
+        assert_eq!(
+            detail_of(&row),
+            json!({"since": 8_000, "duration_ms": 2_700_000, "factor_min": 0.35, "held_ms": 600_000})
         );
     }
 

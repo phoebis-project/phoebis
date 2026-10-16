@@ -1,10 +1,13 @@
-import type { Account, RateLimitWindow } from '@/api/types';
+import type { Account, AccountSlowDown, RateLimitWindow } from '@/api/types';
 import { fmtAbsolute, fmtPct, fmtRelative } from '@/lib/format';
-import { isExpired, meterTone, projectionParts, remainingOf } from '@/lib/quota';
+import { isExpired, meterTone, projectionParts, remainingOf, slowedOf } from '@/lib/quota';
+import { speedHover } from '@/lib/selection';
 import { WINDOW_ORDER } from '@/lib/windows';
 import { Meter } from './primitives';
+import { SpeedChip } from './SpeedChip';
 
-export function WindowBar({ window: w, now, soon = false, showLabel = true, compact = false }: { compact?: boolean; now: number; showLabel?: boolean; soon?: boolean; window: RateLimitWindow }) {
+/** `slowDown` is a slowed account's slow-down, which the whole 5-hour bar alone reads: its speed chip follows the label. */
+export function WindowBar({ window: w, now, soon = false, showLabel = true, compact = false, slowDown = null }: { compact?: boolean; now: number; showLabel?: boolean; slowDown?: AccountSlowDown | null; soon?: boolean; window: RateLimitWindow }) {
   const remaining = remainingOf(w);
   const reset = compact ? fmtRelative(w.resetsAt, now) : `resets ${fmtRelative(w.resetsAt, now)}`;
   // A window past its reset says nothing until its next reading, as the Quota cell's expired line does.
@@ -13,6 +16,7 @@ export function WindowBar({ window: w, now, soon = false, showLabel = true, comp
     <div className="wbar">
       <div className="wbar__head">
         {showLabel && <span className="wbar__label">{w.label}</span>}
+        {slowDown && <SpeedChip factor={slowDown.factor} hover={speedHover(slowDown, now)} />}
         <span className="wbar__pct num">{fmtPct(remaining)}</span>
       </div>
       <Meter value={remaining} tone={meterTone(remaining)} thin label={`${w.label} remaining`} />
@@ -69,11 +73,12 @@ export function WindowTriple({ account, now, compact = false, others = false }: 
   const rest = others ? account.windows.filter((w) => !known.includes(w.id)) : [];
   if (!w5 && !w7 && !account.fableWindow && rest.length === 0) return <div className="wbar__none muted">No quota windows</div>;
   // One word each: "Fable 7d" wraps in the narrow compact columns, which drops
-  // that meter a line below its two neighbors.
+  // that meter a line below its two neighbors. Those columns have no room for a
+  // speed chip beside the 5-hour label either, so a compact card draws it in its head.
   const labels = compact ? { '5h': '5h', '7d': '7d', fable: 'Fable' } : { '5h': '5-hour', '7d': '7-day', fable: 'Fable' };
   return (
     <div className={`wbars wbars--3 ${compact ? 'wbars--compact' : ''}`}>
-      {w5 ? <WindowBar window={{ ...w5, label: labels['5h'] }} now={now} compact={compact} /> : <WindowBarAbsent label={labels['5h']} />}
+      {w5 ? <WindowBar window={{ ...w5, label: labels['5h'] }} now={now} compact={compact} slowDown={compact ? null : slowedOf(account, now)} /> : <WindowBarAbsent label={labels['5h']} />}
       {w7 ? <WindowBar window={{ ...w7, label: labels['7d'] }} now={now} compact={compact} /> : <WindowBarAbsent label={labels['7d']} />}
       {account.fableWindow ? <WindowBar window={{ ...account.fableWindow, label: labels.fable }} now={now} compact={compact} /> : <WindowBarAbsent label={labels.fable} />}
       {rest.map((w) => (

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
 import { iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
-import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, Usage } from '@/api/types';
+import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, DiagnosticsSource, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, Usage } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { type Paging, useFollow } from '@/app/useFollow';
 import { BodyViewer } from '@/components/BodyViewer';
@@ -27,7 +27,7 @@ import { effectiveInterval, FOLLOW_OVERRUN, readEnd, spanEnded } from '@/lib/fol
 import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtEquivalent, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, tokensTotal, withEstimate } from '@/lib/format';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { planLabel } from '@/lib/quota';
-import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, NO_SHARE_TITLE, revisionsTitle } from '@/lib/requests';
+import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, heldWords, NO_SHARE_TITLE, revisionsTitle } from '@/lib/requests';
 import { requestsWiden } from '@/lib/requestsLink';
 import { type Chip, logHref, requestLink } from '@/lib/routingLog';
 import type { UnitPosition } from '@/lib/unit';
@@ -115,10 +115,6 @@ const REQUEST_OUTCOME_LABEL: Record<RequestOutcome, string> = {
   succeeded: 'succeeded',
 };
 
-/** Where a hold waited: its cohort's account, else the last one it waited on. */
-const heldOn = (h: CohortHold) => h.cohort ?? h.waitedOn[h.waitedOn.length - 1] ?? 'an account';
-/** The badge rounds the wait, so its hover carries it whole with where it was placed. */
-const heldTitle = (h: CohortHold) => `waited ${fmtInt(h.heldMs)} ms on ${heldOn(h)}`;
 
 /**
  * The router's ids run to 44 characters, which would wrap the drawer head to a second line beside its two actions at
@@ -447,8 +443,8 @@ export function RequestsPage() {
                             <span className="requests__attempts">
                               <AttemptCount attempts={r.attempts} />
                               {r.held && (
-                                <Badge tone="warning" title={heldTitle(r.held)}>
-                                  held {fmtMs(r.held.heldMs)}
+                                <Badge tone="warning" title={heldWords(r.held).title}>
+                                  {heldWords(r.held).badge}
                                 </Badge>
                               )}
                             </span>

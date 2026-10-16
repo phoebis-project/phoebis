@@ -11,13 +11,15 @@ import { AttentionLine } from '@/components/ui/AttentionLine';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Badge, Button, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
+import { SpeedChip } from '@/components/ui/SpeedChip';
 import { figuresValue } from '@/components/ui/Tile';
 import { equivalentOrDash, nativeFiguresOf, SHARE_NOTE } from '@/lib/analytics';
 import { ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, isFastScope, slowedOf } from '@/lib/quota';
 import { costUnitOf, glanceCellOf, revisionsTitle } from '@/lib/requests';
 import { fmtWindows, ringFigures, type RingFigures, type RingLeftOut, type RingRow } from '@/lib/rings';
+import { speedHover } from '@/lib/selection';
 import type { UnitPosition } from '@/lib/unit';
 
 /**
@@ -270,13 +272,26 @@ function LeftOut({ accounts }: { accounts: RingLeftOut[] }) {
 function AccountMini({ account, now }: { account: Account; now: number }) {
   // A fast-lane row holds fast-mode requests alone, so the line reads a row that cools the account.
   const cooldown = account.cooldowns.find((c) => !isFastScope(c.scope));
+  const slowed = slowedOf(account, now);
+  const status = (
+    <Badge tone={STATUS_TONE[account.status]} dot>
+      {STATUS_LABEL[account.status]}
+    </Badge>
+  );
   return (
     <Link to={`/accounts/${account.id}`} className="card card--padded account-mini">
       <div className="account-mini__head">
         <span className="account-mini__name">{account.label}</span>
-        <Badge tone={STATUS_TONE[account.status]} dot>
-          {STATUS_LABEL[account.status]}
-        </Badge>
+        {/* The compact 5-hour bar has no room for the speed chip beside its label, so the chip stands by the status, the
+            two kept together at the head's far end. */}
+        {slowed ? (
+          <span className="account-mini__status">
+            <SpeedChip factor={slowed.factor} hover={speedHover(slowed, now)} />
+            {status}
+          </span>
+        ) : (
+          status
+        )}
       </div>
       {account.email && <div className="account-mini__sub mono muted">{account.email}</div>}
       <WindowTriple account={account} now={now} compact />

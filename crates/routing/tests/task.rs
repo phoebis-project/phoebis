@@ -5,19 +5,20 @@ use std::time::Duration;
 use fake_upstream::{stays_for, wait_for, wait_for_async};
 use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
-    credits_from_usage, lane_key, resolve, sample_from_usage, spawn, AffinityReport, BandWeight,
-    BurnRates, BurnUnit, ClientClass, ConversationLookup, CreditsState, DecisionRecord,
-    DecisionSummary, Exhaustion, KeyRefusal, LongContextRates, MemberSpend, PinRef,
-    PinUsage, PredecessorQuery, Presented, RateTable, Rates, Refusal, RefusalFacts, RefusedRequest,
-    ReloadError, Report, ResolveError, RouterConfig, RouterHandle, RoutingState, SelectRequest,
-    SelectResult, SharePricer, UtilizationSample, WindowReading, WindowSource, WriterStatus,
-    COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
-    SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
+    credits_from_usage, decide, lane_key, resolve, sample_from_usage, shed_dwell_ms, spawn,
+    AffinityReport, BandWeight, BurnRates, BurnUnit, ClientClass, ConversationLookup, CreditsState,
+    DecisionRecord, DecisionSummary, Exhaustion, KeyRefusal, LongContextRates,
+    MemberSpend, MoveCause, PinRef, PinUsage, PredecessorQuery, Presented, RateTable, Rates,
+    Refusal, RefusalFacts, RefusedRequest, ReloadError, Report, ResolveError, RouterConfig,
+    RouterHandle, RoutingState, SelectRequest, SelectResult, SharePricer, UtilizationSample,
+    WindowReading, WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
+    FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE,
+    WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
-    MemberWrite, ModelRule, PinBurn, PinRow, PoolRow, RoutingLoad, RulesMode, Shedding, StateCause,
-    StorageKey, Store, Strategy, SubscriptionRow, WindowRow,
+    MemberWrite, ModelRule, PinBurn, PinKey, PinRow, PoolRow, RoutingLoad, RulesMode, Shedding,
+    StateCause, StorageKey, Store, Strategy, SubscriptionRow, WindowRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -152,6 +153,7 @@ fn request(
         portable: true,
         attempted: vec![],
         now,
+        received_at: now,
         fallback_ms: 60_000,
         revision: s.revision,
         probe: false,
@@ -164,6 +166,7 @@ fn request(
         static_boundaries: Arc::from([]),
         marker: false,
         parent_agent_id: None,
+        failed_over: None,
         holds: Vec::new(),
         dialed: false,
         held_out: false,
@@ -849,6 +852,7 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
         Report::PinInvalidated {
             account_id: "a".into(),
             pin: pin.clone(),
+            mark: None,
             incarnation: 1,
             lifecycle_generation: 1,
             credential_generation: 1,
@@ -1054,6 +1058,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             portable: true,
             attempted: vec![],
             now,
+            received_at: now,
             fallback_ms: 60_000,
             revision: s.revision,
             probe: false,
@@ -1066,6 +1071,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
+            failed_over: None,
             holds: Vec::new(),
             dialed: false,
             held_out: false,
@@ -1190,6 +1196,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             portable: true,
             attempted: vec![],
             now: 1_000,
+            received_at: 1_000,
             fallback_ms: 60_000,
             revision: s.revision,
             probe: false,
@@ -1202,6 +1209,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
+            failed_over: None,
             holds: Vec::new(),
             dialed: false,
             held_out: false,
@@ -2485,6 +2493,7 @@ async fn a_pin_mark_from_the_previous_holder_leaves_the_new_holders_pin_alone() 
     let mark = |incarnation| Report::PinInvalidated {
         account_id: "a".into(),
         pin: pin.clone(),
+        mark: None,
         incarnation,
         lifecycle_generation: 1,
         credential_generation: 1,
@@ -4559,10 +4568,28 @@ async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
         Some(a.as_str()),
         "the record names the account the fail-over left, as the pin's move does"
     );
-    assert!(matches!(
-        next_event(&mut events).await,
-        RouterEvent::PinMigrated { reason, from_account, .. } if reason == "cooldown" && from_account == a
-    ));
+    let cooldown = Some(MoveCause::Cooldown {
+        scope: "account".into(),
+        reason: "rate_limit".into(),
+        window: Some("five_hour".into()),
+    });
+    assert_eq!(
+        record.outcome.cause, cooldown,
+        "the record carries the cooldown's row as the cause"
+    );
+    match next_event(&mut events).await {
+        RouterEvent::PinMigrated {
+            reason,
+            from_account,
+            cause,
+            ..
+        } => assert_eq!(
+            (reason.as_str(), from_account.as_str(), cause),
+            ("cooldown", a.as_str(), cooldown),
+            "the event carries the cause beside its reason"
+        ),
+        other => panic!("{other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -4626,13 +4653,171 @@ async fn a_fast_row_with_a_pin_invalidates_it_under_fast_lane() {
         (sel.account.id.as_str(), sel.trace.moved),
         (to, Some("fast_lane"))
     );
-    let (placed, _) = next_decision(&mut events).await;
+    let (placed, record) = next_decision(&mut events).await;
     assert_eq!((placed.kind, placed.rule), ("placed", Some("fast_lane")));
+    let fast_row = Some(MoveCause::Cooldown {
+        scope: "fast".into(),
+        reason: FAST_RATE_LIMIT_REASON.into(),
+        window: Some("fast".into()),
+    });
+    assert_eq!(record.outcome.cause, fast_row);
+    match next_event(&mut events).await {
+        RouterEvent::PinMigrated {
+            from_account,
+            to_account,
+            reason,
+            cause,
+            ..
+        } => assert_eq!(
+            (
+                from_account.as_str(),
+                to_account.as_str(),
+                reason.as_str(),
+                cause
+            ),
+            (from.as_str(), to, "fast_lane", fast_row)
+        ),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_mark_without_a_cooldown_moves_the_pin_with_the_marks_state_as_its_cause() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let first = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let SelectResult::Selected(selection) = &first.result else {
+        panic!("{:?}", first.result)
+    };
+    // Both members sit at one priority, so the strategy may start the session on either.
+    let from = selection.account.id.clone();
+    let to = if from == "a" { "b" } else { "a" };
+    let pin = selection.pin.clone().unwrap();
+    assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(matches!(
         next_event(&mut events).await,
-        RouterEvent::PinMigrated { from_account, to_account, reason, .. }
-            if from_account == from && to_account == to && reason == "fast_lane"
+        RouterEvent::PinCreated { .. }
     ));
+    handle
+        .report(Report::PinInvalidated {
+            account_id: from.clone(),
+            pin,
+            mark: Some((AccountState::FundingRequired, StateCause::FundingRefused)),
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        })
+        .await;
+    let second = handle
+        .select(SelectRequest {
+            attempted: vec![from.clone()],
+            ..request(&handle, Some("s1"), 1_100)
+        })
+        .await
+        .unwrap();
+    let SelectResult::Selected(sel) = &second.result else {
+        panic!("{:?}", second.result)
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.trace.moved),
+        (to, Some("mark"))
+    );
+    let mark = Some(MoveCause::Mark {
+        state: "funding_required",
+        cause: "funding_refused",
+    });
+    let (placed, record) = next_decision(&mut events).await;
+    assert_eq!(
+        (placed.rule, &record.outcome.cause),
+        (Some("mark"), &mark),
+        "the record names the mark's state and who moved it"
+    );
+    match next_event(&mut events).await {
+        RouterEvent::PinMigrated { reason, cause, .. } => {
+            assert_eq!((reason.as_str(), cause), ("mark", mark))
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_fail_over_after_a_cooldown_lands_on_the_invalidated_pins_own_burn() {
+    use phoebis_routing::RouterEvent;
+    let store = shedding_store(&["a", "b"]);
+    with_tier(&store, "a");
+    with_tier(&store, "b");
+    store
+        .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    handle.report(windows("a", 0.3, 0.1, AT)).await;
+    handle.report(windows("b", 0.3, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(Report::Cooldown {
+            account_id: "a".into(),
+            row: CooldownRow {
+                account_id: "a".into(),
+                scope: "account".into(),
+                until: AT + HOUR,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: Some(pin_of(&handle).await),
+            lifecycle_generation: 1,
+            credential_generation: 1,
+            incarnation: 1,
+        })
+        .await;
+    assert_eq!(
+        landed_on(
+            handle
+                .select(SelectRequest {
+                    attempted: vec!["a".into()],
+                    ..request(&handle, Some("s1"), AT)
+                })
+                .await
+                .unwrap()
+        ),
+        ("b".into(), None)
+    );
+    let record = loop {
+        if let RouterEvent::Decision { record, .. } = next_event(&mut events).await {
+            break *record;
+        }
+    };
+    // The pool keeps no warm pin, so a fresh session's prior burns nothing. The row the cooldown took off a burns 10
+    // input tokens a second, a tenth of the 5-hour window an hour, which reaches b's 0.65 to the ceiling in 6.5 hours.
+    let b = record
+        .candidates
+        .iter()
+        .find(|c| c.account_id == "b")
+        .expect("b's row");
+    assert_eq!(
+        (b.runway_ms, b.fit),
+        (Some(23_400_000), Some("fits")),
+        "the landing's fit reads the invalidated pin's burn"
+    );
+    let booked = record
+        .outcome
+        .reservation
+        .as_ref()
+        .expect("the landing books the pin's burn");
+    assert!(
+        close(booked.burn.get(FIVE_HOUR).copied(), 0.1),
+        "{booked:?}"
+    );
 }
 
 /// The poll's extra-usage state of account `a`, read at `fetched_at` and converted as the poll converts it.
@@ -6726,18 +6911,68 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
     // Ten minutes on, `s2`'s cache has lapsed. `s1`'s is the one this request refreshes, so it reads warm.
     let at = 1_000 + 600_000;
     now.store(at, Ordering::SeqCst);
+    past_the_wait(&handle, &store, "a", at).await;
     handle
         .select(request(&handle, Some("s1"), at))
         .await
         .unwrap();
     let (summary, _) = next_decision(&mut events).await;
-    assert_eq!(summary.kind, "renewed", "s1 is not marked, so it stays");
+    assert_eq!(
+        summary.kind, "moved",
+        "the round marks s1, the request's own pin, which moves in the same selection"
+    );
     let key = |session: &str| PinKeyFacts {
         key_id: "k".into(),
         session_id: session.into(),
         agent_id: "main".into(),
         model: "claude-sonnet-5".into(),
     };
+    match next_event(&mut events).await {
+        RouterEvent::PinMigrated {
+            session_id,
+            from_account,
+            to_account,
+            reason,
+            ..
+        } => assert_eq!(
+            (
+                session_id.as_str(),
+                from_account.as_str(),
+                to_account.as_str(),
+                reason.as_str()
+            ),
+            ("s1", "a", "b", "shed")
+        ),
+        other => panic!("the move's pin event follows its decision, not {other:?}"),
+    }
+    match next_event(&mut events).await {
+        RouterEvent::MarkCleared {
+            account_id,
+            session_id,
+            reason,
+            marked_at,
+            marked_on,
+            marked_window,
+            projection,
+            stretch_ms,
+            threshold_ms,
+            ..
+        } => assert_eq!(
+            (
+                account_id.as_str(),
+                session_id.as_str(),
+                reason,
+                marked_at,
+                marked_on.as_str(),
+                marked_window.as_str(),
+                projection,
+                stretch_ms,
+                threshold_ms
+            ),
+            ("a", "s1", "moved", at, "a", "five_hour", None, None, None)
+        ),
+        other => panic!("the move clears the mark beside its pin event, not {other:?}"),
+    }
     match next_event(&mut events).await {
         RouterEvent::SheddingRound {
             account_id,
@@ -6767,6 +7002,16 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
                 (round.window.as_str(), round.unit, round.warm_sessions),
                 ("five_hour", "window_share", "when_needed")
             );
+            assert_eq!(
+                (
+                    round.trigger,
+                    round.stretch_ms,
+                    round.threshold_ms,
+                    round.factor
+                ),
+                ("projection", None, None, None),
+                "the pool runs no slow-down, so the projection fired the round"
+            );
             assert!((round.utilization - 0.9).abs() < 1e-9);
             assert!((round.ceiling - 0.95).abs() < 1e-9);
             assert_eq!(round.horizon, at + 5 * HOUR, "no reset, so five hours out");
@@ -6782,10 +7027,11 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
                     .map(|p| (p.session_id.as_str(), p.cold, p.marked, p.skip, p.note))
                     .collect::<Vec<_>>(),
                 [
-                    ("s2", true, true, None, None),
-                    ("s1", false, false, Some("last_pin"), Some("current"))
+                    ("s2", true, false, None, None),
+                    ("s1", false, true, None, Some("cheapest"))
                 ],
-                "the round's order: the cold pin first and marked, the warm current one the last pin"
+                "the round's order: the cold pin first, its burn under the target, and the warm current one, whose \
+                 burn covers the target, marked as the cheapest sufficient pin"
             );
             assert!(round.pins.iter().all(|p| p.burn.is_some()));
             let sum: f64 = round.pins.iter().filter_map(|p| p.burn).sum();
@@ -6794,9 +7040,10 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
                 (round.target - round.excess.min(0.5 * sum)).abs() < 1e-9,
                 "the target is the lesser of the excess and the cap's share of the burn"
             );
-            assert!((round.removed - round.pins[0].burn.unwrap()).abs() < 1e-9);
-            assert_eq!(round.pins[0].planned.as_deref(), Some("b"));
-            assert_eq!(round.marks, vec![key("s2")]);
+            assert!(round.pins[0].burn.unwrap() < round.target);
+            assert!((round.removed - round.pins[1].burn.unwrap()).abs() < 1e-9);
+            assert_eq!(round.pins[1].planned.as_deref(), Some("b"));
+            assert_eq!(round.marks, vec![key("s1")]);
             assert_eq!((round.outcome.as_str(), round.reason), ("marked 1", None));
             assert_eq!(
                 (round.dwell_seconds, round.dwell_until),
@@ -6805,40 +7052,12 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
         }
         other => panic!("the round follows its decision, not {other:?}"),
     }
-    // Inside the dwell no round runs: the marked `s2` moves to `b` at its next request, and the mark leaves with it.
+    // Inside the dwell no round runs: the unmarked `s2` renews where it is.
     handle
         .select(request(&handle, Some("s2"), at + 1_000))
         .await
         .unwrap();
-    assert_eq!(next_decision(&mut events).await.0.kind, "moved");
-    assert!(matches!(
-        next_event(&mut events).await,
-        RouterEvent::PinMigrated { .. }
-    ));
-    match next_event(&mut events).await {
-        RouterEvent::MarkCleared {
-            account_id,
-            session_id,
-            reason,
-            marked_at,
-            marked_on,
-            marked_window,
-            projection,
-            ..
-        } => assert_eq!(
-            (
-                account_id.as_str(),
-                session_id.as_str(),
-                reason,
-                marked_at,
-                marked_on.as_str(),
-                marked_window.as_str(),
-                projection
-            ),
-            ("a", "s2", "moved", at, "a", "five_hour", None)
-        ),
-        other => panic!("the move clears the mark beside its pin event, not {other:?}"),
-    }
+    assert_eq!(next_decision(&mut events).await.0.kind, "renewed");
     no_further_event(&mut events).await;
 }
 
@@ -7026,6 +7245,16 @@ fn no_round(events: &[phoebis_routing::RouterEvent]) -> bool {
         .any(|event| matches!(event, phoebis_routing::RouterEvent::SheddingRound { .. }))
 }
 
+/// Stamps the 5-hour window of `account` on the pool `p` as over the ceiling since a dwell of the pool before `now`,
+/// so the selection at `now` finds it past its wait and a round case reads its round at its first selection over the
+/// ceiling.
+async fn past_the_wait(handle: &RouterHandle, store: &Store, account: &str, now: i64) {
+    let dwell = shed_dwell_ms(&store.pool("p").unwrap().expect("the pool"));
+    handle
+        .stamp_projection_over("p", account, FIVE_HOUR, now - dwell)
+        .await;
+}
+
 #[tokio::test]
 async fn the_marks_and_the_dwell_gate_survive_a_restart() {
     use phoebis_routing::MigrateReason;
@@ -7043,7 +7272,9 @@ async fn the_marks_and_the_dwell_gate_survive_a_restart() {
     store.replace_shed_round("p", "a", 1, AT - 60_000).unwrap();
     let now = Arc::new(AtomicI64::new(AT));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    // a reads over the ceiling with nothing burning, so the trigger fires and the loaded round's dwell holds it.
+    // a reads over the ceiling with nothing burning and its window past its wait, so the trigger fires and the loaded
+    // round's dwell holds it.
+    past_the_wait(&handle, &store, "a", AT).await;
     handle.report(windows("a", 0.96, 0.3, AT)).await;
     handle.report(windows("b", 0.1, 0.1, AT)).await;
     handle.samples().await.unwrap();
@@ -7114,6 +7345,7 @@ async fn a_pin_that_moved_away_and_returned_inside_the_dwell_is_not_shed_again_a
     handle.report(windows("b", 0.1, 0.1, AT)).await;
     handle.report(windows("c", 0.92, 0.1, AT)).await;
     handle.samples().await.unwrap();
+    past_the_wait(&handle, &store, "a", AT).await;
     assert_eq!(
         landed_on(
             handle
@@ -7146,6 +7378,8 @@ async fn a_pin_that_moved_away_and_returned_inside_the_dwell_is_not_shed_again_a
     // c now fits, so a mark that outlived the move would find it a destination.
     handle.report(windows("c", 0.1, 0.1, AT + 2_000)).await;
     handle.samples().await.unwrap();
+    // The stamps live in memory, so the restart starts a's wait afresh.
+    past_the_wait(&handle, &store, "a", AT + 2_000).await;
     let mut events = handle.subscribe_events();
     assert_eq!(
         landed_on(
@@ -7185,6 +7419,7 @@ async fn a_released_and_recreated_pin_s_mark_does_not_survive_a_restart() {
     handle.report(windows("a", 0.9, 0.3, AT)).await;
     handle.report(windows("b", 0.1, 0.1, AT)).await;
     handle.samples().await.unwrap();
+    past_the_wait(&handle, &store, "a", AT).await;
     let mut events = handle.subscribe_events();
     // s0's request runs a's round, which marks s1, the heavier, and leaves s0 where it is.
     assert_eq!(
@@ -7246,6 +7481,7 @@ async fn a_released_and_recreated_pin_s_mark_does_not_survive_a_restart() {
     handle.report(windows("a", 0.93, 0.3, AT + 2_000)).await;
     handle.report(windows("b", 0.1, 0.1, AT + 2_000)).await;
     handle.samples().await.unwrap();
+    past_the_wait(&handle, &store, "a", AT + 2_000).await;
     let mut events = handle.subscribe_events();
     assert_eq!(
         landed_on(
@@ -7547,6 +7783,7 @@ async fn a_mark_a_round_makes_on_the_requests_own_pin_is_released_with_it_in_the
     handle.report(windows("a", 0.9, 0.3, AT)).await;
     handle.report(windows("b", 0.1, 0.1, AT)).await;
     handle.samples().await.unwrap();
+    past_the_wait(&handle, &store, "a", AT).await;
     let mut events = handle.subscribe_events();
     assert_eq!(
         landed_on(
@@ -8837,12 +9074,18 @@ async fn a_pin_migrated_event_carries_the_destinations_fit_runway_and_binding() 
         fit,
         runway_ms,
         binding,
+        cause,
         ..
     } = migrated
     else {
         unreachable!()
     };
     assert_eq!(to_account, "b");
+    assert_eq!(
+        (cause, &record.outcome.cause),
+        (None, &None),
+        "a rule's move carries no cause"
+    );
     assert_eq!(
         (fit, binding.as_deref()),
         (Some("rewrite_only"), Some("five_hour"))
@@ -9030,4 +9273,550 @@ async fn a_predicted_wall_with_no_reset_holds_back_the_samples_of_its_own_window
         ),
         other => panic!("{other:?}"),
     }
+}
+
+/// A main turn of `session` selected against `state` over the task's snapshot: the task's own state is out of the
+/// handle's reach, so a case on the slow-down's memory selects and purges against a state built as the task builds it.
+fn main_turn_on(
+    state: &mut RoutingState,
+    handle: &RouterHandle,
+    session: &str,
+    at: i64,
+) -> phoebis_routing::Decided {
+    use rand::SeedableRng;
+    let req = SelectRequest {
+        request_class: Some("main".into()),
+        ..request(handle, Some(session), at)
+    };
+    decide(
+        state,
+        &handle.snapshot(),
+        &req,
+        &mut rand::rngs::StdRng::seed_from_u64(7),
+    )
+}
+
+#[tokio::test]
+async fn a_quiet_accounts_slow_down_entry_and_a_gone_pins_pace_leave_at_the_purge() {
+    let store = shedding_store(&["a", "b"]);
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.slow_down.slow_down = true;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let snapshot = handle.snapshot();
+    let s1 = stored_pin(&store, "s1", "a", 1, 0.0);
+    let s2 = stored_pin(&store, "s2", "a", 2, 0.0);
+    let mut state = RoutingState::from_load(RoutingLoad {
+        pins: vec![s1.clone(), s2.clone()],
+        ..RoutingLoad::default()
+    });
+    state.record_sample("a", sample_with(AT - 500, FIVE_HOUR, 0.5, Some(AT + HOUR)));
+    main_turn_on(&mut state, &handle, "s1", AT);
+    main_turn_on(&mut state, &handle, "s2", AT);
+    let entry = state
+        .slow_down_state("p", "a")
+        .cloned()
+        .expect("the read wrote a's entry");
+    assert!(state.pin_pace(&s1.key()).is_some() && state.pin_pace(&s2.key()).is_some());
+    assert!(
+        state.purge(&snapshot, AT + 1_000).slow_downs.is_empty(),
+        "the pool's pins still stand on a"
+    );
+    assert!(state.pin_pace(&s1.key()).is_some());
+
+    // A session's release takes its pace at once. The failover's invalidation takes the row alone, since the landing
+    // writes the fresh one under the same key, so the pace waits for the purge.
+    state.release_session("k", "s2");
+    assert!(state.pin_pace(&s2.key()).is_none());
+    state
+        .invalidate_pin(
+            &PinRef {
+                key_id: "k".into(),
+                session_id: "s1".into(),
+                agent_id: "main".into(),
+                model: "claude-sonnet-5".into(),
+                epoch: 1,
+                lane: s1.lane.clone(),
+            },
+            "a",
+        )
+        .expect("the row");
+    assert!(state.pin_pace(&s1.key()).is_some());
+    assert_eq!(state.slow_down_state("p", "a"), Some(&entry));
+
+    let purged = state.purge(&snapshot, AT + 2_000);
+    assert_eq!(
+        purged.slow_downs,
+        vec![(("p".to_string(), "a".to_string()), entry)],
+        "a holds no pin of the pool, so its entry leaves whole"
+    );
+    assert!(state.slow_down_state("p", "a").is_none());
+    assert!(state.pin_pace(&s1.key()).is_none(), "no pin holds the key");
+}
+
+/// Pool `p` slowing its pins over the tiered account `a` alone, its session `s1` pinned there burning ten input tokens
+/// a second, a tenth of the 5-hour window an hour through `priced_config`, and the window at 0.9 with its reset 40
+/// minutes after `AT`: the room under the ceiling lasts half an hour at that burn, so the sessions would pass it ten
+/// minutes before the reset, a factor of about 0.75 and a stretch under the pool's half-hour threshold. The purge
+/// ticks every 50 ms.
+async fn slowed_router(now: &Arc<AtomicI64>) -> RouterHandle {
+    let store = shedding_store(&["a"]);
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.slow_down.slow_down = true;
+    pool.slow_down.slow_down_stretch_seconds = 1800;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    with_tier(&store, "a");
+    store
+        .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
+        .unwrap();
+    let handle = spawn(
+        store,
+        clock(now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..priced_config()
+        },
+    )
+    .unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(AT, FIVE_HOUR, 0.9, Some(SLOWED_RESET)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    handle
+}
+
+/// The 5-hour reset `slowed_router` seeds on `a`.
+const SLOWED_RESET: i64 = AT + 40 * 60_000;
+
+/// Session `s1`'s main turn at `at` under its own request id.
+fn slowed_turn(handle: &RouterHandle, request_id: &str, at: i64) -> SelectRequest {
+    SelectRequest {
+        request_id: request_id.into(),
+        request_class: Some("main".into()),
+        ..request(handle, Some("s1"), at)
+    }
+}
+
+/// The value of `key` on the decision's shed line, where the slow-down read states its figures.
+fn shed_fact(record: &DecisionRecord, key: &str) -> phoebis_routing::FactValue {
+    record
+        .walk
+        .iter()
+        .find(|step| step.step == "move:shed")
+        .and_then(|step| step.facts.iter().find(|fact| fact.key == key))
+        .map(|fact| fact.value.clone())
+        .unwrap_or_else(|| panic!("no {key} on the shed line"))
+}
+
+/// The decisions among `events`, by request id, with their records.
+fn decisions_of(events: &[phoebis_routing::RouterEvent]) -> Vec<(String, &DecisionRecord)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            phoebis_routing::RouterEvent::Decision { record, .. } => {
+                Some((record.request.request_id.clone(), record.as_ref()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_factor_under_one_emits_slow_down_started_once_and_a_return_to_one_ends_it_after_the_wait(
+) {
+    use phoebis_routing::{FactValue, RouterEvent, SLOW_DOWN_WAIT_MS};
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = slowed_router(&now).await;
+    let mut events = handle.subscribe_events();
+    // The first turn reads the factor under 1 and opens the span. The second, 30 s on, gives the pin its cycle and
+    // waits its part of the slow-down.
+    handle
+        .select(slowed_turn(&handle, "r-1", AT))
+        .await
+        .unwrap();
+    let t2 = AT + 30_000;
+    now.store(t2, Ordering::SeqCst);
+    let hold = match handle
+        .select(slowed_turn(&handle, "r-2", t2))
+        .await
+        .unwrap()
+        .result
+    {
+        SelectResult::Held { hold, .. } => hold,
+        other => panic!("the pin with a cycle waits: {other:?}"),
+    };
+    assert_eq!(hold.reason, "slow_down");
+    let until = hold
+        .until
+        .expect("a slow-down hold names the pin's deadline");
+    let seen = drained(&mut events).await;
+    let started: Vec<usize> = seen
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| matches!(event, RouterEvent::SlowDownStarted { .. }))
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(
+        started.len(),
+        1,
+        "the second read under 1 continues the span: {seen:?}"
+    );
+    let decisions = decisions_of(&seen);
+    let first = match &seen[started[0] - 1] {
+        RouterEvent::Decision { record, .. } => record,
+        other => panic!("the start follows the decision whose read opened the span, not {other:?}"),
+    };
+    assert_eq!(first.request.request_id, "r-1");
+    match &seen[started[0]] {
+        RouterEvent::SlowDownStarted {
+            account_id,
+            pool_id,
+            factor,
+            stretch_ms,
+            threshold_ms,
+            demand,
+            reset,
+            at,
+        } => {
+            assert_eq!(
+                (account_id.as_str(), pool_id.as_str(), *reset, *at),
+                ("a", "p", Some(SLOWED_RESET), AT)
+            );
+            assert!(*factor > 0.0 && *factor < 1.0, "{factor}");
+            assert_eq!(
+                (
+                    FactValue::Number(*factor),
+                    FactValue::Int(*stretch_ms),
+                    FactValue::Int(*threshold_ms),
+                    FactValue::Number(*demand)
+                ),
+                (
+                    shed_fact(first, "factor"),
+                    shed_fact(first, "stretch_ms"),
+                    shed_fact(first, "threshold_ms"),
+                    shed_fact(first, "demand_five_hour")
+                ),
+                "the start carries the read's figures, the demand in share per hour"
+            );
+            assert_eq!(*threshold_ms, 1_800_000);
+        }
+        _ => unreachable!(),
+    }
+    let lowest = decisions
+        .iter()
+        .map(|(_, record)| match shed_fact(record, "factor") {
+            FactValue::Number(factor) => factor,
+            other => panic!("{other:?}"),
+        })
+        .fold(f64::INFINITY, f64::min);
+
+    // The window reads far under the ceiling a minute after the hold's deadline: the factor returns to 1, and the span
+    // stays open through the wait.
+    let t3 = until + 60_000;
+    now.store(t3, Ordering::SeqCst);
+    handle
+        .report(observed(
+            "a",
+            sample_with(t3, FIVE_HOUR, 0.1, Some(SLOWED_RESET)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    assert!(matches!(
+        handle
+            .select(slowed_turn(&handle, "r-3", t3))
+            .await
+            .unwrap()
+            .result,
+        SelectResult::Selected(_)
+    ));
+    let seen = drained(&mut events).await;
+    let (_, record) = decisions_of(&seen)
+        .into_iter()
+        .find(|(id, _)| id == "r-3")
+        .expect("the third turn's decision");
+    assert_eq!(shed_fact(record, "factor"), FactValue::Number(1.0));
+    assert!(
+        !seen.iter().any(|event| matches!(
+            event,
+            RouterEvent::SlowDownStarted { .. } | RouterEvent::SlowDownEnded { .. }
+        )),
+        "a return shorter than the wait closes no span: {seen:?}"
+    );
+
+    // Once the factor has read 1 for the wait, the purge tick closes the span at the return.
+    now.store(t3 + SLOW_DOWN_WAIT_MS, Ordering::SeqCst);
+    let ended = loop {
+        if let ended @ RouterEvent::SlowDownEnded { .. } = next_event(&mut events).await {
+            break ended;
+        }
+    };
+    assert_eq!(
+        ended,
+        RouterEvent::SlowDownEnded {
+            account_id: "a".into(),
+            pool_id: "p".into(),
+            since: AT,
+            duration_ms: t3 - AT,
+            factor_min: lowest,
+            held_ms: until - t2,
+            at: t3 + SLOW_DOWN_WAIT_MS,
+        },
+        "the span runs from the first read under 1 to the return, with the hold it answered"
+    );
+    assert!(
+        !drained(&mut events)
+            .await
+            .iter()
+            .any(|event| matches!(event, RouterEvent::SlowDownEnded { .. })),
+        "the span ends once"
+    );
+}
+
+#[tokio::test]
+async fn a_purge_that_drops_a_slowed_entry_ends_its_span() {
+    use phoebis_routing::RouterEvent;
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = slowed_router(&now).await;
+    let mut events = handle.subscribe_events();
+    handle
+        .select(slowed_turn(&handle, "r-1", AT))
+        .await
+        .unwrap();
+    let factor = drained(&mut events)
+        .await
+        .into_iter()
+        .find_map(|event| match event {
+            RouterEvent::SlowDownStarted { factor, .. } => Some(factor),
+            _ => None,
+        })
+        .expect("the read under 1 opened a span");
+    // The session ends and the account goes quiet: the purge drops the entry, and the span, whose factor never returned
+    // to 1, ends at the entry's last read.
+    handle.release_session("k", "s1").await.unwrap();
+    now.store(AT + IN_FLIGHT_RECLAIM_MS + 1_000, Ordering::SeqCst);
+    let ended = loop {
+        if let RouterEvent::SlowDownEnded {
+            account_id,
+            pool_id,
+            since,
+            duration_ms,
+            factor_min,
+            held_ms,
+            ..
+        } = next_event(&mut events).await
+        {
+            break (account_id, pool_id, since, duration_ms, factor_min, held_ms);
+        }
+    };
+    assert_eq!(ended, ("a".into(), "p".into(), AT, 0, factor, 0));
+    assert!(
+        !drained(&mut events)
+            .await
+            .iter()
+            .any(|event| matches!(event, RouterEvent::SlowDownEnded { .. })),
+        "the dropped entry's span ends once"
+    );
+}
+
+/// `account`'s answer among `projections`.
+fn projection_of_account(
+    projections: &[phoebis_routing::AccountProjection],
+    account: &str,
+) -> phoebis_routing::AccountProjection {
+    projections
+        .iter()
+        .find(|p| p.account_id == account)
+        .cloned()
+        .unwrap_or_else(|| panic!("no projection of {account}: {projections:?}"))
+}
+
+#[tokio::test]
+async fn the_projections_ask_answers_the_slow_down_read_and_the_demand_beside_the_projection() {
+    let now = Arc::new(AtomicI64::new(AT));
+    let store = shedding_store(&["a"]);
+    // An api_key member beside the slowed account: it has no 5-hour window to slow.
+    store
+        .insert_account(&AccountRow {
+            id: "d".into(),
+            kind: AccountKind::ApiKey,
+            label: "d".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+            state_cause: StateCause::Operator,
+        })
+        .unwrap();
+    store
+        .set_pool_members(
+            "p",
+            &[("a", 0), ("d", 1)].map(|(id, priority)| MemberWrite {
+                account_id: id.into(),
+                priority,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
+            }),
+            "test",
+        )
+        .unwrap();
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.slow_down.slow_down = true;
+    pool.slow_down.slow_down_stretch_seconds = 900;
+    pool.slow_down.slow_down_hold_seconds = 90;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    with_tier(&store, "a");
+    // `slowed_router`'s figures: s1 burns a tenth of the 5-hour window an hour on `a`, at 0.9 with 40 minutes left.
+    store
+        .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
+        .unwrap();
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(AT, FIVE_HOUR, 0.9, Some(SLOWED_RESET)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    assert_eq!(
+        projection_of_account(&handle.projections("p").await.unwrap(), "a").slow_down,
+        None,
+        "no pinned selection has read the account yet"
+    );
+
+    // The first pinned turn reads the factor under 1. No pin has a cycle yet, so none is held, the realized speed is
+    // 1 and the demand is the achieved burn.
+    handle
+        .select(slowed_turn(&handle, "r-1", AT))
+        .await
+        .unwrap();
+    let first = handle.projections("p").await.unwrap();
+    let a = projection_of_account(&first, "a");
+    let entry = a.slow_down.expect("the pinned read wrote a's entry");
+    assert!(entry.factor > 0.0 && entry.factor < 1.0, "{entry:?}");
+    assert!(entry.stretch_ms > 0, "{entry:?}");
+    assert_eq!(
+        (entry.speed, entry.since, entry.threshold_ms, entry.hold_ms),
+        (1.0, Some(AT), 900_000, 90_000),
+        "the entry's own speed, its span's start and the pool's threshold and hold cap"
+    );
+    let five_hour = a.windows[FIVE_HOUR];
+    assert!(
+        five_hour.burn > 0.0 && five_hour.demand >= five_hour.burn,
+        "{five_hour:?}"
+    );
+    assert_eq!(
+        projection_of_account(&first, "d").slow_down,
+        None,
+        "an api_key account has no 5-hour window to slow"
+    );
+
+    // The second turn plants s1's cycle and waits its part of the slow-down: the speed the plan realizes is under 1,
+    // and the demand divides the pin's burn by it.
+    now.store(AT + 30_000, Ordering::SeqCst);
+    handle
+        .select(slowed_turn(&handle, "r-2", AT + 30_000))
+        .await
+        .unwrap();
+    let a = projection_of_account(&handle.projections("p").await.unwrap(), "a");
+    let entry = a.slow_down.expect("the second read rewrote a's entry");
+    assert!(entry.speed < 1.0, "{entry:?}");
+    let five_hour = a.windows[FIVE_HOUR];
+    assert!(five_hour.demand > five_hour.burn, "{five_hour:?}");
+
+    // The pool's switch off: the entry still stands until the purge tick, and none is in force at once.
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.slow_down.slow_down = false;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    handle.reload().await.unwrap();
+    assert_eq!(
+        projection_of_account(&handle.projections("p").await.unwrap(), "a").slow_down,
+        None,
+        "a pool with the slow-down off answers no entry"
+    );
+}
+
+#[tokio::test]
+async fn pins_standing_answers_the_speed_and_the_cycle_of_a_pin() {
+    use phoebis_routing::FactValue;
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = slowed_router(&now).await;
+    let mut events = handle.subscribe_events();
+    let turn = |session: &str, request_id: &str, at: i64| SelectRequest {
+        request_id: request_id.into(),
+        request_class: Some("main".into()),
+        ..request(&handle, Some(session), at)
+    };
+    // s2 and s3 are placed by their first turns, which fold nothing. Each one's next turn starts its pace, and s2's
+    // third plants its cycle from the gap between its second and third.
+    for (session, request_id, at) in [
+        ("s2", "r-1", AT),
+        ("s3", "r-2", AT + 1_000),
+        ("s2", "r-3", AT + 10_000),
+        ("s3", "r-4", AT + 11_000),
+        ("s2", "r-5", AT + 22_000),
+    ] {
+        now.store(at, Ordering::SeqCst);
+        handle.select(turn(session, request_id, at)).await.unwrap();
+    }
+    // The entry holds the factor the last pinned read wrote.
+    let seen = drained(&mut events).await;
+    let (_, last) = decisions_of(&seen)
+        .into_iter()
+        .find(|(id, _)| id == "r-5")
+        .expect("the last turn's decision");
+    let FactValue::Number(factor) = shed_fact(last, "factor") else {
+        panic!("the last read states its factor");
+    };
+    assert!(factor < 1.0, "{factor}");
+    let standing = handle.pins_standing().await.unwrap();
+    let of = |session: &str| {
+        standing
+            .iter()
+            .find(|p| p.pin.session_id == session)
+            .map(|p| (p.speed, p.cycle_ms))
+            .unwrap_or_else(|| panic!("no pin of {session}: {standing:?}"))
+    };
+    assert_eq!(
+        (of("s2"), of("s3")),
+        ((Some(factor), Some(12_000.0)), (Some(factor), None)),
+        "each pin reads its account's factor, and the cycle stands from a pin's third request on"
+    );
+}
+
+#[tokio::test]
+async fn a_rekeyed_pin_keeps_its_pace_under_the_new_key() {
+    const DATED: &str = "claude-sonnet-5-20260929";
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let pin = stored_pin(&store, "s1", "a", 1, 0.0);
+    let mut state = RoutingState::from_load(RoutingLoad {
+        pins: vec![pin.clone()],
+        ..RoutingLoad::default()
+    });
+    main_turn_on(&mut state, &handle, "s1", AT);
+    main_turn_on(&mut state, &handle, "s1", AT + 10_000);
+    assert_eq!(
+        state.pin_pace(&pin.key()).and_then(|p| p.cycle_ms),
+        Some(10_000.0)
+    );
+    state.apply_resolution("claude-sonnet-5", DATED, AT + 20_000);
+    let dated = PinKey {
+        model: DATED.into(),
+        ..pin.key()
+    };
+    assert!(state.pin(&dated).is_some(), "the rekey moved the pin");
+    assert_eq!(
+        state.pin_pace(&dated).and_then(|p| p.cycle_ms),
+        Some(10_000.0),
+        "the pace moved with it"
+    );
+    assert!(state.pin_pace(&pin.key()).is_none());
 }

@@ -1,4 +1,4 @@
-//! The fourteen conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear,
+//! The fifteen conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear,
 //! the router's own components among them, a deleted subject's series gone unless a parked record still names it, a
 //! refresh run read back by a second reader, a listener's pair read on the read's clock, an unweighted model the
 //! ledger's landing saw, and the gauge the metrics listener scrapes from the same read.
@@ -61,13 +61,14 @@ async fn every_subject_a_kind_applies_to_has_a_series_at_zero_while_nothing_hold
             ("reauth_required", "direct".to_string(), false),
             ("refresh_failed", "business".to_string(), false),
             ("shed_no_runway", "main".to_string(), false),
+            ("slowed_long", "business".to_string(), false),
             ("wall_reached", "business".to_string(), false),
             ("writer_degraded", "ledger".to_string(), false),
             ("writer_degraded", "routing".to_string(), false),
         ],
         "every account carries its re-auth state, an API key its funding, and an OAuth account its refresh run, \
-         its spent destinations and its walls and, before any poll status exists, its backoff; every pool its \
-         parked records and its rounds without runway, and each writer its state"
+         its spent destinations, its walls and its slowed spans and, before any poll status exists, its backoff, \
+         while every pool carries its parked records and its rounds without runway, and each writer its state"
     );
 }
 
@@ -96,6 +97,7 @@ async fn each_loaded_pair_has_a_series_of_both_certificate_kinds_at_zero_while_n
             ("reauth_required", "direct".to_string(), false),
             ("refresh_failed", "business".to_string(), false),
             ("shed_no_runway", "main".to_string(), false),
+            ("slowed_long", "business".to_string(), false),
             ("wall_reached", "business".to_string(), false),
             ("writer_degraded", "ledger".to_string(), false),
             ("writer_degraded", "routing".to_string(), false),
@@ -1428,6 +1430,131 @@ async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_wi
 }
 
 #[tokio::test]
+async fn an_account_slowed_past_twice_its_pools_threshold_in_the_day_holds_the_condition_on_that_account(
+) {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    // The pool's own threshold, so the value the condition carries beside the setting is the case's.
+    let mut pool = rig.store.pool("main").unwrap().unwrap();
+    pool.slow_down.slow_down_stretch_seconds = 2_700;
+    rig.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
+    rig.router.reload().await.unwrap();
+    let started = |at: i64, factor: f64| {
+        routing_event(
+            &rig,
+            at,
+            "slow_down_started",
+            "business",
+            Some("main"),
+            json!({
+                "factor": factor,
+                "stretch_ms": 2_400_000,
+                "threshold_ms": 2_700_000,
+                "demand": 0.1,
+                "reset": null,
+            }),
+        )
+    };
+    let ended = |at: i64, since: i64, duration_ms: i64, factor_min: f64| {
+        routing_event(
+            &rig,
+            at,
+            "slow_down_ended",
+            "business",
+            Some("main"),
+            json!({
+                "since": since,
+                "duration_ms": duration_ms,
+                "factor_min": factor_min,
+                "held_ms": 0,
+            }),
+        )
+    };
+    // A span of 50 minutes closed inside the day and one open since 50 minutes before the fold: 100 minutes, past the
+    // bar of twice the pool's 45 minutes.
+    started(NOW - 2 * HOUR, 0.5);
+    ended(
+        NOW - 2 * HOUR + 52 * MINUTE,
+        NOW - 2 * HOUR,
+        50 * MINUTE,
+        0.4,
+    );
+    started(NOW - 50 * MINUTE, 0.35);
+    fold_at(&rig, NOW).await;
+    let conditions = read(&attention, NOW);
+    let held = find(&conditions, Kind::SlowedLong, "business").unwrap();
+    assert_eq!(
+        (
+            held.holds,
+            held.since,
+            &held.subject,
+            &held.pools,
+            &held.link,
+            &held.detail
+        ),
+        (
+            true,
+            Some(NOW - 2 * HOUR),
+            &account_subject("business"),
+            &vec!["main".to_string()],
+            &Some(Link {
+                page: "accounts",
+                id: "business".into()
+            }),
+            &json!({
+                "bar_ms": 5_400_000,
+                "factor_min": 0.35,
+                "open": true,
+                "setting": ["slow_down_stretch_seconds"],
+                "setting_values": { "slow_down_stretch_seconds": 2_700 },
+                "slowed_ms": 100 * MINUTE,
+                "spans": 2,
+            })
+        ),
+        "the condition dates from the oldest span's start, opens the account and carries the bar and the pool's \
+         threshold"
+    );
+    assert!(
+        Kind::ShedNoRunway < Kind::SlowedLong,
+        "a slow-down that worked for long stops no traffic, so it ranks after every routing condition"
+    );
+    let (status, text) = scrape(&rig, &attention).await;
+    assert_eq!(status, 200);
+    assert!(
+        text.contains(r#"phoebis_attention{kind="slowed_long",subject="business"} 1"#),
+        "{text}"
+    );
+    // The open span ends, and a day later the trailing 24 hours hold none of the spans.
+    ended(NOW + 10 * MINUTE, NOW - 50 * MINUTE, 58 * MINUTE, 0.35);
+    fold_at(&rig, NOW + 25 * HOUR).await;
+    let cleared = find(
+        &read(&attention, NOW + 25 * HOUR),
+        Kind::SlowedLong,
+        "business",
+    )
+    .cloned()
+    .expect("an OAuth account keeps its series once its spans are a day old");
+    assert_eq!(
+        (cleared.holds, cleared.since, &cleared.detail),
+        (
+            false,
+            None,
+            &json!({
+                "bar_ms": null,
+                "factor_min": null,
+                "open": false,
+                "setting": ["slow_down_stretch_seconds"],
+                "slowed_ms": 0,
+                "spans": 0,
+            })
+        ),
+        "the condition clears once the trailing day holds no span, with no start row to read a bar from"
+    );
+}
+
+#[tokio::test]
 async fn a_parked_record_keeps_its_condition_after_its_pool_is_deleted() {
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
@@ -2043,6 +2170,7 @@ async fn a_held_unweighted_model_has_its_series_and_ranks_after_every_degraded_s
             ("reauth_required", "direct".to_string(), false),
             ("refresh_failed", "business".to_string(), false),
             ("shed_no_runway", "main".to_string(), false),
+            ("slowed_long", "business".to_string(), false),
             ("wall_reached", "business".to_string(), false),
             ("writer_degraded", "ledger".to_string(), false),
             ("writer_degraded", "routing".to_string(), false),

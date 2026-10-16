@@ -1716,13 +1716,13 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
     };
     let held = serde_json::json!([
         { "id": "five_hour", "observed_at": read_at, "resets_at": null, "utilization": 0.0,
-          "projection": 0.0, "horizon": NOW + 5 * HOUR, "burn": 0.0,
+          "projection": 0.0, "horizon": NOW + 5 * HOUR, "burn": 0.0, "demand": 0.0,
           "lead": lead(FIVE_HOUR, 0.0, None) },
         { "id": "seven_day", "observed_at": read_at, "resets_at": NOW + 72 * HOUR, "utilization": 0.5,
-          "projection": 0.5, "horizon": NOW + 5 * HOUR, "burn": 0.0,
+          "projection": 0.5, "horizon": NOW + 5 * HOUR, "burn": 0.0, "demand": 0.0,
           "lead": lead(SEVEN_DAY, 0.5, Some(NOW + 72 * HOUR)) },
         { "id": "fable", "observed_at": read_at, "resets_at": NOW + 72 * HOUR, "utilization": 0.2,
-          "projection": 0.2, "horizon": NOW + 5 * HOUR, "burn": 0.0,
+          "projection": 0.2, "horizon": NOW + 5 * HOUR, "burn": 0.0, "demand": 0.0,
           "lead": lead(SEVEN_DAY_FABLE, 0.2, Some(NOW + 72 * HOUR)) },
     ]);
     let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
@@ -3567,6 +3567,318 @@ async fn an_account_window_carries_its_projection_horizon_and_burn_and_null_wher
             "{why}: {five_hour}"
         );
     }
+}
+
+/// The pool `main` over `business` and `direct` with its slow-down switch at `slow_down`, its threshold at 600 seconds
+/// and its hold cap at 60, the router pricing through `round_rates`: `s1` on the tiered `business` burns five points
+/// of its 5-hour window an hour. `business` is paired and ready, so a turn of `s1` stays on it.
+async fn slow_down_harness(slow_down: bool) -> common::Full {
+    use common::{generation, login, post};
+    let seed = common::admin_parts_full().await;
+    seed.store
+        .commit_credentials(
+            "business",
+            1,
+            1,
+            None,
+            None,
+            &phoebis_store::NewBundle {
+                access_token: phoebis_store::Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                refresh_token: Some(phoebis_store::Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                issued_at: common::NOW,
+                expires_at: common::NOW + 3_600_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    seed.store
+        .set_state(
+            "business",
+            phoebis_store::AccountState::Ready,
+            phoebis_store::StateCause::Operator,
+        )
+        .unwrap();
+    let seeding = login(&seed.app, "admin-secret").await;
+    let pool = format!(
+        r#"{{"id":"main","label":"Main","strategy":"priority","window_ceiling":0.95,"burn_average_seconds":1800,"slow_down":{slow_down},"slow_down_stretch_seconds":600,"slow_down_hold_seconds":60,"members":[{{"account_id":"business","priority":0}},{{"account_id":"direct","priority":1}}]}}"#
+    );
+    assert_eq!(
+        post(&seed.app, "/admin/pools", &pool, Some(&seeding))
+            .await
+            .status(),
+        201
+    );
+    post(
+        &seed.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&seeding),
+    )
+    .await;
+    name_the_tier(&seed.store, "business", "default_claude_max_20x");
+    seed.store
+        .upsert_pin(&phoebis_store::PinRow {
+            model: "claude-sonnet-5".into(),
+            lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+            ..burning_opus_pin(
+                "s1",
+                "business",
+                generation(&seed.store, "desktop"),
+                common::NOW,
+                1_000.0,
+                1_000.0,
+            )
+        })
+        .unwrap();
+    common::admin_parts_full_on_rated(seed.store.clone(), round_rates).await
+}
+
+/// A main turn of `session` on the desktop key at `at`, as the relay asks for its first wire attempt.
+async fn main_turn(
+    parts: &common::Full,
+    session: &str,
+    request_id: &str,
+    at: i64,
+) -> phoebis_routing::SelectResult {
+    let snapshot = parts.router.snapshot();
+    let key = snapshot
+        .key("desktop")
+        .expect("the key is in the snapshot")
+        .clone();
+    let candidates = phoebis_routing::resolve(
+        &snapshot,
+        &key,
+        "claude-sonnet-5",
+        "claude-sonnet-5",
+    )
+    .expect("the pool allows the model");
+    parts
+        .router
+        .select(phoebis_routing::SelectRequest {
+            request_id: request_id.into(),
+            attempt: 1,
+            seq: 1,
+            key_id: "desktop".into(),
+            key_generation: common::generation(&parts.store, "desktop"),
+            agent_id: "main".into(),
+            session_id: Some(session.into()),
+            canonical_model: "claude-sonnet-5".into(),
+            folded_model: "claude-sonnet-5".into(),
+            candidates,
+            portable: true,
+            attempted: Vec::new(),
+            now: at,
+            received_at: at,
+            fallback_ms: 60_000,
+            revision: snapshot.revision,
+            probe: false,
+            count: false,
+            request_class: Some("main".into()),
+            context_compacted: false,
+            static_hash: None,
+            boundaries: std::sync::Arc::from([]),
+            client: phoebis_routing::ClientClass::ClaudeCode,
+            static_boundaries: std::sync::Arc::from([]),
+            marker: false,
+            parent_agent_id: None,
+            failed_over: None,
+            holds: Vec::new(),
+            dialed: false,
+            held_out: false,
+            lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+            fast: false,
+            body_tokens: 0,
+        })
+        .await
+        .unwrap()
+        .result
+}
+
+/// The member `account` of the pool `main` as the pools list answers it.
+fn pool_member(pools: &serde_json::Value, account: &str) -> serde_json::Value {
+    pools["pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "main")
+        .and_then(|p| {
+            p["members"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["account_id"] == account)
+                .cloned()
+        })
+        .unwrap_or_else(|| panic!("no member {account} of main: {pools}"))
+}
+
+#[tokio::test]
+async fn the_account_routes_answer_slow_down_null_on_an_api_key_account_and_under_a_pool_with_the_slow_down_off(
+) {
+    use common::{get, json, login, NOW};
+    const HOUR: i64 = 3_600_000;
+    let parts = slow_down_harness(false).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // A reading the slow-down would act on, two points under the ceiling with four hours left.
+    read_windows(
+        &parts,
+        "business",
+        &[(phoebis_routing::FIVE_HOUR, 0.93, Some(NOW + 4 * HOUR))],
+    )
+    .await;
+    assert!(matches!(
+        main_turn(&parts, "s1", "r-1", NOW).await,
+        phoebis_routing::SelectResult::Selected(_)
+    ));
+    let null = serde_json::Value::Null;
+    let business = json(get(&parts.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        business.get("slow_down"),
+        Some(&null),
+        "a pool with the slow-down off keeps no entry in force: {business}"
+    );
+    let five_hour = business["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == "five_hour")
+        .unwrap_or_else(|| panic!("no five_hour window: {business}"))
+        .clone();
+    assert!(
+        within(five_hour["burn"].as_f64(), 0.05) && five_hour["demand"] == five_hour["burn"],
+        "with no speed under 1 the demand is the achieved burn, in share per hour: {five_hour}"
+    );
+    let direct = json(get(&parts.app, "/admin/accounts/direct", Some(&cookie)).await).await;
+    assert_eq!(
+        direct.get("slow_down"),
+        Some(&null),
+        "an api_key account has no 5-hour window to slow: {direct}"
+    );
+    let pools = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            pool_member(&pools, "business").get("speed"),
+            pool_member(&pools, "direct").get("speed")
+        ),
+        (Some(&null), Some(&null)),
+        "a member's speed is null where its slow_down is"
+    );
+}
+
+#[tokio::test]
+async fn a_slowed_account_answers_its_slow_down_on_the_account_route_and_its_factor_as_its_members_and_sessions_speed(
+) {
+    use common::{get, json, login, NOW};
+    const HOUR: i64 = 3_600_000;
+    let parts = slow_down_harness(true).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // Two points under the ceiling with four hours left at five points an hour: the window reaches the ceiling 24
+    // minutes in, so the sessions are slowed to a tenth.
+    read_windows(
+        &parts,
+        "business",
+        &[(phoebis_routing::FIVE_HOUR, 0.93, Some(NOW + 4 * HOUR))],
+    )
+    .await;
+    assert!(matches!(
+        main_turn(&parts, "s1", "r-1", NOW).await,
+        phoebis_routing::SelectResult::Selected(_)
+    ));
+    let business = json(get(&parts.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    let slow_down = &business["slow_down"];
+    let factor = slow_down["factor"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("the pinned read's entry is in force: {business}"));
+    assert!(factor > 0.0 && factor < 1.0, "{slow_down}");
+    assert_eq!(
+        (
+            &slow_down["speed"],
+            &slow_down["since"],
+            &slow_down["threshold_ms"],
+            &slow_down["hold_ms"]
+        ),
+        (
+            &serde_json::json!(1.0),
+            &serde_json::json!(NOW),
+            &serde_json::json!(600_000),
+            &serde_json::json!(60_000)
+        ),
+        "no pin has a cycle yet, so none is held, and the span opened at the read: {slow_down}"
+    );
+    assert!(
+        slow_down["stretch_ms"]
+            .as_i64()
+            .is_some_and(|stretch| stretch > 600_000),
+        "{slow_down}"
+    );
+    let direct = json(get(&parts.app, "/admin/accounts/direct", Some(&cookie)).await).await;
+    assert_eq!(
+        direct.get("slow_down"),
+        Some(&serde_json::Value::Null),
+        "an api_key account has no 5-hour window to slow, whatever its pool's switch reads: {direct}"
+    );
+    let pools = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            pool_member(&pools, "business")["speed"].as_f64(),
+            pool_member(&pools, "direct").get("speed")
+        ),
+        (Some(factor), Some(&serde_json::Value::Null)),
+        "the member's speed is its account's factor, and null where no entry is in force"
+    );
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let s1 = session_row(&sessions, "s1");
+    assert_eq!(
+        (s1["speed"].as_f64(), s1.get("cycle_ms")),
+        (Some(factor), Some(&serde_json::Value::Null)),
+        "the pin reads its account's factor, and no cycle before a second request of the pin: {s1}"
+    );
+}
+
+#[tokio::test]
+async fn a_session_row_with_no_pin_reads_no_slow_down_speed_and_no_cycle() {
+    use common::{login, wait_json, NOW};
+    let parts = slow_down_harness(true).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts.ledger.record(phoebis_ledger::Record::Request {
+        request: phoebis_ledger::RequestRecord {
+            id: "r-unpinned".into(),
+            received_at: NOW - 1_500,
+            finished_at: Some(NOW - 1_000),
+            key_id: Some("desktop".into()),
+            key_generation: common::generation(&parts.store, "desktop"),
+            session_id: Some("s-unpinned".into()),
+            agent_id: Some("main".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            ..Default::default()
+        },
+        attempts: vec![],
+        bodies: None,
+    });
+    let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["session_id"] == "s-unpinned")
+    })
+    .await;
+    let row = session_row(&sessions, "s-unpinned");
+    let null = serde_json::Value::Null;
+    assert_eq!(
+        (
+            row["pinned"].as_bool(),
+            row.get("speed"),
+            row.get("cycle_ms")
+        ),
+        (Some(false), Some(&null), Some(&null)),
+        "a row with no pin has no account's factor and no cycle: {row}"
+    );
 }
 
 #[tokio::test]

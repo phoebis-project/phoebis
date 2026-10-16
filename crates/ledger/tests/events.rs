@@ -533,7 +533,11 @@ fn a_pin_migrated_event_counts_under_its_reason_on_the_destination() {
                 at: 3_600_000,
                 kind: "pin_migrated".into(),
                 account_id: Some("b".into()),
-                detail: Some(r#"{"reason":"overage","from_account":"a"}"#.into()),
+                // The fold reads the detail by key, so the failover's cause object beside the reason changes no count.
+                detail: Some(
+                    r#"{"reason":"overage","from_account":"a","cause":{"scope":"account","reason":"rate_limit","window":"five_hour"}}"#
+                        .into(),
+                ),
                 ..Default::default()
             },
         )?;
@@ -577,8 +581,10 @@ fn moved(at: i64, to: &str, reason: &str, fit: Option<&str>) -> EventRecord {
         at,
         kind: "pin_migrated".into(),
         account_id: Some(to.into()),
+        // A rule's move writes its cause as null, which the fold leaves alone as it does an object.
         detail: Some(
-            serde_json::json!({ "reason": reason, "from_account": "a", "fit": fit }).to_string(),
+            serde_json::json!({ "reason": reason, "from_account": "a", "fit": fit, "cause": null })
+                .to_string(),
         ),
         ..Default::default()
     }
@@ -898,6 +904,619 @@ fn a_weekly_wall_reads_no_projection_error_from_a_round_on_the_five_hour_window(
     );
 }
 
+/// A slow-down span's start as the router's mirror writes it, with the factor the read opened it at, under a pool whose
+/// threshold puts the bar at the floor.
+fn slow_down_started(at: i64, account: &str, pool: &str, factor: f64) -> EventRecord {
+    slow_down_started_under(at, account, pool, factor, 1_800_000)
+}
+
+/// A slow-down span's start under a pool whose stretch threshold is `threshold_ms`.
+fn slow_down_started_under(
+    at: i64,
+    account: &str,
+    pool: &str,
+    factor: f64,
+    threshold_ms: i64,
+) -> EventRecord {
+    EventRecord {
+        at,
+        kind: "slow_down_started".into(),
+        account_id: Some(account.into()),
+        pool_id: Some(pool.into()),
+        detail: Some(
+            serde_json::json!({
+                "factor": factor,
+                "stretch_ms": 600_000,
+                "threshold_ms": threshold_ms,
+                "demand": 0.1,
+                "reset": null,
+            })
+            .to_string(),
+        ),
+        ..Default::default()
+    }
+}
+
+/// The end of the span opened at `since`: its row lands at `at`, after the wait that closed it, while the span itself
+/// ran `duration_ms`.
+fn slow_down_ended(
+    at: i64,
+    account: &str,
+    pool: &str,
+    since: i64,
+    duration_ms: i64,
+    factor_min: f64,
+) -> EventRecord {
+    EventRecord {
+        at,
+        kind: "slow_down_ended".into(),
+        account_id: Some(account.into()),
+        pool_id: Some(pool.into()),
+        detail: Some(
+            serde_json::json!({
+                "since": since,
+                "duration_ms": duration_ms,
+                "factor_min": factor_min,
+                "held_ms": 0,
+            })
+            .to_string(),
+        ),
+        ..Default::default()
+    }
+}
+
+/// The row the ledger writes at each start, naming no account and no pool.
+fn router_started(at: i64) -> EventRecord {
+    EventRecord {
+        at,
+        kind: "router_started".into(),
+        detail: Some(serde_json::json!({ "version": "test" }).to_string()),
+        ..Default::default()
+    }
+}
+
+/// A start row carrying `down_since`, the previous run's newest row, null where the ledger held none.
+fn router_started_after(at: i64, down_since: Option<i64>) -> EventRecord {
+    EventRecord {
+        at,
+        kind: "router_started".into(),
+        detail: Some(
+            serde_json::json!({ "version": "test", "down_since": down_since }).to_string(),
+        ),
+        ..Default::default()
+    }
+}
+
+/// Inserts `rows`, folds the routing conditions at `now` and answers the `slowed_long` rows the fold wrote.
+fn slowed_long_at(
+    db: &LedgerDb,
+    rows: &[EventRecord],
+    now: i64,
+) -> Vec<phoebis_ledger::RoutingCondition> {
+    for row in rows {
+        db.insert_event(row).unwrap();
+    }
+    db.write(|c| {
+        let tx = c.transaction()?;
+        phoebis_ledger::fold_routing_conditions(&tx, now)?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    db.read_blocking(phoebis_ledger::routing_conditions)
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.kind == "slowed_long")
+        .collect()
+}
+
+/// The condition of a slowed account folded at `now`: `spans`, `slowed_ms`, `bar_ms`, `open` and `factor_min`, in that
+/// order.
+fn slowed_row(
+    account: &str,
+    pool: &str,
+    since: i64,
+    now: i64,
+    (spans, slowed_ms, bar_ms, open, factor_min): (u64, i64, i64, bool, f64),
+) -> phoebis_ledger::RoutingCondition {
+    phoebis_ledger::RoutingCondition {
+        kind: "slowed_long".into(),
+        subject_kind: "account".into(),
+        subject_id: account.into(),
+        pool_id: Some(pool.into()),
+        since,
+        count: spans,
+        detail: serde_json::json!({
+            "bar_ms": bar_ms,
+            "factor_min": factor_min,
+            "open": open,
+            "setting": ["slow_down_stretch_seconds"],
+            "slowed_ms": slowed_ms,
+            "spans": spans,
+        }),
+        computed_at: now,
+    }
+}
+
+#[test]
+fn a_slow_down_that_summed_past_its_bar_of_the_day_folds_the_slowed_long_condition() {
+    const MINUTE: i64 = 60_000;
+    const HOUR: i64 = 60 * MINUTE;
+    let now = 1_000 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    let rows = slowed_long_at(
+        &db,
+        &[
+            // Two spans of 40 minutes closed inside the day, each end landing after the wait that closed it, and a
+            // third open since 20 minutes before the fold: 100 minutes, the lowest factor the open span's own.
+            slow_down_started(now - 5 * HOUR, "a", "p", 0.6),
+            slow_down_ended(
+                now - 5 * HOUR + 42 * MINUTE,
+                "a",
+                "p",
+                now - 5 * HOUR,
+                40 * MINUTE,
+                0.35,
+            ),
+            slow_down_started(now - 3 * HOUR, "a", "p", 0.7),
+            slow_down_ended(
+                now - 3 * HOUR + 42 * MINUTE,
+                "a",
+                "p",
+                now - 3 * HOUR,
+                40 * MINUTE,
+                0.5,
+            ),
+            slow_down_started(now - 20 * MINUTE, "a", "p", 0.25),
+            // `b` slowed for 30 and then 20 minutes, 50 in all.
+            slow_down_started(now - 4 * HOUR, "b", "p", 0.5),
+            slow_down_ended(
+                now - 4 * HOUR + 32 * MINUTE,
+                "b",
+                "p",
+                now - 4 * HOUR,
+                30 * MINUTE,
+                0.5,
+            ),
+            slow_down_started(now - 2 * HOUR, "b", "p", 0.5),
+            slow_down_ended(
+                now - 2 * HOUR + 22 * MINUTE,
+                "b",
+                "p",
+                now - 2 * HOUR,
+                20 * MINUTE,
+                0.5,
+            ),
+            // `d` slowed for 35 minutes under `r` and, once moved, 35 under `q`: one account, one row. `r`'s threshold
+            // of 150 minutes would put the bar at five hours, `q`'s of 2000 seconds puts it at 4000 seconds, and the
+            // newest span's start row is `q`'s.
+            slow_down_started_under(now - 6 * HOUR, "d", "r", 0.5, 9_000_000),
+            slow_down_ended(
+                now - 6 * HOUR + 37 * MINUTE,
+                "d",
+                "r",
+                now - 6 * HOUR,
+                35 * MINUTE,
+                0.4,
+            ),
+            slow_down_started_under(now - 2 * HOUR, "d", "q", 0.6, 2_000_000),
+            slow_down_ended(
+                now - 2 * HOUR + 37 * MINUTE,
+                "d",
+                "q",
+                now - 2 * HOUR,
+                35 * MINUTE,
+                0.55,
+            ),
+        ],
+        now,
+    );
+    assert_eq!(
+        rows,
+        [
+            slowed_row(
+                "a",
+                "p",
+                now - 5 * HOUR,
+                now,
+                (3, 6_000_000, 3_600_000, true, 0.25)
+            ),
+            slowed_row(
+                "d",
+                "q",
+                now - 6 * HOUR,
+                now,
+                (2, 70 * MINUTE, 4_000_000, false, 0.4)
+            ),
+        ],
+        "an account's spans sum across its pools past the bar of the newest span's start row, dated by the oldest \
+         and named by the newest span's pool, and 50 minutes raise nothing"
+    );
+    // The open span ends 22 minutes after it opened, and a day later the trailing 24 hours hold none of the spans.
+    assert_eq!(
+        slowed_long_at(
+            &db,
+            &[slow_down_ended(
+                now + 4 * MINUTE,
+                "a",
+                "p",
+                now - 20 * MINUTE,
+                22 * MINUTE,
+                0.25,
+            )],
+            now + 25 * HOUR,
+        ),
+        Vec::new(),
+        "the condition clears once the day holds no span"
+    );
+}
+
+#[test]
+fn a_held_accounts_zero_part_span_second_start_and_orphan_end_join_neither_its_spans_nor_its_since()
+{
+    const MINUTE: i64 = 60_000;
+    const HOUR: i64 = 60 * MINUTE;
+    let now = 1_000 * HOUR;
+    let cutoff = now - 24 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    let rows = slowed_long_at(
+        &db,
+        &[
+            // A span standing at the cutoff whose end row lands inside the day while the span closed two minutes
+            // before it, so no part of it falls in the day.
+            slow_down_started(cutoff - HOUR, "a", "p", 0.1),
+            slow_down_ended(cutoff + MINUTE, "a", "p", cutoff - HOUR, 58 * MINUTE, 0.1),
+            // An end whose start was lost.
+            slow_down_ended(now - 6 * HOUR, "a", "p", now - 7 * HOUR, 30 * MINUTE, 0.05),
+            // A span open for five hours, whose second start lowers its factor and opens nothing.
+            slow_down_started(now - 5 * HOUR, "a", "p", 0.6),
+            slow_down_started(now - 4 * HOUR, "a", "p", 0.3),
+        ],
+        now,
+    );
+    assert_eq!(
+        rows,
+        [slowed_row(
+            "a",
+            "p",
+            now - 5 * HOUR,
+            now,
+            (1, 5 * HOUR, HOUR, true, 0.3)
+        )],
+        "one span counted, dated by its own start, at the second start's factor"
+    );
+}
+
+#[test]
+fn the_slowed_long_fold_closes_an_open_span_at_the_next_router_started_row() {
+    const HOUR: i64 = 3_600_000;
+    let now = 1_000 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    let rows = slowed_long_at(
+        &db,
+        &[
+            // The restart lost the memory-only state, so no end follows the start.
+            slow_down_started(now - 3 * HOUR, "a", "p", 0.4),
+            router_started(now - HOUR),
+        ],
+        now,
+    );
+    assert_eq!(
+        rows,
+        [slowed_row(
+            "a",
+            "p",
+            now - 3 * HOUR,
+            now,
+            (1, 7_200_000, 3_600_000, false, 0.4)
+        )],
+        "the span runs the two hours to the restart, where reading it open to now would count three"
+    );
+}
+
+#[test]
+fn the_slowed_long_fold_ends_a_span_a_restart_closed_at_the_start_rows_down_since() {
+    const HOUR: i64 = 3_600_000;
+    let now = 1_000 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    let rows = slowed_long_at(
+        &db,
+        &[
+            // The previous run wrote its newest row an hour before the restart, and its slow-down held no later.
+            slow_down_started(now - 4 * HOUR, "a", "p", 0.4),
+            router_started_after(now - HOUR, Some(now - 2 * HOUR)),
+        ],
+        now,
+    );
+    assert_eq!(
+        rows,
+        [slowed_row(
+            "a",
+            "p",
+            now - 4 * HOUR,
+            now,
+            (1, 2 * HOUR, HOUR, false, 0.4)
+        )],
+        "the span runs the two hours to down_since and leaves out the hour the router was down"
+    );
+    let db = LedgerDb::open_in_memory().unwrap();
+    let rows = slowed_long_at(
+        &db,
+        &[
+            slow_down_started(now - 4 * HOUR, "a", "p", 0.4),
+            router_started_after(now - HOUR, None),
+        ],
+        now,
+    );
+    assert_eq!(
+        rows,
+        [slowed_row(
+            "a",
+            "p",
+            now - 4 * HOUR,
+            now,
+            (1, 3 * HOUR, HOUR, false, 0.4)
+        )],
+        "a start row without down_since keeps the restart as the span's end"
+    );
+}
+
+#[test]
+fn the_slowed_long_fold_counts_no_time_for_a_span_whose_restart_down_since_is_its_start() {
+    const MINUTE: i64 = 60_000;
+    const HOUR: i64 = 60 * MINUTE;
+    let now = 1_000 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    let rows = slowed_long_at(
+        &db,
+        &[
+            // A span of two hours closed earlier in the day.
+            slow_down_started(now - 10 * HOUR, "a", "p", 0.5),
+            slow_down_ended(
+                now - 8 * HOUR + 2 * MINUTE,
+                "a",
+                "p",
+                now - 10 * HOUR,
+                2 * HOUR,
+                0.5,
+            ),
+            // The previous run stopped right after this start row, its newest, so the span held for no time.
+            slow_down_started(now - 4 * HOUR, "a", "p", 0.4),
+            router_started_after(now - HOUR, Some(now - 4 * HOUR)),
+        ],
+        now,
+    );
+    assert_eq!(
+        rows,
+        [slowed_row(
+            "a",
+            "p",
+            now - 10 * HOUR,
+            now,
+            (1, 2 * HOUR, HOUR, false, 0.5)
+        )],
+        "the closed span alone counts, where reading the other to the restart would add the three hours of downtime"
+    );
+}
+
+#[test]
+fn the_slowed_long_fold_counts_an_open_span_from_before_the_cutoff_over_the_whole_day() {
+    const HOUR: i64 = 3_600_000;
+    let now = 1_000 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    let rows = slowed_long_at(
+        &db,
+        &[
+            // A restart older than the start closes nothing of it.
+            router_started(now - 40 * HOUR),
+            slow_down_started_under(now - 30 * HOUR, "a", "p", 0.5, 9_000_000),
+        ],
+        now,
+    );
+    assert_eq!(
+        rows,
+        [slowed_row(
+            "a",
+            "p",
+            now - 30 * HOUR,
+            now,
+            (1, 86_400_000, 18_000_000, true, 0.5)
+        )],
+        "the newest row before the cutoff is the start, so the span opens at the cutoff, is dated by its own start and \
+         is held to its start row's bar"
+    );
+}
+
+#[test]
+fn the_slowed_long_fold_clamps_a_closed_span_crossing_the_cutoff_to_the_trailing_day() {
+    const HOUR: i64 = 3_600_000;
+    let now = 1_000 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    let rows = slowed_long_at(
+        &db,
+        &[
+            slow_down_started_under(now - 25 * HOUR, "a", "p", 0.6, 2_400_000),
+            slow_down_ended(now - 22 * HOUR, "a", "p", now - 25 * HOUR, 9_000_000, 0.45),
+        ],
+        now,
+    );
+    assert_eq!(
+        rows,
+        [slowed_row(
+            "a",
+            "p",
+            now - 25 * HOUR,
+            now,
+            (1, 5_400_000, 4_800_000, false, 0.45)
+        )],
+        "the two and a half hours count only the hour and a half after the cutoff, past the bar of twice the start \
+         row's 40 minutes"
+    );
+}
+
+#[test]
+fn the_slowed_long_fold_counts_nothing_of_a_span_closed_before_the_cutoff() {
+    const MINUTE: i64 = 60_000;
+    const HOUR: i64 = 60 * MINUTE;
+    let now = 1_000 * HOUR;
+    let cutoff = now - 24 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    let rows = slowed_long_at(
+        &db,
+        &[
+            // A span from 30 to 26 hours back, both of its rows before the cutoff.
+            slow_down_started(now - 30 * HOUR, "a", "p", 0.5),
+            slow_down_ended(now - 26 * HOUR, "a", "p", now - 30 * HOUR, 4 * HOUR, 0.5),
+            // A span whose end row lands a minute after the cutoff, while the span closed two minutes before it.
+            slow_down_started(cutoff - HOUR, "a", "p", 0.5),
+            slow_down_ended(cutoff + MINUTE, "a", "p", cutoff - HOUR, 58 * MINUTE, 0.5),
+            // 50 minutes inside the day, the only time of `a`'s the day holds.
+            slow_down_started(now - 5 * HOUR, "a", "p", 0.5),
+            slow_down_ended(
+                now - 5 * HOUR + 52 * MINUTE,
+                "a",
+                "p",
+                now - 5 * HOUR,
+                50 * MINUTE,
+                0.5,
+            ),
+            // `c` slowed for 61 minutes inside the day.
+            slow_down_started(now - 3 * HOUR, "c", "p", 0.6),
+            slow_down_ended(
+                now - 3 * HOUR + 63 * MINUTE,
+                "c",
+                "p",
+                now - 3 * HOUR,
+                61 * MINUTE,
+                0.55,
+            ),
+        ],
+        now,
+    );
+    assert_eq!(
+        rows,
+        [slowed_row(
+            "c",
+            "p",
+            now - 3 * HOUR,
+            now,
+            (1, 61 * MINUTE, 3_600_000, false, 0.55)
+        )],
+        "counting either of a's old spans would pass the hour"
+    );
+}
+
+#[test]
+fn a_pool_at_the_default_holds_slowed_long_past_five_hours() {
+    const MINUTE: i64 = 60_000;
+    const HOUR: i64 = 60 * MINUTE;
+    const THRESHOLD_MS: i64 = 9_000_000;
+    let now = 1_000 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    let rows = slowed_long_at(
+        &db,
+        &[
+            // `a` slowed for 170 and then 120 minutes, 4 h 50 min in all.
+            slow_down_started_under(now - 12 * HOUR, "a", "p", 0.5, THRESHOLD_MS),
+            slow_down_ended(
+                now - 12 * HOUR + 172 * MINUTE,
+                "a",
+                "p",
+                now - 12 * HOUR,
+                170 * MINUTE,
+                0.4,
+            ),
+            slow_down_started_under(now - 6 * HOUR, "a", "p", 0.5, THRESHOLD_MS),
+            slow_down_ended(
+                now - 6 * HOUR + 122 * MINUTE,
+                "a",
+                "p",
+                now - 6 * HOUR,
+                120 * MINUTE,
+                0.45,
+            ),
+            // `b` slowed for 180 minutes and has stood slowed for the last 130, 5 h 10 min in all.
+            slow_down_started_under(now - 10 * HOUR, "b", "p", 0.6, THRESHOLD_MS),
+            slow_down_ended(
+                now - 10 * HOUR + 182 * MINUTE,
+                "b",
+                "p",
+                now - 10 * HOUR,
+                180 * MINUTE,
+                0.5,
+            ),
+            slow_down_started_under(now - 130 * MINUTE, "b", "p", 0.3, THRESHOLD_MS),
+        ],
+        now,
+    );
+    assert_eq!(
+        rows,
+        [slowed_row(
+            "b",
+            "p",
+            now - 10 * HOUR,
+            now,
+            (2, 310 * MINUTE, 18_000_000, true, 0.3)
+        )],
+        "twice a threshold of two and a half hours puts the bar at five hours, so 4 h 50 min raise nothing"
+    );
+}
+
+#[test]
+fn a_pool_under_half_an_hour_holds_slowed_long_past_the_floor() {
+    const MINUTE: i64 = 60_000;
+    const HOUR: i64 = 60 * MINUTE;
+    const THRESHOLD_MS: i64 = 60_000;
+    let now = 1_000 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    let rows = slowed_long_at(
+        &db,
+        &[
+            // `a` slowed for 55 minutes, many times twice the threshold.
+            slow_down_started_under(now - 4 * HOUR, "a", "p", 0.5, THRESHOLD_MS),
+            slow_down_ended(
+                now - 4 * HOUR + 57 * MINUTE,
+                "a",
+                "p",
+                now - 4 * HOUR,
+                55 * MINUTE,
+                0.5,
+            ),
+            // `b` slowed for 40 and then 25 minutes, 1 h 5 min in all.
+            slow_down_started_under(now - 5 * HOUR, "b", "p", 0.7, THRESHOLD_MS),
+            slow_down_ended(
+                now - 5 * HOUR + 42 * MINUTE,
+                "b",
+                "p",
+                now - 5 * HOUR,
+                40 * MINUTE,
+                0.6,
+            ),
+            slow_down_started_under(now - 2 * HOUR, "b", "p", 0.7, THRESHOLD_MS),
+            slow_down_ended(
+                now - 2 * HOUR + 27 * MINUTE,
+                "b",
+                "p",
+                now - 2 * HOUR,
+                25 * MINUTE,
+                0.65,
+            ),
+        ],
+        now,
+    );
+    assert_eq!(
+        rows,
+        [slowed_row(
+            "b",
+            "p",
+            now - 5 * HOUR,
+            now,
+            (2, 65 * MINUTE, 3_600_000, false, 0.6)
+        )],
+        "twice a threshold of one minute falls under the floor, so the bar is the hour and 55 minutes raise nothing"
+    );
+}
+
 #[test]
 fn two_agents_pin_created_rows_differ_in_their_detail() {
     let pin_created = |agent_id: &str| RouterEvent::PinCreated {
@@ -931,7 +1550,7 @@ fn two_agents_pin_created_rows_differ_in_their_detail() {
 fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically() {
     use phoebis_ledger::EVENT_KINDS;
     use phoebis_routing::{CacheMapEntry, CreditsState, PinKeyFacts, ShedRoundFacts, WindowSource};
-    const KINDS: [&str; 30] = [
+    const KINDS: [&str; 32] = [
         "account_state_changed",
         "budget_period_ended",
         "budget_reached",
@@ -958,6 +1577,8 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
         "reservation_expired",
         "router_started",
         "shedding_round",
+        "slow_down_ended",
+        "slow_down_started",
         "warm_prefix_expired",
         "wind_down_started",
         "window_reset",
@@ -1033,6 +1654,8 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             marked_on: "a".into(),
             marked_window: "five_hour".into(),
             projection: None,
+            stretch_ms: None,
+            threshold_ms: None,
             at: 1,
         },
         RouterEvent::OverageEnded {
@@ -1074,6 +1697,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             fit: Some("fits"),
             runway_ms: None,
             binding: None,
+            cause: None,
             at: 1,
         },
         RouterEvent::PinReleased {
@@ -1107,6 +1731,10 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
                 projection: 0.97,
                 horizon: 2,
                 ceiling: 0.95,
+                trigger: "slow_down",
+                stretch_ms: Some(2_400_000),
+                threshold_ms: Some(1_800_000),
+                factor: Some(0.4),
                 unit: "window_share",
                 burn_average_seconds: 1_800,
                 shed_cap: 0.5,
@@ -1122,6 +1750,25 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
                 dwell_seconds: 900,
                 dwell_until: 900_001,
             }),
+            at: 1,
+        },
+        RouterEvent::SlowDownStarted {
+            account_id: "a".into(),
+            pool_id: "p".into(),
+            factor: 0.5,
+            stretch_ms: 2_520_000,
+            threshold_ms: 1_800_000,
+            demand: 0.12,
+            reset: None,
+            at: 1,
+        },
+        RouterEvent::SlowDownEnded {
+            account_id: "a".into(),
+            pool_id: "p".into(),
+            since: 0,
+            duration_ms: 1,
+            factor_min: 0.5,
+            held_ms: 0,
             at: 1,
         },
         RouterEvent::WarmPrefixExpired {
@@ -1181,7 +1828,12 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             "{kind} is written but not listed"
         );
     }
-    for kind in ["mark_cleared", "reservation_expired"] {
+    for kind in [
+        "mark_cleared",
+        "reservation_expired",
+        "slow_down_ended",
+        "slow_down_started",
+    ] {
         assert!(
             answered.iter().any(|answered| answered == kind),
             "{kind} has no row: {answered:?}"
@@ -1869,6 +2521,76 @@ async fn the_start_row_dates_the_gap_from_the_previous_run_whatever_the_mirror_f
         start["down_since"],
         serde_json::json!(down_since),
         "the gap ends at the previous run's last row"
+    );
+}
+
+#[tokio::test]
+async fn the_start_fold_waits_for_the_start_row_so_a_span_the_previous_run_left_open_closes_at_it()
+{
+    const HOUR: i64 = 3_600_000;
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap());
+    // The previous run's last row opened a span on a three hours ago, so the run stopped with the span open, and the
+    // span held for no time.
+    db.insert_event(&slow_down_started(NOW - 3 * HOUR, "a", "p", 0.4))
+        .unwrap();
+    let clock: phoebis_oauth::Clock = Arc::new(|| NOW);
+    let router = phoebis_routing::spawn(store.clone(), clock.clone(), Default::default()).unwrap();
+    let ledger = phoebis_ledger::spawn(
+        db.clone(),
+        Arc::new(phoebis_ledger::Pricing::new(
+            phoebis_ledger::PriceRevisions::shipped(),
+        )),
+        Arc::new(phoebis_ledger::PlanTables::shipped()),
+        store,
+        &phoebis_bus::Bus::new(),
+        router,
+        clock,
+        Arc::new(phoebis_ledger::Metrics::new()),
+        LedgerConfig {
+            start_version: Some("0.1.0".into()),
+            ..polled_every_50_ms()
+        },
+    );
+    // A read held on the reader connection before the ledger's tasks first run keeps the writer at the start's spend
+    // read, short of the start row's commit, while the purge connection stays free for the fold.
+    let (locked, on_lock) = std::sync::mpsc::channel::<()>();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let reader = std::thread::spawn({
+        let db = db.clone();
+        move || {
+            db.read_blocking(|_| {
+                locked.send(()).unwrap();
+                // A case that fails first drops the sender, which ends the hold all the same.
+                let _ = released.recv();
+                Ok(())
+            })
+            .unwrap()
+        }
+    });
+    on_lock.recv().unwrap();
+    let folds = || {
+        ledger
+            .stats()
+            .condition_folds
+            .load(std::sync::atomic::Ordering::SeqCst)
+    };
+    stays_for(Duration::from_millis(300), || folds() == 0).await;
+    release.send(()).unwrap();
+    reader.join().unwrap();
+    wait_for(Duration::from_secs(5), || (folds() >= 1).then_some(())).await;
+    let rows: Vec<_> = db
+        .read_blocking(phoebis_ledger::routing_conditions)
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.kind == "slowed_long")
+        .collect();
+    assert_eq!(
+        rows,
+        Vec::new(),
+        "the start's fold reads the span closed at the start row's down_since, its own start, where reading it open \
+         would count the three hours to now"
     );
 }
 

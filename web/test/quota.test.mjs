@@ -11,6 +11,18 @@ test('a window is expired once its reset lies before now, never without a reset'
   assert.equal(d.isExpired(window(null), now), false, 'a window reported without a reset');
 });
 
+test("an account's slow-down draws while its factor is under 1 and the 5-hour window it was read from has not reset", () => {
+  const now = Date.UTC(2026, 8, 16, 14, 30);
+  const entry = (factor) => ({ factor, holdMs: 120_000, since: new Date(now - 42 * 60_000).toISOString(), speed: factor, stretchMs: 2_520_000, thresholdMs: 1_800_000 });
+  const five = (resetsAt) => [{ id: '5h', label: '5-hour', observedAt: new Date(now - 3_600_000).toISOString(), periodHours: 5, resetsAt, utilization: 0.86 }];
+  const live = five(new Date(now + 3_600_000).toISOString());
+  assert.deepEqual(d.slowedOf({ slowDown: entry(0.5), windows: live }, now), entry(0.5));
+  assert.equal(d.slowedOf({ slowDown: entry(0.5), windows: five(new Date(now - 5 * 60_000).toISOString()) }, now), null, 'the window reset after the read, so the entry is as stale as its figures');
+  assert.equal(d.slowedOf({ slowDown: entry(1), windows: live }, now), null, 'an account at full speed');
+  assert.equal(d.slowedOf({ slowDown: entry(0.5), windows: [] }, now), null, 'no 5-hour window to read it from');
+  assert.equal(d.slowedOf({ slowDown: null, windows: live }, now), null, 'no entry');
+});
+
 test("the plan's name carries the tier's multiple and falls back to the profile's flag", () => {
   const name = (plan, rateLimitTier) => d.planName({ billingType: '', endsAt: null, organizationType: '', plan, rateLimitTier, since: null, trialEndsAt: null });
   assert.equal(name('max', 'default_claude_max_20x'), 'Max 20x');

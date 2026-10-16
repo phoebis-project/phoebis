@@ -234,6 +234,10 @@ pub struct RollupRow {
     /// Probes the router refused with `503 ledger_behind` while its ledger caught up, sent again later; outside
     /// `failed`, since the account answered nothing.
     pub probes_held: u64,
+    /// The slow-down's waits of the row's requests, each request's `held` waits under `slow_down` summed.
+    pub slow_down_held_ms: u64,
+    /// The row's requests that waited through a slow-down hold.
+    pub slow_down_held: u64,
     pub ttfb_hist: Histogram,
     pub ttfc_hist: Histogram,
     pub duration_hist: Histogram,
@@ -311,6 +315,8 @@ impl RollupRow {
             wasted_probe_reasons: BTreeMap::new(),
             probes_skipped: 0,
             probes_held: 0,
+            slow_down_held_ms: 0,
+            slow_down_held: 0,
             ttfb_hist: Histogram::new(),
             ttfc_hist: Histogram::new(),
             duration_hist: Histogram::new(),
@@ -354,6 +360,8 @@ impl RollupRow {
         add_counts(&mut self.wasted_probe_reasons, &o.wasted_probe_reasons);
         self.probes_skipped += o.probes_skipped;
         self.probes_held += o.probes_held;
+        self.slow_down_held_ms += o.slow_down_held_ms;
+        self.slow_down_held += o.slow_down_held;
         self.ttfb_hist.merge(&o.ttfb_hist);
         self.ttfc_hist.merge(&o.ttfc_hist);
         self.duration_hist.merge(&o.duration_hist);
@@ -395,17 +403,19 @@ impl RollupRow {
         }
     }
 
-    /// Whether every count the fold adds is zero: the request counters (`requests`, `probes_held`), `attempts`, the
-    /// five token counts, `thinking_tokens`, `web_search_requests`, `web_fetch_requests`, the keepalive counters
-    /// (`kept_warm_requests`, `kept_warm_5m_tokens`, `kept_warm_1h_tokens`, `probe_migrated`, `probes_skipped`,
-    /// `wasted_probes`) and the five wasted counts. `fold_request` deletes a row it subtracted from only when this
-    /// holds: a non-serving band row has `requests == 0` while another request's attempts still sit in it.
+    /// Whether every count the fold adds is zero: the request counters (`requests`, `probes_held`, `slow_down_held`),
+    /// `attempts`, the five token counts, `thinking_tokens`, `web_search_requests`, `web_fetch_requests`, the keepalive
+    /// counters (`kept_warm_requests`, `kept_warm_5m_tokens`, `kept_warm_1h_tokens`, `probe_migrated`,
+    /// `probes_skipped`, `wasted_probes`) and the five wasted counts. `fold_request` deletes a row it subtracted from
+    /// only when this holds: a non-serving band row has `requests == 0` while another request's attempts still sit in
+    /// it.
     pub fn holds_nothing(&self) -> bool {
         let usage = self.usage();
         let wasted = self.wasted_usage();
         [
             self.requests,
             self.probes_held,
+            self.slow_down_held,
             self.attempts,
             usage.input,
             usage.cache_read,
@@ -489,6 +499,8 @@ impl RollupRow {
         subtract_counts(&mut self.wasted_probe_reasons, &o.wasted_probe_reasons);
         self.probes_skipped = self.probes_skipped.saturating_sub(o.probes_skipped);
         self.probes_held = self.probes_held.saturating_sub(o.probes_held);
+        self.slow_down_held_ms = self.slow_down_held_ms.saturating_sub(o.slow_down_held_ms);
+        self.slow_down_held = self.slow_down_held.saturating_sub(o.slow_down_held);
         self.ttfb_hist.subtract(&o.ttfb_hist);
         self.ttfc_hist.subtract(&o.ttfc_hist);
         self.duration_hist.subtract(&o.duration_hist);
@@ -648,6 +660,10 @@ pub fn deltas_of(
             _ => {}
         }
     }
+    if let Some(held_ms) = slow_down_held_ms(request.held.as_deref()) {
+        d.slow_down_held_ms = held_ms;
+        d.slow_down_held = 1;
+    }
     // A 401 replay and an unsent retry both run again on the account the request was already on, so only a
     // move between accounts counts.
     d.failovers = attempts
@@ -703,6 +719,25 @@ pub fn deltas_of(
         }
     }
     deltas
+}
+
+/// The request's slow-down waits summed off its `held` JSON, `None` for a request with none. The JSON is the routing
+/// crate's `CohortHold`, which derives no `Deserialize`, so the ledger reads the waits by name, and a row written
+/// before the waits names none.
+fn slow_down_held_ms(held: Option<&str>) -> Option<u64> {
+    let held: serde_json::Value = serde_json::from_str(held?).ok()?;
+    let slowed: Vec<u64> = held
+        .get("waits")?
+        .as_array()?
+        .iter()
+        .filter(|wait| wait.get("reason").and_then(serde_json::Value::as_str) == Some("slow_down"))
+        .map(|wait| {
+            wait.get("held_ms")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+        })
+        .collect();
+    (!slowed.is_empty()).then(|| slowed.iter().sum())
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1089,7 +1124,8 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
     }
 }
 
-/// How far back the routing conditions read: a condition holds while one qualifying event lies this close to the fold.
+/// How far back the routing conditions read: a condition holds while one qualifying event lies this close to the fold,
+/// and `slowed_long` holds as well on a slow-down span open from before this cutoff, which no row inside it names.
 const CONDITION_SPAN_MS: i64 = 24 * 3_600_000;
 
 /// How soon after a move a spent window on its destination counts against the move.
@@ -1100,6 +1136,16 @@ const FIVE_HOURS_MS: i64 = 5 * 3_600_000;
 /// The settings each condition names, the ones an operator reads the condition against.
 const CEILING_SETTING: &[&str] = &["window_ceiling"];
 const WALL_SETTINGS: &[&str] = &["shed_cap", "window_ceiling"];
+const SLOW_SETTINGS: &[&str] = &["slow_down_stretch_seconds"];
+
+/// How many stretch thresholds of slow-down in the trailing day raise `slowed_long`. The slow-down holds an account
+/// while its demand runs ahead of its window, and the threshold is how long the pool lets it hold before a round moves
+/// sessions, so two thresholds' worth in a day says the pool's load exceeds the account's windows under any threshold:
+/// the pool's membership, its ceiling or its threshold rather than one long turn.
+const SLOWED_LONG_STRETCHES: i64 = 2;
+
+/// The bar's floor, so a pool near the threshold's own floor raises nothing on a few minutes of slow-down.
+const SLOWED_LONG_FLOOR_MS: i64 = 3_600_000;
 
 /// One condition of the fold before it is written.
 struct Held {
@@ -1109,13 +1155,17 @@ struct Held {
     detail: serde_json::Value,
 }
 
-/// The three conditions over the trailing 24 hours of events, written whole into `routing_conditions`:
+/// The four conditions over the trailing 24 hours of events, written whole into `routing_conditions`:
 /// `shed_no_runway` per pool from its rounds that marked nothing for want of a destination with runway,
 /// `destination_spent` per account from the moves onto it that a spent window of any source followed within the hour,
-/// and `wall_reached` per account from its spent windows of any source, a predicted wall among them. `since` is the
-/// oldest qualifying event's time. A wall's `projection_error` is one less the projection of the newest round on the
-/// account's newest wall's window inside that window's length before the wall, null with none. The ledger reads no
-/// registry, so a detail names its settings and the reader adds a pool's values.
+/// `wall_reached` per account from its spent windows of any source, a predicted wall among them, and `slowed_long` per
+/// account from its slow-down spans, summed across its pools, once their parts inside the day pass the bar:
+/// `SLOWED_LONG_STRETCHES` times the `threshold_ms` of the newest counted span's start row, at least
+/// `SLOWED_LONG_FLOOR_MS`. `since` is the oldest qualifying event's time, and for `slowed_long` the own start of the
+/// oldest span counted, which a span open from before the cutoff dates before the day. A wall's `projection_error` is
+/// one less the projection of the newest round on the account's newest wall's window inside that window's length
+/// before the wall, null with none. The ledger reads no registry, so a detail names its settings and the reader adds a
+/// pool's values.
 pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), LedgerError> {
     struct Row {
         at: i64,
@@ -1127,7 +1177,8 @@ pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), Led
     let events: Vec<Row> = tx
         .prepare(
             "SELECT at, kind, account_id, pool_id, detail FROM events \
-             WHERE kind IN ('shedding_round', 'pin_migrated', 'window_spent') AND at >= ?1 AND at <= ?2 \
+             WHERE kind IN ('shedding_round', 'pin_migrated', 'window_spent', 'router_started', \
+             'slow_down_ended', 'slow_down_started') AND at >= ?1 AND at <= ?2 \
              ORDER BY at, rowid",
         )?
         .query_map(params![now - CONDITION_SPAN_MS, now], |r| {
@@ -1276,6 +1327,118 @@ pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), Led
         );
     }
 
+    // Each start pairs with the next end of its account and pool or the next restart, whichever comes first: a restart
+    // loses the memory-only state and emits no end, so it closes every span standing at it.
+    let cutoff = now - CONDITION_SPAN_MS;
+    let mut standing = slow_down_open_at(tx, cutoff)?;
+    let mut counted: BTreeMap<String, Vec<SlowSpan>> = BTreeMap::new();
+    let mut count = |account: &str,
+                     pool: &str,
+                     since: i64,
+                     end: i64,
+                     open: bool,
+                     factor: Option<f64>,
+                     threshold_ms: Option<i64>| {
+        // Only the part inside the trailing day counts, and a span with none there is not counted at all.
+        let slowed_ms = end.min(now) - since.max(cutoff);
+        if slowed_ms > 0 {
+            counted
+                .entry(account.to_string())
+                .or_default()
+                .push(SlowSpan {
+                    pool: pool.to_string(),
+                    since,
+                    slowed_ms,
+                    open,
+                    factor,
+                    threshold_ms,
+                });
+        }
+    };
+    for event in &events {
+        if event.kind == "router_started" {
+            // The previous run's newest row is the last instant its slow-down can have held, so the downtime before
+            // the restart counts as no slowed time. A run that stopped right after the start row has that row as its
+            // newest, and the span it closes is of no length.
+            let down_since = event.detail["down_since"].as_i64();
+            for ((account, pool), (since, factor, threshold_ms)) in std::mem::take(&mut standing) {
+                let end = down_since.filter(|down| *down >= since).unwrap_or(event.at);
+                count(&account, &pool, since, end, false, factor, threshold_ms);
+            }
+            continue;
+        }
+        let (Some(account), Some(pool)) = (event.account_id.as_deref(), event.pool_id.as_deref())
+        else {
+            continue;
+        };
+        let key = (account.to_string(), pool.to_string());
+        match event.kind.as_str() {
+            "slow_down_started" => {
+                let factor = event.detail["factor"].as_f64();
+                // The router emits an end before every next start, so a second start before any end or restart
+                // follows a lost row alone. It lowers the standing span's factor and opens no second span, which would
+                // count the overlap twice.
+                standing
+                    .entry(key)
+                    .and_modify(|span| span.1 = lowest(span.1, factor))
+                    .or_insert((event.at, factor, event.detail["threshold_ms"].as_i64()));
+            }
+            "slow_down_ended" => {
+                // An end with no span standing closes nothing this fold counts: the state at the cutoff opens a span
+                // only from a start newer than any end or restart, so its start was lost or a restart closed it.
+                let Some((start, factor, threshold_ms)) = standing.remove(&key) else {
+                    continue;
+                };
+                // The end row lands after the wait that closed the span, so the span's own start and length come
+                // from the detail rather than the row's time.
+                let since = event.detail["since"].as_i64().unwrap_or(start);
+                let end = event.detail["duration_ms"]
+                    .as_i64()
+                    .map_or(event.at, |duration| since + duration);
+                let factor = event.detail["factor_min"].as_f64().or(factor);
+                count(account, pool, since, end, false, factor, threshold_ms);
+            }
+            _ => {}
+        }
+    }
+    for ((account, pool), (since, factor, threshold_ms)) in &standing {
+        count(account, pool, *since, now, true, *factor, *threshold_ms);
+    }
+    for (account, spans) in counted {
+        let slowed_ms: i64 = spans.iter().map(|span| span.slowed_ms).sum();
+        let (Some(oldest), Some(newest)) = (
+            spans.iter().map(|span| span.since).min(),
+            spans.iter().max_by_key(|span| span.since),
+        ) else {
+            continue;
+        };
+        let bar_ms = newest
+            .threshold_ms
+            .map_or(0, |threshold| {
+                threshold.saturating_mul(SLOWED_LONG_STRETCHES)
+            })
+            .max(SLOWED_LONG_FLOOR_MS);
+        if slowed_ms <= bar_ms {
+            continue;
+        }
+        held.insert(
+            ("slowed_long", "account", account),
+            Held {
+                pool_id: Some(newest.pool.clone()),
+                since: oldest,
+                count: spans.len() as u64,
+                detail: serde_json::json!({
+                    "bar_ms": bar_ms,
+                    "factor_min": spans.iter().fold(None, |min, span| lowest(min, span.factor)),
+                    "open": spans.iter().any(|span| span.open),
+                    "setting": setting(SLOW_SETTINGS),
+                    "slowed_ms": slowed_ms,
+                    "spans": spans.len(),
+                }),
+            },
+        );
+    }
+
     tx.execute("DELETE FROM routing_conditions", [])?;
     for ((kind, subject_kind, subject_id), row) in &held {
         tx.execute(
@@ -1294,6 +1457,72 @@ pub fn fold_routing_conditions(tx: &Transaction<'_>, now: i64) -> Result<(), Led
         )?;
     }
     Ok(())
+}
+
+/// One slow-down span the fold counts: its pool, its own start, its part inside the trailing day, whether it still
+/// stands, its lowest factor and the stretch threshold its start row read.
+struct SlowSpan {
+    pool: String,
+    since: i64,
+    slowed_ms: i64,
+    open: bool,
+    factor: Option<f64>,
+    threshold_ms: Option<i64>,
+}
+
+fn lowest(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
+
+/// The slow-down spans standing at a point of the fold, by account and pool: each one's own start and the factor and
+/// the stretch threshold its start read.
+type OpenSpans = BTreeMap<(String, String), (i64, Option<f64>, Option<i64>)>;
+
+/// The spans standing at `cutoff`, per account and pool, with each one's own start and the factor and the stretch
+/// threshold its start read: the newest `slow_down_started` or `slow_down_ended` row before the cutoff where that row
+/// is a start newer than the newest `router_started` row before it.
+fn slow_down_open_at(tx: &Transaction<'_>, cutoff: i64) -> Result<OpenSpans, LedgerError> {
+    let restart: Option<(i64, i64)> = tx
+        .query_row(
+            "SELECT at, rowid FROM events WHERE kind = 'router_started' AND at < ?1 \
+             ORDER BY at DESC, rowid DESC LIMIT 1",
+            params![cutoff],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let mut stmt = tx.prepare(
+        "SELECT at, id, account_id, pool_id, detail FROM ( \
+           SELECT at, rowid AS id, kind, account_id, pool_id, detail, ROW_NUMBER() OVER ( \
+             PARTITION BY account_id, pool_id ORDER BY at DESC, rowid DESC) AS newest \
+           FROM events WHERE kind IN ('slow_down_ended', 'slow_down_started') AND at < ?1 \
+             AND account_id IS NOT NULL AND pool_id IS NOT NULL) \
+         WHERE newest = 1 AND kind = 'slow_down_started'",
+    )?;
+    let starts = stmt
+        .query_map(params![cutoff], |r| {
+            Ok((
+                (r.get::<_, i64>(0)?, r.get::<_, i64>(1)?),
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, Option<String>>(4)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(starts
+        .into_iter()
+        .filter(|(start, ..)| restart.is_none_or(|restart| restart < *start))
+        .map(|((at, _), account, pool, detail)| {
+            let detail = detail
+                .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
+                .unwrap_or(serde_json::Value::Null);
+            let (factor, threshold_ms) =
+                (detail["factor"].as_f64(), detail["threshold_ms"].as_i64());
+            ((account, pool), (at, factor, threshold_ms))
+        })
+        .collect())
 }
 
 pub fn fold_account(tx: &Transaction<'_>, delta: &AccountRollupRow) -> Result<(), LedgerError> {
@@ -1443,7 +1672,7 @@ fn take_segments(
     Ok(segments)
 }
 
-const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, kept_warm_1h_tokens";
+const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, slow_down_held_ms, slow_down_held, kept_warm_1h_tokens";
 const ACCOUNT_SELECT: &str = "SELECT hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json FROM account_rollups_hourly";
 
 pub(crate) fn read_rollup(
@@ -1471,7 +1700,7 @@ pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), Ledge
     let counts =
         |m: &BTreeMap<String, u64>| serde_json::to_string(m).unwrap_or_else(|_| "{}".into());
     conn.execute(
-        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54)"),
+        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56)"),
         params![
             r.hour, r.key_id, r.key_generation, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.client, r.effort, r.request_class, r.speed, r.funding, r.band, r.tier,
             r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
@@ -1482,7 +1711,7 @@ pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), Ledge
             r.probes_skipped as i64, r.wasted_input_tokens as i64, r.wasted_cache_read_tokens as i64, r.wasted_cache_write_5m_tokens as i64,
             r.wasted_cache_write_1h_tokens as i64, r.wasted_output_tokens as i64,
             r.ttfb_hist.to_le_bytes(), r.ttfc_hist.to_le_bytes(), r.duration_hist.to_le_bytes(), r.output_tps_hist.to_le_bytes(), counts(&r.errors), counts(&r.cache_miss_reasons),
-            r.incomplete as i64, r.probes_held as i64,
+            r.incomplete as i64, r.probes_held as i64, r.slow_down_held_ms as i64, r.slow_down_held as i64,
             r.kept_warm_1h_tokens as i64,
         ],
     )?;
@@ -1557,7 +1786,9 @@ fn row_to_rollup_at(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Ro
         cache_miss_reasons: counts(50)?,
         incomplete: u(51)?,
         probes_held: u(52)?,
-        kept_warm_1h_tokens: u(53)?,
+        slow_down_held_ms: u(53)?,
+        slow_down_held: u(54)?,
+        kept_warm_1h_tokens: u(55)?,
     })
 }
 
@@ -3611,6 +3842,8 @@ mod tests {
         r.wasted_probe_reasons = BTreeMap::from([("idle_limit".to_string(), 40)]);
         r.probes_skipped = 41;
         r.probes_held = 49;
+        r.slow_down_held_ms = 55;
+        r.slow_down_held = 56;
         r.ttfb_hist.record(42.0);
         r.ttfc_hist.record(43.0);
         r.ttfc_hist.record(43.0);
@@ -3731,6 +3964,8 @@ mod tests {
         old.web_fetch_requests = 0;
         old.incomplete = 0;
         old.probes_held = 0;
+        old.slow_down_held_ms = 0;
+        old.slow_down_held = 0;
         old.band = STANDARD_BAND.into();
         old.tier = UNATTRIBUTED.into();
         old.wasted_input_tokens = 0;

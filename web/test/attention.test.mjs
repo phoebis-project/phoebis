@@ -8,7 +8,7 @@ const item = (kind, over = {}) => ({ detail: {}, kind, link: null, pools: [], si
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 test('the attention kinds rank worst first, the order the route answers in', () => {
-  assert.deepEqual([...ATTENTION_KIND_VALUES], ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'model_unweighted', 'wall_reached', 'destination_spent', 'shed_no_runway']);
+  assert.deepEqual([...ATTENTION_KIND_VALUES], ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'model_unweighted', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long']);
 });
 
 test("a listener's two certificate kinds decode as themselves, never as the worst kind", () => {
@@ -31,10 +31,11 @@ test('each attention kind has its word and its tone, a client drift and a failed
     reauth_required: 'Re-auth required',
     refresh_failed: 'Credential refresh failed',
     shed_no_runway: 'Rounds without a destination',
+    slowed_long: 'Slowed past twice the stretch',
     wall_reached: 'Wall reached under the ceiling',
     writer_degraded: 'State writer degraded',
   });
-  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'serious', 'critical', 'serious', 'serious', 'warning', 'serious', 'warning', 'warning', 'warning', 'warning', 'warning']);
+  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'serious', 'critical', 'serious', 'serious', 'warning', 'serious', 'warning', 'warning', 'warning', 'warning', 'warning', 'warning']);
 });
 
 test('an item opens the page where its condition is fixed, and an item without a link opens nothing', () => {
@@ -87,6 +88,8 @@ test("a row reads each kind's detail as one sentence", () => {
     `claude-opus-99 has no measured weight, so its 1 plan-funded request since ${since} priced at the weight of the latest weighted model of its model tier`,
     'a detail missing its tier and its donor names neither',
   );
+  const slowed = { bar_ms: 3_600_000, factor_min: 0.35, open: true, setting: ['slow_down_stretch_seconds'], setting_values: { slow_down_stretch_seconds: 1800 }, slowed_ms: 7_700_000, spans: 2 };
+  assert.equal(sentence('slowed_long', slowed), `slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since ${fmtShortTime(item('slowed_long').since)}`);
 });
 
 test("a listener's certificate items read the listener, the file, the date and what to do", () => {
@@ -162,11 +165,11 @@ test('a kind this build does not know opens its link, never a pool log named by 
   assert.equal(attentionTitle(later, NOW).split('\n').pop(), 'started 2h ago', 'and its title names no log');
   const pooled = decodeAttention({ detail: {}, kind: 'quota_drift', link: { id: 'jobs', page: 'pools' }, pools: ['jobs'], since, subject: { id: 'jobs', label: 'jobs', type: 'pool' } });
   assert.equal(new URL(attentionHref(pooled, NOW), 'http://console.test').pathname, '/routing-log', 'one that names a pool opens its log');
-  const known = ['wall_reached', 'destination_spent', 'shed_no_runway'].map((kind) => decodeAttention({ detail: {}, kind, link: null, pools: [], since, subject: { id: 'x', label: 'x', type: 'account' } }).kind);
-  assert.deepEqual(known, ['wall_reached', 'destination_spent', 'shed_no_runway'], 'the three routing conditions decode as themselves');
+  const known = ['wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'].map((kind) => decodeAttention({ detail: {}, kind, link: null, pools: [], since, subject: { id: 'x', label: 'x', type: 'account' } }).kind);
+  assert.deepEqual(known, ['wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'], 'the four routing conditions decode as themselves');
 });
 
-test("the three routing conditions open the routing log on their subject's moves, walls and rounds since the condition began", () => {
+test("the four routing conditions open the routing log on their subject's moves, walls, rounds and slow-downs since the condition began", () => {
   const since = '2026-09-18T10:41:00.000Z';
   const window = { from: since, to: '2026-09-18T12:00:00.000Z' };
   const query = (it) => {
@@ -178,16 +181,17 @@ test("the three routing conditions open the routing log on their subject's moves
   assert.deepEqual(query(item('shed_no_runway', pool)), ['/routing-log', { ...window, kinds: 'shedding_round', pools: 'all' }]);
   assert.deepEqual(query(item('destination_spent', account)), ['/routing-log', { ...window, accounts: 'primary', kinds: 'pin_migrated,window_spent' }]);
   assert.deepEqual(query(item('wall_reached', account)), ['/routing-log', { ...window, accounts: 'primary', kinds: 'window_spent' }]);
+  assert.deepEqual(query(item('slowed_long', account)), ['/routing-log', { ...window, accounts: 'primary', kinds: 'slow_down_ended,slow_down_started' }]);
   assert.equal(attentionHref(item('wall_reached', { ...account, link: null }), NOW), null, 'an account the registry no longer holds opens nothing');
   const at = fmtShortTime(since);
   assert.deepEqual(
-    [attentionLogLine(item('shed_no_runway', pool), NOW), attentionLogLine(item('destination_spent', account), NOW), attentionLogLine(item('wall_reached', account), NOW)],
-    [`Opens the Routing log: pool all, shedding rounds, since ${at}`, `Opens the Routing log: account primary, moves and spent windows, since ${at}`, `Opens the Routing log: account primary, spent windows, since ${at}`],
+    [attentionLogLine(item('shed_no_runway', pool), NOW), attentionLogLine(item('destination_spent', account), NOW), attentionLogLine(item('wall_reached', account), NOW), attentionLogLine(item('slowed_long', account), NOW)],
+    [`Opens the Routing log: pool all, shedding rounds, since ${at}`, `Opens the Routing log: account primary, moves and spent windows, since ${at}`, `Opens the Routing log: account primary, spent windows, since ${at}`, `Opens the Routing log: account primary, slow-downs, since ${at}`],
   );
   assert.equal(attentionTitle(item('shed_no_runway', pool), NOW).split('\n').pop(), `Opens the Routing log: pool all, shedding rounds, since ${at}`, 'the title ends with what the log opens on');
 });
 
-test('the three routing conditions read the count, the setting and the start on the dashboard line and the pool card', () => {
+test('the four routing conditions read the count, the setting and the start on the dashboard line and the pool card', () => {
   const since = '2026-09-18T10:41:00.000Z';
   const at = fmtShortTime(since);
   const account = { link: { id: 'primary', page: 'accounts' }, pools: ['all'], since, subject: { id: 'primary', label: 'primary', type: 'account' } };
@@ -199,8 +203,19 @@ test('the three routing conditions read the count, the setting and the start on 
   assert.equal(words('destination_spent', account, { fits: { least_bad: 1 }, moves: 1, setting: ['window_ceiling'], windows: ['five_hour', 'seven_day'] }), `primary: 1 move landed and the 5h and 7d windows were spent within the hour, window_ceiling, since ${at}`);
   assert.equal(words('wall_reached', account, { projection_error: 0.04, setting: ['shed_cap', 'window_ceiling'], walls: 1, windows: ['five_hour'] }), `primary: 1 wall reached on the 5h window, the last round projected 96 %, shed_cap and window_ceiling, since ${at}`);
   assert.equal(words('wall_reached', account, { projection_error: null, setting: ['shed_cap', 'window_ceiling'], walls: 2, windows: ['seven_day', 'seven_day_fable'] }), `primary: 2 walls reached on the 7d and Fable windows, shed_cap and window_ceiling, since ${at}`, 'a wall no round projected names no error');
+  const studio = { ...account, link: { id: 'studio', page: 'accounts' }, pools: ['work'], subject: { id: 'studio', label: 'studio', type: 'account' } };
+  const slowed = { bar_ms: 3_600_000, factor_min: 0.35, open: true, setting: ['slow_down_stretch_seconds'], setting_values: { slow_down_stretch_seconds: 1800 }, slowed_ms: 7_700_000, spans: 2 };
+  assert.equal(words('slowed_long', studio, slowed), `studio: slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since ${at}`);
+  assert.equal(words('slowed_long', studio, { ...slowed, factor_min: 0.5, open: false, slowed_ms: 3_720_000, spans: 1 }), `studio: slowed 1 h 2 min of the last 24 h, over 1 h, slowest 0.5x, slow_down_stretch_seconds 1800, since ${at}`, 'the factor drops a trailing zero');
+  assert.equal(
+    words('slowed_long', studio, { ...slowed, bar_ms: 18_000_000, setting_values: { slow_down_stretch_seconds: 9000 }, slowed_ms: 19_500_000 }),
+    `studio: slowed 5 h 25 min of the last 24 h, over 5 h, slowest 0.35x, slow_down_stretch_seconds 9000, since ${at}`,
+    'the bar reads in the same span words as the day',
+  );
+  assert.equal(words('slowed_long', studio, { ...slowed, factor_min: null, setting_values: undefined }), `studio: slowed 2 h 8 min of the last 24 h, over 1 h, slow_down_stretch_seconds, since ${at}`, 'a span with no factor read and a pool the registry lost name neither');
+  assert.equal(words('slowed_long', studio, { ...slowed, bar_ms: null }), `studio: slowed 2 h 8 min of the last 24 h, slowest 0.35x, slow_down_stretch_seconds 1800, since ${at}`, 'a detail without a bar names none');
   assert.equal(attentionWords(item('pool_exhausted', { detail: { pool: 'jobs' } }), NOW), null, 'another kind keeps its label and subject');
-  for (const kind of ['wall_reached', 'destination_spent', 'shed_no_runway']) assert.equal(attentionDetail(item(kind, { ...account, detail: {} }), NOW), attentionWords(item(kind, { ...account, detail: {} }), NOW).replace(/^primary: /, ''), `${kind}'s row reads the words without the subject`);
+  for (const kind of ['wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long']) assert.equal(attentionDetail(item(kind, { ...account, detail: {} }), NOW), attentionWords(item(kind, { ...account, detail: {} }), NOW).replace(/^primary: /, ''), `${kind}'s row reads the words without the subject`);
 });
 
 test('the pool exhausted title names the day of a condition that began more than a day ago', () => {

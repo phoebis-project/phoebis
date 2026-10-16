@@ -84,6 +84,7 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             portable: true,
             attempted: Vec::new(),
             now: h.clock.load(std::sync::atomic::Ordering::SeqCst),
+            received_at: h.clock.load(std::sync::atomic::Ordering::SeqCst),
             fallback_ms: 60_000,
             revision: snapshot.revision,
             probe: false,
@@ -96,6 +97,7 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
+            failed_over: None,
             holds: Vec::new(),
             dialed: false,
             held_out: false,
@@ -212,6 +214,25 @@ async fn a_fresh_pins_client_error_ends_as_the_variant_says(
                 (false, Some("mark")),
                 "{status}: the session's next placement moves off the invalidated pin"
             );
+            // The token endpoint's 503 left the account unmarked, so the relay reported no mark to name.
+            loop {
+                match next_event(&mut events).await {
+                    RouterEvent::PinMigrated {
+                        session_id,
+                        reason,
+                        cause,
+                        ..
+                    } if session_id == "s1" => {
+                        assert_eq!(
+                            (reason.as_str(), cause),
+                            ("mark", None),
+                            "{status}: a failover with neither a cooldown nor a mark moves with no cause"
+                        );
+                        break;
+                    }
+                    _ => {}
+                }
+            }
         }
     }
     up.shutdown().await;

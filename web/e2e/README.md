@@ -71,7 +71,7 @@ and its values in `--ink`, the chip line on one line, the first card's head belo
 element and the tiles below it, on Analytics the Group by select against Add filter, and on the routing log and
 Analytics the width of the row's slots and gaps at rest under the view's bound, and at 950 by 800 on Analytics and
 Requests the bar's scroll width at most its client width with the count inside the window, the trailing slots wrapped),
-the Kinds list through Add filter on the routing log (Select all, the eight presets and the 37 kinds, its popover 8 px
+the Kinds list through Add filter on the routing log (Select all, the eight presets and the 39 kinds, its popover 8 px
 inside the window at 1280 by 800), the split Refresh button on the request log (one width at Off, at 5 s and paused
 under the drawer, so the count beside it never moves), the traffic cards (each Analytics check opens the tab it reads
 and returns to Traffic), the tab strip docked under the filter bar at the end of the Latency tab (the bar 49 px at rest
@@ -90,7 +90,7 @@ which opens once the log's shot is taken (the strip and the candidate table insi
 every station badge in the kind badge's box, the station labels clear of the leaf rows and the brackets, every station's
 and way out's dot, the gap to its words and its word taking the pointer for its own button and the line on either side
 of the dot and a station's side of the line away from its label not taking it (in the mock pass on the shed move's card
-too, and there at the strip's 640 px floor for the dots and the line, and on the story's five cards of the gate and the
+too, and there at the strip's 640 px floor for the dots and the line, and on the story's eight cards of the gate and the
 reservation, the spent move held for the reset ending in the fourth way out, Held for the reset), the strip's height
 from its rows, a moved row's badge the Move station's color, the shed move's seventeen stations, the chosen row's Prefix
 chips on the first rung placement the log lists, and a station's popover inside the card and the card's part on screen

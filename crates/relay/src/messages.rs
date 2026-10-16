@@ -1733,6 +1733,7 @@ impl Relay {
                     portable,
                     attempted: attempted.clone(),
                     now,
+                    received_at: trace.received_at,
                     fallback_ms,
                     revision: snapshot.revision,
                     probe: admitted.trace.kind == Kind::Probe,
@@ -1761,6 +1762,7 @@ impl Relay {
                             && admitted.cache_ttl_policy.inject_when_absent
                             && !admitted.auxiliary),
                     parent_agent_id: identity.parent_agent_id.clone(),
+                    failed_over: None,
                     holds: holds.clone(),
                     dialed,
                     held_out,
@@ -1838,6 +1840,21 @@ impl Relay {
                     account_id,
                     mut hold,
                 } => {
+                    // A slowed pin waits to its deadline before its head, under the request's own deadline alone, and
+                    // selects again with the hold on the request, which answers no second one. The hold is its own
+                    // stage: it starts no retry bound and passes no account over, so a slot or reset wait after it
+                    // keeps its whole bound and a pool that exhausts after it answers as it would have without it.
+                    if hold.reason == "slow_down" {
+                        let started = tokio::time::Instant::now();
+                        let waited = self
+                            .wait_out(hold.until.unwrap_or(now), admitted.deadline, &answer.cancel)
+                            .await;
+                        hold.held_ms = started.elapsed().as_millis() as u64;
+                        hold.ran_out = matches!(waited, Waited::Deadline);
+                        holds.push(hold);
+                        trace.waited(&holds);
+                        continue;
+                    }
                     // The account had its one hold of this request, or the request's one bound has passed: at its
                     // cap it is passed over as one whose wait ran out.
                     if held_for.contains(&account_id)
@@ -4569,6 +4586,7 @@ pub(crate) fn failover_reports(
         reports.push(Report::PinInvalidated {
             account_id: account_id.to_string(),
             pin,
+            mark: mark.as_ref().map(|(state, cause, _)| (*state, *cause)),
             incarnation: generations.0,
             lifecycle_generation: generations.1,
             credential_generation: generations.2,

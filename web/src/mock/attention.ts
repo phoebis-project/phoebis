@@ -1,4 +1,4 @@
-import type { AttentionItem } from '@/api/types';
+import type { AttentionItem, RoutingEvent } from '@/api/types';
 import { latestWeighted, modelTierOf } from '@/lib/costs';
 import { undatedModel } from '@/lib/format';
 import { ACCOUNTS, accountById } from './accounts';
@@ -92,12 +92,84 @@ function roundsWithoutRunway(poolId: string): Pick<AttentionItem, 'detail' | 'si
   return { detail: { accounts: sorted(rounds.map((e) => e.accountId)), rounds: rounds.length, setting: ['window_ceiling'], setting_values: { window_ceiling: ceiling } }, since: rounds[0].at };
 }
 
-const CONDITION_ORDER: AttentionItem['kind'][] = ['wall_reached', 'destination_spent', 'shed_no_runway'];
+/** A routing log event as the slowed-account fold reads it. */
+export type SpanRow = Pick<RoutingEvent, 'accountId' | 'at' | 'detail' | 'kind' | 'poolId'>;
+
+/** The slowed-account bar in stretch thresholds and its floor, the reader's own. */
+const SLOWED_LONG_STRETCHES = 2;
+const SLOWED_LONG_FLOOR_MS = HOUR;
 
 /**
- * The three routing conditions as the reader builds them, one per subject the fold holds: every OAuth account for the
- * walls and the spent destinations, every pool for the rounds without runway. The route lists them by kind, then by
- * when each began, then by subject.
+ * An account's slow-down spans over the day as the reader pairs them: the spans standing at the day's cutoff, then each
+ * start with the next end of its account and pool or the next restart, whichever comes first, a start with neither open
+ * to now, each span clamped to the day and one with no part inside it not counted. It holds once the spans sum past the
+ * bar, twice the stretch threshold the newest span's start row read and at least an hour, from the own start of the
+ * oldest, with the lowest factor any span read and the stretch threshold of the newest span's pool. Null where it does
+ * not hold.
+ */
+export function slowedLongOf(rows: readonly SpanRow[], accountId: string, now: number): Pick<AttentionItem, 'detail' | 'since'> | null {
+  const from = now - DAY;
+  const spans: { factor: number | null; open: boolean; pool: string; since: number; slowedMs: number; thresholdMs: number | null }[] = [];
+  const count = (pool: string, since: number, end: number, open: boolean, factor: number | null, thresholdMs: number | null) => {
+    const slowedMs = Math.min(end, now) - Math.max(since, from);
+    if (slowedMs > 0) spans.push({ factor, open, pool, since, slowedMs, thresholdMs });
+  };
+  const lowest = (a: number | null, b: unknown) => (typeof b !== 'number' ? a : a === null ? b : Math.min(a, b));
+  const thresholdOf = (e: SpanRow) => (typeof e.detail.threshold_ms === 'number' ? e.detail.threshold_ms : null);
+  const own = rows.filter((e) => e.kind === 'router_started' || (e.accountId === accountId && e.poolId !== null)).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  // A span that started before the cutoff and ends inside the day names no start the day holds, so the state at the
+  // cutoff opens it: per pool the newest start or end before the cutoff, where that row is a start newer than the
+  // newest restart before it.
+  const before = own.filter((e) => Date.parse(e.at) < from);
+  const restart = Math.max(Number.NEGATIVE_INFINITY, ...before.filter((e) => e.kind === 'router_started').map((e) => Date.parse(e.at)));
+  const lastBefore = new Map<string, SpanRow>();
+  for (const e of before) if (e.kind === 'slow_down_started' || e.kind === 'slow_down_ended') lastBefore.set(e.poolId ?? '', e);
+  const standing = new Map<string, { factor: number | null; since: number; thresholdMs: number | null }>();
+  for (const [pool, e] of lastBefore) if (e.kind === 'slow_down_started' && Date.parse(e.at) > restart) standing.set(pool, { factor: lowest(null, e.detail.factor), since: Date.parse(e.at), thresholdMs: thresholdOf(e) });
+  for (const e of own.filter((x) => Date.parse(x.at) >= from && Date.parse(x.at) <= now)) {
+    const pool = e.poolId ?? '';
+    if (e.kind === 'router_started') {
+      for (const [open, span] of standing) count(open, span.since, Date.parse(e.at), false, span.factor, span.thresholdMs);
+      standing.clear();
+    } else if (e.kind === 'slow_down_started') {
+      const span = standing.get(pool);
+      standing.set(pool, span ? { ...span, factor: lowest(span.factor, e.detail.factor) } : { factor: lowest(null, e.detail.factor), since: Date.parse(e.at), thresholdMs: thresholdOf(e) });
+    } else if (e.kind === 'slow_down_ended') {
+      const span = standing.get(pool);
+      if (!span) continue;
+      standing.delete(pool);
+      const since = typeof e.detail.since === 'number' ? e.detail.since : span.since;
+      const end = typeof e.detail.duration_ms === 'number' ? since + e.detail.duration_ms : Date.parse(e.at);
+      count(pool, since, end, false, typeof e.detail.factor_min === 'number' ? e.detail.factor_min : span.factor, span.thresholdMs);
+    }
+  }
+  for (const [pool, span] of standing) count(pool, span.since, now, true, span.factor, span.thresholdMs);
+  if (spans.length === 0) return null;
+  const slowedMs = spans.reduce((n, x) => n + x.slowedMs, 0);
+  const newest = spans.reduce((a, b) => (b.since > a.since ? b : a));
+  const barMs = Math.max(SLOWED_LONG_STRETCHES * (newest.thresholdMs ?? 0), SLOWED_LONG_FLOOR_MS);
+  if (slowedMs <= barMs) return null;
+  const stretch = POOLS.find((p) => p.id === newest.pool)?.slowDownStretchSeconds;
+  return {
+    detail: {
+      bar_ms: barMs,
+      factor_min: spans.reduce<number | null>((n, x) => lowest(n, x.factor), null),
+      open: spans.some((x) => x.open),
+      setting: ['slow_down_stretch_seconds'],
+      ...(stretch === undefined ? {} : { setting_values: { slow_down_stretch_seconds: stretch } }),
+      slowed_ms: slowedMs,
+      spans: spans.length,
+    },
+    since: iso(Math.min(...spans.map((x) => x.since))),
+  };
+}
+
+const CONDITION_ORDER: AttentionItem['kind'][] = ['wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'];
+
+/**
+ * The four routing conditions as the reader builds them, one per subject the fold holds: every OAuth account for the
+ * walls, the spent destinations and the slow-downs, every pool for the rounds without runway. The route lists them by
+ * kind, then by when each began, then by subject.
  */
 const CONDITIONS: AttentionItem[] = [
   ...ACCOUNTS.filter((a) => a.kind === 'oauth').flatMap((a) => {
@@ -112,6 +184,10 @@ const CONDITIONS: AttentionItem[] = [
     const held = roundsWithoutRunway(p.id);
     return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...held, kind: 'shed_no_runway' as const, link: { id: p.id, page: 'pools' as const }, pools: [p.id], subject: { id: p.id, label: p.name, type: 'pool' as const } }] : [];
   }),
+  ...ACCOUNTS.filter((a) => a.kind === 'oauth').flatMap((a) => {
+    const held = slowedLongOf(ROUTING_EVENTS, a.id, NOW);
+    return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), ...held, kind: 'slowed_long' as const }] : [];
+  }),
 ].sort((x, y) => CONDITION_ORDER.indexOf(x.kind) - CONDITION_ORDER.indexOf(y.kind) || Date.parse(x.since) - Date.parse(y.since) || x.subject.id.localeCompare(y.subject.id));
 
 /**
@@ -122,8 +198,8 @@ const CONDITIONS: AttentionItem[] = [
  * legacy's refreshes failing, the proxy listener's certificate 12 days from its end, a priced record of the jobs pool's
  * one member parked in the ledger file, the backoff secondary's poll is in, Sonnet 4.6 priced at its model tier's
  * weight, nightly's wall at 12:01 and secondary's after the 11:00 round, nightly spent after the least-bad move onto
- * it, and the all pool's round that found no destination with runway. The three routing conditions read the routing
- * log's events as the ledger folds them.
+ * it, the all pool's round that found no destination with runway, and studio slowed in work for 2 h 8 min of the day.
+ * The four routing conditions read the routing log's events as the ledger folds them.
  */
 export const ATTENTION: AttentionItem[] = [
   ...(jobsExhausted

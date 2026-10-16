@@ -13,13 +13,15 @@ import { FilterBar } from '@/components/FilterBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
+import { SpeedChip } from '@/components/ui/SpeedChip';
 import { ACCOUNTS_CODEC } from '@/lib/address';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
 import { accountPatchOf, advancesOwnToken, derivedId, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
-import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
+import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, isFastScope, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
+import { speedHover } from '@/lib/selection';
 import { joinTrend } from '@/lib/trend';
 
 /** The Status dimension's options, in the labels' order. */
@@ -196,12 +198,15 @@ export function AccountsPage() {
 function AccountRow({ account, active, now }: { account: Account; active: boolean; now: number }) {
   // The row keeps the list's query and hash, so opening an account leaves the filters standing.
   const location = useLocation();
+  const slowed = slowedOf(account, now);
   return (
     <li>
       <Link to={{ hash: location.hash, pathname: `/accounts/${account.id}`, search: location.search }} className={`account-row ${active ? 'is-active' : ''}`}>
         <div className="account-row__head">
           <span className="account-row__name">{account.label}</span>
           {account.plan && <Badge tone="neutral">{account.plan}</Badge>}
+          {/* The compact 5-hour bar has no room for the speed chip beside its label, so the chip stands by the status. */}
+          {slowed && <SpeedChip factor={slowed.factor} hover={speedHover(slowed, now)} />}
           <Badge tone={STATUS_TONE[account.status]} dot>
             {STATUS_LABEL[account.status]}
           </Badge>

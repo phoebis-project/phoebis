@@ -111,14 +111,14 @@ test("a dimension whose list did not load carries the failure's words, and a lis
 
 test('every kind belongs to exactly one preset and a preset is exactly its members', () => {
   const members = d.KIND_PRESETS.flatMap((p) => p.members);
-  assert.equal(d.ALL_KINDS.length, 37);
+  assert.equal(d.ALL_KINDS.length, 39);
   assert.equal(new Set(members).size, members.length, 'no kind stands in two presets');
   assert.deepEqual([...members].sort(), [...d.ALL_KINDS].sort(), 'the presets together are every kind the Kinds list offers');
   assert.deepEqual(
     d.KIND_PRESETS.map((p) => [p.label, p.members.length]),
     [
       ['placements and pins', 7],
-      ['moves and holds', 5],
+      ['moves and holds', 7],
       ['exhaustion and refusals', 4],
       ['account state and windows', 9],
       ['cooldowns and backoff', 4],
@@ -134,16 +134,19 @@ test('every kind belongs to exactly one preset and a preset is exactly its membe
 });
 
 test('the Kinds chip names a whole preset, a union of whole presets in the table\'s order, else the kinds\' words three then +N, and nothing for every kind', () => {
-  assert.deepEqual(d.kindsChipText(['shedding_round', 'mark_cleared', 'moved', 'wind_down_started', 'held']), {
+  assert.deepEqual(d.kindsChipText(['shedding_round', 'mark_cleared', 'slow_down_ended', 'moved', 'wind_down_started', 'slow_down_started', 'held']), {
     text: 'kinds: moves and holds',
-    title: 'shedding round, mark cleared, moved, wind-down started, held',
+    title: 'shedding round, mark cleared, slow-down ended, moved, wind-down started, slow-down started, held',
     values: 'moves and holds',
   });
-  assert.deepEqual(d.kindsChipText(['cooldown_set', 'cooldown_cleared', 'poll_backoff_started', 'poll_backoff_ended', 'moved', 'held', 'shedding_round', 'mark_cleared', 'wind_down_started']), {
+  assert.deepEqual(d.KIND_PRESETS.find((p) => p.label === 'moves and holds').members.slice(-3), ['wind_down_started', 'slow_down_started', 'slow_down_ended'], 'the slow-down starts and ends after the wind-down');
+  assert.deepEqual(d.kindsChipText(['cooldown_set', 'cooldown_cleared', 'poll_backoff_started', 'poll_backoff_ended', 'moved', 'held', 'shedding_round', 'mark_cleared', 'wind_down_started', 'slow_down_started', 'slow_down_ended']), {
     text: 'kinds: moves and holds, cooldowns and backoff',
-    title: 'cooldown set, cooldown cleared, poll backoff started, poll backoff ended, moved, held, shedding round, mark cleared, wind-down started',
+    title: 'cooldown set, cooldown cleared, poll backoff started, poll backoff ended, moved, held, shedding round, mark cleared, wind-down started, slow-down started, slow-down ended',
     values: 'moves and holds, cooldowns and backoff',
   });
+  // The preset's five kinds before the slow-down's two are a hand-picked set now.
+  assert.equal(d.kindsChipText(['moved', 'held', 'shedding_round', 'mark_cleared', 'wind_down_started']).text, 'kinds: moved, held, shedding round +2');
   assert.deepEqual(d.kindsChipText(['moved', 'held', 'placed', 'probe', 'cooldown_set']), {
     text: 'kinds: moved, held, placed +2',
     title: 'moved, held, placed, probe decisions, cooldown set',

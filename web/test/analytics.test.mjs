@@ -591,6 +591,25 @@ test('FAILOVER_MOVE_REASONS names the three failover reasons and no reason the m
   assert.equal(d.FAILOVER_MOVE_REASONS.includes('unknown'), false, "the route's unknown reason is no failover");
 });
 
+test("the held bars read one bar per bucket, the range's sum, and an empty range reads no bar", () => {
+  const held = [
+    { at: '2026-09-16T12:00:00.000Z', heldMs: 42_000, requests: 1 },
+    { at: '2026-09-16T13:00:00.000Z', heldMs: 0, requests: 0 },
+    { at: '2026-09-16T14:00:00.000Z', heldMs: 840_000, requests: 12 },
+  ];
+  const answer = { held, moves: { shed: 2 }, movesByReasonAndFit: { shed: { fits: 2 } }, points: [] };
+  assert.deepEqual(d.heldBars(answer), { bars: held, totalMs: 882_000, totalRequests: 13 }, 'a bucket that held nothing keeps its bar at zero');
+  assert.deepEqual(d.heldBars({ ...answer, held: [] }), { bars: [], totalMs: 0, totalRequests: 0 }, 'an answer from before the member holds no bucket');
+});
+
+test("a held bar's hover reads its requests and their time", () => {
+  assert.equal(d.heldHover({ heldMs: 840_000, requests: 12 }), '12 requests held 14 min in all');
+  assert.equal(d.heldHover({ heldMs: 3_900_000, requests: 1_200 }), '1,200 requests held 1 h 5 min in all');
+  assert.equal(d.heldHover({ heldMs: 42_000, requests: 1 }), '1 request held 42 s in all', 'a wait under a minute reads its seconds');
+  assert.equal(d.heldHover({ heldMs: 300, requests: 1 }), '1 request held 1 s in all', 'a wait that happened reads at least a second');
+  assert.equal(d.heldHover({ heldMs: 0, requests: 0 }), 'no request held');
+});
+
 /** A route-shaped account group, the captured one with the members a case sets. */
 const accountGroup = (over = {}) => ({ ...d.decodeAnalyticsGroup(fixture('analytics_breakdown_accounts').rows[0]), ...over });
 

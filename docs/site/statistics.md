@@ -70,7 +70,9 @@ day and the current month: an API-key member's rows whole, a subscription member
 still draws real money. A member's spend is the period's hourly sums priced at the revision in force at each hour, so a
 revision that lands moves the spend at the next refresh, and a model priced by prompt length sums its hours by the band
 each attempt fell in. The rollups file each hour's traffic under who paid for it: the plan, overage, or a fast answer's
-usage credits, as the response reported it. An account's rollups also book a cooldown's time when its announcement
+usage credits, as the response reported it. They also count, per account and pool, the time the slow-down held the
+hour's requests before their heads and how many requests it held, which the Analytics view's held chart reads
+([Slow-down](routing.md#slow-down)). An account's rollups also book a cooldown's time when its announcement
 lands, each part to the hour it falls in, up to seven days past the announcement, a later announcement booking on from
 the end already booked, and a cooldown cleared early gives back the time after the clear.
 
@@ -428,7 +430,8 @@ The decisions and events of the log, the decision card and the query the view ke
 ### Analytics
 
 The Traffic, Burn, Latency, Cache, Cost, Cache warming and Accounts sections, their ranges and groupings, are on
-[Analytics](console.md#analytics).
+[Analytics](console.md#analytics), the held time per bucket under Traffic's moves chart among them, which reads the
+slow-down's two rollup counts above.
 
 ## Conditions and gauges
 
@@ -442,9 +445,9 @@ names keeps a holding `ledger_record_parked` series after it is deleted, and the
 that series the same way, until the fold's trailing day lets its row go. A restart starts the conditions fed by the
 request bus over, and the usage poll keeps its backoff in memory as well, so `poll_backoff` reads 0 until a new backoff
 run is thirty minutes old. The conditions read from the registry, and `ledger_record_parked`, read from the ledger file,
-hold again at the first read. The three routing conditions, `wall_reached`, `destination_spent` and `shed_no_runway`,
-read a table the ledger folds from its events of the trailing 24 hours once an hour and at start, so a restart holds
-them again at the first fold.
+hold again at the first read. The four routing conditions, `wall_reached`, `destination_spent`, `shed_no_runway` and
+`slowed_long`, read a table the ledger folds from its events of the trailing 24 hours once an hour and at start, so a
+restart holds them again at the first fold.
 
 | Kind | Tone | Subject | Clears when |
 | --- | --- | --- | --- |
@@ -463,6 +466,7 @@ them again at the first fold.
 | `wall_reached` | warning | the account | no window of the account read spent in the last 24 hours |
 | `destination_spent` | warning | the destination account | no move onto the account was followed by a spent window within an hour in the last 24 hours |
 | `shed_no_runway` | warning | the pool | no round of the pool marked nothing for want of a destination in the last 24 hours |
+| `slowed_long` | warning | the account | the slow-down spans of the last 24 hours sum at or under twice the pool's `slow_down_stretch_seconds`, at least an hour |
 
 **`pool_exhausted`** holds while a request of the pool has ended exhausted and none of the pool's requests has
 succeeded since. It is fed by the request bus. An `incomplete` answer neither raises nor clears it. The detail names the
@@ -535,7 +539,7 @@ model tier, the model whose weight stands in and the requests served since.
 
 **`wall_reached`** holds while a window of the account read spent in the last 24 hours: a `window_spent` event of any
 source, the prediction's among them, so a wall the router predicted counts before a head or the poll reads it. The
-ledger folds the three routing conditions from its events once an hour and at start into one table, which the gauge and
+ledger folds the four routing conditions from its events once an hour and at start into one table, which the gauge and
 `GET /admin/attention` read, so a condition clears at the first fold whose trailing day holds none of its events. The
 subject is the account, and the item dates from the oldest wall of the day. The detail counts the walls, names their
 windows and the settings `shed_cap` and `window_ceiling`, and gives the projection error: one less the projection of the
@@ -553,6 +557,22 @@ outcome `nothing_to_mark` with the reason `no_runway`) in the last 24 hours, one
 `wall_reached` is. The subject is the pool, and the item dates from the oldest such round. The detail counts the rounds
 and names the accounts they ran on and the setting `window_ceiling` with the pool's value. The item opens the routing
 log on the pool's shedding rounds since the condition began.
+
+**`slowed_long`** holds while the account's slow-down spans of the last 24 hours, each from its `slow_down_started`
+event to its `slow_down_ended` event, to the previous run's last row where a `router_started` row closed it (or to that
+row where it names none), or to now while it stands open, sum past twice the pool's `slow_down_stretch_seconds`, at
+least an hour (five hours at the default of 9000, the hour on a pool set to move early at 1800), every span clamped to
+the day. It is folded as `wall_reached` is. The slow-down holds an account for as long as its demand runs ahead of its
+window, and the threshold is how long the operator lets it hold before a round moves sessions, so two thresholds' worth
+of slow-down in a day says the pool's load exceeds that account's windows, which is the pool's membership, its ceiling
+or its threshold and not one turn, while an account slowed for ten minutes at the end of a window is working as intended
+and raises nothing. The subject is the account, and the item dates from the start of the oldest span counted. The detail
+counts the spans, gives their sum, the bar, whether a span is open and the lowest factor of the spans, and names the
+setting `slow_down_stretch_seconds` with the pool's value, which the dashboard's line words under the label "Slowed past
+twice the stretch" as
+`studio: slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12`. The
+item opens the routing log on the account's slow-down starts and ends since the condition began
+([Slow-down](routing.md#slow-down)).
 
 A threshold is a Prometheus rule over the gauge:
 

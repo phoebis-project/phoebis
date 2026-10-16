@@ -65,7 +65,11 @@ test('a pool creation refuses the values a pool edit refuses', async () => {
   await assert.rejects(() => api.createPool({ ...all, affinityTtlSeconds: 30, keepalive: { ...all.keepalive, enabled: false }, name: 'short' }), refusedAs(400, 'affinity_ttl_seconds is 0 or at least 60'));
   await assert.rejects(() => api.createPool({ ...all, keepalive: { ...all.keepalive, maxParkedSeconds: 59 }, name: 'cold' }), refusedAs(400, 'keepalive.max_parked_seconds must be between 60 and 604800, not 59'));
   await assert.rejects(() => api.createPool({ ...all, bodyCaptureHours: 100_000, name: 'hoard' }), refusedAs(400, 'body_capture_hours exceeds stats.body_capture_max_hours'));
-  assert.equal((await api.listPools()).some((p) => ['cold', 'hoard', 'short'].includes(p.id)), false);
+  await assert.rejects(() => api.createPool({ ...all, name: 'stretch', slowDownStretchSeconds: 59 }), refusedAs(400, 'slow_down_stretch_seconds is between 60 and 18000'));
+  await assert.rejects(() => api.createPool({ ...all, name: 'hold', slowDownHoldSeconds: 0 }), refusedAs(400, 'slow_down_hold_seconds is between 1 and 300'));
+  await assert.rejects(() => api.createPool({ ...all, name: 'mode', returnToPlan: 'sometimes' }), refusedAs(400, 'return_to_plan must be always, when_cold, or never'));
+  await assert.rejects(() => api.createPool({ ...all, name: 'dwell', returnToPlanDwellSeconds: 86_401 }), refusedAs(400, 'return_to_plan_dwell_seconds is between 0 and 86400'));
+  assert.equal((await api.listPools()).some((p) => ['cold', 'dwell', 'hoard', 'hold', 'mode', 'short', 'stretch'].includes(p.id)), false);
 });
 
 test('a new pool reads each member the way the pool route does', async () => {
@@ -79,6 +83,7 @@ test('a new pool reads each member the way the pool route does', async () => {
     return Object.fromEntries(pool.members.map((m) => [m.accountId, m.eligible]));
   };
   assert.deepEqual(await verdicts('first', 'never'), {
+    annex: 'eligible',
     legacy: 'unavailable',
     nightly: 'overage',
     overflow: 'unavailable',
@@ -134,12 +139,13 @@ test('a pool write round-trips the pin and placement fields and the members\' bu
 
 test('a pool save reads the resolved figures off the saved members, so a member of another kind moves them', async () => {
   const api = await signedIn();
-  // The work pool's one member is a subscription, so its figures are the plan's alone.
+  // The work pool's subscription member alone reads the plan's figures, and its API-key member brings the dollars'.
   const work = poolInputOf((await api.listPools()).find((p) => p.id === 'work'));
-  const before = (await api.listPools()).find((p) => p.id === 'work').keepaliveResolved;
-  assert.ok(before !== null && work.members.length === 1, 'the story seeds work with one member and its figures');
-  await api.createAccount({ id: 'metered', kind: 'api_key', label: 'Metered', secret: 'sk-ant-api03-not-a-key' });
-  const saved = await api.updatePool('work', { ...work, members: [...work.members, { accountId: 'metered', priority: 1 }] });
+  const studio = work.members.filter((m) => m.accountId === 'studio');
+  assert.deepEqual(work.members.map((m) => m.accountId), ['studio', 'annex'], 'the story seeds work with a subscription member and an API-key one');
+  const before = (await api.updatePool('work', { ...work, members: studio })).keepaliveResolved;
+  assert.ok(before !== null, 'a pool with a member resolves its figures');
+  const saved = await api.updatePool('work', { ...work, members: [...studio, { accountId: 'annex', priority: 1 }] });
   assert.notDeepEqual(saved.keepaliveResolved, before, 'an API-key member brings the dollar figures');
   assert.ok(saved.keepaliveResolved.breakEvenSeconds.min < before.breakEvenSeconds.min, `the low end reads ${saved.keepaliveResolved.breakEvenSeconds.min} against ${before.breakEvenSeconds.min}`);
 });
@@ -607,13 +613,19 @@ test('the mock refuses a burn average or a shed dwell past two hours and admits 
   }
 });
 
-test("the mock answers a two-field mistake with the route's first sentence, the ceiling before the cap, the average and the dwell", async () => {
+test("the mock answers a two-field mistake with the route's first sentence, the ceiling before the cap, the average and the dwell, the wind-down before the stretch, the hold, the mode and the return dwell", async () => {
   const api = await signedIn();
   const base = await storyPool(api);
+  const slowed = { returnToPlan: 'sometimes', returnToPlanDwellSeconds: 86_401, slowDownHoldSeconds: 0, slowDownStretchSeconds: 59 };
   const cases = [
     [{ burnAverageSeconds: 599, shedCap: 0.05, shedDwellSeconds: 299, windowCeiling: 0.4 }, 'window_ceiling is between 0.5 and 1.0'],
     [{ burnAverageSeconds: 599, shedCap: 0.05, shedDwellSeconds: 299 }, 'shed_cap is between 0.1 and 1.0'],
     [{ burnAverageSeconds: 599, shedDwellSeconds: 299 }, 'burn_average_seconds is between 600 and 7200'],
+    [{ ...slowed, windDownMinutes: 10_081 }, 'wind_down_minutes is at most 10080 (one week)'],
+    [slowed, 'slow_down_stretch_seconds is between 60 and 18000'],
+    [{ ...slowed, slowDownStretchSeconds: 60 }, 'slow_down_hold_seconds is between 1 and 300'],
+    [{ ...slowed, slowDownHoldSeconds: 1, slowDownStretchSeconds: 60 }, 'return_to_plan must be always, when_cold, or never'],
+    [{ ...slowed, returnToPlan: 'never', slowDownHoldSeconds: 1, slowDownStretchSeconds: 60 }, 'return_to_plan_dwell_seconds is between 0 and 86400'],
   ];
   for (const [patch, error] of cases) await assert.rejects(() => api.updatePool('all', { ...base, ...patch }), refusedAs(400, error), JSON.stringify(patch));
 });

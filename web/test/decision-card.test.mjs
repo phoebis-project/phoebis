@@ -94,6 +94,32 @@ test("the candidates table's header names the window the record read", async () 
   assert.equal(await header([key]), 'Pace');
 });
 
+test("the Projection cell's hover names the demand where it differs from the burn", async () => {
+  const mock = new MockApi();
+  const page = await mock.listRoutingLog({ from: new Date(0).toISOString(), limit: 200, to: new Date(Date.now() + 86_400_000).toISOString() });
+  const row = page.rows.find((r) => r.type === 'decision' && r.kind === 'placed');
+  assert.ok(row, 'the mock holds a placement');
+  const placed = await mock.getDecision(row.requestId, row.seq);
+  const [first] = placed.candidates;
+  const reading = { ageMs: 4_000, ahead: null, horizon: new Date(Date.parse(row.at) + 3_600_000).toISOString(), observedAt: row.at, projection: 0.91, reserved: null, reset: new Date(Date.parse(row.at) + 3_600_000).toISOString(), source: 'head', utilization: 0.8 };
+  // A slowed account's sessions burn half their demand, and an account the slow-down does not hold burns its demand.
+  const slowed = { ...first, accountId: 'studio', burn: { five_hour: 0.0643 }, factor: 0.5, fit: 'fits', kind: 'oauth', windows: { five_hour: { ...reading, demand: 0.1286 } } };
+  const paced = { ...first, accountId: 'primary', burn: { five_hour: 0.085 }, factor: null, fit: 'fits', kind: 'oauth', windows: { five_hour: { ...reading, demand: 0.085 } } };
+  api.getDecision = async () => ({ ...placed, candidates: [slowed, paced] });
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  act(() => root.render(h(MemoryRouter, null, h(DecisionCard, { now: Date.parse(row.at), onWiden() {}, row }))));
+  await settled();
+  const column = [...container.querySelectorAll('.decision-card__candidates thead th')].findIndex((th) => th.textContent === 'Projection');
+  const cells = [...container.querySelectorAll('.decision-card__candidates tbody tr')].map((tr) => tr.children[column]);
+  assert.equal(cells.length, 2);
+  assert.equal(cells[0].getAttribute('title'), 'demand 12.86 %/h over burn 6.43 %/h at 0.5x');
+  assert.equal(cells[1].getAttribute('title'), null, 'a demand equal to the burn names nothing');
+  assert.ok(cells[0].textContent.startsWith('5h 91%'), `the cell keeps its projection: ${cells[0].textContent}`);
+});
+
 test("each Pace cell is described by its hover through the host the card sits under", async () => {
   const mock = new MockApi();
   const page = await mock.listRoutingLog({ from: new Date(0).toISOString(), limit: 200, to: new Date(Date.now() + 86_400_000).toISOString() });
@@ -502,20 +528,26 @@ test("a story card's candidate table leads with the member the decision placed, 
   assert.notEqual(record.candidates[0].accountId, record.outcome.accountId, "the fast failover's record leads with another member");
 });
 
-test('the settings fold lists the nineteen settings in the card order with Load shedding on or off, and a version 1 record its three removed after them', async () => {
+test('the settings fold lists the twenty-four settings in the card order with Load shedding on or off, and a version 1 record its three removed after them', async () => {
   const { record, row } = await storyRecord('req_ef099b34-453', 1);
   const fold = async (settings) => {
     const container = await cardOf({ ...record, settings }, row);
     return rowsOf(container, '.decision-card__settings');
   };
-  const labels = ['Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', 'Window ceiling', 'Load shedding', 'Move when spent', 'Overage grace', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Warm sessions', 'In-flight cap', 'Retry in place'];
+  const labels = [
+    'Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', 'Window ceiling', 'Load shedding', 'Move when spent', 'Overage grace', 'Return to plan',
+    'Return dwell', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Slow-down', 'Stretch', 'Hold', 'Warm sessions', 'In-flight cap', 'Retry in place',
+  ];
   const on = await fold({ ...record.settings, loadShedding: true, windowCeiling: 0.75 });
   assert.deepEqual(on.map(([label]) => label), labels);
   assert.deepEqual([on[8], on[9]], [['Window ceiling', '75%'], ['Load shedding', 'on']]);
   assert.deepEqual((await fold({ ...record.settings, loadShedding: false }))[9], ['Load shedding', 'off']);
-  const legacy = await fold({ ...record.settings, legacy: { paceFloor: 0.05, selectBelowUtilization: 0.6, shedAheadOfPace: null }, loadShedding: null, windowCeiling: null });
+  // A version 1 record carried neither the switch and the ceiling nor the slow-down's and the return mode's five.
+  const before = { returnToPlan: null, returnToPlanDwellSeconds: null, slowDown: null, slowDownHoldSeconds: null, slowDownStretchSeconds: null };
+  const legacy = await fold({ ...record.settings, ...before, legacy: { paceFloor: 0.05, selectBelowUtilization: 0.6, shedAheadOfPace: null }, loadShedding: null, windowCeiling: null });
   assert.deepEqual(legacy.map(([label]) => label), [...labels, 'Shed above (then)', 'Select below (then)', 'Pace floor (then)']);
   assert.deepEqual([legacy[8], legacy[9], ...legacy.slice(-3)], [['Window ceiling', 'not recorded'], ['Load shedding', 'not recorded'], ['Shed above (then)', 'off'], ['Select below (then)', '60%'], ['Pace floor (then)', '5%']]);
+  assert.equal(legacy.filter(([, value]) => value === 'not recorded').length, 7);
 });
 
 test('the verdict line and the Outcome read a hold for the reset and a reservation, and the foot the record version', async () => {

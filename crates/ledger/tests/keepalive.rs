@@ -626,13 +626,13 @@ async fn migration_thirty_seven_keeps_a_rollup_rows_kept_warm_tokens_under_five_
             None,
         )
         .unwrap();
-        // The file as version 35 left it: the one count, holding what a credit booked before the split.
+        // The file as version 36 left it: the one count, holding what a credit booked before the split.
         db.write(|c| {
             c.execute_batch(
                 "ALTER TABLE rollups_hourly DROP COLUMN kept_warm_1h_tokens; \
                  ALTER TABLE rollups_hourly RENAME COLUMN kept_warm_5m_tokens TO kept_warm_tokens; \
                  UPDATE rollups_hourly SET kept_warm_requests = 3, kept_warm_tokens = 2000; \
-                 UPDATE meta SET value = '35' WHERE key = 'schema_version';",
+                 UPDATE meta SET value = '36' WHERE key = 'schema_version';",
             )?;
             Ok(())
         })

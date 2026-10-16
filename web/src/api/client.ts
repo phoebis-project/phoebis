@@ -91,20 +91,30 @@ export type PoolEngineFields = Pick<
   | 'migrateWhenSpent'
   | 'overageMoveGraceMinutes'
   | 'retryInPlaceSeconds'
+  | 'returnToPlan'
+  | 'returnToPlanDwellSeconds'
   | 'shedCap'
   | 'shedDwellSeconds'
+  | 'slowDown'
+  | 'slowDownHoldSeconds'
+  | 'slowDownStretchSeconds'
   | 'warmSessions'
   | 'windDownMinutes'
   | 'windowCeiling'
 >;
 
-/** The store's ceiling, shedding and failover defaults, which a new pool starts with. */
+/** The store's ceiling, shedding, slow-down, failover and return-to-plan defaults, which a new pool starts with. */
 export const POOL_ENGINE_DEFAULTS: PoolEngineFields = {
   ...SHEDDING_PRESETS.balanced,
   ...FAILOVER_PRESETS.balanced,
   loadShedding: true,
   migrateWhenSpent: true,
   overageMoveGraceMinutes: 30,
+  returnToPlan: 'always',
+  returnToPlanDwellSeconds: 900,
+  slowDown: false,
+  slowDownHoldSeconds: 120,
+  slowDownStretchSeconds: 9_000,
   warmSessions: 'when_needed',
   windDownMinutes: 30,
   windowCeiling: 0.95,

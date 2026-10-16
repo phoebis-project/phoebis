@@ -15,7 +15,7 @@ use tokio::time::Instant;
 
 use crate::affinity::{AffinityMap, PurgedEntry};
 use crate::listing::{row_for, snapshot_date, tier_segment};
-use crate::select::{affinity_ttl_ms, seconds_ms};
+use crate::select::{affinity_ttl_ms, seconds_ms, SlowDownRead, SLOW_DOWN_WAIT_MS};
 use crate::task::BurnRates;
 use crate::windows::{window_for, MODEL_WINDOWS};
 use crate::RegistrySnapshot;
@@ -282,7 +282,7 @@ pub enum StateWrite {
     UpsertWindow(WindowRow),
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Purged {
     /// The removed entries' keys, for the store's delete.
     pub affinity: Vec<(String, String)>,
@@ -291,6 +291,8 @@ pub struct Purged {
     pub cooldowns: Vec<(String, String)>,
     /// Each dropped pin with the one fact that dropped it: `deleted`, `expired`, or `unserved`.
     pub pins: Vec<(PinKey, &'static str)>,
+    /// The slow-down entries dropped, by pool id and account id, whole: an open span ends with its entry.
+    pub slow_downs: Vec<((String, String), SlowDownState)>,
 }
 
 /// A member's spend in one budgeted period, as the ledger last answered it; memory only. The period it was summed
@@ -595,6 +597,16 @@ pub fn burn_decayed(burn: f64, burn_at: Option<i64>, now: i64, window_ms: i64) -
     }
 }
 
+/// The realized speed a write folds in, read as 1 (no slowing known) when it is not finite or not positive, since the
+/// demand divides by it.
+fn full_speed_unless_positive(realized: f64) -> f64 {
+    if realized.is_finite() && realized > 0.0 {
+        realized
+    } else {
+        1.0
+    }
+}
+
 /// The fold a renewal with usage applies at `now`: the average decayed to `now`, plus `tokens` spread over the
 /// window, so the average is tokens per second.
 pub(crate) fn burn_folded(
@@ -639,6 +651,69 @@ pub struct Reservation {
     pub expires_at: i64,
 }
 
+/// An account's slow-down on one pool's pins, as the last pinned selection on the account read it, and the span the
+/// factor has read under 1 for.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SlowDownState {
+    /// The burn the window can still carry to its reset over the demand, clamped to [0, 1].
+    pub factor: f64,
+    /// The realized speed, a time-weighted average over the pool's burn average, which the demand divides the pins'
+    /// burn by: the burn average lags a change of pace by the same constant.
+    pub speed: f64,
+    pub read_at: i64,
+    /// When the stretch first read over the threshold, cleared once it reads at or under it.
+    pub over_since: Option<i64>,
+    /// When the factor first read under 1 since the span last closed. A return to 1 keeps it through the
+    /// `SLOW_DOWN_WAIT_MS` wait, so a dip back under 1 inside the wait continues the span.
+    pub slowed_since: Option<i64>,
+    /// When the factor last returned to 1 inside the span. A dip back under 1 clears it, and the span's close keeps
+    /// it as the instant the factor returned.
+    pub clear_since: Option<i64>,
+    /// The lowest factor read since `slowed_since`, 1 outside a span.
+    pub factor_min: f64,
+    /// The new holds answered since `slowed_since`, each from its arrival to its deadline, summed, 0 outside a span. A
+    /// request rejoining a standing deadline adds nothing, since its wait is the hold already counted.
+    pub held_ms: i64,
+    /// The read's stretch, kept beside its factor so the pages read the figures the holds apply.
+    pub stretch_ms: i64,
+    /// The threshold the read compared the stretch to, the pool's `slow_down_stretch_seconds` at the read.
+    pub threshold_ms: i64,
+}
+
+/// One edge of an account's slow-down span, which the task announces as an event.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SlowDownEdge {
+    /// The factor read under 1 for the first time since it last read 1, with the figures of that read: the demand in
+    /// share of the 5-hour window per hour.
+    Started {
+        factor: f64,
+        stretch_ms: i64,
+        threshold_ms: i64,
+        demand: f64,
+        reset: Option<i64>,
+    },
+    /// The span closed, its length running from `since` to the instant the factor returned to 1, or to the entry's
+    /// last read where the purge dropped the entry before it did: the wait that closes a span is not slowed time.
+    Ended {
+        since: i64,
+        duration_ms: i64,
+        factor_min: f64,
+        held_ms: i64,
+    },
+}
+
+/// A pin's pace: the cycle a slow-down hold is sized from and the hold standing on it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PinPace {
+    /// The last dispatch of a request of a held class: its arrival, or the end of the hold it waited through, so a
+    /// wait never counts as the pin's own gap.
+    pub dispatched_at: i64,
+    /// The time-weighted average of the gaps between a dispatch and the next arrival, `None` before the first gap.
+    pub cycle_ms: Option<f64>,
+    /// The end of the slow-down hold standing on the pin.
+    pub deadline: Option<i64>,
+}
+
 /// The `window_ceiling` a pool is created with.
 pub const DEFAULT_WINDOW_CEILING: f64 = 0.95;
 
@@ -674,6 +749,26 @@ pub fn shed_dwell_ms(pool: &PoolRow) -> i64 {
 /// account still run, since the switch turns the round off and nothing else.
 pub fn load_shedding(pool: &PoolRow) -> bool {
     pool.shedding.load_shedding
+}
+
+/// Whether the pool slows its pins' requests on the 5-hour window.
+pub fn slow_down(pool: &PoolRow) -> bool {
+    pool.slow_down.slow_down
+}
+
+/// The time the slow-down may add to a session before the round takes over, in milliseconds.
+pub fn slow_down_stretch_ms(pool: &PoolRow) -> i64 {
+    seconds_ms(u64::from(pool.slow_down.slow_down_stretch_seconds))
+}
+
+/// The longest one request waits for the slow-down, in milliseconds.
+pub fn slow_down_hold_ms(pool: &PoolRow) -> i64 {
+    seconds_ms(u64::from(pool.slow_down.slow_down_hold_seconds))
+}
+
+/// How long a warm pin stays on an api_key member before the return rule moves it under `always`, in milliseconds.
+pub fn return_to_plan_dwell_ms(pool: &PoolRow) -> i64 {
+    seconds_ms(u64::from(pool.failover.return_to_plan_dwell_seconds))
 }
 
 #[derive(Default)]
@@ -920,6 +1015,13 @@ pub struct RoutingState {
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
     pins: HashMap<PinKey, PinRow>,
+    /// Each pin's pace by its key, which outlives `take_pin`: a move and a failover's landing write their fresh row
+    /// under the same key, and the session's pace does not change with its account. Memory only, so the first request
+    /// of a pin after a restart reads none.
+    pin_paces: HashMap<PinKey, PinPace>,
+    /// When each window of the projection test first read over the ceiling at a pinned selection, keyed by pool id,
+    /// account id and window. Memory only: a restart starts from none.
+    projection_over: HashMap<(String, String, String), i64>,
     /// The ledger's tables, which this crate cannot name, handed in by the task; unit tables until then, so a
     /// burn read through them is a token count.
     rates: BurnRates,
@@ -941,6 +1043,12 @@ pub struct RoutingState {
     /// When the latest shedding round ran on each account, by the id of the pool that ran it and the account id: the
     /// stamp the dwell between rounds reads. The marks live on the pin rows.
     shed_rounds: HashMap<(String, String), i64>,
+    /// The span edges the writes and the purge recorded and the task has yet to announce, by pool id and account id.
+    slow_down_edges: Vec<(String, String, SlowDownEdge)>,
+    /// Each account's slow-down by the id of the pool whose pins it reads and the account id, as the last pinned
+    /// selection on the account wrote it. Memory only, as the reservations are: a restart starts every account
+    /// unslowed.
+    slow_downs: HashMap<(String, String), SlowDownState>,
 }
 
 impl RoutingState {
@@ -1016,6 +1124,8 @@ impl RoutingState {
                 })
                 .collect(),
             pins: load.pins.into_iter().map(|p| (p.key(), p)).collect(),
+            pin_paces: HashMap::new(),
+            projection_over: HashMap::new(),
             rates: BurnRates::default(),
             renewed: HashSet::new(),
             reservations: HashMap::new(),
@@ -1028,6 +1138,8 @@ impl RoutingState {
             samples,
             share: SharePricer::default(),
             shed_rounds,
+            slow_down_edges: Vec::new(),
+            slow_downs: HashMap::new(),
         }
     }
 
@@ -1072,15 +1184,25 @@ impl RoutingState {
 
     /// A fresh pin under a key another pin held (a release that lands the session elsewhere) takes the old one off
     /// its account with its mark and starts unrenewed. A renewal keeps the epoch and the renewal, and the row it
-    /// writes carries the mark as the caller read it.
+    /// writes carries the mark as the caller read it. A fresh pin on another account than the row it replaces clears
+    /// the slow-down deadline standing on the key's pace and keeps the cycle and the last dispatch: the hold was sized
+    /// for the source's window, and the new account's own factor decides the next one. A fresh pin with no row to
+    /// replace counts as such a landing, since a move and a failover take the row off the source before they write.
     pub(crate) fn put_pin(&mut self, mut pin: PinRow) {
         pin.model = self.canonical(&pin.model).to_string();
         let key = pin.key();
         let epoch = pin.epoch;
-        match self.pins.insert(key.clone(), pin) {
-            Some(replaced) if replaced.epoch == epoch => {}
-            _ => {
+        let account_id = pin.account_id.clone();
+        let landed = match self.pins.insert(key.clone(), pin) {
+            Some(replaced) if replaced.epoch == epoch => false,
+            replaced => {
                 self.renewed.remove(&key);
+                replaced.is_none_or(|replaced| replaced.account_id != account_id)
+            }
+        };
+        if landed {
+            if let Some(pace) = self.pin_paces.get_mut(&key) {
+                pace.deadline = None;
             }
         }
     }
@@ -1772,6 +1894,238 @@ impl RoutingState {
         on.into_iter().map(|(_, reservation)| reservation).collect()
     }
 
+    /// The account's slow-down entry on the pool as written, whatever the pool's switch reads now.
+    pub fn slow_down_state(&self, pool_id: &str, account_id: &str) -> Option<&SlowDownState> {
+        self.slow_downs
+            .get(&(pool_id.to_string(), account_id.to_string()))
+    }
+
+    /// The read's write, once per pinned selection on the account: the factor from the read, the speed folded toward
+    /// `realized` (`speed x w + realized x (1 - w)` with `w = exp(-(now - read_at) / average_ms)`, the first write
+    /// taking `realized` whole), `over_since` stamped while the read's stretch is over its threshold and cleared at or
+    /// under it, and the span the factor reads under 1 for opened and tracked. A read of 1 stamps `clear_since` and
+    /// leaves the span open, so a dip back under 1 inside `SLOW_DOWN_WAIT_MS` continues it and
+    /// `take_slow_down_edges` closes it once the factor has read 1 for the wait. A span that opens records its start
+    /// from this read, after the end of a span whose wait ran out before any drain closed it. Answers the entry as
+    /// written, the read's stretch and threshold beside its factor.
+    pub fn write_slow_down(
+        &mut self,
+        pool_id: &str,
+        account_id: &str,
+        read: &SlowDownRead,
+        realized: f64,
+        now: i64,
+        average_ms: i64,
+    ) -> &SlowDownState {
+        debug_assert!(
+            realized.is_finite() && realized > 0.0,
+            "a realized speed is positive and finite: {realized}"
+        );
+        let realized = full_speed_unless_positive(realized);
+        let over = read.stretch_ms > read.threshold_ms;
+        let slowed = read.factor < 1.0;
+        let key = (pool_id.to_string(), account_id.to_string());
+        let mut opened = !self.slow_downs.contains_key(&key) && slowed;
+        let mut ended = None;
+        self.slow_downs
+            .entry(key)
+            .and_modify(|entry| {
+                let w = (-((now - entry.read_at).max(0) as f64) / average_ms.max(1) as f64).exp();
+                entry.speed = entry.speed * w + realized * (1.0 - w);
+                entry.factor = read.factor;
+                entry.stretch_ms = read.stretch_ms;
+                entry.threshold_ms = read.threshold_ms;
+                entry.read_at = now;
+                entry.over_since = over.then(|| entry.over_since.unwrap_or(now));
+                // A span whose factor has read 1 for the wait ended at the return, though no drain has closed it yet: a
+                // selection can land before the purge tick that would, and the dip it reads opens a span of its own.
+                if let (true, Some(since), Some(clear)) =
+                    (slowed, entry.slowed_since, entry.clear_since)
+                {
+                    if now - clear >= SLOW_DOWN_WAIT_MS {
+                        ended = Some(SlowDownEdge::Ended {
+                            since,
+                            duration_ms: clear - since,
+                            factor_min: entry.factor_min,
+                            held_ms: entry.held_ms,
+                        });
+                        entry.slowed_since = None;
+                    }
+                }
+                match (slowed, entry.slowed_since) {
+                    (true, Some(_)) => {
+                        entry.factor_min = entry.factor_min.min(read.factor);
+                        entry.clear_since = None;
+                    }
+                    (true, None) => {
+                        entry.slowed_since = Some(now);
+                        entry.clear_since = None;
+                        entry.factor_min = read.factor;
+                        entry.held_ms = 0;
+                        opened = true;
+                    }
+                    (false, Some(_)) => {
+                        entry.clear_since.get_or_insert(now);
+                    }
+                    (false, None) => {}
+                }
+            })
+            .or_insert_with(|| SlowDownState {
+                factor: read.factor,
+                speed: realized,
+                read_at: now,
+                over_since: over.then_some(now),
+                slowed_since: slowed.then_some(now),
+                clear_since: None,
+                factor_min: read.factor.min(1.0),
+                held_ms: 0,
+                stretch_ms: read.stretch_ms,
+                threshold_ms: read.threshold_ms,
+            });
+        if let Some(edge) = ended {
+            self.slow_down_edges
+                .push((pool_id.to_string(), account_id.to_string(), edge));
+        }
+        if opened {
+            self.slow_down_edges.push((
+                pool_id.to_string(),
+                account_id.to_string(),
+                SlowDownEdge::Started {
+                    factor: read.factor,
+                    stretch_ms: read.stretch_ms,
+                    threshold_ms: read.threshold_ms,
+                    demand: read.demand * 3_600.0,
+                    reset: read.reset,
+                },
+            ));
+        }
+        self.slow_downs
+            .get(&(pool_id.to_string(), account_id.to_string()))
+            .expect("the entry was just written")
+    }
+
+    /// The span edges to announce at `now`: those the writes and the purge recorded, in the order they were recorded,
+    /// then one end per span whose factor has read 1 for `SLOW_DOWN_WAIT_MS`, its length from `slowed_since` to
+    /// `clear_since`. A closed span leaves the entry unslowed with its figures reset and `clear_since` the instant the
+    /// factor last returned to 1. Every entry is read, so an account that returned to 1 and went quiet ends its span at
+    /// the next purge tick without a selection.
+    pub fn take_slow_down_edges(&mut self, now: i64) -> Vec<(String, String, SlowDownEdge)> {
+        let mut edges = std::mem::take(&mut self.slow_down_edges);
+        let mut closed: Vec<(String, String, SlowDownEdge)> = self
+            .slow_downs
+            .iter_mut()
+            .filter_map(|((pool_id, account_id), entry)| {
+                let since = entry.slowed_since?;
+                let clear = entry
+                    .clear_since
+                    .filter(|clear| now - clear >= SLOW_DOWN_WAIT_MS)?;
+                let edge = SlowDownEdge::Ended {
+                    since,
+                    duration_ms: clear - since,
+                    factor_min: entry.factor_min,
+                    held_ms: entry.held_ms,
+                };
+                entry.slowed_since = None;
+                entry.factor_min = 1.0;
+                entry.held_ms = 0;
+                Some((pool_id.clone(), account_id.clone(), edge))
+            })
+            .collect();
+        // The map's order is no order, and the events land in the ledger in the order they are emitted.
+        closed.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        edges.extend(closed);
+        edges
+    }
+
+    /// Adds a slow-down hold's length to the entry's `held_ms`, the span's held time. Nothing while no span is open:
+    /// the time belongs to a span that stands, and a request rejoining a standing deadline is not passed here, so two
+    /// requests of one pin waiting to one instant count once.
+    pub fn add_slow_down_held(&mut self, pool_id: &str, account_id: &str, held_ms: i64) {
+        if let Some(entry) = self
+            .slow_downs
+            .get_mut(&(pool_id.to_string(), account_id.to_string()))
+            .filter(|entry| entry.slowed_since.is_some())
+        {
+            entry.held_ms = entry.held_ms.saturating_add(held_ms);
+        }
+    }
+
+    /// The entry in force for the account on the pool: `None` at once for a pool whose switch is off, whatever lingers
+    /// until the purge tick drops it, and `None` where no entry stands, an api_key account, an untiered account or one
+    /// with no 5-hour reading (which writes no entry) and an account no pinned selection has read since the last purge
+    /// or restart.
+    pub fn slow_down_in_force(&self, pool: &PoolRow, account_id: &str) -> Option<&SlowDownState> {
+        slow_down(pool)
+            .then(|| self.slow_down_state(&pool.id, account_id))
+            .flatten()
+    }
+
+    /// The speed the demand divides the account's pins' burn by on `pool`: the entry's realized speed, 1 with none.
+    pub(crate) fn slow_down_speed(&self, pool: &PoolRow, account_id: &str) -> f64 {
+        self.slow_down_in_force(pool, account_id)
+            .map_or(1.0, |entry| entry.speed)
+    }
+
+    /// The pace under `key` as the pin row spells it, with no resolution applied.
+    pub fn pin_pace(&self, key: &PinKey) -> Option<&PinPace> {
+        self.pin_paces.get(key)
+    }
+
+    /// Folds an arrival into the pin's cycle: the gap since the last dispatch weighs in by `w = exp(-gap /
+    /// average_ms)`, so a long think moves the average more than a quick tool call, the first gap is taken whole, and
+    /// the arrival becomes the last dispatch. An arrival at or before the last dispatch folds nothing: a re-selection
+    /// of the same request (after a failover or a refused hold) carries the arrival already folded, whose gap of zero
+    /// would plant a cycle of zero, a request queued behind a later one has no gap to give, and an arrival before a
+    /// standing deadline, which a hold made the last dispatch, rejoins the deadline. The pin's first arrival starts its
+    /// pace with no gap.
+    pub fn fold_pace(&mut self, key: &PinKey, received_at: i64, average_ms: i64) {
+        let Some(pace) = self.pin_paces.get_mut(key) else {
+            self.pin_paces.insert(
+                key.clone(),
+                PinPace {
+                    dispatched_at: received_at,
+                    cycle_ms: None,
+                    deadline: None,
+                },
+            );
+            return;
+        };
+        if received_at <= pace.dispatched_at {
+            return;
+        }
+        let gap = (received_at - pace.dispatched_at) as f64;
+        pace.cycle_ms = Some(match pace.cycle_ms {
+            None => gap,
+            Some(cycle) => {
+                let w = (-gap / average_ms.max(1) as f64).exp();
+                cycle * w + gap * (1.0 - w)
+            }
+        });
+        pace.dispatched_at = received_at;
+    }
+
+    /// Ends the pace under `key` with its pin's session: a fresh placement under the key starts with none.
+    pub(crate) fn drop_pace(&mut self, key: &PinKey) {
+        self.pin_paces.remove(key);
+    }
+
+    /// A hold answered for a request of the pin under `key` dispatches the request at its end, so the wait never lands
+    /// in the pin's next gap. A later dispatch already standing stays. Nothing for a key with no pace.
+    pub(crate) fn pace_held_until(&mut self, key: &PinKey, until: i64) {
+        if let Some(pace) = self.pin_paces.get_mut(key) {
+            pace.dispatched_at = pace.dispatched_at.max(until);
+        }
+    }
+
+    /// The slow-down hold's deadline stands on the pin under `key`, which the pin's next requests rejoin until it
+    /// passes, and the request is dispatched there. Nothing for a key with no pace.
+    pub(crate) fn stand_slow_down_deadline(&mut self, key: &PinKey, until: i64) {
+        if let Some(pace) = self.pin_paces.get_mut(key) {
+            pace.deadline = Some(until);
+        }
+        self.pace_held_until(key, until);
+    }
+
     /// Set by the task at spawn from its config, and by a test that prices a round through its own tables.
     pub fn set_rates(&mut self, rates: BurnRates) {
         self.rates = rates;
@@ -1886,6 +2240,33 @@ impl RoutingState {
         now: i64,
         average_ms: i64,
     ) -> BTreeMap<String, f64> {
+        self.shares(account_id, keep, tier, now, average_ms, 1.0)
+    }
+
+    /// The twin of `burn_shares` that the slow-down's readers take: the kept pins' sum on every window over `speed`,
+    /// the account's realized speed, and the live reservations' `burn` undivided, since a booking is a fresh session's
+    /// prior or a moving pin's figure, neither of them slowed on the account yet.
+    pub fn demand_shares(
+        &self,
+        account_id: &str,
+        keep: &dyn Fn(&PinRow) -> bool,
+        tier: &str,
+        now: i64,
+        average_ms: i64,
+        speed: f64,
+    ) -> BTreeMap<String, f64> {
+        self.shares(account_id, keep, tier, now, average_ms, speed)
+    }
+
+    fn shares(
+        &self,
+        account_id: &str,
+        keep: &dyn Fn(&PinRow) -> bool,
+        tier: &str,
+        now: i64,
+        average_ms: i64,
+        speed: f64,
+    ) -> BTreeMap<String, f64> {
         // A pin a live booking on this account names counts through the booking's burn alone, so a moved pin counts
         // once while its move is in flight. The booking is matched on the account and the pin row, never on the key
         // across accounts: a booking a request still in flight on the source holds there must not hide the live
@@ -1913,6 +2294,9 @@ impl RoutingState {
                         burn_decayed(rate, pin.burn_at, now, average_ms);
                 }
             }
+        }
+        for share in shares.values_mut() {
+            *share /= speed;
         }
         for reservation in self
             .reservations
@@ -1986,8 +2370,76 @@ impl RoutingState {
             .insert((pool_id.to_string(), account_id.to_string()), at);
     }
 
-    /// A late failure from account A must not remove a newer pin on account B, so both have to match.
-    pub fn invalidate_pin(&mut self, pin: &PinRef, account_id: &str) -> bool {
+    /// When `window` of the projection test first read over the ceiling on the account under `pool_id`, `None` while it
+    /// reads at or under the ceiling or no selection has read it.
+    pub fn projection_over_since(
+        &self,
+        pool_id: &str,
+        account_id: &str,
+        window: &str,
+    ) -> Option<i64> {
+        self.projection_over
+            .get(&(
+                pool_id.to_string(),
+                account_id.to_string(),
+                window.to_string(),
+            ))
+            .copied()
+    }
+
+    /// Sets the stamp at the first reading over the ceiling, clears it at a reading at or under, and replaces a stamp
+    /// older than the window's start (`window_start`: the window's reset less its length where the reading names a
+    /// reset, or the reset a 5-hour reading has passed with no sample since).
+    pub fn note_projection(
+        &mut self,
+        pool_id: &str,
+        account_id: &str,
+        window: &str,
+        over: bool,
+        window_start: Option<i64>,
+        now: i64,
+    ) {
+        let key = (
+            pool_id.to_string(),
+            account_id.to_string(),
+            window.to_string(),
+        );
+        if !over {
+            self.projection_over.remove(&key);
+            return;
+        }
+        let stamp = self.projection_over.entry(key).or_insert(now);
+        // A stamp belongs to one window: a quiet account's stamp from before the reset would fire the new window's
+        // first reading over the ceiling at once.
+        if window_start.is_some_and(|start| *stamp < start) {
+            *stamp = now;
+        }
+    }
+
+    /// Stamps `window` on the account as over the ceiling since `at`, so a test reaches a window past its wait without
+    /// a selection a wait before its instant. No production path stamps but the note, so it is compiled under `test`
+    /// and the `debug-hooks` feature alone.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    pub fn stamp_projection_over(
+        &mut self,
+        pool_id: &str,
+        account_id: &str,
+        window: &str,
+        at: i64,
+    ) {
+        self.projection_over.insert(
+            (
+                pool_id.to_string(),
+                account_id.to_string(),
+                window.to_string(),
+            ),
+            at,
+        );
+    }
+
+    /// A late failure from account A must not remove a newer pin on account B, so both have to match. Answers the row
+    /// the invalidation took, whose figures the failover's landing reads, `None` when nothing matched.
+    pub fn invalidate_pin(&mut self, pin: &PinRef, account_id: &str) -> Option<PinRow> {
         let key = PinKey {
             key_id: pin.key_id.clone(),
             session_id: pin.session_id.clone(),
@@ -1999,9 +2451,10 @@ impl RoutingState {
             .get(&key)
             .is_some_and(|p| p.epoch == pin.epoch && p.account_id == account_id);
         if matches {
-            self.take_pin(&key);
+            self.take_pin(&key)
+        } else {
+            None
         }
-        matches
     }
 
     /// Records the resolution and moves every pin and every model cooldown keyed on `spelling` to `dated_id`
@@ -2077,6 +2530,8 @@ impl RoutingState {
             // its fast usage moves with it.
             let renewed = self.renewed.contains(&spelled);
             self.take_pin(&spelled);
+            // The pace follows the row the merge keeps, so the session's cycle reads on under the dated id.
+            let pace = self.pin_paces.remove(&spelled);
             rekey.delete_pins.push(spelled);
             let dated_key = PinKey {
                 model: dated_id.to_string(),
@@ -2089,6 +2544,9 @@ impl RoutingState {
             if keep_existing {
                 merged_away.push(pin);
             } else {
+                if let Some(pace) = pace {
+                    self.pin_paces.insert(dated_key.clone(), pace);
+                }
                 let moved = PinRow {
                     model: dated_id.to_string(),
                     lane: relaned(&pin.lane, spelling, dated_id),
@@ -2156,6 +2614,10 @@ impl RoutingState {
         for key in &gone {
             self.take_pin(key);
         }
+        // The session ended, so its paces leave with it, one whose pin a failover took and no landing wrote back among
+        // them.
+        self.pin_paces
+            .retain(|key, _| !(key.key_id == key_id && key.session_id == session_id));
         gone
     }
 
@@ -2239,6 +2701,13 @@ impl RoutingState {
         for (key, _) in &pins {
             self.take_pin(key);
         }
+        // A move writes the key again within the selection that took the row, so a key no pin holds at the tick
+        // belongs to a session that ended, or to a failover: the task's report handling takes that row and the landing
+        // comes on a later selection, so a tick between the two drops the pace and the landed pin starts a new one.
+        let held = &self.pins;
+        self.pin_paces.retain(|key, _| held.contains_key(key));
+        let slow_downs = self.purge_slow_downs(snapshot, now);
+        self.purge_projection_over(snapshot);
         // None of these needs a deletion written: the overage rows cascade with the account and the next holder's
         // first reading replaces one left under another incarnation, the window and credits rows cascade too and
         // the purge tick drops one of another incarnation, and charges and round-robin cursors are held in memory
@@ -2295,7 +2764,81 @@ impl RoutingState {
             affinity_entries,
             cooldowns,
             pins,
+            slow_downs,
         }
+    }
+
+    /// The slow-down entries a quiet account or a switched-off pool leaves, removed and answered in key order: an
+    /// entry whose account holds no pin of the pool, one no selection wrote for `IN_FLIGHT_RECLAIM_MS`, the backstop
+    /// the reservations use, and every entry of a pool whose slow-down is off or that left the registry, so a quiet
+    /// account reads unslowed again without a selection.
+    fn purge_slow_downs(
+        &mut self,
+        snapshot: &RegistrySnapshot,
+        now: i64,
+    ) -> Vec<((String, String), SlowDownState)> {
+        let pins = &self.pins;
+        let mut gone: Vec<(String, String)> = self
+            .slow_downs
+            .iter()
+            .filter(|((pool_id, account_id), entry)| {
+                let pool = snapshot.pool(pool_id).filter(|pool| slow_down(pool));
+                let pinned = pins.values().any(|pin| {
+                    pin.account_id == *account_id
+                        && snapshot
+                            .key(&pin.key_id)
+                            .is_some_and(|key| key.pool_id == *pool_id)
+                });
+                pool.is_none() || !pinned || now - entry.read_at >= IN_FLIGHT_RECLAIM_MS
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        gone.sort();
+        let dropped: Vec<((String, String), SlowDownState)> = gone
+            .into_iter()
+            .filter_map(|key| self.slow_downs.remove(&key).map(|entry| (key, entry)))
+            .collect();
+        // No start stands without its end: a dropped span ends at the factor's return, or at the last read where the
+        // factor never returned.
+        for ((pool_id, account_id), entry) in &dropped {
+            if let Some(since) = entry.slowed_since {
+                self.slow_down_edges.push((
+                    pool_id.clone(),
+                    account_id.clone(),
+                    SlowDownEdge::Ended {
+                        since,
+                        duration_ms: entry.clear_since.unwrap_or(entry.read_at) - since,
+                        factor_min: entry.factor_min,
+                        held_ms: entry.held_ms,
+                    },
+                ));
+            }
+        }
+        dropped
+    }
+
+    /// The projection stamps no test reads: every stamp of a pool whose shedding is off or that left the registry, the
+    /// 5-hour stamps of a pool that slows its pins, whose 5-hour test is the stretch, and the stamps of an account that
+    /// holds no pin of the pool, so a flipped switch or a quiet account starts its wait afresh. No age drops a stamp,
+    /// since a window that reads over for hours keeps the stamp of its first reading over and the round after the
+    /// dwell waits no second time.
+    fn purge_projection_over(&mut self, snapshot: &RegistrySnapshot) {
+        let pins = &self.pins;
+        self.projection_over
+            .retain(|(pool_id, account_id, window), _| {
+                let Some(pool) = snapshot.pool(pool_id).filter(|pool| load_shedding(pool)) else {
+                    return false;
+                };
+                if window == FIVE_HOUR && slow_down(pool) {
+                    return false;
+                }
+                pins.values().any(|pin| {
+                    pin.account_id == *account_id
+                        && snapshot
+                            .key(&pin.key_id)
+                            .is_some_and(|key| key.pool_id == *pool_id)
+                })
+            });
     }
 }
 
@@ -3612,5 +4155,256 @@ mod tests {
             "a Fable pin burns its own week beside the shared windows"
         );
         assert_eq!(windows_of("claude-sonnet-5"), [FIVE_HOUR, SEVEN_DAY]);
+    }
+
+    #[test]
+    fn a_realized_speed_that_is_not_finite_or_not_positive_reads_as_full_speed() {
+        for realized in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -0.25] {
+            assert_eq!(full_speed_unless_positive(realized), 1.0, "{realized}");
+        }
+        assert_eq!(full_speed_unless_positive(0.25), 0.25);
+    }
+
+    #[test]
+    fn a_flicker_around_one_inside_the_wait_makes_one_span() {
+        const SECOND: i64 = 1_000;
+        const MINUTE: i64 = 60 * SECOND;
+        const T: i64 = 10 * 3_600_000;
+        let read = |factor: f64| SlowDownRead {
+            utilization: 0.9,
+            horizon: T + 40 * MINUTE,
+            reset: Some(T + 40 * MINUTE),
+            demand: 0.1 / 3_600.0,
+            stretch_ms: 10 * MINUTE,
+            threshold_ms: 30 * MINUTE,
+            factor,
+            speed: 1.0,
+            plan: Vec::new(),
+            realized: 1.0,
+        };
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        for (at, factor) in [
+            (T, 0.6),
+            (T + MINUTE, 1.0),
+            (T + 90 * SECOND, 0.4),
+            (T + 2 * MINUTE, 1.0),
+        ] {
+            state.write_slow_down("p", "a", &read(factor), 1.0, at, 1_800_000);
+        }
+        assert_eq!(
+            state.take_slow_down_edges(T + 2 * MINUTE + SLOW_DOWN_WAIT_MS),
+            vec![
+                (
+                    "p".to_string(),
+                    "a".to_string(),
+                    SlowDownEdge::Started {
+                        factor: 0.6,
+                        stretch_ms: 10 * MINUTE,
+                        threshold_ms: 30 * MINUTE,
+                        demand: read(0.6).demand * 3_600.0,
+                        reset: Some(T + 40 * MINUTE),
+                    }
+                ),
+                (
+                    "p".to_string(),
+                    "a".to_string(),
+                    SlowDownEdge::Ended {
+                        since: T,
+                        duration_ms: 2 * MINUTE,
+                        factor_min: 0.4,
+                        held_ms: 0,
+                    }
+                ),
+            ],
+            "the dip inside the wait continues the span, which ends once at the last return"
+        );
+        let entry = state.slow_down_state("p", "a").expect("the entry stays");
+        assert_eq!(
+            (
+                entry.slowed_since,
+                entry.clear_since,
+                entry.factor_min,
+                entry.held_ms
+            ),
+            (None, Some(T + 2 * MINUTE), 1.0, 0),
+            "the closed span leaves its figures reset and the return's instant"
+        );
+        assert!(
+            state
+                .take_slow_down_edges(T + 2 * MINUTE + SLOW_DOWN_WAIT_MS + MINUTE)
+                .is_empty(),
+            "a span ends once"
+        );
+    }
+
+    #[test]
+    fn a_dip_once_the_factor_has_read_one_for_the_wait_ends_the_span_and_opens_another() {
+        const MINUTE: i64 = 60_000;
+        const T: i64 = 10 * 3_600_000;
+        let read = |factor: f64| SlowDownRead {
+            utilization: 0.9,
+            horizon: T + 40 * MINUTE,
+            reset: Some(T + 40 * MINUTE),
+            demand: 0.1 / 3_600.0,
+            stretch_ms: 10 * MINUTE,
+            threshold_ms: 30 * MINUTE,
+            factor,
+            speed: 1.0,
+            plan: Vec::new(),
+            realized: 1.0,
+        };
+        let started = |factor: f64| SlowDownEdge::Started {
+            factor,
+            stretch_ms: 10 * MINUTE,
+            threshold_ms: 30 * MINUTE,
+            demand: read(factor).demand * 3_600.0,
+            reset: Some(T + 40 * MINUTE),
+        };
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        // No drain runs between the return and the dip, as when a selection lands before the purge tick after the wait.
+        let dip = T + MINUTE + SLOW_DOWN_WAIT_MS;
+        for (at, factor) in [(T, 0.6), (T + MINUTE, 1.0), (dip, 0.5)] {
+            state.write_slow_down("p", "a", &read(factor), 1.0, at, 1_800_000);
+        }
+        let edge = |edge: SlowDownEdge| ("p".to_string(), "a".to_string(), edge);
+        assert_eq!(
+            state.take_slow_down_edges(dip),
+            vec![
+                edge(started(0.6)),
+                edge(SlowDownEdge::Ended {
+                    since: T,
+                    duration_ms: MINUTE,
+                    factor_min: 0.6,
+                    held_ms: 0,
+                }),
+                edge(started(0.5)),
+            ],
+            "the factor read 1 for the wait, so the span ended at the return and the dip is a span of its own"
+        );
+        let entry = state.slow_down_state("p", "a").expect("the entry");
+        assert_eq!(
+            (entry.slowed_since, entry.clear_since, entry.factor_min),
+            (Some(dip), None, 0.5)
+        );
+    }
+
+    /// A registry that holds no pool, so the purge drops every slow-down entry.
+    fn no_pools() -> RegistrySnapshot {
+        RegistrySnapshot::from_load(phoebis_store::RegistryLoad::default(), [0; 32], 0, 1)
+    }
+
+    /// A read of `factor` with nothing over the threshold, for the cases that write an entry and read it back.
+    fn read_of(factor: f64) -> SlowDownRead {
+        SlowDownRead {
+            utilization: 0.9,
+            horizon: 3_600_000,
+            reset: Some(3_600_000),
+            demand: 0.1 / 3_600.0,
+            stretch_ms: 600_000,
+            threshold_ms: 1_800_000,
+            factor,
+            speed: 1.0,
+            plan: Vec::new(),
+            realized: 1.0,
+        }
+    }
+
+    #[test]
+    fn the_speed_folds_toward_the_realized_speed_by_the_time_since_the_last_read_over_the_burn_average(
+    ) {
+        const AVERAGE_MS: i64 = 1_800_000;
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        let first = state.write_slow_down("p", "a", &read_of(0.5), 0.5, 0, AVERAGE_MS);
+        assert_eq!(
+            first.speed, 0.5,
+            "the first write takes the realized speed whole"
+        );
+        let speed = state
+            .write_slow_down("p", "a", &read_of(0.5), 1.0, AVERAGE_MS / 2, AVERAGE_MS)
+            .speed;
+        let w = (-0.5_f64).exp();
+        assert!(
+            (speed - (0.5 * w + 1.0 * (1.0 - w))).abs() < 1e-12,
+            "half a burn average after the last read keeps e^-0.5 of the old speed: {speed}"
+        );
+    }
+
+    #[test]
+    fn a_span_the_purge_drops_after_a_return_to_one_ends_at_the_return() {
+        const MINUTE: i64 = 60_000;
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        // The factor returns to 1 a minute in and reads 1 again half a minute later, inside the wait.
+        for (at, factor) in [(0, 0.6), (MINUTE, 1.0), (90_000, 1.0)] {
+            state.write_slow_down("p", "a", &read_of(factor), 1.0, at, 1_800_000);
+        }
+        // The pool left the registry, so the purge drops the entry before the wait closes the span.
+        state.purge_slow_downs(&no_pools(), 100_000);
+        let ended: Vec<SlowDownEdge> = state
+            .take_slow_down_edges(100_000)
+            .into_iter()
+            .map(|(_, _, edge)| edge)
+            .filter(|edge| matches!(edge, SlowDownEdge::Ended { .. }))
+            .collect();
+        assert_eq!(
+            ended,
+            [SlowDownEdge::Ended {
+                since: 0,
+                duration_ms: MINUTE,
+                factor_min: 0.6,
+                held_ms: 0,
+            }],
+            "the span ends at the return, not at the last read"
+        );
+    }
+
+    #[test]
+    fn a_span_the_purge_drops_while_the_factor_reads_under_one_ends_at_the_last_read() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        for (at, factor) in [(0, 0.6), (30_000, 0.5)] {
+            state.write_slow_down("p", "a", &read_of(factor), 1.0, at, 1_800_000);
+        }
+        state.purge_slow_downs(&no_pools(), 40_000);
+        let ended: Vec<SlowDownEdge> = state
+            .take_slow_down_edges(40_000)
+            .into_iter()
+            .map(|(_, _, edge)| edge)
+            .filter(|edge| matches!(edge, SlowDownEdge::Ended { .. }))
+            .collect();
+        assert_eq!(
+            ended,
+            [SlowDownEdge::Ended {
+                since: 0,
+                duration_ms: 30_000,
+                factor_min: 0.5,
+                held_ms: 0,
+            }],
+            "the factor never returned, so the span ends at the entry's last read"
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "a realized speed is positive and finite")]
+    fn the_engine_never_writes_a_realized_speed_that_is_not_positive() {
+        let read = SlowDownRead {
+            utilization: 0.5,
+            horizon: 3_600_000,
+            reset: None,
+            demand: 0.0,
+            stretch_ms: 0,
+            threshold_ms: 1_800_000,
+            factor: 1.0,
+            speed: 1.0,
+            plan: Vec::new(),
+            realized: 1.0,
+        };
+        RoutingState::from_load(RoutingLoad::default()).write_slow_down(
+            "p",
+            "a",
+            &read,
+            f64::NAN,
+            0,
+            1_800_000,
+        );
     }
 }

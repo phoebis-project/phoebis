@@ -48,7 +48,8 @@
           "tier": "default_claude_max_20x",
           "since": 1773482400000,
           "trial_ends_at": null,
-          "ends_at": null
+          "ends_at": null,
+          "derived_ends_at": 1791972000000
         },
         "windows": [
           {
@@ -59,7 +60,7 @@
             "projection": null,
             "horizon": null,
             "burn": null,
-            "lead": -0.18000000000000005
+            "demand": null
           },
           {
             "id": "seven_day",
@@ -69,7 +70,7 @@
             "projection": null,
             "horizon": null,
             "burn": null,
-            "lead": -0.4471428571428571
+            "demand": null
           },
           {
             "id": "seven_day_fable",
@@ -79,7 +80,7 @@
             "projection": null,
             "horizon": null,
             "burn": null,
-            "lead": -0.7371428571428571
+            "demand": null
           },
           {
             "id": "seven_day_opus",
@@ -89,9 +90,10 @@
             "projection": null,
             "horizon": null,
             "burn": null,
-            "lead": -0.8271428571428571
+            "demand": null
           }
         ],
+        "slow_down": null,
         "fast_lane": {
           "input": {
             "utilization": 0.42,
@@ -155,6 +157,7 @@
         "profile": null,
         "subscription": null,
         "windows": [],
+        "slow_down": null,
         "fast_lane": null,
         "extra_usage": null,
         "pool": {

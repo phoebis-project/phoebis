@@ -1,6 +1,7 @@
 import type { AttentionItem, AttentionKind } from '@/api/types';
 import { fmtAbsolute, fmtRelative, instant as clockInstant } from './format';
-import { WINDOW_WORD, logHref, sinceCondition, type LogLink } from './routingLog';
+import { WINDOW_WORD, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
+import { speedWord } from './selection';
 
 export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   certificate_expiring: 'Certificate expiring',
@@ -15,6 +16,7 @@ export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   reauth_required: 'Re-auth required',
   refresh_failed: 'Credential refresh failed',
   shed_no_runway: 'Rounds without a destination',
+  slowed_long: 'Slowed past twice the stretch',
   wall_reached: 'Wall reached under the ceiling',
   writer_degraded: 'State writer degraded',
 };
@@ -32,6 +34,7 @@ export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'serious' | 'war
   reauth_required: 'critical',
   refresh_failed: 'serious',
   shed_no_runway: 'warning',
+  slowed_long: 'warning',
   wall_reached: 'warning',
   writer_degraded: 'serious',
 };
@@ -57,13 +60,14 @@ function conditionLog({ kind, link }: LinkedItem): { log: Pick<LogLink, 'account
   if (link.page !== 'accounts') return null;
   if (kind === 'destination_spent') return { log: { accounts: [link.id], kinds: ['pin_migrated', 'window_spent'] }, words: `account ${link.id}, moves and spent windows` };
   if (kind === 'wall_reached') return { log: { accounts: [link.id], kinds: ['window_spent'] }, words: `account ${link.id}, spent windows` };
+  if (kind === 'slowed_long') return { log: { accounts: [link.id], kinds: ['slow_down_ended', 'slow_down_started'] }, words: `account ${link.id}, slow-downs` };
   return null;
 }
 
 /**
  * A `pool_exhausted` item opens the routing log on the pool's exhausted decisions from the condition's start, and a
- * routing condition on its subject's rounds, moves and walls since then. Every other kind opens the account, pool, key
- * or model where it is fixed. Null when the item names none.
+ * routing condition on its subject's rounds, moves, walls and slow-downs since then. Every other kind opens the
+ * account, pool, key or model where it is fixed. Null when the item names none.
  */
 export function attentionHref(item: LinkedItem, now: number): string | null {
   const { link } = item;
@@ -159,6 +163,8 @@ export function attentionDetail(item: AttentionItem, now: number): string {
     case 'destination_spent':
     case 'shed_no_runway':
       return conditionWords(item, now);
+    case 'slowed_long':
+      return slowedWords(item, now);
   }
 }
 
@@ -203,10 +209,30 @@ function conditionWords(item: AttentionItem, now: number): string {
 }
 
 /**
+ * A slowed account's span, the bar it passed, its slowest factor and the stretch it is held to, without the subject.
+ * The setting's value is a whole number of seconds, which `conditionWords` would print as a percent. The factor reads
+ * as the speed chips print it.
+ */
+function slowedWords(item: AttentionItem, now: number): string {
+  const d = item.detail;
+  const settingValues = d.setting_values !== null && typeof d.setting_values === 'object' ? (d.setting_values as Record<string, unknown>) : {};
+  const settings = words(
+    names(d.setting).map((name) => {
+      const value = settingValues[name];
+      return typeof value === 'number' ? `${name} ${Math.round(value)}` : name;
+    }),
+  );
+  const bar = typeof d.bar_ms === 'number' && Number.isFinite(d.bar_ms) ? [`over ${formatFact(d.bar_ms, 'ms', now)}`] : [];
+  const slowest = typeof d.factor_min === 'number' && Number.isFinite(d.factor_min) ? [`slowest ${speedWord(d.factor_min)}`] : [];
+  return [`slowed ${formatFact(count(d.slowed_ms), 'ms', now)} of the last 24 h`, ...bar, ...slowest, ...(settings ? [settings] : []), `since ${clockInstant(Date.parse(item.since), now)}`].join(', ');
+}
+
+/**
  * A routing condition's sentence as the dashboard's line draws it, its subject first, or null for any other kind, which
  * keeps its label and subject.
  */
 export function attentionWords(item: AttentionItem, now: number): string | null {
+  if (item.kind === 'slowed_long') return `${item.subject.label}: ${slowedWords(item, now)}`;
   if (item.kind !== 'wall_reached' && item.kind !== 'destination_spent' && item.kind !== 'shed_no_runway') return null;
   return `${item.subject.label}: ${conditionWords(item, now)}`;
 }

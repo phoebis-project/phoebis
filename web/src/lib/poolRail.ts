@@ -17,5 +17,6 @@ export const POOL_RAIL: Record<PoolGroup, { label: string; parent: string }> = {
   placement: { label: 'Placement', parent: 'Routing' },
   selection: { label: 'Selection', parent: 'Routing' },
   shedding: { label: 'Load shedding', parent: 'Load' },
-  utilization: { label: 'Window ceiling', parent: 'Load' },
+  slowDown: { label: 'Slow-down', parent: 'Load' },
+  utilization: { label: 'Windows', parent: 'Load' },
 };

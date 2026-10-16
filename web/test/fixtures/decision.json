@@ -9,6 +9,7 @@
       "attempt": 1,
       "seq": 1,
       "at": 1791721000000,
+      "received_at": 1791721000000,
       "key_id": "desktop",
       "key_generation": 1791721000000,
       "pool_id": "main",
@@ -38,7 +39,7 @@
       },
       "attempted": [],
       "holds": [],
-      "registry_revision": 50,
+      "registry_revision": 62,
       "body_tokens": 0
     },
     "pin": {
@@ -59,7 +60,9 @@
       "released": [],
       "marked_at": null,
       "marked_on": null,
-      "marked_window": null
+      "marked_window": null,
+      "cycle_ms": null,
+      "slow_down_until": null
     },
     "pin_reason": null,
     "settings": {
@@ -76,13 +79,18 @@
       "migrate_when_spent": true,
       "overage_move_grace_minutes": 30,
       "wind_down_minutes": 30,
+      "return_to_plan": "always",
+      "return_to_plan_dwell_seconds": 900,
       "shed_cap": 0.2,
       "burn_average_seconds": 1800,
       "shed_dwell_seconds": 900,
       "warm_sessions": "when_needed",
+      "slow_down": false,
+      "slow_down_stretch_seconds": 9000,
+      "slow_down_hold_seconds": 120,
       "in_flight_cap": 16,
       "retry_in_place_seconds": 60,
-      "pool_updated_at": 1791721000047
+      "pool_updated_at": 1791721000059
     },
     "candidates": [
       {
@@ -112,6 +120,7 @@
             "ahead": null,
             "projection": null,
             "horizon": null,
+            "demand": null,
             "reserved": 0.0
           },
           "fast_output": {
@@ -123,6 +132,7 @@
             "ahead": null,
             "projection": null,
             "horizon": null,
+            "demand": null,
             "reserved": 0.0
           }
         },
@@ -196,7 +206,8 @@
         "runway_ms": null,
         "fit": "fits",
         "binding": null,
-        "burn": {}
+        "burn": {},
+        "factor": null
       },
       {
         "account_id": "direct",
@@ -262,7 +273,8 @@
         "runway_ms": null,
         "fit": "fits",
         "binding": null,
-        "burn": {}
+        "burn": {},
+        "factor": null
       }
     ],
     "walk": [
@@ -427,6 +439,7 @@
       "shed_marks": null,
       "mark_cleared": null,
       "reservation": null,
+      "cause": null,
       "completion": {
         "status": 200,
         "cache_read_tokens": 500,

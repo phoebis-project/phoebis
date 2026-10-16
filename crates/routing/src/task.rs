@@ -21,19 +21,19 @@ use crate::affinity::{
     ConversationQuery, PredecessorQuery, PurgedEntry,
 };
 use crate::record::{
-    CacheMapEntry, DecisionRecord, DecisionSummary, PinEventFacts, RefusalFacts, RefusedRequest,
-    ShedRoundFacts,
+    CacheMapEntry, DecisionRecord, DecisionSummary, MoveCause, PinEventFacts, RefusalFacts,
+    RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    decide, pace_of, projection_of, release_reasons, Decided, MigrateReason, Refusal,
-    SelectRequest, SelectResult, FIVE_HOUR_MS,
+    decide, pace_of, projection_of, release_reasons, BurnRead, Decided, FailedOver, MigrateReason,
+    Refusal, SelectRequest, SelectResult, FIVE_HOUR_MS,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
-    is_plan_window, mark_holds, plan_windows, shed_dwell_ms, AccountTicket, BurnUnit, CreditsState,
-    EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable,
-    RoutingState, SharePricer, StateWrite, UtilizationSample, WindowReading, WindowSource,
-    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    is_plan_window, mark_holds, plan_windows, shed_dwell_ms, slow_down_hold_ms, AccountTicket,
+    BurnUnit, CreditsState, EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef,
+    PinUsage, RateTable, RoutingState, SharePricer, SlowDownEdge, StateWrite, UtilizationSample,
+    WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::{resolve, term, window_for, Candidate, KeyRefusal, Presented, RegistrySnapshot};
 
@@ -68,6 +68,16 @@ const EVENTS: usize = 1_024;
 /// session. A failover re-selects within one request, well inside this.
 const MIGRATION_WINDOW_MS: i64 = 60_000;
 
+/// The pin a failover invalidated, kept for `MIGRATION_WINDOW_MS` so the landing reads its figures and names its cause.
+struct Invalidated {
+    account_id: String,
+    /// `cooldown`, `fast_lane` or `mark`.
+    reason: &'static str,
+    at: i64,
+    row: PinRow,
+    cause: Option<MoveCause>,
+}
+
 /// How far apart two readings' resets may lie and still name one reset: a head names its resets in whole seconds and
 /// the poll in milliseconds, so the two sources disagree about one reset by under a second, while a window's next
 /// reset lands hours after the last.
@@ -91,10 +101,11 @@ pub enum RouterEvent {
         source_request_id: Option<String>,
         at: i64,
     },
-    /// A shedding mark left a pin: the heal check found the trigger gone at the pin's request (`healed`, with the
-    /// healing projection), the pin moved off the account the mark was made on (`moved`), or the pin was released,
-    /// expired or lost a rekey's merge without a move, or asked while its pool's load shedding was off (`released`).
-    /// `account_id` is the account the pin sat on when the mark cleared.
+    /// A shedding mark left a pin: the heal check found the window back under its test at the pin's request (`healed`,
+    /// with the healing projection, and with the stretch and the threshold where the stretch healed a 5-hour mark), the
+    /// pin moved off the account the mark was made on (`moved`), or the pin was released, expired or lost a rekey's
+    /// merge without a move, or asked while its pool's load shedding was off (`released`). `account_id` is the account
+    /// the pin sat on when the mark cleared.
     MarkCleared {
         account_id: String,
         key_id: String,
@@ -106,6 +117,8 @@ pub enum RouterEvent {
         marked_on: String,
         marked_window: String,
         projection: Option<f64>,
+        stretch_ms: Option<i64>,
+        threshold_ms: Option<i64>,
         at: i64,
     },
     OverageEnded {
@@ -151,6 +164,9 @@ pub enum RouterEvent {
         fit: Option<&'static str>,
         runway_ms: Option<i64>,
         binding: Option<String>,
+        /// Why a failover moved the session, `None` for a rule's move and for a failover the relay sent with
+        /// neither a cooldown nor a mark.
+        cause: Option<MoveCause>,
         at: i64,
     },
     PinReleased {
@@ -203,6 +219,30 @@ pub enum RouterEvent {
         model: String,
         /// Boxed: the round's facts carry every pin of the round, and the broadcast copies the enum whole.
         round: Box<ShedRoundFacts>,
+        at: i64,
+    },
+    /// The account's factor on the pool read under 1 for the first time since it last read 1: the read's factor,
+    /// stretch and threshold, its demand in share of the 5-hour window per hour and the window's reset.
+    SlowDownStarted {
+        account_id: String,
+        pool_id: String,
+        factor: f64,
+        stretch_ms: i64,
+        threshold_ms: i64,
+        demand: f64,
+        reset: Option<i64>,
+        at: i64,
+    },
+    /// The factor read 1 for the safety wait, or the purge dropped the entry: the span from `since` to the instant the
+    /// factor returned to 1 (or the entry's last read, where it never did), with the lowest factor read in it and the
+    /// time its new holds waited.
+    SlowDownEnded {
+        account_id: String,
+        pool_id: String,
+        since: i64,
+        duration_ms: i64,
+        factor_min: f64,
+        held_ms: i64,
         at: i64,
     },
     /// `blocked()` answered differently before and after a credits reading landed.
@@ -458,9 +498,12 @@ pub enum Report {
         evidence: OverageEvidence,
         incarnation: u64,
     },
+    /// A failover without a cooldown ended the pin. `mark` is the state the verdict marks the account with and who
+    /// moved it, `None` for a failover that marks nothing (a 401 whose refresh failed without marking the account).
     PinInvalidated {
         account_id: String,
         pin: PinRef,
+        mark: Option<(AccountState, StateCause)>,
         incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
@@ -802,6 +845,14 @@ enum Command {
     ReleaseReports {
         reply: oneshot::Sender<()>,
     },
+    #[cfg(any(test, feature = "debug-hooks"))]
+    StampProjectionOver {
+        pool_id: String,
+        account_id: String,
+        window: String,
+        at: i64,
+        reply: oneshot::Sender<()>,
+    },
     Resolve {
         spelling: String,
         dated_id: String,
@@ -819,8 +870,10 @@ enum Command {
     StateMoved {
         rows: Vec<MovedState>,
     },
+    /// Boxed, since a failed-over request carries a whole pin row and the mailbox holds every command at the largest
+    /// variant's size.
     Select {
-        request: SelectRequest,
+        request: Box<SelectRequest>,
         reply: oneshot::Sender<SelectAnswer>,
     },
     Shutdown {
@@ -918,6 +971,23 @@ pub struct AccountProjection {
     /// `pace_of`'s score whatever the account's kind: the spare rate on `seven_day` for an OAuth account, the
     /// remaining worst bucket for an api_key account (whose `windows` is empty).
     pub pace_score: f64,
+    /// The slow-down entry in force for the account at the ask's instant, read through `slow_down_in_force`: `None`
+    /// where the pool's switch is off, the account is an api_key one, an untiered one or one with no 5-hour reading,
+    /// or no pinned selection has read it since the last purge or restart.
+    pub slow_down: Option<AccountSlowDown>,
+}
+
+/// The slow-down entry an account's last pinned selection wrote, with the pool's hold cap: the figures the holds apply.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AccountSlowDown {
+    pub factor: f64,
+    /// The realized speed the demand divides the pins' burn by.
+    pub speed: f64,
+    /// When the factor first read under 1 since it last read 1, `None` outside a span.
+    pub since: Option<i64>,
+    pub stretch_ms: i64,
+    pub threshold_ms: i64,
+    pub hold_ms: i64,
 }
 
 /// One plan window of an account's projection: a window the account holds no reading of has none.
@@ -929,6 +999,8 @@ pub struct WindowProjection {
     pub horizon: i64,
     /// Share per hour, the account's `burn_shares` on the window.
     pub burn: f64,
+    /// The pins' burn over the speed with the live bookings' burn undivided, in share per hour.
+    pub demand: f64,
     /// `remaining / hours - burn` on this window, what Pace scores a candidate by for a model that draws it.
     pub spare_rate: f64,
 }
@@ -946,6 +1018,10 @@ pub struct PinStanding {
     pub runway_bounded: Option<bool>,
     /// The window the runway reads, `None` unless it is bounded.
     pub binding: Option<String>,
+    /// The account's factor from the slow-down entry in force, `None` without one.
+    pub speed: Option<f64>,
+    /// The pin's cycle from its pace, `None` until two requests of the pin have arrived after its placement.
+    pub cycle_ms: Option<f64>,
 }
 
 #[derive(Clone)]
@@ -1004,7 +1080,11 @@ impl RouterHandle {
     }
 
     pub async fn select(&self, request: SelectRequest) -> Result<SelectAnswer, RouterGone> {
-        self.ask(|reply| Command::Select { request, reply }).await
+        self.ask(|reply| Command::Select {
+            request: Box::new(request),
+            reply,
+        })
+        .await
     }
 
     /// A request the relay refused before asking for a selection, recorded as the request's one decision: sends
@@ -1252,9 +1332,9 @@ impl RouterHandle {
     pub async fn pins_standing(&self) -> Result<Vec<PinStanding>, RouterGone> {
         self.ask(|reply| Command::PinsStanding { reply }).await
     }
-    /// Every member of `pool_id` with its projections and Pace score under that pool's settings (the pins the pool
-    /// keeps, its burn average, its ceiling), one ask, one instant, by account: an api_key account answers its score
-    /// alone, and a pool the registry does not hold answers none.
+    /// Every member of `pool_id` with its projections, its Pace score and its slow-down entry in force under that
+    /// pool's settings (the pins the pool keeps, its burn average, its ceiling), one ask, one instant, by account: an
+    /// api_key account answers its score alone, and a pool the registry does not hold answers none.
     pub async fn projections(&self, pool_id: &str) -> Result<Vec<AccountProjection>, RouterGone> {
         let pool_id = pool_id.to_string();
         self.ask(|reply| Command::Projections { pool_id, reply })
@@ -1346,7 +1426,8 @@ impl RouterHandle {
 }
 
 /// Compiled only under the `debug-hooks` feature, which a dependent's dev-dependency turns on, so a release build
-/// carries no way to stall the task's reports or to put an event of its own on the task's broadcast.
+/// carries no way to stall the task's reports, to put an event of its own on the task's broadcast or to stamp a
+/// window of the projection test.
 #[cfg(any(test, feature = "debug-hooks"))]
 impl RouterHandle {
     /// Answers once the task parks every affinity report it receives, unapplied and with the watermark behind
@@ -1358,6 +1439,27 @@ impl RouterHandle {
         ReportHold {
             handle: self.clone(),
         }
+    }
+
+    /// Stamps `window` of the projection test on the account as over the ceiling since `at`, as
+    /// `RoutingState::stamp_projection_over` does, answering once the task has the stamp, so a selection sent after it
+    /// reads it.
+    pub async fn stamp_projection_over(
+        &self,
+        pool_id: &str,
+        account_id: &str,
+        window: &str,
+        at: i64,
+    ) {
+        self.ask(|reply| Command::StampProjectionOver {
+            pool_id: pool_id.to_string(),
+            account_id: account_id.to_string(),
+            window: window.to_string(),
+            at,
+            reply,
+        })
+        .await
+        .expect("the router task is running");
     }
 
     /// Parks the loop before its next command until the guard drops, so a test can fill the queue.
@@ -1466,9 +1568,10 @@ struct Task {
     /// The loop's own way back into its mailbox, weak so it never keeps its receiver alive: upgraded for the one
     /// load a task runs, and dropped with that task.
     handle_tx: mpsc::WeakSender<Command>,
-    /// The account a pin was invalidated from, why, and when. The next select for that same key
-    /// within `MIGRATION_WINDOW_MS` reports a migration rather than a fresh pin; older entries go on purge.
-    invalidated: HashMap<PinKey, (String, &'static str, i64)>,
+    /// The pin a failover invalidated, under its key. The next select for that same key within
+    /// `MIGRATION_WINDOW_MS` lands on the row's figures and reports a migration rather than a fresh pin, and the purge
+    /// drops older entries.
+    invalidated: HashMap<PinKey, Invalidated>,
     /// The reloads the running load answers: those that were waiting when it started.
     load_waiters: Vec<oneshot::Sender<Result<(), String>>>,
     /// Whether a registry load runs. At most one does.
@@ -2194,6 +2297,8 @@ fn released_mark(row: &PinRow, at: i64) -> Option<RouterEvent> {
         marked_on: row.marked_on.clone()?,
         marked_window: row.marked_window.clone().unwrap_or_default(),
         projection: None,
+        stretch_ms: None,
+        threshold_ms: None,
         at,
     })
 }
@@ -2256,9 +2361,10 @@ fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
 }
 
 /// The members of `pool_id` in account order, each with its projection per plan window and its Pace score at `now`
-/// under that pool's settings: the windows from `projection_of` with `pace_of`'s spare rate on each, the score from
-/// `pace_of` on `seven_day`, the window Pace reads for a model without a week of its own. Empty for a pool the snapshot
-/// does not hold.
+/// under that pool's settings: the windows from `projection_of` on the achieved burn and on the demand with `pace_of`'s
+/// spare rate on each, the score from `pace_of` on `seven_day`, the window Pace reads for a model without a week of its
+/// own, and the slow-down entry in force, which the last pinned selection on the account wrote. Empty for a pool the
+/// snapshot does not hold.
 fn projections(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2287,8 +2393,26 @@ fn projections(
             let tier = snapshot.tier(account_id).unwrap_or_default();
             let windows = all_plan_windows()
                 .filter_map(|window| {
-                    let projection =
-                        projection_of(state, snapshot, pool, account_id, tier, window, now)?;
+                    let projection = projection_of(
+                        state,
+                        snapshot,
+                        pool,
+                        account_id,
+                        tier,
+                        window,
+                        now,
+                        BurnRead::Achieved,
+                    )?;
+                    let demand = projection_of(
+                        state,
+                        snapshot,
+                        pool,
+                        account_id,
+                        tier,
+                        window,
+                        now,
+                        BurnRead::Demand,
+                    )?;
                     Some((
                         window.to_string(),
                         WindowProjection {
@@ -2296,6 +2420,7 @@ fn projections(
                             projection: projection.at_horizon,
                             horizon: projection.horizon,
                             burn: projection.burn * 3_600.0,
+                            demand: demand.burn * 3_600.0,
                             spare_rate: pace_of(state, snapshot, pool, &candidate, window, now)
                                 .score,
                         },
@@ -2306,6 +2431,16 @@ fn projections(
                 account_id: account_id.to_string(),
                 windows,
                 pace_score: pace_of(state, snapshot, pool, &candidate, SEVEN_DAY, now).score,
+                slow_down: state.slow_down_in_force(pool, account_id).map(|entry| {
+                    AccountSlowDown {
+                        factor: entry.factor,
+                        speed: entry.speed,
+                        since: entry.slowed_since,
+                        stretch_ms: entry.stretch_ms,
+                        threshold_ms: entry.threshold_ms,
+                        hold_ms: slow_down_hold_ms(pool),
+                    }
+                }),
             }
         })
         .collect()
@@ -2314,7 +2449,8 @@ fn projections(
 /// Every pin with its burn decayed to `now` by its pool's burn average (the default preset's for a key whose pool left
 /// the registry) and its runway on its own account under that pool, read by `standing_runway` once per pool, account
 /// and set of windows, since the account's projection already holds every pin's burn and every pin drawing those
-/// windows there reads the same runway.
+/// windows there reads the same runway. Each pin reads its account's factor from the slow-down entry in force under
+/// that pool and its cycle from its pace.
 fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) -> Vec<PinStanding> {
     type Runway = Option<(Option<i64>, Option<String>)>;
     let mut runways: HashMap<(String, String, Vec<&'static str>), Runway> = HashMap::new();
@@ -2342,11 +2478,17 @@ fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) ->
                 None => (None, None, None),
                 Some((runway_ms, binding)) => (runway_ms, Some(runway_ms.is_some()), binding),
             };
+            let speed = pool
+                .and_then(|pool| state.slow_down_in_force(pool, &pin.account_id))
+                .map(|entry| entry.factor);
+            let cycle_ms = state.pin_pace(&pin.key()).and_then(|pace| pace.cycle_ms);
             PinStanding {
                 pin: decayed(pin, now, average_ms),
                 runway_ms,
                 runway_bounded,
                 binding,
+                speed,
+                cycle_ms,
             }
         })
         .collect()
@@ -2394,8 +2536,16 @@ fn standing_runway(
     let mut projected = false;
     let mut bounded: Vec<(&str, i64)> = Vec::new();
     for window in plan_windows(model) {
-        let Some(projection) = projection_of(state, snapshot, pool, account_id, tier, window, now)
-        else {
+        let Some(projection) = projection_of(
+            state,
+            snapshot,
+            pool,
+            account_id,
+            tier,
+            window,
+            now,
+            BurnRead::Achieved,
+        ) else {
             continue;
         };
         projected = true;
@@ -2423,6 +2573,45 @@ impl Task {
     /// A send with no receiver is an error and means nothing: the loop must never depend on anyone listening.
     fn emit(&self, event: RouterEvent) {
         let _ = self.events.send(event);
+    }
+
+    /// The slow-down span edges the state recorded, one event each, and the spans whose factor has read 1 for the
+    /// wait by `now`.
+    fn slow_down_edges(&mut self, now: i64) {
+        for (pool_id, account_id, edge) in self.state.take_slow_down_edges(now) {
+            self.emit(match edge {
+                SlowDownEdge::Started {
+                    factor,
+                    stretch_ms,
+                    threshold_ms,
+                    demand,
+                    reset,
+                } => RouterEvent::SlowDownStarted {
+                    account_id,
+                    pool_id,
+                    factor,
+                    stretch_ms,
+                    threshold_ms,
+                    demand,
+                    reset,
+                    at: now,
+                },
+                SlowDownEdge::Ended {
+                    since,
+                    duration_ms,
+                    factor_min,
+                    held_ms,
+                } => RouterEvent::SlowDownEnded {
+                    account_id,
+                    pool_id,
+                    since,
+                    duration_ms,
+                    factor_min,
+                    held_ms,
+                    at: now,
+                },
+            });
+        }
     }
 
     /// The decision of a request the relay refused before asking for a selection, built on the current snapshot.
@@ -2584,6 +2773,20 @@ impl Task {
                 let before = pin_key
                     .as_ref()
                     .and_then(|key| self.state.pin(key).cloned());
+                // A failover inside the window lands on the row its source lost: the selection prices the session's
+                // own burn and names the cause on the record. A key that holds a pin again is no landing, and the
+                // entry stays until a selection lands the session, so a held one leaves it for the next.
+                request.failed_over = pin_key
+                    .as_ref()
+                    .filter(|_| before.is_none())
+                    .and_then(|key| self.invalidated.get(key))
+                    .filter(|entry| request.now - entry.at <= MIGRATION_WINDOW_MS)
+                    .map(|entry| FailedOver {
+                        from_account_id: entry.account_id.clone(),
+                        reason: entry.reason,
+                        row: entry.row.clone(),
+                        cause: entry.cause.clone(),
+                    });
                 // The facts are read against the state the selection runs on, before it moves anything.
                 let released = before
                     .as_ref()
@@ -2628,9 +2831,13 @@ impl Task {
                             match self
                                 .invalidated
                                 .remove(key)
-                                .filter(|(_, _, at)| now - at <= MIGRATION_WINDOW_MS)
+                                .filter(|entry| now - entry.at <= MIGRATION_WINDOW_MS)
                             {
-                                Some((from, reason, _)) => {
+                                Some(Invalidated {
+                                    account_id: from,
+                                    reason,
+                                    ..
+                                }) => {
                                     // A hard fail-over's move is named on the attempt row the same way a
                                     // selector's move is.
                                     if let SelectResult::Selected(selection) = &mut result {
@@ -2655,6 +2862,7 @@ impl Task {
                                         fit,
                                         runway_ms,
                                         binding,
+                                        cause: record.outcome.cause.clone(),
                                         at: now,
                                     });
                                 }
@@ -2709,6 +2917,7 @@ impl Task {
                                         fit,
                                         runway_ms,
                                         binding,
+                                        cause: None,
                                         at: now,
                                     });
                                 }
@@ -2745,6 +2954,8 @@ impl Task {
                             marked_on: facts.marked_on.clone(),
                             marked_window: facts.marked_window.clone(),
                             projection: facts.projection,
+                            stretch_ms: facts.stretch_ms,
+                            threshold_ms: facts.threshold_ms,
                             at: request.now,
                         }),
                         None if pin_events
@@ -2785,6 +2996,7 @@ impl Task {
                 for event in pin_events.into_iter().chain(mark).chain(round) {
                     self.emit(event);
                 }
+                self.slow_down_edges(request.now);
                 if let Some((account_id, rewrite)) = booked {
                     for (window, share) in rewrite {
                         let Some(after) = self.state.predicted(&account_id, &window, request.now)
@@ -2861,6 +3073,18 @@ impl Task {
                 let _ = reply.send(());
                 // Awaited inside the loop, so no command is taken until the guard drops.
                 let _ = release.await;
+            }
+            #[cfg(any(test, feature = "debug-hooks"))]
+            Command::StampProjectionOver {
+                pool_id,
+                account_id,
+                window,
+                at,
+                reply,
+            } => {
+                self.state
+                    .stamp_projection_over(&pool_id, &account_id, &window, at);
+                let _ = reply.send(());
             }
             Command::Resolve {
                 spelling,
@@ -3170,6 +3394,11 @@ impl Task {
                 } else {
                     "cooldown"
                 };
+                let cause = MoveCause::Cooldown {
+                    scope: row.scope.clone(),
+                    reason: row.reason.clone(),
+                    window: Some(row.window.clone()),
+                };
                 let mut writes = Vec::new();
                 if self.state.record_cooldown(row.clone()) {
                     self.emit(RouterEvent::CooldownSet {
@@ -3208,17 +3437,21 @@ impl Task {
                             "a fast refusal from a lane the pin has left leaves the pin"
                         );
                     } else {
-                        // The row leaves with the invalidation, so its mark is read before it.
-                        let row = self.state.pin(&key).cloned();
-                        if self.state.invalidate_pin(&pin, &account_id) {
+                        if let Some(row) = self.state.invalidate_pin(&pin, &account_id) {
                             let now = (self.clock)();
-                            self.invalidated
-                                .insert(key.clone(), (account_id.clone(), moved, now));
-                            if let Some(event) =
-                                row.as_ref().and_then(|row| released_mark(row, now))
-                            {
+                            if let Some(event) = released_mark(&row, now) {
                                 self.emit(event);
                             }
+                            self.invalidated.insert(
+                                key.clone(),
+                                Invalidated {
+                                    account_id: account_id.clone(),
+                                    reason: moved,
+                                    at: now,
+                                    row,
+                                    cause: Some(cause),
+                                },
+                            );
                             writes.push(StateWrite::DeletePin(key));
                         }
                     }
@@ -3333,6 +3566,7 @@ impl Task {
             Report::PinInvalidated {
                 account_id,
                 mut pin,
+                mark,
                 incarnation,
                 lifecycle_generation,
                 credential_generation,
@@ -3352,15 +3586,26 @@ impl Task {
                     agent_id: pin.agent_id.clone(),
                     model: pin.model.clone(),
                 };
-                // The row leaves with the invalidation, so its mark is read before it.
-                let row = self.state.pin(&key).cloned();
-                if self.state.invalidate_pin(&pin, &account_id) {
+                if let Some(row) = self.state.invalidate_pin(&pin, &account_id) {
                     let now = (self.clock)();
-                    self.invalidated
-                        .insert(key.clone(), (account_id.clone(), "mark", now));
-                    if let Some(event) = row.as_ref().and_then(|row| released_mark(row, now)) {
+                    if let Some(event) = released_mark(&row, now) {
                         self.emit(event);
                     }
+                    self.invalidated.insert(
+                        key.clone(),
+                        Invalidated {
+                            account_id: account_id.clone(),
+                            // The reason stays `mark` for a failover the relay sent unmarked too, which names no
+                            // cause.
+                            reason: "mark",
+                            at: now,
+                            row,
+                            cause: mark.map(|(state, cause)| MoveCause::Mark {
+                                state: state.as_str(),
+                                cause: cause.as_str(),
+                            }),
+                        },
+                    );
                     self.write(vec![StateWrite::DeletePin(key)]);
                 }
             }
@@ -3713,13 +3958,14 @@ impl Task {
             .cloned()
             .collect();
         for key in keys {
-            if let Some(value) = self.invalidated.remove(&key) {
+            if let Some(mut entry) = self.invalidated.remove(&key) {
+                entry.row.model = dated_id.to_string();
                 self.invalidated.insert(
                     PinKey {
                         model: dated_id.to_string(),
                         ..key
                     },
-                    value,
+                    entry,
                 );
             }
         }
@@ -3920,6 +4166,7 @@ impl Task {
             .map(|p| (p.key(), p))
             .collect();
         let purged = self.state.purge(&snapshot, now);
+        self.slow_down_edges(now);
         tracing::debug!(
             affinity = purged.affinity.len(),
             cooldowns = purged.cooldowns.len(),
@@ -3927,7 +4174,7 @@ impl Task {
             "purged expired and orphaned routing state"
         );
         self.invalidated
-            .retain(|_, (_, _, at)| now - *at <= MIGRATION_WINDOW_MS);
+            .retain(|_, entry| now - entry.at <= MIGRATION_WINDOW_MS);
         for (account_id, scope) in &purged.cooldowns {
             self.emit(RouterEvent::CooldownCleared {
                 account_id: account_id.clone(),

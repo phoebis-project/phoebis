@@ -1,5 +1,5 @@
 import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
-import { AFFINITY_MODE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
+import { AFFINITY_MODE_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
 import { slug } from '@/api/http';
 import type { Account, ApiKey, ModelRule, ModelRulesMode, Pool, PoolKeepalive, PoolWarning } from '@/api/types';
 import { fmtInt, toLocalInput } from './format';
@@ -42,7 +42,10 @@ export const ENGINE_BOUNDS: Record<Exclude<WholeEngineKey, 'shedCap' | 'windowCe
   inFlightCap: { max: 4_294_967_295, min: 1 },
   overageMoveGraceMinutes: { max: 300, min: 0 },
   retryInPlaceSeconds: { max: 300, min: 0 },
+  returnToPlanDwellSeconds: { max: 86_400, min: 0 },
   shedDwellSeconds: { max: 7_200, min: 300 },
+  slowDownHoldSeconds: { max: 300, min: 1 },
+  slowDownStretchSeconds: { max: 18_000, min: 60 },
   windDownMinutes: { max: 10_080, min: 0 },
 };
 
@@ -62,7 +65,7 @@ export function prefixThresholdRefusal(value: string): string | null {
 }
 
 /** The pool dialog's groups in rail order; a refusal names the one its control sits in. */
-export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'bodyCapture', 'cacheDiagnostics'] as const;
+export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'slowDown', 'failover', 'overage', 'cacheTtl', 'keepalive', 'bodyCapture', 'cacheDiagnostics'] as const;
 export type PoolGroup = (typeof POOL_GROUPS)[number];
 
 export interface PoolRefusal {
@@ -79,7 +82,10 @@ export const ENGINE_FIELD_LABELS: Record<keyof typeof ENGINE_BOUNDS, string> = {
   inFlightCap: 'In flight',
   overageMoveGraceMinutes: 'Overage grace (min)',
   retryInPlaceSeconds: 'Retry in place (s)',
+  returnToPlanDwellSeconds: 'Return dwell (s)',
   shedDwellSeconds: 'Shed dwell (s)',
+  slowDownHoldSeconds: 'Hold (s)',
+  slowDownStretchSeconds: 'Stretch (s)',
   windDownMinutes: 'Wind down (min)',
 };
 
@@ -161,15 +167,21 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
 
   const engine = (group: PoolGroup, key: keyof typeof ENGINE_BOUNDS) =>
     refuse(group, ENGINE_FIELD_LABELS[key], whole(input[key], ENGINE_BOUNDS[key].min, ENGINE_BOUNDS[key].max) ? null : boundText(ENGINE_FIELD_LABELS[key], ENGINE_BOUNDS[key]));
+  engine('utilization', 'burnAverageSeconds');
+
   refuse('shedding', 'Shed cap (%)', ratio(input.shedCap, 0.1) ? null : 'Shed cap (%) is from 10 to 100.');
-  engine('shedding', 'burnAverageSeconds');
   engine('shedding', 'shedDwellSeconds');
   refuse('shedding', 'Warm sessions', WARM_SESSIONS_VALUES.some((mode) => mode === input.warmSessions) ? null : listed('Warm sessions'));
+
+  engine('slowDown', 'slowDownStretchSeconds');
+  engine('slowDown', 'slowDownHoldSeconds');
 
   engine('failover', 'inFlightCap');
   engine('failover', 'retryInPlaceSeconds');
 
   engine('overage', 'overageMoveGraceMinutes');
+  refuse('overage', 'Return to plan', RETURN_TO_PLAN_VALUES.some((mode) => mode === input.returnToPlan) ? null : listed('Return to plan'));
+  engine('overage', 'returnToPlanDwellSeconds');
   engine('overage', 'windDownMinutes');
 
   refuse('keepalive', 'Keep prompt caches warm', !k.enabled || affinity >= 300 ? null : 'Keep prompt caches warm needs Session affinity of at least 5m.');
@@ -188,12 +200,26 @@ export function validatePoolInput(input: PoolInput, accountIds: ReadonlySet<stri
 }
 
 /** The settings the pool routes' static checks read, on a saved pool or a dialog's input alike. */
-export type WarnedSettings = Pick<Pool, 'affinityTtlSeconds' | 'cacheTtl' | 'inFlightCap' | 'loadShedding' | 'migrateWhenSpent' | 'shedCap' | 'warmSessions' | 'windowCeiling'>;
+export type WarnedSettings = Pick<
+  Pool,
+  | 'affinityTtlSeconds'
+  | 'cacheTtl'
+  | 'inFlightCap'
+  | 'loadShedding'
+  | 'migrateWhenSpent'
+  | 'returnToPlan'
+  | 'returnToPlanDwellSeconds'
+  | 'shedCap'
+  | 'slowDown'
+  | 'slowDownHoldSeconds'
+  | 'warmSessions'
+  | 'windowCeiling'
+>;
 
 const TTL_SECONDS = { '1h': 3_600, '5m': 300 } as const;
 
 /**
- * The pool routes' eight static checks, the mirror of the route's own as `ENGINE_BOUNDS` mirrors its bounds: each with
+ * The pool routes' ten static checks, the mirror of the route's own as `ENGINE_BOUNDS` mirrors its bounds: each with
  * the fields it reads and its sentence, sorted by code. `cohort` is the most agents of one session among the pins
  * under the pool's keys. A warning blocks nothing.
  */
@@ -219,8 +245,15 @@ export function poolWarnings(pool: WarnedSettings, cohort: number): PoolWarning[
   if (pool.windowCeiling >= 1) {
     warn('ceiling_without_margin', ['window_ceiling'], 'A ceiling at 100 percent leaves no margin for a stale reading or a large turn, so a session can reach the wall before the round or the gate reads it.');
   }
-  if (!pool.loadShedding) {
-    warn('shedding_off', ['load_shedding'], 'With load shedding off no round marks sessions on a member whose window would pass the ceiling, so a session stays until its window is spent or its account refuses it.');
+  if (pool.slowDownHoldSeconds > 150) {
+    warn('hold_over_window', ['slow_down_hold_seconds'], "A hold over 150 seconds leaves under 30 seconds of the client's first-byte window for the upstream's head, so a slowed request can time out at the client and be sent again.");
+  }
+  if (pool.returnToPlan === 'always' && pool.returnToPlanDwellSeconds === 0) {
+    warn('return_at_once', ['return_to_plan_dwell_seconds'], "A return dwell of zero returns every warm session on its first request at the metered member, so the member serves one turn per session and the move's rewrite is paid each time.");
+  }
+  // With the slow-down on, a session over the ceiling is slowed toward the reset rather than left to spend its window.
+  if (!pool.loadShedding && !pool.slowDown) {
+    warn('shedding_off', ['load_shedding', 'slow_down'], 'With load shedding off no round marks sessions on a member whose window would pass the ceiling, so a session stays until its window is spent or its account refuses it.');
   }
   if (!pool.migrateWhenSpent) {
     warn('spent_moves_off', ['migrate_when_spent'], 'With spent moves off a session stays on a spent account until the upstream refuses it, so the destination gate never runs for that move.');

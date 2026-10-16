@@ -41,6 +41,10 @@ test('a preset sets the cap, the average and the dwell and never the switch, so 
       assert.deepEqual([applied.loadShedding, applied.windowCeiling, d.sheddingPresetOf(applied)], [on, 0.9, name], `${name} with the switch ${on ? 'on' : 'off'}`);
     }
   }
+  const untouched = ['returnToPlan', 'returnToPlanDwellSeconds', 'slowDown', 'slowDownHoldSeconds', 'slowDownStretchSeconds'];
+  for (const [name, values] of [...Object.entries(d.SHEDDING_PRESETS), ...Object.entries(d.FAILOVER_PRESETS)]) {
+    assert.deepEqual(Object.keys(values).filter((key) => untouched.includes(key)), [], `${name} reaches none of the slow-down and return-to-plan fields`);
+  }
 });
 
 const NOW = Date.parse('2026-09-16T14:30:00Z');
@@ -87,6 +91,7 @@ const pool = (accounts, over = {}) => ({
   members: accounts.map((a) => member(a.id)),
   shedCap: 0.5,
   warmSessions: 'when_needed',
+  windDownMinutes: 30,
   windowCeiling: 0.9,
   ...over,
 });
@@ -122,6 +127,48 @@ test('the preview reads one member over the ceiling and the round that marks two
   assert.equal(line([hot, cool], three, { shedCap: 0.25 }), '1 member projects over the ceiling: hot. A round there would mark 1 session (0 warm), 3.0 %/h of the excess, to move to a sibling with runway.', 'a quarter of the burn is 2 points an hour, which cold-a reaches alone');
 });
 
+/**
+ * An account as the routes serve it with its slow-down read at `factor` and a stretch of `stretchMinutes` against 30,
+ * the holds having realized `speed`.
+ */
+const slowedAccount = (id, factor, stretchMinutes, speed = factor) => ({
+  ...oauth(id, 0.5, 0.5),
+  slowDown: { factor, holdMs: 120_000, since: factor < 1 ? at(NOW - 10 * MINUTE) : null, speed, stretchMs: stretchMinutes * MINUTE, thresholdMs: 30 * MINUTE },
+});
+/** A pool with the slow-down on, its members in the given order, each carrying the factor its account serves. */
+const slowPool = (accounts, over = {}) => ({
+  members: accounts.map((a, i) => ({ accountId: a.id, priority: i, speed: a.slowDown?.factor ?? null })),
+  slowDown: true,
+  slowDownHoldSeconds: 120,
+  slowDownStretchSeconds: 1_800,
+  ...over,
+});
+const slowLine = (accounts, over = {}) => d.slowDownPreviewLine(d.slowDownPreview(slowPool(accounts, over), accounts));
+
+test('the slow-down preview reads off, no slowed member, or the slowed members and the wait on the slowest, word for word', () => {
+  const studio = slowedAccount('studio', 0.5, 42);
+  const unslowed = (id) => slowedAccount(id, 1, 0);
+  assert.equal(slowLine([studio], { slowDown: false }), 'Slow-down is off: no request is held.', 'the switch off holds nothing, whatever a member reads');
+  assert.equal(slowLine([oauth('quiet', 0.5, 0.5)]), 'No member is slowed.', 'no member served a slow-down');
+  assert.equal(slowLine([unslowed('calm'), unslowed('still')]), 'No member is slowed.', 'members read at full speed');
+  assert.equal(slowLine([studio, unslowed('annex')]), '1 member is slowed: studio at 0.5x (42 min of 30 min). A session there waits its cycle times 1.0, up to 120 s.');
+  assert.equal(
+    slowLine([slowedAccount('studio', 0.5, 42, 1)]),
+    '1 member is slowed: studio at 0.5x (42 min of 30 min). A session there waits its cycle times 1.0, up to 120 s.',
+    'the factor is read, never the speed the holds realized, which reads 1 until a pin there has a cycle',
+  );
+  assert.equal(
+    slowLine([slowedAccount('alder', 0.5, 42), slowedAccount('birch', 0.35, 55), unslowed('cedar')]),
+    '2 members are slowed: alder at 0.5x (42 min of 30 min), birch at 0.35x (55 min of 30 min). A session on birch waits its cycle times 1.9, up to 120 s.',
+    'the closing sentence reads the slowest member',
+  );
+  assert.equal(slowLine([studio], { slowDownHoldSeconds: 60, slowDownStretchSeconds: 9_000 }), '1 member is slowed: studio at 0.5x (42 min of 2 h 30 min). A session there waits its cycle times 1.0, up to 60 s.', "the threshold and the hold are the pool's");
+  assert.equal(slowLine([slowedAccount('full', 0, 70)]), '1 member is slowed: full at 0x (1 h 10 min of 30 min). A session there waits the full 120 s.', 'at the ceiling a session waits the whole hold');
+  const alder = slowedAccount('alder', 0.5, 42);
+  const ghost = { ...slowPool([alder]), members: [{ accountId: 'alder', priority: 0, speed: 0.5 }, { accountId: 'ghost', priority: 1, speed: 0.4 }] };
+  assert.equal(d.slowDownPreviewLine(d.slowDownPreview(ghost, [alder])), '2 members are slowed: alder at 0.5x (42 min of 30 min), ghost at 0.4x. A session on ghost waits its cycle times 1.5, up to 120 s.', 'a member whose account did not load counts by its own factor, its stretch unknown');
+});
+
 test('the preview names the member closest to the ceiling when none projects over it on any window', () => {
   const near = oauth('near', 0.85, 0.3);
   assert.equal(line([near, cool], []), `No member projects over the ceiling on any window: the closest is near, 5h 85 % at ${d.instant(NOW + 2 * HOUR, NOW)}.`, 'a 5-hour horizon reads its clock time');
@@ -147,10 +194,13 @@ test('the preview names every member over the ceiling, and says no sibling has r
   assert.deepEqual(ordered.hot.map((h) => h.label), ['hot', 'second'], 'the members in the order the Members group lists them, priority first');
 });
 
-test('a sibling whose plan ends inside the next five hours has no runway, whatever its projection', () => {
+test("a sibling whose plan ends inside the pool's wind-down has no runway, whatever its projection", () => {
   const ending = (hours) => ({ ...cool, cancelled: true, subscription: { endsAt: at(NOW + hours * HOUR), trialEndsAt: null } });
-  assert.equal(line([hot, ending(4)], three), '1 member projects over the ceiling: hot. No sibling has runway for them, so nothing would be marked.', 'an end four hours out falls inside every horizon');
-  assert.equal(line([hot, ending(6)], three), '1 member projects over the ceiling: hot. A round there would mark 2 sessions (1 warm), 4.5 %/h of the excess, to move to a sibling with runway.', 'an end six hours out does not');
+  const marked = '1 member projects over the ceiling: hot. A round there would mark 2 sessions (1 warm), 4.5 %/h of the excess, to move to a sibling with runway.';
+  const stranded = '1 member projects over the ceiling: hot. No sibling has runway for them, so nothing would be marked.';
+  assert.equal(line([hot, ending(4)], three, { windDownMinutes: 180 }), marked, 'an end four hours out lies past a three-hour wind-down');
+  assert.equal(line([hot, ending(4)], three, { windDownMinutes: 300 }), stranded, 'and inside a five-hour one');
+  assert.equal(line([hot, ending(4)], three, { windDownMinutes: 240 }), stranded, 'an end exactly the wind-down away is inside it');
 });
 
 test('a member over the ceiling with no priced pin reads that a round would mark no session', () => {

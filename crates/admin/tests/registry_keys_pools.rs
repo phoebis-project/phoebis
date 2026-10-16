@@ -2061,7 +2061,9 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
             r#"{"id":"eng","label":"Engine","shed_cap":0.3,"burn_average_seconds":600,
                 "shed_dwell_seconds":300,"window_ceiling":0.8,"load_shedding":false,
                 "migrate_when_spent":false,"warm_sessions":"always","retry_in_place_seconds":5,
-                "in_flight_cap":4,"overage_move_grace_minutes":10,"wind_down_minutes":15}"#,
+                "in_flight_cap":4,"overage_move_grace_minutes":10,"wind_down_minutes":15,
+                "slow_down":true,"slow_down_stretch_seconds":600,"slow_down_hold_seconds":30,
+                "return_to_plan":"when_cold","return_to_plan_dwell_seconds":0}"#,
             Some(&cookie),
         )
         .await,
@@ -2095,6 +2097,17 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
             Some(15),
         ),
         "every shedding and failover field is answered as stored"
+    );
+    assert_eq!(
+        (
+            created["slow_down"].as_bool(),
+            created["slow_down_stretch_seconds"].as_u64(),
+            created["slow_down_hold_seconds"].as_u64(),
+            created["return_to_plan"].as_str(),
+            created["return_to_plan_dwell_seconds"].as_u64(),
+        ),
+        (Some(true), Some(600), Some(30), Some("when_cold"), Some(0)),
+        "every slow-down and return-to-plan field is answered as stored"
     );
     assert!(
         created["moves_per_hour"].is_object(),
@@ -2143,6 +2156,22 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
             "warm_sessions must be always, never, or when_needed",
         ),
         (
+            r#"{"slow_down_stretch_seconds":59}"#,
+            "slow_down_stretch_seconds is between 60 and 18000",
+        ),
+        (
+            r#"{"slow_down_stretch_seconds":18001}"#,
+            "slow_down_stretch_seconds is between 60 and 18000",
+        ),
+        (
+            r#"{"slow_down_hold_seconds":0}"#,
+            "slow_down_hold_seconds is between 1 and 300",
+        ),
+        (
+            r#"{"slow_down_hold_seconds":301}"#,
+            "slow_down_hold_seconds is between 1 and 300",
+        ),
+        (
             r#"{"retry_in_place_seconds":301}"#,
             "retry_in_place_seconds is 0 to 300",
         ),
@@ -2155,12 +2184,21 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
             r#"{"wind_down_minutes":10081}"#,
             "wind_down_minutes is at most 10080 (one week)",
         ),
-        // The two toggles take no bound: a value that is not a boolean fails the body's parse.
+        (
+            r#"{"return_to_plan":"sometimes"}"#,
+            "return_to_plan must be always, when_cold, or never",
+        ),
+        (
+            r#"{"return_to_plan_dwell_seconds":86401}"#,
+            "return_to_plan_dwell_seconds is between 0 and 86400",
+        ),
+        // The three toggles take no bound: a value that is not a boolean fails the body's parse.
         (r#"{"load_shedding":"off"}"#, "body must be a JSON object"),
         (
             r#"{"migrate_when_spent":"off"}"#,
             "body must be a JSON object",
         ),
+        (r#"{"slow_down":"off"}"#, "body must be a JSON object"),
     ] {
         let refused = patch(&app, "/admin/pools/eng", body, Some(&cookie)).await;
         assert_eq!(refused.status(), 400, "{body}");
@@ -2173,7 +2211,8 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
             "/admin/pools/eng",
             r#"{"shed_cap":0.1,"burn_average_seconds":600,"shed_dwell_seconds":300,"window_ceiling":0.5,
                 "retry_in_place_seconds":0,"in_flight_cap":1,"overage_move_grace_minutes":0,
-                "wind_down_minutes":0}"#,
+                "wind_down_minutes":0,"slow_down_stretch_seconds":60,"slow_down_hold_seconds":1,
+                "return_to_plan_dwell_seconds":0}"#,
             Some(&cookie),
         )
         .await,
@@ -2189,6 +2228,9 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
             low["in_flight_cap"].as_u64(),
             low["overage_move_grace_minutes"].as_u64(),
             low["wind_down_minutes"].as_u64(),
+            low["slow_down_stretch_seconds"].as_u64(),
+            low["slow_down_hold_seconds"].as_u64(),
+            low["return_to_plan_dwell_seconds"].as_u64(),
         ),
         (
             Some(0.1),
@@ -2199,6 +2241,9 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
             Some(1),
             Some(0),
             Some(0),
+            Some(60),
+            Some(1),
+            Some(0),
         ),
         "every field's lower inclusive edge is accepted"
     );
@@ -2208,7 +2253,9 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
             &app,
             "/admin/pools/eng",
             r#"{"shed_cap":1,"burn_average_seconds":7200,"shed_dwell_seconds":7200,"window_ceiling":1,
-                "retry_in_place_seconds":300,"overage_move_grace_minutes":300,"wind_down_minutes":10080}"#,
+                "retry_in_place_seconds":300,"overage_move_grace_minutes":300,"wind_down_minutes":10080,
+                "slow_down_stretch_seconds":18000,"slow_down_hold_seconds":300,
+                "return_to_plan_dwell_seconds":86400}"#,
             Some(&cookie),
         )
         .await,
@@ -2223,6 +2270,9 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
             high["retry_in_place_seconds"].as_u64(),
             high["overage_move_grace_minutes"].as_u64(),
             high["wind_down_minutes"].as_u64(),
+            high["slow_down_stretch_seconds"].as_u64(),
+            high["slow_down_hold_seconds"].as_u64(),
+            high["return_to_plan_dwell_seconds"].as_u64(),
         ),
         (
             Some(1.0),
@@ -2231,7 +2281,10 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
             Some(1.0),
             Some(300),
             Some(300),
-            Some(10_080)
+            Some(10_080),
+            Some(18_000),
+            Some(300),
+            Some(86_400),
         ),
         "every field's upper inclusive edge is accepted"
     );
@@ -2837,7 +2890,9 @@ async fn a_patch_leaves_an_absent_engine_field_at_its_stored_value() {
         r#"{"id":"eng","label":"Engine","shed_cap":0.3,"burn_average_seconds":900,
             "shed_dwell_seconds":600,"window_ceiling":0.9,"load_shedding":false,
             "migrate_when_spent":false,"warm_sessions":"always","retry_in_place_seconds":5,
-            "in_flight_cap":4,"overage_move_grace_minutes":10,"wind_down_minutes":15}"#,
+            "in_flight_cap":4,"overage_move_grace_minutes":10,"wind_down_minutes":15,
+            "slow_down":true,"slow_down_stretch_seconds":900,"slow_down_hold_seconds":60,
+            "return_to_plan":"never","return_to_plan_dwell_seconds":300}"#,
         Some(&cookie),
     )
     .await;
@@ -2881,6 +2936,17 @@ async fn a_patch_leaves_an_absent_engine_field_at_its_stored_value() {
             Some(15),
         ),
         "an unrelated patch leaves every engine field at what it was stored with"
+    );
+    assert_eq!(
+        (
+            edited["slow_down"].as_bool(),
+            edited["slow_down_stretch_seconds"].as_u64(),
+            edited["slow_down_hold_seconds"].as_u64(),
+            edited["return_to_plan"].as_str(),
+            edited["return_to_plan_dwell_seconds"].as_u64(),
+        ),
+        (Some(true), Some(900), Some(60), Some("never"), Some(300)),
+        "and every slow-down and return-to-plan field"
     );
 }
 
@@ -3014,11 +3080,29 @@ async fn the_pool_answer_lists_each_warning_that_holds_and_none_that_does_not() 
              the wall before the round or the gate reads it.",
         ),
         (
+            "hold",
+            r#""slow_down_hold_seconds":151"#,
+            r#"{"slow_down_hold_seconds":150}"#,
+            "hold_over_window",
+            &["slow_down_hold_seconds"][..],
+            "A hold over 150 seconds leaves under 30 seconds of the client's first-byte window for the upstream's \
+             head, so a slowed request can time out at the client and be sent again.",
+        ),
+        (
+            "return",
+            r#""return_to_plan":"always","return_to_plan_dwell_seconds":0"#,
+            r#"{"return_to_plan_dwell_seconds":1}"#,
+            "return_at_once",
+            &["return_to_plan_dwell_seconds"][..],
+            "A return dwell of zero returns every warm session on its first request at the metered member, so the \
+             member serves one turn per session and the move's rewrite is paid each time.",
+        ),
+        (
             "off",
             r#""load_shedding":false"#,
             r#"{"load_shedding":true}"#,
             "shedding_off",
-            &["load_shedding"][..],
+            &["load_shedding", "slow_down"][..],
             "With load shedding off no round marks sessions on a member whose window would pass the ceiling, so a \
              session stays until its window is spent or its account refuses it.",
         ),
@@ -3072,6 +3156,45 @@ async fn the_pool_answer_lists_each_warning_that_holds_and_none_that_does_not() 
             "{clear} clears {code}"
         );
     }
+    // With the slow-down on, a session over the ceiling is slowed toward the reset instead of staying until its window
+    // is spent, so the shedding check holds only while both switches are off.
+    let shedding_off = || {
+        serde_json::json!([warning(
+            "shedding_off",
+            &["load_shedding", "slow_down"],
+            "With load shedding off no round marks sessions on a member whose window would pass the ceiling, so a \
+             session stays until its window is spent or its account refuses it."
+        )])
+    };
+    let slowed = post(
+        app,
+        "/admin/pools",
+        r#"{"id":"slowed","label":"slowed","load_shedding":false,"slow_down":true}"#,
+        Some(cookie),
+    )
+    .await;
+    assert_eq!(slowed.status(), 201);
+    assert_eq!(
+        json(slowed).await["warnings"],
+        serde_json::json!([]),
+        "the slow-down on keeps shedding_off silent"
+    );
+    assert_eq!(listed("slowed").await, serde_json::json!([]));
+    let unslowed = json(
+        patch(
+            app,
+            "/admin/pools/slowed",
+            r#"{"slow_down":false}"#,
+            Some(cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        unslowed["warnings"],
+        shedding_off(),
+        "with both switches off the check holds again"
+    );
     // The affinity check runs while the policy injects, which takes the policy on and its injection on: the affinity
     // at the longest of the four TTLs clears it, and with the affinity under it again, the injection turned off on a
     // policy that stays on clears it, as the policy turned off does.

@@ -64,11 +64,11 @@ meter](statistics.md#plan-meter).
 
 The expert view, whose switch carries the title "Shows every field of the pool and key dialogs, the advanced ones
 included.", is stored in the browser under `phoebis.expertView` and starts off. With it on, the pool dialog's rail gains
-the groups Auto mode, Placement, Failover and Cache diagnostics, and its other groups show the fields Pin sessions, Load
-shedding's Preset, Shed cap (%), Burn average (s), Shed dwell (s), Migrate when spent, Warm sessions and Preview,
-Overage grace (min), Wind down (min), Add a cache marker to a request without one and the cache TTL's per-model
-overrides. The key dialog gains Server-side auto mode, Pool rules and List [1m] twins in the models listing, and the
-sidebar the Diagnostics group. With the mode off, a group with hidden fields closes on
+the groups Auto mode, Placement, Slow-down, Failover and Cache diagnostics, and its other groups show the fields Pin
+sessions, Windows' Burn average (s), Load shedding's Preset, Shed cap (%), Shed dwell (s), Warm sessions and Preview,
+Overage grace (min), Return to plan, Return dwell (s), Wind down (min), Add a cache marker to a request without one and
+the cache TTL's per-model overrides. The key dialog gains Server-side auto mode, Pool rules and List [1m] twins in the
+models listing, and the sidebar the Diagnostics group. With the mode off, a group with hidden fields closes on
 `{n} more settings in the expert view` (`1 more setting` for one), whose link turns the mode on, and a hidden field that
 holds a refusal shows anyway. Closing a dialog with unsaved changes asks "Discard changes?" with "This dialog has
 changes that are not saved.", "Keep editing" and "Discard".
@@ -86,14 +86,17 @@ pool, a pool deleted since, one of the router's own writers, a page unknown to t
 conditions are the ones the `phoebis_attention` gauge exports ([Conditions and
 gauges](statistics.md#conditions-and-gauges)), and the pool exhausted item opens the [routing log](#routing-log) on the
 pool's exhausted decisions from the moment the condition began. The model weight estimated item opens the
-[Models](#models) view. The three routing conditions read as one sentence each, the subject first, then the count, the
+[Models](#models) view. The four routing conditions read as one sentence each, the subject first, then the count, the
 settings they name (with the pool's values where the item carries them) and the start, such as
 `main: 4 rounds marked nothing, no destination had runway, window_ceiling 95 %, since 14:45` for a pool whose rounds
 found no destination with runway. An account's count reads `2 moves landed and the 5h window was spent within the hour`
 where moves onto it were followed by a spent window, or `1 wall reached on the 5h window` where it reached its wall,
-followed by `the last round projected 96 %` where a round on that window came before. Each opens the [routing
-log](#routing-log) on the pool's shedding rounds, the account's moves and spent windows, or its spent windows, from the
-moment the condition began. A parked ledger record adds "Replay parked records", which answers
+followed by `the last round projected 96 %` where a round on that window came before. An account slowed past twice its
+pool's stretch threshold within the day reads, under the label "Slowed past twice the stretch",
+`studio: slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12`, the
+bar after `over`, the lowest factor of its spans and the pool's threshold. Each opens the [routing log](#routing-log) on
+the pool's shedding rounds, the account's moves and spent windows, its spent windows, or its slow-down starts and ends,
+from the moment the condition began. A parked ledger record adds "Replay parked records", which answers
 `Landed {n}, {n} still parked`. Where the line is too narrow for its lead, the "+N more" badge and that button with its
 answer together, the button and its answer take a second row.
 
@@ -121,15 +124,16 @@ tier is sized for the 5-hour window." (or 7-day). Each account keeps one color a
 the Analytics, in the order of its id, the eight colors cycling past eight accounts, and an account the registry does
 not list draws muted.
 
-"Accounts" draws one small card per account, linking to its detail, with the status badge, the email, "Overage active"
-while requests bill as extra usage, the cooldown line, and "API key" for an API-key account. "Recent requests" ("Last
-10 across every pool", with "All requests" opening the Requests view) lists Time, Key, Account, Model, Status, TTFB,
-Tokens and Cost, the status badge reading `×{n}` for a request of several attempts. Cost reads a request's dollars
-under the three dollar positions, its account's shares under Window shares as the Requests view's column does, and
-under Native a subscription request's 20x 5-hour equivalent alone, with the other windows, the dollar equivalent and
-the price list and cost model in force on hover. Where the table runs wider than its card it scrolls inside it.
-"Sessions" ("Sticky pins and cache-warming agents", with "Open") reads the active pins as `active pins across {n}
-accounts` and the agents as Agents, Busy, Idle and Parked. What each figure means is on [Statistics](statistics.md).
+"Accounts" draws one small card per account, linking to its detail, with the status badge, the speed chip beside it on a
+slowed account (`0.5x`, as [Quota](#quota) describes it), the email, "Overage active" while requests bill as extra
+usage, the cooldown line, and "API key" for an API-key account. "Recent requests" ("Last 10 across every pool", with
+"All requests" opening the Requests view) lists Time, Key, Account, Model, Status, TTFB, Tokens and Cost, the status
+badge reading `×{n}` for a request of several attempts. Cost reads a request's dollars under the three dollar positions,
+its account's shares under Window shares as the Requests view's column does, and under Native a subscription request's
+20x 5-hour equivalent alone, with the other windows, the dollar equivalent and the price list and cost model in force on
+hover. Where the table runs wider than its card it scrolls inside it. "Sessions" ("Sticky pins and cache-warming
+agents", with "Open") reads the active pins as `active pins across {n} accounts` and the agents as Agents, Busy, Idle
+and Parked. What each figure means is on [Statistics](statistics.md).
 
 ## Quota
 
@@ -160,13 +164,19 @@ leaves at the window's horizon: `resets in 2h 13m, 19% left at the reset` where 
 minute), `resets in 3d 5h, 56% left in 5 h` where it comes earlier (five hours out on a weekly window, or the account's
 end), and `{pct} left now` once it has come. A window the sessions spend before its horizon reads the time until it runs
 out, `spent in 2 h 10 min`. The reset and the projection split over two lines where the column does not hold them on
-one, and the hover adds the burn behind the projection, `the sessions on this account burn 8.5% an hour`. The window
-bars of the Dashboard's account cards and of the Accounts list draw the projection alone in the reset's place, in a
-compact form (`19% left at reset`, `56% left in 5 h`) that splits between the share and the horizon where the bar is
-narrow, with the reset's instant on hover, and keep the reset where the window has no projection. The Accounts detail's
-bars read the whole label, split between its two parts where the bar is narrow. The Pools dialog's Preview, the Sessions
-Runway column and the routing log keep the used share, the figure that the window ceiling of a pool is measured against.
-A window whose reset has passed with no reading since reads `expired {ago}` instead, with "no reading since the reset,
+one, and the hover adds the burn behind the projection, `the sessions on this account burn 8.5% an hour`. On a slowed
+account the 5-hour window's line ends in the speed chip, `0.5x` in the warning tone (the account's slow-down factor to
+two decimals, a trailing zero dropped, `0.35x`), whose hover reads `slowed since 17:40: the sessions on this account
+would pass the ceiling 42 min before the reset, over the 30 min threshold` (`under` while no round can fire). The chip
+draws while the factor is under 1 and the 5-hour window the read came from has not reset since, and the Dashboard's
+account cards, the Accounts view, the Pools cards and the Sessions view draw the same chip with the same hover
+([Slow-down](routing.md#slow-down)). The window bars of the Dashboard's account cards and of the Accounts list draw the
+projection alone in the reset's place, in a compact form (`19% left at reset`, `56% left in 5 h`) that splits between
+the share and the horizon where the bar is narrow, with the reset's instant on hover, and keep the reset where the
+window has no projection. The Accounts detail's bars read the whole label, split between its two parts where the bar is
+narrow, and the 5-hour bar's label carries the chip on a slowed account. The Pools dialog's Preview, the Sessions Runway
+column and the routing log keep the used share, the figure that the window ceiling of a pool is measured against. A
+window whose reset has passed with no reading since reads `expired {ago}` instead, with "no reading since the reset,
 {time}" on hover, and draws no share and an empty meter until the next reading, and a window the account does not report
 reads "not reported". A card with no window yet reads "No quota windows reported yet.", and one whose read failed shows
 the error with `, next attempt {time}` and a "Retry" button in the windows' place. The "Extra usage" chip reads `off`,
@@ -203,11 +213,12 @@ or Status, and "Add account", and at the right edge the split Refresh button and
 they stay while an account opens. Auto reload starts at 5 s and waits while a dialog or an editor of the detail is open,
 or while its save runs. The six labels, with the state each stands for, are Cooling down (`cooldown`), Needs funding
 (`funding_required`), Paused (`paused`), Needs re-auth (`reauth_required`), Ready (`ready`) and Not paired (`unpaired`).
-A row reads the label with a badge that names the plan by its tier ("Max 20x", "Max 5x" or "Pro"), the email, `pool
-{id}` or "no pool", "Overage" while requests bill as extra usage and "extra usage on" while it is enabled and unused.
-The pane reads "The router holds no account yet" with "Add account" before the first account, "No accounts match" with
-"Clear the search or the status filter." under a filter, and "No account to show" until a row is selected. What the
-states mean and how an account moves between them is on [Pairing an account](pairing.md).
+A row reads the label with a badge that names the plan by its tier ("Max 20x", "Max 5x" or "Pro"), the status badge
+with the speed chip beside it on a slowed account, the email, `pool {id}` or "no pool", "Overage" while requests bill as
+extra usage and "extra usage on" while it is enabled and unused. The pane reads "The router holds no account yet" with
+"Add account" before the first account, "No accounts match" with "Clear the search or the status filter." under a
+filter, and "No account to show" until a row is selected. What the states mean and how an account moves between them is
+on [Pairing an account](pairing.md).
 
 The detail opens on the account's label with "Edit label", its email and its badges: the status, `quarantined` while
 the last refresh's outcome is uncertain, `cooldown ends {ago}`, "Overage active" and "Routing paused", with `Overage
@@ -231,17 +242,18 @@ editor: the checkbox "Cancelled", the field "Ends" with the hint "The date the p
 An annual plan is marked cancelled in its final month only.", Save and Cancel, and "Reload" where the row changed under
 the editor. The card closes on "Renewal date is not reported by the provider." For an API-key account it lists Type
 ("API key") and Windows ("None reported, billed per token"). "Usage" ("Remaining share of each window") draws the three
-windows as the Quota view does, "Extra usage this month" with its spend meter and an "in use" badge, the reason the
-provider gave for disabling extra usage, and a "Fast mode" line with the share of the fast lane's input and output
-buckets used and a chip while the fast lane cools, or reads "This account does not report quota windows." "7-day trend"
-("Utilization of each window, sampled every 5 minutes") draws the 5-hour, 7-day and Fable 7-day windows of a
-subscription account, or "No samples yet" with "Quota samples appear after the first successful quota fetch." "Cooling
-down" lists Scope ("Whole account", "Fast mode", "Fast mode credits" or the model), Reason and Until with a Clear button
-per row, or "Nothing cooling down", and Clear asks "Clear cooldown": "The account becomes eligible immediately. If the
-account is still rate limited, the next request re-enters cooldown." "Pool" links the pool with `priority {n}`, or reads
-"Not a member of a pool." "Credential" lists Access token, Refresh token, Last refresh and Last error for a subscription
-account, and Secret ("stored encrypted at rest") and Last error for an API-key account. "Requests" reads Last 24h, Last
-7d and Lifetime, with a "Routing log" link that opens the log on the account's rows over the last hour.
+windows as the Quota view does, the speed chip beside the 5-hour bar's label on a slowed account, "Extra usage this
+month" with its spend meter and an "in use" badge, the reason the provider gave for disabling extra usage, and a "Fast
+mode" line with the share of the fast lane's input and output buckets used and a chip while the fast lane cools, or
+reads "This account does not report quota windows." "7-day trend" ("Utilization of each window, sampled every 5
+minutes") draws the 5-hour, 7-day and Fable 7-day windows of a subscription account, or "No samples yet" with "Quota
+samples appear after the first successful quota fetch." "Cooling down" lists Scope ("Whole account", "Fast mode", "Fast
+mode credits" or the model), Reason and Until with a Clear button per row, or "Nothing cooling down", and Clear asks
+"Clear cooldown": "The account becomes eligible immediately. If the account is still rate limited, the next request
+re-enters cooldown." "Pool" links the pool with `priority {n}`, or reads "Not a member of a pool." "Credential" lists
+Access token, Refresh token, Last refresh and Last error for a subscription account, and Secret ("stored encrypted at
+rest") and Last error for an API-key account. "Requests" reads Last 24h, Last 7d and Lifetime, with a "Routing log" link
+that opens the log on the account's rows over the last hour.
 
 "Catalog" opens `Catalog of {label}`: `As of {ago}` with "Refresh", and the models as Model, Name, Released, Input
 tokens, Output tokens and Effort levels, or "The upstream lists no models."
@@ -278,14 +290,16 @@ Each card carries the pool's name, its status badge (active, degraded, disabled 
 keys yet", "1 key", `{n} keys`, or "Keys unavailable" when the keys read failed), an edit button and "Delete". A strip
 of badges names the features the pool has on and the state of its load shedding, in the rail's order: "server-side auto
 mode off", `sheds above 95 %` (the pool's window ceiling) with the pool's load shedding on or `shedding off` with it
-off, "cache TTL" and "keepalive", each opening the dialog on the group that edits it, the last followed by the pool's
-resolved ceilings in whole hours, `idle {h} · parked {h} · horizon {h}` (a range such as `44h to 71h` where the pool's
-combinations differ). One sentence says what the status means, and attention rows under it list the dashboard's
-conditions filtered to this pool, one row per condition with its badge, its subject linked where it is fixed and its
-detail, ending with its age, the whole on hover. On a narrow card the detail and the age take a line of their own under
-the badge. The pool's own exhausted row and its Rounds without a destination row open the [routing log](#routing-log) on
-its exhausted decisions or its shedding rounds since the condition began, and an account's Destination spent within the
-hour row opens it on the account's moves and spent windows, its Wall reached under the ceiling row on its spent windows.
+off, `slows above 2 h 30 min` (the pool's stretch threshold as a span, `slows above 30 min` on a pool set to 1800) with
+its slow-down on, "cache TTL" and "keepalive", each opening the dialog on the group that edits it, the last followed by
+the pool's resolved ceilings in whole hours, `idle {h} · parked {h} · horizon {h}` (a range such as `44h to 71h` where
+the pool's combinations differ). One sentence says what the status means, and attention rows under it list the
+dashboard's conditions filtered to this pool, one row per condition with its badge, its subject linked where it is fixed
+and its detail, ending with its age, the whole on hover. On a narrow card the detail and the age take a line of their
+own under the badge. The pool's own exhausted row and its Rounds without a destination row open the [routing
+log](#routing-log) on its exhausted decisions or its shedding rounds since the condition began, and an account's
+Destination spent within the hour row opens it on the account's moves and spent windows, its Wall reached under the
+ceiling row on its spent windows, and its Slowed past twice the stretch row on its slow-down starts and ends.
 
 The serving table lists who serves next: Tier (`P{n}`, or `plan P{n}`, `overage P{n}` and `API keys P{n}` where the pool
 prefers subscription accounts), Account, Standing and Pins. Standing reads `next` for the member a fresh session lands
@@ -293,15 +307,17 @@ on, `eligible`, `after plan quota` for a member in overage ranked after the plan
 hover `Winding down to the plan's end at {time}`) for a member that serves only as the last resort, and for a member
 passed over `cooldown {left}` (on hover `In a cooldown that ends {time}`), `overage until {time}` (`overage` where the
 reset is unknown), `at budget` or `at budget until {time}` with the spend against the budget, and `unavailable` with the
-account's status on hover. The caption names the strategy, `Pace`, `Priority, then random` or `Round robin`, with
-`subscription accounts first` appended where the pool prefers subscription accounts, and its hover notes "A request for
-a Fable model is placed on the Fable window instead, which this card does not draw." Pins reads the member's active
-pins, one per agent and model as the card's Active pins fact counts them, a muted `0` for none. Then "Traffic, 24h"
-draws requests per hour with a 3-hour average, or "No traffic in the last 24h", and the facts Members, Keys, Requests
-24h, Cost 24h, Active pins, Warnings and Moves in the last hour. Warnings counts the pool's warnings with their
-sentences on hover, and its figure opens the dialog on the group of the first warning's first field. The figure of Moves
-in the last hour opens the routing log on the pool's moved decisions, and its hover lists the moves by reason. "Delete"
-asks `Delete pool {name}`: "Deletes the pool and its memberships. Its keys must be moved or revoked first."
+account's status on hover. On a card whose pool has the slow-down on, Standing carries the speed chip of a slowed
+member, `0.5x` with the Quota view's hover where the account is loaded. The caption names the strategy, `Pace`,
+`Priority, then random` or `Round robin`, with `subscription accounts first` appended where the pool prefers
+subscription accounts, and its hover notes "A request for a Fable model is placed on the Fable window instead, which
+this card does not draw." Pins reads the member's active pins, one per agent and model as the card's Active pins fact
+counts them, a muted `0` for none. Then "Traffic, 24h" draws requests per hour with a 3-hour average, or "No traffic in
+the last 24h", and the facts Members, Keys, Requests 24h, Cost 24h, Active pins, Warnings and Moves in the last hour.
+Warnings counts the pool's warnings with their sentences on hover, and its figure opens the dialog on the group of the
+first warning's first field. The figure of Moves in the last hour opens the routing log on the pool's moved decisions,
+and its hover lists the moves by reason. "Delete" asks `Delete pool {name}`: "Deletes the pool and its memberships. Its
+keys must be moved or revoked first."
 
 The pool dialog, "Create pool" or `Edit pool {name}`, is grouped: a rail "Pool settings" on the left, one group open
 at a time, a status line reading "Every group saves together." or `Save is held: {reason}` (a pool that changed since
@@ -312,7 +328,7 @@ Identity and Members "needed" and Keys "after saving". The groups by rail parent
 | --- | --- | --- |
 | Pool | Identity, Members, Keys, Models, Auto mode | Auto mode |
 | Routing | Selection, Placement, Pinning | Placement, and Pin sessions under Pinning |
-| Load | Window ceiling, Load shedding, Failover, Overage and plan end | Failover, Preset, Shed cap (%), Burn average (s), Shed dwell (s), Migrate when spent, Warm sessions and Preview under Load shedding, and Overage grace (min) and Wind down (min) under Overage and plan end |
+| Load | Windows, Load shedding, Slow-down, Failover, Overage and plan end | Slow-down, Failover, Burn average (s) under Windows, Preset, Shed cap (%), Shed dwell (s), Warm sessions and Preview under Load shedding, and Overage grace (min), Return to plan, Return dwell (s) and Wind down (min) under Overage and plan end |
 | Caching | Cache TTL, Keepalive | Add a cache marker to a request without one and the per-model overrides, both under Cache TTL |
 | Visibility | Body capture, Cache diagnostics | Cache diagnostics |
 
@@ -322,29 +338,32 @@ spare rate: the allowance left in the window it reads, the model's own Fable wee
 hour, within the first priority tier that has an eligible account. An API-key member scores the room left in its worst
 bucket. An unsampled account counts as untouched, and ties are random. Each account's windows are on the Accounts page."
 
-Window ceiling opens on "The ceiling is the share of a window the router keeps every account under: a session lands only
-where its rewrite and its burn stay under it until the window resets, and a round moves sessions off an account whose
-sessions would take it over." and holds `Window ceiling (%)`, from 50 to 100, with the hint "A move or a new session
+Windows opens on "The windows the router works from: the share of each it keeps every account under, and the span each
+session's burn is averaged over." and holds `Window ceiling (%)`, from 50 to 100, with the hint "A move or a new session
 lands on a member only where its windows stay under this share until they reset, or for the next five hours on a weekly
-window. A round runs on a member whose window would pass it." It closes on the "Member utilization" bar, whose hint
-reads "Each tick is a member's latest 5-hour or 7-day reading, as on the Quota page. Drag the ceiling's handle, or focus
-it and use the arrow keys." The bar is one track of used shares holding both windows' readings, a tick per member window
-with the hover `{account}: {window} {used}` and the legend "5-hour reading" and "7-day reading", and the ceiling stands
-on it in every view as the "Window ceiling" handle, dragged or moved with the arrow keys, with the field following it.
+window. A round runs on a member whose window would pass it.", and in the expert view `Burn average (s)`, from 600 to
+7200, with the hint "The time constant of each session's burn average. The projection, the slow-down and the round read
+it." It closes on the "Member utilization" bar, whose hint reads "Each tick is a member's latest 5-hour or 7-day
+reading, as on the Quota page. Drag the ceiling's handle, or focus it and use the arrow keys." The bar is one track of
+used shares holding both windows' readings, a tick per member window with the hover `{account}: {window} {used}` and the
+legend "5-hour reading" and "7-day reading", and the ceiling stands on it in every view as the "Window ceiling" handle,
+dragged or moved with the arrow keys, with the field following it.
 
 Load shedding opens on "A member whose window would pass the ceiling before its reset, or within five hours on a weekly
 window, runs a round that marks the sessions that cover the excess, and each moves to a sibling with runway at its next
-request." Its first field, in every view, is the `Load shedding` toggle, drawn as Migrate when spent is, with the hint
+request. With the slow-down on, a round fires when the time the slow-down adds passes the stretch threshold, and removes
+only what the slow-down cannot cover." Its first field, in every view, is the `Load shedding` toggle, with the hint
 "Off, no round runs and nothing is marked. The ceiling still holds every move and new session, and Migrate when spent
 keeps its own switch." With it off no round runs, the group's other fields stay editable, and the spent move keeps its
 own toggle. The expert view adds the preset (Balanced, the default, Fast, Conservative or Custom, the first three
-filling the cap, the average and the dwell and leaving the switch as it is, Custom opening the three to an edit),
-`Shed cap (%)`, from 10 to 100, with the hint "The most of the member's burn one round removes. The round removes what
-brings the window under the ceiling, up to this.", `Burn average (s)` with "The time constant of each session's burn
-average. The projection and the round read it.", `Shed dwell (s)`, Migrate when spent and Warm sessions, and closes on a
-"Preview" line, the round's dry run as the fields stand. The Preview replays the trigger from the projections the
-accounts route serves for each member and window and from the sessions' served burn, an estimate of what the router
-reads.
+filling the cap, the average under Windows and the dwell and leaving the switch as it is, Custom opening the three to an
+edit with the hint "Set the cap, the burn average under Windows, and the dwell by hand."), `Shed cap (%)`, from 10 to
+100, with the hint "The most of the member's burn one round removes. The round removes what brings the window under the
+ceiling, up to this.", `Shed dwell (s)` and Warm sessions, and closes on a "Preview" line, the round's dry run as the
+fields stand. `Burn average (s)` sits under Windows and `Migrate when spent` under Failover, which opens on "How long a
+request waits out a throttle on its member, how many requests one member serves at once, and whether a spent window
+moves the session at once." The Preview replays the trigger from the projections the accounts route serves for each
+member and window and from the sessions' served burn, an estimate of what the router reads.
 
 With the switch off the Preview opens on `Load shedding is off: no round runs.` and names the projection alone. It reads
 `No member projects over the ceiling on any window: the closest is {label}, {window} {p} {horizon}.` while no member's
@@ -360,10 +379,40 @@ before the sign (`99 %`), `{horizon}` `at` a clock time on the 5-hour window and
 (`in 5h`), `{window}` the window's label (`5h`, `7d` or `Fable week`), `{excess}` a percent an hour with one decimal
 (`9.5 %/h`), and `{list}` the members in the Members group's order.
 
+Slow-down, in the expert view, opens on "The slow-down holds each request of a session before it is forwarded, so an
+account whose sessions would pass the ceiling before the reset reaches it under the ceiling instead. A session waits its
+own cycle times the slow-down, so a fast session waits more than a slow one and each keeps its share." and holds the
+`Slow-down` toggle, with the hint "Holds requests on a member whose five-hour window would pass the ceiling. Auxiliary
+requests, compactions, the fast lane, probes and token counts are never held.", `Stretch (s)`, from 60 to 18000, with
+the hint "The time the slow-down may add to a session before a round moves sessions off the member, with load shedding
+on. Under it the slow-down holds alone.", `Hold (s)`, from 1 to 300, with the hint "The longest one request waits. 120 s
+leaves 60 s of the client's 180 s first-byte window for the upstream's head.", and a "Preview" line, which reads the
+switch and the threshold as the dialog holds them and the slow-down the accounts route serves on each member, so it
+shows what the save would do. With the switch off it reads `Slow-down is off: no request is held.`, with it on and no
+member slowed `No member is slowed.`, with one `1 member is slowed: {label} at {factor}x ({stretch} of {threshold}).`
+followed by `A session there waits its cycle times {wait}, up to {hold}.`, and with more
+`{n} members are slowed: {label} at {factor}x ({stretch} of {threshold}), ....` followed by
+`A session on {slowest label} waits its cycle times {wait}, up to {hold}.`, where `{factor}` is the member's factor as
+the chip prints it, `{stretch}` and `{threshold}` spans (`42 min of 30 min`), `{wait}` one over the slowest member's
+factor less one, to one decimal (`1.0` at 0.5), and `{hold}` the hold in seconds (`120 s`). Where the slowest member is
+at a factor of 0 the second sentence reads `A session there waits the full {hold}.` with one member slowed and
+`A session on {slowest label} waits the full {hold}.` with more. The mechanism is on [Slow-down](routing.md#slow-down).
+
+Overage and plan end holds the Overage policy radio in every view and, in the expert view, `Overage grace (min)`,
+`Return to plan`, `Return dwell (s)` and `Wind down (min)`. `Return to plan` is a radio, Always ("at once when cold,
+after the dwell when warm"), When cold ("only when the move is free: a compaction, a restart or a lane change") and
+Never ("the session stays until the member refuses it"), with the hint "When a session on an API-key member returns to a
+subscription member. Under Never it leaves the metered member on expiry, a cooldown or a mark alone."
+`Return dwell (s)`, from 0 to 86400, with the hint "Under Always, how long a warm session stays on the API-key member
+before it returns. 0 returns it at once.", is enabled under Always alone and stays editable while a save refused its
+value. `Wind down (min)` carries the hint "This long before a cancelled subscription ends, its account takes new
+sessions only as the last resort and cold sessions move off. Inside it the account is no destination for a move. The end
+is set on the Accounts page." The rules are on [Moves](routing.md#moves).
+
 The pool routes answer each pool with its warnings on every list, create and save: static checks on settings that work
 against each other, none of which blocks a save. The dialog draws the saved pool's warnings above its groups, one line
 per warning with its sentence and `Go to {group}.` naming the group of its first field, and a new pool shows none until
-it is saved. The card's Warnings fact counts them. The eight checks, by code:
+it is saved. The card's Warnings fact counts them. The ten checks, by code:
 
 | Code | Holds when | Sentence |
 | --- | --- | --- |
@@ -372,7 +421,9 @@ it is saved. The card's Warnings fact counts them. The eight checks, by code:
 | `cap_under_quarter` | `shed_cap` is under 0.25 | "A shed cap under 25 percent removes at most a quarter of the burn per round, so a window far over the ceiling needs several rounds and dwells to come under it." |
 | `ceiling_low` | `window_ceiling` is under 0.8 | "A ceiling under 80 percent leaves a fifth of every window unused and moves sessions that would have finished the window warm." |
 | `ceiling_without_margin` | `window_ceiling` is 1.0 | "A ceiling at 100 percent leaves no margin for a stale reading or a large turn, so a session can reach the wall before the round or the gate reads it." |
-| `shedding_off` | `load_shedding` is off | "With load shedding off no round marks sessions on a member whose window would pass the ceiling, so a session stays until its window is spent or its account refuses it." |
+| `hold_over_window` | `slow_down_hold_seconds` is over 150 | "A hold over 150 seconds leaves under 30 seconds of the client's first-byte window for the upstream's head, so a slowed request can time out at the client and be sent again." |
+| `return_at_once` | `return_to_plan` is `always` and `return_to_plan_dwell_seconds` is 0 | "A return dwell of zero returns every warm session on its first request at the metered member, so the member serves one turn per session and the move's rewrite is paid each time." |
+| `shedding_off` | `load_shedding` is off and `slow_down` is off | "With load shedding off no round marks sessions on a member whose window would pass the ceiling, so a session stays until its window is spent or its account refuses it." |
 | `spent_moves_off` | `migrate_when_spent` is off | "With spent moves off a session stays on a spent account until the upstream refuses it, so the destination gate never runs for that move." |
 | `warm_never` | `warm_sessions` is `never` | "With warm sessions never a round stops after the cold sessions, so the excess is covered only while cold sessions carry it." |
 
@@ -473,25 +524,27 @@ that answered it. Every filter, the range and the page size live in the page's a
 keeps them.
 
 The table offers thirteen columns, Time, Key, Pool, Account, Model, Client, Kind, Transport, Status,
-Attempts, TTFB, Tokens and Cost, with Kind, Pool and Transport hidden until the Columns control turns them on, and
-shows Time, Model, Status and Attempts alone while the drawer is open. A row older than a day prints its date before the
-time, so a 7-day or 30-day range reads without the hover. The model column reads the family and version with the whole
-id on hover. The client column reads the class the router derived from the user agent (`claude-code/<entrypoint>`
+Attempts, TTFB, Tokens and Cost, with Kind, Pool and Transport hidden until the Columns control turns them on, and shows
+Time, Model, Status and Attempts alone while the drawer is open. A row older than a day prints its date before the time,
+so a 7-day or 30-day range reads without the hover. The model column reads the family and version with the whole id on
+hover. The client column reads the class the router derived from the user agent (`claude-code/<entrypoint>`
 or `other`), whole on hover, with the agent type beneath it on a subagent's turn.
 Status reads the code with the outcome word beside it where the
 request did not succeed (`canceled`, `exhausted`, `failed`, `incomplete` or `rejected`). One row is one client request
 however many attempts it took: Attempts reads `2 attempts` with the trail of account and status on hover, nothing for a
-request of one attempt, and a `held {time}` badge for a request that waited for a slot while every account was at its
-cap. Cost reads in the top bar's unit. Under Native a request a subscription window paid reads its 20x 5-hour equivalent
-over its 20x 7-day one (`1.47% 20x 5h` over `0.244% 20x 7d`), with every window, the model week among them, and the
-dollar equivalent on hover. Under the four other positions it reads its account's own window shares, each with its
-window's short word (`0.12% Fable week` over `0.42% 5h`, the full labels on hover). An overage, fast mode or API-key
-request reads dollars under every position, and a figure an estimate priced leads with `~`, its hover adding "Estimated
-at the model tier's latest weighted model". The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First,
-Previous and Next, holds the requests up to the moment you opened it so paging does not shift, and the split Refresh
-button's body brings it up to now. An empty table reads "No requests match" with "Widen the date range or clear a
-filter." and "Reset filters", which clears the filters, the search and the range. What each figure means is on
-[Statistics](statistics.md).
+request of one attempt, and a `waited 42 s` badge for a request that waited through a hold, for a slot while every
+account was at its cap, for a reset or for the slow-down, whose hover names each wait with its reason in the row's order
+and the account it waited on, `waited for the slow-down 42 s, for a slot 3 s on {account}` (a row from before the
+reasons reads `waited 1 s on {account}`, and a wait under a second reads `1 s`). Cost reads in the top bar's unit. Under
+Native a request a subscription window paid reads its 20x 5-hour equivalent over its 20x 7-day one (`1.47% 20x 5h` over
+`0.244% 20x 7d`), with every window, the model week among them, and the dollar equivalent on hover. Under the four other
+positions it reads its account's own window shares, each with its window's short word (`0.12% Fable week` over
+`0.42% 5h`, the full labels on hover). An overage, fast mode or API-key request reads dollars under every position, and
+a figure an estimate priced leads with `~`, its hover adding "Estimated at the model tier's latest weighted model". The
+table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous and Next, holds the requests up to the
+moment you opened it so paging does not shift, and the split Refresh button's body brings it up to now. An empty table
+reads "No requests match" with "Widen the date range or clear a filter." and "Reset filters", which clears the filters,
+the search and the range. What each figure means is on [Statistics](statistics.md).
 
 Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
 and the choice stays with the open page, out of its address. At each interval it reads the list again, a preset's range
@@ -583,9 +636,12 @@ Cost, Cache warming or Accounts, and a range with nothing reads "No traffic in t
 Traffic reads `{n} requests, {pct} errors` and draws Requests by outcome (OK, Rate limited, Failed, Incomplete and
 Exhausted), Errors by code, Failovers, Migration rewrites with its moves (one bar per move reason, stacked by the
 destination's fit, `fits`, `rewrite only`, `least bad` or `unknown`, each segment titled `{fit} {n}` and the bar labeled
-with the reason's total), Requests by speed, Effort levels, and the table Traffic by the chosen group with Requests, OK,
-Rate limited, Failed, Incomplete, Exhausted, Rejected, Error rate, Failovers, Search and Fetch. Under the model grouping
-the requests the router rejected before routing group under "no model", which the Cache by model table leaves out.
+with the reason's total, and under them "Held by the slow-down", a bar per bucket of the time the slow-down held
+requests in the warning tone, its hover `12 requests held 14 min in all`, `no request held` on a bucket that held none,
+and its legend line the range's sum, or `none in range` with no chart), Requests by speed, Effort levels, and the table
+Traffic by the chosen group with Requests, OK, Rate limited, Failed, Incomplete, Exhausted, Rejected, Error rate,
+Failovers, Search and Fetch. Under the model grouping the requests the router rejected before routing group under "no
+model", which the Cache by model table leaves out.
 
 Burn follows the page's grouping, and "Session (Burn only)" groups it by session while every other section keeps the key
 grouping, since no rollup carries a session. Of the filters, the Accounts filter and the user agent groups alone apply
@@ -695,16 +751,19 @@ warming and Next probe, with Agents, Last request and Next probe hidden by defau
 takes the card's free width and keeps at least 74 px, and a set of columns wider than the card scrolls
 inside it. Runway reads the time until the projection of the pin's account reaches the ceiling on the window that binds,
 among those the pin's model draws: a span such as `6 h 55 min`, `none` where the runway is gone, `unbounded` where
-nothing burns, and a dash for an unpinned row or a pinned row with no projection. The session cell cuts a long id with
-an ellipsis, whole on hover.
-A session that branched from another conversation at depth 2 or deeper carries a fork
-badge under its id, `fork, on another account` or `fork, same account` where the session it branched from is listed with
-a pinned account, and `fork at 3` otherwise, with the base, the depth and the base's account on hover, and a click on
-the badge scrolls to the base's row where the list holds it. Companion reads the mod's state, `reporting` with how long
-ago the person was last seen at the terminal, `silent` or `none`. Cache warming reads the pin state badge, `busy`,
-`idle`, `parked`, `released` or `unknown`, with the recipe summary, or "no recipe". Next probe reads the instant,
-"pending" or "not scheduled". Before the first session the card reads "No live sessions" with "A session appears here on
-its first request, or as soon as the keepalive mod registers it, and drops off once it passes the session expiry."
+nothing burns, and a dash for an unpinned row or a pinned row with no projection. On a pinned row whose pin carries a
+cycle its hover reads `cycle 20 s`, the gap between the session's requests the slow-down's hold is sized from. Account
+draws the speed chip after the account's name on a slowed session, with the Quota view's hover. The session cell cuts a
+long id with an ellipsis, whole on hover.
+A session that branched from another conversation at depth 2 or deeper
+carries a fork badge under its id, `fork, on another account` or `fork, same account` where the session it branched from
+is listed with a pinned account, and `fork at 3` otherwise, with the base, the depth and the base's account on hover,
+and a click on the badge scrolls to the base's row where the list holds it. Companion reads the mod's state, `reporting`
+with how long ago the person was last seen at the terminal, `silent` or `none`. Cache warming reads the pin state badge,
+`busy`, `idle`, `parked`, `released` or `unknown`, with the recipe summary, or "no recipe". Next probe reads the
+instant, "pending" or "not scheduled". Before the first session the card reads "No live sessions" with "A session
+appears here on its first request, or as soon as the keepalive mod registers it, and drops off once it passes the
+session expiry."
 
 A row's menu offers "View in analytics" and "View in requests" once the session has ledgered traffic, "View in routing
 log", which opens the log on that session's decisions an hour either side of its last request, and "Release". Release
@@ -829,25 +888,29 @@ drawer), Kind (a decision in a filled badge with `attempt 2/3` beneath a failove
 Session (the first eight characters with the agent beneath), Account (a move names the account it left and the one it
 landed on), Model, By, Fact, and Details, which opens the request's drawer. By names what decided the row in one chip:
 the rule that fired (`spent rule`), the rung that placed it (`static rung`), the strategy and the tier's priority
-(`Pace P0`, whose hover is the Pace hint), where a hold waited (`cohort`, `session pin`), what exhausted the pool
-(`budget`, `cooldown`, `fast lane`), the refusal (`client drift`, `key revoked`), `no rule fired` for a renewal, or an
-event's reason (`window spent`, `429 on 5h`). Fact gives the value that made it so as a muted label with its value,
-`gap`, `idle`, `prefix`, `until`, a move's `runway` on its destination (a span such as `2 h 10 min`, `none` or
-`unbounded`) followed by `least bad` or `rewrite only` where the destination did not fit, or a renewal's window
-utilization, such as `5h 96%`, where that window's projection reached the ceiling. A verdict reads in one color across
-the rows, the card and the strip: good when it served the request, warning when it changed its course, critical for a
-refusal or an exhaustion, and neutral for none and no. Every account, key, pool, model, session and request a row names
-is a link.
+(`Pace P0`, whose hover is the Pace hint), where a hold waited (`cohort`, `session pin`), `slow-down` for a request the
+slow-down held and for the renewal after its hold, what exhausted the pool (`budget`, `cooldown`, `fast lane`), the
+refusal (`client drift`, `key revoked`), `no rule fired` for a renewal, or an event's reason (`window spent`,
+`429 on 5h`, `slow-down` for a slow-down's start and end). Fact gives the value that made it so as a muted label with
+its value, `gap`, `idle`, `prefix`, `until`, a held request's `until 18:20` and `speed 0.5x`, the renewal's
+`held 42 s`, a slow-down start's `speed 0.5x` and an end's `slowest 0.35x`, a move's `runway` on its destination (a
+span such as `2 h 10 min`, `none` or `unbounded`) followed by `least bad` or `rewrite only` where the destination did
+not fit, or a renewal's window utilization, such as `5h 96%`, where that window's projection reached the ceiling. A
+verdict reads in one color across the rows, the card and the strip: good when it served the request, warning when it
+changed its course, critical for a refusal or an exhaustion, and neutral for none and no. Every account, key, pool,
+model, session and request a row names is a link.
 
 Every row opens beneath itself. A decision row loads its record and draws the decision card. Its verdict line names the
 decision with its accounts and its pool as links ("Moved secondary to primary", "Attempt 2 of 2: placed on primary",
 "Exhausted in jobs") and chips for the tier, the rule or the rung, `held for the reset at 18:20` on a request that
-waited for a reset, `reserved 10.4% of 5h` on a move or a placement that booked a reservation, the pin's warmth and the
-cache verdict (`cache pending` before the attempt reports usage). "How the router decided" draws the walk as a strip of
-stations in the engine's order, each with its verdict, the path the decision took in the accent, every branch it did not
-take as a stub, a step the record does not carry dashed and reading "not run", and the ways out as termini, Chosen, Held
-for a slot and Refused, the one reached filled in its tone. A fourth way out, Held for the reset, is drawn only when a
-spent move waited for one, in Held for a slot's place. A move's track carries the Fit station after Move, the
+waited for a reset, `held for the slow-down until 18:20` and `0.5x` on one the slow-down held, `reserved 10.4% of 5h` on
+a move or a placement that booked a reservation, the pin's warmth and the cache verdict (`cache pending` before the
+attempt reports usage). "How the router decided" draws the walk as a strip of stations in the engine's order, each with
+its verdict, the path the decision took in the accent, every branch it did not take as a stub, a step the record does
+not carry dashed and reading "not run", and the ways out as termini, Chosen, Held for a slot and Refused, the one
+reached filled in its tone. Two more ways out, Held for the reset and Held for the slow-down, are drawn only when the
+decision took them, a spent move that waited for a reset or a request the slow-down held, each in Held for a slot's
+place, so the strip names five termini and draws three. A move's track carries the Fit station after Move, the
 destination gate's table: a row per candidate the gate read with its projection, rewrite and reserved share on each
 window the gate read, its runway, the window that binds, its end and its verdict, the station's own verdict naming the
 order the gate took. Reserve stands after Pick, or after the last step where no pick ran, and lists the booking (the
@@ -863,41 +926,54 @@ rows list the chosen, renewed or held-on member first, then the ranked members b
 strategy did not rank, then the ones a partition or a check dropped with their obstacle. Projection reads one line per
 window the candidate reports, the projection at the window's horizon, `5h 99% at 18:20` where the horizon is the reset
 and `7d 41% in 5 h` where it falls earlier, and Runway a span (`2 h 10 min`), `none` or `unbounded`, each a dash for a
-candidate the gate did not read. The Pace score stands under a header naming the window it read,
-`Spare rate, 7-day per hour` or `Spare rate, Fable week per hour` (`Pace` where no subscription candidate names one, and
-`Pace, 7-day left per hour` on a version 1 record), each cell's hover reading
+candidate the gate did not read. The Projection cell's hover names the demand where it differs from the burn the window
+sees, `demand 12.86 %/h over burn 6.43 %/h at 0.5x`, with the candidate's slow-down factor. The Pace score stands under
+a header naming the window it read, `Spare rate, 7-day per hour` or `Spare rate, Fable week per hour` (`Pace` where no
+subscription candidate names one, and `Pace, 7-day left per hour` on a version 1 record), each cell's hover reading
 `{pct} of the 7-day window left over {n} h to its reset at {time}, less {burn} of burn: {rate}.` (or
 `to its subscription's end at {time}`) followed by `Inside its tier, the highest spare rate wins.` Verdict carries the
 one chip that decided it (`429 on 5h until 15:42`, `budget $1.10 of $5.00`), whose hover says why the member was passed
 over, and beside it a badge for a destination the gate read that did not fit, `rewrite only` or `least bad` in the
 warning tone and `ending` neutral. Three folds, "Request facts", "Pin and warmth" (a record that pins nothing reads why:
-not looked up or pinning off) and `Settings in force since {time}`, stay closed until opened. The settings
-fold lists the pool's nineteen settings in the card's order with Load shedding reading `on` or `off`,
-or "The key and its pool had left the registry". A version 1 record reads `not recorded` for
-Load shedding and Window ceiling and lists after the nineteen, each marked `(then)`, the three settings it carried that a
+not looked up or pinning off, and a pin that carries them reads Cycle and Slowed until) and
+`Settings in force since {time}`, stay closed until opened. The settings fold lists the pool's twenty-four settings
+in the card's order with Load shedding and Slow-down reading `on` or `off`, Stretch and Hold as spans,
+Return to plan as its word and Return dwell as a span or `at once` at 0, or "The key
+and its pool had left the registry". A record written before a setting existed reads `not recorded` for it, Load
+shedding and Window ceiling on a version 1 record and the five slow-down and return-to-plan settings on an older version
+2 record, and a version 1 record lists after the twenty-four, each marked `(then)`, the three settings it carried that a
 version 2 record does not. "Outcome" lists the pin written, the reservation (the account, the share per window and the
 expiry), the cache-map entries the answer wrote (`pending` until it ends), the cache read with the TTL tier of its
-deepest entry, the hold, reading `for the reset at {time}` where the request waited for a reset, the answer an
-exhaustion or a refusal gave, and the spend against a budget. The foot offers the three widenings after "Widen to", this
-minute, this session and this account, names the record's version as `Record v{n}`, and "Copy as JSON" copies the record
-route's answer whole. A record the retention purged reads "The record left with the retention", and one still loading
-"Loading the record".
+deepest entry, the hold, reading `for the reset at {time}` where the request waited for a reset, or
+`for the slow-down until {time}` with the chips `speed 0.5x`, `stretch 42 min of 30 min`, `bound 2 min` and `cycle 20 s`
+where the slow-down held it, a Cause on a failover's landing or a move with a cause (`429 on 5h` or `fast lane 429` for
+a cooldown, `re-auth required by credential refused` for a mark), the answer an exhaustion or a refusal gave, and the
+spend against a budget. The foot offers the three widenings after "Widen to", this minute, this session and this
+account, names the record's version as `Record v{n}`, and "Copy as JSON" copies the record route's answer whole. A
+record the retention purged reads "The record left with the retention", and one still loading "Loading the record".
 
 An event row opens to a panel of pairs: When to the second in UTC, the account and the pool as links, then the kind's
 own pairs. An event that names a request ends with "Source request", which opens the log on that request a quarter hour
 either side, and "Details", which opens the request's drawer. An account state change names who moved the state:
 `credential refused`, `credit balance`, `funding retried`, `refresh failed`, `by hand` or `paired`, and a deleted
 account's last row reads `deleted`. A pin moved panel names the account the pin left, the one it landed on, the reason
-and what moved it, and where a rule's gate read the destination, Destination fit (`fits`, `rewrite only` or `least bad`)
-and Runway (a span, `none` or `unbounded`). A shedding round's panel reads Started by, Trigger
-(`5h projection 99% at 18:20 over the ceiling 95%`, or `7d projection 96% in 5 h over the ceiling 95%`), Excess
-(`9.5 %/h`), Cap with the target and the burn removed, Unit, Burn average, Warm sessions, the Pins table (Session,
-Agent, Warmth, Burn, Last prompt, Rewrite, Destination, Mark), Skipped (one chip per pin, its session and its reason),
-Planned destinations, Outcome (`marked 2`, or `nothing to mark: no runway`), Next round after, Dwell and Survive a
-restart. A mark cleared panel reads the pin, Reason (`healed: the 5h projection read 91% under the ceiling`, `moved` or
-`released`), Marked (when, on which account) and Standing for, and a reservation expired panel reads Request, Attempt,
-Cause, Reserved (`5h 10.4%`, `7d 1.2%`), Held for and the Effect `the booked share left the account's prediction`. The
-kinds and what each row records:
+and what moved it, where a rule's gate read the destination, Destination fit (`fits`, `rewrite only` or `least bad`)
+and Runway (a span, `none` or `unbounded`), and on a failover's move its Cause, `429 on 5h` or `fast lane 429` for a
+cooldown and `re-auth required by credential refused` for a mark, in the account state panel's words. A shedding
+round's panel reads Started by, Trigger (`5h projection 99% at 18:20 over the ceiling 95%`,
+`7d projection 96% in 5 h over the ceiling 95%`, or `5h stretch 42 min over the threshold 30 min` for a round the
+stretch fired, followed by Demand, `12.0 %/h to the reset at 18:20`), Fired by (`the projection` or `the slow-down`),
+Excess (`9.5 %/h`), Cap with the target and the burn removed, Unit, Burn average, Warm sessions, the Pins table
+(Session, Agent, Warmth, Burn, Last prompt, Rewrite, Destination, Mark), Skipped (one chip per pin, its session and its
+reason), Planned destinations, Outcome (`marked 2`, or `nothing to mark: no runway`), Next round after, Dwell and
+Survive a restart. A mark cleared panel reads the pin, Reason (`healed: the 5h projection read 91% under the ceiling`,
+`healed: the stretch read 24 min under the threshold 30 min` for a mark the stretch made, `moved` or `released`), Marked
+(when, on which account) and Standing for, and a reservation expired panel reads Request, Attempt, Cause, Reserved
+(`5h 10.4%`, `7d 1.2%`), Held for and the Effect `the booked share left the account's prediction`. A slow-down started
+panel reads Speed (`0.5x`), Stretch (`42 min of 30 min`, the threshold after `of`), Demand (`12.0 %/h`), Reset and the
+Effect `requests of the account's sessions wait their cycle times the slow-down up to the hold`, and a slow-down ended
+panel Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
+`requests of the account's sessions pass unheld again`. The kinds and what each row records:
 
 | Event | What it records |
 | --- | --- |
@@ -909,14 +985,14 @@ kinds and what each row records:
 | cooldown set | An answer cooled an account, its fast lane or one model on it until a time. |
 | fast credits changed | An account's usage credits for fast mode became available or unavailable. |
 | ledger gap | The ledger could not record a request whole, and the reason names what it is missing. |
-| mark cleared | A shedding mark left a pin: it moved, was released, or its account's window read under the ceiling again. |
+| mark cleared | A shedding mark left a pin: it moved, was released, or its account's window read under the ceiling again, or its stretch under the threshold. |
 | model permitted | An account served a model another account had rejected. |
 | model rejected | An account answered 404 for a model, which cools that model on the account. |
 | overage ended | An account left overage at its 7-day reset. |
 | overage started | An account went into overage, so its requests draw on extra usage. |
 | pin created | A placement pinned a session to an account. |
 | pin expired | A pin was released, idle past the pin window or for the reasons it lists. |
-| pin moved | A rule or a failover moved a session's pin to another account, with the destination's fit and runway where a rule's gate read it. |
+| pin moved | A rule or a failover moved a session's pin to another account, with the destination's fit and runway where a rule's gate read it and the failover's cause. |
 | pin released | An operator released a session's pin by hand. |
 | poll backoff ended | The usage poll answered cleanly again after backing off. |
 | poll backoff started | The usage poll was rate limited, so decisions read the account's windows from response heads. |
@@ -926,7 +1002,9 @@ kinds and what each row records:
 | registry changed | An operator edited a pool, a key or an account, field by field where the change names them. |
 | reservation expired | A request ended without usage or its booking turned an hour old, so the share it reserved left the destination's prediction. |
 | router started | The router started and loaded its pins, shedding marks, window readings and affinity entries. |
-| shedding round | A round ran on an account whose projection on a plan window read over the ceiling at the window's horizon, with the pins it marked or why it marked none, and kept its marks across a restart. |
+| shedding round | A round ran on an account whose projection on a plan window read over the ceiling at the window's horizon, or whose stretch stood over the slow-down's threshold for the safety wait, with the pins it marked or why it marked none, and kept its marks across a restart. |
+| slow-down ended | An account's slow-down span closed: its factor read 1 again for the safety wait, or its entry left at the purge, with the span's length, its lowest factor and the time it held requests. |
+| slow-down started | An account's slow-down began: its factor read under 1, so requests of its sessions wait their cycle times the slow-down up to the hold. |
 | warm prefix expired | A warm prefix's cache-map entry lapsed past its TTL. |
 | wind-down started | An account's subscription end entered the pool's wind-down, so no fresh session starts on it. |
 | window reset | A quota window reset, with the reading before it. |
@@ -937,6 +1015,6 @@ Sessions row menu's "View in routing log" on the session's decisions an hour eit
 card's "Moves in the last hour" figure on the pool's moved decisions over the last hour, the card's pool exhausted row
 and the dashboard's pool exhausted item on the pool's exhausted decisions from the moment the condition began, the
 routing conditions' dashboard items and pool card rows on the pool's shedding rounds, the account's moves and spent
-windows, or its spent windows, from the moment the condition began, the "Routing log" action on an account's Requests
-card on the account's rows over the last hour, and the Models view's button on the model rejected and model permitted
-rows of the last 24 hours.
+windows, its spent windows, or its slow-down starts and ends, from the moment the condition began, the "Routing log"
+action on an account's Requests card on the account's rows over the last hour, and the Models view's button on the model
+rejected and model permitted rows of the last 24 hours.

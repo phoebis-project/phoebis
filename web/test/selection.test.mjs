@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import * as d from './dist/api.js';
 import { cooldownBadge, fmtAbsolute, fmtPeriodEnd, fmtRelative, fmtShortTime, INELIGIBLE_LABEL, LAST_RESORT_LABEL, overageBadge, poolStatusSentence, selectionOrder, windingDownBadge } from './dist/api.js';
 
 const HOUR = 3_600_000;
@@ -296,6 +297,60 @@ test('the Standing badges read the time left or the reset time, each with its se
   const end = NOW + 3 * 24 * HOUR;
   assert.deepEqual(windingDownBadge(end, NOW), { text: 'winding down 3d', title: `Winding down to the plan's end at ${fmtAbsolute(new Date(end).toISOString())}` });
   assert.deepEqual(windingDownBadge(NOW - MINUTE, NOW), { text: 'winding down', title: `Winding down past the plan's end at ${fmtAbsolute(new Date(NOW - MINUTE).toISOString())}` }, 'an end behind the instant reads no time left');
+});
+
+/** A slow-down entry read `sinceAgo` before the instant, the stretch and the threshold in minutes. */
+const slowDown = (factor, stretchMinutes, thresholdMinutes = 30, sinceAgo = 42 * MINUTE) => ({
+  factor,
+  holdMs: 120_000,
+  since: sinceAgo === null ? null : new Date(NOW - sinceAgo).toISOString(),
+  speed: factor,
+  stretchMs: stretchMinutes * MINUTE,
+  thresholdMs: thresholdMinutes * MINUTE,
+});
+
+test('a speed word and its hover read the factor, the since, the stretch against the threshold, and nothing on an unslowed account', () => {
+  assert.deepEqual([0.5, 0.35, 0.95, 2 / 3, 0.3, 0].map(d.speedWord), ['0.5x', '0.35x', '0.95x', '0.67x', '0.3x', '0x'], 'two decimals with a trailing zero dropped');
+  assert.equal(d.speedWord(0.996), '0.99x', 'a factor under 1 never reads 1x, since the chip draws under 1 alone');
+  const since = new Date(NOW - 42 * MINUTE).toISOString();
+  const tail = 'the sessions on this account would pass the ceiling 42 min before the reset';
+  assert.equal(d.speedHover(slowDown(0.5, 42), NOW), `slowed since ${fmtShortTime(since)}: ${tail}, over the 30 min threshold`);
+  assert.equal(d.speedHover(slowDown(0.7, 12), NOW), `slowed since ${fmtShortTime(since)}: the sessions on this account would pass the ceiling 12 min before the reset, under the 30 min threshold`, 'no round fires under the threshold');
+  assert.equal(d.speedHover(slowDown(0.6, 30), NOW), `slowed since ${fmtShortTime(since)}: the sessions on this account would pass the ceiling 30 min before the reset, under the 30 min threshold`, 'a stretch at the threshold reads under it, since a round fires only above it');
+  assert.equal(d.speedHover(slowDown(0.5, 42, 150), NOW), `slowed since ${fmtShortTime(since)}: ${tail}, under the 2 h 30 min threshold`, 'a threshold past an hour reads its hours');
+  assert.equal(d.speedHover(slowDown(0.5, 42, 30, null), NOW), `${tail}, over the 30 min threshold`, 'without a since the words open at the sessions');
+  assert.equal(d.speedHover(slowDown(1, 0), NOW), null, 'an account at full speed has no hover');
+  assert.equal(d.speedHover(null, NOW), null, 'nor one the router has not read');
+});
+
+/** A 5-hour window read an hour ago that resets at `resetsAt`, the window a slow-down entry is read from. */
+const window5h = (resetsAt) => [{ id: '5h', label: '5-hour', observedAt: new Date(NOW - HOUR).toISOString(), periodHours: 5, resetsAt, utilization: 0.86 }];
+
+test('a serving member reads the chip from its account\'s slow-down, from its own speed when the account is not loaded, and none when neither is set', () => {
+  const read = slowDown(0.5, 42);
+  const studio = account('studio', { slowDown: read, windows: window5h(hoursFromNow(1)) });
+  assert.deepEqual(d.memberSpeed({ speed: 0.5 }, studio, NOW), { factor: 0.5, hover: d.speedHover(read, NOW) }, 'a loaded account reads its own slow-down');
+  const unheld = { ...read, speed: 1 };
+  const since = new Date(NOW - 42 * MINUTE).toISOString();
+  assert.deepEqual(
+    d.memberSpeed({ speed: 0.5 }, account('studio', { slowDown: unheld, windows: window5h(hoursFromNow(1)) }), NOW),
+    { factor: 0.5, hover: `slowed since ${fmtShortTime(since)}: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min threshold` },
+    'the chip and its hover read the factor, never the speed the holds realized, which reads 1 until a pin there has a cycle',
+  );
+  assert.deepEqual(d.memberSpeed({ speed: 0.4 }, studio, NOW), { factor: 0.5, hover: d.speedHover(read, NOW) }, "on a pool with the switch on, the account's entry wins over the member's figure");
+  assert.deepEqual(d.memberSpeed({ speed: 0.5 }, account('plain', { slowDown: null }), NOW), { factor: null, hover: null }, 'a loaded account with no slow-down draws none');
+  assert.deepEqual(d.memberSpeed({ speed: null }, account('full', { slowDown: slowDown(1, 0), windows: window5h(hoursFromNow(1)) }), NOW), { factor: null, hover: null }, 'an account at full speed draws none');
+  assert.deepEqual(d.memberSpeed({ speed: 0.4 }, null, NOW), { factor: 0.4, hover: null }, "a member whose account is not loaded reads the pool's own figure");
+  // The card passes the account only on a pool whose switch is on, so a pool that holds nobody draws no chip for an
+  // entry the purge has not yet dropped: the pools route serves its members no speed.
+  assert.deepEqual(d.memberSpeed({ speed: null }, null, NOW), { factor: null, hover: null }, 'and none when neither is set, as on a pool with the switch off, where the card passes no account and the member serves no speed');
+});
+
+test("a loaded account whose 5-hour window reset after the slow-down's read draws no chip, its entry as stale as the window", () => {
+  const read = slowDown(0.5, 42);
+  const reset = account('studio', { slowDown: read, windows: window5h(new Date(NOW - 5 * MINUTE).toISOString()) });
+  assert.deepEqual(d.memberSpeed({ speed: 0.5 }, reset, NOW), { factor: null, hover: null });
+  assert.deepEqual(d.memberSpeed({ speed: 0.5 }, account('studio', { slowDown: read }), NOW), { factor: null, hover: null }, 'nor one with no 5-hour window to read it from');
 });
 
 test('a member at its budget is skipped with the reason the serving table names', () => {

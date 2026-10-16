@@ -262,7 +262,7 @@ async function groupedDialogFixture(theme) {
     measurements.push(`${theme} /fixtures/grouped-dialog ${state} ${JSON.stringify(read)}`);
     const sayIn = (what) => say(`${state}: ${what}`);
     if (read.frame.width !== 1040 || read.frame.height !== 752) sayIn(`the frame measures ${read.frame.width} by ${read.frame.height}, not 1040 by 752`);
-    if (read.groups !== 16 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 16 under 5`);
+    if (read.groups !== 17 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 17 under 5`);
     if (read.wrapped.length) sayIn(`${read.wrapped.join(', ')} wraps onto a second line`);
     if (read.truncated.length) sayIn(`${read.truncated.join(', ')} is cut short by its ellipsis`);
     if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px`);
@@ -463,14 +463,14 @@ async function groupedDialogFixture(theme) {
     await choose('overage');
     await check('Overage and plan end chosen');
     await choose('utilization');
-    await check('Window ceiling chosen');
+    await check('Windows chosen');
     await load('?refused=overage,utilization');
     await check('Identity chosen, both refused');
     await levels('Identity chosen, both refused');
     await choose('overage');
     await check('Overage and plan end chosen, both refused');
     await choose('utilization');
-    await check('Window ceiling chosen, both refused');
+    await check('Windows chosen, both refused');
     await load('?create=1');
     await check('Identity chosen, marked');
     await levels('Identity chosen, marked');
@@ -542,9 +542,9 @@ async function sidebarBrand(theme) {
 /**
  * The dashboard's attention line above the tiles: one 22 px row in every state, every badge it shows and its "+N more"
  * badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges on the row's one top edge, none past
- * the content box, and the line on the tiles' left edge and clear of them. The mock pass draws the story's fourteen
- * items, more than the row holds at 1280 by 800: the badges shown and the fold's count add up to fourteen, the fold
- * badge draws its dashed border, and its list opens under it inside the window with all fourteen, closing on Escape
+ * the content box, and the line on the tiles' left edge and clear of them. The mock pass draws the story's fifteen
+ * items, more than the row holds at 1280 by 800: the badges shown and the fold's count add up to fifteen, the fold
+ * badge draws its dashed border, and its list opens under it inside the window with all fifteen, closing on Escape
  * with the focus back on the badge. The router pass seeds an exhaustion of its main pool, which any request the pool
  * serves later in the run (a keepalive probe among them) clears: the light pass, which reaches the dashboard first,
  * requires that item, so a route answering an empty list fails it, and the dark pass draws that item or the quiet line,
@@ -590,7 +590,7 @@ async function attentionLine(theme) {
   const texts = read.badges.map((b) => b.text);
   const folded = Number(/^\+(\d+) more$/.exec(read.more?.text ?? '')?.[1] ?? 0);
   if (mock) {
-    if (read.lead !== '14 need attention' || texts.length + folded !== 14 || folded === 0 || read.more?.border !== 'dashed') say(`reads ${read.lead} over ${JSON.stringify(texts)} and ${JSON.stringify(read.more?.text ?? null)}, not the story's fourteen items folded behind a dashed "+N more" at 1280 by 800`);
+    if (read.lead !== '15 need attention' || texts.length + folded !== 15 || folded === 0 || read.more?.border !== 'dashed') say(`reads ${read.lead} over ${JSON.stringify(texts)} and ${JSON.stringify(read.more?.text ?? null)}, not the story's fifteen items folded behind a dashed "+N more" at 1280 by 800`);
     else {
       await attentionList(theme);
       await attentionLineNarrow(theme);
@@ -639,7 +639,7 @@ async function attentionList(theme) {
   measurements.push(`${theme} / attention line list ${JSON.stringify(read)}`);
   if (!read) say('did not open');
   else {
-    if (read.badges !== 14 || read.rows !== 14 || !read.oneRowEach) say(`holds ${read.badges} badges over ${read.rows} rows, not the story's fourteen items one per row`);
+    if (read.badges !== 15 || read.rows !== 15 || !read.oneRowEach) say(`holds ${read.badges} badges over ${read.rows} rows, not the story's fifteen items one per row`);
     if (!read.inside) say('draws a badge past its box');
     if (read.role !== 'dialog' || read.label !== 'Needs attention' || read.expanded !== 'true') say(`is ${read.role} named ${JSON.stringify(read.label)} under a badge expanded ${read.expanded}`);
     if (read.gap !== 8) say(`stands ${read.gap} px under its badge, not 8`);
@@ -1219,9 +1219,10 @@ async function poolCachingControls(theme) {
 }
 
 /**
- * The Load shedding group's switch, drawn in every view, against the Migrate when spent switch below it, drawn in the
- * expert view: the same switch with its label beside it, so either reading smaller or lighter than the other is the
- * defect to catch.
+ * The Load shedding group's switch, drawn in every view, against the Migrate when spent switch under Failover and the
+ * Slow-down switch, both drawn in the expert view: the same switch with its label beside it, so one reading smaller or
+ * lighter than another is the defect to catch. Each is read while its group shows, since a hidden group's boxes
+ * measure nothing.
  */
 async function poolSheddingSwitch(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
@@ -1238,26 +1239,37 @@ async function poolSheddingSwitch(theme) {
     return;
   }
   await settle();
-  const pair = await dialog.evaluate((el) => {
-    const read = (label) => {
-      const toggle = el.querySelector(`button[role="switch"][aria-label="${label}"]`);
-      const field = toggle?.closest('.field');
-      if (!field) return null;
-      const text = getComputedStyle(field.querySelector('.field__label'));
-      const box = toggle.getBoundingClientRect();
-      return { field: field.className, label: `${text.fontSize} ${text.fontWeight} ${text.color}`, switch: `${box.width} ${box.height}` };
-    };
-    const shedding = read('Load shedding');
-    const migrate = read('Migrate when spent');
-    return shedding && migrate ? { migrate, shedding } : null;
-  });
-  if (!pair) {
-    say('the Load shedding and Migrate when spent switches are not both drawn to compare');
-  } else {
-    measurements.push(`${theme} /pools load shedding switch ${JSON.stringify(pair.shedding)}`);
-    measurements.push(`${theme} /pools migrate when spent switch ${JSON.stringify(pair.migrate)}`);
-    const differs = ['field', 'label', 'switch'].filter((key) => pair.shedding[key] !== pair.migrate[key]);
-    if (differs.length) say(`the Load shedding switch's ${differs.join(', ')} differs from the Migrate when spent switch's`);
+  const read = (group, label) =>
+    dialog.evaluate(
+      (el, [group, label]) => {
+        const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === group);
+        const toggle = section?.querySelector(`button[role="switch"][aria-label="${label}"]`);
+        const field = toggle?.closest('.field');
+        if (!field || section.hidden) return null;
+        const text = getComputedStyle(field.querySelector('.field__label'));
+        const box = toggle.getBoundingClientRect();
+        return { field: field.className, label: `${text.fontSize} ${text.fontWeight} ${text.color}`, switch: `${box.width} ${box.height}` };
+      },
+      [group, label],
+    );
+  const shedding = await read('Load shedding', 'Load shedding');
+  const others = [];
+  for (const [group, label] of [['Failover', 'Migrate when spent'], ['Slow-down', 'Slow-down']]) {
+    await railEntry(dialog, group).click();
+    await settle();
+    others.push([label, await read(group, label)]);
+  }
+  if (!shedding) say('the Load shedding switch is not drawn to compare');
+  else measurements.push(`${theme} /pools load shedding switch ${JSON.stringify(shedding)}`);
+  for (const [label, other] of others) {
+    if (!other) {
+      say(`the ${label} switch is not drawn to compare`);
+      continue;
+    }
+    measurements.push(`${theme} /pools ${label.toLowerCase()} switch ${JSON.stringify(other)}`);
+    if (!shedding) continue;
+    const differs = ['field', 'label', 'switch'].filter((key) => shedding[key] !== other[key]);
+    if (differs.length) say(`the Load shedding switch's ${differs.join(', ')} differs from the ${label} switch's`);
   }
   await closeByEscape(dialog, `${theme} /pools load shedding switch dialog`, say);
   await expertView(false).catch(() => {});
@@ -1267,7 +1279,8 @@ async function poolSheddingSwitch(theme) {
 /**
  * The load groups in the expert view against the controls beside them, each measured while its group shows: a preset
  * pill against a session-affinity pill, the overage grace field against the window ceiling field, and a warm-sessions
- * choice against an overage choice. Then the utilization bar's ceiling handle and the shedding preview line.
+ * choice against an overage choice. Then the utilization bar's ceiling handle and the shedding and slow-down preview
+ * lines.
  */
 async function poolRoutingCards(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
@@ -1276,9 +1289,9 @@ async function poolRoutingCards(theme) {
     await expertView(true);
     await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
-    await railEntry(dialog, 'Window ceiling').click();
+    await railEntry(dialog, 'Windows').click();
   } catch (error) {
-    say(`the pool dialog never reached its Window ceiling group (${error instanceof Error ? error.message : String(error)})`);
+    say(`the pool dialog never reached its Windows group (${error instanceof Error ? error.message : String(error)})`);
     await page.keyboard.press('Escape');
     await expertView(false).catch(() => {});
     return;
@@ -1307,6 +1320,7 @@ async function poolRoutingCards(theme) {
       const track = el.querySelector('.ubar__track')?.getBoundingClientRect();
       const knob = handle?.getBoundingClientRect();
       const preview = shown(el.querySelector('.shed-preview'));
+      const slowDownPreview = shown(el.querySelector('.slow-down-preview'));
       return {
         affinityPill: box(idlePill('Session affinity')),
         ceilingField: box(el.querySelector('input[aria-label="Window ceiling (%)"]')),
@@ -1316,6 +1330,7 @@ async function poolRoutingCards(theme) {
         overageField: box(el.querySelector('input[aria-label="Overage grace (min)"]') ?? [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Overage grace (min)')?.querySelector('input')),
         preview: preview ? (preview.textContent ?? '').trim() : null,
         sheddingPill: box(idlePill('Load shedding preset')),
+        slowDownPreview: slowDownPreview ? (slowDownPreview.textContent ?? '').trim() : null,
         warmChoice: box(idleChoice('Warm sessions')),
       };
     });
@@ -1324,7 +1339,7 @@ async function poolRoutingCards(theme) {
     for (const [key, value] of Object.entries(part)) if (value !== null) read[key] = value;
   };
   keep(await measure());
-  for (const label of ['Pinning', 'Load shedding', 'Failover', 'Overage and plan end']) {
+  for (const label of ['Pinning', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end']) {
     await railEntry(dialog, label).click();
     await settle();
     keep(await measure());
@@ -1348,6 +1363,7 @@ async function poolRoutingCards(theme) {
   if (!read.handle) say('the utilization bar draws no ceiling handle');
   else if (!read.handle.inside || read.handle.value === null) say(`the ceiling handle sits off its track (${JSON.stringify(read.handle)})`);
   if (!read.preview || !/^(Load shedding is off: no round runs\. )?(\d+ members? projects? over the ceiling|No member projects over the ceiling on any window)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
+  if (!read.slowDownPreview || !/^(Slow-down is off: no request is held\.|No member is slowed\.|\d+ members? (is|are) slowed: )/.test(read.slowDownPreview)) say(`the slow-down preview reads ${JSON.stringify(read.slowDownPreview)}`);
   await closeByEscape(dialog, `${theme} /pools routing groups dialog`, say);
   await expertView(false).catch(() => {});
   await atRest();
@@ -1363,9 +1379,9 @@ async function utilizationCeiling(theme) {
   try {
     await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
-    await railEntry(dialog, 'Window ceiling').click();
+    await railEntry(dialog, 'Windows').click();
   } catch (error) {
-    say(`the pool dialog never reached its Window ceiling group (${error instanceof Error ? error.message : String(error)})`);
+    say(`the pool dialog never reached its Windows group (${error instanceof Error ? error.message : String(error)})`);
     await page.keyboard.press('Escape');
     return;
   }
@@ -1554,9 +1570,9 @@ async function poolCardAges(theme, say, where) {
 }
 
 /** The pool dialog's groups in rail order. */
-const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Window ceiling', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
+const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
 /** The groups whose every field is expert, which the rail leaves out while the mode is off. */
-const POOL_EXPERT_GROUPS = ['Auto mode', 'Placement', 'Failover', 'Cache diagnostics'];
+const POOL_EXPERT_GROUPS = ['Auto mode', 'Placement', 'Slow-down', 'Failover', 'Cache diagnostics'];
 /**
  * Per group, the switches whose dependents the geometry pass turns off, and the controls that must go disabled. An
  * `expert` switch and the `expertControls` are drawn in the expert view alone, so the plain walk leaves them out.
@@ -1811,14 +1827,18 @@ async function poolDialogWalk(theme, mode) {
       return null;
     }, group);
     if (gated) found.push(gated);
-    const preset = { 'Load shedding': ['Load shedding preset', ['Shed cap (%)', 'Burn average (s)', 'Shed dwell (s)']], Failover: ['Failover preset', ['In flight', 'Retry in place (s)']] }[group];
+    // Each preset field with the group that draws it: the shedding preset reaches the average under Windows.
+    const preset = {
+      'Load shedding': ['Load shedding preset', [['Load shedding', 'Shed cap (%)'], ['Windows', 'Burn average (s)'], ['Load shedding', 'Shed dwell (s)']]],
+      Failover: ['Failover preset', [['Failover', 'In flight'], ['Failover', 'Retry in place (s)']]],
+    }[group];
     // The presets and their fields are expert, so the plain walk reaches Load shedding with neither drawn.
     if (preset && expert) {
       const state = await dialog.evaluate(
         (el, [label, pills, fields]) => {
-          const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === label);
-          const pressed = [...(section?.querySelectorAll(`[aria-label="${pills}"] .pill[aria-pressed="true"]`) ?? [])].map((p) => p.textContent?.trim());
-          const inputs = fields.map((f) => [...(section?.querySelectorAll('.field') ?? [])].find((x) => x.querySelector('.field__label')?.textContent?.trim() === f)?.querySelector('input'));
+          const sectionOf = (name) => [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === name);
+          const pressed = [...(sectionOf(label)?.querySelectorAll(`[aria-label="${pills}"] .pill[aria-pressed="true"]`) ?? [])].map((p) => p.textContent?.trim());
+          const inputs = fields.map(([home, f]) => [...(sectionOf(home)?.querySelectorAll('.field') ?? [])].find((x) => x.querySelector('.field__label')?.textContent?.trim() === f)?.querySelector('input'));
           return { disabled: inputs.map((i) => (i ? i.disabled : null)), pressed };
         },
         [group, ...preset],
@@ -2424,8 +2444,12 @@ async function deleteAccountButton(theme) {
  * The window bars of the dashboard's account cards and the Accounts page's rows and detail card: each bar's reset line
  * stays inside its bar. A compact bar, three to a card, reads its projection in its reset's place, its share and its
  * horizon as two parts, and a whole bar its reset and its projection as two parts, each part whole on its line and
- * inside its bar, on one line where the bar holds both. The mock's story projects its subscription windows, so its pass
- * has phrases to read, and the router's seed draws no subscription bar.
+ * inside its bar, on one line where the bar holds both. A slowed account's speed chip stands where it fits: in a
+ * compact card's head, on the status badge's line just before it, the name whole and the chip inside the card, with no
+ * compact bar drawing one, and in a whole 5-hour bar's head after the whole label and before the share, the share
+ * inside the bar and the bar's meter level with its neighbors'. The mock's story projects its subscription windows and
+ * slows studio, so its pass has phrases to read and a chip in the compact cards of `/` and `/accounts` and on studio's
+ * own Usage card (`/accounts/studio`), and the router's seed draws no subscription bar.
  */
 async function windowBarLines(theme, path) {
   const say = (what) => failures.push(`${theme} ${path}: ${what}`);
@@ -2437,6 +2461,27 @@ async function windowBarLines(theme, path) {
       const rects = [...range.getClientRects()].filter((r) => r.width > 0);
       return { lines: new Set(rects.map((r) => Math.round(r.top))).size, width: Math.round(Math.max(0, ...rects.map((r) => r.width)) * 10) / 10, words: el.textContent?.trim() ?? '' };
     };
+    const edges = (el) => {
+      const r = el.getBoundingClientRect();
+      return { left: Math.round(r.left * 10) / 10, right: Math.round(r.right * 10) / 10, top: Math.round(r.top * 10) / 10 };
+    };
+    // The chip's row: the head's label, chip and share, the bar's meter and its neighbors' meters in the same row.
+    const speedOf = (bar) => {
+      const chip = bar.querySelector('.wbar__head .speed-chip .badge');
+      if (!chip) return null;
+      const label = bar.querySelector('.wbar__label');
+      const meterTop = (b) => Math.round((b.querySelector('.meter')?.getBoundingClientRect().top ?? 0) * 10) / 10;
+      return {
+        bar: edges(bar),
+        chip: edges(chip),
+        cut: label ? label.scrollWidth > label.clientWidth : null,
+        label: label ? edges(label) : null,
+        meter: meterTop(bar),
+        neighbors: [...bar.parentElement.children].filter((b) => b !== bar && b.classList.contains('wbar') && Math.abs(b.getBoundingClientRect().top - bar.getBoundingClientRect().top) < 0.5).map(meterTop),
+        share: edges(bar.querySelector('.wbar__pct')),
+        words: chip.textContent?.trim() ?? '',
+      };
+    };
     return [...document.querySelectorAll('.wbars .wbar:not(.wbar--absent)')].map((bar) => {
       const reset = bar.querySelector('.wbar__reset');
       return {
@@ -2444,10 +2489,36 @@ async function windowBarLines(theme, path) {
         compact: bar.closest('.wbars--compact') !== null,
         line: runOf(reset),
         parts: [...reset.querySelectorAll('.wbar__part')].map(runOf),
+        speed: speedOf(bar),
         words: reset.textContent?.trim() ?? '',
       };
     });
   });
+  // A compact card's chip: its head's name, the chip and the status badge after it, inside the card.
+  const cards = await page.evaluate(() =>
+    [...document.querySelectorAll('.account-mini__head .speed-chip .badge, .account-row__head .speed-chip .badge')].map((chip) => {
+      const head = chip.closest('.account-mini__head, .account-row__head');
+      const name = head.querySelector('.account-mini__name, .account-row__name');
+      const status = [...head.querySelectorAll('.badge')].find((b) => b.querySelector('.badge__dot') !== null);
+      const box = (el) => {
+        const r = el.getBoundingClientRect();
+        return { bottom: Math.round(r.bottom * 10) / 10, left: Math.round(r.left * 10) / 10, right: Math.round(r.right * 10) / 10, top: Math.round(r.top * 10) / 10 };
+      };
+      return { card: box(head.closest('.account-mini, .account-row')), chip: box(chip), cut: name.scrollWidth > name.clientWidth, name: name.textContent?.trim() ?? '', status: status ? box(status) : null };
+    }),
+  );
+  measurements.push(`${theme} ${path} card head speed chips ${JSON.stringify(cards)}`);
+  if (mock && path !== '/accounts/studio' && cards.length === 0) say("the story slows studio, yet no compact card's head draws its speed chip");
+  for (const c of cards) {
+    const kind = `${c.name}'s speed chip`;
+    if (c.cut) say(`${kind} cuts the card's name short`);
+    if (c.status === null) say(`${kind} stands in a head with no status badge`);
+    else {
+      if (c.chip.right > c.status.left) say(`${kind} ends at ${c.chip.right}px, past the status badge starting at ${c.status.left}px`);
+      if (c.chip.bottom <= c.status.top || c.chip.top >= c.status.bottom) say(`${kind} stands off the status badge's line`);
+    }
+    if (c.chip.right > c.card.right + 0.5) say(`${kind} ends at ${c.chip.right}px, past its card's ${c.card.right}px`);
+  }
   measurements.push(`${theme} ${path} window bar lines ${JSON.stringify(read.map((r) => [r.compact ? 'compact' : 'whole', r.words, r.line.width, r.line.lines, r.bar, r.parts.map((part) => part.width)]))}`);
   const projects = (r) => r.compact && /^\d+% left (at reset|in |now)|^spent in /.test(r.words);
   if (mock && !read.some(projects)) say('the story projects its subscription windows, yet no compact window bar reads a projection');
@@ -2458,6 +2529,36 @@ async function windowBarLines(theme, path) {
     if (projects(r) && r.parts.length !== 2) say(`the ${kind}'s projection ${JSON.stringify(r.words)} draws ${r.parts.length} parts, not its share and its horizon as two`);
     if (r.parts.length === 0 ? r.line.lines > 1 : r.parts.some((part) => part.lines > 1) || r.line.lines > r.parts.length) say(`the ${kind}'s line ${JSON.stringify(r.words)} wraps inside ${r.parts.length === 0 ? 'itself' : 'a part'}, over ${r.line.lines} lines`);
   }
+  const slowed = read.filter((r) => r.speed !== null);
+  measurements.push(`${theme} ${path} window bar speed chips ${JSON.stringify(slowed.map((r) => [r.compact ? 'compact' : 'whole', r.speed]))}`);
+  if (mock && path === '/accounts/studio' && !slowed.some((r) => !r.compact)) say("the story slows studio, yet its Usage card's 5-hour bar draws no speed chip");
+  for (const { compact, speed: c } of slowed) {
+    const kind = `the ${compact ? 'compact ' : ''}window bar's speed chip ${JSON.stringify(c.words)}`;
+    if (compact) say(`${kind} stands in a compact bar, which has no room for it beside the label`);
+    if (c.cut !== false || c.label === null) say(`${kind} cuts the bar's label short`);
+    else if (c.chip.left < c.label.right) say(`${kind} starts at ${c.chip.left}px, inside the label ending at ${c.label.right}px`);
+    if (c.chip.right > c.share.left) say(`${kind} ends at ${c.chip.right}px, past the share starting at ${c.share.left}px`);
+    if (c.share.right > c.bar.right + 0.5) say(`${kind} pushes the share to ${c.share.right}px, past the bar's ${c.bar.right}px`);
+    if (c.neighbors.some((top) => Math.abs(top - c.meter) > 0.5)) say(`${kind} drops its bar's meter to ${c.meter}px, where its neighbors' stand at ${c.neighbors.join(', ')}px`);
+  }
+}
+
+/**
+ * The story slows studio, whose Usage card on its own Accounts page draws the whole 5-hour bar with the speed chip
+ * beside its label, so the mock pass opens that page after the view's shot and reads its window bars there.
+ */
+async function slowedUsageBar(theme) {
+  await page.clock.setSystemTime(clockOrigin);
+  await page.goto(`${base}/accounts/studio`);
+  await booted();
+  await advance(LOAD_MS);
+  try {
+    await page.waitForSelector('.detail .wbars--3', { timeout: 15_000 });
+  } catch {
+    failures.push(`${theme} /accounts/studio: the Usage card's window bars never appeared`);
+    return;
+  }
+  await windowBarLines(theme, '/accounts/studio');
 }
 
 /**
@@ -2566,7 +2667,8 @@ let cardReadings = {};
  * The Quota cards' chips with their shares read "left" against the columns that hold them: every card's window
  * chip and reset cell fits its column on one line, the window grid stays inside its card, an expired window's
  * longer reset cell may wrap but never runs past its column, and a live label with a projection breaks between its
- * reset and its projection where the column is too narrow for both, each part on one line inside the cell. Every live
+ * reset and its projection where the column is too narrow for both, each part on one line inside the cell, as is the
+ * speed chip that closes a slowed account's 5-hour cell, which the mock pass requires on the story's studio. Every live
  * window's meter carries its pace mark inside the meter's horizontal bounds and taller than the track. The router's
  * seed has no subscription account, so only the story's pass has chips to read.
  */
@@ -2590,6 +2692,13 @@ async function quotaChips(theme) {
         return { inside: rects.every((r) => r.left >= box.left - 0.5 && r.right <= box.right + 0.5), lines: lines.size, text: part.textContent ?? '', width: Math.round(Math.max(0, ...lines.values()) * 10) / 10 };
       });
     };
+    const speed = (el) => {
+      const chip = el.querySelector('.speed-chip');
+      if (!chip) return null;
+      const box = el.getBoundingClientRect();
+      const rects = [...chip.getClientRects()];
+      return { inside: rects.every((r) => r.left >= box.left - 0.5 && r.right <= box.right + 0.5), lines: new Set(rects.map((r) => Math.round(r.top))).size, text: chip.textContent ?? '' };
+    };
     const tone = (el) => (el ? { background: getComputedStyle(el).backgroundColor, color: getComputedStyle(el).color } : null);
     return {
       chips: [...document.querySelectorAll('.qcard__windows .qchip')].map((chip) => ({ ...cell(chip), parts: [...chip.children].map(lines) })),
@@ -2600,11 +2709,11 @@ async function quotaChips(theme) {
         const mark = meter.querySelector('.meter__mark')?.getBoundingClientRect() ?? null;
         return { height: mark ? Math.round(mark.height) : null, inside: mark !== null && mark.left >= track.left - 0.5 && mark.right <= track.right + 0.5, left: mark ? Math.round(mark.left - track.left) : null, taller: mark !== null && mark.height > track.height, title: meter.getAttribute('title') ?? '', track: Math.round(track.height) };
       }),
-      resets: [...document.querySelectorAll('.qcard__windows .qwin__reset')].map((el) => ({ ...cell(el), parts: parts(el) })),
+      resets: [...document.querySelectorAll('.qcard__windows .qwin__reset')].map((el) => ({ ...cell(el), parts: parts(el), speed: speed(el) })),
       tones: Object.fromEntries(['good', 'low', 'warn'].map((name) => [name, tone(document.querySelector(`.qcard__windows .qchip--${name}`))])),
     };
   });
-  measurements.push(`${theme} /quota chips ${JSON.stringify({ chips: read.chips.map((c) => [c.text, c.client]), resets: read.resets.map((c) => [c.text, c.client, c.lines, c.parts.map((p) => p.width)]) })}`);
+  measurements.push(`${theme} /quota chips ${JSON.stringify({ chips: read.chips.map((c) => [c.text, c.client]), resets: read.resets.map((c) => [c.text, c.client, c.lines, c.parts.map((p) => p.width), ...(c.speed ? [c.speed] : [])]) })}`);
   measurements.push(`${theme} /quota pace marks ${JSON.stringify(read.marks.map((m) => [m.title, m.left, m.height, m.track]))}`);
   cardTones = read.tones;
   cardReadings = read.readings;
@@ -2628,6 +2737,8 @@ async function quotaChips(theme) {
     } else if (!reset.text.startsWith('expired ') && reset.lines > 1) say(`the reset cell ${JSON.stringify(reset.text)} wraps`);
   }
   if (mock && !read.resets.some((r) => r.parts.length === 2)) say('the story projects its live windows, yet no reset cell draws its reset and its projection as two parts');
+  if (mock && !read.resets.some((r) => r.speed !== null)) say('the story slows studio, yet no reset cell closes with its speed chip');
+  for (const reset of read.resets.filter((r) => r.speed !== null && (r.speed.lines > 1 || !r.speed.inside))) say(`the reset cell ${JSON.stringify(reset.text)} draws its speed chip over ${reset.speed.lines} lines or past the cell`);
   for (const card of read.grids) {
     if (card.grid > card.card) say(`${card.name}'s windows run past its card`);
   }
@@ -2991,11 +3102,20 @@ async function quotaMeters(theme) {
         let sum = 0;
         const lines = new Map();
         for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+          if (node.parentElement?.closest('.speed-chip')) continue;
           range.selectNodeContents(node);
           for (const r of range.getClientRects()) {
             sum += r.width;
             lines.set(Math.round(r.top), (lines.get(Math.round(r.top)) ?? 0) + r.width);
           }
+        }
+        // The speed chip's pill is wider than its word, so it counts by its own box, on the line whose text it stands
+        // beside or on a line of its own: the pill rises above the text's box, so its top names no line.
+        for (const chip of label.querySelectorAll('.speed-chip .badge')) {
+          const r = chip.getBoundingClientRect();
+          const line = [...lines.keys()].find((top) => top >= r.top - 0.5 && top <= r.bottom) ?? Math.round(r.top);
+          sum += r.width;
+          lines.set(line, (lines.get(line) ?? 0) + r.width);
         }
         // A label split between its reset and its projection needs its wider line, each part whole on its own line.
         return tenth(label.querySelector('.qwin__part') ? Math.max(0, ...lines.values()) : sum);
@@ -3797,8 +3917,8 @@ function timeFit(cells) {
 
 /**
  * The request table's room, as the fit measures read it: how much the table needs of its wrap, its narrowest layout,
- * the columns' widths, the Client text's cut, the TTFB cells' lines, the Cost cells that read a share or a 20x
- * equivalent, and the Time cells' fit.
+ * the columns' widths, the Client text's cut, the TTFB cells' lines, the held markers' lines, the Cost cells that read
+ * a share or a 20x equivalent, and the Time cells' fit.
  */
 async function readRequestsTable() {
   const read = await page.evaluate(() => {
@@ -3838,6 +3958,7 @@ async function readRequestsTable() {
     // A placeholder row is one cell across the table, so it has no TTFB or Cost cell.
     const cellsOf = (at) => (at < 0 ? [] : [...table.querySelectorAll('tbody tr')].map((tr) => (tr.children.length > at ? tr.children[at] : null)).filter((td) => td !== null));
     const ttfb = cellsOf(columnAt('TTFB'));
+    const held = [...table.querySelectorAll('tbody .requests__attempts > .badge')].map((b) => ({ lines: lines(b), text: b.textContent?.trim() ?? '' }));
     // The main line or the `.sub` line, whichever the row's figures fill, each in its window's short word: a share
     // under the share position, a 20x equivalent under native, the default.
     const shares = cellsOf(columnAt('Cost')).filter((td) => /\d+% (20x )?(5h|7d|Fable week)/.test(td.textContent ?? '')).length;
@@ -3847,6 +3968,7 @@ async function readRequestsTable() {
       columns,
       drawer: document.querySelector('.drawer') !== null,
       floor: { cut: classes.filter((s) => s.scrollWidth > s.clientWidth).length, short },
+      held,
       least,
       rows: table.querySelectorAll('tbody tr').length,
       scroll: table.scrollWidth,
@@ -3864,12 +3986,12 @@ async function readRequestsTable() {
  * The router pass's seed fits the card, so there the fit is asserted. The mock story's rows carry values wider than
  * the 990 px card (its default set runs past 990 px there with the fills at their floors), so in the mock pass the
  * width is recorded and the table scrolls inside its wrap. In both passes each cut Client text
- * holds at least sixteen characters of its font, the fills' floor. The share measure below reads the same
- * width with the Cost column's widest text. Under a `range` the page was loaded on, the Time cells' fit is held as
- * well: a cell whose date and time break over two lines, run past its content box or stand taller than the row's other
- * cells fails. Neither pass draws a request older than a day there, since the mock's story and the router's seed both
- * lie within the day before the pass's clock, so the smoke's clock case holds the dated text and
- * `routingLogDatedTime` lays a dated cell out.
+ * holds at least sixteen characters of its font, the fills' floor. A held row's marker reads its wait as waited on
+ * one line. The share measure below reads the same width with the Cost column's widest text. Under a `range` the page
+ * was loaded on, the Time cells' fit is held as well: a cell whose date and time break over two lines, run past its
+ * content box or stand taller than the row's other cells fails. Neither pass draws a request older than a day there,
+ * since the mock's story and the router's seed both lie within the day before the pass's clock, so the smoke's clock
+ * case holds the dated text and `routingLogDatedTime` lays a dated cell out.
  */
 async function requestsTableFits(theme, range = null) {
   const read = await readRequestsTable();
@@ -3887,6 +4009,8 @@ async function requestsTableFits(theme, range = null) {
   for (const text of read.floor.short) say(`the cut text ${text}`);
   if (read.rows > 0 && read.ttfb.cells === 0) say('no TTFB cell to measure');
   for (const text of read.ttfb.split) say(`the TTFB cell "${text}" draws its figure and its unit on two lines`);
+  measurements.push(`${theme} /requests${under} held markers ${JSON.stringify(read.held)}`);
+  for (const marker of read.held.filter((m) => m.lines > 1 || !/^waited \d/.test(m.text))) say(`the held marker "${marker.text}" does not read its wait as waited on one line`);
   if (range === null) return;
   if (read.rows > 0 && read.time.cells === 0) say('no Time cell to measure');
   for (const text of read.time.split) say(`the Time cell "${text}" breaks over two lines`);
@@ -4199,7 +4323,7 @@ const BAR_CHIPS = {
   '/analytics': '?accounts=primary&keys=laptop&models=claude-opus-5&pools=jobs&probes=1',
   '/keys': '?pools=all,jobs&status=active',
   '/requests': '?accounts=primary&keys=laptop&models=claude-opus-5&pools=jobs&statuses=200',
-  '/routing-log': '?accounts=primary&keys=laptop&kinds=moved,held,shedding_round,mark_cleared,wind_down_started&models=claude-opus-5&pools=jobs',
+  '/routing-log': '?accounts=primary&keys=laptop&kinds=moved,held,shedding_round,mark_cleared,wind_down_started,slow_down_started,slow_down_ended&models=claude-opus-5&pools=jobs',
 };
 /** A view whose row draws no search holds its slots under this width at rest, far from a second line. */
 const ROW_BOUND = {
@@ -4348,7 +4472,7 @@ async function barRow(theme, view) {
 }
 
 /**
- * The Kinds list through Add filter on the routing log at 1280 by 800, Select all, the eight presets and the 37 kinds:
+ * The Kinds list through Add filter on the routing log at 1280 by 800, Select all, the eight presets and the 39 kinds:
  * its popover keeps 8 px inside the window above and below, where the list scrolls. Records the box.
  */
 async function kindsPopoverInside(theme) {
@@ -4367,7 +4491,7 @@ async function kindsPopoverInside(theme) {
   measurements.push(`${theme} /routing-log kinds popover inside ${JSON.stringify(read)}`);
   if (read === null) say('did not open');
   else {
-    if (read.rows !== 46) say(`lists ${read.rows} rows, not Select all, the eight presets and the 37 kinds`);
+    if (read.rows !== 48) say(`lists ${read.rows} rows, not Select all, the eight presets and the 39 kinds`);
     if (read.top < 8 || read.bottom > read.view - 8) say(`spans ${read.top} to ${read.bottom} px, outside the ${read.view} px window less 8 px above and below`);
   }
   await page.keyboard.press('Escape');
@@ -4415,7 +4539,10 @@ async function refreshControlWidth(theme) {
  * neighbor it copies: Requests by speed against Requests by outcome (title type, card width, chart height),
  * Effort levels against Errors by code (title type, card width, and where both draw bars, the bar row, its label
  * type and its track), Fast mode spend against the first tile, Cost under a fresh browser's native position (the tile
- * box and its figure's type). The cards are read on the Traffic tab and the tiles on Cost.
+ * box and its figure's type). Migration rewrites, which grows taller than its row partner with the held chart under
+ * its moves, stands against Failovers (title type, card width, the row's top and height, the first chart's height),
+ * and in the mock pass, whose story holds requests for the slow-down, draws the held chart's bars in the warning tone.
+ * The cards are read on the Traffic tab and the tiles on Cost.
  */
 async function trafficCards(theme) {
   // The cards and tiles the shown tab draws; one on another tab is not mounted and reads as null.
@@ -4431,20 +4558,34 @@ async function trafficCards(theme) {
         return {
           bar: bar ? Math.round(bar.getBoundingClientRect().height) : null,
           chart: chart ? Math.round(chart.getBoundingClientRect().height) : null,
+          charts: el.querySelectorAll('.recharts-responsive-container').length,
+          height: Math.round(el.getBoundingClientRect().height),
           label: type(bar?.children[0]),
           section: el.closest('.analytics-section')?.id ?? null,
           title: type(el.querySelector('.card__title')),
+          top: Math.round(el.getBoundingClientRect().top),
           track: bar ? Math.round(bar.querySelector('.hbars__track').getBoundingClientRect().height) : null,
           width: Math.round(el.getBoundingClientRect().width),
         };
       };
+      // A computed color holds the value, never the token's name, so the warning ink is read off a probe of its own.
+      const held = (() => {
+        const chart = card('Migration rewrites')?.querySelector('.held-chart');
+        if (!chart) return null;
+        const probe = document.body.appendChild(document.createElement('span'));
+        probe.style.color = 'var(--warning)';
+        const warning = getComputedStyle(probe).color;
+        probe.remove();
+        const fills = [...chart.querySelectorAll('path.recharts-rectangle')].map((bar) => getComputedStyle(bar).fill);
+        return { bars: fills.length, fills: [...new Set(fills)], warning };
+      })();
       const tile = (label) => {
         const el = [...document.querySelectorAll('#cost .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === label);
         if (!el) return null;
         const b = el.getBoundingClientRect();
         return { height: Math.round(b.height), value: type(el.querySelector('.stat__value')), width: Math.round(b.width) };
       };
-      return { cost: tile('Cost'), effort: box('Effort levels'), errors: box('Errors by code'), fastSpend: tile('Fast mode spend'), outcome: box('Requests by outcome'), speed: box('Requests by speed') };
+      return { cost: tile('Cost'), effort: box('Effort levels'), errors: box('Errors by code'), failovers: box('Failovers'), fastSpend: tile('Fast mode spend'), held, outcome: box('Requests by outcome'), rewrites: box('Migration rewrites'), speed: box('Requests by speed') };
     });
   try {
     if (!(await tabTo(theme, 'Traffic'))) return;
@@ -4458,6 +4599,9 @@ async function trafficCards(theme) {
     failures.push(...compare(read.effort, read.errors, ['section', 'title', 'width', ...bars], `${theme} /analytics: "Effort levels" against "Errors by code"`));
     failures.push(...compare(read.fastSpend, read.cost, ['height', 'value', 'width'], `${theme} /analytics: the Fast mode spend tile against Cost`));
     if (read.effort?.bar === null) failures.push(`${theme} /analytics: the Effort levels card draws no bar, though every request asks for a level or none`);
+    failures.push(...compare(read.rewrites, read.failovers, ['chart', 'height', 'section', 'title', 'top', 'width'], `${theme} /analytics: "Migration rewrites" against "Failovers"`));
+    if (mock && (read.rewrites?.charts !== 2 || !read.held || read.held.bars === 0)) failures.push(`${theme} /analytics: the story holds requests for the slow-down, yet the rewrites card draws no held bar under its moves (${JSON.stringify(read.held)})`);
+    if (read.held && read.held.fills.some((fill) => fill !== read.held.warning)) failures.push(`${theme} /analytics: the held bars draw ${read.held.fills.join(', ')}, not the warning ink ${read.held.warning}`);
   } finally {
     await tabTo(theme, 'Traffic');
   }
@@ -5964,9 +6108,10 @@ async function stripIdleContrast(theme) {
  * viewports, and every station's and way out's word holds the card's muted contrast with an idle way out among them,
  * read on the seeded router's first card and on the mock's fresh placement, whose Pick station the mock pass then opens
  * and closes by Enter, Escape, Space and Escape. The shed move's shed station's popover keeps inside the window less 8
- * px above and below at both viewports and in a window shorter than its content, where it scrolls. One Escape over the
- * Add filter popover open on its Account step closes a hovered station's popover and the Add filter popover alike, on
- * the seeded router's first card's host station and on the mock's fresh placement's Pick station.
+ * px above and below at both viewports and in a window shorter than its content, where it scrolls, and the stretch
+ * round's, its Round group holding the stretch's rows, at 1280 by 800. One Escape over the Add filter popover open on
+ * its Account step closes a hovered station's popover and the Add filter popover alike, on the seeded router's first
+ * card's host station and on the mock's fresh placement's Pick station.
  */
 async function decisionCard(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -6200,14 +6345,18 @@ async function decisionCard(theme) {
   await popoverBounds(theme, "the fresh placement's Pick station", async (card) => card.locator('.strip-station[data-station="pick"]'));
   await stationKeys(theme, "the fresh placement's Pick station", page.locator('.routing-log__panel .decision-card').last().locator('.strip-station[data-station="pick"]'));
   await escapeReachesFilter(theme, "the fresh placement's Pick station", page.locator('.routing-log__panel .decision-card').last().locator('.strip-station[data-station="pick"]'));
-  // The story's cards for the gate and the reservation, each on its request's page a quarter hour either side of its
-  // decision, which the mock dates back from its load: their strips' words and pointers at 1280 by 800.
-  for (const { ago, id, seq, what } of [
+  // The story's cards for the gate, the reservation and the slow-down, each on its request's page a quarter hour either
+  // side of its decision, which the mock dates back from its load: their strips' words and pointers at 1280 by 800, and
+  // the shed station's popover of the round the stretch fired, whose Round group holds the stretch's rows.
+  for (const { ago, id, seq, shed, what } of [
     { ago: (79 * 60 + 39) * 1_000, id: 'req_9d4c1a73-e58', seq: 2, what: 'spent move held for the reset' },
     { ago: (3 * 3_600 + 28 * 60 + 10) * 1_000, id: 'req_5b2e8d47-c19', seq: 1, what: 'least-bad move' },
     { ago: (17 * 60 + 30) * 1_000, id: 'req_6e1f3b98-a24', seq: 1, what: 'round that marked nothing' },
     { ago: 45 * 60_000, id: 'req_2c7d9f15-b63', seq: 1, what: 'spare-rate placement' },
     { ago: (48 * 60 + 45) * 1_000, id: 'req_7a3f0c26-d81', seq: 1, what: 'booked placement' },
+    { ago: (25 * 60 + 42) * 1_000, id: 'req_9f2e7c5a-c49', seq: 1, what: 'slowed request' },
+    { ago: 25 * 60_000, id: 'req_9f2e7c5a-c49', seq: 2, shed: true, what: 'round fired by the stretch' },
+    { ago: (22 * 60 + 9) * 1_000, id: 'req_b8c3e9d4-e61', seq: 2, what: 'failover landing' },
   ]) {
     const at = (await page.evaluate(() => Date.now())) - ago;
     await page.goto(`${base}/routing-log?request=${id}&from=${new Date(at - quarter).toISOString()}&to=${new Date(at + quarter).toISOString()}`);
@@ -6220,6 +6369,7 @@ async function decisionCard(theme) {
     }
     await stripWords(theme, `the ${what}'s card`);
     await stripPointer(theme, `the ${what}'s card`);
+    if (shed) await shedPopoverHeight(theme, `the ${what}'s card`, false);
   }
 }
 
@@ -7233,7 +7383,8 @@ async function burnShot(theme) {
 
 /**
  * The Sessions table's default columns fit its card at the pass's 1280 by 800: the table needs no more than its wrap's
- * width, so nothing scrolls sideways and the companion and the cache warming state stay in view.
+ * width, so nothing scrolls sideways and the companion and the cache warming state stay in view. A slowed session's
+ * speed chip stands on the account's line inside its Account cell, which the mock pass requires on studio's sessions.
  */
 async function sessionsTableFits(theme) {
   const read = await page.evaluate(() => {
@@ -7250,12 +7401,22 @@ async function sessionsTableFits(theme) {
       least,
       rows: table.querySelectorAll('tbody tr.srow').length,
       scroll: table.scrollWidth,
+      speed: [...table.querySelectorAll('.srow__account .speed-chip .badge')].map((chip) => {
+        const cell = chip.closest('td').getBoundingClientRect();
+        const box = chip.getBoundingClientRect();
+        const name = chip.closest('.srow__account').querySelector('a')?.getBoundingClientRect() ?? null;
+        return { inside: box.left >= cell.left - 0.5 && box.right <= cell.right + 0.5, line: name !== null && box.top <= name.bottom && box.bottom >= name.top, text: chip.textContent?.trim() ?? '' };
+      }),
       wrapScroll: wrap.scrollWidth,
     };
   });
-  measurements.push(`${theme} /sessions table ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}`}`);
+  measurements.push(`${theme} /sessions table ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}, speed chips ${JSON.stringify(read.speed)}`}`);
   if (read === null) failures.push(`${theme} /sessions: no session table to measure`);
-  else if (read.scroll > read.client || read.wrapScroll > read.client) failures.push(`${theme} /sessions: the default columns need ${Math.max(read.scroll, read.wrapScroll)}px of the wrap's ${read.client}px, so the table scrolls sideways`);
+  else {
+    if (read.scroll > read.client || read.wrapScroll > read.client) failures.push(`${theme} /sessions: the default columns need ${Math.max(read.scroll, read.wrapScroll)}px of the wrap's ${read.client}px, so the table scrolls sideways`);
+    if (mock && read.speed.length === 0) failures.push(`${theme} /sessions: the story slows studio's sessions, yet no Account cell draws a speed chip`);
+    for (const chip of read.speed.filter((c) => !c.inside || !c.line)) failures.push(`${theme} /sessions: the speed chip ${JSON.stringify(chip.text)} stands ${chip.inside ? "off the account name's line" : 'past its Account cell'}`);
+  }
 }
 
 /**
@@ -7974,6 +8135,7 @@ try {
       if (view.path === '/settings') await copyFallback(theme);
       // The pool chip's measure and the bar's load their addresses themselves and leave the bare view.
       if (view.path === '/keys') await keysPoolSelect(theme);
+      if (view.path === '/accounts' && mock) await slowedUsageBar(theme);
       if (CARD_VIEWS.includes(view.path)) await barRow(theme, view.path);
     }
   }
