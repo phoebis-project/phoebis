@@ -635,12 +635,35 @@ fn budget_unknown(
     state.accounting_degraded() && budgeted_member(snapshot, pool_id, account_id).is_some()
 }
 
-/// The rewrite per plan window (the pin's last context, or `body_tokens` for a fresh session or a pin never renewed
-/// with usage, as one cache write at the lane's TTL on `tier` at the band of `now`) and the burn per plan window (the
-/// pin's own decayed burn over its account's speed, or for a fresh session the decayed burn of the row a failover took
-/// off its source over that source's speed, else the median of the pool's priced warm pins, each over its account's
-/// speed, absent with none, which reads as zero), on the windows the request's model draws. A window nothing prices
-/// is absent from both. The destination gate's fit and the shedding round read it.
+/// The rewrite a selection prices for the pin's next write: its last context, or the body's estimate for a fresh
+/// session or a pin never renewed with usage, as one cache write at the lane's TTL (five minutes until a pin reports
+/// one). The gate's booking and the pick's figure price the same tokens through it.
+pub(crate) fn rewrite_write(request: &SelectRequest, pin: Option<&PinRow>) -> PinUsage {
+    // A pin never renewed with usage reads its context from the body, as a fresh session does, and a fresh
+    // session's TTL is unknown before a pin exists, so its write prices at five minutes.
+    let (tokens, ttl_ms) = match pin {
+        Some(pin) if pin.last_input_tokens > 0 => (pin.last_input_tokens, pin.cache_ttl_ms),
+        Some(pin) => (request.body_tokens, pin.cache_ttl_ms),
+        None => (request.body_tokens, 300_000),
+    };
+    if ttl_ms >= 3_600_000 {
+        PinUsage {
+            write_1h: tokens,
+            ..PinUsage::default()
+        }
+    } else {
+        PinUsage {
+            write_5m: tokens,
+            ..PinUsage::default()
+        }
+    }
+}
+
+/// The rewrite per plan window (`rewrite_write`'s write on `tier` at the band of `now`) and the burn per plan window
+/// (the pin's own decayed burn over its account's speed, or for a fresh session the decayed burn of the row a failover
+/// took off its source over that source's speed, else the median of the pool's priced warm pins, each over its
+/// account's speed, absent with none, which reads as zero), on the windows the request's model draws. A window nothing
+/// prices is absent from both. The destination gate's fit and the shedding round read it.
 pub(crate) fn pin_figures(
     state: &RoutingState,
     pool: &PoolRow,
@@ -652,25 +675,7 @@ pub(crate) fn pin_figures(
     let share = state.share();
     let model = request.canonical_model.as_str();
     let average_ms = burn_average_ms(pool);
-    let pin = figures.pin();
-    // A pin never renewed with usage reads its context from the body, as a fresh session does, and a fresh
-    // session's TTL is unknown before a pin exists, so its write prices at five minutes.
-    let (tokens, ttl_ms) = match pin {
-        Some(pin) if pin.last_input_tokens > 0 => (pin.last_input_tokens, pin.cache_ttl_ms),
-        Some(pin) => (request.body_tokens, pin.cache_ttl_ms),
-        None => (request.body_tokens, 300_000),
-    };
-    let write = if ttl_ms >= 3_600_000 {
-        PinUsage {
-            write_1h: tokens,
-            ..PinUsage::default()
-        }
-    } else {
-        PinUsage {
-            write_5m: tokens,
-            ..PinUsage::default()
-        }
-    };
+    let write = rewrite_write(request, figures.pin());
     let priced = |window: &str, p: &PinRow| {
         share
             .rate(window, entrypoint_of(p), tier, &p.model, &p.burn, now)
@@ -3783,6 +3788,7 @@ pub(crate) struct Mark {
 struct PinRead {
     skip: Option<&'static str>,
     rewrite: Option<f64>,
+    rewrite_window: Option<&'static str>,
     runway_ms: Option<i64>,
 }
 
@@ -4245,7 +4251,21 @@ fn shed_round(
         let (rewrite, pin_burn) =
             pin_figures(state, pool, &req, Figures::Pin(p), destination_tier, now);
         read.runway_ms = fit.runway_ms;
-        read.rewrite = rewrite.get(trigger.window).copied();
+        let model = req.canonical_model.as_str();
+        // The move's cost is the share the rewrite spends on the scarce weekly windows, since the 5-hour window
+        // refills, and the Max 20x equivalent is the pin's alone, the same on every destination: a figure that read 0
+        // on one kind of sibling would turn the pick into a destination preference, which is the gate's to make.
+        read.rewrite = state
+            .share()
+            .equivalent(
+                window_for(model),
+                req.entrypoint.as_deref(),
+                model,
+                rewrite_write(&req, Some(p)),
+                now,
+            )
+            .filter(|share| *share > 0.0);
+        read.rewrite_window = read.rewrite.map(|_| window_for(model));
         let booking = Reservation {
             account_id: destination,
             attempt: request.attempt,
@@ -4365,6 +4385,7 @@ fn shed_round(
             per_rewrite: burn.map(|b| b / p.last_input_tokens.max(1) as f64),
             marked: mark.is_some() || mark_holds(p),
             rewrite: read.and_then(|read| read.rewrite),
+            rewrite_window: read.and_then(|read| read.rewrite_window),
             planned: mark
                 .filter(|_| left.is_none())
                 .map(|mark| mark.planned.clone()),

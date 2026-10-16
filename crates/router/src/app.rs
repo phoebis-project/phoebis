@@ -734,10 +734,11 @@ pub async fn run_until(
 /// The routing task's burn prices and peak band: the model's 5-hour share per token on its anchor tier per regime and
 /// its band, and for dollars `prices`, the revision of the table `Pricing::load` chose that is in force at the start
 /// `now`, the share of an account's window a completed request consumed, and the share per second a pin's burn
-/// consumes, both priced through the model on the account's tier. Every closure prices under the regime of the
+/// consumes, both priced through the model on the account's tier, and the Max 20x equivalent of a window a pin's
+/// rewrite spends, priced on the anchor tier whatever the account's. Every closure prices under the regime of the
 /// entrypoint it is handed, the base one for `None`. The `BurnRates` tables and the measured windows are read at `now`
 /// and fixed for the life of the process, so a pending revision reaches them at the next start, while the two shares
-/// price at each call's instant under the revision in force then.
+/// and the equivalent price at each call's instant under the revision in force then.
 fn router_config(
     prices: &phoebis_ledger::PriceTable,
     tables: Arc<phoebis_ledger::PlanTables>,
@@ -747,6 +748,7 @@ fn router_config(
     let band = tables.clone();
     let measured = tables.clone();
     let rate_tables = tables.clone();
+    let equivalent_tables = tables.clone();
     phoebis_routing::RouterConfig {
         band: phoebis_routing::BandWeight::new(move |window, entrypoint, at| {
             band.band_factor(window, entrypoint, at)
@@ -764,6 +766,9 @@ fn router_config(
         .with_measured(move |window| measured.measured(window, now))
         .with_rate(move |window, entrypoint, tier, model, burn, at| {
             rate_tables.share_rate_at(window, entrypoint, tier, model, burn, at)
+        })
+        .with_equivalent(move |window, entrypoint, model, usage, at| {
+            equivalent_tables.equivalent_at(window, entrypoint, model, usage, at)
         }),
         funding_retry: Duration::from_secs(300.min(routing.model_rejection_seconds)),
         // Released once the ledger's mirror subscribed and the start row is recorded, below.
@@ -1118,6 +1123,68 @@ mod tests {
             None,
             "the shipped model places Mystery 2 in no tier, so nothing weighs it"
         );
+    }
+
+    /// The equivalent prices on the anchor tier through the model week's own capacity factor, so on tables whose Fable
+    /// week holds a quarter of the 7-day window's capacity, a write's Fable-week figure reads four times its 7-day one.
+    #[test]
+    fn the_router_configs_equivalent_closure_prices_a_write_through_the_tables() {
+        let quarter_week = phoebis_ledger::test_tables::first_entry_costs_text().replacen(
+            "seven_day_fable: {of: seven_day, capacity_factor: 0.5}",
+            "seven_day_fable: {of: seven_day, capacity_factor: 0.25}",
+            1,
+        );
+        let tables = phoebis_ledger::PlanTables {
+            revisions: phoebis_ledger::CostRevisions::from_yaml(&quarter_week)
+                .expect("the test cost model parses"),
+            path: None,
+            source: "test".into(),
+        };
+        let config = router_config(
+            phoebis_ledger::PriceRevisions::shipped().in_force(START),
+            Arc::new(tables),
+            &RoutingConfig::default(),
+            START,
+        );
+        let write = phoebis_routing::PinUsage {
+            write_5m: 1_000,
+            write_1h: 500,
+            ..Default::default()
+        };
+        let model = "claude-fable-5-1";
+        let at = START;
+        let week = config
+            .share
+            .equivalent(phoebis_routing::SEVEN_DAY, None, model, write, at);
+        let fable_week =
+            config
+                .share
+                .equivalent(phoebis_routing::SEVEN_DAY_FABLE, None, model, write, at);
+        assert!(
+            fable_week
+                .zip(week)
+                .is_some_and(|(fable_week, week)| week > 0.0
+                    && (fable_week - 4.0 * week).abs() < 1e-12),
+            "the Fable week's factor of a quarter reads four times the 7-day figure: {fable_week:?} against {week:?}"
+        );
+        let shipped = phoebis_ledger::PlanTables::shipped();
+        let config = router_config(
+            phoebis_ledger::PriceRevisions::shipped().in_force(START),
+            Arc::new(shipped.clone()),
+            &RoutingConfig::default(),
+            START,
+        );
+        for window in [
+            phoebis_routing::FIVE_HOUR,
+            phoebis_routing::SEVEN_DAY,
+            phoebis_routing::SEVEN_DAY_FABLE,
+        ] {
+            assert_eq!(
+                config.share.equivalent(window, None, model, write, at),
+                shipped.equivalent_at(window, None, model, write, at),
+                "the closure answers the tables' equivalent on {window}"
+            );
+        }
     }
 
     /// The test model's regime `desk` holds twice the base 5-hour capacity on Max 20x, and the base's band halves the

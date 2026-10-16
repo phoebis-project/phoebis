@@ -656,10 +656,10 @@ pub struct ShedRoundFacts {
     pub dwell_until: i64,
 }
 
-/// One of the pool's pins on the account its round ran on: those in the round in its order, then those it left out, a
-/// fast-lane pin and a pin whose model does not draw the trigger's window. A pin there under a key of a pool the
-/// account left is in no round and is not listed here. `burn` and `rewrite` are shares of the trigger's window, the
-/// burn per hour.
+/// One of the pool's pins on the account its round ran on: those in the round in its order, then those it left out (a
+/// fast-lane pin, and a pin whose model does not draw the trigger's window). A pin there under a key of a pool the
+/// account left is in no round and is not listed here. `burn` and `per_rewrite` are shares of the trigger's window, the
+/// burn per hour, and `rewrite` the Max 20x equivalent of the pin's weekly window.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ShedPinFacts {
     pub key_id: String,
@@ -671,8 +671,11 @@ pub struct ShedPinFacts {
     pub last_input_tokens: u64,
     pub per_rewrite: Option<f64>,
     pub marked: bool,
-    /// The pin's rewrite on its planned destination, `None` with none.
+    /// The pin's rewrite as the Max 20x equivalent of `rewrite_window`, the share of that window a Max 20x account
+    /// would spend on it, `None` where the cost model cannot size it.
     pub rewrite: Option<f64>,
+    /// The window `rewrite` is the equivalent of, `seven_day` or the pin's model week, `None` with no figure.
+    pub rewrite_window: Option<&'static str>,
     /// The destination the round found for the pin.
     pub planned: Option<String>,
     pub runway_ms: Option<i64>,

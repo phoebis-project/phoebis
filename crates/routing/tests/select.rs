@@ -11831,7 +11831,8 @@ fn rounding(pins: Vec<PinRow>) -> RoutingState {
 /// hour, a sixth of that of the 7-day window and a third of the Fable week, whatever its model, and a cache-write token
 /// prices as `ratio_pricer`'s. The entrypoint `desk`, the cases' own regime, prices half the 5-hour figure, and no
 /// entrypoint or any other one the base. A model spelled `guess` or `unpriced`, or the unlisted `claude-opus-4-8`,
-/// prices nothing.
+/// prices nothing. The Max 20x equivalent of a window prices a write as the share on `TIER` does, whatever the
+/// destination's tier, so a rewrite's Fable-week equivalent is twice its 7-day one.
 fn hourly_pricer() -> SharePricer {
     fn per_token(window: &str, entrypoint: Option<&str>, tier: &str, model: &str) -> Option<f64> {
         if tier != TIER
@@ -11855,6 +11856,34 @@ fn hourly_pricer() -> SharePricer {
     })
     .with_rate(|window, entrypoint, tier, model, burn, _| {
         per_token(window, entrypoint, tier, model).map(|per| burn.input / per * 100_000.0 / 3_600.0)
+    })
+    .with_equivalent(|window, entrypoint, model, usage, _| {
+        per_token(window, entrypoint, TIER, model)
+            .map(|per| (usage.write_5m + 2 * usage.write_1h) as f64 / per)
+    })
+}
+
+/// `hourly_pricer` with the model `claude-unpriced-5` burning and fitting as `claude-sonnet-5` does, while its
+/// equivalent stays `hourly_pricer`'s, which weighs no model spelled `unpriced`: a pin of that model covers a target
+/// and finds a destination, and the pick cannot size its rewrite.
+fn unpriced_equivalent_pricer() -> SharePricer {
+    fn as_priced(model: &str) -> &str {
+        if model == "claude-unpriced-5" {
+            "claude-sonnet-5"
+        } else {
+            model
+        }
+    }
+    let hourly = hourly_pricer();
+    let (price, rate) = (hourly.clone(), hourly.clone());
+    SharePricer::new(move |window, entrypoint, tier, model, usage, at| {
+        price.price(window, entrypoint, tier, as_priced(model), usage, at)
+    })
+    .with_rate(move |window, entrypoint, tier, model, burn, at| {
+        rate.rate(window, entrypoint, tier, as_priced(model), burn, at)
+    })
+    .with_equivalent(move |window, entrypoint, model, usage, at| {
+        hourly.equivalent(window, entrypoint, model, usage, at)
     })
 }
 
@@ -13562,7 +13591,7 @@ fn a_round_fires_on_the_seven_day_projection_over_the_ceiling_and_prices_its_pin
         marked_pin
             .rewrite
             .is_some_and(|r| (r - 1_000.0 / 60_000_000.0).abs() < 1e-12),
-        "the rewrite on the week, priced on b's tier: {:?}",
+        "the rewrite as the Max 20x equivalent of the pin's week: {:?}",
         marked_pin.rewrite
     );
     assert!(
@@ -13712,14 +13741,21 @@ fn a_model_week_over_its_ceiling_fires_a_round_that_marks_a_fable_pin_and_leaves
         round
             .pins
             .iter()
-            .map(|p| (p.session_id.as_str(), p.marked, p.skip, p.planned.as_deref()))
+            .map(|p| (
+                p.session_id.as_str(),
+                p.marked,
+                p.skip,
+                p.planned.as_deref(),
+                p.rewrite_window
+            ))
             .collect::<Vec<_>>(),
         [
-            ("f1", true, None, Some("b")),
-            ("f2", false, None, None),
-            ("o1", false, Some("off_window"), None)
+            ("f1", true, None, Some("b"), Some("seven_day_fable")),
+            ("f2", false, None, None, None),
+            ("o1", false, Some("off_window"), None, None)
         ],
-        "the round walks the two Fable pins and marks one, and the Opus pin lists after them off the window"
+        "the round walks the two Fable pins and marks one, its rewrite of the Fable week, and the Opus pin lists after \
+         them off the window"
     );
     assert_eq!(
         round
@@ -15920,7 +15956,7 @@ fn tiered(pool: Pool) -> RegistrySnapshot {
 /// One five-minute cache-write token a ten-millionth of the 5-hour window, a sixty-millionth of the 7-day window
 /// and a thirty-millionth of the Fable week on `TIER`, a one-hour write token twice that, the same ratios per input
 /// token a second for a burn, and nothing for a model spelled `unpriced`, so a case can hold a pin the tables do not
-/// weight.
+/// weight. The Max 20x equivalent of a window is the write's share of it on `TIER`.
 fn ratio_pricer() -> SharePricer {
     fn ratio(window: &str, tier: &str, model: &str, tokens: f64) -> Option<f64> {
         if tier != TIER || model.contains("unpriced") {
@@ -15943,6 +15979,14 @@ fn ratio_pricer() -> SharePricer {
         )
     })
     .with_rate(|window, _, tier, model, burn, _| ratio(window, tier, model, burn.input))
+    .with_equivalent(|window, _, model, usage, _| {
+        ratio(
+            window,
+            TIER,
+            model,
+            (usage.write_5m + 2 * usage.write_1h) as f64,
+        )
+    })
 }
 
 fn close(a: f64, b: f64) -> bool {
@@ -19081,7 +19125,8 @@ const CACHE_READ_WEIGHT: f64 = 0.005;
 
 /// The replay's pricer on `TIER`, out of band: one cache-write token a ten-millionth of the 5-hour window, a
 /// sixty-millionth of the 7-day window and twice that of the Fable week, the same ratios per token a second for a
-/// burn, and a cache-read token at `CACHE_READ_WEIGHT` of a write.
+/// burn, and a cache-read token at `CACHE_READ_WEIGHT` of a write. The Max 20x equivalent of a window is the write's
+/// share of it on `TIER`.
 fn replay_pricer() -> SharePricer {
     fn per_token(window: &str, tier: &str) -> Option<f64> {
         if tier != TIER {
@@ -19106,6 +19151,9 @@ fn replay_pricer() -> SharePricer {
                 + CACHE_READ_WEIGHT * burn.cache_read)
                 / per
         })
+    })
+    .with_equivalent(|window, _, _, usage, _| {
+        per_token(window, TIER).map(|per| (usage.write_5m + usage.write_1h) as f64 / per)
     })
 }
 
@@ -22358,8 +22406,23 @@ fn a_target_under_one_pins_burn_marks_the_cheapest_sufficient_pin() {
             .unwrap_or_else(|| panic!("the pick read {session}'s rewrite: {round:?}"))
     };
     assert!(
-        close(rewrite("heavy"), 0.04) && close(rewrite("light"), 0.001),
-        "the record shows the rewrites the pick compared"
+        close(rewrite("heavy"), 400_000.0 / 60_000_000.0)
+            && close(rewrite("light"), 10_000.0 / 60_000_000.0),
+        "the record shows the rewrites the pick compared, each the Max 20x equivalent of the pin's week: {} and {}",
+        rewrite("heavy"),
+        rewrite("light")
+    );
+    let window = |session: &str| {
+        round
+            .pins
+            .iter()
+            .find(|p| p.session_id == session)
+            .and_then(|p| p.rewrite_window)
+    };
+    assert_eq!(
+        (window("heavy"), window("light")),
+        (Some("seven_day"), Some("seven_day")),
+        "the pins' model has no week of its own, so each figure is of the 7-day window"
     );
     assert!(
         round.pins[0].runway_ms.is_some(),
@@ -22443,8 +22506,346 @@ fn a_covering_pin_without_a_destination_leaves_the_pick_to_the_order() {
         "the order marks the next pin, though its burn is short of the target"
     );
     assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.rewrite.is_some(), p.rewrite_window))
+            .collect::<Vec<_>>(),
+        [("wide", false, None), ("narrow", true, Some("seven_day"))],
+        "the marked pin names the window its figure is of, and the pin with no destination reads no figure"
+    );
+    assert_eq!(
         fact(line(&d.record, "move:shed"), "skipped"),
         &FactValue::List(vec!["k/wide/main/claude-sonnet-5: no_runway".into()])
+    );
+    assert_eq!((round.outcome.as_str(), round.reason), ("marked 1", None));
+}
+
+/// Two warm pins of one prompt size on `a`, a Fable pin burning twice what an Opus pin burns, so the order walks the
+/// Fable pin first, and the light current pin under the target. `a` at 0.7 with the reset an hour out projects 1.004 on
+/// its 5-hour window, a target of 0.054 an hour that each of the two covers. Both Fable weeks read 0.1, so the Fable
+/// pin finds `b` and `a`'s week projects under the ceiling.
+fn fable_and_opus_of_one_prompt(s: &RegistrySnapshot) -> RoutingState {
+    let model_pin = |session: &str, model: &str, burn: f64| PinRow {
+        model: model.into(),
+        lane: lane_key(model, "standard", "none", "-"),
+        last_input_tokens: 60_000,
+        ..burning(session, "a", burn, true, T)
+    };
+    let mut st = rounding(vec![
+        model_pin("opus", "claude-opus-5", 10.0),
+        model_pin("fable", "claude-fable-5", 20.0),
+        PinRow {
+            last_input_tokens: 10_000,
+            ..burning("light", "a", 0.4, true, T)
+        },
+    ]);
+    st.record_sample(
+        "a",
+        with_fable(
+            refreshing(0.7, T + HOUR, T + 72 * HOUR, T - 500),
+            0.1,
+            Some(T + 96 * HOUR),
+        ),
+    );
+    st.record_sample(
+        "b",
+        with_fable(
+            refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500),
+            0.1,
+            Some(T + 96 * HOUR),
+        ),
+    );
+    past_the_wait(&mut st, s, "p", "a", T);
+    st
+}
+
+#[test]
+fn a_pick_between_a_fable_pin_and_an_opus_pin_of_one_prompt_size_marks_the_opus_pin() {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = fable_and_opus_of_one_prompt(&s);
+    let d = decide(&mut st, &s, &auxiliary(&s, "light", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(round.window, "five_hour");
+    assert!(
+        (round.target - 0.054).abs() < 1e-9,
+        "the excess sets the target: {round:?}"
+    );
+    let pin = |session: &str| {
+        round
+            .pins
+            .iter()
+            .find(|p| p.session_id == session)
+            .unwrap_or_else(|| panic!("{session} in the round: {round:?}"))
+    };
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (
+                p.session_id.as_str(),
+                p.marked,
+                p.planned.as_deref(),
+                p.rewrite_window,
+                p.note
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("fable", false, None, Some("seven_day_fable"), None),
+            ("opus", true, Some("b"), Some("seven_day"), Some("cheapest")),
+            ("light", false, None, None, Some("current")),
+        ],
+        "the order walks the Fable pin first, and the pick marks the Opus pin, whose move spends less of a week"
+    );
+    let (fable, opus) = (pin("fable"), pin("opus"));
+    assert!(
+        fable
+            .rewrite
+            .zip(opus.rewrite)
+            .is_some_and(|(fable, opus)| (fable - 2.0 * opus).abs() < 1e-12),
+        "the Fable pin's rewrite spends its week, which holds half the 7-day window's tokens: {:?} against {:?}",
+        fable.rewrite,
+        opus.rewrite
+    );
+    assert_eq!((round.outcome.as_str(), round.reason), ("marked 1", None));
+}
+
+/// `hourly_pricer` with a second tier, `pro`, whose shares and burns read five times those on `TIER`, while the Max
+/// 20x equivalent is `hourly_pricer`'s whatever the tier.
+fn two_tier_pricer() -> SharePricer {
+    fn on_pro(tier: &str) -> (&str, f64) {
+        if tier == "pro" {
+            (TIER, 5.0)
+        } else {
+            (tier, 1.0)
+        }
+    }
+    let hourly = hourly_pricer();
+    let (price, rate) = (hourly.clone(), hourly.clone());
+    SharePricer::new(move |window, entrypoint, tier, model, usage, at| {
+        let (tier, factor) = on_pro(tier);
+        price
+            .price(window, entrypoint, tier, model, usage, at)
+            .map(|share| share * factor)
+    })
+    .with_rate(move |window, entrypoint, tier, model, burn, at| {
+        let (tier, factor) = on_pro(tier);
+        rate.rate(window, entrypoint, tier, model, burn, at)
+            .map(|rate| rate * factor)
+    })
+    .with_equivalent(move |window, entrypoint, model, usage, at| {
+        hourly.equivalent(window, entrypoint, model, usage, at)
+    })
+}
+
+#[test]
+fn a_covering_pins_rewrite_reads_one_figure_whatever_the_destinations_tier() {
+    // `heavy_light_small`'s round under `two_tier_pricer`, once beside `b` on `TIER` and once beside `c` on `pro`,
+    // where the burns and the shares read five times: light covers the target and fits either sibling.
+    let run = |sibling: &'static str, tier: &str| {
+        let s = snapshot_with_terms(
+            Pool {
+                strategy: Strategy::Pace,
+                members: vec![("a", 0), (sibling, 1)],
+                ..Pool::default()
+            },
+            [("a", TIER), (sibling, tier)]
+                .into_iter()
+                .map(|(id, tier)| SubscriptionTerm {
+                    account_id: id.into(),
+                    since: None,
+                    trial_ends_at: None,
+                    cancelled: false,
+                    ends_at: None,
+                    tier: Some(tier.into()),
+                })
+                .collect(),
+        );
+        let mut st = heavy_light_small();
+        st.set_share(two_tier_pricer());
+        st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500));
+        st.record_sample(sibling, refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+        past_the_wait(&mut st, &s, "p", "a", T);
+        let d = decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng());
+        let round = d.shed_round.expect("the round ran").facts;
+        let light = round
+            .pins
+            .iter()
+            .find(|p| p.session_id == "light")
+            .cloned()
+            .unwrap_or_else(|| panic!("light in the round: {round:?}"));
+        assert_eq!(
+            (light.marked, light.note),
+            (true, Some("cheapest")),
+            "{round:?}"
+        );
+        (light.rewrite, light.rewrite_window, light.planned)
+    };
+    let (on_max, window_on_max, planned_on_max) = run("b", TIER);
+    let (on_pro, window_on_pro, planned_on_pro) = run("c", "pro");
+    assert!(
+        on_max
+            .zip(on_pro)
+            .is_some_and(|(max, pro)| (max - pro).abs() < 1e-12),
+        "the figure is the pin's alone, the same on a Max 20x and a Pro destination: {on_max:?} against {on_pro:?}"
+    );
+    assert_eq!(
+        (window_on_max, window_on_pro),
+        (Some("seven_day"), Some("seven_day"))
+    );
+    assert_eq!(
+        (planned_on_max.as_deref(), planned_on_pro.as_deref()),
+        (Some("b"), Some("c")),
+        "each run plans the pin on its own sibling"
+    );
+}
+
+#[test]
+fn a_covering_pin_planned_on_an_api_key_sibling_reads_its_figure() {
+    // `heavy_light_small`'s round beside `b`, once a subscription on `TIER` and once an API-key account with no tier,
+    // which fits every pin before any pricing.
+    let run = |s: &RegistrySnapshot| {
+        let mut st = heavy_light_small();
+        st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500));
+        st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+        past_the_wait(&mut st, s, "p", "a", T);
+        decide(&mut st, s, &auxiliary(s, "small", T), &mut rng())
+            .shed_round
+            .expect("the round ran")
+            .facts
+    };
+    let rewrite = |round: &phoebis_routing::ShedRoundFacts, session: &str| {
+        round
+            .pins
+            .iter()
+            .find(|p| p.session_id == session)
+            .and_then(|p| p.rewrite)
+    };
+    let subscription = run(&projection_pool(vec![("a", 0), ("b", 1)]));
+    let api_key = run(&snapshot_with_terms(
+        Pool {
+            strategy: Strategy::Pace,
+            members: vec![("a", 0), ("b", 1)],
+            kinds: vec![("b", AccountKind::ApiKey)],
+            ..Pool::default()
+        },
+        tier_terms(&["a"]),
+    ));
+    assert!(
+        rewrite(&api_key, "light")
+            .zip(rewrite(&subscription, "light"))
+            .is_some_and(|(api_key, subscription)| (api_key - subscription).abs() < 1e-12),
+        "the pin planned on the API-key sibling reads the figure it reads on a subscription: {:?} against {:?}",
+        rewrite(&api_key, "light"),
+        rewrite(&subscription, "light")
+    );
+    assert!(
+        rewrite(&api_key, "heavy").is_some(),
+        "the pin the pick passed over reads its figure there too: {api_key:?}"
+    );
+    assert_eq!(
+        api_key
+            .pins
+            .iter()
+            .map(|p| (
+                p.session_id.as_str(),
+                p.marked,
+                p.planned.as_deref(),
+                p.rewrite_window,
+                p.note
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("heavy", false, None, Some("seven_day"), None),
+            (
+                "light",
+                true,
+                Some("b"),
+                Some("seven_day"),
+                Some("cheapest")
+            ),
+            ("small", false, None, None, Some("current")),
+        ],
+        "the pick compares the two figures and marks the smaller, as on a subscription sibling"
+    );
+}
+
+#[test]
+fn an_unsized_and_an_unpriced_covering_pin_cost_nothing_and_the_pick_takes_one_first() {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    // Three warm pins burning 0.2 of the 5-hour window an hour each and the light current pin: `unsized` reports no
+    // prompt, so it leads the order, `unpriced` runs a model the equivalent does not weigh, and `sized` rewrites
+    // 400 000 tokens. `a` at 0.4 projects 1.001 at its reset an hour out, a target of 0.051 that each of the three
+    // covers.
+    let mut st = loaded(vec![
+        PinRow {
+            last_input_tokens: 0,
+            ..burning("unsized", "a", 20.0, true, T)
+        },
+        PinRow {
+            model: "claude-unpriced-5".into(),
+            lane: lane_key("claude-unpriced-5", "standard", "none", "-"),
+            last_input_tokens: 10_000,
+            ..burning("unpriced", "a", 20.0, true, T)
+        },
+        PinRow {
+            last_input_tokens: 400_000,
+            ..burning("sized", "a", 20.0, true, T)
+        },
+        PinRow {
+            last_input_tokens: 10_000,
+            ..burning("small", "a", 0.1, true, T)
+        },
+    ]);
+    st.set_share(unpriced_equivalent_pricer());
+    st.record_sample("a", refreshing(0.4, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let round = d.shed_round.expect("the round ran").facts;
+    assert!(
+        (round.target - 0.051).abs() < 1e-9,
+        "the excess sets the target: {round:?}"
+    );
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (
+                p.session_id.as_str(),
+                p.rewrite.is_some(),
+                p.rewrite_window,
+                p.runway_ms.is_some()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("unsized", false, None, true),
+            ("unpriced", false, None, true),
+            ("sized", true, Some("seven_day"), true),
+            ("small", false, None, false),
+        ],
+        "the gate found a destination for each covering pin, and the cost model sizes the sized pin's rewrite alone"
+    );
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (
+                p.session_id.as_str(),
+                p.marked,
+                p.planned.as_deref(),
+                p.note
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("unsized", true, Some("b"), Some("cheapest")),
+            ("unpriced", false, None, None),
+            ("sized", false, None, None),
+            ("small", false, None, Some("current")),
+        ],
+        "the two pins whose move costs nothing tie, and the pick takes the first in the order"
     );
     assert_eq!((round.outcome.as_str(), round.reason), ("marked 1", None));
 }

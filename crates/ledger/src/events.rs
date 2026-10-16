@@ -1206,6 +1206,7 @@ mod tests {
                     per_rewrite: Some(0.004),
                     marked: true,
                     rewrite: Some(0.01),
+                    rewrite_window: Some("seven_day"),
                     planned: Some("b".into()),
                     runway_ms: Some(7_200_000),
                     skip: None,
@@ -1311,8 +1312,8 @@ mod tests {
             json!([{
                 "key_id": "k", "session_id": "s1", "agent_id": "main", "model": "m", "cold": true,
                 "burn": 4.0, "last_input_tokens": 1_000, "per_rewrite": 0.004, "marked": true,
-                "rewrite": 0.01, "planned": "b", "runway_ms": 7_200_000, "skip": null,
-                "note": "current"
+                "rewrite": 0.01, "rewrite_window": "seven_day", "planned": "b",
+                "runway_ms": 7_200_000, "skip": null, "note": "current"
             }]),
             "each pin is an object of one-value fields"
         );

@@ -1979,6 +1979,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
                     per_rewrite: Some(0.004),
                     marked: true,
                     rewrite: Some(0.005),
+                    rewrite_window: Some("seven_day"),
                     planned: Some("direct".into()),
                     runway_ms: None,
                     skip: None,

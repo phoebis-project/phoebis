@@ -337,11 +337,13 @@ pub struct SharePricer {
     price: Arc<Price>,
     measured: Arc<Measured>,
     rate: Arc<Rate>,
+    equivalent: Arc<Equivalent>,
 }
 
 type Price = dyn Fn(&str, Option<&str>, &str, &str, PinUsage, i64) -> Option<f64> + Send + Sync;
 type Measured = dyn Fn(&str) -> bool + Send + Sync;
 type Rate = dyn Fn(&str, Option<&str>, &str, &str, &PinBurn, i64) -> Option<f64> + Send + Sync;
+type Equivalent = dyn Fn(&str, Option<&str>, &str, PinUsage, i64) -> Option<f64> + Send + Sync;
 
 impl SharePricer {
     /// `price(window, entrypoint, tier, canonical_model, usage, at)`: the share of `window` on `tier` at `at` (the
@@ -357,6 +359,7 @@ impl SharePricer {
             price: Arc::new(price),
             measured: Arc::new(|_| true),
             rate: Arc::new(|_, _, _, _, _, _| None),
+            equivalent: Arc::new(|_, _, _, _, _| None),
         }
     }
 
@@ -390,6 +393,22 @@ impl SharePricer {
         }
     }
 
+    /// `equivalent(window, entrypoint, canonical_model, usage, at)`: the Max 20x equivalent of `window`, the share a
+    /// Max 20x account would spend on `usage` under the regime the entrypoint names, at the band of `at`. `None` for
+    /// a window the tables cannot price for the model. Every pricer prices nothing here until it is set.
+    pub fn with_equivalent(
+        self,
+        equivalent: impl Fn(&str, Option<&str>, &str, PinUsage, i64) -> Option<f64>
+            + Send
+            + Sync
+            + 'static,
+    ) -> SharePricer {
+        SharePricer {
+            equivalent: Arc::new(equivalent),
+            ..self
+        }
+    }
+
     pub fn rate(
         &self,
         window: &str,
@@ -412,6 +431,17 @@ impl SharePricer {
         at: i64,
     ) -> Option<f64> {
         (self.price)(window, entrypoint, tier, canonical_model, usage, at)
+    }
+
+    pub fn equivalent(
+        &self,
+        window: &str,
+        entrypoint: Option<&str>,
+        canonical_model: &str,
+        usage: PinUsage,
+        at: i64,
+    ) -> Option<f64> {
+        (self.equivalent)(window, entrypoint, canonical_model, usage, at)
     }
 
     pub fn measured(&self, window: &str) -> bool {
@@ -3959,6 +3989,14 @@ mod tests {
                 burn.input * 1e-7
             })
         })
+    }
+
+    #[test]
+    fn the_default_pricer_prices_no_equivalent() {
+        assert_eq!(
+            SharePricer::default().equivalent(SEVEN_DAY, None, "m", PinUsage::default(), 0),
+            None
+        );
     }
 
     #[test]

@@ -13285,6 +13285,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 "per_rewrite": 0.004,
                 "marked": true,
                 "rewrite": 0.005,
+                "rewrite_window": "seven_day",
                 "planned": "direct",
                 "runway_ms": null,
                 "skip": null,
