@@ -116,10 +116,14 @@ pub fn restorable_version(cli_version: &str) -> Option<&str> {
     (spelled && suffixed).then_some(cli_version)
 }
 
-/// `sdk-cli` out of `claude-cli/2.1.269 (external, sdk-cli)`; `cli` when the agent carries no parenthesis, or
-/// when the parenthesized tail is not a bare lowercase-and-hyphen token (the client's own spellings: `cli`,
-/// `sdk-cli`, `claude-vscode`, and the like). Unsanitized, a forged User-Agent could smuggle a `;`-separated
-/// field of its own choosing into the billing line this build then signs.
+/// The token in the entrypoint's position of a `claude-cli/` user agent, the second comma-separated token of the
+/// parenthesis, after `external`: `sdk-cli` out of `claude-cli/2.1.269 (external, sdk-cli)`, `claude-desktop-3p` out
+/// of `(external, claude-desktop-3p, agent-sdk/0.3.295)`, `cli` out of `(external, cli, workload/cron)`. `cli` when
+/// the agent carries no parenthesis, no second token, or one outside the entrypoint token alphabet:
+/// `claude-cli/<version>` alone is the client's own spelling of the interactive entrypoint. The alphabet admits a
+/// digit for `claude-desktop-3p` and an underscore for `claude_in_slack`, `local_agent` and the `remote_*` family,
+/// which would otherwise read as `cli` whatever their position. Unsanitized, a forged User-Agent could smuggle a
+/// `;`-separated field of its own choosing into the billing line this build signs.
 pub fn entrypoint_of(user_agent: &str) -> &str {
     let Some(open) = user_agent.find('(') else {
         return "cli";
@@ -127,21 +131,28 @@ pub fn entrypoint_of(user_agent: &str) -> &str {
     let Some(close) = user_agent[open..].find(')') else {
         return "cli";
     };
-    let Some(candidate) = user_agent[open + 1..open + close].rsplit(',').next() else {
+    let Some(candidate) = user_agent[open + 1..open + close].split(',').nth(1) else {
         return "cli";
     };
     let candidate = candidate.trim();
-    // Bounded the same as `header_id`'s identifiers: a token running past this length reaches a log line and a
-    // ledger key, so it reads as unknown rather than widening every row that names its class.
-    let valid = (1..=crate::identity::MAX_ID_LEN).contains(&candidate.len())
-        && candidate
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b == b'-');
-    if valid {
+    if is_entrypoint_token(candidate) {
         candidate
     } else {
         "cli"
     }
+}
+
+/// The entrypoint token alphabet: ASCII lowercase letters, ASCII digits, hyphens and underscores, 1 to `MAX_ID_LEN`
+/// bytes, so `claude-desktop-3p` passes on its digit and `claude_in_slack`, `local_agent` and the `remote_*` family on
+/// their underscore, while a separator (`;`, `=`, whitespace, `/`, `.`) fails. Shared with the cross-check's read of
+/// `cc_entrypoint`, and the rule the cost model's loader restates for a regime's name and its entrypoints.
+pub(crate) fn is_entrypoint_token(candidate: &str) -> bool {
+    // Bounded the same as `header_id`'s identifiers: a token running past this length reaches a log line and a
+    // ledger key, so it reads as unknown rather than widening every row that names its class.
+    (1..=crate::identity::MAX_ID_LEN).contains(&candidate.len())
+        && candidate
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
 }
 
 /// Absent-field candidates in `FIELD_ORDER`'s relative order: `cch` before `cc_prev_req` before `cc_prompt_id`.
@@ -580,6 +591,26 @@ mod tests {
     #[test]
     fn entrypoint_of_reads_the_clients_own_spellings_and_falls_back_on_anything_else() {
         assert_eq!(
+            entrypoint_of("claude-cli/2.1.295 (external, claude-desktop-3p, agent-sdk/0.3.295)"),
+            "claude-desktop-3p",
+            "the token in the entrypoint's position, whatever follows it"
+        );
+        assert_eq!(
+            entrypoint_of("claude-cli/2.1.300 (external, cli, workload/cron)"),
+            "cli",
+            "read by its position, the third token never consulted"
+        );
+        assert_eq!(
+            entrypoint_of("claude-cli/2.1.295 (external, claude-desktop-3p)"),
+            "claude-desktop-3p",
+            "a digit is in the alphabet"
+        );
+        assert_eq!(
+            entrypoint_of("claude-cli/2.1.300 (external, local_agent)"),
+            "local_agent",
+            "an underscore is in the alphabet"
+        );
+        assert_eq!(
             entrypoint_of("claude-cli/2.1.269 (external, sdk-cli)"),
             "sdk-cli"
         );
@@ -599,9 +630,38 @@ mod tests {
             "a forged field smuggled into the parenthesis is not a bare token"
         );
         assert_eq!(
+            entrypoint_of("claude-cli/2.1.269 (external)"),
+            "cli",
+            "no token in the entrypoint's position"
+        );
+        assert_eq!(
+            entrypoint_of("claude-cli/2.1.269 (external, cli=1)"),
+            "cli",
+            "an equals sign is a separator"
+        );
+        assert_eq!(
+            entrypoint_of("claude-cli/2.1.269 (external, cli.1)"),
+            "cli",
+            "a dot is a separator"
+        );
+        assert_eq!(
             entrypoint_of("claude-cli/2.1.269 (external, sdk cli)"),
             "cli",
             "whitespace inside the token is not a spelling the client uses"
+        );
+        assert_eq!(
+            entrypoint_of("claude-cli/2.1.269 (external,  sdk-cli )"),
+            "sdk-cli",
+            "whitespace around the token is trimmed"
+        );
+        let over_bound = format!(
+            "claude-cli/2.1.269 (external, {})",
+            "a".repeat(crate::identity::MAX_ID_LEN + 1)
+        );
+        assert_eq!(
+            entrypoint_of(&over_bound),
+            "cli",
+            "a token past the bound reads as unknown"
         );
     }
 }

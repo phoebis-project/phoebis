@@ -23,6 +23,9 @@ pub struct BodyFacts {
     /// The `cc_turn_origin` the line carries, in the client's own spelling (a token of lowercase ASCII letters
     /// and underscores, at most 32 bytes); absent from a reduced-shape request.
     pub turn_origin: Option<String>,
+    /// The `cc_entrypoint` token of the billing line under the entrypoint token rule, `None` for a body without a
+    /// line, a line that names none, a value outside the rule, and a body no reader parses.
+    pub entrypoint: Option<String>,
     /// Whether `system[0]` is an attribution line at all, stamped or reduced: what the restoration fills.
     pub carries_line: bool,
     pub shape: RequestShape,
@@ -75,6 +78,7 @@ impl BodyFacts {
                 prompt_units: vec![[b'0' as u16; 3]],
                 prompt_id: None,
                 turn_origin: None,
+                entrypoint: None,
                 carries_line: false,
                 shape: RequestShape {
                     safeguards,
@@ -128,6 +132,9 @@ impl BodyFacts {
         let turn_origin = first_system_text
             .and_then(carried_turn_origin)
             .map(String::from);
+        let entrypoint = first_system_text
+            .and_then(carried_entrypoint)
+            .map(String::from);
         let count = |v: Option<&Value>| v.and_then(Value::as_array).map_or(0, |a| a.len() as u32);
         let text = |v: Option<&Value>| v.and_then(Value::as_str).map(str::to_string);
         let thinking = root.get("thinking");
@@ -164,6 +171,7 @@ impl BodyFacts {
             prompt_units,
             prompt_id,
             turn_origin,
+            entrypoint,
             carries_line,
             shape,
             top_level_effort,
@@ -285,6 +293,32 @@ fn carried_turn_origin(text: &str) -> Option<&str> {
     let spelled = (1..=TURN_ORIGIN_MAX).contains(&value.len())
         && value.bytes().all(|b| matches!(b, b'a'..=b'z' | b'_'));
     spelled.then_some(value)
+}
+
+/// The `cc_entrypoint` of an attribution line under the alphabet the user agent's token is read by, so the
+/// cross-check compares the two token for token and a separator never reaches its log line.
+fn carried_entrypoint(text: &str) -> Option<&str> {
+    carried_field(text, "cc_entrypoint").filter(|value| crate::billing::is_entrypoint_token(value))
+}
+
+/// One `info` line where the body's line names another entrypoint than the user agent did, with the request id and
+/// both tokens, and nothing where they agree or either is absent. The user agent's token prices: the line is the
+/// client's own attribution and the regime a pricing fact, so a disagreement is something to read, never a refusal.
+pub(crate) fn note_entrypoint_disagreement(
+    request_id: &str,
+    user_agent: Option<&str>,
+    line: Option<&str>,
+) {
+    if let (Some(agent), Some(line)) = (user_agent, line) {
+        if agent != line {
+            tracing::info!(
+                request_id,
+                user_agent_entrypoint = agent,
+                billing_entrypoint = line,
+                "the billing line names another entrypoint than the user agent, which prices"
+            );
+        }
+    }
 }
 
 fn is_fresh_user_turn(message: &Value) -> bool {
@@ -500,6 +534,52 @@ mod tests {
         );
         let reduced = br#"{"system":[{"type":"text","text":"be helpful"}]}"#;
         assert_eq!(BodyFacts::read(reduced).turn_origin, None);
+    }
+
+    #[test]
+    fn cc_entrypoint_is_read_off_the_line_under_the_entrypoint_tokens_rule() {
+        let line = |entrypoint: &str| {
+            format!(
+                r#"{{"system":[{{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.295.517; cc_entrypoint={entrypoint}; cc_turn_origin=human;"}}]}}"#
+            )
+        };
+        let read = |body: &str| BodyFacts::read(body.as_bytes()).entrypoint;
+        assert_eq!(
+            read(&line("claude-desktop-3p")).as_deref(),
+            Some("claude-desktop-3p")
+        );
+        assert_eq!(read(&line("local_agent")).as_deref(), Some("local_agent"));
+        assert_eq!(
+            read(&line("Desk top")),
+            None,
+            "a value outside the token alphabet is absent"
+        );
+        let over_bound = "a".repeat(crate::identity::MAX_ID_LEN + 1);
+        assert_eq!(
+            read(&line(&over_bound)),
+            None,
+            "past the bound the value is absent"
+        );
+        assert_eq!(
+            BodyFacts::read(phoebis_profile::fixtures::body(
+                phoebis_profile::fixtures::BodyFixture::Oauth
+            ))
+            .entrypoint
+            .as_deref(),
+            Some("sdk-cli"),
+            "the reduced shape's line names its entrypoint too"
+        );
+        assert_eq!(
+            read(
+                r#"{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.295.517;"}]}"#
+            ),
+            None,
+            "a line that names no entrypoint"
+        );
+        assert_eq!(
+            read(r#"{"system":[{"type":"text","text":"be helpful"}]}"#),
+            None
+        );
     }
 
     #[test]

@@ -43,6 +43,9 @@ pub struct RequestIdentity {
     pub folded_model: String,
     /// `folded_model`, or the dated id the catalog cache resolved it to: the routing, ledger, and pricing key.
     pub canonical_model: String,
+    /// The user agent's entrypoint token for a `claude-cli/` agent (`cli` where it names none), `None` for any other
+    /// client: what the selection's request and the pin carry, and what the cost model's regime prices by.
+    pub entrypoint: Option<String>,
     /// `claude-code/<entrypoint>` or `other`: a log label, never a gate.
     pub client: String,
     /// The class the label maps to.
@@ -72,6 +75,9 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
     }
     // The header is the client's own statement of the session.
     let session_id = header_id(headers, "x-claude-code-session-id");
+    let entrypoint = user_agent_of(headers)
+        .filter(|agent| agent.starts_with("claude-cli/"))
+        .map(|agent| entrypoint_of(agent).to_string());
     let client = client_class(headers);
     Ok(RequestIdentity {
         session_id,
@@ -82,6 +88,7 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
         model,
         canonical_model: folded_model.clone(),
         folded_model,
+        entrypoint,
         class: ClientClass::of_label(&client),
         client,
         forked_from: None,
@@ -223,14 +230,18 @@ pub(crate) fn is_auxiliary(request_class: Option<&str>) -> bool {
 /// reads none), `other` for anything else. The entrypoint is bounded by `entrypoint_of`, so the class is safe
 /// for a log line and a ledger key.
 pub fn client_class(headers: &HeaderMap) -> String {
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
+    let user_agent = user_agent_of(headers).unwrap_or_default();
     if user_agent.starts_with("claude-cli/") {
         return format!("claude-code/{}", entrypoint_of(user_agent));
     }
     OTHER_CLIENT.to_string()
+}
+
+/// The `User-Agent` header as text, `None` where the request carries none or it is not visible ASCII.
+fn user_agent_of(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
 }
 
 /// Brackets are allowed on top of the identifier charset because a client may name a tier with them, as the
@@ -332,6 +343,20 @@ mod tests {
             "claude-code/sdk-cli"
         );
         assert_eq!(
+            client_class(&agent(
+                "claude-cli/2.1.295 (external, claude-desktop-3p, agent-sdk/0.3.295)"
+            )),
+            "claude-code/claude-desktop-3p"
+        );
+        assert_eq!(
+            client_class(&agent("claude-cli/2.1.300 (external, cli, workload/cron)")),
+            "claude-code/cli"
+        );
+        assert_eq!(
+            client_class(&agent("claude-cli/2.1.269 (external, cli)")),
+            "claude-code/cli"
+        );
+        assert_eq!(
             client_class(&agent("claude-cli/2.1.269")),
             "claude-code/cli"
         );
@@ -363,6 +388,35 @@ mod tests {
             OTHER_CLIENT,
             "a stainless header on an agent outside Claude Code does not change the label"
         );
+    }
+
+    #[test]
+    fn the_identity_carries_the_entrypoint_for_a_claude_cli_agent_and_none_for_any_other() {
+        let agent = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(axum::http::header::USER_AGENT, value.parse().unwrap());
+            headers
+        };
+        let entrypoint = |headers: &HeaderMap| {
+            identify(headers, BODY)
+                .expect("the body has a model")
+                .entrypoint
+        };
+        assert_eq!(
+            entrypoint(&agent(
+                "claude-cli/2.1.295 (external, claude-desktop-3p, agent-sdk/0.3.295)"
+            ))
+            .as_deref(),
+            Some("claude-desktop-3p")
+        );
+        assert_eq!(
+            entrypoint(&agent("claude-cli/2.1.269")).as_deref(),
+            Some("cli"),
+            "an agent that names no entrypoint is the interactive one"
+        );
+        let mut sdk = agent("anthropic-sdk-python/0.40.0");
+        sdk.insert("x-stainless-lang", "python".parse().unwrap());
+        assert_eq!(entrypoint(&sdk), None);
     }
 
     #[test]
@@ -421,6 +475,7 @@ mod tests {
             model: "claude-sonnet-4-5".into(),
             folded_model: "claude-sonnet-4-5".into(),
             canonical_model: "claude-sonnet-4-5".into(),
+            entrypoint: Some("cli".into()),
             client: "claude-code/cli".into(),
             class: ClientClass::ClaudeCode,
             forked_from: None,

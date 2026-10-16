@@ -1426,6 +1426,11 @@ impl Relay {
             &self.router,
         );
         let auxiliary = crate::identity::is_auxiliary(request_class.as_deref());
+        crate::facts::note_entrypoint_disagreement(
+            &trace.request_id,
+            identity.entrypoint.as_deref(),
+            facts.entrypoint.as_deref(),
+        );
         trace
             .observed(
                 Some(&key),
