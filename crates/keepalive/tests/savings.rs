@@ -740,30 +740,52 @@ fn failed(r: &Rig, id: &str, ttfb_ms: Option<i64>) -> phoebis_bus::Event {
     event
 }
 
-/// A failed request decides the probes it kept only once the upstream answered it: past a head the read is the
-/// cache's answer, while one that failed before any reached nothing and leaves them for the request after it.
+/// A failed request decides none of the probes it kept, past a head or not, since a failed turn is no evidence about
+/// the cache. The probe waits for the next successful request, which reads its coverage inside its entry and is
+/// credited, or for the lapse, which settles it `expired` at the entry's end at 570 s.
 #[tokio::test]
-async fn a_failed_request_decides_the_probes_it_kept_only_past_a_head() {
-    for (head, left) in [(Some(40), 0), (None, 1)] {
-        let mut r = rig(RigSpec {
-            accounts: vec![api_key("a", A, 0)],
-            ..RigSpec::default()
-        })
-        .await;
-        open_request(&r, "first", 0, 2_000);
-        r.engine.observe(completed(&r, "first", 0));
-        r.advance_attended(270_000);
-        r.step().await;
-        assert_eq!(r.status("main").unanswered, 1, "a covering probe");
-        r.advance_attended(10_000);
-        open_request(&r, "second", 0, 2_000);
-        r.engine.observe(failed(&r, "second", head));
-        assert_eq!(r.status("main").unanswered, left, "head {head:?}");
-        if head.is_some() {
-            let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes > 0).await;
+async fn a_failed_request_decides_none_of_the_probes_it_kept_and_leaves_them_to_the_next_success_or_the_lapse(
+) {
+    for head in [Some(40), None] {
+        for next in [true, false] {
+            let mut r = rig(RigSpec {
+                accounts: vec![api_key("a", A, 0)],
+                ..RigSpec::default()
+            })
+            .await;
+            open_request(&r, "first", 0, 2_000);
+            r.engine.observe(completed(&r, "first", 0));
+            r.advance_attended(270_000);
+            r.step().await;
+            assert_eq!(r.status("main").unanswered, 1, "a covering probe");
+            r.advance_attended(10_000);
+            open_request(&r, "second", 0, 2_000);
+            r.engine.observe(failed(&r, "second", head));
             assert_eq!(
-                probe_rows(&rows).wasted_probe_reasons,
-                BTreeMap::from([("cold_return".to_string(), 1)])
+                r.status("main").unanswered,
+                1,
+                "head {head:?}: the failed request decided nothing"
+            );
+            let expected = if next {
+                // Past the first request's five-minute TTL and inside the probe's entry.
+                r.advance_attended(50_000);
+                open_request(&r, "third", 2_000, 0);
+                r.engine.observe(completed(&r, "third", 2_000));
+                (1, BTreeMap::new())
+            } else {
+                r.advance_attended(290_000);
+                r.step().await;
+                r.engine.flush_persisted().await;
+                (0, BTreeMap::from([("expired".to_string(), 1)]))
+            };
+            let rows = final_rollups(&r).await;
+            assert_eq!(
+                (
+                    inference_rows(&rows).kept_warm_requests,
+                    probe_rows(&rows).wasted_probe_reasons
+                ),
+                expected,
+                "head {head:?}, a successful request next: {next}"
             );
         }
     }
@@ -1902,6 +1924,210 @@ async fn a_turn_ended_before_its_head_or_by_a_bus_gap_leaves_the_pending_probe_t
     }
 }
 
+/// A probe pending past its recipe's end sits on an agent that holds no recipe, which no tick asks the router about, so
+/// a resolution that lands then reaches the probe at the next request's arrival: the request under the dated id reads
+/// the entry the probe kept as its own lineage and is credited, with nothing settled as a cold return.
+#[tokio::test]
+async fn a_probe_pending_past_its_recipes_end_follows_a_resolution_to_the_next_requests_credit() {
+    let dated = "claude-sonnet-4-5-20250929";
+    let mut r = ended_by_the_idle_limit().await;
+    let listing = relay_common::catalog_rules().remove(0);
+    r.h.catalog_up
+        .push_credential_rule(A, &listing.path_prefix, listing.respond);
+    let a = r.h.store.account("a").unwrap().unwrap();
+    r.h.catalog.refresh(&a).await;
+    assert_eq!(
+        r.h.catalog.lookup("claude-sonnet-4-5").as_deref(),
+        Some(dated)
+    );
+    let views = r.engine.router_views();
+    r.advance(10_000);
+    r.step().await;
+    assert_eq!(
+        (r.engine.router_views(), r.status("main").unanswered),
+        (views, 1),
+        "the tick asked the router nothing and the probe still waits"
+    );
+    let second = r.observe("main").await;
+    assert_eq!(r.status("main").canonical_model, dated);
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "the probe's lineage followed the resolution, so the request answered it and was credited"
+    );
+    assert!(row(&r, &second).await.kept_warm);
+}
+
+/// The head of `id`'s attempt `attempt`, answered at `status`.
+fn head(
+    r: &Rig,
+    id: &str,
+    attempt: u8,
+    status: u16,
+    outcome: phoebis_bus::AttemptOutcome,
+) -> phoebis_bus::Event {
+    phoebis_bus::Event::ResponseHead(phoebis_bus::ResponseHead {
+        request_id: id.into(),
+        attempt,
+        status,
+        headers: Vec::new(),
+        first_event: None,
+        outcome,
+        cooldown: None,
+        written_at: r.now(),
+        observed_at: r.now(),
+    })
+}
+
+/// A turn on `id`, observed and placed on `a`, that the upstream fails with a 500: the head, then the failed completion
+/// past it.
+fn a_turn_failed_with_a_500(r: &Rig, id: &str) {
+    r.engine.observe(r.observed(id, "main", BODY));
+    r.engine.observe(r.selected(id, "a"));
+    r.engine.observe(head(
+        r,
+        id,
+        1,
+        500,
+        phoebis_bus::AttemptOutcome::UpstreamError,
+    ));
+    let mut event = failed(r, id, Some(40));
+    if let phoebis_bus::Event::RequestComplete(complete) = &mut event {
+        complete.status = 500;
+    }
+    r.engine.observe(event);
+}
+
+/// A turn the upstream failed is no evidence about the cache, so a retry reads the gap from the last turn that
+/// answered. A request at 0 s, a covering probe at 270 s keeping its entry to 570 s, and a turn at 330 s that fails with
+/// a 500: a retry inside the entry, past the first request's five-minute TTL, earns the credit the failed turn could
+/// not, and a retry past the entry reads nothing the probe kept, earns none, and settles the probe `expired`.
+#[tokio::test]
+async fn a_retry_after_a_failed_turn_earns_the_credit_inside_the_probes_entry_and_none_past_it() {
+    for (retry_after, expected) in [
+        (10_000, (1, BTreeMap::new())),
+        (270_000, (0, BTreeMap::from([("expired".to_string(), 1)]))),
+    ] {
+        let mut r = rig(RigSpec {
+            accounts: vec![api_key("a", A, 0)],
+            ..RigSpec::default()
+        })
+        .await;
+        open_request(&r, "first", 0, 2_000);
+        r.engine.observe(completed(&r, "first", 0));
+        r.advance_attended(270_000);
+        r.step().await;
+        assert_eq!(r.status("main").unanswered, 1, "a covering probe");
+        r.advance_attended(60_000);
+        a_turn_failed_with_a_500(&r, "failed");
+        r.advance_attended(retry_after);
+        open_request(&r, "retry", 2_000, 0);
+        r.engine.observe(completed(&r, "retry", 2_000));
+        let rows = final_rollups(&r).await;
+        assert_eq!(
+            (
+                inference_rows(&rows).kept_warm_requests,
+                probe_rows(&rows).wasted_probe_reasons
+            ),
+            expected,
+            "a retry {retry_after} ms after the failed turn"
+        );
+    }
+}
+
+/// The retry's credit holds for a probe the idle limit left pending too: a turn inside its entry that fails with a 500
+/// hands the probe back under its label, and the retry after it reads the probe's coverage and is credited.
+#[tokio::test]
+async fn a_retry_after_a_failed_turn_reads_the_probe_the_idle_limit_left_pending() {
+    let r = ended_by_the_idle_limit().await;
+    r.advance(10_000);
+    a_turn_failed_with_a_500(&r, "failed");
+    r.advance(10_000);
+    open_request(&r, "retry", 2_000, 0);
+    r.engine.observe(completed(&r, "retry", 2_000));
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "the retry inside the probe's entry is credited and nothing settles"
+    );
+}
+
+/// A failed attempt the request's own replay answered is no failed turn: a 401 on the first attempt and a 200 on the
+/// refreshed credential's second, inside a covered entry past the first request's TTL, is credited as a plain success,
+/// and its arrival is the instant the next request's gap runs from.
+#[tokio::test]
+async fn a_request_whose_replay_answers_a_401_is_credited_as_a_plain_success() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_request(&r, "first", 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 1, "a covering probe");
+    r.advance_attended(60_000);
+    let arrived = r.now();
+    r.engine.observe(r.observed("replayed", "main", BODY));
+    r.engine.observe(r.selected("replayed", "a"));
+    r.engine.observe(head(
+        &r,
+        "replayed",
+        1,
+        401,
+        phoebis_bus::AttemptOutcome::AuthFailed,
+    ));
+    let mut replay = r.selected("replayed", "a");
+    if let phoebis_bus::Event::AccountSelected(selected) = &mut replay {
+        selected.attempt = 2;
+    }
+    r.engine.observe(replay);
+    r.engine.observe(head(
+        &r,
+        "replayed",
+        2,
+        200,
+        phoebis_bus::AttemptOutcome::Succeeded,
+    ));
+    let mut start = message_start(
+        "replayed",
+        phoebis_bus::Usage {
+            cache_read_tokens: Some(2_000),
+            ..Default::default()
+        },
+    );
+    if let phoebis_bus::Event::ResponseChunk(chunk) = &mut start {
+        chunk.attempt = 2;
+    }
+    r.engine.observe(start);
+    r.engine.observe(completed(&r, "replayed", 2_000));
+    let (_, agents) = r.engine.persist_rows();
+    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "the replayed request is credited as a plain success"
+    );
+    assert_eq!(
+        payload["last_answered_at"].as_i64(),
+        Some(arrived),
+        "the replayed request answered from its arrival"
+    );
+}
+
 /// Every rollup row the rig wrote, read once the ledger has landed everything the test sent it.
 async fn final_rollups(r: &Rig) -> Vec<RollupRow> {
     r.ledger.clone().shutdown().await.unwrap();
@@ -2055,6 +2281,43 @@ async fn a_request_past_the_first_entry_and_inside_the_second_that_reads_nothing
             BTreeMap::from([("cold_return".to_string(), 1), ("expired".to_string(), 1)])
         ),
         "the request arrived 600 s in, after 570 s and before 840 s"
+    );
+}
+
+/// A later probe that covered nothing never shadows an older covered one whose entry still lives. The first probe reads
+/// the entry back 270 s in and keeps it to 570 s, the second reads a hundred tokens of the prefix 540 s in and covers
+/// nothing, and a request 550 s in that reads the cache is credited on the first probe's coverage.
+#[tokio::test]
+async fn a_later_probe_that_covered_nothing_leaves_the_credit_to_the_older_covered_probe() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_request(&r, "first", 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(270_000);
+    r.step().await;
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(100, 1_900));
+    r.advance_attended(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.unanswered, status.reason),
+        (2, 2, Reason::PartialCacheCoverage),
+        "the second probe covered nothing 540 s in: {status:?}"
+    );
+    r.advance_attended(10_000);
+    open_request(&r, "second", 2_000, 0);
+    r.engine.observe(completed(&r, "second", 2_000));
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "the request inside the first probe's entry is credited on its coverage"
     );
 }
 

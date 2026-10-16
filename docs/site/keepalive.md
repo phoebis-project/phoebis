@@ -104,8 +104,11 @@ the same way an auxiliary one is. A body carrying no chain at all re-arms on eve
 own warmth check applies for a client that sends none.
 
 The kept-warm credit follows the same rule: only a request that re-armed the recipe earns it, and it goes to the probe
-whose entry that request read, a probe that rewrote the entry included. An auxiliary or a foreign request may still read
-a warm cache, but it never resets the recipe's schedule and settles nothing.
+whose entry that request read, a probe that rewrote the entry included, the newest probe that covered the entry taking
+it over a later one that covered nothing. An auxiliary or a foreign request may still read a warm cache, but it never
+resets the recipe's schedule and settles nothing. A failed turn decides no probe and is no evidence about the cache, so
+a retry inside the probe's entry earns the credit the failed turn could not, its gap measured from the last turn that
+answered.
 
 ## The four fields
 

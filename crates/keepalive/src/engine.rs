@@ -594,9 +594,14 @@ pub(crate) struct Agent {
     /// The probes a superseding real request took over from `unanswered`, with the keys they were paid under: the
     /// request moves the agent's model, account, pool and key generation before its completion decides them. A
     /// probe sent while it is open lands on `unanswered`, for the request after it. The idle limit moves its probes
-    /// here too, pending under its label until their entry lapses or a turn reads them.
+    /// here too, pending under its label until their entry lapses or a turn reads them, and a failed turn hands back
+    /// the probes it took the same way.
     pub kept: Vec<Kept>,
     pub last_real_at: Option<i64>,
+    /// The arrival of the last request whose completion succeeded with a 2xx status. The kept-warm gap is measured
+    /// from it rather than from `last_real_at`, so a failed turn, which stays no evidence about the cache, leaves the
+    /// retry after it the gap from the last turn that answered.
+    pub last_answered_at: Option<i64>,
     /// The label of the last discard that had one, so a probe result arriving after the recipe stopped settles
     /// under the stop that orphaned it.
     pub last_stop: Option<Wasted>,
@@ -662,6 +667,7 @@ impl Agent {
             unanswered: Vec::new(),
             kept: Vec::new(),
             last_real_at: None,
+            last_answered_at: None,
             last_stop: None,
             last_presence_at: None,
             last_probe_at: None,
@@ -669,6 +675,36 @@ impl Agent {
             credited_today: 0,
             counters_day: utc_day(now),
         }
+    }
+
+    /// Moves every model name the agent holds that `canonical` dates, and answers whether any moved: the recipe's
+    /// own, the one its open observation took from the recipe before it, and its kept and unanswered probes', which
+    /// an agent keeps after its recipe ended.
+    pub(crate) fn follow_resolutions(&mut self, canonical: &HashMap<String, String>) -> bool {
+        let mut moved = false;
+        if let Some(dated) = canonical.get(&self.canonical_model) {
+            self.canonical_model = dated.clone();
+            moved = true;
+        }
+        if let Some(prior) = self.current.as_mut().and_then(|o| o.prior.as_mut()) {
+            if let Some(dated) = canonical.get(&prior.model) {
+                prior.model = dated.clone();
+                moved = true;
+            }
+        }
+        for kept in &mut self.kept {
+            if let Some(dated) = canonical.get(&kept.canonical_model) {
+                kept.canonical_model = dated.clone();
+                moved = true;
+            }
+        }
+        for probe in &mut self.unanswered {
+            if let Some(dated) = canonical.get(&probe.model) {
+                probe.model = dated.clone();
+                moved = true;
+            }
+        }
+        moved
     }
 
     /// When the next probe is due: the entry's expiry less the timing's lead and this schedule's share of the
@@ -839,6 +875,9 @@ pub(crate) struct Observation {
     pub kind: Option<AccountKind>,
     /// Whether the current attempt's head reported overage in use, the fact the request's own row files under.
     pub in_overage: bool,
+    /// The engine's instant at the request's arrival, which a successful completion makes the agent's
+    /// `last_answered_at`.
+    pub arrived_at: i64,
 }
 
 /// One unanswered probe with the label that settles it as wasted. Queued under the lock and written to the ledger by
@@ -959,7 +998,8 @@ pub(crate) struct Kept {
     /// The label a probe written off at a ceiling settles under when its entry lapses with no turn: `idle_limit`
     /// today. A turn that reads the probe leaves the label in place, so one that ends without deciding the probe
     /// hands it back to the lapse sweep. `None` for a probe a real request superseded, which waits for that
-    /// request's completion.
+    /// request's completion. A failed completion hands such a probe back under `expired`, the label its recipe's
+    /// own lapse settles it under.
     pub pending: Option<Wasted>,
 }
 
@@ -1282,12 +1322,12 @@ impl Inner {
     }
 
     /// `discard` for a real request that supersedes the recipe: the probes the recipe leaves unanswered were paying
-    /// for that request, so it keeps them until the first of these decides them: its completion, once it reached
-    /// the upstream (each probe on its own: a warm return on its lineage inside its entry clears it, one past its
-    /// entry settles it under `expired`, and any other return, on another lineage or with no read, under
-    /// `cold_return`), a labeled discard (under its label), or the agent's lapse or eviction. A request the engine
-    /// takes no observation of, or one refused or cancelled before the upstream answered, leaves them kept for
-    /// whichever comes next.
+    /// for that request, so it keeps them until the first of these decides them: its successful completion (each
+    /// probe on its own: a warm return on its lineage inside its entry clears it, one past its entry settles it
+    /// under `expired`, and any other return, on another lineage or with no read, under `cold_return`), a labeled
+    /// discard (under its label), or the agent's lapse or eviction. A request the engine takes no observation of
+    /// leaves them kept for whichever comes next, and one that fails hands them back for the next turn to read or
+    /// the lapse sweep to settle.
     pub(crate) fn discard_keeping_unanswered(
         &mut self,
         key: &SessionKey,
@@ -1298,11 +1338,11 @@ impl Inner {
         self.set_reason(key, agent_id, reason);
     }
 
-    /// The decision `discard_keeping_unanswered` defers, taken by the completion of the request that kept the
-    /// probes, `read` being what the completion read from the cache. Each probe answers to the lineage it was paid
-    /// under and to the entry it wrote, since a request that failed before any head leaves its probes behind with
-    /// the agent already moved to that request's model and entry: a warm return is one on the probe's model, speed
-    /// and account, arriving before that probe's entry expired, that read the cache. A kept-warm credit takes no
+    /// The decision `discard_keeping_unanswered` defers, taken by the successful completion of the request that
+    /// kept the probes, `read` being what the completion read from the cache. Each probe answers to the lineage it
+    /// was paid under and to the entry it wrote, since a request that failed leaves its probes behind with the agent
+    /// already moved to that request's model and entry: a warm return is one on the probe's model, speed and
+    /// account, arriving before that probe's entry expired, that read the cache. A kept-warm credit takes no
     /// shortcut here: a probe off the lineage the credited request read kept nothing it read. The model is the
     /// probe's as resolutions followed it. A probe sent while the request was open is not among them: it pays for
     /// the request after this one.
@@ -1718,30 +1758,7 @@ impl Inner {
         let mut followed: Vec<(SessionKey, String)> = Vec::new();
         for (key, session) in self.sessions.iter_mut() {
             for (agent_id, agent) in session.agents.iter_mut() {
-                let mut moved = false;
-                if let Some(dated) = canonical.get(&agent.canonical_model) {
-                    agent.canonical_model = dated.clone();
-                    moved = true;
-                }
-                if let Some(prior) = agent.current.as_mut().and_then(|o| o.prior.as_mut()) {
-                    if let Some(dated) = canonical.get(&prior.model) {
-                        prior.model = dated.clone();
-                        moved = true;
-                    }
-                }
-                for kept in &mut agent.kept {
-                    if let Some(dated) = canonical.get(&kept.canonical_model) {
-                        kept.canonical_model = dated.clone();
-                        moved = true;
-                    }
-                }
-                for probe in &mut agent.unanswered {
-                    if let Some(dated) = canonical.get(&probe.model) {
-                        probe.model = dated.clone();
-                        moved = true;
-                    }
-                }
-                if moved {
+                if agent.follow_resolutions(canonical) {
                     followed.push((key.clone(), agent_id.clone()));
                 }
             }
@@ -2140,11 +2157,32 @@ impl Engine {
                 .clone()
                 .zip(observed.boundaries.last().cloned());
         }
+        // A tick asks the router only about the models of retained recipes, so a probe an agent keeps past its
+        // recipe's end can miss a resolution: the one this request carries for its own spelling dates it here,
+        // before the credit compares its model with the request's.
+        let mut resolved = HashMap::new();
+        if observed.wire_model != observed.canonical_model {
+            resolved.insert(
+                observed.wire_model.clone(),
+                observed.canonical_model.clone(),
+            );
+        }
+        inner
+            .sessions
+            .get_mut(&key)
+            .unwrap()
+            .agents
+            .get_mut(&agent_id)
+            .unwrap()
+            .follow_resolutions(&resolved);
         // What the previous recipe proved, taken before anything below overwrites it and consumed with the
-        // observation: the kept-warm credit reads this and nothing on the agent. The newest unanswered probe wrote
-        // the entry this request can read, a rewrite included, so its coverage is the one taken, and it leaves with
-        // the probes this request keeps. A recipe the idle limit ended left its probes kept and pending, so the
-        // newest of those whose entry still lives stands in for it.
+        // observation: the kept-warm credit reads this and nothing on the agent. The newest unanswered probe whose
+        // coverage held is taken, a rewrite included, then the newest unanswered probe where none held, so a late
+        // probe's `covered: false` never shadows an older covered one whose entry still lives, and the coverage
+        // leaves with the probes this request keeps. A recipe the idle limit ended leaves its probes kept and
+        // pending, as a failed turn hands back the probes it took, so the newest of those whose entry still lives
+        // stands in for it. The gap runs from the last turn that answered, since a failed turn is no evidence about
+        // the cache.
         let prior = {
             let agent = &inner.sessions[&key].agents[&agent_id];
             let newest_kept = agent
@@ -2152,9 +2190,16 @@ impl Engine {
                 .iter()
                 .rev()
                 .find(|kept| kept.pending.is_some() && now < kept.entry_expires);
-            agent.last_real_at.map(|real_at| {
+            let newest_unanswered = agent
+                .unanswered
+                .iter()
+                .rev()
+                .find(|p| p.covered)
+                .or(agent.unanswered.last());
+            let answered_at = agent.last_answered_at.or(agent.last_real_at);
+            answered_at.map(|real_at| {
                 let ttl_ms = agent.ttl_ms;
-                match (agent.unanswered.last(), newest_kept) {
+                match (newest_unanswered, newest_kept) {
                     (Some(probe), _) => PriorCoverage {
                         account: probe.account.clone(),
                         covered: probe.covered,
@@ -2268,6 +2313,7 @@ impl Engine {
             dispatched_ms: None,
             kind: None,
             in_overage: false,
+            arrived_at: now,
         });
         agent.body_dirty = true;
         // The mark is retired only by a save at the row's revision, so the new body takes a revision of its own.
@@ -2450,10 +2496,18 @@ impl Engine {
             Outcome::Rejected => Some(Reason::RequestRejected),
         };
         if let Some(reason) = reason {
-            // Only an answer from the upstream says anything about the cache the kept probes held; a request
-            // refused or cancelled before one arrived leaves them for the next request.
-            if complete.ttfb_ms.is_some() {
-                inner.decide_unanswered(&key, &agent_id, read);
+            // A failed turn is no evidence about the cache, past a head or not, so it decides none of the probes it
+            // kept and hands them back for the next turn to read. A label the turn found stays, and a probe that
+            // carries none takes `expired`, which the lapse sweep settles it under at its entry's end if no turn
+            // reads it first, as its recipe's own lapse would have.
+            if let Some(agent) = inner
+                .sessions
+                .get_mut(&key)
+                .and_then(|s| s.agents.get_mut(&agent_id))
+            {
+                for kept in agent.kept.iter_mut().filter(|kept| kept.pending.is_none()) {
+                    kept.pending = Some(Wasted::Expired);
+                }
             }
             // A probe sent while this request was open pays for the request after it, whatever this one did.
             inner.end_observation(&key, &agent_id, None, Unanswered::Leave);
@@ -2515,6 +2569,18 @@ impl Engine {
                     })
                 })
         };
+        // Set once the credit has read its gap from the turn before, so the next request's gap runs from this one.
+        if (200..300).contains(&complete.status) {
+            if let Some(agent) = inner
+                .sessions
+                .get_mut(&key)
+                .and_then(|s| s.agents.get_mut(&agent_id))
+            {
+                if let Some(arrived_at) = agent.current.as_ref().map(|o| o.arrived_at) {
+                    agent.last_answered_at = Some(arrived_at);
+                }
+            }
+        }
         inner.decide_unanswered(&key, &agent_id, read);
         let (ready, armed) = inner.sessions[&key]
             .agents
@@ -3505,6 +3571,7 @@ mod tests {
             dispatched_ms: None,
             kind: None,
             in_overage: false,
+            arrived_at: 0,
         }
     }
 
