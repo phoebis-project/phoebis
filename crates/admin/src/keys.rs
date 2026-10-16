@@ -13,7 +13,6 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use phoebis_routing::RegistrySnapshot;
 use phoebis_store::{stamp_token, ApiKeyRow, StoreError, ROTATION_GRACE_MS};
-use rand::Rng;
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
@@ -201,7 +200,7 @@ pub(crate) struct KeyCreated {
 
 fn new_secret() -> String {
     let mut bytes = [0u8; 32];
-    rand::rng().fill_bytes(&mut bytes);
+    phoebis_oauth::random::fill(&mut bytes);
     format!("phoebis-{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 

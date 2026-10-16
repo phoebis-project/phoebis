@@ -2,7 +2,6 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use rand::Rng;
 use sha2::{Digest, Sha256};
 
 #[derive(Clone)]
@@ -36,9 +35,8 @@ pub fn generate_state() -> String {
     URL_SAFE_NO_PAD.encode(random_bytes())
 }
 
-// rand 0.10 dropped `rand::rngs::OsRng`; `rand::rng()` is the thread-local CSPRNG that replaces it.
 fn random_bytes() -> [u8; 32] {
     let mut bytes = [0u8; 32];
-    rand::rng().fill_bytes(&mut bytes);
+    crate::random::fill(&mut bytes);
     bytes
 }

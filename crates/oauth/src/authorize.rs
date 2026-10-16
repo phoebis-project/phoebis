@@ -12,7 +12,7 @@ pub fn loopback_redirect_uri(port: u16) -> String {
 
 /// A port from the IANA dynamic range, which is where `listen(0)` lands on every platform the client runs on.
 pub fn ephemeral_port() -> u16 {
-    rand::random_range(49_152..=65_535)
+    crate::random::ephemeral_port()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

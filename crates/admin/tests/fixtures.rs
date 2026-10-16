@@ -24,10 +24,9 @@ fn dir() -> PathBuf {
 }
 
 /// One line per value, depth first in key order: the path and the JSON kind (`null`, `boolean`, `integer`, `float`,
-/// `string`, `array`, `object`). The first element stands for an array. Values are not compared: ids and secrets
-/// are random, and a value change is the decoder tests' business. The order and the kinds are compared, since an
-/// answer rebuilt from a struct could move a key, turn an absence into a `null` or an integer into a float and
-/// still hold the key set.
+/// `string`, `array`, `object`). The first element stands for an array. Values are not compared: a value change is
+/// the decoder tests' business. The order and the kinds are compared, since an answer rebuilt from a struct could
+/// move a key, turn an absence into a `null` or an integer into a float and still hold the key set.
 fn shape(v: &Value) -> Vec<String> {
     fn walk(v: &Value, path: &str, out: &mut Vec<String>) {
         let kind = match v {
@@ -377,9 +376,14 @@ fn attempt(id: &str, n: u32, account: &str, status: u16, outcome: &str, at: i64)
     }
 }
 
+/// Seeds every id and secret the capture mints, so two captures at one head write the same bytes.
+const FIXTURE_SEED: u64 = 0x0123_4567_89ab_cdef;
+
 #[tokio::test]
 async fn every_route_is_captured_and_holds_its_shape() {
     let parts = common::admin_parts_full().await;
+    // Ahead of the login, since the login mints the session id `session.json` reads.
+    phoebis_oauth::random::seed(FIXTURE_SEED);
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
     let app = &parts.app;
@@ -443,7 +447,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     let key_generation = parts.store.api_key("desktop").unwrap().unwrap().created_at;
     let planted = planted(access_token, refresh_token, &key_secret);
     let mut key_created = created.clone();
-    // The minted secret is random, so the fixture carries a stable stand-in rather than the capture's own.
+    // No fixture carries a secret shaped like a real one, so the stand-in stays whatever the capture mints.
     key_created["secret"] = j!("phoebis-fixture");
     hold(&planted, "key_created", "POST /admin/keys", key_created);
     // A real selection through the router, so `sessions.json` captures a pinned row and the trace below is the
@@ -1946,7 +1950,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
                     scope: "account".into(),
                     until: now + 600_000,
                     set_at: now,
-                    reason: "rate_limited".into(),
+                    reason: "rate_limit".into(),
                     window: "five_hour".into(),
                     source_request_id: Some("r-move".into()),
                     incarnation: 1,

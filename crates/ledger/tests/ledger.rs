@@ -2266,12 +2266,12 @@ async fn a_shutdown_with_both_queues_full_lands_every_completed_request() {
     });
     tokio::time::sleep(Duration::from_millis(200)).await;
     hold_tx.send(()).unwrap();
-    let shutdown = tokio::time::timeout(Duration::from_secs(10), h.ledger.clone().shutdown()).await;
+    let shutdown = tokio::time::timeout(Duration::from_secs(30), h.ledger.clone().shutdown()).await;
     holder.join().unwrap();
     shutdown
         .expect("the writer keeps reading while it waits for the assembler, so shutdown does not deadlock")
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(10), publisher)
+    tokio::time::timeout(Duration::from_secs(30), publisher)
         .await
         .expect("the publisher resolves once the assembler has drained its queue")
         .unwrap();

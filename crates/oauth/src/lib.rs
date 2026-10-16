@@ -5,6 +5,7 @@ mod exchange;
 mod identity;
 mod manager;
 mod pkce;
+pub mod random;
 mod session;
 mod usage;
 
