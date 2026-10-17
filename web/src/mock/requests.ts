@@ -1256,6 +1256,36 @@ function storyRequests(): RequestLog[] {
 export const REQUESTS: RequestLog[] = buildRequests();
 export const requestById = new Map(REQUESTS.map((r) => [r.id, r]));
 
+/**
+ * The story's late request, an arrival among the rows a page of 50 shows that ran long, so the ledger writes it a few
+ * seconds after the load, below rows a page read at the load already shows.
+ */
+const LATE_REQUEST_ID = 'req_7a3f0c26-d81';
+/** Past the first auto reload poll of a page read as the mock loads, so that poll lands nothing and a later one lands it. */
+const LATE_LANDING_MS = 6_000;
+let landings: Map<string, number> | null = null;
+
+/**
+ * The instant the ledger wrote a story row: its finish on the story's clock, strictly increasing in the order the rows
+ * finished, one past the row before where two land in one millisecond, as the ledger's writer stamps them, and the late
+ * request's after every other. Read on first use, once the story's passes have set each row's last fields.
+ */
+export function landedAt(row: RequestLog): number {
+  if (landings === null) {
+    const finish = (r: RequestLog) => (r.id === LATE_REQUEST_ID ? NOW + LATE_LANDING_MS : Date.parse(r.at) + (r.durationMs ?? 0));
+    let previous = 0;
+    landings = new Map(
+      [...REQUESTS]
+        .sort((a, b) => finish(a) - finish(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .map((r) => {
+          previous = Math.max(finish(r), previous + 1);
+          return [r.id, previous];
+        }),
+    );
+  }
+  return landings.get(row.id) ?? Date.parse(row.at) + (row.durationMs ?? 0);
+}
+
 // The ci key's last use is its newest request the key check let through: a send after the revocation is refused as an
 // unknown key and uses nothing.
 keyById.get('ci')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'ci' && r.errorCode !== 'auth_unknown')?.at ?? null;

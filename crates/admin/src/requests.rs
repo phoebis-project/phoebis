@@ -9,9 +9,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{
-    entrypoint_of_client, funding_of, list_requests, price_equivalent, price_shares, request_by_id,
-    request_events, AttemptRecord, Funding, LiveKeys, PlanTables,
-    PriceRevisions, PricedShares, RequestFilter, RequestRecord, Speed,
+    entrypoint_of_client, funding_of, list_request_page, price_equivalent, price_shares,
+    request_by_id, request_events, AttemptRecord, Funding, LiveKeys,
+    PlanTables, PriceRevisions, PricedShares, RequestFilter, RequestRecord, Speed,
 };
 use phoebis_routing::PinUsage;
 use serde_json::Value;
@@ -57,6 +57,9 @@ pub(crate) struct RequestList {
     pub requests: Vec<RequestSummary>,
     /// Set only while a row lies beyond the page. A page of exactly `limit` rows with none beyond answers null.
     pub next_cursor: Option<String>,
+    /// The newest write instant the ledger holds at this read, 0 on an empty ledger. Pass it as `landed_after` to
+    /// read what landed since.
+    pub landed_through: i64,
 }
 
 /// One client request with its attempt trail. `request_truncated` and `response_truncated` say whether the captured
@@ -727,6 +730,9 @@ pub(crate) struct RequestsQuery {
     pub request: Option<String>,
     /// The requests whose session id equals the value, literally. Combines with `text` and every other filter.
     pub session: Option<String>,
+    /// Unix milliseconds. Only the rows the ledger wrote after this instant, for a poll that passes back the
+    /// `landed_through` of its last answer, beside the other filters.
+    pub landed_after: Option<i64>,
     /// A comma list. A value is read as the breakdown's: a bare id for the current key's rows,
     /// `<id>@<generation>` for an earlier holder's, or `-` for requests no key was read for.
     pub keys: Option<String>,
@@ -777,7 +783,7 @@ pub(crate) struct RequestsQuery {
     params(RequestsQuery),
     responses(
         (status = 200, description = "The page.", body = RequestList),
-        (status = 400, description = "- `{name} is not a number`, for `from` or `to`\n- `statuses are numbers`\n- `limit is not a number`\n- `cursor is <received_at>:<id>`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent` or `client`", body = ErrorBody, example = json!({"error": "{name} is not a number"})),
+        (status = 400, description = "- `{name} is not a number`, for `from` or `to`\n- `landed_after is not a number`\n- `statuses are numbers`\n- `limit is not a number`\n- `cursor is <received_at>:<id>`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent` or `client`", body = ErrorBody, example = json!({"error": "{name} is not a number"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -795,6 +801,10 @@ pub(crate) async fn list(
             return failure(StatusCode::BAD_REQUEST, &format!("{name} is not a number"))
         }
     };
+    let landed_after = match number("landed_after") {
+        Ok(landed_after) => landed_after,
+        Err(name) => return failure(StatusCode::BAD_REQUEST, &format!("{name} is not a number")),
+    };
     let statuses: Result<Vec<u16>, _> = list_param(&q, "statuses")
         .iter()
         .map(|s| s.parse::<u16>())
@@ -807,6 +817,7 @@ pub(crate) async fn list(
         // An empty value narrows nothing, as an absent one, since the ledger drops it as it drops an empty `text`.
         request: q.get("request").cloned(),
         session: q.get("session").cloned(),
+        landed_after,
         keys: list_param(&q, "keys"),
         pools: list_param(&q, "pools"),
         accounts: list_param(&q, "accounts"),
@@ -854,15 +865,17 @@ pub(crate) async fn list(
     match state
         .ledger
         .db()
-        .read(move |c| list_requests(c, &filter, &live, cursor.as_deref(), limit))
+        .read(move |c| list_request_page(c, &filter, &live, cursor.as_deref(), limit))
         .await
     {
-        Ok((rows, next_cursor)) => Json(RequestList {
-            requests: rows
+        Ok(page) => Json(RequestList {
+            requests: page
+                .rows
                 .iter()
                 .map(|(r, a)| request_summary(r, a, &shares))
                 .collect(),
-            next_cursor,
+            next_cursor: page.next,
+            landed_through: page.landed_through,
         })
         .into_response(),
         Err(e) => ledger_failure(e),

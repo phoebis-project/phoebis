@@ -314,6 +314,10 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// newest of each window for the meter's drift, so a cost model whose figures stray from the upstream's readings is
 /// seen. The table starts empty, and the first fold reconciles every completed window of the trailing 30 days whose
 /// readings and requests the ledger still holds.
+///
+/// Version 39: a request row carries the instant the ledger wrote it, strictly increasing across the writer's rows,
+/// indexed so a list read filters on it, and a poll that passes back the newest stamp of its last answer reads exactly
+/// the rows written since. No backfill: a row from before reads NULL, which no such filter answers.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -977,5 +981,10 @@ ALTER TABLE rollups_hourly ADD COLUMN kept_warm_1h_tokens INTEGER NOT NULL DEFAU
   requests INTEGER NOT NULL, estimated INTEGER NOT NULL, computed_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, window, window_end)
 );",
+    ),
+    (
+        39,
+        "ALTER TABLE requests ADD COLUMN landed_at INTEGER;
+CREATE INDEX requests_landed_at ON requests(landed_at);",
     ),
 ];

@@ -964,6 +964,13 @@ test('a request page carries the trail with zero-based attempt indexes and the c
   assert.equal(d.decodeRequest(fixture('request').request).canonicalModel, 'claude-sonnet-5-5');
 });
 
+test("a request page carries the ledger's newest write instant, which a poll passes back", () => {
+  const wire = fixture('requests');
+  assert.equal(typeof wire.landed_through, 'number', 'the route answers the member');
+  assert.equal(d.decodeRequestPage(wire).landedThrough, wire.landed_through);
+  assert.equal(d.decodeRequestPage({ landed_through: 0, next_cursor: null, requests: [] }).landedThrough, 0, 'an empty ledger answers 0');
+});
+
 test('a request carries its seven phases as ISO instants and null where the ledger holds none', () => {
   const failover = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-failover');
   const { phases } = failover;

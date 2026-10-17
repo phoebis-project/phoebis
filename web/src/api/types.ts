@@ -858,6 +858,8 @@ export interface RequestQuery {
   includeProbes?: boolean;
   keyIds?: string[];
   kind?: RequestKind | null;
+  /** Unix milliseconds: the rows the ledger wrote after this instant, the `landedThrough` of a poll's last answer. */
+  landedAfter?: number;
   limit?: number;
   models?: string[];
   outcomes?: RequestOutcome[];
@@ -879,6 +881,8 @@ export interface RequestQuery {
 }
 
 export interface RequestPage {
+  /** The newest write instant the ledger held at the read, 0 on an empty ledger. */
+  landedThrough: number;
   nextCursor: string | null;
   requests: RequestLog[];
 }

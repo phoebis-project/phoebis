@@ -223,7 +223,7 @@ function keyOptions(keys: ApiKey[] | null, selected: string[]): Option[] {
 /** The route's order, which a poll's merge keeps: newest first, and the higher id first at one instant. */
 const newestFirst = (a: RequestLog, b: RequestLog) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
 /** The route answers its rows as `requests`, and the poll reads a list's as `rows`. */
-const listed = (page: RequestPage) => ({ nextCursor: page.nextCursor, rows: page.requests });
+const listed = (page: RequestPage) => ({ landedThrough: page.landedThrough, nextCursor: page.nextCursor, rows: page.requests });
 
 export function RequestsPage() {
   const { requestId } = useParams();
@@ -285,7 +285,7 @@ export function RequestsPage() {
     list: requests.data && listed(requests.data),
     paging,
     paused: Boolean(requestId) || barOpen,
-    read: (c, to) => api.listRequests({ ...query, cursor: c, to: iso(readEnd(custom, span.to, to)) }).then(listed),
+    read: (c, to, landedAfter) => api.listRequests({ ...query, cursor: c, landedAfter, to: iso(readEnd(custom, span.to, to)) }).then(listed),
     setPaging,
     stale: requests.stale,
   });

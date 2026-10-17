@@ -101,6 +101,40 @@ test("an auto reload poll that reaches past the list's last row stops there and 
   assert.deepEqual(polled.rows.map(byId), r.rows.slice(0, 27).map(byId), 'no row past row 26 lands');
 });
 
+/**
+ * `route(count)` as a watermark reads it, every row one the ledger wrote since: each read answers the newest stamp, the
+ * first `base` and each later read one more, as a row that lands between two pages moves it.
+ */
+function watermarked(count, base = 1_000) {
+  const r = route(count);
+  const read = async (cursor) => ({ ...(await r.read(cursor)), landedThrough: base + r.reads.length - 1 });
+  return { ...r, read };
+}
+
+test('under a watermark the poll reads on past known rows and sets the overrun when its eighth page still answers a next cursor', async () => {
+  // A row the list shows can land again, so a page of known rows says nothing about what lies below it.
+  const r = watermarked(325);
+  const polled = await d.followPages(r.read, new Set(r.rows.map(byId)), byId, belowOf(r.rows), false);
+  assert.equal(r.reads.length, d.FOLLOW_PAGES);
+  assert.equal(polled.overrun, '200');
+  assert.equal(polled.landedThrough, 1_000, "the first page's stamp, a later page's ignored");
+});
+
+test('under a watermark eight pages whose last answers no next cursor set no overrun', async () => {
+  const r = watermarked(200);
+  const polled = await d.followPages(r.read, new Set(r.rows.map(byId)), byId, belowOf(r.rows), false);
+  assert.deepEqual([r.reads.length, polled.overrun, polled.rows.length], [d.FOLLOW_PAGES, null, 200]);
+});
+
+test("under a watermark a page that reaches past the list's last row ends the poll and leaves the rows below to Next", async () => {
+  const r = watermarked(300);
+  const shown = r.rows.slice(0, 27);
+  const polled = await d.followPages(r.read, new Set(shown.map(byId)), byId, belowOf(shown), false);
+  assert.deepEqual(r.reads, [undefined, '25']);
+  assert.equal(polled.overrun, null);
+  assert.deepEqual(polled.rows.map(byId), r.rows.slice(0, 27).map(byId), 'no row past row 26 lands');
+});
+
 test('the overrun names auto reload', () => {
   assert.equal(d.FOLLOW_OVERRUN, 'More rows arrived than auto reload could fetch. Reload to read them.');
 });
@@ -297,4 +331,80 @@ test('turning auto reload off clears the fresh tint, since no poll follows to ta
   assert.deepEqual([[...f.last().fresh], f.last().rows[0].id], [[], 'row_000'], 'the rows stay and the tint goes');
   act(() => clock.tick(10_000));
   assert.deepEqual(f.polls(), [ORIGIN + 5_000], 'off reads nothing');
+});
+
+test("under a watermark the first poll reads at the list's stamp and the next at the poll's, and a late row lands in place under the fresh tint", async () => {
+  const clock = frozen();
+  const r = route(60);
+  // Row 10 ran long: the list was read before it finished, and it lands below rows the list shows as row 0 arrives
+  // above them.
+  const shown = r.rows.slice(1, 26).filter((row) => row.id !== 'row_010');
+  const landed = [
+    { row: r.rows[0], stamp: 101 },
+    { row: r.rows[10], stamp: 102 },
+  ];
+  const sent = [];
+  const read = async (cursor, to, landedAfter) => {
+    sent.push(landedAfter);
+    const rows = landed.filter((l) => landedAfter === undefined || l.stamp > landedAfter).map((l) => l.row);
+    return { landedThrough: 102, nextCursor: null, rows };
+  };
+  const f = follow({ list: { landedThrough: 100, nextCursor: '26', rows: shown }, read });
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(sent, [100], "the first poll reads at the list's stamp");
+  assert.deepEqual(f.last().rows.map(byId), r.rows.slice(0, 26).map(byId), 'the late row sits between rows 9 and 11');
+  assert.deepEqual([...f.last().fresh].sort(), ['row_000', 'row_010'], 'in the same tint as the row that arrived above');
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(sent, [100, 102], "the next poll reads at the first poll's stamp");
+  assert.deepEqual([...f.last().fresh], [], 'a poll that brings nothing takes the tint away');
+});
+
+test("every page of one poll reads at one stamp, and the next poll reads at the first page's, a later page's ignored", async () => {
+  const clock = frozen();
+  const r = route(60);
+  // Thirty rows arrived above the 25 the list shows, two pages of them.
+  const answers = [
+    { landedThrough: 104, nextCursor: 'p2', rows: r.rows.slice(0, 25) },
+    // A row landed between the two pages, so this read holds a newer stamp than the first, and the row it names
+    // carries a stamp above 104 that the next poll reads.
+    { landedThrough: 105, nextCursor: null, rows: r.rows.slice(25, 30) },
+  ];
+  const sent = [];
+  const read = async (cursor, to, landedAfter) => {
+    sent.push({ cursor, landedAfter });
+    return answers.shift() ?? { landedThrough: 105, nextCursor: null, rows: [] };
+  };
+  const f = follow({ list: { landedThrough: 100, nextCursor: '55', rows: r.rows.slice(30, 55) }, read });
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(
+    sent,
+    [
+      { cursor: undefined, landedAfter: 100 },
+      { cursor: 'p2', landedAfter: 100 },
+    ],
+    "both pages of the first poll read at the list's stamp",
+  );
+  assert.equal(f.last().rows.length, 55);
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(sent.slice(2), [{ cursor: undefined, landedAfter: 104 }], "the next poll reads at the first page's stamp");
+});
+
+test("a poll that stands in for a failed list read takes its page's stamp as the watermark", async () => {
+  const clock = frozen();
+  const sent = [];
+  const read = async (cursor, to, landedAfter) => {
+    sent.push(landedAfter);
+    return { landedThrough: 7, nextCursor: null, rows: [{ at: at(1), id: 'a' }] };
+  };
+  const f = follow({ error: 'ledger locked', list: null, read });
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual([f.last().rows.map(byId), f.last().error], [['a'], null], 'the newest page stands in for the list');
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(sent, [undefined, 7], 'the first read has no stamp to read at, and the next reads at its page');
 });

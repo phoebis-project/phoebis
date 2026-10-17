@@ -11786,7 +11786,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "diagnostics_source": "router"
         }
       ],
-      "next_cursor": null
+      "next_cursor": null,
+      "landed_through": 1791721000005
     }
   },
   "routing_log": {
@@ -14428,7 +14429,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "ready": true,
       "dead": [],
       "ledger": {
-        "schema_version": 38,
+        "schema_version": 39,
         "written": 19,
         "dropped": 0,
         "write_failures": 0,

@@ -18,7 +18,7 @@ import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE, memberPins } from './operations';
 import { KEYS, POOLS, composedFor, resolvedFor, servedFigures } from './pools';
-import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById, requestSidesOf } from './requests';
+import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { createRng } from './rng';
 import { ROUTING_LOG_KINDS, getDecision, listRoutingLog } from './routingLog';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
@@ -842,15 +842,21 @@ export class MockApi implements Api {
   }
 
   listRequests(query: RequestQuery = {}): Promise<RequestPage> {
-    if (emptyStore()) return latency({ nextCursor: null, requests: [] });
+    if (emptyStore()) return latency({ landedThrough: 0, nextCursor: null, requests: [] });
     const live = new Map(this.keys.map((k) => [k.id, Date.parse(k.createdAt)]));
-    const matched = REQUESTS.filter((r) => matchesQuery(r, query, live)).sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+    // The ledger lists a request once it has written it, so a row whose landing the console's clock has not reached
+    // stays out, and the newest stamp is over every written row, as the route reads it whatever the filters keep.
+    const now = clock.now();
+    const written = REQUESTS.filter((r) => landedAt(r) <= now);
+    const landedThrough = written.reduce((newest, r) => Math.max(newest, landedAt(r)), 0);
+    const since = query.landedAfter;
+    const matched = written.filter((r) => matchesQuery(r, query, live) && (since === undefined || landedAt(r) > since)).sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
     const after = query.cursor ? matched.filter((r) => isAfterCursor(r, query.cursor!)) : matched;
     const limit = query.limit ?? 50;
     const page = after.slice(0, limit);
     const last = page[page.length - 1];
     // A cursor only rides along while rows are left, which is how the route signals the end of the list.
-    return latency({ nextCursor: after.length > limit && last ? `${Date.parse(last.at)}:${last.id}` : null, requests: page });
+    return latency({ landedThrough, nextCursor: after.length > limit && last ? `${Date.parse(last.at)}:${last.id}` : null, requests: page });
   }
 
   listRoutingLog(query: RoutingLogQuery = {}): Promise<RoutingLogPage> {

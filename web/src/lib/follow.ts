@@ -50,6 +50,8 @@ export interface Overrun {
 export interface Followed<R> {
   for: string;
   fresh: Set<string>;
+  /** The watermark the next poll reads at: the newest stamp the last poll's first page answered. */
+  landedThrough?: number;
   overrun: Overrun | null;
   rows: R[];
   /**
@@ -76,16 +78,25 @@ export function merged<R>(shown: R[], polled: R[], identity: (row: R) => string,
  * brings no new one. A row `below` the list's last row is on the pages Next reads, so it neither keeps the poll reading
  * nor lands. `overrun` is the cursor past the last row read when `FOLLOW_PAGES` pages ran out first, so the rows
  * between it and the list stay reachable.
+ *
+ * A reader under a watermark answers only the rows written since it, so a known row among them landed again and ends
+ * nothing: `stopOnKnown` false reads on until a page reaches below the list's last row, past which every row is
+ * Next's, or the route has no more, and only an eighth page that still answers a next cursor sets the overrun.
+ * `landedThrough` is the first page's, since a row written between two pages stamps above it and the next poll reads
+ * it, where a later page's would skip it.
  */
-export async function followPages<R>(read: (cursor: string | undefined) => Promise<{ nextCursor: string | null; rows: R[] }>, known: ReadonlySet<string>, identity: (row: R) => string, below: (row: R) => boolean): Promise<{ overrun: string | null; rows: R[] }> {
+export async function followPages<R>(read: (cursor: string | undefined) => Promise<{ landedThrough?: number; nextCursor: string | null; rows: R[] }>, known: ReadonlySet<string>, identity: (row: R) => string, below: (row: R) => boolean, stopOnKnown = true): Promise<{ landedThrough?: number; overrun: string | null; rows: R[] }> {
   const rows: R[] = [];
   let cursor: string | undefined;
+  let landedThrough: number | undefined;
   for (let n = 0; n < FOLLOW_PAGES; n += 1) {
     const page = await read(cursor);
+    if (n === 0) landedThrough = page.landedThrough;
     const listed = page.rows.filter((r) => !below(r));
     rows.push(...listed);
-    if (page.nextCursor === null || listed.every((r) => known.has(identity(r)))) return { overrun: null, rows };
+    const ends = stopOnKnown ? listed.every((r) => known.has(identity(r))) : listed.length < page.rows.length;
+    if (page.nextCursor === null || ends) return { landedThrough, overrun: null, rows };
     cursor = page.nextCursor;
   }
-  return { overrun: cursor ?? null, rows };
+  return { landedThrough, overrun: cursor ?? null, rows };
 }

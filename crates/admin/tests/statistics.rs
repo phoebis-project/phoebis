@@ -1534,6 +1534,110 @@ async fn the_request_log_filters_paginates_and_shows_one_row_per_request_with_it
     );
 }
 
+/// A poll passes back the newest write instant of its last answer as `landed_after` and reads the rows the ledger
+/// wrote since, beside the other filters, a late row whose arrival sorts below the others included.
+#[tokio::test]
+async fn the_request_log_reads_the_rows_written_after_landed_after_and_answers_the_newest_stamp() {
+    let parts = common::admin_parts_full().await;
+    let now = common::NOW;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let empty = json(get(&parts.app, "/admin/requests", Some(&cookie)).await).await;
+    assert_eq!(
+        empty["landed_through"].as_i64(),
+        Some(0),
+        "an empty ledger answers 0"
+    );
+    let land = |id: &str, at: i64, model: &str| {
+        parts
+            .db
+            .insert_request(
+                &request(
+                    id,
+                    at,
+                    Some("desktop"),
+                    model,
+                    "succeeded",
+                    200,
+                    "inference",
+                ),
+                &[attempt(id, "business", 200)],
+                None,
+            )
+            .unwrap();
+    };
+    land("r0", now, "claude-sonnet-5");
+    land("r1", now - 60_000, "claude-opus-5");
+    let first = json(get(&parts.app, "/admin/requests?limit=500", Some(&cookie)).await).await;
+    let through = first["landed_through"].as_i64().unwrap();
+    assert!(through > 0, "the answer carries the newest stamp: {first}");
+    land("r2", now - 30 * 60_000, "claude-sonnet-5");
+    land("r3", now + 60_000, "claude-opus-5");
+    let ids = |page: &serde_json::Value| -> Vec<String> {
+        page["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let since = json(
+        get(
+            &parts.app,
+            &format!("/admin/requests?landed_after={through}&limit=500"),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        ids(&since),
+        ["r3", "r2"],
+        "the rows written after the stamp alone, in the list's order"
+    );
+    let newest = since["landed_through"].as_i64().unwrap();
+    assert!(
+        newest > through,
+        "the newest stamp moved past the last answer's"
+    );
+    let narrowed = json(
+        get(
+            &parts.app,
+            &format!("/admin/requests?landed_after={through}&models=claude-opus-5&limit=500"),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (ids(&narrowed), narrowed["landed_through"].as_i64()),
+        (vec!["r3".to_string()], Some(newest)),
+        "the stamp combines with the other filters, and the newest stamp is the ledger's whatever the filters keep"
+    );
+    let caught_up = json(
+        get(
+            &parts.app,
+            &format!("/admin/requests?landed_after={newest}&limit=500"),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (ids(&caught_up).len(), caught_up["landed_through"].as_i64()),
+        (0, Some(newest)),
+        "nothing was written since the newest stamp"
+    );
+}
+
+#[tokio::test]
+async fn the_request_log_refuses_a_landed_after_that_is_not_a_number() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let refused = get(&parts.app, "/admin/requests?landed_after=x", Some(&cookie)).await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(json(refused).await["error"], "landed_after is not a number");
+}
+
 #[tokio::test]
 async fn a_bodies_route_answers_the_bytes_each_side_stored_and_saw() {
     let parts = common::admin_parts_full().await;

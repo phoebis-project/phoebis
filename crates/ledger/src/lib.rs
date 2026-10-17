@@ -67,6 +67,7 @@ pub use query::{
     SessionActivity, SessionIdentity, SharePricing, SharedEquivalent, Span, Totals, TrafficBucket,
     DECISION_KINDS, EVENT_KINDS, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
 };
+pub use query::{list_request_page, RequestPage};
 pub use quota::{
     lead_over_pace, polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled,
     POLL_INTERVAL, PROFILE_EVERY_POLLS,

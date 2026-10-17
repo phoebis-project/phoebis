@@ -18,6 +18,10 @@ export interface Paging {
  * streak once. When a wait ends a full interval after the last answer, the poll reads at once. The caller hands in the
  * list's last answer, its error and its paging state, and reads back the rows to draw, the error to show, the pager's
  * next cursor and the pager's handlers, so nothing the caller passes depends on the hook's own state.
+ *
+ * A list that answers `landedThrough` runs the poll under a watermark: every page of a poll reads the rows written
+ * after it (`read`'s `landedAfter`), the list's own stamp first and then each poll's first page's, so a request that
+ * finished below the rows shown lands among them. A list that answers none keeps the page walk from the newest page.
  */
 export function useFollow<R>(input: {
   address: string;
@@ -26,11 +30,11 @@ export function useFollow<R>(input: {
   identity: (row: R) => string;
   /** The auto reload interval in milliseconds, 0 for off. */
   intervalMs: number;
-  list: { nextCursor: string | null; rows: R[] } | null;
+  list: { landedThrough?: number; nextCursor: string | null; rows: R[] } | null;
   paging: Paging;
   /** The page's own pause (an open drawer). A cursor page and a hidden tab are the hook's. */
   paused: boolean;
-  read: (cursor: string | undefined, to: number) => Promise<{ nextCursor: string | null; rows: R[] }>;
+  read: (cursor: string | undefined, to: number, landedAfter?: number) => Promise<{ landedThrough?: number; nextCursor: string | null; rows: R[] }>;
   setPaging: Dispatch<SetStateAction<Paging>>;
   stale: boolean;
 }): { error: string | null; fresh: Set<string>; goNext: () => void; goPrevious: () => void; nextCursor: string | null; overrun: Overrun | null; rows: R[]; setFollowed: Dispatch<SetStateAction<Followed<R> | null>> } {
@@ -50,12 +54,14 @@ export function useFollow<R>(input: {
   // The rows the poll merges into: those followed under this address, else the list's once it answers this query. While
   // the list still answers an earlier filter, its rows belong to that filter, so there is nothing to merge into yet.
   const shown = following?.rows ?? (stale ? null : (list?.rows ?? null));
+  // The stamp the rows shown were read through, so it moves with them.
+  const mark = following ? following.landedThrough : stale ? undefined : list?.landedThrough;
   const overrun = following?.overrun ?? null;
   const standIn = following?.standIn ?? null;
   // The poll outlives renders, so it reads the current address, rows and reader through a ref.
-  const latest = useRef({ address, compare, failed: error !== null, identity, overrun, read, shown, standIn });
+  const latest = useRef({ address, compare, failed: error !== null, identity, mark, overrun, read, shown, standIn });
   useLayoutEffect(() => {
-    latest.current = { address, compare, failed: error !== null, identity, overrun, read, shown, standIn };
+    latest.current = { address, compare, failed: error !== null, identity, mark, overrun, read, shown, standIn };
   });
   // A failing streak toasts once: the polls that continue it run quiet, and the one that ends it takes the streak's
   // notice down, as `useAsync`'s refresh does.
@@ -72,15 +78,17 @@ export function useFollow<R>(input: {
     // Each run of the poll toasts its own streak once, so a run armed while the route still fails says so again.
     failures.failing = false;
     const poll = () => {
-      const { address: polled, compare: order, identity: identify, read: reader, shown: start } = latest.current;
-      // Every page of one poll reads up to the same instant, so its cursors walk one fixed range.
+      const { address: polled, compare: order, identity: identify, mark: landedAfter, read: reader, shown: start } = latest.current;
+      // Every page of one poll reads up to the same instant and from the same stamp, so its cursors walk one fixed
+      // range.
       const to = clock.now();
-      const page = (cursor: string | undefined) => (failures.failing ? quietly(() => reader(cursor, to)) : reader(cursor, to));
+      const page = (cursor: string | undefined) => (failures.failing ? quietly(() => reader(cursor, to, landedAfter)) : reader(cursor, to, landedAfter));
       const last = start?.[start.length - 1];
       const below = (r: R) => last !== undefined && order(r, last) > 0;
       // Before the list answers there is no row to stop at, so the poll reads the newest page alone and keeps the
       // cursor past it for the answer that stands in for a list read that failed.
-      const pages: Promise<{ cursor?: string | null; overrun: string | null; rows: R[] }> = start === null ? page(undefined).then((p) => ({ cursor: p.nextCursor, overrun: null, rows: p.rows })) : followPages(page, new Set(start.map(identify)), identify, below);
+      const pages: Promise<{ cursor?: string | null; landedThrough?: number; overrun: string | null; rows: R[] }> =
+        start === null ? page(undefined).then((p) => ({ cursor: p.nextCursor, landedThrough: p.landedThrough, overrun: null, rows: p.rows })) : followPages(page, new Set(start.map(identify)), identify, below, landedAfter === undefined);
       pages.then(
         (polledPages) => {
           if (!armed.alive) return;
@@ -94,14 +102,14 @@ export function useFollow<R>(input: {
           if (current.shown === null) {
             // A list read still on its way answers for itself. One that failed left nothing to merge into, so the
             // newest page stands in for it untinted and clears its error.
-            if (current.failed && polledPages.cursor !== undefined) setFollowed({ for: polled, fresh: new Set(), overrun: null, rows: polledPages.rows, standIn: { cursor: polledPages.cursor, to } });
+            if (current.failed && polledPages.cursor !== undefined) setFollowed({ for: polled, fresh: new Set(), landedThrough: polledPages.landedThrough, overrun: null, rows: polledPages.rows, standIn: { cursor: polledPages.cursor, to } });
             return;
           }
           const known = new Set(current.shown.map(identify));
           // A gap an earlier poll left stays until a reload, and Next walks on from the newest one, which reaches the
           // older ones too.
           const next = polledPages.overrun === null ? current.overrun : { cursor: polledPages.overrun, to };
-          setFollowed({ for: polled, fresh: new Set(polledPages.rows.map(identify).filter((k) => !known.has(k))), overrun: next, rows: merged(current.shown, polledPages.rows, identify, order), standIn: current.standIn });
+          setFollowed({ for: polled, fresh: new Set(polledPages.rows.map(identify).filter((k) => !known.has(k))), landedThrough: polledPages.landedThrough ?? landedAfter, overrun: next, rows: merged(current.shown, polledPages.rows, identify, order), standIn: current.standIn });
         },
         (err: unknown) => {
           if (!armed.alive) return;

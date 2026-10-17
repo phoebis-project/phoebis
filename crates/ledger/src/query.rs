@@ -112,6 +112,8 @@ pub struct RequestFilter {
     pub request: Option<String>,
     /// Keep the requests whose session id equals the value, literally.
     pub session: Option<String>,
+    /// Keep the rows whose `landed_at` is above the value.
+    pub landed_after: Option<i64>,
     pub keys: Vec<String>,
     pub pools: Vec<String>,
     /// Keep the requests whose serving attempt, the last one, ran on an account in the list: the account the
@@ -312,6 +314,10 @@ pub fn list_requests(
         args.push(Box::new(session.to_string()));
         clauses.push(format!("session_id = ?{}", args.len()));
     }
+    if let Some(landed_after) = filter.landed_after {
+        args.push(Box::new(landed_after));
+        clauses.push(format!("landed_at > ?{}", args.len()));
+    }
     key_lifetimes(&filter.keys, live, &mut args, &mut clauses);
     in_list_or_null("pool_id", &filter.pools, &mut args, &mut clauses);
     in_list(
@@ -479,6 +485,41 @@ pub fn list_requests(
         })
         .flatten();
     Ok((out, next))
+}
+
+/// One page of `list_request_page`.
+#[derive(Clone, Debug)]
+pub struct RequestPage {
+    pub rows: Vec<RequestWithAttempts>,
+    /// The cursor past the page's last row, set only while a row lies beyond it.
+    pub next: Option<String>,
+    /// The newest `landed_at` the ledger holds at this read, 0 on an empty ledger, read in the page's transaction.
+    pub landed_through: i64,
+}
+
+/// `list_requests` with the newest write instant the ledger holds. Both reads share one transaction, so every row
+/// written after this read carries a stamp above `landed_through`, and a poll that passes it back as `landed_after`
+/// misses no row.
+pub fn list_request_page(
+    conn: &Connection,
+    filter: &RequestFilter,
+    live: &LiveKeys,
+    cursor: Option<&str>,
+    limit: usize,
+) -> Result<RequestPage, LedgerError> {
+    // A read hands a shared connection, which only the unchecked form opens a transaction on.
+    let tx = conn.unchecked_transaction()?;
+    let (rows, next) = list_requests(&tx, filter, live, cursor, limit)?;
+    let landed_through = tx.query_row(
+        "SELECT COALESCE(MAX(landed_at), 0) FROM requests",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(RequestPage {
+        rows,
+        next,
+        landed_through,
+    })
 }
 
 /// The same two queries `LedgerDb::request` runs, over a connection the caller already holds.

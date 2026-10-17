@@ -10267,11 +10267,13 @@ m.unmount();
   const nextPage = (page) => page.container.querySelector('button[aria-label="Next page"]');
   const partTitle = (page) => intervalPart(page)?.getAttribute('title') ?? null;
   {
-    // Mounted two seconds before the newest row the page's filters list, so the first poll's range is the first to
-    // reach it. The row reaches the table through the poll's read alone.
+    // Mounted two seconds before the newest row the page's filters list lands at its finish, so the first poll is the
+    // first read to find it written. The row reaches the table through the poll's read alone, from the stamp the list
+    // answered.
     const [newest] = (await api.listRequests({ from: isoAt(CLOCK_ORIGIN - 24 * HOUR), limit: 1, to: isoAt(CLOCK_ORIGIN + 60_000) })).requests;
-    const t = Date.parse(newest.at);
+    const t = Date.parse(newest.at) + (newest.durationMs ?? 0);
     const page = await mount('/requests', { now: t - 2_000 });
+    const { landedThrough } = await api.listRequests({ from: isoAt(t - 2_000 - 24 * HOUR), to: isoAt(t - 2_000) });
     const before = idOf(requestRows(page)[0]);
     const start = { title: partTitle(page), word: intervalWord(page) };
     await chooseInterval(page, '5 s');
@@ -10282,8 +10284,8 @@ m.unmount();
     polls.restore();
     const first = requestRows(page)[0];
     const sent = polls.calls[0]?.[0] ?? {};
-    // The first page brings the new row, so the poll reads the second, which brings none.
-    const landed = { calls: polls.calls.length, cursor: sent.cursor, id: idOf(first), isNew: first?.classList.contains('is-new') ?? false, second: polls.calls[1]?.[0]?.cursor, to: sent.to };
+    // The rows written since the list's stamp fit one page, which answers no next cursor.
+    const landed = { after: sent.landedAfter, calls: polls.calls.length, cursor: sent.cursor, id: idOf(first), isNew: first?.classList.contains('is-new') ?? false, to: sent.to };
     first?.click();
     await page.settle();
     const paused = countCalls('listRequests');
@@ -10322,7 +10324,7 @@ m.unmount();
       ok:
         start.word === 'Off' && start.title === 'Auto reload off' && chosen.word === '5 s' && chosen.title === 'Auto reload every 5 s' &&
         before !== newest.id &&
-        landed.calls === 2 && landed.cursor === undefined && typeof landed.second === 'string' && landed.to === isoAt(t + 3_000) && landed.id === newest.id && landed.isNew &&
+        landed.calls === 1 && landed.cursor === undefined && landed.after === landedThrough && landedThrough > 0 && landed.to === isoAt(t + 3_000) && landed.id === newest.id && landed.isNew &&
         drawer.open && drawer.calls === 0 && drawer.id === newest.id && drawer.title === 'Auto reload every 5 s, paused while a request is open' &&
         JSON.stringify(after.closing) === JSON.stringify([isoAt(t + 8_000)]) && after.calls === 1 && after.to === isoAt(t + 13_000) && after.id === newest.id && after.tinted === 0 &&
         paged.calls === 0 && paged.rows > 0 && paged.word === '5 s' && paged.title === 'Auto reload every 5 s, paused on an older page' &&
@@ -10333,36 +10335,49 @@ m.unmount();
   }
   {
     // The ledger writes a request when it finishes, so one that ran long lands below rows the list already shows. The
-    // list's tenth row finishes after the page loaded, and the newest row arrives above the list, which puts the late
-    // row on the poll's second page.
-    const [newest] = (await api.listRequests({ from: isoAt(CLOCK_ORIGIN - 24 * HOUR), limit: 1, to: isoAt(CLOCK_ORIGIN + 60_000) })).requests;
-    const loaded = Date.parse(newest.at) - 2_000;
-    const before = (await api.listRequests({ from: isoAt(loaded - 24 * HOUR), limit: 11, to: isoAt(loaded) })).requests;
-    const late = before[9];
-    const slot = requests.findIndex((r) => r.id === late.id);
-    const [held] = requests.splice(slot, 1);
-    const page = await mount('/requests?rows=10', { now: loaded });
+    // story's late request, among the rows a page of 50 shows, lands a few seconds after the mock loaded, after this page
+    // read its list at the origin: the first poll lands nothing, and the poll after its landing sets it in its place
+    // under the fresh tint, every poll reading from the stamp the one before answered.
+    const rows = 50;
+    const page = await mount(`/requests?rows=${rows}`, { now: CLOCK_ORIGIN });
     const listed = requestRows(page).map(idOf);
-    // The late request finishes, so the ledger holds its row from here on.
-    requests.splice(slot, 0, held);
+    const read = (at, limit) => api.listRequests({ from: isoAt(CLOCK_ORIGIN - 24 * HOUR), limit, to: isoAt(at) });
+    const { landedThrough } = await read(CLOCK_ORIGIN, rows);
+    // The story's rows the page would list had every request landed: the one it lacks is the late request.
+    const newestFirst = (a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+    const story = requests
+      .filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= CLOCK_ORIGIN - 24 * HOUR && Date.parse(r.at) <= CLOCK_ORIGIN)
+      .sort(newestFirst)
+      .slice(0, rows + 1)
+      .map((r) => r.id);
+    const missing = story.slice(0, rows).filter((id) => !listed.includes(id));
+    const late = missing[0] ?? null;
     await chooseInterval(page, '5 s');
     const polls = countCalls('listRequests');
     tick(5_000);
     await page.settle();
+    const first = { drawn: requestRows(page).map(idOf), tinted: page.container.querySelectorAll('.requests__table tbody tr.is-new').length };
+    // The landing's instant is the mock's load plus a few seconds, so the clock steps on a poll at a time until it lands.
+    let drawn = first.drawn;
+    let ticks = 1;
+    for (; ticks < 8 && late !== null && !drawn.includes(late); ticks += 1) {
+      tick(5_000);
+      await page.settle();
+      drawn = requestRows(page).map(idOf);
+    }
     polls.restore();
-    const end = isoAt(loaded + 5_000);
-    const all = (await api.listRequests({ from: isoAt(loaded - 24 * HOUR), limit: 30, to: end })).requests.map((r) => r.id);
-    const expected = all.slice(0, all.indexOf(before[10].id) + 1);
-    const drawn = requestRows(page).map(idOf);
     const tinted = [...page.container.querySelectorAll('.requests__table tbody tr.is-new')].map(idOf);
     const sent = polls.calls.map((c) => c[0]);
+    const after = await read(CLOCK_ORIGIN + ticks * 5_000, rows + 1);
     results.push({
-      name: '/requests auto reload reads on past a page that brought a new row and lands a request that finished late in its place',
+      name: '/requests auto reload lands a request that finished below the rows shown between them under the fresh tint, each poll from the stamp the one before answered',
       ok:
-        JSON.stringify(listed) === JSON.stringify([...before.slice(0, 9), before[10]].map((r) => r.id)) && all.indexOf(late.id) >= 10 &&
-        JSON.stringify(drawn) === JSON.stringify(expected) && tinted.includes(late.id) && tinted.includes(newest.id) &&
-        sent.length === 3 && sent[0].cursor === undefined && sent.every((q) => q.to === end),
-      missing: [`late ${late.id} at ${all.indexOf(late.id)}`, `listed ${listed.join(' | ')}`, `drawn ${drawn.join(' | ')}`, `expected ${expected.join(' | ')}`, `tinted ${tinted.join(' | ')}`, JSON.stringify(sent.map((q) => [q.cursor, q.to]))],
+        listed.length === rows && missing.length === 1 && first.tinted === 0 && !first.drawn.includes(late) && ticks > 1 &&
+        JSON.stringify(drawn) === JSON.stringify(story) && JSON.stringify(after.requests.map((r) => r.id)) === JSON.stringify(story) &&
+        JSON.stringify(tinted) === JSON.stringify([late]) && story.indexOf(late) > 0 &&
+        sent.length === ticks && sent.every((q) => q.cursor === undefined) && sent[0].landedAfter === landedThrough &&
+        sent.every((q, i) => i === 0 || q.landedAfter >= sent[i - 1].landedAfter) && sent.at(-1).landedAfter < after.landedThrough,
+      missing: [`late ${late} at ${story.indexOf(late)}, missing ${missing.join(' | ')}`, `listed ${listed.length}`, `first poll ${JSON.stringify(first.tinted)}`, `after ${ticks} polls drawn ${drawn.length}: ${drawn.slice(0, 3).join(' | ')}`, `tinted ${tinted.join(' | ')}`, JSON.stringify(sent.map((q) => [q.cursor, q.landedAfter])), `list ${landedThrough}, after ${after.landedThrough}`],
     });
     page.unmount();
   }
@@ -10400,8 +10415,9 @@ m.unmount();
   {
     // Ninety requests arrive after the page loaded: the list reads up to the instant of the ninety-first newest, the
     // interval menu left open holds the poll while the clock moves past the ninety to the pinned origin, and the first
-    // poll after the menu closes finds more than its eight pages of ten read. Next reads on from the last row the poll
-    // read, up to the poll's end.
+    // poll after the menu closes finds more than its eight pages of ten read, every page from the list's stamp. Next
+    // reads on from the last row the poll read, up to the poll's end. The rows the poll reads are those the ledger holds
+    // at its end, so the late request, still running there, is not among them.
     const end = isoAt(CLOCK_ORIGIN + 5_000);
     // Every row under the bounds, newest first.
     const rowsUnder = async (from) => {
@@ -10416,9 +10432,9 @@ m.unmount();
     const atOf = (id) => Date.parse(requests.find((r) => r.id === id)?.at ?? '');
     const near = await rowsUnder(CLOCK_ORIGIN - 48 * HOUR);
     const loaded = atOf(near[90]);
-    const all = await rowsUnder(loaded - 24 * HOUR);
     const page = await mount('/requests?rows=10', { now: loaded });
     const listed = requestRows(page).map(idOf);
+    const atLoad = await api.listRequests({ from: isoAt(loaded - 24 * HOUR), limit: 10, to: isoAt(loaded) });
     await chooseInterval(page, '5 s');
     intervalPart(page)?.click();
     await page.settle(100);
@@ -10432,6 +10448,7 @@ m.unmount();
     await page.settle(2_000);
     polls.restore();
     const sent = polls.calls.map((c) => c[0]);
+    const all = await rowsUnder(loaded - 24 * HOUR);
     const overrun = sent.length === 8 ? (await api.listRequests(sent[7])).nextCursor : null;
     const line = page.container.querySelector('.requests__overrun')?.textContent ?? null;
     const drawn = requestRows(page).map(idOf);
@@ -10444,8 +10461,9 @@ m.unmount();
     results.push({
       name: '/requests Next past an auto reload overrun reads the rows the poll left up to its end',
       ok:
-        all.length >= 100 && atOf(near[89]) > loaded && loaded < CLOCK_ORIGIN && held.calls.length === 0 && JSON.stringify(listed) === JSON.stringify(all.slice(90, 100)) &&
-        sent.length === 8 && sent.every((q) => q.to === end && q.limit === 10) && line === 'More rows arrived than auto reload could fetch. Reload to read them.' &&
+        all.length >= 100 && atOf(near[89]) > loaded && loaded < CLOCK_ORIGIN && held.calls.length === 0 && JSON.stringify(listed) === JSON.stringify(atLoad.requests.map((r) => r.id)) &&
+        listed.every((id) => all.indexOf(id) >= 89) &&
+        sent.length === 8 && sent.every((q) => q.to === end && q.limit === 10 && q.landedAfter === atLoad.landedThrough) && line === 'More rows arrived than auto reload could fetch. Reload to read them.' &&
         drawn.length === 80 + listed.length && JSON.stringify(drawn.slice(0, 80)) === JSON.stringify(all.slice(0, 80)) &&
         overrun !== null && read.length === 1 && read[0].cursor === overrun && read[0].to === end && JSON.stringify(after) === JSON.stringify(all.slice(80, 90)),
       missing: [`${all.length} rows, loaded ${isoAt(loaded)}, ${held.calls.length} reads while held`, `listed ${listed.slice(0, 2).join(' | ')}`, `${sent.length} reads, line ${line}`, `${drawn.length} drawn`, `overrun ${overrun}`, JSON.stringify(read.map((q) => [q.cursor, q.to])), `next ${after.slice(0, 2).join(' | ')}`, `gap ${all.slice(80, 82).join(' | ')}`],

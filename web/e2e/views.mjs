@@ -4765,6 +4765,59 @@ async function refreshControlWidth(theme) {
 }
 
 /**
+ * A request that finishes below rows already shown lands between them on the next auto reload in the tint a row that
+ * arrives at the top takes. In the mock pass the story's late request, among the rows a page of 50 shows, lands a few
+ * seconds after the load: the page reads its list without it, turns auto reload to 5 s and reads the first poll's
+ * answer, where the row lands below the first and every cell of it reads the fill a top row's cells read under the same
+ * tint, in the box of the untinted row above it. The mock's story alone lands a request after the load, so the router
+ * pass records the measure as skipped. The interval returns to Off and the bare log loads again.
+ */
+async function lateRowTint(theme) {
+  if (!mock) {
+    measurements.push(`${theme} /requests late row tint skipped: the seed lands no request after the load`);
+    return;
+  }
+  const say = (what) => failures.push(`${theme} /requests: the late row ${what}`);
+  await loadAtOrigin('/requests?rows=50', '.requests__table');
+  const rows = page.locator('.requests__table > tbody > tr:not(.table__detail)');
+  const ids = () => rows.evaluateAll((trs) => trs.map((tr) => tr.querySelector('.sub.mono')?.getAttribute('title') ?? null));
+  const listed = await ids();
+  const choose = async (word) => {
+    await page.locator('.filter-bar .refresh-control__part').click();
+    await settle();
+    await page.locator('.popover[role="menu"] [role="menuitemradio"]', { hasText: new RegExp(`^${word}$`) }).click();
+    await settle();
+  };
+  await choose('5 s');
+  await atRest();
+  // Past the first poll and short of the second, which would take the tint away.
+  await advance(6_000);
+  const polled = await ids();
+  const landed = polled.filter((id) => !listed.includes(id));
+  const at = landed.length === 1 ? polled.indexOf(landed[0]) : -1;
+  const late = at > 0 ? await rowCells(rows.nth(at)) : null;
+  const above = at > 0 ? await rowCells(rows.nth(at - 1)) : null;
+  // The top row as a new arrival draws it, under the class the poll sets on a row it brings.
+  await rows.first().evaluate((tr) => tr.classList.add('is-new'));
+  const fresh = await rowCells(rows.first());
+  await rows.first().evaluate((tr) => tr.classList.remove('is-new'));
+  const tinted = await page.locator('.requests__table > tbody > tr.is-new').count();
+  await choose('Off');
+  await atRest();
+  measurements.push(`${theme} /requests late row tint ${JSON.stringify({ above, at, fresh, landed, late, listed: listed.length, tinted })}`);
+  if (landed.length !== 1) say(`landing reads ${landed.length} new rows on the first poll, not the story's late request alone`);
+  else if (at <= 0) say(`${landed[0]} lands at row ${at + 1}, not below the first`);
+  else {
+    failures.push(...compare(late, fresh, ['backgrounds'], `${theme} /requests: the late row's cells against a new row's`));
+    failures.push(...compare(late, above, ['border', 'height', 'padding'], `${theme} /requests: the late row against the row above it`));
+    if (late !== null && above !== null && String(late.backgrounds) === String(above.backgrounds)) say(`reads the fill of the untinted row above it, ${above.backgrounds[0]}`);
+    if (tinted !== 1) say(`leaves ${tinted} rows tinted, not itself alone`);
+  }
+  await loadAtOrigin('/requests', '.requests__table');
+  await atRest();
+}
+
+/**
  * The Traffic section's speed chart and effort bars and the Cost section's fast-mode tile, each against the
  * neighbor it copies: Requests by speed against Requests by outcome (title type, card width, chart height),
  * Effort levels against Errors by code (title type, card width, and where both draw bars, the bar row, its label
@@ -8457,6 +8510,7 @@ try {
       if (view.path === '/requests') await requestDrawerCompact(theme);
       if (view.path === '/requests' && mock) await attemptCardAtTheBottom(theme);
       if (view.path === '/requests') await wideBodyDialog(theme);
+      if (view.path === '/requests') await lateRowTint(theme);
       if (view.path === '/routing-log') await stripIdleContrast(theme);
       if (view.path === '/routing-log') await decisionCard(theme);
       // The bar's measure loads each address itself and leaves the bare log, where the Kinds list opens.
