@@ -735,6 +735,10 @@ pub fn warm(pin: &PinRow, now: i64) -> bool {
 /// gives up waiting on.
 pub const IN_FLIGHT_RECLAIM_MS: i64 = 3_600_000;
 
+/// The gaps a cycle averages over. Eight arrivals read a change of pace within a few minutes of 30 s turns, under
+/// any burn average, and keep one long gap under the span from standing in the cycle for more than eight turns.
+pub const CYCLE_GAPS: u32 = 8;
+
 /// A move's or a placement's booking on its destination: the rewrite and the burn the request will land there,
 /// counted by `predicted` until the usage releases it before its charge, the request ends without usage, or the purge
 /// gives up on it.
@@ -818,8 +822,12 @@ pub struct PinPace {
     /// The last dispatch of a request of a held class: its arrival, or the end of the hold it waited through, so a
     /// wait never counts as the pin's own gap.
     pub dispatched_at: i64,
-    /// The time-weighted average of the gaps between a dispatch and the next arrival, `None` before the first gap.
+    /// The count-weighted mean of the gaps between a dispatch and the next arrival: the first gap whole, then each gap
+    /// under the pool's burn average moves it by one over `min(gaps + 1, CYCLE_GAPS)`. `None` before the first gap.
     pub cycle_ms: Option<f64>,
+    /// The gaps folded so far, at most `CYCLE_GAPS`: the next fold's share is one over this count plus one, held at
+    /// one over `CYCLE_GAPS` once the count is there.
+    pub gaps: u32,
     /// The end of the slow-down hold standing on the pin.
     pub deadline: Option<i64>,
 }
@@ -2205,13 +2213,17 @@ impl RoutingState {
         self.pin_paces.get(key)
     }
 
-    /// Folds an arrival into the pin's cycle: the gap since the last dispatch weighs in by `w = exp(-gap /
-    /// average_ms)`, so a long think moves the average more than a quick tool call, the first gap is taken whole, and
-    /// the arrival becomes the last dispatch. An arrival at or before the last dispatch folds nothing: a re-selection
-    /// of the same request (after a failover or a refused hold) carries the arrival already folded, whose gap of zero
+    /// Folds an arrival into the pin's cycle, the mean of its last gaps: the gap since the last dispatch moves the
+    /// cycle by `1 / min(gaps + 1, CYCLE_GAPS)` toward itself, so the first gap is taken whole, the first gaps read
+    /// their plain mean and every later one moves it by an eighth, and the cycle tracks a change of pace within eight
+    /// arrivals. A gap of `average_ms` or longer is a pause that folds nothing and leaves the cycle and its count
+    /// standing: a long think, a main agent waiting on its subagents or an idle session says nothing of the pace the
+    /// session runs at, and a hold sized from such a gap would hold the resumed session at the cap while the
+    /// water-filling counts it almost unslowed. The arrival still becomes the last dispatch, so the next gap is
+    /// measured from it. An arrival at or before the last dispatch folds nothing: a re-selection of the same request
     /// would plant a cycle of zero, a request queued behind a later one has no gap to give, and an arrival before a
-    /// standing deadline, which a hold made the last dispatch, rejoins the deadline. The pin's first arrival starts its
-    /// pace with no gap.
+    /// standing deadline, which a hold made the last dispatch, rejoins the deadline. The pin's first arrival starts
+    /// its pace with no gap.
     pub fn fold_pace(&mut self, key: &PinKey, received_at: i64, average_ms: i64) {
         let Some(pace) = self.pin_paces.get_mut(key) else {
             self.pin_paces.insert(
@@ -2219,6 +2231,7 @@ impl RoutingState {
                 PinPace {
                     dispatched_at: received_at,
                     cycle_ms: None,
+                    gaps: 0,
                     deadline: None,
                 },
             );
@@ -2227,15 +2240,18 @@ impl RoutingState {
         if received_at <= pace.dispatched_at {
             return;
         }
-        let gap = (received_at - pace.dispatched_at) as f64;
+        let gap = received_at - pace.dispatched_at;
+        pace.dispatched_at = received_at;
+        if gap >= average_ms {
+            return;
+        }
+        let gap = gap as f64;
+        let n = f64::from(pace.gaps.min(CYCLE_GAPS - 1) + 1);
         pace.cycle_ms = Some(match pace.cycle_ms {
             None => gap,
-            Some(cycle) => {
-                let w = (-gap / average_ms.max(1) as f64).exp();
-                cycle * w + gap * (1.0 - w)
-            }
+            Some(cycle) => cycle + (gap - cycle) / n,
         });
-        pace.dispatched_at = received_at;
+        pace.gaps = (pace.gaps + 1).min(CYCLE_GAPS);
     }
 
     /// Ends the pace under `key` with its pin's session: a fresh placement under the key starts with none.
@@ -4374,6 +4390,74 @@ mod tests {
             started(FIVE_HOUR, Some(now + crate::select::FIVE_HOUR_MS), now),
             Some(now),
             "a reset exactly a window's length ahead"
+        );
+    }
+
+    /// The pace key the fold cases arrive under.
+    fn paced() -> PinKey {
+        PinKey {
+            key_id: "k".into(),
+            session_id: "s".into(),
+            agent_id: "main".into(),
+            model: "m".into(),
+        }
+    }
+
+    #[test]
+    fn fold_pace_counts_its_gaps_to_eight_and_holds_the_count_there() {
+        const AVERAGE_MS: i64 = 1_800_000;
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        let read = |state: &RoutingState| {
+            let pace = state.pin_pace(&paced()).expect("a pace");
+            (pace.gaps, pace.cycle_ms)
+        };
+        state.fold_pace(&paced(), 0, AVERAGE_MS);
+        assert_eq!(
+            read(&state),
+            (0, None),
+            "the first arrival starts the pace with no gap"
+        );
+        for gap in 1..=8 {
+            state.fold_pace(&paced(), i64::from(gap) * 30_000, AVERAGE_MS);
+            assert_eq!(read(&state), (gap, Some(30_000.0)), "gap {gap}");
+        }
+        state.fold_pace(&paced(), 246_000, AVERAGE_MS);
+        assert_eq!(
+            read(&state),
+            (CYCLE_GAPS, Some(27_000.0)),
+            "a ninth gap leaves the count at eight and moves the cycle by an eighth"
+        );
+    }
+
+    #[test]
+    fn fold_pace_leaves_the_cycle_and_the_count_standing_over_a_pause() {
+        const AVERAGE_MS: i64 = 1_800_000;
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        let read = |state: &RoutingState| {
+            let pace = state.pin_pace(&paced()).expect("a pace");
+            (pace.gaps, pace.cycle_ms, pace.dispatched_at)
+        };
+        for gap in 0..=3 {
+            state.fold_pace(&paced(), gap * 30_000, AVERAGE_MS);
+        }
+        assert_eq!(read(&state), (3, Some(30_000.0), 90_000));
+        let paused = 90_000 + AVERAGE_MS;
+        state.fold_pace(&paced(), paused, AVERAGE_MS);
+        assert_eq!(
+            read(&state),
+            (3, Some(30_000.0), paused),
+            "a gap of the burn average folds nothing and dates the next gap"
+        );
+        let next = paused + AVERAGE_MS - 1;
+        state.fold_pace(&paced(), next, AVERAGE_MS);
+        assert_eq!(
+            read(&state),
+            (
+                4,
+                Some(30_000.0 + (AVERAGE_MS - 1 - 30_000) as f64 / 4.0),
+                next
+            ),
+            "a gap one millisecond under the burn average folds"
         );
     }
 

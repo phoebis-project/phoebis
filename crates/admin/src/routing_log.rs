@@ -344,9 +344,9 @@ pub(crate) struct DecisionRecord {
     /// `lane`, `shed` (`from`, `at`), `marked`, `warmth` (`refresh`, `cold` or `untouched`), `warmth_cause`,
     /// `released` (the reasons a pin was let go), `marked_at`, `marked_on` and `marked_window` (the shedding mark the
     /// row carries: when it was made, the account and the window whose trigger made it, null without one), `cycle_ms`
-    /// (the pin's cycle, the time-weighted average of the gaps between a dispatch and the next arrival, null before its
-    /// first gap), `slow_down_until` (the end of the slow-down hold standing on the pin, null with none). Null for a
-    /// request that pins nothing, with `pin_reason` beside it.
+    /// (the pin's cycle, the count-weighted mean of its last eight gaps between a dispatch and the next arrival, null
+    /// before its first gap), `slow_down_until` (the end of the slow-down hold standing on the pin, null with none).
+    /// Null for a request that pins nothing, with `pin_reason` beside it.
     #[schema(value_type = Option<Object>)]
     pub pin: Option<Value>,
     /// `not_looked_up` for a refusal, which precedes the pin lookup, or `pinning_off`.

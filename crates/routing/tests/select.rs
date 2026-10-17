@@ -20359,14 +20359,11 @@ fn a_pins_cycle_folds_from_its_arrivals_and_an_exempt_class_folds_nothing() {
         (Some(10_000), None),
         "the first gap is taken whole"
     );
-    let w = (-30_000.0_f64 / AVERAGE_MS as f64).exp();
-    let (cycle, _) = cycle_on(&mut st, &main_turn(&s, "s1", T + 40_000));
-    let cycle = cycle.expect("a cycle");
-    assert!(
-        (cycle as f64 - (10_000.0 * w + 30_000.0 * (1.0 - w))).abs() <= 1.0,
-        "a later gap weighs in by its length over the burn average: {cycle}"
+    assert_eq!(
+        cycle_on(&mut st, &main_turn(&s, "s1", T + 40_000)),
+        (Some(20_000), None),
+        "the first gaps read their plain mean"
     );
-    assert!(10_000 < cycle && cycle < 30_000);
     let pace = st.pin_pace(&pin_key("s1")).cloned();
     assert!(pace.is_some());
 
@@ -20415,6 +20412,11 @@ fn a_pins_cycle_folds_from_its_arrivals_and_an_exempt_class_folds_nothing() {
             "{case} folds nothing"
         );
     }
+    assert_eq!(
+        cycle_on(&mut st, &main_turn(&s, "s1", T + 60_000)),
+        (Some(20_000), None),
+        "the third gap runs from the second turn's dispatch past the exempt requests, and the three read their mean"
+    );
 
     // A pin that idled out takes its pace with it: the fresh pin under the key reads no cycle at its next turn, where a
     // pace that stayed would read the idle hours as one gap.
@@ -20549,13 +20551,9 @@ fn the_record_names_the_read_the_factor_the_demand_and_the_cycle() {
     assert_eq!(b.factor, None, "no entry stands on b");
     assert_eq!(b.windows[FIVE_HOUR].demand, Some(0.0));
     let pin = d.record.pin.as_ref().expect("a pin block");
-    let w = (-9_000.0_f64 / AVERAGE_MS as f64).exp();
     assert_eq!(
         (pin.cycle_ms, pin.slow_down_until),
-        (
-            Some((10_000.0 * w + 9_000.0 * (1.0 - w)).round() as i64),
-            Some(until)
-        ),
+        (Some(9_500), Some(until)),
         "the cycle folds the arrival, not the selection's instant, and the deadline is the hold's"
     );
     let value = serde_json::to_value(&d.record).expect("the record serializes");
@@ -20791,6 +20789,133 @@ fn a_slowed_pins_main_turn_is_held_for_its_cycle_over_the_factor_before_the_rene
         (pace.dispatched_at, pace.deadline),
         (until, Some(until)),
         "the deadline stands on the pin and the wait is the request's dispatch"
+    );
+}
+
+/// `held_pools` with the burn average at `average_ms`, so a case's pause is a gap of its own span and not of the
+/// shipped default's.
+fn paced_pools(hold_seconds: u32, average_ms: i64) -> (RegistrySnapshot, RegistrySnapshot) {
+    let pool = |on: bool| Pool {
+        members: vec![("a", 0), ("b", 1)],
+        load_shedding: false,
+        shedding: Shedding {
+            burn_average_seconds: (average_ms / 1_000) as u64,
+            ..Shedding::default()
+        },
+        slow_down: SlowDown {
+            slow_down: on,
+            slow_down_stretch_seconds: 1800,
+            slow_down_hold_seconds: hold_seconds,
+        },
+        ..Pool::default()
+    };
+    (tiered(pool(false)), tiered(pool(true)))
+}
+
+/// The cycle the record's pin block reads after a main turn of `s1` at `at`, on a live row.
+fn cycle_at(st: &mut RoutingState, s: &RegistrySnapshot, at: i64) -> Option<i64> {
+    let d = decide(st, s, &main_turn(s, "s1", at), &mut rng());
+    let pin = d.record.pin.expect("a pin block");
+    assert_eq!(pin.found, "live", "at {at}");
+    pin.cycle_ms
+}
+
+#[test]
+fn a_pins_cycle_is_the_mean_of_its_last_eight_gaps_and_a_later_gap_moves_it_by_an_eighth() {
+    let (off, _) = paced_pools(120, AVERAGE_MS);
+    let mut st = loaded(vec![seeded_pin("s1", "a", T)]);
+    assert_eq!(
+        cycle_at(&mut st, &off, T),
+        None,
+        "the first arrival starts the pace with no gap"
+    );
+    for gap in 1..=8 {
+        assert_eq!(
+            cycle_at(&mut st, &off, T + gap * 30 * SECOND),
+            Some(30_000),
+            "after {gap} gaps of 30 s"
+        );
+    }
+    assert_eq!(
+        cycle_at(&mut st, &off, T + 246 * SECOND),
+        Some(27_000),
+        "a ninth gap of 6 s moves the cycle by an eighth toward it"
+    );
+    assert_eq!(
+        cycle_at(&mut st, &off, T + 252 * SECOND),
+        Some(24_375),
+        "the count stops at eight, so a tenth gap moves it by an eighth again"
+    );
+}
+
+#[test]
+fn a_gap_of_the_burn_average_or_longer_is_a_pause_that_leaves_the_cycle_standing() {
+    let (off, _) = paced_pools(120, AVERAGE_MS);
+    let mut st = loaded(vec![seeded_pin("s1", "a", T)]);
+    for gap in 0..=8 {
+        cycle_at(&mut st, &off, T + gap * 30 * SECOND);
+    }
+    let resumed = T + 240 * SECOND + AVERAGE_MS;
+    assert_eq!(
+        cycle_at(&mut st, &off, resumed),
+        Some(30_000),
+        "a gap of the burn average folds nothing"
+    );
+    assert_eq!(
+        st.pin_pace(&pin_key("s1")).map(|pace| pace.dispatched_at),
+        Some(resumed),
+        "a gap of the burn average is a pause and the arrival still dates the next gap"
+    );
+    assert_eq!(
+        cycle_at(&mut st, &off, resumed + 27 * SECOND),
+        Some(29_625),
+        "the next gap moves the cycle by an eighth, the count untouched by the pause"
+    );
+    let cycle = cycle_at(&mut st, &off, resumed + 27 * SECOND + AVERAGE_MS - 1).expect("a cycle");
+    assert!(
+        cycle > 100_000,
+        "a gap one millisecond under the burn average folds: {cycle}"
+    );
+}
+
+#[test]
+fn a_slowed_pins_main_turn_after_a_pause_is_held_for_the_pace_it_runs_at() {
+    let (off, on) = paced_pools(120, AVERAGE_MS);
+    // The burn and the readings are dated at the held turn, so neither decays over the pause and the factor reads
+    // about a half, as `slowed_s1`'s does.
+    let resumed = T + AVERAGE_MS;
+    let mut st = rounding(vec![burning("s1", "a", 15.0, true, resumed)]);
+    reading(&mut st, "a", 0.80, 2 * HOUR, resumed);
+    reading(&mut st, "b", 0.1, 2 * HOUR, resumed);
+    // Eight gaps of 30 s on the switched-off pool, the last turn a pause of one burn average before the held one.
+    for gap in 0..=8 {
+        let at = T - 240 * SECOND + gap * 30 * SECOND;
+        let d = decide(&mut st, &off, &main_turn(&off, "s1", at), &mut rng());
+        assert!(
+            matches!(d.result, SelectResult::Selected(_)),
+            "a turn on the switched-off pool is never held: {:?}",
+            d.result
+        );
+    }
+    let req = main_turn(&on, "s1", resumed);
+    let d = decide(&mut st, &on, &req, &mut rng());
+    let (account_id, hold) = held_on(&d);
+    assert_eq!((account_id.as_str(), hold.reason), ("a", "slow_down"));
+    let outcome = d.record.outcome.hold.clone().expect("a held outcome");
+    assert_eq!(
+        outcome.cycle_ms,
+        Some(30_000),
+        "the pause left the cycle standing"
+    );
+    assert!(
+        (outcome.factor.expect("a factor") - 0.5).abs() < 0.05,
+        "{outcome:?}"
+    );
+    assert_cycle_over_factor(&d, req.received_at);
+    let length = hold.until.expect("the pin's deadline") - req.received_at;
+    assert!(
+        length < 120_000,
+        "held for the pace it runs at, not for the pause: {length}"
     );
 }
 
@@ -23228,10 +23353,12 @@ fn the_cedar_window_replay_ends_at_a_zero_factor_with_the_subagent_held_and_no_r
 
     // The window near the reset: cedar at 0.96 with 27 minutes to its reset, where the subagent's turns read a
     // stretch far over the threshold, past the safety wait at the second, and the reset less the threshold already
-    // behind them. No round fires: the slow-down holds the subagent to the reset.
-    for (request_id, at, over_ms) in [
-        ("r-273", T + 273 * MINUTE, Some(0)),
-        ("r-276", T + 276 * MINUTE, None),
+    // behind them. No round fires: the slow-down holds the subagent to the reset. Both of its gaps before r-273 run
+    // past the burn average, so they are pauses and r-273 goes out on no cycle. r-276's three minutes are its first
+    // gap, held at the pool's cap under a factor of zero.
+    for (request_id, at, over_ms, cycle_ms) in [
+        ("r-273", T + 273 * MINUTE, Some(0), None),
+        ("r-276", T + 276 * MINUTE, None, Some(3 * MINUTE)),
     ] {
         let d = decide(
             &mut st,
@@ -23257,7 +23384,22 @@ fn the_cedar_window_replay_ends_at_a_zero_factor_with_the_subagent_held_and_no_r
             "at {at}"
         );
         assert!(no_fact(shed, "trigger"), "{:?}", shed.facts);
-        assert_eq!(held_on(&d).1.reason, "slow_down");
+        assert_eq!(
+            d.record.pin.as_ref().and_then(|pin| pin.cycle_ms),
+            cycle_ms,
+            "at {at}"
+        );
+        match cycle_ms {
+            None => assert_eq!(
+                (d.record.outcome.kind, d.record.outcome.hold.as_ref()),
+                ("renewed", None),
+                "a pin with no cycle is never held"
+            ),
+            Some(_) => {
+                let (_, hold) = held_on(&d);
+                assert_eq!((hold.reason, hold.until), ("slow_down", Some(at + 120_000)));
+            }
+        }
         decisions.push((request_id, d));
     }
     assert!(

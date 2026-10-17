@@ -179,8 +179,8 @@ pub struct PinFacts {
     pub marked_at: Option<i64>,
     pub marked_on: Option<String>,
     pub marked_window: Option<String>,
-    /// The pin's cycle, the time-weighted average of the gaps between a dispatch and the next arrival, `None` before
-    /// its first gap.
+    /// The pin's cycle, the count-weighted mean of its last eight gaps between a dispatch and the next arrival, `None`
+    /// before its first gap.
     pub cycle_ms: Option<i64>,
     /// The end of the slow-down hold standing on the pin, `None` with none.
     pub slow_down_until: Option<i64>,
