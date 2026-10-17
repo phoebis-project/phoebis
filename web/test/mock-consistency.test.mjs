@@ -603,8 +603,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // The written session is the one that holds an agent in each lifecycle word.
     const bySession = new Map();
     for (const r of recipes) bySession.set(r.sessionId, [...(bySession.get(r.sessionId) ?? []), r]);
-    const [written] = [...bySession.values()].filter((rows) => ['busy', 'idle', 'parked', 'released'].every((word) => rows.some((r) => r.agentState === word)));
-    const lines = written.filter((r) => r.agentState === 'released');
+    const full = [...bySession.values()].filter((rows) => ['busy', 'idle', 'parked', 'released'].every((word) => rows.some((r) => r.agentState === word)));
+    assert.equal(full.length, 1, 'one session holds every lifecycle word');
+    const lines = full[0].filter((r) => r.agentState === 'released');
     assert.equal(lines.length, 3, 'three released lines');
     for (const r of lines) assert.ok(inside(r), `${r.agentId}'s last use is inside its pool's window`);
     assert.ok(lines.some((r) => s.now - Date.parse(r.lastRequestAt) > affinityOf(s, r)), 'a line whose last request is past the window counts by its probe');
@@ -680,15 +681,17 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`an account that is not ready or has routing off reads the operator obstacle with no reason, at ${at}`, async () => {
+  test(`an account that is not ready or has routing off reads the operator obstacle with no reason, its state left on the candidate, at ${at}`, async () => {
     const s = await story;
-    const pool = s.lib.poolById.get('all');
-    for (const a of [
-      { id: 'not-ready', routingEnabled: true, status: 'reauth_required', subscription: null },
-      { id: 'routing-off', routingEnabled: false, status: 'ready', subscription: null },
-    ]) {
-      assert.deepEqual(s.lib.obstacleOf(a, pool, s.now, 'claude-sonnet-5', false, []), { name: 'operator', reason: null, until: null, window: null }, a.id);
+    const operator = (await decisionsOf(s)).flatMap((r) => r.candidates.filter((c) => c.obstacle?.name === 'operator').map((c) => [`${r.requestId}/${r.seq} ${c.accountId}`, c]));
+    assert.ok(operator.length > 0, 'the story holds candidates the operator took out');
+    for (const [id, c] of operator) {
+      assert.deepEqual([c.obstacle.reason, c.obstacle.until, c.obstacle.window], [null, null, null], id);
+      assert.ok(c.state !== 'ready' || c.enabled === false, `${id} reads state ${c.state} and enabled ${c.enabled}`);
     }
+    // No story member is ready with routing off, so an account of the case's own takes that branch.
+    const routingOff = { id: 'routing-off', routingEnabled: false, status: 'ready', subscription: null };
+    assert.deepEqual(s.lib.obstacleOf(routingOff, s.lib.poolById.get('all'), s.now, 'claude-sonnet-5', false, []), { name: 'operator', reason: null, until: null, window: null });
   });
 
   test(`a member at two reached budgets reads the budget whose period ends last, at ${at}`, async () => {
