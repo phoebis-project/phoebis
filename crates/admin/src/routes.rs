@@ -40,8 +40,8 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::{
-    accounts, analytics, attention, dashboard, keepalive, keys, models, openapi, pools, pricing,
-    requests, sessions, settings, tls, AdminState, LoginError, NewAccount,
+    accounts, analytics, attention, dashboard, guardrails, keepalive, keys, models, openapi, pools,
+    pricing, requests, sessions, settings, tls, AdminState, LoginError, NewAccount,
 };
 
 /// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
@@ -77,6 +77,12 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .routes(routes!(analytics::series))
         .routes(routes!(attention::show))
         .routes(routes!(dashboard::show))
+        .routes(routes!(guardrails::list, guardrails::create))
+        .routes(routes!(
+            guardrails::show,
+            guardrails::patch,
+            guardrails::remove
+        ))
         .routes(routes!(keepalive::overview))
         .routes(routes!(keepalive::recipes))
         .routes(routes!(keys::list, keys::create))
@@ -233,6 +239,7 @@ fn entity_of(
     let created = created.map(|c| c.0.clone());
     match pattern.get(2).copied() {
         Some("accounts") => ("account", segment("{id}").or(created)),
+        Some("guardrails") => ("guardrail", segment("{id}").or(created)),
         Some("keys") => ("key", segment("{id}").or(created)),
         Some("ledger") => ("ledger", None),
         Some("pools") => ("pool", segment("{id}").or(created)),

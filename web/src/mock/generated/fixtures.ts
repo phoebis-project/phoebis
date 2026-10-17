@@ -4524,14 +4524,14 @@ export const FIXTURES: Record<string, Fixture> = {
       "guardrails": [
         {
           "id": "large-auxiliary",
-          "name": null,
+          "name": "Large auxiliary requests",
           "observed": 0,
           "blocked": 1,
           "blocked_bytes": 48213
         },
         {
           "id": "subagent-status-summary",
-          "name": null,
+          "name": "Subagent status summary",
           "observed": 2,
           "blocked": 0,
           "blocked_bytes": 0
@@ -9755,7 +9755,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         "attempted": [],
         "holds": [],
-        "registry_revision": 62,
+        "registry_revision": 64,
         "body_tokens": 0
       },
       "pin": {
@@ -10178,6 +10178,162 @@ export const FIXTURES: Record<string, Fixture> = {
       }
     }
   },
+  "guardrail_created": {
+    "route": "POST /admin/guardrails",
+    "body": {
+      "id": "subagent-status-summary",
+      "name": "Subagent status summary",
+      "description": "The status line fork the client sends for each running subagent.",
+      "enabled": true,
+      "mode": "observe",
+      "action": "block",
+      "conditions": [
+        {
+          "subject": "request_class",
+          "operator": "equals",
+          "value": "auxiliary"
+        },
+        {
+          "subject": "body",
+          "operator": "present",
+          "path": "tools"
+        },
+        {
+          "subject": "message",
+          "operator": "matches",
+          "value": "^Describe your most recent action in 3-5 words",
+          "selector": "last_user"
+        }
+      ],
+      "pools": [
+        {
+          "id": "main",
+          "label": "Main",
+          "position": 0
+        }
+      ],
+      "keys": [],
+      "revision": 6189767511104,
+      "created_at": 1791721000000,
+      "updated_at": 1791721000000
+    }
+  },
+  "guardrail_show": {
+    "route": "GET /admin/guardrails/subagent-status-summary",
+    "body": {
+      "id": "subagent-status-summary",
+      "name": "Subagent status summary",
+      "description": "The status line fork the client sends for each running subagent.",
+      "enabled": true,
+      "mode": "observe",
+      "action": "block",
+      "conditions": [
+        {
+          "subject": "request_class",
+          "operator": "equals",
+          "value": "auxiliary"
+        },
+        {
+          "subject": "body",
+          "operator": "present",
+          "path": "tools"
+        },
+        {
+          "subject": "message",
+          "operator": "matches",
+          "value": "^Describe your most recent action in 3-5 words",
+          "selector": "last_user"
+        }
+      ],
+      "pools": [
+        {
+          "id": "main",
+          "label": "Main",
+          "position": 0
+        }
+      ],
+      "keys": [],
+      "revision": 6189767511104,
+      "created_at": 1791721000000,
+      "updated_at": 1791721000000
+    }
+  },
+  "guardrails": {
+    "route": "GET /admin/guardrails",
+    "body": {
+      "guardrails": [
+        {
+          "id": "large-auxiliary",
+          "name": "Large auxiliary requests",
+          "description": "Auxiliary requests that ask for more than 4096 output tokens.",
+          "enabled": true,
+          "mode": "enforce",
+          "action": "block",
+          "conditions": [
+            {
+              "subject": "request_class",
+              "operator": "equals",
+              "value": "auxiliary"
+            },
+            {
+              "subject": "body",
+              "operator": "gt",
+              "value": "4096",
+              "path": "max_tokens"
+            }
+          ],
+          "pools": [],
+          "keys": [
+            {
+              "id": "desktop",
+              "label": "Desktop",
+              "position": 0
+            }
+          ],
+          "revision": 6189767511104,
+          "created_at": 1791721000000,
+          "updated_at": 1791721000000
+        },
+        {
+          "id": "subagent-status-summary",
+          "name": "Subagent status summary",
+          "description": "The status line fork the client sends for each running subagent.",
+          "enabled": true,
+          "mode": "observe",
+          "action": "block",
+          "conditions": [
+            {
+              "subject": "request_class",
+              "operator": "equals",
+              "value": "auxiliary"
+            },
+            {
+              "subject": "body",
+              "operator": "present",
+              "path": "tools"
+            },
+            {
+              "subject": "message",
+              "operator": "matches",
+              "value": "^Describe your most recent action in 3-5 words",
+              "selector": "last_user"
+            }
+          ],
+          "pools": [
+            {
+              "id": "main",
+              "label": "Main",
+              "position": 0
+            }
+          ],
+          "keys": [],
+          "revision": 6189767511104,
+          "created_at": 1791721000000,
+          "updated_at": 1791721000000
+        }
+      ]
+    }
+  },
   "keepalive_overview": {
     "route": "GET /admin/keepalive/overview",
     "body": {
@@ -10343,7 +10499,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "effective_body_capture_hours": 24,
       "auto_mode_server": null,
       "effective_auto_mode_server": true,
-      "prefix": "ZFPxvgA5",
+      "prefix": "rKbKVPL_",
       "created_at": 1791721000000,
       "updated_at": 1791721000000,
       "revision": 6189767511104,
@@ -10351,6 +10507,8 @@ export const FIXTURES: Record<string, Fixture> = {
       "last_used_at": null,
       "retired_secret_last_used_at": null,
       "sessions_on_retired_secret": 0,
+      "guardrails": [],
+      "pool_guardrails": [],
       "usage_7d": {
         "billed_usd": 0,
         "cost_usd": 0,
@@ -10423,7 +10581,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "effective_body_capture_hours": 24,
           "auto_mode_server": null,
           "effective_auto_mode_server": true,
-          "prefix": "ZZvEUiue",
+          "prefix": "rKbKVPL_",
           "created_at": 1791721000000,
           "updated_at": 1791721000000,
           "revision": 6189767511104,
@@ -10431,6 +10589,24 @@ export const FIXTURES: Record<string, Fixture> = {
           "last_used_at": null,
           "retired_secret_last_used_at": null,
           "sessions_on_retired_secret": 0,
+          "guardrails": [
+            {
+              "id": "large-auxiliary",
+              "name": "Large auxiliary requests",
+              "mode": "enforce",
+              "enabled": true,
+              "position": 0
+            }
+          ],
+          "pool_guardrails": [
+            {
+              "id": "subagent-status-summary",
+              "name": "Subagent status summary",
+              "mode": "observe",
+              "enabled": true,
+              "position": 0
+            }
+          ],
           "usage_7d": {
             "billed_usd": 0.0107,
             "cost_usd": 0.02135,
@@ -10983,7 +11159,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "ZZvEUiue",
+              "prefix": "rKbKVPL_",
               "enabled": true
             }
           ],
@@ -11322,6 +11498,15 @@ export const FIXTURES: Record<string, Fixture> = {
                 "seven_day": 0.000008146666666666666
               },
               "estimated": true
+            }
+          ],
+          "guardrails": [
+            {
+              "id": "subagent-status-summary",
+              "name": "Subagent status summary",
+              "mode": "observe",
+              "enabled": true,
+              "position": 0
             }
           ],
           "warnings": [

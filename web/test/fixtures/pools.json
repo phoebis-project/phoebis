@@ -133,7 +133,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "ZZvEUiue",
+            "prefix": "rKbKVPL_",
             "enabled": true
           }
         ],
@@ -472,6 +472,15 @@
               "seven_day": 8.146666666666666e-6
             },
             "estimated": true
+          }
+        ],
+        "guardrails": [
+          {
+            "id": "subagent-status-summary",
+            "name": "Subagent status summary",
+            "mode": "observe",
+            "enabled": true,
+            "position": 0
           }
         ],
         "warnings": [

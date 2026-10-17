@@ -23,7 +23,7 @@
         "effective_body_capture_hours": 24,
         "auto_mode_server": null,
         "effective_auto_mode_server": true,
-        "prefix": "ZZvEUiue",
+        "prefix": "rKbKVPL_",
         "created_at": 1791721000000,
         "updated_at": 1791721000000,
         "revision": 6189767511104,
@@ -31,6 +31,24 @@
         "last_used_at": null,
         "retired_secret_last_used_at": null,
         "sessions_on_retired_secret": 0,
+        "guardrails": [
+          {
+            "id": "large-auxiliary",
+            "name": "Large auxiliary requests",
+            "mode": "enforce",
+            "enabled": true,
+            "position": 0
+          }
+        ],
+        "pool_guardrails": [
+          {
+            "id": "subagent-status-summary",
+            "name": "Subagent status summary",
+            "mode": "observe",
+            "enabled": true,
+            "position": 0
+          }
+        ],
         "usage_7d": {
           "billed_usd": 0.0107,
           "cost_usd": 0.02135,

@@ -446,6 +446,18 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // The minted secret is random, so the fixture carries a stable stand-in rather than the capture's own.
     key_created["secret"] = j!("phoebis-fixture");
     hold(&planted, "key_created", "POST /admin/keys", key_created);
+    // One guardrail observing on the pool and one enforcing on the key, so the matches the request rows below carry
+    // name registry rows and the pool's and the key's answers carry both lists.
+    let response = post(app, "/admin/guardrails", r#"{"id":"subagent-status-summary","name":"Subagent status summary","description":"The status line fork the client sends for each running subagent.","mode":"observe","conditions":[{"subject":"request_class","operator":"equals","value":"auxiliary"},{"subject":"body","operator":"present","path":"tools"},{"subject":"message","operator":"matches","selector":"last_user","value":"^Describe your most recent action in 3-5 words"}],"pools":["main"]}"#, Some(&cookie)).await;
+    assert_eq!(response.status(), 201, "the observing guardrail is created");
+    hold(
+        &planted,
+        "guardrail_created",
+        "POST /admin/guardrails",
+        json(response).await,
+    );
+    let response = post(app, "/admin/guardrails", r#"{"id":"large-auxiliary","name":"Large auxiliary requests","description":"Auxiliary requests that ask for more than 4096 output tokens.","mode":"enforce","conditions":[{"subject":"request_class","operator":"equals","value":"auxiliary"},{"subject":"body","operator":"gt","path":"max_tokens","value":"4096"}],"keys":["desktop"]}"#, Some(&cookie)).await;
+    assert_eq!(response.status(), 201, "the enforcing guardrail is created");
     // A real selection through the router, so `sessions.json` captures a pinned row and the trace below is the
     // shape `select` actually serializes, not a hand-built stand-in.
     let snapshot = parts.router.snapshot();
@@ -1338,6 +1350,11 @@ async fn every_route_is_captured_and_holds_its_shape() {
         ),
         ("attention", "/admin/attention"),
         ("dashboard", "/admin/dashboard"),
+        (
+            "guardrail_show",
+            "/admin/guardrails/subagent-status-summary",
+        ),
+        ("guardrails", "/admin/guardrails"),
         ("keepalive_recipes", "/admin/keepalive/recipes"),
         ("key_models", "/admin/keys/desktop/models"),
         ("keys", "/admin/keys"),

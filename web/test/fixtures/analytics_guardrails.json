@@ -6,14 +6,14 @@
     "guardrails": [
       {
         "id": "large-auxiliary",
-        "name": null,
+        "name": "Large auxiliary requests",
         "observed": 0,
         "blocked": 1,
         "blocked_bytes": 48213
       },
       {
         "id": "subagent-status-summary",
-        "name": null,
+        "name": "Subagent status summary",
         "observed": 2,
         "blocked": 0,
         "blocked_bytes": 0
