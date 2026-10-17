@@ -1,7 +1,7 @@
 import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
 import { AFFINITY_MODE_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
 import { slug } from '@/api/http';
-import type { Account, ApiKey, ModelRule, ModelRulesMode, Pool, PoolKeepalive, PoolWarning } from '@/api/types';
+import type { Account, ApiKey, GuardrailRef, ModelRule, ModelRulesMode, Pool, PoolKeepalive, PoolWarning } from '@/api/types';
 import { fmtInt, toLocalInput } from './format';
 import { checkPattern } from './patterns';
 
@@ -65,7 +65,7 @@ export function prefixThresholdRefusal(value: string): string | null {
 }
 
 /** The pool dialog's groups in rail order; a refusal names the one its control sits in. */
-export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'slowDown', 'failover', 'overage', 'cacheTtl', 'keepalive', 'bodyCapture', 'cacheDiagnostics'] as const;
+export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'guardrails', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'slowDown', 'failover', 'overage', 'cacheTtl', 'keepalive', 'bodyCapture', 'cacheDiagnostics'] as const;
 export type PoolGroup = (typeof POOL_GROUPS)[number];
 
 export interface PoolRefusal {
@@ -286,6 +286,8 @@ export interface KeyForm {
   enabled: boolean;
   /** `keep` leaves the stored expiry alone, `never` clears it, and a number is days from the save. */
   expiry: string;
+  /** The key's own guardrail ids in the order they run, after its pool's. */
+  guardrails: string[];
   longContextTwins: boolean;
   modelRules: ModelRule[];
   modelRulesMode: ModelRulesMode;
@@ -294,6 +296,17 @@ export interface KeyForm {
   optOut: boolean;
   poolId: string;
 }
+
+/** A pool's or a key's attached guardrail ids in the order the subject runs them. */
+export const guardrailIdsOf = (refs: readonly Pick<GuardrailRef, 'id' | 'position'>[]): string[] => [...refs].sort((a, b) => a.position - b.position).map((r) => r.id);
+
+/**
+ * The `guardrails` member an edit sends: the whole list where it differs from the one the dialog opened with, order
+ * included, else nothing, so an untouched list leaves in place an attachment made meanwhile from the guardrail's side,
+ * which moves no revision of the pool or the key.
+ */
+export const guardrailsChange = (list: readonly string[], opened: readonly string[]): { guardrails?: string[] } =>
+  list.length === opened.length && list.every((id, i) => id === opened[i]) ? {} : { guardrails: [...list] };
 
 /** The dialog's starting fields: the stored key's, or a new key's in `poolId`. */
 export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
@@ -305,6 +318,7 @@ export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
     // say nothing about it.
     enabled: existing?.enabled ?? true,
     expiry: existing ? 'keep' : 'never',
+    guardrails: guardrailIdsOf(existing?.guardrails ?? []),
     longContextTwins: existing?.longContextTwins ?? true,
     modelRules: existing?.modelRules ?? [],
     modelRulesMode: existing?.modelRulesMode ?? 'extend',
@@ -332,7 +346,7 @@ export function keyInputOf(form: KeyForm, now: number): KeyInput {
 }
 
 /** The key dialog's groups in rail order; a refusal names the one its control sits in. */
-export const KEY_GROUPS = ['key', 'access', 'models', 'sessions', 'capture'] as const;
+export const KEY_GROUPS = ['key', 'access', 'models', 'guardrails', 'sessions', 'capture'] as const;
 export type KeyGroup = (typeof KEY_GROUPS)[number];
 
 export interface KeyRefusal {

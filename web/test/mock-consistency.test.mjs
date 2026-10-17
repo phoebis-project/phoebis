@@ -1839,6 +1839,21 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const day = await s.api.getAnalyticsGuardrails('24h');
     assert.deepEqual([day.from, day.to, day.guardrails], [iso(from), iso(s.now), counts.guardrails], "the view's day is the last 24 hours");
   });
+
+  test(`the_mock_dashboard_leaves_the_blocked_rows_out_of_the_rate_and_the_top_code_and_keeps_them_in_the_count at ${at}`, async () => {
+    const s = await story;
+    const blocked = s.counted.filter((r) => r.errorCode === 'guardrail_blocked');
+    const rated = s.counted.filter((r) => r.errorCode !== 'guardrail_blocked');
+    const failed = rated.filter((r) => r.status !== 200);
+    assert.equal(s.overview.errorRate24h, failed.length / rated.length, 'the rate is the other failures over the other requests');
+    const codes = new Map();
+    for (const r of rated) if (r.errorCode) codes.set(r.errorCode, (codes.get(r.errorCode) ?? 0) + 1);
+    assert.notEqual(s.overview.topErrorCode, 'guardrail_blocked');
+    assert.equal(codes.get(s.overview.topErrorCode ?? '') ?? 0, Math.max(0, ...codes.values()), "the top code is the day's most frequent other code");
+    assert.ok(blocked.length > 0 && blocked.length === s.requests.filter((r) => r.guardrailId !== null).length, "the day holds every one of the story's blocked rows");
+    assert.equal(s.overview.requests24h, s.counted.length, 'the count keeps the blocked rows, since the router received them');
+    assert.equal(sum(s.overview.hourly, (h) => h.errors), failed.length, 'the hourly errors leave them out too');
+  });
 }
 
 // An instant whose hour a full day back carries traffic before the dashboard's first bucket.

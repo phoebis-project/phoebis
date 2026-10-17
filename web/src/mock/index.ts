@@ -349,6 +349,11 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
   }
   if (q.efforts?.length && !q.efforts.includes(foldEffort(r.shape.effort))) return false;
   if (q.requestClasses?.length && !q.requestClasses.includes(foldRequestClass(r.requestClass))) return false;
+  // `-` keeps a request no guardrail matched, the spelling the class filter uses for none.
+  if (q.guardrails?.length) {
+    const listed = q.guardrails;
+    if (!r.guardrails.some((m) => listed.includes(m.id)) && !(listed.includes('-') && r.guardrails.length === 0)) return false;
+  }
   // Probes are off the log unless they are what the query asks for, as the route lists them.
   if (r.kind === 'probe' && !q.includeProbes && q.kind !== 'probe') return false;
   return true;
@@ -921,6 +926,10 @@ export class MockApi implements Api {
     let cached = 0;
     let cost = 0;
     const errorCodes = new Map<string, number>();
+    // A guardrail block is a refusal the operator asked for, so it is no error of the router's: the rate, the hourly
+    // errors and the top code leave it out, while the request count keeps it, since the router received it.
+    const blocked = (r: RequestLog) => r.errorCode === 'guardrail_blocked';
+    const rated = last24h.filter((r) => !blocked(r));
     for (const r of last24h) {
       const at = iso(Math.floor(Date.parse(r.at) / 3_600_000) * 3_600_000);
       const bucket = hourlyMap.get(at);
@@ -928,12 +937,12 @@ export class MockApi implements Api {
       tokens += total;
       cached += r.usage.cacheRead;
       cost += r.costUsd;
-      if (r.errorCode) errorCodes.set(r.errorCode, (errorCodes.get(r.errorCode) ?? 0) + 1);
+      if (r.errorCode && !blocked(r)) errorCodes.set(r.errorCode, (errorCodes.get(r.errorCode) ?? 0) + 1);
       if (bucket) {
         bucket.requests += 1;
         bucket.tokens += total;
         bucket.cost += r.costUsd;
-        if (r.status !== 200) bucket.errors += 1;
+        if (r.status !== 200 && !blocked(r)) bucket.errors += 1;
       }
     }
     const top = [...errorCodes.entries()].sort((a, b) => b[1] - a[1])[0];
@@ -944,7 +953,7 @@ export class MockApi implements Api {
       billed24h: day.billedUsd,
       cost24h: cost,
       equivalent24h: day.equivalent,
-      errorRate24h: last24h.length ? last24h.filter((r) => r.status !== 200).length / last24h.length : null,
+      errorRate24h: rated.length ? rated.filter((r) => r.status !== 200).length / rated.length : null,
       estimated24h: day.estimated,
       hourly: [...hourlyMap.values()],
       requests24h: last24h.length,

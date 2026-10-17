@@ -221,6 +221,20 @@ test('the key dialog starts from the stored key and builds the edit from it', ()
 });
 
 
+test('the key form reads its own guardrails in position order, the input leaves them out, and an edit sends the list only when it changed', () => {
+  const refs = [
+    { enabled: true, id: 'second', mode: 'observe', name: 'Second', position: 3 },
+    { enabled: false, id: 'first', mode: 'enforce', name: 'First', position: 1 },
+  ];
+  const form = d.keyFormOf({ ...key, guardrails: refs }, 'unused');
+  assert.deepEqual(form.guardrails, ['first', 'second'], 'by position, which is no index');
+  assert.equal('guardrails' in d.keyInputOf(form, NOW), false, 'the input builder leaves the list to the save');
+  assert.deepEqual(d.keyFormOf(null, 'all').guardrails, [], 'a new key starts with none');
+  assert.deepEqual(d.guardrailsChange(['first', 'second'], ['first', 'second']), {}, 'an unchanged list sends nothing');
+  assert.deepEqual(d.guardrailsChange(['second', 'first'], ['first', 'second']), { guardrails: ['second', 'first'] }, 'a reorder sends the whole list');
+  assert.deepEqual(d.guardrailsChange([], ['first']), { guardrails: [] }, 'removing the last sends the empty list');
+});
+
 test('ticking cancelled leaves the end as typed, unticking clears it, and the form refuses what the route refuses', () => {
   const body = fixture('account');
   const account = d.decodeAccount(body);
@@ -259,7 +273,7 @@ test('a model rule list is refused in the route\'s order and words, and the refu
 });
 
 test("the key dialog's holds agree with its Save condition", () => {
-  assert.deepEqual(d.KEY_GROUPS, ['key', 'access', 'models', 'sessions', 'capture']);
+  assert.deepEqual(d.KEY_GROUPS, ['key', 'access', 'models', 'guardrails', 'sessions', 'capture']);
   const named = { captureHours: '6', captureMode: 'inherit', modelRules: [], name: 'workstation', poolId: 'all' };
   assert.deepEqual(d.keyRefusals(named), [], 'a named key in a pool with no rules may save');
   assert.deepEqual(d.keyRefusals({ ...named, name: '' }), [{ field: 'Name', group: 'key', text: 'the key needs a name.' }]);
@@ -412,7 +426,7 @@ test("refusals come in rail order, a new pool's first two the name and the membe
     refusals.slice(0, 2).map((r) => r.text),
     ['the pool needs a name.', 'the pool needs a member.'],
   );
-  assert.deepEqual(d.POOL_GROUPS, ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'slowDown', 'failover', 'overage', 'cacheTtl', 'keepalive', 'bodyCapture', 'cacheDiagnostics']);
+  assert.deepEqual(d.POOL_GROUPS, ['identity', 'members', 'keys', 'models', 'guardrails', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'slowDown', 'failover', 'overage', 'cacheTtl', 'keepalive', 'bodyCapture', 'cacheDiagnostics']);
 });
 
 test('every bounded engine field is refused once it leaves its bound', () => {

@@ -52,6 +52,19 @@ test('the mock keeps a request under its class folded as the rollups file it', a
   assert.deepEqual(await listed({ requestClasses: ['-'] }), ids(expected));
 });
 
+test('the mock keeps a request under a guardrail that matched it, and under none where no guardrail matched, as the route does', async () => {
+  const matched = unprobed.find((r) => r.guardrails.length > 0);
+  assert.ok(matched, 'the story holds a row a guardrail matched');
+  const id = matched.guardrails.at(-1).id;
+  const carrying = unprobed.filter((r) => r.guardrails.some((m) => m.id === id));
+  narrowed(carrying, `that ${id} matched`);
+  assert.deepEqual(await listed({ guardrails: [id] }), ids(carrying));
+  const none = unprobed.filter((r) => r.guardrails.length === 0);
+  narrowed(none, 'that no guardrail matched');
+  assert.deepEqual(await listed({ guardrails: ['-'] }), ids(none));
+  assert.deepEqual(await listed({ guardrails: [id, '-'] }), ids([...carrying, ...none]), 'an id and none keep the rows of either');
+});
+
 test('the mock keeps a request under its canonical model, not its wire spelling, as the route compares it', async () => {
   const resolved = unprobed.find((r) => r.model !== r.canonicalModel);
   assert.ok(resolved, 'the story holds a request whose wire spelling differs from its canonical model');

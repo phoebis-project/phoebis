@@ -153,6 +153,7 @@ export const REQUESTS_DIMENSIONS: Dimension[] = [
   CATALOG_MODEL,
   POOL,
   { field: 'cacheMissReasons', group: 'Outcome', kind: 'list', label: 'Cache miss reason', word: 'cache miss reason' },
+  { field: 'guardrails', group: 'Outcome', kind: 'list', label: 'Guardrail', word: 'guardrail' },
   { field: 'held', group: 'Outcome', kind: 'flag', label: 'Held only', word: 'held only' },
   { field: 'outcomes', group: 'Outcome', kind: 'list', label: 'Outcome', word: 'outcome' },
   {
