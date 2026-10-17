@@ -4,7 +4,7 @@ import { api } from '@/api';
 import { iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
 import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, DiagnosticsSource, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, Usage } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
-import { type Paging, useFollow } from '@/app/useFollow';
+import { useFollow } from '@/app/useFollow';
 import { BodyViewer } from '@/components/BodyViewer';
 import { Chips } from '@/components/ChipView';
 import { FilterBar } from '@/components/FilterBar';
@@ -23,7 +23,7 @@ import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION } from '@/lib/dimensions';
 import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
-import { effectiveInterval, FOLLOW_OVERRUN, readEnd, spanEnded } from '@/lib/follow';
+import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, readEnd, spanEnded } from '@/lib/follow';
 import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtEquivalent, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, tokensTotal, withEstimate } from '@/lib/format';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { planLabel } from '@/lib/quota';
@@ -248,9 +248,7 @@ export function RequestsPage() {
   // `to` holds the range's end a walk from the poll's overrun reads under, the end its cursor came from.
   const [paging, setPaging] = useState<Paging>({ for: address, stack: [] });
   if (paging.for !== address) setPaging({ for: address, stack: [] });
-  const cursor = paging.for === address ? paging.cursor : undefined;
-  const stack = paging.for === address ? paging.stack : [];
-  const pagedTo = paging.for === address ? paging.to : undefined;
+  const { cursor, stack, to: pagedTo } = pagingFor(paging, address);
   // The range ends where the list was loaded, so a cursor page is read against the window its cursor came from;
   // Refresh moves the end to now.
   const [loadedAt, setLoadedAt] = useState(() => clock.now());

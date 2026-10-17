@@ -61,6 +61,22 @@ export interface Followed<R> {
   standIn: { cursor: string | null; to: number } | null;
 }
 
+/** A list's cursor walk and the pages before it, kept for the address (`for`) it was read under. */
+export interface Paging {
+  for: string;
+  cursor?: string;
+  stack: (string | undefined)[];
+  to?: number;
+}
+
+/**
+ * The pager's state under `address`, or the empty state where the paging belongs to another address. The stack keeps
+ * the first page's undefined cursor, which `goNext` pushes when the reader leaves the first page.
+ */
+export function pagingFor(paging: Paging, address: string): { cursor: string | undefined; stack: (string | undefined)[]; to: number | undefined } {
+  return paging.for === address ? { cursor: paging.cursor, stack: paging.stack, to: paging.to } : { cursor: undefined, stack: [], to: undefined };
+}
+
 /**
  * A poll's answer over the rows shown, one row per identity so a row the poll reads again never lands twice, in
  * `compare`'s order.
@@ -84,8 +100,10 @@ export function merged<R>(shown: R[], polled: R[], identity: (row: R) => string,
  * Next's, or the route has no more, and only an eighth page that still answers a next cursor sets the overrun.
  * `landedThrough` is the first page's, since a row written between two pages stamps above it and the next poll reads
  * it, where a later page's would skip it.
+ *
+ * `alive` is read between pages: a poll whose caller is gone stops reading and answers what it read, with no overrun.
  */
-export async function followPages<R>(read: (cursor: string | undefined) => Promise<{ landedThrough?: number; nextCursor: string | null; rows: R[] }>, known: ReadonlySet<string>, identity: (row: R) => string, below: (row: R) => boolean, stopOnKnown = true): Promise<{ landedThrough?: number; overrun: string | null; rows: R[] }> {
+export async function followPages<R>(read: (cursor: string | undefined) => Promise<{ landedThrough?: number; nextCursor: string | null; rows: R[] }>, known: ReadonlySet<string>, identity: (row: R) => string, below: (row: R) => boolean, stopOnKnown = true, alive: () => boolean = () => true): Promise<{ landedThrough?: number; overrun: string | null; rows: R[] }> {
   const rows: R[] = [];
   let cursor: string | undefined;
   let landedThrough: number | undefined;
@@ -95,7 +113,7 @@ export async function followPages<R>(read: (cursor: string | undefined) => Promi
     const listed = page.rows.filter((r) => !below(r));
     rows.push(...listed);
     const ends = stopOnKnown ? listed.every((r) => known.has(identity(r))) : listed.length < page.rows.length;
-    if (page.nextCursor === null || ends) return { landedThrough, overrun: null, rows };
+    if (page.nextCursor === null || ends || !alive()) return { landedThrough, overrun: null, rows };
     cursor = page.nextCursor;
   }
   return { landedThrough, overrun: cursor ?? null, rows };

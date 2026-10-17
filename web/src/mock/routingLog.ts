@@ -2103,6 +2103,12 @@ function expiredReservations(): EventSeed[] {
 }
 
 /**
+ * The story's late event, studio's token refresh, which the ledger writes a few seconds after the mock loads: past the
+ * first auto reload poll of a log read as the mock loads, so that poll lands nothing and a later one lands it on top.
+ */
+const LATE_EVENT_AT = NOW + 6_000;
+
+/**
  * The events beside the decisions: every pin event and model answer the requests' windows hold, the pins the
  * placements created, the cooldowns the attempts' answers set, and the story's own rows, at least one of every kind.
  */
@@ -2259,6 +2265,9 @@ function buildEvents(): RoutingEvent[] {
   );
   if (oldestCooldown) seeds.push({ accountId: oldestCooldown.accountId, at: iso(oldestCooldown.until), detail: { cause: 'expired', scope: oldestCooldown.scope }, kind: 'cooldown_cleared' });
   if (gap) seeds.push({ accountId: null, at: iso(Date.parse(gap.at) + (gap.durationMs ?? 0)), detail: { reason: 'chunk_skipped', request_id: gap.id }, kind: 'ledger_gap', requestId: gap.id });
+  // The story's access tokens run eight hours from their refresh.
+  const studioRefresh = accountOf.get('studio')?.credential.refreshTokenExpiresAt ?? null;
+  seeds.push({ accountId: 'studio', at: iso(LATE_EVENT_AT), detail: { access_expires_at: LATE_EVENT_AT + 8 * HOUR, refresh_expires_at: studioRefresh === null ? null : Date.parse(studioRefresh), until: LATE_EVENT_AT + 8 * HOUR }, kind: 'refresh_succeeded' });
   return seeds
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.kind.localeCompare(b.kind))
     .map((e, i) => ({ type: 'event', accountId: e.accountId, actor: e.actor ?? null, agentId: e.agentId ?? null, at: e.at, detail: e.detail, id: i + 1, keyId: e.keyId ?? null, kind: e.kind, model: e.model ?? null, poolId: e.poolId ?? null, requestId: e.requestId ?? null, sessionId: e.sessionId ?? null }));
@@ -2266,6 +2275,8 @@ function buildEvents(): RoutingEvent[] {
 
 /** Every event kind of the ledger at least once, oldest first by id. */
 export const ROUTING_EVENTS: RoutingEvent[] = buildEvents();
+/** The late event's id: the route lists it once its clock reaches the event, as the ledger has written it by then. */
+const LATE_EVENT_ID = ROUTING_EVENTS.find((e) => Date.parse(e.at) === LATE_EVENT_AT)?.id;
 
 const DECISION_KINDS: readonly string[] = ['exhausted', 'held', 'moved', 'placed', 'refused', 'renewed'];
 /** Every event kind the ledger writes, as the route validates `kinds` against them. */
@@ -2328,6 +2339,7 @@ export function listRoutingLog(query: RoutingLogQuery, now: number): RoutingLogP
   const events = ROUTING_EVENTS.filter(
     (e) =>
       within(e.at) &&
+      (e.id !== LATE_EVENT_ID || now >= LATE_EVENT_AT) &&
       (!query.request || e.requestId === query.request) &&
       session(e.sessionId) &&
       inList(query.keyIds, e.keyId) &&

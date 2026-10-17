@@ -4818,6 +4818,82 @@ async function lateRowTint(theme) {
 }
 
 /**
+ * The fresh tint on a log: a row an auto reload poll brings draws every cell in --accent-soft, read over the surface
+ * as the cell draws it, a tone more than `TONE_STEP` apart from the row's resting fill, in the row's own box. In the
+ * mock pass the story lands one row on each log a few seconds after the load: the request log's late request among the
+ * rows a page of 50 shows, and the routing log's late event above the rows the log shows. The page reads its list,
+ * turns auto reload to 5 s through the interval menu, steps the clock past the landing and the first poll, and reads
+ * the first fresh row that is not the selected one, since a selected row draws the same token. The router pass's seed
+ * lands no row after the load, so it records the measure as skipped. The interval returns to Off and the bare log loads
+ * again.
+ */
+async function freshRowTint(theme, path) {
+  if (!mock) {
+    measurements.push(`${theme} ${path} fresh row tint skipped: the seed lands no row after the load`);
+    return;
+  }
+  const say = (what) => failures.push(`${theme} ${path}: the fresh row ${what}`);
+  const table = path === '/requests' ? '.requests__table' : '.routing-log__table';
+  await loadAtOrigin(path === '/requests' ? '/requests?rows=50' : path, table);
+  const choose = async (word) => {
+    await page.locator('.filter-bar .refresh-control__part').click();
+    await settle();
+    await page.locator('.popover[role="menu"] [role="menuitemradio"]', { hasText: new RegExp(`^${word}$`) }).click();
+    await settle();
+  };
+  await choose('5 s');
+  await atRest();
+  // Past the landing and the first poll, short of the second, which would take the tint away.
+  await advance(6_000);
+  await page.waitForSelector(`${table} > tbody > tr.is-new`, { timeout: 5_000 }).catch(() => {});
+  const first = page.locator(`${table} > tbody > tr.is-new:not(.is-selected):not([aria-current="true"])`).first();
+  const fresh = (await first.count()) > 0 ? await first.elementHandle() : null;
+  const found = fresh !== null;
+  // The row by the name each log gives it: the routing log's identity, the request log's id on its time cell.
+  const row = found ? await fresh.evaluate((tr) => tr.getAttribute('data-row') ?? tr.querySelector('.sub.mono')?.getAttribute('title') ?? null) : null;
+  const landed = await page.locator(`${table} > tbody > tr.is-new`).count();
+  const tinted = found ? await rowCells(fresh) : null;
+  // The same row at rest, under the stripe its place in the table gives it.
+  let rest = null;
+  if (found) {
+    await fresh.evaluate((tr) => tr.classList.remove('is-new'));
+    rest = await rowCells(fresh);
+    await fresh.evaluate((tr) => tr.classList.add('is-new'));
+  }
+  const tones = await page.evaluate(() => {
+    const tone = (name) => {
+      const probe = document.createElement('div');
+      probe.style.background = `var(${name})`;
+      document.body.append(probe);
+      const color = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return color;
+    };
+    return { accentSoft: tone('--accent-soft'), surface: tone('--surface') };
+  });
+  await choose('Off');
+  await atRest();
+  // A translucent tone (the dark theme's --accent-soft) composited over the surface, as the cell under it draws.
+  const surface = colorChannels(tones.surface);
+  const over = (css) => composite(colorChannels(css), surface).map((c) => Math.round(c * 10) / 10);
+  const gap = (a, b) => Math.round(Math.max(...over(a).map((c, i) => Math.abs(c - over(b)[i]))) * 10) / 10;
+  const token = over(tones.accentSoft);
+  const drawn = tinted?.backgrounds.map(over) ?? [];
+  const apart = tinted !== null && rest !== null ? gap(tinted.backgrounds[0], rest.backgrounds[0]) : null;
+  const box = (cells) => cells && { border: cells.border, height: cells.height, padding: cells.padding };
+  measurements.push(`${theme} ${path} fresh row tint ${JSON.stringify({ apart, cells: drawn.length, drawn: drawn[0] ?? null, landed, rest: rest?.backgrounds[0] ?? null, restBox: box(rest), row, tinted: tinted?.backgrounds[0] ?? null, tintedBox: box(tinted), token, tones })}`);
+  if (!found) say('never arrives: no row reads is-new after the first poll');
+  else {
+    const off = drawn.flatMap((rgb, i) => (rgb.every((c, k) => Math.abs(c - token[k]) <= 0.5) ? [] : [`cell ${i + 1} draws ${JSON.stringify(rgb)}`]));
+    if (off.length > 0) say(`draws its cells off --accent-soft (${JSON.stringify(token)} over the surface): ${off.join(', ')}`);
+    if (apart === null || apart <= TONE_STEP) say(`stands ${apart} from its resting fill ${rest?.backgrounds[0]}, within ${TONE_STEP} on every channel`);
+    failures.push(...compare(tinted, rest, ['border', 'height', 'padding'], `${theme} ${path}: the fresh row against itself at rest`));
+  }
+  await loadAtOrigin(path, table);
+  await atRest();
+}
+
+/**
  * The Traffic section's speed chart and effort bars and the Cost section's fast-mode tile, each against the
  * neighbor it copies: Requests by speed against Requests by outcome (title type, card width, chart height),
  * Effort levels against Errors by code (title type, card width, and where both draw bars, the bar row, its label
@@ -8511,11 +8587,13 @@ try {
       if (view.path === '/requests' && mock) await attemptCardAtTheBottom(theme);
       if (view.path === '/requests') await wideBodyDialog(theme);
       if (view.path === '/requests') await lateRowTint(theme);
+      if (view.path === '/requests') await freshRowTint(theme, view.path);
       if (view.path === '/routing-log') await stripIdleContrast(theme);
       if (view.path === '/routing-log') await decisionCard(theme);
       // The bar's measure loads each address itself and leaves the bare log, where the Kinds list opens.
       if (view.path === '/routing-log') await barRow(theme, view.path);
       if (view.path === '/routing-log') await kindsPopoverInside(theme);
+      if (view.path === '/routing-log') await freshRowTint(theme, view.path);
       if (view.path === '/sessions') await forkLink(theme);
       if (view.path === '/settings') await copyFallback(theme);
       // The pool chip's measure and the bar's load their addresses themselves and leave the bare view.

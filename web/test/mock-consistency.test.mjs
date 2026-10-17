@@ -1869,6 +1869,26 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const upstreamErrors = rows.filter((r) => r.status !== 200 && r.status !== 429 && r.status !== 529 && r.errorCode !== 'stream_undecodable');
     assert.equal(totals.errors.api_error ?? 0, upstreamErrors.length, 'and counts no closed stream as an upstream error');
   });
+
+  test(`the routing log lists the story's late event once the clock reaches it a few seconds after the load, on top, at ${at}`, async () => {
+    const s = await story;
+    // The route's clock is read as the call is made, so it is set for the call alone.
+    const readAt = (clock) => {
+      const wall = Date.now;
+      Date.now = () => clock;
+      try {
+        return s.api.listRoutingLog({ from: iso(s.now - HOUR), limit: 25, to: iso(s.now + DAY) });
+      } finally {
+        Date.now = wall;
+      }
+    };
+    const late = (rows) => rows.filter((r) => Date.parse(r.at) > s.now);
+    const before = (await readAt(s.now + 5_000)).rows;
+    const after = (await readAt(s.now + 6_000)).rows;
+    assert.deepEqual(late(before), [], 'nothing past the load is written five seconds on');
+    assert.deepEqual(late(after).map((r) => [r.type, r.kind, r.accountId, r.at]), [['event', 'refresh_succeeded', 'studio', iso(s.now + 6_000)]], 'six seconds on, the late event alone');
+    assert.equal(after[0], late(after)[0], 'on top of the log');
+  });
 }
 
 // An instant whose hour a full day back carries traffic before the dashboard's first bucket.

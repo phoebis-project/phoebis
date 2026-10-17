@@ -4,7 +4,7 @@ import { api } from '@/api';
 import { iso } from '@/api/decode';
 import type { DecisionKind, FactEntity, RoutingLogQuery, RoutingLogRow } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
-import { type Paging, useFollow } from '@/app/useFollow';
+import { useFollow } from '@/app/useFollow';
 import { DecisionCard } from '@/components/DecisionCard';
 import { EventDetail } from '@/components/EventDetail';
 import { FilterBar } from '@/components/FilterBar';
@@ -15,7 +15,7 @@ import { addressWindow, type LogFilters, RANGE_PRESETS, ROUTING_LOG_CODEC } from
 import { clock } from '@/lib/clock';
 import { compareByModelTier } from '@/lib/costs';
 import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
-import { effectiveInterval, FOLLOW_OVERRUN, readEnd, spanEnded } from '@/lib/follow';
+import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, readEnd, spanEnded } from '@/lib/follow';
 import { fmtAbsolute, fmtDatedTime, fmtInt, fmtTime, upperFirst } from '@/lib/format';
 import { useAsync, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { ALL_KINDS, byOf, compareRows, DECISION_KIND_LABEL, DECISION_KIND_TONE, entityHref, EVENT_KIND_LABEL, eventTone, factsOf, identityOf, KIND_PRESETS, type LogLink, logHref } from '@/lib/routingLog';
@@ -73,9 +73,7 @@ export function RoutingLogPage() {
   // `to` holds the range's end a walk from the poll's overrun reads under, the end its cursor came from.
   const [paging, setPaging] = useState<Paging>({ for: address, stack: [] });
   if (paging.for !== address) setPaging({ for: address, stack: [] });
-  const cursor = paging.for === address ? paging.cursor : undefined;
-  const stack = paging.for === address ? paging.stack : [];
-  const pagedTo = paging.for === address ? paging.to : undefined;
+  const { cursor, stack, to: pagedTo } = pagingFor(paging, address);
   // The open rows belong to the page they were opened on, so another page or another filter starts with every row shut.
   const pageKey = `${cursor ?? ''}|${address}`;
   const [opened, setOpened] = useState<{ for: string; ids: Set<string> }>({ for: pageKey, ids: new Set() });

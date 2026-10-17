@@ -101,6 +101,10 @@ split Refresh button on the request log (one width at Off, at 5 s and paused und
 never moves), a late row on the request log (in the mock pass, after the view's shot, the story's late request landing
 below the first of the rows a page of 50 shows on the first auto reload at 5 s, every cell of it in the fill a top
 row's cells take under the same tint and in the box of the untinted row above it, recorded as skipped in the router
+pass), the fresh tint on both logs (in the mock pass, after the view's shot, the row the story lands a few seconds after
+the load, the request log's late request on a page of 50 and the routing log's late event, drawn on the first auto
+reload at 5 s with every cell in --accent-soft over the surface, apart from the row's resting fill and in its box,
+recorded as skipped in the router
 pass), the traffic cards (each Analytics check opens the tab it reads and returns to Traffic), the tab strip
 docked under the filter bar at the end of the Latency tab (the bar 49 px at rest and 83 px with a chip line, read on an
 address of its own), the Unit select and the legend's button in the top bar (inside the bar, clear of Log out and the

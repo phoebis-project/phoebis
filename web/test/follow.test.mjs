@@ -78,6 +78,18 @@ test("a merge keeps one row per identity, the polled row winning, in the order o
   assert.equal(rows[0].read, 'polled');
 });
 
+test('a merge keys a row by the identity it is given, so two rows of different ids under one identity merge to the polled one', () => {
+  // The routing log keys a decision by its request and sequence, which a row read again keeps whatever else it carries.
+  const identity = (r) => `${r.requestId}/${r.seq}`;
+  const shown = [
+    { at: at(3), id: 'shown_1', requestId: 'req_1', seq: 1 },
+    { at: at(2), id: 'shown_2', requestId: 'req_2', seq: 1 },
+  ];
+  const polled = [{ at: at(3), id: 'polled_1', requestId: 'req_1', seq: 1 }];
+  const rows = d.merged(shown, polled, identity, newestFirst);
+  assert.deepEqual(rows.map(byId), ['polled_1', 'shown_2']);
+});
+
 test('an auto reload poll reads on past a page bringing a row below known ones, which the merge sets in place', async () => {
   // The request ledger writes a row when its request finishes, so a long request lands between rows the list already
   // shows: row 10 of the 50 shown, on the first page.
@@ -135,6 +147,17 @@ test("under a watermark a page that reaches past the list's last row ends the po
   assert.deepEqual(polled.rows.map(byId), r.rows.slice(0, 27).map(byId), 'no row past row 26 lands');
 });
 
+test('an auto reload poll whose caller is gone after its first page reads no more and answers that page with no overrun', async () => {
+  // No row the list shows is on the route's first eight pages, so a poll that read on would answer an overrun.
+  const r = route(325);
+  const shown = r.rows.slice(300);
+  const alive = () => r.reads.length < 1;
+  const polled = await d.followPages(r.read, new Set(shown.map(byId)), byId, belowOf(shown), true, alive);
+  assert.deepEqual(r.reads, [undefined]);
+  assert.equal(polled.overrun, null);
+  assert.deepEqual(polled.rows.map(byId), r.rows.slice(0, 25).map(byId));
+});
+
 test('the overrun names auto reload', () => {
   assert.equal(d.FOLLOW_OVERRUN, 'More rows arrived than auto reload could fetch. Reload to read them.');
 });
@@ -167,7 +190,7 @@ async function settled() {
 /** The page's side of the hook: the paging state it holds over one address. */
 function Host({ input, seen }) {
   const [paging, setPaging] = useState({ for: 'q', stack: [] });
-  seen.push(useFollow({ ...input, paging, setPaging }));
+  seen.push({ ...useFollow({ ...input, paging, setPaging }), paging });
   return null;
 }
 
@@ -265,6 +288,21 @@ test('an older page pauses the poll and keeps the followed rows, and the first p
   act(() => clock.tick(5_000));
   assert.equal(f.polls().at(-1), ORIGIN + 15_000, 'and the poll ticks on');
   await settled();
+});
+
+test("the pager's state reads under its own address, and another address reads the first page with nothing before it", () => {
+  const paging = { for: 'q', cursor: 'c2', stack: [undefined, 'c1'], to: 5_000 };
+  assert.deepEqual(d.pagingFor(paging, 'q'), { cursor: 'c2', stack: [undefined, 'c1'], to: 5_000 });
+  assert.deepEqual(d.pagingFor(paging, 'other'), { cursor: undefined, stack: [], to: undefined });
+});
+
+test("Next from the first page keeps the first page's cursor on the stack, and Previous returns to the first page", () => {
+  frozen();
+  const f = follow();
+  act(() => f.last().goNext());
+  assert.deepEqual(d.pagingFor(f.last().paging, 'q'), { cursor: '26', stack: [undefined], to: undefined }, 'the stack holds the first page, whose cursor is undefined');
+  act(() => f.last().goPrevious());
+  assert.deepEqual(d.pagingFor(f.last().paging, 'q'), { cursor: undefined, stack: [], to: undefined }, 'Previous pops it and reads the first page');
 });
 
 test('an ended span polls nothing', () => {

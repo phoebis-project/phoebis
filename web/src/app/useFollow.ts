@@ -1,15 +1,7 @@
 import { type Dispatch, type SetStateAction, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApiError, quietly, reportRecovery } from '@/api/http';
 import { clock } from '@/lib/clock';
-import { type Followed, followPages, merged, type Overrun } from '@/lib/follow';
-
-/** A list's cursor walk and the pages before it, kept for the address (`for`) it was read under. */
-export interface Paging {
-  for: string;
-  cursor?: string;
-  stack: (string | undefined)[];
-  to?: number;
-}
+import { type Followed, followPages, merged, type Overrun, type Paging, pagingFor } from '@/lib/follow';
 
 /**
  * The auto reload poll both logs run: every `intervalMs` while the tab is visible, the page's `paused` is false and the
@@ -39,9 +31,7 @@ export function useFollow<R>(input: {
   stale: boolean;
 }): { error: string | null; fresh: Set<string>; goNext: () => void; goPrevious: () => void; nextCursor: string | null; overrun: Overrun | null; rows: R[]; setFollowed: Dispatch<SetStateAction<Followed<R> | null>> } {
   const { address, compare, error, identity, intervalMs, list, paging, paused, read, setPaging, stale } = input;
-  const cursor = paging.for === address ? paging.cursor : undefined;
-  const stack = paging.for === address ? paging.stack : [];
-  const pagedTo = paging.for === address ? paging.to : undefined;
+  const { cursor, stack, to: pagedTo } = pagingFor(paging, address);
   const [followed, setFollowed] = useState<Followed<R> | null>(null);
   // The tint marks what the last poll brought, and with auto reload off no poll follows to take it away.
   const [intervalSeen, setIntervalSeen] = useState(intervalMs);
@@ -70,13 +60,17 @@ export function useFollow<R>(input: {
   const lastAnswered = useRef<number | null>(null);
   // The rows under the reader would move on an older page, so its cursor holds the poll until the first page returns.
   const polling = intervalMs > 0 && !paused && cursor === undefined;
+  // A streak toasts once until the address or the interval changes, so the poll a pause's end arms runs on quiet.
+  // Declared above the poll's effect, since an interval change re-runs that effect with a read at once, which has to
+  // find the streak reset.
+  useEffect(() => {
+    streak.current.failing = false;
+  }, [address, intervalMs]);
   useEffect(() => {
     if (!polling) return;
     // An answer that lands once the poll has stopped would tint rows no later poll clears.
     const armed = { alive: true };
     const failures = streak.current;
-    // Each run of the poll toasts its own streak once, so a run armed while the route still fails says so again.
-    failures.failing = false;
     const poll = () => {
       const { address: polled, compare: order, identity: identify, mark: landedAfter, read: reader, shown: start } = latest.current;
       // Every page of one poll reads up to the same instant and from the same stamp, so its cursors walk one fixed
@@ -88,7 +82,7 @@ export function useFollow<R>(input: {
       // Before the list answers there is no row to stop at, so the poll reads the newest page alone and keeps the
       // cursor past it for the answer that stands in for a list read that failed.
       const pages: Promise<{ cursor?: string | null; landedThrough?: number; overrun: string | null; rows: R[] }> =
-        start === null ? page(undefined).then((p) => ({ cursor: p.nextCursor, landedThrough: p.landedThrough, overrun: null, rows: p.rows })) : followPages(page, new Set(start.map(identify)), identify, below, landedAfter === undefined);
+        start === null ? page(undefined).then((p) => ({ cursor: p.nextCursor, landedThrough: p.landedThrough, overrun: null, rows: p.rows })) : followPages(page, new Set(start.map(identify)), identify, below, landedAfter === undefined, () => armed.alive);
       pages.then(
         (polledPages) => {
           if (!armed.alive) return;
@@ -100,8 +94,9 @@ export function useFollow<R>(input: {
           const current = latest.current;
           if (current.address !== polled) return;
           if (current.shown === null) {
-            // A list read still on its way answers for itself. One that failed left nothing to merge into, so the
-            // newest page stands in for it untinted and clears its error.
+            // A list read in flight after a failure keeps `failed` until it answers, so a poll that lands meanwhile
+            // stands in for it untinted and clears its error, and the stand-in's rows stay drawn over the list's answer
+            // until a Refresh or another address.
             if (current.failed && polledPages.cursor !== undefined) setFollowed({ for: polled, fresh: new Set(), landedThrough: polledPages.landedThrough, overrun: null, rows: polledPages.rows, standIn: { cursor: polledPages.cursor, to } });
             return;
           }

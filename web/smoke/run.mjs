@@ -1282,12 +1282,13 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   });
 }
 {
-  // The projection rides the reset label after the reset, on one line, read at one frozen instant so the span to a
-  // weekly horizon is the one the page drew: the smoke's clock runs past the mock's anchor, so the phrase comes from the
-  // shared words and the mock's own windows rather than a literal span. The story's figures are the burns its windows
-  // carry: nightly's 5-hour window runs out before its reset, primary's reaches its reset with a share left, and
-  // primary's 7-day window reads its five hours.
-  const at = Date.now();
+  // The projection rides the reset label after the reset, on one line. The page is mounted on the smoke's origin, as
+  // `readsAgain` mounts, and every check reads at that one instant, so the spans the story's windows leave read the
+  // same however late the run reaches the block. The mock anchors its story as it loads, a moment after the origin, so
+  // the phrase comes from the shared words and the mock's own windows rather than a literal span. The story's figures
+  // are the burns its windows carry: nightly's 5-hour window runs out before its reset, primary's reaches its reset with
+  // a share left, and primary's 7-day window reads its five hours.
+  const at = CLOCK_ORIGIN;
   const q = await mount('/quota', { now: at });
   const accounts = (await api.listAccounts()).filter((a) => a.kind === 'oauth');
   const cellOf = (label, name) => {
@@ -1319,7 +1320,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   const weekly = wOf('primary', '7d');
   const story = { nightly5h: cellOf('nightly', '5h').text, primary5h: cellOf('primary', '5h').text, primary7d: cellOf('primary', '7d').text };
   // nightly's forecast reads 104% at its reset 3 h 41 min out on a burn of 1.9% an hour, so it reaches the whole window
-  // 2 h 6 min before the reset: 1 h 35 min after the story's start, and less as the clock runs on.
+  // 2 h 6 min before the reset: 1 h 35 min after the story's start, plus the moment the mock took to load.
   const nightly = wOf('nightly', '5h');
   const spentIn = nightly === null ? null : Date.parse(nightly.horizon) - ((nightly.projection - 1) / nightly.burn) * 3_600_000 - at;
   results.push({
@@ -1345,7 +1346,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   const legacyWeek = wOf('legacy', '7d');
   results.push({
     name: '/quota a window without a projection reads its reset label and its hover as before',
-    ok: legacyWeek !== null && legacyWeek.projection === null && /^resets in \d+d \d+h$/.test(bare.text) && !bare.title.includes('burn') && !bare.title.includes(', the sessions'),
+    ok: legacyWeek !== null && legacyWeek.projection === null && bare.text === `resets ${fmtRelative(legacyWeek.resetsAt, at)}` && !bare.title.includes('burn') && !bare.title.includes(', the sessions'),
     missing: [JSON.stringify(bare), JSON.stringify(legacyWeek)],
   });
   q.unmount();
@@ -10413,6 +10414,39 @@ m.unmount();
     page.unmount();
   }
   {
+    // The drawer pauses the poll and its close resumes it on the same address and interval, so a streak that toasted
+    // before the drawer opened runs on quiet after it closes. The drawer stays open past the notice's 6-second dwell, so
+    // a toast after the close is a second one for the same streak.
+    const page = await mount('/requests', { now: CLOCK_ORIGIN });
+    const toasts = () => [...page.container.querySelectorAll('.toast')].map((t) => t.textContent);
+    await chooseInterval(page, '5 s');
+    const outage = failCalls({ listRequests: '/admin/requests' }, 'ledger locked');
+    tick(5_000);
+    await page.settle();
+    const first = toasts();
+    requestRows(page)[0]?.click();
+    await page.settle();
+    const open = page.container.querySelector('.drawer') !== null;
+    tick(7_000);
+    await page.settle();
+    const under = toasts();
+    page.container.querySelector('button[aria-label="Close details"]')?.click();
+    await page.settle();
+    const polls = countCalls('listRequests');
+    tick(5_000);
+    await page.settle();
+    polls.restore();
+    const closed = toasts();
+    outage.restore();
+    page.unmount();
+    const notice = '/admin/requests failed: ledger locked';
+    results.push({
+      name: '/requests a drawer closed inside a failing auto reload streak toasts the streak no second time',
+      ok: open && polls.calls.length === 1 && JSON.stringify([first, under, closed]) === JSON.stringify([[notice], [], []]),
+      missing: [`drawer open ${open}, ${polls.calls.length} reads after the close`, JSON.stringify([first, under, closed])],
+    });
+  }
+  {
     // Ninety requests arrive after the page loaded: the list reads up to the instant of the ninety-first newest, the
     // interval menu left open holds the poll while the clock moves past the ninety to the pinned origin, and the first
     // poll after the menu closes finds more than its eight pages of ten read, every page from the list's stamp. Next
@@ -11675,12 +11709,13 @@ m.unmount();
     await chooseInterval(page, 'Off');
     held.release();
     await page.settle();
-    // The held page brings the new row, so the poll reads its second page, and no later poll starts a first one.
+    // The held page brings the new row, which would read on to a second page, but the run that sent it has ended, so
+    // the poll reads no further page and no later poll starts a first one.
     const after = { calls: held.calls.length, first: cell(trs(page)[0], 'time')?.firstChild?.textContent ?? '', pages: held.calls.map((c) => c[0]?.cursor === undefined), tinted: tinted(page), word: intervalWord(page) };
     held.restore();
     results.push({
-      name: '/routing-log a poll that answers after auto reload is turned off lands nothing',
-      ok: after.calls === 2 && JSON.stringify(after.pages) === JSON.stringify([true, false]) && after.first !== clockText(hour.rows[0].at) && after.tinted === 0 && after.word === 'Off',
+      name: '/routing-log a poll that answers after auto reload is turned off lands nothing and reads no further page',
+      ok: after.calls === 1 && JSON.stringify(after.pages) === JSON.stringify([true]) && after.first !== clockText(hour.rows[0].at) && after.tinted === 0 && after.word === 'Off',
       missing: [JSON.stringify(after)],
     });
     page.unmount();
