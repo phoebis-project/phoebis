@@ -318,6 +318,14 @@ impl Default for ClientFacts {
     }
 }
 
+/// One guardrail that matched the request, at its position in the key's list, `blocked` on the first enforcing one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuardrailMatch {
+    pub id: String,
+    pub position: u32,
+    pub blocked: bool,
+}
+
 /// What the relay's fork detection read of the request: for one whose messages continue another conversation
 /// of the key and generation at depth 2 or deeper, that conversation's root (its session id) and the matched
 /// depth. Both `None` for a session's own continuation, a match at depth 1, an auxiliary request and a refusal
@@ -374,6 +382,10 @@ pub struct RequestObserved {
     /// The key's `rotated_at` at authentication, `None` for a key never rotated: which rotation a retired
     /// presentation belongs to.
     pub rotation_at: Option<i64>,
+    /// The guardrail that blocked the request, `None` where none did or none was evaluated.
+    pub guardrail_id: Option<String>,
+    /// Every guardrail that matched, in evaluation order, empty for a refusal published before the step.
+    pub guardrails: Vec<GuardrailMatch>,
     pub received_at: i64,
 }
 
@@ -523,16 +535,21 @@ pub fn header_published(name: &str) -> bool {
 /// there.
 pub const USER_AGENT_MAX_BYTES: usize = 256;
 
+/// `value` cut to `USER_AGENT_MAX_BYTES` at a character boundary: the one rule the row and the live step apply.
+pub fn user_agent_cut(value: &str) -> &str {
+    let mut end = value.len().min(USER_AGENT_MAX_BYTES);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
 pub fn user_agent_of(headers: &[(String, String)]) -> Option<String> {
     let value = headers
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
         .map(|(_, v)| v)?;
-    let mut end = value.len().min(USER_AGENT_MAX_BYTES);
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    Some(value[..end].to_string())
+    Some(user_agent_cut(value).to_string())
 }
 
 #[cfg(test)]
@@ -644,5 +661,16 @@ mod tests {
         assert!(cut.len() <= USER_AGENT_MAX_BYTES);
         assert_eq!(cut, "a".repeat(255));
         assert!(user_agent_of(&[]).is_none());
+    }
+
+    #[test]
+    fn user_agent_cut_on_a_value_under_at_and_over_the_bound_and_on_a_multibyte_boundary() {
+        let under = "a".repeat(USER_AGENT_MAX_BYTES - 1);
+        let at = "a".repeat(USER_AGENT_MAX_BYTES);
+        assert_eq!(user_agent_cut(&under), under);
+        assert_eq!(user_agent_cut(&at), at);
+        assert_eq!(user_agent_cut(&format!("{at}b")), at);
+        // "é" is two bytes and starts at the last byte the bound keeps, so the cut lands before it.
+        assert_eq!(user_agent_cut(&format!("{under}é")), under);
     }
 }

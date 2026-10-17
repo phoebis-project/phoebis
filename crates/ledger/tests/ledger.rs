@@ -1103,6 +1103,8 @@ fn observed_event(id: &str) -> BusEvent {
         fork: phoebis_bus::Fork::default(),
         presented_retired: false,
         rotation_at: None,
+        guardrail_id: None,
+        guardrails: Vec::new(),
         received_at: 0,
     })
 }

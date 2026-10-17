@@ -7,7 +7,7 @@ use serde_json::Value;
 pub fn is_portable(body: &[u8]) -> bool {
     // Fails open: an unparseable body is refused by the upstream anyway, and a request the scanner cannot
     // read carries no account-bound reference it could prove.
-    crate::facts::tolerant_value(body).is_none_or(|root| portable_of(&root))
+    phoebis_guardrails::parse_body(body).is_none_or(|root| portable_of(&root))
 }
 
 pub(crate) fn portable_of(root: &Value) -> bool {

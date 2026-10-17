@@ -726,6 +726,8 @@ mod tests {
             fork: Fork::default(),
             presented_retired: false,
             rotation_at: None,
+            guardrail_id: None,
+            guardrails: Vec::new(),
             received_at: 1_000,
         })
     }

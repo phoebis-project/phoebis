@@ -229,6 +229,7 @@ with.
 | `client_not_allowed` | 403 | `permission_error` | `this key admits Claude Code clients only`, `the pool has no API-key member to serve a client that is not Claude Code` | Use Claude Code with this key, or ask the operator for a key whose pool admits your client ([clients](routing.md#clients)). |
 | `fast_credits_unavailable` | 429 | `rate_limit_error` | `no account in this pool can draw usage credits for fast mode` | Turn fast mode off, or wait for the credits. |
 | `fast_lane_exhausted` | 429 | `rate_limit_error` | `every account in this pool is at its fast limit` | Wait out the `Retry-After`, or turn fast mode off. |
+| `guardrail_blocked` | 400 | `invalid_request_error` | `blocked by guardrail "{name}"` | A guardrail the operator attached to your key matched the request, and the answer carries `x-should-retry: false`, so do not send it again unchanged. The Requests view names the guardrail. |
 | `invalid_body` | 400 | `invalid_request_error` | `the request body is not valid gzip`, `the request body nests deeper than the relay reads`, `the request body is not a valid Messages request` | Send a Messages request as Claude Code sends it. |
 | `invalid_limit` | 400 | `invalid_request_error` | `limit must be between 1 and 1000` | Ask `GET /v1/models` for 1 to 1000 rows. |
 | `invalid_model` | 400 | `invalid_request_error` | `the request body's model is not a usable model name` | Set a model the listing names ([the models listing](#the-models-listing)). |

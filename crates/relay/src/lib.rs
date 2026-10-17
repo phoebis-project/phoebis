@@ -101,6 +101,8 @@ pub enum RelayError {
     /// body unedited under the client's stamp and stripping the stamp are the two alternatives this rejects.
     #[error("request body carries a billing hash this build's rules do not reproduce ({kind})")]
     ClientDrift { kind: &'static str },
+    #[error("blocked by guardrail \"{name}\"")]
+    GuardrailBlocked { name: String },
     #[error("request body names a model the relay will not repeat")]
     InvalidModel,
     #[error("the router is not accepting requests right now")]

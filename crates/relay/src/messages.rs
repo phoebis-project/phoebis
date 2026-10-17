@@ -19,9 +19,10 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 use phoebis_bus::{
     AccountSelected, AttemptOutcome, AutoMode, Bus, ClientFacts, CooldownSet, DiagnosticsSource,
-    Event, Fork, Kind, Origin, Outcome, RequestComplete, RequestObserved, RequestShape,
-    ResponseChunk, ResponseFacts, ResponseHead as BusHead, Usage,
+    Event, Fork, GuardrailMatch, Kind, Origin, Outcome, RequestComplete, RequestObserved,
+    RequestShape, ResponseChunk, ResponseFacts, ResponseHead as BusHead, Usage,
 };
+use phoebis_guardrails::{evaluate_all, Evaluation, HeaderLookup, Lookup, RequestFacts};
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
     cohort_hold, resolve, AccountTicket, ChainFacts, ClientClass, CohortHold, ConversationLookup,
@@ -549,6 +550,8 @@ impl Trace {
         auto_mode: Option<AutoMode>,
         presented_retired: bool,
         rotation_at: Option<i64>,
+        guardrail_id: Option<String>,
+        guardrails: Vec<GuardrailMatch>,
     ) {
         if self.bus.is_none() {
             return;
@@ -590,6 +593,8 @@ impl Trace {
                 .unwrap_or_default(),
             presented_retired,
             rotation_at,
+            guardrail_id,
+            guardrails,
             received_at: self.received_at,
         }))
         .await;
@@ -715,6 +720,19 @@ fn client_facts(
     }
 }
 
+/// The live request's headers as the guardrail evaluator reads them. Every header is in hand, so a name answers
+/// its first value or absent and never unknown, and a value that is not visible ASCII reads as absent.
+struct HeaderMapLookup<'a>(&'a HeaderMap);
+
+impl HeaderLookup for HeaderMapLookup<'_> {
+    fn get(&self, name: &str) -> Lookup<'_> {
+        self.0
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map_or(Lookup::Absent, Lookup::Value)
+    }
+}
+
 /// The declared body length, when the caller sent one the relay can read; a chunked body has none.
 fn content_length(headers: &HeaderMap) -> Option<usize> {
     headers
@@ -773,10 +791,13 @@ fn outcome_of(outcome: &RelayOutcome) -> Outcome {
         // failure.
         Some("model_rejected") => Outcome::Rejected,
         // A key or policy refusal is conclusive whether it is caught at admission or at the reselect after an
-        // attempt, so the ledger row reads rejected rather than failed.
-        Some("auth_unknown") | Some("client_not_allowed") | Some("model_not_allowed") => {
-            Outcome::Rejected
-        }
+        // attempt, so the ledger row reads rejected rather than failed. A guardrail's block is conclusive too: it
+        // is answered at attempt 0, and naming it here keeps a later change to the attempt-count rule below from
+        // moving it.
+        Some("auth_unknown")
+        | Some("client_not_allowed")
+        | Some("guardrail_blocked")
+        | Some("model_not_allowed") => Outcome::Rejected,
         Some(_) if outcome.attempt == 0 => Outcome::Rejected,
         Some(_) => Outcome::Failed,
         None if outcome.upstream_status < 400 => Outcome::Succeeded,
@@ -999,6 +1020,8 @@ impl Relay {
                             None,
                             false,
                             None,
+                            None,
+                            Vec::new(),
                         )
                         .await;
                     return self
@@ -1026,6 +1049,8 @@ impl Relay {
                             None,
                             false,
                             None,
+                            None,
+                            Vec::new(),
                         )
                         .await;
                     return self
@@ -1054,6 +1079,8 @@ impl Relay {
                                 None,
                                 false,
                                 None,
+                                None,
+                                Vec::new(),
                             )
                             .await;
                         return self
@@ -1082,6 +1109,8 @@ impl Relay {
                                 None,
                                 false,
                                 None,
+                                None,
+                                Vec::new(),
                             )
                             .await;
                         return self
@@ -1284,7 +1313,9 @@ impl Relay {
         } else {
             raw
         };
-        let facts = BodyFacts::read(&raw);
+        // The tree lives to the guardrail step and no further: the body budget does not count it, and it is
+        // dropped before the observation waits on the bus.
+        let (facts, tree) = BodyFacts::read_with_tree(&raw);
         let auto_mode_server = snapshot.auto_mode_server(&key);
         let auto_mode = facts.shape.safeguards.then_some(if auto_mode_server {
             AutoMode::Server
@@ -1332,6 +1363,7 @@ impl Relay {
             }
         };
         if let Some(error) = refusal {
+            drop(tree);
             trace
                 .observed(
                     Some(&key),
@@ -1348,6 +1380,8 @@ impl Relay {
                     auto_mode,
                     presented == Presented::Retired,
                     key.rotated_at,
+                    None,
+                    Vec::new(),
                 )
                 .await;
             return self
@@ -1364,6 +1398,7 @@ impl Relay {
         let mut identity = match identify(&parts.headers, &raw) {
             Ok(identity) => identity,
             Err(error) => {
+                drop(tree);
                 trace
                     .observed(
                         Some(&key),
@@ -1380,6 +1415,8 @@ impl Relay {
                         auto_mode,
                         presented == Presented::Retired,
                         key.rotated_at,
+                        None,
+                        Vec::new(),
                     )
                     .await;
                 return self
@@ -1431,6 +1468,45 @@ impl Relay {
             identity.entrypoint.as_deref(),
             facts.entrypoint.as_deref(),
         );
+        // Before the facts are published and before any account is read: a block is a refusal the operator asked
+        // for, so no selection, pin or window sees the request. A probe is the router's own traffic and is never
+        // evaluated.
+        let evaluation = if trace.kind == Kind::Probe {
+            Evaluation::default()
+        } else {
+            let headers = HeaderMapLookup(&parts.headers);
+            let user_agent = parts
+                .headers
+                .get(header::USER_AGENT)
+                .and_then(|v| v.to_str().ok())
+                .map(phoebis_bus::user_agent_cut);
+            let agent_type = crate::identity::header_id(&parts.headers, "x-claude-code-agent-type");
+            let facts = RequestFacts {
+                kind: trace.kind.as_str(),
+                request_class: request_class.as_deref(),
+                agent_type: agent_type.as_deref(),
+                client: identity.client.as_str(),
+                model: &identity.canonical_model,
+                user_agent,
+                headers: &headers,
+                body: tree.as_ref(),
+            };
+            evaluate_all(
+                snapshot.guardrails_for(&key).iter().map(Arc::as_ref),
+                &facts,
+            )
+        };
+        drop(tree);
+        let guardrails: Vec<GuardrailMatch> = evaluation
+            .matched
+            .iter()
+            .map(|m| GuardrailMatch {
+                id: m.id.clone(),
+                position: m.position,
+                blocked: m.blocked,
+            })
+            .collect();
+        let guardrail_id = evaluation.blocked.map(|i| guardrails[i].id.clone());
         trace
             .observed(
                 Some(&key),
@@ -1455,8 +1531,33 @@ impl Relay {
                 auto_mode,
                 presented == Presented::Retired,
                 key.rotated_at,
+                guardrail_id.clone(),
+                guardrails,
             )
             .await;
+        if let Some(id) = guardrail_id {
+            let name = snapshot
+                .guardrails()
+                .name_of(&id)
+                .unwrap_or(&id)
+                .to_string();
+            tracing::debug!(
+                request_id = %trace.request_id,
+                key = %key.id,
+                guardrail = %id,
+                "a guardrail blocked the request"
+            );
+            return self
+                .refused(
+                    &trace,
+                    0,
+                    relay_failure(&RelayError::GuardrailBlocked { name }),
+                    Some(&key),
+                    Some(&identity),
+                    client_version.as_deref(),
+                )
+                .await;
+        }
         let client_class = identity.class;
         let candidates = match resolve(
             &snapshot,
@@ -3574,6 +3675,8 @@ impl Relay {
                 None,
                 presented_retired,
                 key.rotated_at,
+                None,
+                Vec::new(),
             )
             .await;
         self.refused(trace, 0, failure, Some(key), None, client_version)
@@ -4826,6 +4929,37 @@ mod tests {
             inflate_request(br#"{"model":"claude-sonnet-4-5"}"#, 1 << 20),
             Err(RelayError::BodyNotGzip)
         ));
+    }
+
+    /// A guardrail's refusal is conclusive, so the row reads rejected whatever attempt count the outcome carries.
+    #[test]
+    fn outcome_of_reads_a_guardrail_block_as_rejected_at_attempt_0_and_1() {
+        let outcome = |attempt: u8| RelayOutcome {
+            request_id: "r-1".into(),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            session_id: None,
+            canonical_model: None,
+            account_id: String::new(),
+            upstream_status: 0,
+            attempt,
+            written: false,
+            client_drift: None,
+            client_version: None,
+            error_code: Some("guardrail_blocked".into()),
+            pin_epoch: None,
+            received_at: 0,
+            head_at: None,
+            upstream_request_id: None,
+            cache_ttl_ms: None,
+            overage_in_use: None,
+            account_kind: None,
+            diagnostics: None,
+            obstacle: None,
+            held: None,
+        };
+        assert_eq!(outcome_of(&outcome(0)), Outcome::Rejected);
+        assert_eq!(outcome_of(&outcome(1)), Outcome::Rejected);
     }
 
     #[test]
