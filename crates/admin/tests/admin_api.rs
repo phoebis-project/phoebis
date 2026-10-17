@@ -1032,6 +1032,71 @@ async fn a_confirmed_pairing_polls_the_quota_at_once_and_a_refresh_records_its_r
 }
 
 #[tokio::test]
+async fn a_confirm_says_its_first_poll_is_in_flight_and_the_list_row_lists_the_windows_it_lands() {
+    use common::{get, json, login, NOW};
+    let h = common::admin_parts_full().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let asked = || {
+        h.up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+            .count()
+    };
+    // The endpoint holds its answer, so the confirm answers while the poll it started is still waiting on it.
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Gated(Box::new(fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: phoebis_profile::fixtures::control_response(
+                phoebis_profile::fixtures::ControlFixture::Usage,
+            )
+            .to_vec(),
+        })),
+    );
+    let confirmed = pair_business(&h.app, &cookie).await;
+    assert_eq!(confirmed.status(), 200);
+    let confirmed = json(confirmed).await;
+    assert_eq!(
+        (
+            confirmed["account_id"].as_str(),
+            confirmed["status"].as_str(),
+            confirmed["first_poll_in_flight"].as_bool(),
+        ),
+        (Some("business"), Some("confirmed"), Some(true)),
+        "{confirmed}"
+    );
+    let windows_listed = |listed: serde_json::Value| {
+        listed["accounts"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|a| a["id"] == "business"))
+            .and_then(|row| row["windows"].as_array().map(Vec::len))
+    };
+    let listed = json(get(&h.app, "/admin/accounts", Some(&cookie)).await).await;
+    assert_eq!(
+        windows_listed(listed),
+        Some(0),
+        "the row lists no window while the poll is in flight"
+    );
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while asked() < 1 {
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the confirm never polled the endpoint"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    h.up.release();
+    routed_sample(&h.router, "business", NOW).await;
+    let listed = json(get(&h.app, "/admin/accounts", Some(&cookie)).await).await;
+    assert!(
+        windows_listed(listed).is_some_and(|n| n > 0),
+        "the row lists the first reading's windows once the poll landed"
+    );
+}
+
+#[tokio::test]
 async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_fetch() {
     use common::{get, json, login, post, NOW};
     use std::sync::atomic::Ordering;
@@ -2673,7 +2738,7 @@ async fn a_start_with_new_confirms_into_a_ready_row_with_its_identity_plan_and_s
     assert_eq!(confirmed.status(), 200);
     assert_eq!(
         json(confirmed).await,
-        serde_json::json!({ "account_id": "fresh", "status": "confirmed" })
+        serde_json::json!({ "account_id": "fresh", "status": "confirmed", "first_poll_in_flight": true })
     );
     let acct = json(get(&app, "/admin/accounts/fresh", Some(&cookie)).await).await;
     assert_eq!(

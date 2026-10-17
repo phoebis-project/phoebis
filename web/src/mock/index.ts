@@ -3,9 +3,10 @@ import { AFFINITY_MODE_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, 
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, MemberEligibility,
-  ModelRule, ModelsState, Overview, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
+  ModelRule, ModelsState, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
+import { clock } from '@/lib/clock';
 import { foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
@@ -28,6 +29,11 @@ const MOCK_SEED = 4_211;
 
 // A short delay keeps loading states honest without making the mock feel slow.
 const latency = <T,>(value: T, ms = 120): Promise<T> => new Promise((resolve) => setTimeout(() => resolve(value), ms));
+
+/** How long a confirm's first usage poll takes to land, on the clock the pages read: the few seconds its answer names. */
+const FIRST_POLL_MS = 2_000;
+/** The windows a paired account's first poll reads: the shape the story gives primary's plan windows. */
+const FIRST_READING = ACCOUNTS.find((a) => a.id === 'primary')?.windows ?? [];
 
 // The routes' own wording, so a page draws the text the router would have sent.
 const ACCOUNT_TAKEN = 'an account with this id exists';
@@ -362,6 +368,8 @@ export class MockApi implements Api {
   private buriedKeys = new Map<string, number>([['desktop', 1]]);
   /** The incarnation each deleted pool id reached, which its next pool starts above. */
   private buriedPools = new Map<string, number>();
+  /** The instant each confirm started its account's first poll, held until a list read lands that reading. */
+  private firstPolls = new Map<string, number>();
   // The live desktop key was issued under the id its deleted earlier holder had, so it is that id's second; every other
   // key of the story is its id's first.
   private keys: ApiKey[] = KEYS.map((k) => ({ ...k, revision: stampToken((this.buriedKeys.get(k.id) ?? 0) + 1, k.updatedAt) }));
@@ -408,6 +416,21 @@ export class MockApi implements Api {
   private putAccount(next: Account): Account {
     this.accounts = this.accounts.map((a) => (a.id === next.id ? next : a));
     return next;
+  }
+
+  /**
+   * A list read at least `FIRST_POLL_MS` after a confirm lands that confirm's first reading on its row, where the row
+   * reads no window yet. Keyed on the clock rather than a count of reads, since the confirm's reload and the refresh
+   * the closing dialog resumes read the list at once on a live clock.
+   */
+  private landFirstPolls() {
+    const at = clock.now();
+    for (const [id, confirmedAt] of this.firstPolls) {
+      if (at - confirmedAt < FIRST_POLL_MS) continue;
+      this.firstPolls.delete(id);
+      const a = this.accounts.find((x) => x.id === id);
+      if (a && a.windows.length === 0 && a.fableWindow === null) this.putAccount({ ...a, windows: FIRST_READING.map((w) => ({ ...w })) });
+    }
   }
 
   /** The row the create route builds, and the row the confirm of a pairing started for a new account writes. */
@@ -498,7 +521,7 @@ export class MockApi implements Api {
     return latency({ email: existing?.email ?? 'operator+new@example.com', organization: 'Personal', state: submitted.state }, 500);
   }
 
-  async confirmPairing(pairingId: string) {
+  async confirmPairing(pairingId: string): Promise<PairingConfirmed> {
     const pairing = this.pairings.get(pairingId);
     // Deleted either way: the router fails the session on a refused confirm.
     this.pairings.delete(pairingId);
@@ -509,7 +532,8 @@ export class MockApi implements Api {
       // The confirm stores the tokens it exchanged, so the row carries both their expiries, as the router answers it.
       this.accounts = [...this.accounts, { ...row, credential: { ...row.credential, accessTokenExpiresAt: ahead(8 * HOUR), refreshTokenExpiresAt: ahead(30 * DAY) } }];
     }
-    return latency(undefined, 250);
+    if (pairing !== undefined) this.firstPolls.set(pairing.accountId, clock.now());
+    return latency({ accountId: pairing?.accountId ?? '', firstPollInFlight: true, status: 'confirmed' }, 250);
   }
 
   async createAccount(input: AccountInput): Promise<Account> {
@@ -783,6 +807,7 @@ export class MockApi implements Api {
   }
 
   listAccounts() {
+    this.landFirstPolls();
     return latency(emptyStore() ? [] : this.accounts.map((a) => this.withPool(a)));
   }
 

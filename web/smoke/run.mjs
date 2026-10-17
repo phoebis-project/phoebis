@@ -2439,6 +2439,108 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
       if (e?.status !== 404) throw e;
     });
   }
+  {
+    // A confirmed pairing's first reading: the Usage card reads the hint until the account's windows land, which the
+    // mock answers on a list read 2 s after the confirm on its clock. On a frozen mount of its own, so the auto reload,
+    // the re-read under Off and the mock's landing move on `tick` alone.
+    const first = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+    const HINT = 'The first quota reading is in flight';
+    const fieldIn = (dlg, label) => [...(dlg?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input') ?? null;
+    const type = async (input, value) => {
+      if (!input) return;
+      setter.call(input, value);
+      input.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await first.settle(120);
+    };
+    /** Pairs a new account through Add account, answering whether the page landed on the detail of `id`. */
+    const pairNew = async (label, id) => {
+      [...first.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account')?.click();
+      await first.settle(300);
+      const add = openDialogs(first).pop() ?? null;
+      await type(fieldIn(add, 'Label'), label);
+      buttonIn(add, 'Start pairing')?.click();
+      await first.settle(500);
+      const dlg = openDialogs(first).pop() ?? null;
+      const state = new URLSearchParams((dlg?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
+      await type(dlg?.querySelector('input[placeholder^="http://localhost"]'), `http://localhost:54545/callback?code=abc123&state=${state}`);
+      buttonIn(dlg, 'Submit')?.click();
+      const submitted = await until(first, () => buttonIn(dlg, 'Confirm')?.disabled === false);
+      buttonIn(dlg, 'Confirm')?.click();
+      const landed = await until(first, () => openDialogs(first).length === 0 && first.location().pathname === `/accounts/${id}` && (first.container.querySelector('.detail__title')?.textContent ?? '').includes(label));
+      // The confirm's reload lands before a check counts the reads after it.
+      await first.settle(300);
+      return submitted && landed;
+    };
+    /** Whether the open detail's Usage card reads the hint, and whether it draws the window bars. */
+    const usage = () => {
+      const card = [...first.container.querySelectorAll('.accounts__detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage');
+      return { hint: (card?.textContent ?? '').includes(HINT), windows: Boolean(card?.querySelector('.wbars')) };
+    };
+    /** The list reads each `tick(2_000)` brings, over `steps` steps, `before(step)` run ahead of each. */
+    const readsPerStep = async (steps, before = async () => {}) => {
+      const spy = countCalls('listAccounts');
+      const counts = [];
+      for (let step = 0; step < steps; step += 1) {
+        await before(step);
+        const from = spy.calls.length;
+        tick(2_000);
+        await first.settle(200);
+        counts.push(spy.calls.length - from);
+      }
+      spy.restore();
+      return counts;
+    };
+
+    const pairedLive = await pairNew('Fresh desk', 'fresh-desk');
+    const atConfirm = usage();
+    tick(5_000);
+    await first.settle(300);
+    const pastInterval = usage();
+    results.push({
+      name: "/accounts a confirmed pairing's Usage card reads the first reading hint until the auto reload past the interval lands the windows",
+      ok: pairedLive && atConfirm.hint && !atConfirm.windows && pastInterval.windows && !pastInterval.hint,
+      missing: [`paired ${pairedLive}`, `at the confirm ${JSON.stringify(atConfirm)}`, `past the interval ${JSON.stringify(pastInterval)}`],
+    });
+
+    await chooseInterval(first, 'Off');
+    const pairedOff = await pairNew('Fresh shelf', 'fresh-shelf');
+    const offConfirm = usage();
+    const offReads = await readsPerStep(3);
+    const offLanded = usage();
+    results.push({
+      name: '/accounts with auto reload off a confirmed pairing reads the list again 2 s on, where its windows land, and then reads no more',
+      ok: pairedOff && intervalWord(first) === 'Off' && offConfirm.hint && JSON.stringify(offReads) === JSON.stringify([1, 0, 0]) && offLanded.windows && !offLanded.hint,
+      missing: [`paired ${pairedOff}`, `interval ${intervalWord(first)}`, `at the confirm ${JSON.stringify(offConfirm)}`, `reads per 2 s ${JSON.stringify(offReads)}`, `after ${JSON.stringify(offLanded)}`],
+    });
+
+    // A reading that has not landed after 30 s: the re-read stops there, and skips the read due while a dialog is open.
+    const { listAccounts } = api;
+    api.listAccounts = async (...args) => (await listAccounts.apply(api, args)).map((a) => (a.id === 'fresh-attic' ? { ...a, fableWindow: null, windows: [] } : a));
+    const pairedHeld = await pairNew('Fresh attic', 'fresh-attic');
+    const heldReads = await readsPerStep(16, async (step) => {
+      if (step === 2) {
+        [...first.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account')?.click();
+        await first.settle(300);
+      }
+      if (step === 3) {
+        buttonIn(openDialogs(first).pop(), 'Cancel')?.click();
+        await first.settle(200);
+      }
+    });
+    const heldAfter = usage();
+    api.listAccounts = listAccounts;
+    results.push({
+      name: '/accounts with auto reload off the re-read after a pairing runs every 2 s for 30 s and skips the read due while a dialog is open',
+      ok: pairedHeld && JSON.stringify(heldReads) === JSON.stringify([1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]) && heldAfter.hint && !heldAfter.windows,
+      missing: [`paired ${pairedHeld}`, `reads per 2 s ${JSON.stringify(heldReads)}`, `after ${JSON.stringify(heldAfter)}`],
+    });
+    first.unmount();
+    for (const id of ['fresh-desk', 'fresh-shelf', 'fresh-attic']) {
+      await api.deleteAccount(id).catch((e) => {
+        if (e?.status !== 404) throw e;
+      });
+    }
+  }
 
   // The discard question: an unchanged dialog closes on an outside click, a typed label asks first.
   dlg = await openAdd();

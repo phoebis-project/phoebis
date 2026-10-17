@@ -217,14 +217,15 @@ the six status labels, its chip reading such as "status: Paused"), the Sort sele
 or Status, and "Add account", and at the right edge the split Refresh button and the count of the rows the list shows,
 `{n} accounts`. The search, the sort and the status live in the page's address, so a link or a reload keeps them, and
 they stay while an account opens. Auto reload starts at 5 s and waits while a dialog or an editor of the detail is open,
-or while its save runs. The six labels, with the state each stands for, are Cooling down (`cooldown`), Needs funding
-(`funding_required`), Paused (`paused`), Needs re-auth (`reauth_required`), Ready (`ready`) and Not paired (`unpaired`).
-A row reads the label with a badge that names the plan by its tier ("Max 20x", "Max 5x", "Pro" or "Team", none on an
-API-key row), the status badge with the speed chip beside it on a slowed account, the email, `pool {id}` or "no pool",
-"Overage" while requests bill as extra usage and "extra usage on" while it is enabled and unused. The pane reads "The
-router holds no account yet" with "Add account" before the first account, "No accounts match" with "Clear the search or
-the status filter." under a filter, and "No account to show" until a row is selected. What the states mean and how an
-account moves between them is on [Pairing an account](pairing.md).
+or while its save runs, and while it is off the page reads the list every 2 s after a pairing's confirm, with the same
+wait, until the account's first reading lands or 30 s pass. The six labels, with the state each stands for, are Cooling
+down (`cooldown`), Needs funding (`funding_required`), Paused (`paused`), Needs re-auth (`reauth_required`), Ready
+(`ready`) and Not paired (`unpaired`). A row reads the label with a badge that names the plan by its tier ("Max 20x",
+"Max 5x", "Pro" or "Team", none on an API-key row), the status badge with the speed chip beside it on a slowed account,
+the email, `pool {id}` or "no pool", "Overage" while requests bill as extra usage and "extra usage on" while it is
+enabled and unused. The pane reads "The router holds no account yet" with "Add account" before the first account, "No
+accounts match" with "Clear the search or the status filter." under a filter, and "No account to show" until a row is
+selected. What the states mean and how an account moves between them is on [Pairing an account](pairing.md).
 
 The detail opens on the account's label with "Edit label", its email and its badges: the status, `quarantined` while
 the last refresh's outcome is uncertain, `cooldown ends {ago}`, "Overage active" and "Routing paused", with `Overage
@@ -251,15 +252,16 @@ the editor. The card closes on "Renewal date is not reported by the provider." F
 windows as the Quota view does, the speed chip beside the 5-hour bar's label on a slowed account, "Extra usage this
 month" with its spend meter and an "in use" badge, the reason the provider gave for disabling extra usage, and a "Fast
 mode" line with the share of the fast lane's input and output buckets used and a chip while the fast lane cools, or
-reads "This account does not report quota windows." "7-day trend" ("Utilization of each window, sampled every 5
-minutes") draws the 5-hour, 7-day and Fable 7-day windows of a subscription account, or "No samples yet" with "Quota
-samples appear after the first successful quota fetch." "Cooling down" lists Scope ("Whole account", "Fast mode", "Fast
-mode credits" or the model), Reason and Until with a Clear button per row, or "Nothing cooling down", and Clear asks
-"Clear cooldown": "The account becomes eligible immediately. If the account is still rate limited, the next request
-re-enters cooldown." "Pool" links the pool with `priority {n}`, or reads "Not a member of a pool." "Credential" lists
-Access token, Refresh token, Last refresh and Last error for a subscription account, and Secret ("stored encrypted at
-rest") and Last error for an API-key account. "Requests" reads Last 24h, Last 7d and Lifetime, with a "Routing log" link
-that opens the log on the account's rows over the last hour.
+reads "This account does not report quota windows.", or "The first quota reading is in flight" from a pairing's confirm
+until the account's first reading lands. "7-day trend" ("Utilization of each window, sampled every 5 minutes") draws the
+5-hour, 7-day and Fable 7-day windows of a subscription account, or "No samples yet" with "Quota samples appear after
+the first successful quota fetch." "Cooling down" lists Scope ("Whole account", "Fast mode", "Fast mode credits" or the
+model), Reason and Until with a Clear button per row, or "Nothing cooling down", and Clear asks "Clear cooldown": "The
+account becomes eligible immediately. If the account is still rate limited, the next request re-enters cooldown." "Pool"
+links the pool with `priority {n}`, or reads "Not a member of a pool." "Credential" lists Access token, Refresh token,
+Last refresh and Last error for a subscription account, and Secret ("stored encrypted at rest") and Last error for an
+API-key account. "Requests" reads Last 24h, Last 7d and Lifetime, with a "Routing log" link that opens the log on the
+account's rows over the last hour.
 
 "Catalog" opens `Catalog of {label}`: `As of {ago}` with "Refresh", and the models as Model, Name, Released, Input
 tokens, Output tokens and Effort levels, or "The upstream lists no models."

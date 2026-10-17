@@ -128,9 +128,11 @@ ending account its end), and the Fit and Pick tables' rows striped as the candid
 out's word at the card's muted contrast or better on the open row's tint in both themes with an idle way out among them,
 the strip's station count the record's steps and placeholders at both viewports, and in the mock pass the fresh
 placement's Pick station opened by Enter and by Space with the focus inside its popover and closed by Escape with the
-focus back on the station), the subscription end editor, the catalog popup and its columns (Model and Name the fills),
-the Keys table's columns (Name, Models and Status the fills) and the badges of its fill cells (each ending inside its
-cell and cutting its own label with the ellipsis), the Models rules table's columns (Pattern the fill), the key dialog's
+focus back on the station), the subscription end editor, the hint a confirmed pairing draws in the Usage card while the
+first reading is in flight (in the mock pass, after the view's shot, against the note of the story's API-key account
+annex in type, ink, line height, margin and place), the catalog popup and its columns (Model and Name the fills), the
+Keys table's columns (Name, Models and Status the fills) and the badges of its fill cells (each ending inside its cell
+and cutting its own label with the ellipsis), the Models rules table's columns (Pattern the fill), the key dialog's
 Access selects, the Keys bar's pool chip against its status chip (26 px, on an address that holds both), the Sessions
 lead and its disclosure at 1280 by 800 and 1440 by 900 (the head under the bar's bottom, its height closed and open, the
 button on the sentence's last line or flush left on the next, the opened paragraph 6 px under the lead, Cost reference

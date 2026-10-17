@@ -2368,6 +2368,11 @@ test('settings, pricing, pairing, quota, and usage decode', () => {
   assert.ok(isIso(catalog.fetchedAt));
 });
 
+test("a pairing's confirm decodes the account, the status and whether its first poll is in flight", () => {
+  assert.deepEqual(d.decodePairingConfirmed({ account_id: 'business', first_poll_in_flight: true, status: 'confirmed' }), { accountId: 'business', firstPollInFlight: true, status: 'confirmed' });
+  assert.equal(d.decodePairingConfirmed({ account_id: 'business', first_poll_in_flight: false, status: 'confirmed' }).firstPollInFlight, false, 'the member is read, never assumed');
+});
+
 test('a session decodes its burn unit, and a pin the cost model cannot price reads no burn', () => {
   const rows = fixture('sessions').sessions;
   const wire = rows.find((s) => s.session_id === 's-fixture');

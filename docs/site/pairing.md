@@ -44,7 +44,9 @@ the session's state.
 ### Confirm
 
 The dialog shows the email and organization the upstream answered. Check that they are the ones you meant to pair, then
-choose Confirm to store the refresh token for this account.
+choose Confirm to store the refresh token for this account. The Accounts view shows the account's first reading once
+the poll lands, a few seconds after the confirm, and its Usage card reads "The first quota reading is in flight" until
+then.
 
 Both of the console's starts, for a new account and for an existing one, are `claude_ai` logins, which authorize at
 `claude.com`. A `console` login, which authorizes at `platform.claude.com`, is available through the API. A pairing
@@ -109,12 +111,13 @@ curl -sS -X POST http://127.0.0.1:8081/admin/oauth/sessions/$ID/confirm \
   -H "authorization: Bearer $PHOEBIS_ADMIN_SECRET"
 ```
 
-The answer is `200` with the `account_id` and `status` `confirmed`. The credential is committed and the account's state
-set to `ready`, and a session started with `new` creates the row `ready` with its identity, credential and profile in
-one write. The confirm reads the usage endpoint right after answering, so the windows show within seconds. An account
-stays bound to the upstream account it was first paired to, so moving it elsewhere means deleting it: confirming another
-upstream account answers `409 this slot is already paired to a different upstream account`, and an upstream account
-already paired to another of the router's accounts `409 that upstream account is already paired to another slot`.
+The answer is `200` with the `account_id`, `status` `confirmed` and `first_poll_in_flight` `true`. The credential is
+committed and the account's state set to `ready`, and a session started with `new` creates the row `ready` with its
+identity, credential and profile in one write. The confirm reads the usage endpoint right after answering, so the
+windows show within seconds. An account stays bound to the upstream account it was first paired to, so moving it
+elsewhere means deleting it: confirming another upstream account answers
+`409 this slot is already paired to a different upstream account`, and an upstream account already paired to another of
+the router's accounts `409 that upstream account is already paired to another slot`.
 
 `GET /admin/accounts` lists the accounts with their `kind`, `state` and the rest of each row, and
 `GET /admin/accounts/{id}/usage` answers the poll's latest snapshot of the account's usage windows and the poll's

@@ -162,6 +162,14 @@ export interface PairingPreview {
   state: string;
 }
 
+/** The confirm's answer: the paired account, and whether the confirm started that account's first usage poll, so its
+ *  windows land a few seconds after the answer. */
+export interface PairingConfirmed {
+  accountId: string;
+  firstPollInFlight: boolean;
+  status: string;
+}
+
 export interface CatalogModel {
   createdAt: string;
   displayName: string;

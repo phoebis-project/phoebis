@@ -1,6 +1,6 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from './client';
 import * as d from './decode';
-import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, PairingInput, PairingPreview, PairingStart, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
+import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, PairingConfirmed, PairingInput, PairingPreview, PairingStart, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
 
 export class ApiError extends Error {
   code: string | null;
@@ -152,7 +152,7 @@ export class HttpApi implements Api {
     const r = await call<{ pending: { email: string; organization_name: string | null } }>('POST', `/admin/oauth/sessions/${enc(pairingId)}/callback`, input);
     return { email: r.pending.email, organization: r.pending.organization_name ?? 'Personal', state: pairingId };
   };
-  confirmPairing = (pairingId: string) => call<void>('POST', `/admin/oauth/sessions/${enc(pairingId)}/confirm`);
+  confirmPairing = async (pairingId: string): Promise<PairingConfirmed> => d.decodePairingConfirmed(await call('POST', `/admin/oauth/sessions/${enc(pairingId)}/confirm`));
   createAccount = async (input: AccountInput): Promise<Account> => d.decodeAccount(await call('POST', '/admin/accounts', { id: input.id, kind: input.kind, label: input.label, secret: input.secret }, false, DIALOG_WRITE));
   createKey = async (input: CreateKeyInput): Promise<CreatedApiKey> => {
     const expires_at = input.expiresInDays === null ? null : Date.now() + input.expiresInDays * 86_400_000;

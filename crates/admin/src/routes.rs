@@ -902,6 +902,9 @@ pub(crate) struct Confirmed {
     /// `confirmed`.
     #[schema(example = "confirmed")]
     pub status: String,
+    /// The first usage poll runs in the background, so the account's windows land a few seconds after this
+    /// answer.
+    pub first_poll_in_flight: bool,
 }
 
 /// Start a pairing session.
@@ -1438,6 +1441,7 @@ async fn pairing_confirm(
             Json(Confirmed {
                 account_id: row.id.clone(),
                 status: "confirmed".into(),
+                first_poll_in_flight: true,
             })
             .into_response()
         }

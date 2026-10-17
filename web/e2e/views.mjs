@@ -6723,6 +6723,56 @@ async function addAccountDialog(theme) {
 }
 
 /**
+ * The line a confirmed pairing draws in the Usage card while the account's first reading is in flight fills the slot
+ * of the note an account without windows reads, so it takes that note's type, ink and place: the mock pass pairs a new
+ * account through Add account and reads the hint against the note on the story's API-key account annex. The mock lands
+ * the reading on a list read 2 s after the confirm on the page's clock, which the reads here stay short of. The pairing
+ * adds a row, so this runs after the view's shot.
+ */
+async function firstReadingHint(theme) {
+  const say = (what) => failures.push(`${theme} /accounts first reading: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  const line = (text) =>
+    page.evaluate((wanted) => {
+      const card = [...document.querySelectorAll('.accounts__detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage');
+      const p = [...(card?.querySelectorAll('p') ?? [])].find((el) => el.textContent?.trim() === wanted);
+      if (!card || !p) return null;
+      const s = getComputedStyle(p);
+      const box = p.getBoundingClientRect();
+      const frame = card.getBoundingClientRect();
+      return { color: s.color, font: `${s.fontFamily} ${s.fontSize} ${s.fontWeight}`, left: Math.round(box.left - frame.left), lineHeight: s.lineHeight, margin: s.margin, top: Math.round(box.top - frame.top) };
+    }, text);
+  await page.clock.setSystemTime(clockOrigin);
+  await page.goto(`${base}/accounts/annex`);
+  await booted();
+  await advance(LOAD_MS);
+  const note = await line('This account does not report quota windows.');
+  try {
+    await page.getByRole('button', { name: 'Add account', exact: true }).click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await dialog.locator('.field', { has: page.locator('.field__label', { hasText: /^Label$/ }) }).locator('input').fill('Fresh desk');
+    await settle();
+    await dialog.getByRole('button', { name: 'Start pairing', exact: true }).click();
+    await advance(1_000);
+    const authorize = (await dialog.locator('.pairing__url').textContent()) ?? '';
+    const state = new URLSearchParams(authorize.split('?')[1] ?? '').get('state');
+    await dialog.locator('input[placeholder^="http://localhost"]').fill(`http://localhost:54545/callback?code=abc123&state=${state}`);
+    await dialog.getByRole('button', { name: 'Submit', exact: true }).click();
+    await advance(1_000);
+    await dialog.getByRole('button', { name: 'Confirm', exact: true }).click();
+    await advance(600);
+    await dialog.waitFor({ state: 'detached', timeout: 5_000 });
+  } catch (error) {
+    say(`the pairing never confirmed (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  const hint = await line('The first quota reading is in flight');
+  measurements.push(`${theme} /accounts first reading ${JSON.stringify({ hint, note })}`);
+  for (const finding of compare(hint, note, ['color', 'font', 'left', 'lineHeight', 'margin', 'top'], 'the first reading hint against the note of an account without windows')) say(finding);
+  await atRest();
+}
+
+/**
  * The account page's catalog popup: the Effort levels column closes the table, its heading the box of the Output
  * tokens heading beside it and its cells the type of the Name cells, the other plain text column; no row's levels
  * wrap and the table fits the dialog without scrolling. The mock pass writes the open popup's shot beside the
@@ -8416,6 +8466,7 @@ try {
       if (view.path === '/settings') await copyFallback(theme);
       // The pool chip's measure and the bar's load their addresses themselves and leave the bare view.
       if (view.path === '/keys') await keysPoolSelect(theme);
+      if (view.path === '/accounts' && mock) await firstReadingHint(theme);
       if (view.path === '/accounts' && mock) await slowedUsageBar(theme);
       if (CARD_VIEWS.includes(view.path)) await barRow(theme, view.path);
     }
