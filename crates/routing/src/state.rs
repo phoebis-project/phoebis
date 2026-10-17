@@ -2366,7 +2366,7 @@ impl RoutingState {
                 // The pin's last prompt selects the set, so a long-prompt pin ranks at the rates it burns, and a
                 // pin never renewed with usage carries zero and prices at the standard rates.
                 let burn = rates
-                    .price_pin(unit, p, &p.burn_fast)
+                    .price_pin(unit, p)
                     .map(|priced| burn_decayed(priced, p.burn_at, now, window_ms));
                 (p.clone(), burn)
             })
@@ -3295,8 +3295,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pins_fast_usage_moves_with_a_rekey_leaves_with_the_pin_and_never_reaches_a_fresh_pin_under_its_key(
-    ) {
+    fn a_pins_fast_usage_moves_with_a_rekey_and_leaves_with_the_pin() {
         let (pin, _) = burning("s", 1.0);
         let mut state = RoutingState::from_load(RoutingLoad {
             pins: vec![pin.clone()],
@@ -3317,16 +3316,6 @@ mod tests {
             vec![(dated.clone(), fast)],
             "the rekey carries the fast usage to the dated id"
         );
-        state.put_pin(PinRow {
-            epoch: 2,
-            ..pin.clone()
-        });
-        assert_eq!(
-            state.fast_burn(&dated),
-            PinBurn::default(),
-            "a fresh pin under the key starts without the replaced pin's fast usage"
-        );
-        state.set_fast_burn(&dated, fast);
         state.remove_pin(&dated);
         assert!(
             state.fast_burns().is_empty(),

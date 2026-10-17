@@ -1320,7 +1320,7 @@ function supportedRule(r: RequestLog, from: string): PinMigrationReason | null {
   if (!pool || !head || r.kind === 'count_tokens' || pinned?.accountId !== from || !serves(from, r.canonicalModel)) return null;
   const at = Date.parse(head.startedAt);
   const fast = fastTurn(r.keyId, r.model, r.kind);
-  const registryKind = (id: string) => ACCOUNTS.find((a) => a.id === id)?.kind;
+  const registryKind = (id: string) => accountById.get(id)?.kind;
   const inOverage = (id: string) => id === 'nightly' && at >= OVERAGE_FROM;
   const spent = (windows: AttemptWindow[]) => spentWindows(windows).length > 0;
   const known = head.windows.some((w) => w.id === '5h' && w.utilization !== null) && head.windows.some((w) => w.id === '7d' && w.utilization !== null);

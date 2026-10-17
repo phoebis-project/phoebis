@@ -5116,6 +5116,25 @@ async fn a_credits_reading_with_room_lifts_the_spent_window_rows_and_leaves_a_mo
             ("model:claude-fable-5-1".to_string(), "recovered"),
         ]
     );
+    // Set after the last reading and read before the next, so the row's window alone decides the lift.
+    now.store(4_000, Ordering::SeqCst);
+    handle
+        .report(cooled(
+            "a",
+            "account",
+            4_000 + HOUR,
+            "rate_limit",
+            "retry_after",
+        ))
+        .await;
+    handle
+        .report(credits_at(true, None, Some(20.0), 5_000))
+        .await;
+    assert_eq!(
+        scopes().await,
+        ["account", "model:claude-opus-5"],
+        "a reading with room keeps an account rate limit that names no plan window"
+    );
 }
 
 #[tokio::test]
@@ -5915,7 +5934,7 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
         "the thousand fast tokens land in the pin's fast usage, unweighed: {fast:?}"
     );
     assert_eq!((s1.burn_at, s1.last_input_tokens), (Some(62_000), 1_000));
-    let priced = rates.price_pin(BurnUnit::Usd, s1, &fast).unwrap();
+    let priced = rates.price_pin(BurnUnit::Usd, s1).unwrap();
     assert!(
         (priced - (decayed * 0.25 + 1_000.0 / window * 0.5)).abs() < 1e-9,
         "priced, the row's tokens at the quarter and the fast tokens at the half: {priced}"
@@ -6030,7 +6049,7 @@ async fn a_fast_renewal_over_the_threshold_lands_in_the_fast_usage_and_prices_at
         "the fast tokens land in the fast usage, unweighed: {fast:?}"
     );
     assert_eq!(s1.last_input_tokens, 1_001);
-    let priced = rates.price_pin(BurnUnit::Usd, &s1, &fast).unwrap();
+    let priced = rates.price_pin(BurnUnit::Usd, &s1).unwrap();
     assert!(
         (priced - 1_001.0 * 0.5 / window).abs() < 1e-9,
         "priced through the fast table, the burn reads the fast dollars whatever the pin's last prompt: {priced}"
@@ -6058,7 +6077,7 @@ async fn a_fast_renewal_over_the_threshold_on_a_row_without_fast_cells_prices_at
         (fast.input - 1_001.0 / window).abs() < 1e-9,
         "the fast tokens land in the fast usage: {fast:?}"
     );
-    let priced = rates.price_pin(BurnUnit::Usd, &s1, &fast).unwrap();
+    let priced = rates.price_pin(BurnUnit::Usd, &s1).unwrap();
     assert!(
         (priced - 1_001.0 / window).abs() < 1e-9,
         "priced at the long-context rates the pin's last prompt selects: {priced}"
@@ -6131,8 +6150,8 @@ async fn pin_and_fast_usage(handle: &RouterHandle) -> (PinRow, PinBurn) {
 /// One second of session "s1"'s dollar burn as the readers price it: the pin's row at the set its last prompt
 /// selects plus its fast usage through the fast table.
 async fn dollar_burn(handle: &RouterHandle, rates: &BurnRates) -> f64 {
-    let (pin, fast) = pin_and_fast_usage(handle).await;
-    rates.price_pin(BurnUnit::Usd, &pin, &fast).unwrap()
+    let (pin, _) = pin_and_fast_usage(handle).await;
+    rates.price_pin(BurnUnit::Usd, &pin).unwrap()
 }
 
 /// `tokens` folded at `now` onto an average last folded at `at`, over the pool's 600 s burn average, as

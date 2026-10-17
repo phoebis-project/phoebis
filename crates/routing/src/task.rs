@@ -411,14 +411,14 @@ impl Default for BurnRates {
 }
 
 impl BurnRates {
-    /// One second of the pin's burn in `unit`, `fast` being the pin's fast usage as the row's `burn_fast` holds
-    /// it. Under `Usd` the row's plain copy at the set the pin's last prompt selects plus the fast usage through
-    /// the fast table. On a row with fast cells that table carries them whatever the prompt, so a prompt that
-    /// crosses the threshold reprices the ordinary usage alone, and on a row without them it carries the row's own
-    /// sets, so the fast usage reprices with the row, as the ledger prices a fast answer there. Under `WindowShare`
-    /// the banded copy alone, through the table of the pin's regime: fast usage draws usage credits, never the plan's
-    /// window. `None` where a type the pin burns has no rate.
-    pub fn price_pin(&self, unit: BurnUnit, pin: &PinRow, fast: &PinBurn) -> Option<f64> {
+    /// One second of the pin's burn in `unit`, the fast usage the row's own `burn_fast`. Under `Usd` the row's plain
+    /// copy at the set the pin's last prompt selects plus the fast usage through the fast table. On a row with fast
+    /// cells that table carries them whatever the prompt, so a prompt that crosses the threshold reprices the
+    /// ordinary usage alone, and on a row without them it carries the row's own sets, so the fast usage reprices with
+    /// the row, as the ledger prices a fast answer there. Under `WindowShare` the banded copy alone, through the table
+    /// of the pin's regime: fast usage draws usage credits, never the plan's window. `None` where a type the pin burns
+    /// has no rate.
+    pub fn price_pin(&self, unit: BurnUnit, pin: &PinRow) -> Option<f64> {
         let own = unit.table(self, entrypoint_of(pin)).price_burn(
             &pin.model,
             &unit.read(pin),
@@ -428,7 +428,7 @@ impl BurnRates {
             BurnUnit::Usd => Some(
                 own + self
                     .fast
-                    .price_burn(&pin.model, fast, pin.last_input_tokens)?,
+                    .price_burn(&pin.model, &pin.burn_fast, pin.last_input_tokens)?,
             ),
             BurnUnit::WindowShare => Some(own),
         }
@@ -1377,9 +1377,9 @@ impl RouterHandle {
         self.ask(|reply| Command::Projections { pool_id, reply })
             .await
     }
-    /// Each pin's fast usage by key, the copy `BurnRates::price_pin` sums beside the row under `BurnUnit::Usd`.
-    /// A pin without fast usage has no entry. The fast-mode tests probe the copy through it and no production path
-    /// reads it, so it is compiled under `test` and the `debug-hooks` feature alone.
+    /// Each pin's fast usage by key, the row's own copy, for a test or a debug hook that reads a pin's burn apart
+    /// from its row. A pin without fast usage has no entry. The fast-mode tests probe the copy through it and no
+    /// production path reads it, so it is compiled under `test` and the `debug-hooks` feature alone.
     #[cfg(any(test, feature = "debug-hooks"))]
     pub async fn fast_burns(&self) -> Result<HashMap<PinKey, PinBurn>, RouterGone> {
         self.ask(|reply| Command::FastBurns { reply }).await
@@ -5008,6 +5008,70 @@ mod tests {
             RegimeRates::unit().for_entrypoint(Some("desk")),
             &RateTable::unit(),
             "the unit tables list no regime"
+        );
+    }
+
+    #[test]
+    fn a_pins_price_adds_its_rows_fast_usage_under_usd_and_leaves_it_out_under_window_share() {
+        let flat = |rate: f64| RateTable {
+            fallback: crate::state::Rates {
+                input: Some(rate),
+                cache_read: Some(rate),
+                write_5m: Some(rate),
+                write_1h: Some(rate),
+                output: Some(rate),
+            },
+            ..RateTable::unit()
+        };
+        let rates = BurnRates {
+            dollars: flat(0.25),
+            five_hour: RegimeRates {
+                base: flat(0.125),
+                ..RegimeRates::unit()
+            },
+            fast: flat(0.5),
+        };
+        let input = |input: f64| PinBurn {
+            input,
+            ..PinBurn::default()
+        };
+        let pin = PinRow {
+            key_id: "k".into(),
+            session_id: "s".into(),
+            agent_id: "main".into(),
+            model: "m".into(),
+            account_id: "a".into(),
+            epoch: 1,
+            created_at: 0,
+            last_used_at: 0,
+            key_generation: 0,
+            incarnation: 1,
+            burn: input(4.0),
+            burn_at: None,
+            burn_banded: input(16.0),
+            burn_fast: input(6.0),
+            last_input_tokens: 0,
+            last_refresh_at: 0,
+            cache_ttl_ms: 300_000,
+            shed_from: None,
+            shed_at: None,
+            static_hash: None,
+            tail_hash: None,
+            lane: crate::lane_key("m", "standard", "none", "-"),
+            entrypoint: String::new(),
+            marked_at: None,
+            marked_on: None,
+            marked_window: None,
+        };
+        assert_eq!(
+            rates.price_pin(BurnUnit::Usd, &pin),
+            Some(4.0 * 0.25 + 6.0 * 0.5),
+            "the row's plain copy at the dollar rate plus its fast usage at the fast rate"
+        );
+        assert_eq!(
+            rates.price_pin(BurnUnit::WindowShare, &pin),
+            Some(16.0 * 0.125),
+            "the banded copy alone, since fast usage draws usage credits and never the plan's window"
         );
     }
 

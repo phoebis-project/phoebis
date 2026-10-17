@@ -5321,7 +5321,7 @@ fn remaining(state: &RoutingState, account_id: &str, window: &str, now: i64) -> 
 }
 
 /// Pace's inputs and score for a candidate at `now`: the spare rate, the remaining allowance over the hours to the
-/// earlier of the window's reset and the account's derived end less the demand of the pool's pins on the account on
+/// earlier of the window's reset and the account's end less the demand of the pool's pins on the account on
 /// that window (their burn over the account's realized speed), in share per hour. An account that runs out sooner is
 /// spent first, and one whose sessions already spend its allowance ranks below an idle one. The score reads negative
 /// where the account spends faster than its pace allows. An untiered account prices no burn. An api_key account
