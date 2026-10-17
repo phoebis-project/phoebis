@@ -64,8 +64,8 @@ pub(crate) struct PairOutcome {
     pub serving: String,
     pub reloaded: bool,
     pub cert_file: String,
-    /// The new leaf's `not_after` as an RFC 3339 UTC stamp. Null where that instant lies past the latest the router
-    /// writes as a stamp (late on 9999-12-30 UTC), as RFC 5280's no-expiry `99991231235959Z` does.
+    /// The new leaf's `not_after` as an RFC 3339 UTC stamp. Null where that instant lies past the latest instant the
+    /// router writes as a stamp (late on 9999-12-30 UTC), as RFC 5280's no-expiry `99991231235959Z` does.
     pub expires: Option<String>,
     pub days_left: i32,
 }

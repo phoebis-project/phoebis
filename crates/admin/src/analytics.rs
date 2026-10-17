@@ -1210,8 +1210,8 @@ mod tests {
         for stem in ["analytics_series", "analytics_series_accounts"] {
             round_trips::<SeriesTwin>(stem);
         }
-        // Most of the fixture's windows are null, so every window of every hour is read as the nullable sample and
-        // the mirror is proved on the ones that hold one.
+        // Each window is a sample or null, as `windows_schema` declares, so every window of every hour is read as
+        // the nullable sample and the mirror is proved on the ones that hold one.
         let accounts = fixture("analytics_accounts");
         let mut sampled = 0;
         for (window, sample) in accounts["accounts"]
