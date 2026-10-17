@@ -44,8 +44,9 @@ for (const name of loaded) {
   if (read(name).includes('recharts-')) failures.push(`${which} carries Recharts code`);
 }
 // The API reference page is the bundle's second entry: its shell names a module script under dist/assets/, the
-// chunks that entry loads statically carry no Recharts code, and neither entry loads the other. Its size is
-// printed and takes no ceiling, since the size is Scalar's and a ceiling would move with every Scalar release.
+// chunks that entry loads statically carry no Recharts code, the chunks the console loads carry no Vue code, and
+// neither entry loads the other. Its size is printed and takes no ceiling, since the size is Scalar's and a ceiling
+// would move with every Scalar release.
 const referenceHtml = readFileSync(join(dist, 'api-reference', 'index.html'), 'utf8');
 const referenceTag = referenceHtml.match(/<script\b[^>]*\btype="module"[^>]*>/);
 const referenceSrc = referenceTag?.[0].match(/\bsrc="([^"]+)"/)?.[1];
@@ -65,6 +66,16 @@ if (!referenceSrc) {
     }
     for (const name of referenceLoaded) {
       if (read(name).includes('recharts-')) failures.push(`${name}, loaded by the reference, carries Recharts code`);
+    }
+    // `__v_isRef` is the ref flag of Vue's reactivity core, which Scalar runs on and the console never loads. The
+    // reference has to carry it, or the marker no longer names Vue and the console's check would pass on nothing.
+    const VUE_MARKER = '__v_isRef';
+    if (![...referenceLoaded].some((name) => read(name).includes(VUE_MARKER))) {
+      failures.push(`no chunk the reference loads carries ${VUE_MARKER}, so the Vue check reads nothing`);
+    }
+    for (const name of loaded) {
+      const which = name === entry ? 'the entry' : `${name}, loaded with the entry,`;
+      if (read(name).includes(VUE_MARKER)) failures.push(`${which} carries Vue code`);
     }
     if (loaded.has(referenceEntry)) failures.push('the console entry loads the reference entry');
     if (referenceLoaded.has(entry)) failures.push('the reference entry loads the console entry');

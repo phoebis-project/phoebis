@@ -56,8 +56,8 @@ pub(crate) struct Limit {
 pub(crate) struct PoolKeepalive {
     /// The requests a probe kept warm.
     pub credited_24h: u64,
-    /// The ten buckets of the return rate by idle age, each `from_seconds`, `reached`, `returned` and
-    /// `to_seconds`.
+    /// The ten buckets of the return rate by idle age (the keepalive page's section of that name), each
+    /// `from_seconds`, `reached`, `returned` and `to_seconds`.
     pub idle_returns: Vec<IdleReturn>,
     pub pool_id: String,
     /// The probes the upstream served.

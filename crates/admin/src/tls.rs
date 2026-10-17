@@ -53,8 +53,8 @@ pub(crate) enum ListenerOutcome {
     Plain(PlainOutcome),
 }
 
-/// `serving` `tls` and `reloaded` true: the pair loaded and serves the next connection. `expires` is the new leaf's
-/// `not_after` as an RFC 3339 UTC stamp and `days_left` the whole days until it.
+/// `serving` `tls` and `reloaded` true: the pair loaded and serves the next connection. `days_left` is the whole days
+/// until the new leaf's `not_after`.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PairOutcome {
@@ -64,6 +64,8 @@ pub(crate) struct PairOutcome {
     pub serving: String,
     pub reloaded: bool,
     pub cert_file: String,
+    /// The new leaf's `not_after` as an RFC 3339 UTC stamp. Null where that instant lies past the latest the router
+    /// writes as a stamp (late on 9999-12-30 UTC), as RFC 5280's no-expiry `99991231235959Z` does.
     pub expires: Option<String>,
     pub days_left: i32,
 }
@@ -109,8 +111,6 @@ pub(crate) struct PlainOutcome {
         (status = 500, description = "`the certificate pairs' reload did not finish` when the reload stopped before it answered.", body = ErrorBody, example = json!({"error": "the certificate pairs' reload did not finish"})),
     ),
 )]
-// `200` whatever the outcomes: the files are the operator's and the router keeps serving, so a refusal is the
-// listener's outcome in the body rather than the route's status.
 pub async fn reload(State(state): State<Arc<AdminState>>) -> Response {
     let Some(pairs) = state.tls_reload.clone() else {
         return Json(TlsReloaded {

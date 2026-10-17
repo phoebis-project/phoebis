@@ -106,8 +106,10 @@ cat > "$tmp/routes-unknown.rs" <<'RS'
         .with_state(engine)
 RS
 : > "$tmp/client-unknown.md"
-out=$(python3 "$check" client "$tmp/routes-unknown.rs" "$tmp/client-unknown.md" 2>&1) && fail "a handler call the checker does not consume passed"
-echo "$out" | grep -q "weird(...) on /v1/odd is not a method this checker consumes" || fail "the unknown handler call did not report: $out"
+out=$(python3 "$check" client "$tmp/routes-unknown.rs" "$tmp/client-unknown.md" 2>&1) && \
+  fail "a handler call the checker does not consume passed"
+echo "$out" | grep -q "weird(...) on /v1/odd is not a method this checker consumes" \
+  || fail "the unknown handler call did not report: $out"
 
 # The last route of a table is followed by whatever the router chains next, not always another route or a
 # layer; the parser must read it whatever follows.

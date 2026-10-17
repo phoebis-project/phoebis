@@ -158,7 +158,7 @@ pub(crate) struct RangeQuery {
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct RollupQuery {
-    /// Default `24h`.
+    /// `1h`, `24h`, `7d`, `30d`, or `<from>,<to>` in Unix milliseconds spanning at most 400 days. Default `24h`.
     pub range: Option<String>,
     /// `account`, `all`, `client`, `effort`, `key`, `kind`, `model`, `pool`, `request_class`, `speed`, or
     /// `user_agent`. Default `all`.
@@ -192,7 +192,7 @@ pub(crate) struct RollupQuery {
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct PlacementsQuery {
-    /// Default `24h`.
+    /// `1h`, `24h`, `7d`, `30d`, or `<from>,<to>` in Unix milliseconds spanning at most 400 days. Default `24h`.
     pub range: Option<String>,
     /// A comma-separated list.
     pub keys: Option<String>,
@@ -221,7 +221,7 @@ pub(crate) struct PlacementsQuery {
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct BurnQuery {
-    /// Default `24h`.
+    /// `1h`, `24h`, `7d`, `30d`, or `<from>,<to>` in Unix milliseconds spanning at most 400 days. Default `24h`.
     pub range: Option<String>,
     /// `account`, `client`, `effort`, `key`, `kind`, `model`, `pool`, `request_class`, `session`, `speed`, or
     /// `user_agent`. Default `account`. The `session` grouping reads the twenty sessions with the most tokens over the
@@ -276,7 +276,7 @@ pub(crate) struct Series {
     params(RollupQuery),
     responses(
         (status = 200, description = "The points over the range.", body = Series),
-        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor a range the chart cannot carry, the ledger's own message: `pricing table: the range needs <n> points, and the most a chart carries is 10000`.\n\nFor the other parameters:\n- `funding is billed or plan`\n- `group_by is account, all, client, effort, key, kind, model, pool, request_class, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agents`, `user_agent_groups` or `clients`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor a range the chart cannot carry, the ledger's own message: `pricing table: the range needs {count} points, and the most a chart carries is 10000`.\n\nFor the other parameters:\n- `funding is billed or plan`\n- `group_by is account, all, client, effort, key, kind, model, pool, request_class, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agents`, `user_agent_groups` or `clients`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
     ),
 )]
@@ -1210,24 +1210,25 @@ mod tests {
         for stem in ["analytics_series", "analytics_series_accounts"] {
             round_trips::<SeriesTwin>(stem);
         }
-        // Three of the fixture's four hours carry a null `five_hour`, so every hour is read as the nullable sample
-        // and the mirror is proved on the ones that hold one.
+        // Most of the fixture's windows are null, so every window of every hour is read as the nullable sample and
+        // the mirror is proved on the ones that hold one.
         let accounts = fixture("analytics_accounts");
         let mut sampled = 0;
-        for hour in accounts["accounts"]
+        for (window, sample) in accounts["accounts"]
             .as_array()
             .unwrap()
             .iter()
             .flat_map(|a| a["hours"].as_array().unwrap())
+            .flat_map(|hour| hour["windows"].as_object().unwrap())
         {
-            let sample = &hour["windows"]["five_hour"];
-            let typed: Option<WindowSample> = serde_json::from_value(sample.clone()).unwrap();
-            assert_eq!(serde_json::to_value(&typed).unwrap(), *sample);
+            let typed: Option<WindowSample> =
+                serde_json::from_value(sample.clone()).unwrap_or_else(|e| panic!("{window}: {e}"));
+            assert_eq!(serde_json::to_value(&typed).unwrap(), *sample, "{window}");
             sampled += typed.is_some() as usize;
         }
         assert!(
             sampled >= 1,
-            "at least one hour samples five_hour, so WindowSample is exercised"
+            "at least one window of one hour holds a sample, so WindowSample is exercised"
         );
     }
 }

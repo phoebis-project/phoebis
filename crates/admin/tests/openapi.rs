@@ -522,7 +522,7 @@ async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_l
     let mut rest = ROUTES_RS;
     while let Some(at) = rest.find(".route(") {
         let after = &rest[at + ".route(".len()..];
-        let literal = after.trim_start().trim_start_matches(['\n', ' ']);
+        let literal = after.trim_start();
         if let Some(path) = literal.strip_prefix('"') {
             plain.insert(path[..path.find('"').unwrap()].to_string());
         }
@@ -1274,10 +1274,14 @@ async fn the_reload_route_answers_each_listener_as_exactly_one_of_the_three_clos
         let cookie = login(&app, "admin-secret").await;
         let answer = json(post(&app, "/admin/tls/reload", "", Some(&cookie)).await).await;
         let listeners = answer["listeners"].as_array().unwrap();
+        assert_eq!(listeners.len(), 2, "one object per listener");
         assert_eq!(
-            listeners.len(),
-            2,
-            "one object per listener, proxy then admin"
+            listeners
+                .iter()
+                .map(|listener| listener["listener"].as_str())
+                .collect::<Vec<_>>(),
+            [Some("proxy"), Some("admin")],
+            "proxy then admin"
         );
         for (listener, (serving, reloaded)) in listeners.iter().zip(expected) {
             let keys: BTreeSet<&str> = listener

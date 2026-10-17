@@ -48,22 +48,22 @@ Each operation names its request (path segments, query parameters, or body field
         (name = "Accounts"),
         (name = "Analytics", description = "`GET /admin/analytics/breakdown` and `/series` share `range` \
             (default `24h`), `group_by` (`account`, `all`, `client`, `effort`, `key`, `kind`, `model`, `pool`, \
-            `request_class`, `speed`, or `user_agent`), and filters `keys`, `pools`, `accounts`, `models`, `kinds` \
+            `request_class`, `speed`, or `user_agent`), the filters `keys`, `pools`, `accounts`, `models`, `kinds` \
             (comma-separated lists), `user_agents` (newline-separated patterns over the agent's first product token, \
             `claude-cli/2.1.286` for `claude-cli/2.1.286 (external, cli)`: `*` matches any run of characters, `?` one, \
             and a backslash quotes either, so a value with no wildcard matches in full), `user_agent_groups` \
             (newline-separated patterns. Under `group_by=user_agent` each names a group, a row falls in the first that \
             matches its agent's token, and the rest group under `other`), `clients` (newline-separated patterns over \
-            the client class, the grammar and bound of `user_agents`), and `include_probes` (`true`/`1`), and \
-            `/accounts` takes `range` alone. `/breakdown` and `/series` also take `funding` (`billed` keeps the \
-            overage and fast rows and every row an API key account served, `plan` the rows a subscription window paid \
-            for and the rows of a request no account served. Each row files under the funding its serving attempt \
-            had when the ledger recorded it, so deleting an account, or recreating its id as the other kind, moves \
-            none of its rows. A probe's cost files under the funding of the probe's own request, while a recipe's \
-            settlement, which carries the probes' waste, files under the kind its record carries: `billed` for an API \
-            key account, else `fast` for a fast recipe, else `plan`. Absent keeps every row. The two subsets \
-            partition the rows). `GET /admin/analytics/budgets`, `/burn`, `/placements`, `/reconciliations`, and \
-            `/rewrites`, elsewhere under this tag, take their own request shapes."),
+            the client class, the grammar and bound of `user_agents`), and `include_probes` (`true`/`1`). Both also \
+            take `funding` (`billed` keeps the overage and fast rows and every row an API key account served, `plan` \
+            the rows a subscription window paid for and the rows of a request no account served. Each row files under \
+            the funding its serving attempt had when the ledger recorded it, so deleting an account, or recreating its \
+            id as the other kind, moves none of its rows. A probe's cost files under the funding of the probe's own \
+            request, while a recipe's settlement, which carries the probes' waste, files under the kind its record \
+            carries: `billed` for an API key account, else `fast` for a fast recipe, else `plan`. Absent keeps every \
+            row. The two subsets partition the rows). `/accounts` takes `range` alone. `GET /admin/analytics/budgets`, \
+            `/burn`, `/placements`, `/reconciliations`, and `/rewrites`, elsewhere under this tag, take their own \
+            request shapes."),
         (name = "Attention"),
         (name = "Dashboard"),
         (name = "Keepalive"),

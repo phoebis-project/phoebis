@@ -121,7 +121,7 @@ pub(crate) struct PoolInput {
     /// `0.5` to `1.0`, default `0.95`.
     #[serde(default)]
     window_ceiling: Option<f64>,
-    /// An ordered list of `{pattern, not}`, at most 256, each pattern checked as the routing page's model rules say.
+    /// An ordered list of `{pattern, not}`, at most 256.
     #[serde(default)]
     model_rules: Option<Vec<RuleInput>>,
     /// A partial policy of the four fields, merged onto the pool's stored policy, which a create starts at the

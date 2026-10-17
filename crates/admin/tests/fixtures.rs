@@ -26,7 +26,8 @@ fn dir() -> PathBuf {
 /// One line per value, depth first in key order: the path and the JSON kind (`null`, `boolean`, `integer`, `float`,
 /// `string`, `array`, `object`). The first element stands for an array. Values are not compared: a value change is
 /// the decoder tests' business. The order and the kinds are compared, since an answer rebuilt from a struct could
-/// move a key, turn an absence into a `null` or an integer into a float and still hold the key set.
+/// move a key, turn an absence into a `null` or an integer into a float and still hold the key set. A backslash, a
+/// `.` or a `[` in a key is escaped with a backslash, so a key cannot read as a nested path.
 fn shape(v: &Value) -> Vec<String> {
     fn walk(v: &Value, path: &str, out: &mut Vec<String>) {
         let kind = match v {
@@ -42,6 +43,10 @@ fn shape(v: &Value) -> Vec<String> {
         match v {
             Value::Object(m) => {
                 for (k, v) in m {
+                    let k = k
+                        .replace('\\', "\\\\")
+                        .replace('.', "\\.")
+                        .replace('[', "\\[");
                     walk(v, &format!("{path}.{k}"), out);
                 }
             }
@@ -72,6 +77,11 @@ fn shape_tells_a_moved_key_a_null_for_an_absence_and_a_float_for_an_integer_but_
             "a null for an absent key",
         ),
         (j!({ "a": 1.0 }), j!({ "a": 1 }), "a float for an integer"),
+        (
+            j!({ "a": { "b": 1 } }),
+            j!({ "a": {}, "a.b": 1 }),
+            "a dotted key for a nested one",
+        ),
     ];
     for (left, right, what) in &differ {
         assert_ne!(
@@ -138,7 +148,7 @@ fn hold(planted: &[String], name: &str, route: &str, body: Value) {
             .position(|(c, l)| c != l)
             .unwrap_or(committed.len().min(live.len()));
         panic!(
-            "{name}: the committed fixture's shape differs from the live answer at line {at}: committed {:?}, live {:?}. \
+            "{name}: the committed fixture's shape differs from the live answer at entry {at}: committed {:?}, live {:?}. \
              A moved key, a null for an absence or a float for an integer is a defect of the route's answer. A new or \
              dropped key needs a re-capture and a decoder update.",
             committed.get(at),
