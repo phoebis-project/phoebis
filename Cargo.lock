@@ -1802,6 +1802,7 @@ version = "0.1.0"
 dependencies = [
  "fake-upstream",
  "jiff",
+ "phoebis-guardrails",
  "phoebis-oauth",
  "phoebis-profile",
  "phoebis-routing",

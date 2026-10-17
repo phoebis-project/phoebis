@@ -2,6 +2,7 @@
 //! selection that owns pins, cooldowns, and overage state, and the listing a caller's key may route to.
 
 mod affinity;
+mod guardrails;
 pub mod listing;
 pub mod pattern;
 mod record;
@@ -18,6 +19,7 @@ pub use affinity::{
     AffinityChain, AffinityEntry, AffinityMap, AffinityReport, AffinityRow, ConversationLookup,
     ConversationMatch, ConversationQuery, PredecessorQuery, PurgedEntry, RungWalk, Visited,
 };
+pub use guardrails::CompiledGuardrails;
 pub use phoebis_store::canonical_id as canonical_model;
 pub use record::{
     BudgetFacts, By, CacheMapEntry, CandidateFacts, ChainFacts, CooldownFacts, CreditsFacts,

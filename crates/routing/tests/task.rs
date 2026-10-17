@@ -298,6 +298,62 @@ async fn a_selection_is_written_through_and_a_registry_write_shows_up_after_relo
 }
 
 #[tokio::test]
+async fn spawn_answers_an_attached_guardrail_through_the_first_snapshot_before_any_reload() {
+    use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode, Operator, Subject};
+    use phoebis_store::GuardrailRow;
+
+    let store = seeded(&["a"]);
+    store
+        .insert_guardrail(
+            &GuardrailRow {
+                id: "auxiliary".into(),
+                name: "Auxiliary".into(),
+                description: String::new(),
+                enabled: true,
+                mode: GuardrailMode::Observe,
+                action: GuardrailAction::Block,
+                conditions: vec![Condition {
+                    subject: Subject::RequestClass,
+                    operator: Operator::Equals,
+                    value: Some("auxiliary".into()),
+                    name: None,
+                    path: None,
+                    selector: None,
+                }],
+                preset_id: None,
+                preset_version: None,
+                incarnation: 1,
+                created_at: 0,
+                updated_at: 0,
+            },
+            &["p".to_string()],
+            &[],
+            "test",
+        )
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let ids = |handle: &RouterHandle| {
+        let snapshot = handle.snapshot();
+        snapshot
+            .guardrails_for(snapshot.key("k").unwrap())
+            .iter()
+            .map(|g| g.id.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&handle), ["auxiliary"]);
+    handle.reload().await.unwrap();
+    assert_eq!(
+        ids(&handle),
+        ["auxiliary"],
+        "a reload compiles the set again"
+    );
+    store.delete_guardrail("auxiliary", "test").unwrap();
+    handle.reload().await.unwrap();
+    assert!(ids(&handle).is_empty(), "a delete reaches the next reload");
+}
+
+#[tokio::test]
 async fn a_request_admitted_under_an_older_registry_is_re_resolved_against_the_current_one() {
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
