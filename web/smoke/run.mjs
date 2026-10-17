@@ -8133,7 +8133,7 @@ const editGuardrail = async (page, name) => {
   await page.settle(100);
   results.push({
     name: '/guardrails Create guardrail offers a blank guardrail and each preset under its heading',
-    ok: JSON.stringify(entries) === JSON.stringify(['menuitem:Blank guardrail', 'presentation:From a preset', 'menuitem:Subagent status summary']),
+    ok: JSON.stringify(entries) === JSON.stringify(['menuitem:Blank guardrail', 'presentation:From a preset', 'menuitem:Away recap', 'menuitem:Prompt suggestion', 'menuitem:Subagent status summary']),
     missing: entries,
   });
   page.unmount();
@@ -8169,7 +8169,7 @@ await readsAgain('/guardrails', 'listGuardrails', 5_000);
 {
   // A stamp behind the build's version: the line carries both badges, and the update takes the current conditions.
   const [stored] = (await api.listGuardrails()).filter((g) => g.id === 'subagent-status-summary');
-  const [preset] = await api.listGuardrailPresets();
+  const preset = (await api.listGuardrailPresets()).find((p) => p.id === 'subagent-status-summary');
   const behind = { ...stored, conditions: stored.conditions.slice(0, 2), preset: { ...stored.preset, currentVersion: 2, customized: true } };
   const page = await mountNode(React.createElement(GuardrailDialog, { existing: behind, existingIds: new Set(), keys: [], onClose: () => undefined, onSaved: () => undefined, open: true, pools: [], presets: [{ ...preset, version: 2 }] }));
   const dlg = openDialogs(page).pop() ?? null;

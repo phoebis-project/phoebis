@@ -3,6 +3,58 @@
   "body": {
     "presets": [
       {
+        "id": "away-recap",
+        "version": 1,
+        "name": "Away recap",
+        "description": "When the user steps away and comes back, Claude Code forks the main thread's whole conversation to ask for a recap of the session in under 40 words. Each fork reads the thread's full cached context for about 90 output tokens. The setting awaySummaryEnabled turns the feature off on one machine.",
+        "measured_on": "Claude Code 2.1.296 to 2.1.301",
+        "suggested_mode": "observe",
+        "conditions": [
+          {
+            "subject": "request_class",
+            "operator": "equals",
+            "value": "auxiliary"
+          },
+          {
+            "subject": "body",
+            "operator": "present",
+            "path": "tools"
+          },
+          {
+            "subject": "message",
+            "operator": "matches",
+            "value": "^The user stepped away and is coming back\\. Recap in under 40 words",
+            "selector": "last_user"
+          }
+        ]
+      },
+      {
+        "id": "prompt-suggestion",
+        "version": 1,
+        "name": "Prompt suggestion",
+        "description": "In an interactive session Claude Code forks the main thread's whole conversation to predict what the user types next and shows the answer in the input. Each fork reads the thread's full cached context for about seven output tokens. The setting promptSuggestionEnabled turns the feature off on one machine.",
+        "measured_on": "Claude Code 2.1.296 to 2.1.301",
+        "suggested_mode": "observe",
+        "conditions": [
+          {
+            "subject": "request_class",
+            "operator": "equals",
+            "value": "auxiliary"
+          },
+          {
+            "subject": "body",
+            "operator": "present",
+            "path": "tools"
+          },
+          {
+            "subject": "message",
+            "operator": "matches",
+            "value": "^\\[SUGGESTION MODE: Suggest what the user might naturally type next",
+            "selector": "last_user"
+          }
+        ]
+      },
+      {
         "id": "subagent-status-summary",
         "version": 1,
         "name": "Subagent status summary",

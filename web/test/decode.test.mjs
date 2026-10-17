@@ -2431,16 +2431,17 @@ test('an attention item with a spelling the console does not know reads the wors
 });
 
 test('a_guardrail_decodes_with_its_conditions_preset_and_attachments', () => {
-  const g = d.decodeGuardrail(fixture('guardrail_show'));
+  const raw = fixture('guardrail_show');
+  const g = d.decodeGuardrail(raw);
   assert.deepEqual([g.id, g.enabled, g.mode, g.action, g.keys], ['subagent-status-summary', true, 'observe', 'block', []]);
   assert.equal(typeof g.name, 'string');
   assert.equal(typeof g.description, 'string');
-  assert.deepEqual(g.preset, { currentVersion: 1, customized: false, id: 'subagent-status-summary', version: 1 });
+  assert.deepEqual(g.preset, { currentVersion: raw.preset.current_version, customized: raw.preset.customized, id: raw.preset.id, version: raw.preset.version });
   assert.deepEqual(g.pools, [{ id: 'main', label: 'Main', position: 0 }]);
   assert.ok(isIso(g.createdAt) && isIso(g.updatedAt) && typeof g.revision === 'number');
   assert.deepEqual(g.conditions[0], { name: undefined, operator: 'equals', path: undefined, selector: undefined, subject: 'request_class', value: 'auxiliary' }, 'the route leaves an absent member out');
   assert.deepEqual(g.conditions.map((c) => Object.keys(c).sort()), Array.from({ length: 3 }, () => ['name', 'operator', 'path', 'selector', 'subject', 'value']), 'every condition reads the same four optional keys');
-  assert.deepEqual([g.conditions[1].path, g.conditions[2].selector], ['tools', 'last_user']);
+  assert.deepEqual([g.conditions[1].path, g.conditions[2].selector], [raw.conditions[1].path, raw.conditions[2].selector]);
   const [large] = fixture('guardrails').guardrails.map(d.decodeGuardrail);
   assert.deepEqual([large.id, large.mode, large.preset, large.keys], ['large-auxiliary', 'enforce', null, [{ id: 'desktop', label: 'Desktop', position: 0 }]]);
   // A list can skip a position after a detach, so the decoder orders by it and keeps the values as sent.
@@ -2457,9 +2458,15 @@ test('a_guardrail_decodes_with_its_conditions_preset_and_attachments', () => {
 });
 
 test('the_presets_the_test_answer_and_the_counts_decode', () => {
-  const preset = d.decodeGuardrailPreset(fixture('guardrail_presets').presets[0]);
-  assert.deepEqual([preset.id, preset.version, preset.suggestedMode, preset.conditions.length], ['subagent-status-summary', 1, 'observe', 3]);
-  assert.ok(typeof preset.name === 'string' && typeof preset.description === 'string' && typeof preset.measuredOn === 'string');
+  const raws = fixture('guardrail_presets').presets;
+  const presets = raws.map(d.decodeGuardrailPreset);
+  assert.deepEqual(presets.map((p) => p.id), ['away-recap', 'prompt-suggestion', 'subagent-status-summary'], "the route's order by id");
+  const raw = raws.find((p) => p.id === 'subagent-status-summary');
+  const preset = presets.find((p) => p.id === 'subagent-status-summary');
+  assert.deepEqual(
+    [preset.version, preset.suggestedMode, preset.conditions.length, preset.name, preset.description, preset.measuredOn],
+    [raw.version, raw.suggested_mode, raw.conditions.length, raw.name, raw.description, raw.measured_on],
+  );
   const run = d.decodeGuardrailTest(fixture('guardrail_test'));
   assert.deepEqual(run.sample, { keyId: null, limit: 50, poolId: 'main', windowHours: 72 });
   assert.deepEqual(run.totals, { indeterminate: 0, matched: 0, sampled: 1, unmatched: 1 });

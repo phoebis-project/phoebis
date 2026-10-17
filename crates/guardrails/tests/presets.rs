@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use phoebis_guardrails::{
     evaluate, presets, CompiledGuardrail, GuardrailAction, GuardrailMode, HeaderLookup, Lookup,
@@ -7,6 +7,8 @@ use phoebis_guardrails::{
 use serde_json::Value;
 
 const FORK: &str = include_str!("fixtures/subagent_summary_fork.json");
+const SUGGESTION: &str = include_str!("fixtures/prompt_suggestion_fork.json");
+const RECAP: &str = include_str!("fixtures/away_recap_fork.json");
 const CLASSIFIER: &str = include_str!("fixtures/auto_mode_classifier.json");
 
 struct NoHeaders;
@@ -102,4 +104,71 @@ fn versions_of_one_id_are_distinct_and_ascending_and_current_and_at_answer_the_t
     }
     assert!(Preset::current("not-a-preset").is_none());
     assert!(Preset::at("not-a-preset", 1).is_none());
+}
+
+#[test]
+fn the_table_holds_the_summary_the_suggestion_and_the_recap_at_version_one_in_observe_mode() {
+    let ids: BTreeSet<&str> = presets().iter().map(|preset| preset.id).collect();
+    assert_eq!(
+        ids,
+        BTreeSet::from(["away-recap", "prompt-suggestion", "subagent-status-summary"])
+    );
+    for id in ["prompt-suggestion", "away-recap"] {
+        let preset = Preset::at(id, 1).unwrap_or_else(|| panic!("{id} version 1 is in the table"));
+        assert_eq!(preset.suggested_mode, GuardrailMode::Observe, "{id}");
+        assert_eq!(preset.conditions.len(), 3, "{id}");
+    }
+}
+
+#[test]
+fn each_preset_matches_its_own_fork_fixture_and_none_of_the_other_bodies() {
+    let forks = [
+        ("subagent-status-summary", FORK),
+        ("prompt-suggestion", SUGGESTION),
+        ("away-recap", RECAP),
+    ];
+    let bodies: Vec<(&str, Value)> = forks
+        .into_iter()
+        .chain([("classifier", CLASSIFIER)])
+        .map(|(name, text)| {
+            (
+                name,
+                serde_json::from_str(text).expect("the fixture parses"),
+            )
+        })
+        .collect();
+    for (id, _) in forks {
+        let preset = Preset::current(id).unwrap_or_else(|| panic!("{id} is not in the table"));
+        let guardrail = compiled(preset);
+        for (name, body) in &bodies {
+            let verdict = evaluate(&guardrail, &auxiliary(body));
+            if *name == id {
+                assert_eq!(verdict, Verdict::Matched, "{id} on its own fork");
+            } else {
+                assert!(
+                    matches!(verdict, Verdict::Unmatched { .. }),
+                    "{id} on the {name} body: {verdict:?}"
+                );
+            }
+        }
+    }
+}
+
+// A create from a preset writes the preset's name past the route's name checks, so the table holds each name to them.
+#[test]
+fn every_presets_name_passes_the_create_routes_three_rules() {
+    for preset in presets() {
+        assert!(
+            preset.name.len() <= 256,
+            "{}: the name is {} bytes",
+            preset.id,
+            preset.name.len()
+        );
+        assert!(!preset.name.is_empty(), "{}: the name is empty", preset.id);
+        assert!(
+            !preset.name.to_lowercase().contains("prompt is too long"),
+            "{}: the name carries the compaction sentence",
+            preset.id
+        );
+    }
 }
