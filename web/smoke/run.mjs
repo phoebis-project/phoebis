@@ -11617,6 +11617,20 @@ m.unmount();
     });
     page.unmount();
   }
+  {
+    // The ledger's row names an edited account in its detail alone, so the Account cell reads the change's target.
+    const listed = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 24 * HOUR), kinds: ['registry_changed'], limit: 25, to: iso(CLOCK_ORIGIN) })).rows;
+    const edit = listed.find((r) => r.detail.kind === 'account_updated');
+    const page = await mount('/routing-log?kinds=registry_changed&range=24h', { now: CLOCK_ORIGIN });
+    const tr = trs(page).find((row) => row.getAttribute('data-row') === `event/${edit?.id}`);
+    const links = [...(cell(tr, 'account')?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href'));
+    results.push({
+      name: "/routing-log an account edit's Account cell links the account it edited",
+      ok: edit !== undefined && edit.accountId === null && JSON.stringify(links) === JSON.stringify([`/accounts/${edit.detail.target}`]),
+      missing: [edit ? `${edit.detail.target}, account ${edit.accountId}` : 'no account edit in the story', `links ${JSON.stringify(links)}`, cell(tr, 'account')?.textContent ?? 'no row'],
+    });
+    page.unmount();
+  }
   const rowKey = (r) => `${clockText(r.at)} ${r.type === 'decision' ? r.requestId : '-'}`;
   const drawnKeys = (page) => trs(page).map((tr) => `${cell(tr, 'time')?.firstChild?.textContent ?? ''} ${cell(tr, 'time')?.querySelector('a')?.textContent ?? '-'}`);
   /**
@@ -13196,7 +13210,14 @@ m.unmount();
       refresh_failed: ['Error'],
       refresh_succeeded: ['Access token', 'Refresh token'],
       refresh_uncertain: ['Error'],
-      registry_changed: ['Change', 'Fields', 'Actor'],
+      // A row per changed field and the replaced secret, and the reading of decisions on a pool's edit alone.
+      registry_changed: (e) => [
+        'Change',
+        ...Object.keys(e.detail.diff ?? {}).filter((field) => field !== 'secret_replaced').map((field) => field.replace(/_/g, ' ')),
+        ...(e.detail.diff?.secret_replaced === true ? ['Secret'] : []),
+        'Actor',
+        ...(e.detail.kind === 'pool_updated' ? ['Reading it'] : []),
+      ],
       reservation_expired: ['Request', 'Attempt', 'Cause', 'Reserved', 'Held for', 'Effect'],
       router_started: ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests'],
       shedding_round: ['Started by', 'Trigger', 'Fired by', 'Excess', 'Cap', 'Unit', 'Burn average', 'Warm sessions', 'Pins', 'Skipped', 'Outcome', 'Next round after', 'Dwell', 'Survive a restart'],
@@ -13222,6 +13243,7 @@ m.unmount();
       ledger_gap: () => ({ Meaning: ['an interior chunk of the capture was dropped at the bus'] }),
       poll_backoff_ended: (e) => ({ 'Backed off': [`from ${hhmm(e.detail.resumed_at - e.detail.duration_ms)}`, `to ${hhmm(e.detail.resumed_at)}`] }),
       mark_cleared: (e) => ({ Marked: [hhmm(e.detail.marked_at), `on ${e.detail.marked_on}`], Reason: [e.detail.reason] }),
+      registry_changed: (e) => (e.detail.diff?.secret_replaced === true ? { Secret: ['replaced'] } : {}),
       reservation_expired: (e) => ({ Cause: [e.detail.cause.replace(/_/g, ' ')], Reserved: Object.entries(e.detail.shares).map(([w, v]) => `${{ five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable' }[w]} ${fmtShare(v)}`) }),
       shedding_round: (e) => ({ 'Fired by': ['the projection'], Outcome: ['nothing to mark: no runway'], Trigger: [`5h projection ${fmtPct(e.detail.projection)} at ${hhmm(e.detail.horizon)} over the ceiling ${fmtPct(e.detail.ceiling)}`] }),
       // The closed span of 09:12 drains its row at 10:40:36, and the open span starts at 13:48 under the threshold.
@@ -13237,7 +13259,7 @@ m.unmount();
     };
     const modelLinks = {};
     for (const kind of EVENT_KINDS) {
-      // The story's newest registry change revokes a key and names no field, so the pool edit stands for the kind.
+      // The story's newest registry change revokes a key and names no field, so the account edit stands for the kind.
       const listed = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 7 * DAY), kinds: [kind], limit: 25, to: iso(CLOCK_ORIGIN + 7 * DAY) })).rows;
       const e = listed.find((r) => Object.keys(r.detail.diff ?? {}).length > 0) ?? listed[0];
       if (!e) {
@@ -13258,7 +13280,7 @@ m.unmount();
         ok:
           JSON.stringify(pairs.slice(0, head.length).map((p) => [p.label, p.dd?.textContent])) === JSON.stringify(head) &&
           (e.accountId === null || href('Account') === `/accounts/${e.accountId}`) && (e.poolId === null || href('Pool') === `/pools#${e.poolId}`) &&
-          JSON.stringify(pairs.slice(head.length).map((p) => p.label)) === JSON.stringify(OWN[kind]) && (e.requestId === null) === (detail?.querySelector('.event-detail__foot') === null) &&
+          JSON.stringify(pairs.slice(head.length).map((p) => p.label)) === JSON.stringify(typeof OWN[kind] === 'function' ? OWN[kind](e) : OWN[kind]) && (e.requestId === null) === (detail?.querySelector('.event-detail__foot') === null) &&
           Object.entries(VALUES[kind]?.(e) ?? {}).every(([label, want]) => JSON.stringify(ddWords(pairs.find((p) => p.label === label)?.dd)) === JSON.stringify(want)),
         missing: pairs.map((p) => `${p.label}: ${p.dd?.textContent}`),
       });

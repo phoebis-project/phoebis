@@ -911,19 +911,19 @@ while a link whose range ends at the moment it was made reads on, each read refr
 A row reads Time (dated past a day as on the Requests view, a decision's request beneath it as a link to the request's
 drawer), Kind (a decision in a filled badge with `attempt 2/3` beneath a failover attempt, an event in an outlined one),
 Session (the first eight characters with the agent beneath), Account (a move names the account it left and the one it
-landed on), Model, By, Fact, and Details, which opens the request's drawer. By names what decided the row in one chip:
-the rule that fired (`spent rule`), the rung that placed it (`static rung`), the strategy and the tier's priority
-(`Pace P0`, whose hover is the Pace hint), where a hold waited (`cohort`, `session pin`), `slow-down` for a request the
-slow-down held and for the renewal after its hold, what exhausted the pool (`budget`, `cooldown`, `fast lane`), the
-refusal (`client drift`, `key revoked`), `no rule fired` for a renewal, or an event's reason (`window spent`,
-`429 on 5h`, `slow-down` for a slow-down's start and end). Fact gives the value that made it so as a muted label with
-its value, `gap`, `idle`, `prefix`, `until`, a held request's `until 18:20` and `speed 0.5x`, the renewal's
-`held 42 s`, a slow-down start's `speed 0.5x` and an end's `slowest 0.35x`, a move's `runway` on its destination (a
-span such as `2 h 10 min`, `none` or `unbounded`) followed by `least bad` or `rewrite only` where the destination did
-not fit, or a renewal's window utilization, such as `5h 96%`, where that window's projection reached the ceiling. A
-verdict reads in one color across the rows, the card and the strip: good when it served the request, warning when it
-changed its course, critical for a refusal or an exhaustion, and neutral for none and no. Every account, key, pool,
-model, session and request a row names is a link.
+landed on, and a registry change the pool, the key or the account it edited), Model, By, Fact, and Details, which opens
+the request's drawer. By names what decided the row in one chip: the rule that fired (`spent rule`), the rung that
+placed it (`static rung`), the strategy and the tier's priority (`Pace P0`, whose hover is the Pace hint), where a hold
+waited (`cohort`, `session pin`), `slow-down` for a request the slow-down held and for the renewal after its hold, what
+exhausted the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client drift`, `key revoked`), `no rule fired` for
+a renewal, or an event's reason (`window spent`, `429 on 5h`, `slow-down` for a slow-down's start and end). Fact gives
+the value that made it so as a muted label with its value, `gap`, `idle`, `prefix`, `until`, a held request's
+`until 18:20` and `speed 0.5x`, the renewal's `held 42 s`, a slow-down start's `speed 0.5x` and an end's
+`slowest 0.35x`, a move's `runway` on its destination (a span such as `2 h 10 min`, `none` or `unbounded`) followed by
+`least bad` or `rewrite only` where the destination did not fit, or a renewal's window utilization, such as `5h 96%`,
+where that window's projection reached the ceiling. A verdict reads in one color across the rows, the card and the
+strip: good when it served the request, warning when it changed its course, critical for a refusal or an exhaustion, and
+neutral for none and no. Every account, key, pool, model, session and request a row names is a link.
 
 Every row opens beneath itself. A decision row loads its record and draws the decision card. Its verdict line names the
 decision with its accounts and its pool as links ("Moved secondary to primary", "Attempt 2 of 2: placed on primary",
@@ -1027,7 +1027,7 @@ Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
 | refresh failed | An access-token refresh failed. |
 | refresh succeeded | An access-token refresh succeeded. |
 | refresh uncertain | An access-token refresh ended without a clear answer. |
-| registry changed | An operator edited a pool, a key or an account, field by field where the change names them. |
+| registry changed | An operator edited a pool, a key or an account, each changed field with its value before and after. |
 | reservation expired | A request ended without usage or its booking turned an hour old, so the share it reserved left the destination's prediction. |
 | router started | The router started and loaded its pins, shedding marks, window readings and affinity entries. |
 | shedding round | A round ran on an account whose projection on a plan window read over the ceiling at the window's horizon, or whose stretch stood over the slow-down's threshold for the safety wait, with the pins it marked or why it marked none, and kept its marks across a restart. |

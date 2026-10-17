@@ -259,10 +259,19 @@ export function RoutingLogPage() {
   );
 }
 
+/**
+ * The account or the key a registry change edited. The ledger's row names a pool's change in its pool column and
+ * these two in the change's target alone.
+ */
+const registryTarget = (row: RoutingLogRow, subject: 'account' | 'key'): string | null =>
+  row.type === 'event' && row.kind === 'registry_changed' && typeof row.detail.kind === 'string' && row.detail.kind.startsWith(`${subject}_`) && typeof row.detail.target === 'string' ? row.detail.target : null;
+
 /** The account a row is about: a move draws where it left and where it landed, a pool or key event its subject. */
 function AccountCell({ row }: { row: RoutingLogRow }) {
   const from = row.type === 'decision' ? row.fromAccountId : row.kind === 'pin_migrated' && typeof row.detail.from_account === 'string' ? row.detail.from_account : null;
-  if (row.accountId !== null) {
+  const accountId = row.accountId ?? registryTarget(row, 'account');
+  const keyId = row.type === 'event' ? (row.keyId ?? registryTarget(row, 'key')) : null;
+  if (accountId !== null) {
     return (
       <span className="routing-log__cut">
         {from !== null && (
@@ -270,7 +279,7 @@ function AccountCell({ row }: { row: RoutingLogRow }) {
             <EntityLink kind="account" id={from} /> <span className="muted">to</span>{' '}
           </>
         )}
-        <EntityLink kind="account" id={row.accountId} />
+        <EntityLink kind="account" id={accountId} />
       </span>
     );
   }
@@ -281,10 +290,10 @@ function AccountCell({ row }: { row: RoutingLogRow }) {
       </span>
     );
   }
-  if (row.type === 'event' && row.keyId !== null) {
+  if (keyId !== null) {
     return (
       <span className="routing-log__cut">
-        <span className="muted">key</span> <EntityLink kind="key" id={row.keyId} />
+        <span className="muted">key</span> <EntityLink kind="key" id={keyId} />
       </span>
     );
   }

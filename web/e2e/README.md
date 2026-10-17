@@ -24,7 +24,10 @@ top bar's controls (Log out and the theme control 32 px at one top), the sidebar
 line, the routing log's columns at 1280 by 800 and 1440 by 900 (Fact 189 px at both, Account 179 then 147 px, Model at
 1440 alone at 192 px with the model beneath the account at 1280 alone, each column as wide as its longest cell, a line
 cut on purpose behind an ellipsis, the table its card's width with nothing to scroll sideways, and again under the 7-day
-range on the state changes with each dated Time cell on one line), the Diagnostics group (neither its heading nor the
+range on the state changes with each dated Time cell on one line), an account edit's Account cell under the 24-hour
+range on the registry and state changes (the link the cell reads off the change's target, against the account link of a
+state change in type, ink, height, left edge and top, and against the pool's and the key's links of the other registry
+rows in all but their left edge, which their muted word moves), the Diagnostics group (neither its heading nor the
 Routing log link on the dashboard with the expert view off, both with the log open and the link active), pool chips, the
 caching controls, the Load shedding switch against Migrate when spent, the load groups (the overage grace field against
 the window ceiling field, the utilization bar's ceiling handle and the shedding preview line), the pool dialog's ceiling

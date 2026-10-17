@@ -245,6 +245,21 @@ fn row_to_account(row: &Row<'_>) -> rusqlite::Result<AccountRow> {
     })
 }
 
+/// Shared by `Store::account` and the account edit, which reads the row it changes inside its own transaction.
+pub(crate) fn account_in(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> Result<Option<AccountRow>, StoreError> {
+    conn.query_row(
+        "SELECT id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, \
+         state_cause FROM accounts WHERE id = ?1",
+        params![id],
+        row_to_account,
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
 /// Shared by `Store::accounts` and `load_registry`, so the registry snapshot can read the account list
 /// inside its own transaction instead of through the store's connection lock.
 pub(crate) fn all_accounts(conn: &rusqlite::Connection) -> Result<Vec<AccountRow>, StoreError> {
@@ -267,14 +282,7 @@ impl Store {
         #[cfg(any(test, feature = "debug-hooks"))]
         self.count_credential_read();
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        conn.query_row(
-            "SELECT id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, \
-             state_cause FROM accounts WHERE id = ?1",
-            params![id],
-            row_to_account,
-        )
-        .optional()
-        .map_err(StoreError::from)
+        account_in(&conn, id)
     }
 
     pub fn insert_account(&self, row: &AccountRow) -> Result<(), StoreError> {
@@ -604,24 +612,33 @@ impl Store {
 
     pub fn subscription_term(&self, id: &str) -> Result<Option<SubscriptionTerm>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        conn.query_row(
-            "SELECT id, subscription_since, trial_ends_at, cancelled, subscription_ends_at, \
-             subscription_tier FROM accounts WHERE id = ?1",
-            params![id],
-            |row| {
-                Ok(SubscriptionTerm {
-                    account_id: row.get(0)?,
-                    since: row.get(1)?,
-                    trial_ends_at: row.get(2)?,
-                    cancelled: row.get(3)?,
-                    ends_at: row.get(4)?,
-                    tier: row.get(5)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(StoreError::from)
+        subscription_term_in(&conn, id)
     }
+}
+
+/// Shared by `Store::subscription_term` and the account edit, which reads the flag and the end it changes inside its
+/// own transaction.
+pub(crate) fn subscription_term_in(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> Result<Option<SubscriptionTerm>, StoreError> {
+    conn.query_row(
+        "SELECT id, subscription_since, trial_ends_at, cancelled, subscription_ends_at, \
+         subscription_tier FROM accounts WHERE id = ?1",
+        params![id],
+        |row| {
+            Ok(SubscriptionTerm {
+                account_id: row.get(0)?,
+                since: row.get(1)?,
+                trial_ends_at: row.get(2)?,
+                cancelled: row.get(3)?,
+                ends_at: row.get(4)?,
+                tier: row.get(5)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(StoreError::from)
 }
 
 /// What the profile document says about the subscription, stored beside the raw document; each field `None`

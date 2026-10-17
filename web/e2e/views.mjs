@@ -1026,6 +1026,58 @@ async function routingLogDatedTime(theme) {
 }
 
 /**
+ * The Account cell of a registry change that edited an account, under the 24-hour range on the registry and state
+ * changes: the link the cell reads off the change's target against the account link of a state change (its type, ink,
+ * height, left edge and top in its cell), and against the pool's and the key's links of the other registry rows in all
+ * but the left edge, which their muted word moves. The router's seed edits no account, so its pass records that the
+ * read stands down. The bare log loads again after.
+ */
+async function routingLogRegistryTarget(theme) {
+  try {
+    await loadAtOrigin('/routing-log?range=24h&kinds=account_state_changed,registry_changed', '.routing-log__table');
+    const read = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.routing-log__table tbody tr.routing-log__row')];
+      const text = (tr, name) => tr.querySelector(`td.routing-log__${name}`)?.textContent?.trim() ?? '';
+      const link = (tr, href) => tr?.querySelector(`td.routing-log__account a[href^="${href}"]`) ?? null;
+      const box = (a) => {
+        if (a === null) return null;
+        const td = a.closest('td');
+        const at = a.getBoundingClientRect();
+        const cell = td.getBoundingClientRect();
+        const style = getComputedStyle(a);
+        const round = (n) => Math.round(n * 10) / 10;
+        return {
+          height: round(at.height),
+          ink: style.color,
+          left: round(at.left - cell.left - parseFloat(getComputedStyle(td).paddingLeft)),
+          text: a.textContent ?? '',
+          top: round(at.top - cell.top),
+          type: `${style.fontSize} ${style.fontWeight} ${style.fontFamily}`,
+        };
+      };
+      const by = (word) => rows.find((tr) => text(tr, 'by') === word);
+      return {
+        account: box(link(by('account edited'), '/accounts/')),
+        key: box(link(by('key revoked'), '/keys')),
+        pool: box(link(by('pool edited'), '/pools')),
+        state: box(link(rows.find((tr) => text(tr, 'kind') === 'account state changed'), '/accounts/')),
+      };
+    });
+    if (!mock && read.account === null) {
+      measurements.push(`${theme} /routing-log registry target skipped: the seed edits no account (${JSON.stringify(read)})`);
+      return;
+    }
+    measurements.push(`${theme} /routing-log registry target ${JSON.stringify(read)}`);
+    const what = (neighbor) => `${theme} /routing-log: an account edit's Account link against the ${neighbor}`;
+    failures.push(...compare(read.account, read.state, ['height', 'ink', 'left', 'top', 'type'], what("state change's account link")));
+    failures.push(...compare(read.account, read.pool, ['height', 'ink', 'top', 'type'], what("pool edit's pool link")));
+    failures.push(...compare(read.account, read.key, ['height', 'ink', 'top', 'type'], what("key revocation's key link")));
+  } finally {
+    await loadAtOrigin('/routing-log', '.routing-log__table');
+  }
+}
+
+/**
  * The Diagnostics group: on the Dashboard with the expert view off the sidebar draws neither the heading nor the
  * Routing log link, and with the log open both are drawn and the link is the active one.
  */
@@ -8255,6 +8307,7 @@ try {
         await diagnosticsNav(theme, view.path);
         // Before the first decision opens, since the read leaves the bare log and loads it again.
         await routingLogDatedTime(theme);
+        await routingLogRegistryTarget(theme);
         await firstDecisionOpen(theme);
         await pagerControls(theme, view.path);
       }

@@ -4376,3 +4376,62 @@ async fn every_pool_write_answers_the_stamp_it_wrote_and_a_bare_create_holds_the
     let row = stored(&store);
     assert_eq!(members["updated_at"].as_i64(), Some(row.updated_at));
 }
+
+#[tokio::test]
+async fn a_pool_edit_through_the_route_reads_on_the_routing_log_as_the_pairs_of_the_fields_it_changed(
+) {
+    // The mirror reads the change log every `event_poll`, so a short one lands the edit's row inside the wait.
+    let parts = common::admin_parts_full_retained(phoebis_ledger::LedgerConfig {
+        event_poll: std::time::Duration::from_millis(20),
+        ..phoebis_ledger::LedgerConfig::default()
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let created = post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let created = json(created).await;
+    let patched = patch(
+        &parts.app,
+        "/admin/pools/main",
+        r#"{"label":"Main pool","in_flight_cap":4}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(patched.status(), 200);
+    let edit = |page: &serde_json::Value| {
+        page["rows"].as_array().and_then(|rows| {
+            rows.iter()
+                .find(|row| row["detail"]["kind"] == "pool_updated")
+                .cloned()
+        })
+    };
+    let page = common::wait_json(
+        &parts.app,
+        &format!(
+            "/admin/routing-log?kinds=registry_changed&from={}&to={}",
+            common::NOW - 60_000,
+            common::NOW + 60_000
+        ),
+        &cookie,
+        |page| edit(page).is_some(),
+    )
+    .await;
+    let edit = edit(&page).unwrap();
+    assert_eq!(
+        (&edit["detail"]["target"], &edit["detail"]["diff"]),
+        (
+            &serde_json::json!("main"),
+            &serde_json::json!({
+                "label": { "from": "Main", "to": "Main pool" },
+                "in_flight_cap": { "from": created["in_flight_cap"], "to": 4 },
+            })
+        ),
+        "the two fields the edit changed, each with its value before and after"
+    );
+}

@@ -1758,15 +1758,15 @@ fn a_pool_round_trips_its_slow_down_and_return_to_plan_fields() {
             (
                 "pool_updated".to_string(),
                 [
-                    serde_json::json!(false),
-                    serde_json::json!(18_000),
-                    serde_json::json!(300),
-                    serde_json::json!("when_cold"),
-                    serde_json::json!(86_400)
+                    serde_json::json!({ "from": true, "to": false }),
+                    serde_json::json!({ "from": 600, "to": 18_000 }),
+                    serde_json::json!({ "from": 30, "to": 300 }),
+                    serde_json::json!({ "from": "never", "to": "when_cold" }),
+                    serde_json::json!({ "from": 0, "to": 86_400 })
                 ]
             ),
         ],
-        "the change log names the five fields on the create and the edit"
+        "the change log names the five fields on the create's snapshot and in the edit's pairs"
     );
 }
 
@@ -2124,7 +2124,10 @@ fn a_pool_reopens_on_and_a_key_reopens_inheriting_until_set_off() {
         .rfind(|c| c.kind == "key_updated")
         .unwrap();
     let diff: serde_json::Value = serde_json::from_str(&change.diff_json).unwrap();
-    assert_eq!(diff["auto_mode_server"], serde_json::json!(false));
+    assert_eq!(
+        diff["auto_mode_server"],
+        serde_json::json!({ "from": null, "to": false })
+    );
 }
 
 #[test]
@@ -4075,7 +4078,276 @@ fn a_pool_stores_round_robin_and_the_subscription_preference_is_the_operators_al
         "the flag is the operator's answer alone; no strategy overrides it"
     );
     let change = store.registry_changes_after(0, 10).unwrap().pop().unwrap();
-    assert!(change.diff_json.contains(r#""prefer_subscription":false"#));
+    assert!(change
+        .diff_json
+        .contains(r#""prefer_subscription":{"from":true,"to":false}"#));
+}
+
+/// The kind and the diff of the newest change the log holds for `target`.
+fn last_change(store: &Store, target: &str) -> (String, serde_json::Value) {
+    let change = store
+        .registry_changes_after(0, 1_000)
+        .unwrap()
+        .into_iter()
+        .rfind(|c| c.target == target)
+        .unwrap();
+    (
+        change.kind,
+        serde_json::from_str(&change.diff_json).unwrap(),
+    )
+}
+
+/// An account write of `label` fenced on the row as it reads now, staging nothing else.
+fn account_edit<'a>(store: &Store, id: &'a str, label: &'a str) -> AccountUpdate<'a> {
+    let row = store.account(id).unwrap().unwrap();
+    AccountUpdate {
+        id,
+        expected_revision: row.revision,
+        incarnation: row.incarnation,
+        lifecycle_generation: row.lifecycle_generation,
+        label,
+        secret: None,
+        state: None,
+        at: 5,
+        actor: "admin",
+        enabled: None,
+        cancellation: None,
+    }
+}
+
+#[test]
+fn a_pool_edit_records_each_field_it_changed_with_its_value_before_and_after_and_nothing_else() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    let read = store.pool("main").unwrap().unwrap();
+    let stamp = store
+        .update_pool(
+            &PoolRow {
+                label: "Main pool".into(),
+                failover: Failover {
+                    in_flight_cap: 4,
+                    ..read.failover
+                },
+                ..read.clone()
+            },
+            read.updated_at,
+            "test",
+        )
+        .unwrap();
+    assert_eq!(
+        last_change(&store, "main"),
+        (
+            "pool_updated".to_string(),
+            serde_json::json!({
+                "label": { "from": "main", "to": "Main pool" },
+                "in_flight_cap": { "from": 16, "to": 4 },
+            })
+        ),
+        "the two fields the edit changed and no other"
+    );
+    let edited = store.pool("main").unwrap().unwrap();
+    store.update_pool(&edited, stamp, "test").unwrap();
+    assert_eq!(
+        last_change(&store, "main"),
+        ("pool_updated".to_string(), serde_json::json!({})),
+        "an edit that changed no field"
+    );
+}
+
+#[test]
+fn a_key_edit_records_each_field_it_changed_with_its_value_before_and_after_and_nothing_else() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    store
+        .insert_api_key(
+            &key(&store, "desktop", "main", "phoebis-0123456789abcdef"),
+            "test",
+        )
+        .unwrap();
+    let read = store.api_key("desktop").unwrap().unwrap();
+    let stamp = store
+        .update_api_key(
+            &ApiKeyRow {
+                label: "Desktop".into(),
+                enabled: false,
+                ..read.clone()
+            },
+            read.updated_at,
+            "test",
+        )
+        .unwrap();
+    assert_eq!(
+        last_change(&store, "desktop"),
+        (
+            "key_updated".to_string(),
+            serde_json::json!({
+                "label": { "from": "desktop", "to": "Desktop" },
+                "enabled": { "from": true, "to": false },
+            })
+        ),
+        "the two fields the edit changed and no other"
+    );
+    let edited = store.api_key("desktop").unwrap().unwrap();
+    store.update_api_key(&edited, stamp, "test").unwrap();
+    assert_eq!(
+        last_change(&store, "desktop"),
+        ("key_updated".to_string(), serde_json::json!({})),
+        "an edit that changed no field"
+    );
+}
+
+#[test]
+fn a_creation_records_the_rows_snapshot() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    store
+        .insert_api_key(
+            &key(&store, "desktop", "main", "phoebis-0123456789abcdef"),
+            "test",
+        )
+        .unwrap();
+    for (target, kind, members, label) in [
+        ("main", "pool_created", 31, "main"),
+        ("desktop", "key_created", 12, "desktop"),
+    ] {
+        let (logged, diff) = last_change(&store, target);
+        let diff = diff.as_object().unwrap().clone();
+        assert_eq!(
+            (logged.as_str(), diff.len(), &diff["label"]),
+            (kind, members, &serde_json::json!(label)),
+            "{kind} names every field with its value"
+        );
+        assert!(
+            diff.values()
+                .all(|v| !v.is_object() || v.get("from").is_none()),
+            "{kind} holds values, not pairs: {diff:?}"
+        );
+    }
+}
+
+#[test]
+fn an_account_edit_of_the_label_and_the_end_records_two_pairs_and_no_secret_flag() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .insert_account(&account("plan", AccountKind::Oauth))
+        .unwrap();
+    store.set_cancelled("plan", true, Some(1_000)).unwrap();
+    store
+        .commit_account_update(&AccountUpdate {
+            cancellation: Some((true, Some(2_000))),
+            ..account_edit(&store, "plan", "Plan")
+        })
+        .unwrap();
+    assert_eq!(
+        last_change(&store, "plan"),
+        (
+            "account_updated".to_string(),
+            serde_json::json!({
+                "label": { "from": "plan", "to": "Plan" },
+                "subscription_ends_at": { "from": 1_000, "to": 2_000 },
+            })
+        ),
+        "the label and the end, the flag the edit left as it stood, and no secret"
+    );
+}
+
+#[test]
+fn an_uncancel_records_the_end_the_update_drops_as_null() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .insert_account(&account("plan", AccountKind::Oauth))
+        .unwrap();
+    store.set_cancelled("plan", true, Some(2_000)).unwrap();
+    // The admin route stages an uncancel with the stored end, and the update drops it with the flag.
+    store
+        .commit_account_update(&AccountUpdate {
+            cancellation: Some((false, Some(2_000))),
+            ..account_edit(&store, "plan", "plan")
+        })
+        .unwrap();
+    assert_eq!(
+        store.subscription_term("plan").unwrap().unwrap().ends_at,
+        None
+    );
+    assert_eq!(
+        last_change(&store, "plan").1,
+        serde_json::json!({
+            "cancelled": { "from": true, "to": false },
+            "subscription_ends_at": { "from": 2_000, "to": null },
+        })
+    );
+}
+
+#[test]
+fn an_account_edit_that_stages_a_secret_records_the_flag_beside_its_pairs_and_never_the_secret() {
+    let store = seeded_api_key_account("vendor");
+    let secret = Secret::new("sk-ant-api03-REPLACED");
+    store
+        .commit_account_update(&AccountUpdate {
+            enabled: Some(false),
+            secret: Some(&secret),
+            state: Some((AccountState::Ready, StateCause::Operator)),
+            ..account_edit(&store, "vendor", "Vendor")
+        })
+        .unwrap();
+    assert_eq!(
+        store
+            .api_key_credential("vendor")
+            .unwrap()
+            .unwrap()
+            .0
+            .expose(),
+        "sk-ant-api03-REPLACED"
+    );
+    let change = store
+        .registry_changes_after(0, 100)
+        .unwrap()
+        .into_iter()
+        .rfind(|c| c.kind == "account_updated")
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&change.diff_json).unwrap(),
+        serde_json::json!({
+            "label": { "from": "vendor", "to": "Vendor" },
+            "enabled": { "from": true, "to": false },
+            "secret_replaced": true,
+        }),
+        "the state the secret stages was already ready, so it reads no pair"
+    );
+    assert!(
+        !change.diff_json.contains("REPLACED"),
+        "{}",
+        change.diff_json
+    );
+}
+
+#[test]
+fn an_edit_of_an_absent_pool_key_or_account_answers_not_found_and_writes_nothing() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    let logged = store.registry_changes_after(0, 100).unwrap().len();
+    assert!(matches!(
+        store.update_pool(&pool("ghost"), 1, "test"),
+        Err(StoreError::PoolNotFound(id)) if id == "ghost"
+    ));
+    assert!(matches!(
+        store.update_api_key(&key(&store, "ghost", "main", "phoebis-ghost"), 0, "test"),
+        Err(StoreError::KeyNotFound(id)) if id == "ghost"
+    ));
+    assert!(matches!(
+        rename(&store, "ghost", 1, "x", "admin"),
+        Err(StoreError::AccountNotFound(id)) if id == "ghost"
+    ));
+    assert_eq!(
+        store.registry_changes_after(0, 100).unwrap().len(),
+        logged,
+        "no change is recorded"
+    );
+    assert!(
+        store.pool("ghost").unwrap().is_none()
+            && store.api_key("ghost").unwrap().is_none()
+            && store.account("ghost").unwrap().is_none()
+    );
 }
 
 #[test]

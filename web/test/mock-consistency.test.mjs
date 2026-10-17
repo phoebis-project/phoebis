@@ -106,13 +106,15 @@ async function logOf(s) {
   return rows;
 }
 
-/** The members the store's `pool_diff` writes on a pool edit: the whole row after the save. */
+/** The members the store's `pool_diff` names, whose changed ones a pool edit carries as pairs. */
 const POOL_DIFF_MEMBERS = [
   'affinity_mode', 'affinity_ttl_seconds', 'auto_mode_server', 'body_capture_hours', 'burn_average_seconds', 'cache_diagnostics', 'cache_ttl', 'enabled', 'in_flight_cap', 'label', 'load_shedding',
   'migrate_when_spent', 'min_shared_prefix_tokens', 'model_rules', 'overage_move_grace_minutes', 'overage_policy', 'prefer_subscription', 'retry_in_place_seconds', 'return_to_plan',
   'return_to_plan_dwell_seconds', 'session_placement', 'shed_cap', 'shed_dwell_seconds', 'slow_down', 'slow_down_hold_seconds', 'slow_down_stretch_seconds', 'strategy', 'subagent_placement',
   'warm_sessions', 'wind_down_minutes', 'window_ceiling',
 ];
+/** The fields an account edit carries as pairs, beside the flag a staged secret sets. */
+const ACCOUNT_DIFF_MEMBERS = ['cancelled', 'enabled', 'label', 'state', 'subscription_ends_at'];
 
 /** Whether one tier ranks before another, compared member by member as the engine orders them. */
 const tierBefore = (x, y) => {
@@ -773,13 +775,40 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const changes = (await logOf(s)).filter((x) => x.type === 'event' && x.kind === 'registry_changed');
     const isChange = (v) => v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join() === 'from,to';
-    assert.ok(changes.some((e) => e.detail.kind === 'pool_updated') && changes.some((e) => e.detail.kind === 'key_revoked'), changes.map((e) => e.detail.kind).join(', '));
+    // A pair names a member its writer stores and a value that moved.
+    const pairsOf = (e, members) => {
+      const pairs = Object.entries(e.detail.diff).filter(([field]) => field !== 'secret_replaced');
+      assert.ok(pairs.length > 0, `${e.id}: the edit names the fields it changed`);
+      for (const [field, change] of pairs) {
+        assert.ok(members.includes(field), `${e.id}: ${field} is a field the store names`);
+        assert.ok(isChange(change) && JSON.stringify(change.from) !== JSON.stringify(change.to), `${e.id}: ${field} reads its value before and after`);
+      }
+      return Object.fromEntries(pairs);
+    };
     for (const e of changes) {
       if (e.detail.kind === 'key_revoked') assert.deepEqual(e.detail.diff, {}, `${e.id}: a revocation stores no diff`);
-      if (e.detail.kind !== 'pool_updated') continue;
-      assert.deepEqual(Object.keys(e.detail.diff).sort(), [...POOL_DIFF_MEMBERS].sort(), `${e.id}: the pool row after the save`);
-      assert.deepEqual(Object.entries(e.detail.diff).filter(([, v]) => isChange(v)).map(([k]) => k), [], `${e.id}: a member read as a change`);
+      if (e.detail.kind === 'pool_updated') {
+        const pairs = pairsOf(e, POOL_DIFF_MEMBERS);
+        assert.ok(!('secret_replaced' in e.detail.diff), `${e.id}: a pool holds no secret`);
+        // The story's one edit of the pool is its last, so each new value is the one the pool holds, its label as the
+        // pool's name.
+        const pool = s.pools.find((x) => x.id === e.detail.target);
+        assert.ok(pool, `${e.id}: the edit names a pool of the story`);
+        const member = (field) => (field === 'label' ? 'name' : field.replace(/_([a-z])/g, (_, c) => c.toUpperCase()));
+        for (const [field, change] of Object.entries(pairs)) if (member(field) in pool) assert.deepEqual(change.to, pool[member(field)], `${e.id}: ${field} reads the pool's value`);
+      }
+      if (e.detail.kind === 'account_updated') {
+        const pairs = pairsOf(e, ACCOUNT_DIFF_MEMBERS);
+        assert.equal(e.detail.diff.secret_replaced, true, `${e.id}: the edit staged a secret, which reads as the flag alone`);
+        const account = s.accounts.find((x) => x.id === e.detail.target);
+        assert.equal(account?.kind, 'api_key', `${e.id}: only an API-key account holds a secret`);
+        assert.ok(!('cancelled' in pairs) && !('subscription_ends_at' in pairs), `${e.id}: an API-key account has no end`);
+        // The story's one edit of the account is its last, so each new value is the one the account holds.
+        const held = { enabled: account.routingEnabled, label: account.label };
+        for (const [field, change] of Object.entries(pairs)) if (field in held) assert.deepEqual(change.to, held[field], `${e.id}: ${field} reads the account's value`);
+      }
     }
+    assert.ok(['account_updated', 'key_revoked', 'pool_updated'].every((kind) => changes.some((e) => e.detail.kind === kind)), changes.map((e) => e.detail.kind).join(', '));
   });
 
   test(`every cache write a record dates falls on a request of its hour, at ${at}`, async () => {

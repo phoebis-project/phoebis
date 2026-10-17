@@ -1853,8 +1853,17 @@ function expiries(): EventSeed[] {
 
 const ttlRulesDiff = (r: PoolSeed['cacheTtl']['plan']) => ({ main: r.main, models: r.models.map((m) => ({ main: m.main, model: m.model, subagent: m.subagent })), subagent: r.subagent });
 
-/** A pool edit's diff as the store's `pool_diff` writes it: the whole row after the save, under its column names. */
-function poolDiff(p: PoolSeed): Record<string, unknown> {
+/**
+ * A pool edit's diff as the store writes it: each field the save changed under its column name, with the value
+ * `before` names and the one the pool holds now.
+ */
+function poolDiff(p: PoolSeed, before: Record<string, unknown>): Record<string, unknown> {
+  const row = poolRow(p);
+  return Object.fromEntries(Object.entries(before).map(([field, from]) => [field, { from, to: row[field] }]));
+}
+
+/** A pool's row as the store's `pool_diff` writes it on a creation, under its column names. */
+function poolRow(p: PoolSeed): Record<string, unknown> {
   return {
     affinity_mode: p.affinityMode,
     affinity_ttl_seconds: p.affinityTtlSeconds,
@@ -2158,6 +2167,7 @@ function buildEvents(): RoutingEvent[] {
   const secondary = accountOf.get('secondary')!;
   const endsAt = Date.parse(secondary.subscription?.endsAt ?? '');
   const pool = poolById.get('all')!;
+  const annex = accountOf.get('annex')!;
   const beforeReset = oauthWindows('primary', fiveHourReset - 1, () => OLDER_FACTOR).find((w) => w.id === '5h')?.utilization ?? null;
   seeds.push(
     ...[roundEvent('req_1eaa9bc1-a18/1', ROUND_PINS), roundEvent('req_9f2e7c5a-c49/2', STRETCH_PINS), roundEvent('req_6e1f3b98-a24/1', NO_RUNWAY_PINS), roundEvent('req_3e7a5c19-f84/1', FABLE_WEEK_PINS)].flatMap((e) => (e === null ? [] : [e])),
@@ -2183,7 +2193,17 @@ function buildEvents(): RoutingEvent[] {
       kind: 'fast_credits_changed',
     },
     { accountId: 'nightly', at: iso(OVERAGE_FROM), detail: {}, kind: 'overage_started' },
-    { accountId: null, actor: 'admin', at: iso(t(9, 5, 12)), detail: { diff: poolDiff(pool), kind: 'pool_updated', target: 'all' }, kind: 'registry_changed', poolId: 'all' },
+    // The edit that renamed the pool and set its ceiling.
+    { accountId: null, actor: 'admin', at: iso(t(9, 5, 12)), detail: { diff: poolDiff(pool, { label: 'All', window_ceiling: 0.95 }), kind: 'pool_updated', target: 'all' }, kind: 'registry_changed', poolId: 'all' },
+    // The annex unpaused and renamed with its secret replaced: the store records the secret as its flag alone, and the
+    // ledger's row names the account in its target alone.
+    {
+      accountId: null,
+      actor: 'admin',
+      at: iso(t(9, 8, 30)),
+      detail: { diff: { enabled: { from: false, to: annex.routingEnabled }, label: { from: 'annex', to: annex.label }, secret_replaced: true }, kind: 'account_updated', target: 'annex' },
+      kind: 'registry_changed',
+    },
     // The ci key's revocation, after the last request it reached selection with.
     { accountId: null, actor: 'admin', at: iso(KEY_REVOKED_AT), detail: { diff: {}, kind: 'key_revoked', target: 'ci' }, keyId: 'ci', kind: 'registry_changed' },
     { accountId: 'primary', at: iso(t(9, 0, 41)), detail: { added: ['claude-opus-5-5'], count: 12, removed: [] }, kind: 'catalog_changed' },

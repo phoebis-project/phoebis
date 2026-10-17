@@ -916,6 +916,14 @@ impl Store {
         self.park_on_pool_write_hold();
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let before = tx
+            .query_row(
+                &format!("{POOL_SELECT} WHERE id = ?1"),
+                params![row.id],
+                row_to_pool,
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::PoolNotFound(row.id.clone()))?;
         let at = stamp_past(self.now_ms(), expected_updated_at);
         let updated = tx.execute(
             "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, window_ceiling = ?7, model_rules_json = ?8, keepalive_json = ?9, body_capture_hours = ?10, prefer_subscription = ?11, shed_cap = ?12, burn_average_seconds = ?13, shed_dwell_seconds = ?14, load_shedding = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, overage_move_grace_minutes = ?20, wind_down_minutes = ?21, cache_ttl_json = ?22, cache_diagnostics = ?23, affinity_mode = ?24, subagent_placement = ?25, session_placement = ?26, min_shared_prefix_tokens = ?27, auto_mode_server = ?28, slow_down = ?29, slow_down_stretch_seconds = ?30, slow_down_hold_seconds = ?31, return_to_plan = ?32, return_to_plan_dwell_seconds = ?33, updated_at = ?34 WHERE id = ?1 AND updated_at = ?35 AND incarnation = ?36",
@@ -958,19 +966,18 @@ impl Store {
                 row.incarnation as i64
             ],
         )?;
+        // The row stands, read above, so a fence that matched nothing means another write moved it.
         if updated == 0 {
-            let exists: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM pools WHERE id = ?1",
-                params![row.id],
-                |r| r.get(0),
-            )?;
-            return Err(if exists > 0 {
-                StoreError::Stale
-            } else {
-                StoreError::PoolNotFound(row.id.clone())
-            });
+            return Err(StoreError::Stale);
         }
-        record_change(&tx, at, actor, "pool_updated", &row.id, &pool_diff(row))?;
+        record_change(
+            &tx,
+            at,
+            actor,
+            "pool_updated",
+            &row.id,
+            &pool_pairs(&before, row),
+        )?;
         if let Some(members) = members {
             set_pool_members_in(&tx, &row.id, members, at, actor)?;
         }
@@ -1146,6 +1153,11 @@ impl Store {
         {
             return Err(StoreError::PoolNotFound(row.pool_id.clone()));
         }
+        let key_row = format!("{KEY_SELECT} WHERE id = ?1");
+        let before = tx
+            .query_row(&key_row, params![row.id], row_to_key)
+            .optional()?
+            .ok_or_else(|| StoreError::KeyNotFound(row.id.clone()))?;
         let at = stamp_past(self.now_ms(), expected_updated_at);
         let updated = tx.execute(
             "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, auto_mode_server = ?12, updated_at = ?13 WHERE id = ?1 AND updated_at = ?14 AND incarnation = ?15",
@@ -1167,19 +1179,20 @@ impl Store {
                 row.incarnation as i64
             ],
         )?;
+        // The row stands, read above, so a fence that matched nothing means another write moved it.
         if updated == 0 {
-            let exists: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM api_keys WHERE id = ?1",
-                params![row.id],
-                |r| r.get(0),
-            )?;
-            return Err(if exists > 0 {
-                StoreError::Stale
-            } else {
-                StoreError::KeyNotFound(row.id.clone())
-            });
+            return Err(StoreError::Stale);
         }
-        record_change(&tx, at, actor, "key_updated", &row.id, &key_diff(row))?;
+        // Read back rather than taken from `row`: the edit leaves the display prefix, which the pairs name too.
+        let after = tx.query_row(&key_row, params![row.id], row_to_key)?;
+        record_change(
+            &tx,
+            at,
+            actor,
+            "key_updated",
+            &row.id,
+            &key_pairs(&before, &after),
+        )?;
         tx.commit()?;
         Ok(at)
     }
@@ -1455,6 +1468,9 @@ impl Store {
     pub fn commit_account_update(&self, u: &AccountUpdate<'_>) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let absent = || StoreError::AccountNotFound(u.id.to_string());
+        let before = crate::accounts::account_in(&tx, u.id)?.ok_or_else(absent)?;
+        let term = crate::accounts::subscription_term_in(&tx, u.id)?.ok_or_else(absent)?;
         let cancelled = u.cancellation.map(|(cancelled, _)| cancelled);
         let ends_at = u.cancellation.and_then(|(_, ends_at)| ends_at);
         let (state, cause) = u.state.unzip();
@@ -1480,17 +1496,9 @@ impl Store {
                 cause,
             ],
         )?;
+        // The row stands, read above, so a fence that matched nothing means another write moved it.
         if updated == 0 {
-            let exists: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM accounts WHERE id = ?1",
-                params![u.id],
-                |r| r.get(0),
-            )?;
-            return Err(if exists > 0 {
-                StoreError::Stale
-            } else {
-                StoreError::AccountNotFound(u.id.to_string())
-            });
+            return Err(StoreError::Stale);
         }
         if let Some(secret) = u.secret {
             store_api_key_secret(&tx, &self.key, u.id, secret)?;
@@ -1501,15 +1509,7 @@ impl Store {
             u.actor,
             "account_updated",
             u.id,
-            &serde_json::json!({
-                "label": u.label,
-                "secret": u.secret.is_some(),
-                "state": state.map(AccountState::as_str),
-                "enabled": u.enabled,
-                "cancelled": cancelled,
-                "subscription_ends_at": ends_at,
-            })
-            .to_string(),
+            &account_pairs(&before, u, &term),
         )?;
         tx.commit()?;
         Ok(())
@@ -1709,6 +1709,16 @@ fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
 }
 
 fn pool_diff(row: &PoolRow) -> String {
+    pool_fields(row).to_string()
+}
+
+/// The pairs of the fields whose value differs between `before` and `after`, over the fields `pool_diff` names,
+/// `{}` when none does.
+fn pool_pairs(before: &PoolRow, after: &PoolRow) -> String {
+    serde_json::Value::Object(changed(&pool_fields(before), &pool_fields(after))).to_string()
+}
+
+fn pool_fields(row: &PoolRow) -> serde_json::Value {
     serde_json::json!({
         "label": row.label,
         "enabled": row.enabled,
@@ -1742,11 +1752,18 @@ fn pool_diff(row: &PoolRow) -> String {
         "min_shared_prefix_tokens": row.affinity.min_shared_prefix_tokens,
         "auto_mode_server": row.auto_mode_server,
     })
-    .to_string()
+}
+
+fn key_diff(row: &ApiKeyRow) -> String {
+    key_fields(row).to_string()
+}
+
+fn key_pairs(before: &ApiKeyRow, after: &ApiKeyRow) -> String {
+    serde_json::Value::Object(changed(&key_fields(before), &key_fields(after))).to_string()
 }
 
 /// Never the digest: the change log is read by the ledger and the UI.
-fn key_diff(row: &ApiKeyRow) -> String {
+fn key_fields(row: &ApiKeyRow) -> serde_json::Value {
     serde_json::json!({
         "label": row.label,
         "pool_id": row.pool_id,
@@ -1760,5 +1777,52 @@ fn key_diff(row: &ApiKeyRow) -> String {
         "prefix": row.prefix,
         "auto_mode_server": row.auto_mode_server,
     })
-    .to_string()
+}
+
+/// The account's pairs over the five editable fields, `secret_replaced` beside them when a secret was staged. The
+/// row holds the label, the state and the switch, and the term row the flag and the end.
+fn account_pairs(before: &AccountRow, u: &AccountUpdate<'_>, term: &SubscriptionTerm) -> String {
+    // As the update's `CASE` writes them: the end goes with the flag, dropped the moment the flag is off.
+    let (cancelled, ends_at) = match u.cancellation {
+        None => (term.cancelled, term.ends_at),
+        Some((true, ends_at)) => (true, ends_at),
+        Some((false, _)) => (false, None),
+    };
+    let old = serde_json::json!({
+        "label": before.label,
+        "enabled": before.enabled,
+        "state": before.state.as_str(),
+        "cancelled": term.cancelled,
+        "subscription_ends_at": term.ends_at,
+    });
+    let new = serde_json::json!({
+        "label": u.label,
+        "enabled": u.enabled.unwrap_or(before.enabled),
+        "state": u.state.map_or(before.state, |(state, _)| state).as_str(),
+        "cancelled": cancelled,
+        "subscription_ends_at": ends_at,
+    });
+    let mut pairs = changed(&old, &new);
+    // A secret's value never reaches the log, which the ledger and the UI read.
+    if u.secret.is_some() {
+        pairs.insert("secret_replaced".into(), serde_json::Value::Bool(true));
+    }
+    serde_json::Value::Object(pairs).to_string()
+}
+
+/// Each member whose value differs between two snapshots of one row, as `{"from": old, "to": new}`.
+fn changed(
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+) -> serde_json::Map<String, serde_json::Value> {
+    let (Some(before), Some(after)) = (before.as_object(), after.as_object()) else {
+        return serde_json::Map::new();
+    };
+    before
+        .iter()
+        .filter_map(|(field, from)| {
+            let to = after.get(field).unwrap_or(&serde_json::Value::Null);
+            (from != to).then(|| (field.clone(), serde_json::json!({ "from": from, "to": to })))
+        })
+        .collect()
 }

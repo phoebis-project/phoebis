@@ -14,7 +14,7 @@ export { ageWord };
 // The routing log's words. The routes answer structured values and no English, so a label change touches this module
 // alone and never a route or a fixture.
 
-export type FactLabel = '5h' | '7d' | 'Fable' | 'answer' | 'attempt' | 'capture' | 'cause' | 'client' | 'depth' | 'epoch' | 'field' | 'fields' | 'fit' | 'gap' | 'held' | 'idle' | 'in flight' | 'key' | 'lasted' | 'models' | 'next' | 'over' | 'pick' | 'pins' | 'prefix' | 'rank' | 'resets' | 'retry' | 'runway' | 'slow-down' | 'slowest' | 'speed' | 'spent' | 'state' | 'to' | 'turn' | 'until' | 'was';
+export type FactLabel = '5h' | '7d' | 'Fable' | 'answer' | 'attempt' | 'capture' | 'cause' | 'client' | 'depth' | 'epoch' | 'field' | 'fields' | 'fit' | 'gap' | 'held' | 'idle' | 'in flight' | 'key' | 'lasted' | 'models' | 'next' | 'over' | 'pick' | 'pins' | 'prefix' | 'rank' | 'resets' | 'retry' | 'runway' | 'secret' | 'slow-down' | 'slowest' | 'speed' | 'spent' | 'state' | 'to' | 'turn' | 'until' | 'was';
 
 const LABELS = {
   answer: 'answer',
@@ -46,6 +46,7 @@ const LABELS = {
   resets: 'resets',
   retry: 'retry',
   runway: 'runway',
+  secret: 'secret',
   seven_day: '7d',
   seven_day_fable: 'Fable',
   slow_down: 'slow-down',
@@ -427,11 +428,21 @@ const registryBy = (kind: string) => {
   return at < 0 ? words(kind) : `${kind.slice(0, at)} ${wordOf(REGISTRY_VERB, kind.slice(at + 1))}`;
 };
 
-const fieldValue = (field: string, value: unknown) => {
+/** The registry fields that hold an instant: a key's expiry and an account's subscription end. */
+const TIME_FIELDS = new Set(['expires_at', 'subscription_ends_at']);
+
+const fieldValue = (field: string, value: unknown, now: number) => {
   if (value === null || value === undefined) return 'none';
   if (typeof value === 'boolean') return value ? 'on' : 'off';
   if (typeof value === 'number' && SHARE_FIELDS.has(field)) return fmtPct(value);
+  if (typeof value === 'number' && TIME_FIELDS.has(field)) return formatFact(value, 'time', now);
   return typeof value === 'object' ? JSON.stringify(value) : String(value);
+};
+
+/** A registry change's field entries without the flag a staged secret sets, and whether it stands. */
+const registryDiff = (diff: unknown): { entries: [string, unknown][]; secret: boolean } => {
+  const { secret_replaced: secret, ...rest } = rec(diff);
+  return { entries: Object.entries(rest), secret: secret === true };
 };
 
 function cooldownBy(e: RoutingEvent): string {
@@ -623,13 +634,13 @@ function eventFacts(e: RoutingEvent, now: number, page: readonly RoutingLogRow[]
     case 'refresh_succeeded':
       return time('until', d.access_expires_at);
     case 'registry_changed': {
-      // Only a diff whose every entry is a change names its fields, and the whole row the store writes on an edit names
-      // none.
-      const diff = Object.entries(rec(d.diff));
-      if (diff.length === 0 || !diff.every(([, change]) => isChange(change))) return [];
+      // Only a diff whose every entry is a change names its fields: a creation's snapshot names none.
+      const { entries: diff, secret } = registryDiff(d.diff);
+      if (diff.length === 0) return secret ? [pair('secret', 'replaced', 'text', now)] : [];
+      if (!diff.every(([, change]) => isChange(change))) return [];
       if (diff.length > 1) return [pair('fields', diff.length, 'count', now)];
       const [field, change] = diff[0];
-      return [pair('field', fieldLabel(field), 'text', now), pair('to', fieldValue(field, rec(change).to), 'text', now)];
+      return [pair('field', fieldLabel(field), 'text', now), pair('to', fieldValue(field, rec(change).to, now), 'text', now)];
     }
     case 'router_started':
       return count('pins', d.pins_loaded);
@@ -1791,18 +1802,20 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       const target = str(d.target);
       const subject = kind.slice(0, kind.indexOf('_'));
       add('Change', plain(registryBy(kind)), target === null ? null : subject === 'pool' || subject === 'key' || subject === 'account' ? { entity: { id: target, kind: subject }, value: target } : plain(target));
-      const diff = Object.entries(rec(d.diff));
+      const { entries: diff, secret } = registryDiff(d.diff);
       const primitive = (v: unknown) => v === null || ['boolean', 'number', 'string'].includes(typeof v);
       if (diff.every(([, change]) => isChange(change) && primitive(rec(change).from) && primitive(rec(change).to))) {
-        for (const [field, change] of diff) add(fieldLabel(field), plain(fieldValue(field, rec(change).from), 'from'), plain(fieldValue(field, rec(change).to), 'to'));
+        for (const [field, change] of diff) add(fieldLabel(field), plain(fieldValue(field, rec(change).from, now), 'from'), plain(fieldValue(field, rec(change).to, now), 'to'));
       } else {
         add('Fields', plain(fmtInt(diff.length)));
       }
+      if (secret) add('Secret', plain('replaced'));
       add('Actor', row.actor === null ? null : plain(row.actor));
-      // A record holds the settings it was decided under, so one written before the edit reads each field's old value.
-      if (diff.every(([, change]) => isChange(change))) {
+      // A record holds the pool's settings it was decided under, so one written before a pool's edit reads each field's
+      // old value.
+      if (kind === 'pool_updated' && diff.every(([, change]) => isChange(change))) {
         const before = formatFact(atOf(row), 'time', now);
-        add('Reading it', ...diff.filter(([, change]) => ['boolean', 'number', 'string'].includes(typeof rec(change).from) || rec(change).from === null).map(([field, change]) => plain(`decisions before ${before} carry ${fieldLabel(field)} ${fieldValue(field, rec(change).from)}`)));
+        add('Reading it', ...diff.filter(([, change]) => ['boolean', 'number', 'string'].includes(typeof rec(change).from) || rec(change).from === null).map(([field, change]) => plain(`decisions before ${before} carry ${fieldLabel(field)} ${fieldValue(field, rec(change).from, now)}`)));
       }
       break;
     }

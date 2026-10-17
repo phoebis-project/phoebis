@@ -109,7 +109,7 @@ const failover = (reason, status) => [
   decision({ accountId: 'primary', at: iso(at + 300), attempt: 2, attemptCount: 2, by: strategy('pace', [0, 0, 0]), fast: reason === 'fast_lane', fromAccountId: 'secondary', requestId: `req_${reason}`, seq: 2, sessionId: 's-moved', status: 200, tier: [0, 0, 0] }),
   decision({ accountId: 'secondary', at: iso(at - 1_200), attempt: 1, attemptCount: 2, by: strategy('pace', [0, 0, 0]), fast: reason === 'fast_lane', requestId: `req_${reason}`, seq: 1, sessionId: 's-moved', status, tier: [0, 0, 0] }),
 ];
-/** The pool row as the store writes it on every edit: each field's current value, with no record of the old one. */
+/** A pool's whole row under the names it carried before the renames: each field's value, with no old one beside it. */
 const WHOLE_POOL_ROW = {
   label: 'All', enabled: true, strategy: 'pace', affinity_ttl_seconds: 600, overage_policy: 'prefer_plan', shed_ahead_of_pace: 0.9, select_below_utilization: null, model_rules: [],
   body_capture_hours: 24, prefer_subscription: true, shed_share: 0.5, burn_window_seconds: 600, source_dwell_seconds: 900, migrate_when_spent: true, warm_sessions: 'when_needed',
@@ -145,6 +145,11 @@ const EVENTS = [
   ['registry changed, several fields', event('registry_changed', { diff: { in_flight_cap: { from: 16, to: 8 }, pace_floor: { from: 0, to: 0.1 }, strategy: { from: 'pace', to: 'priority' } }, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', ['fields 3']],
   ['registry changed, the whole pool row', event('registry_changed', { diff: WHOLE_POOL_ROW, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', []],
   ['registry changed, a key revoked', event('registry_changed', { diff: {}, kind: 'key_revoked', target: 'ci' }, { accountId: null, actor: 'admin', keyId: 'ci' }), 'key revoked', []],
+  ['registry changed, an account edit of one field', event('registry_changed', { diff: { label: { from: 'annex', to: 'Studio annex' } }, kind: 'account_updated', target: 'annex' }, { accountId: null, actor: 'admin' }), 'account edited', ['field label', 'to Studio annex']],
+  ['registry changed, a field beside a replaced secret', event('registry_changed', { diff: { label: { from: 'annex', to: 'Studio annex' }, secret_replaced: true }, kind: 'account_updated', target: 'annex' }, { accountId: null, actor: 'admin' }), 'account edited', ['field label', 'to Studio annex']],
+  ['registry changed, a replaced secret alone', event('registry_changed', { diff: { secret_replaced: true }, kind: 'account_updated', target: 'annex' }, { accountId: null, actor: 'admin' }), 'account edited', ['secret replaced']],
+  ['registry changed, an end', event('registry_changed', { diff: { subscription_ends_at: { from: null, to: ms(18, 0) } }, kind: 'account_updated', target: 'secondary' }, { accountId: null, actor: 'admin' }), 'account edited', ['field subscription ends at', 'to 18:00']],
+  ['registry changed, a key expiry', event('registry_changed', { diff: { expires_at: { from: null, to: MIDNIGHT + 9 * 24 * HOUR } }, kind: 'key_updated', target: 'ci' }, { accountId: null, actor: 'admin' }), 'key edited', ['field expires at', 'to Sep 26 00:00']],
   ['refresh succeeded', event('refresh_succeeded', { access_expires_at: ms(20, 52), refresh_expires_at: null, until: ms(20, 52) }), 'refreshed', ['until 20:52']],
   ['refresh failed', event('refresh_failed', { cause: 'invalid_grant', error: 'refresh rejected with status 400 (invalid_grant)' }), 'refresh failed', ['cause invalid_grant']],
   ['refresh uncertain', event('refresh_uncertain', { cause: 'refresh_response_lost', error: 'refresh response lost: connection reset' }), 'refresh uncertain', ['cause refresh_response_lost']],
@@ -246,13 +251,13 @@ test('a fact key the console has no label for is dropped rather than drawn under
 
 const TABLE_LABELS = [
   '5h', '7d', 'Fable', 'answer', 'attempt', 'capture', 'cause', 'client', 'depth', 'epoch', 'field', 'fields', 'fit', 'gap', 'held', 'idle', 'in flight', 'key', 'lasted', 'models', 'next', 'over', 'pick', 'pins', 'prefix',
-  'rank', 'resets', 'retry', 'runway', 'slow-down', 'slowest', 'speed', 'spent', 'state', 'to', 'turn', 'until', 'was',
+  'rank', 'resets', 'retry', 'runway', 'secret', 'slow-down', 'slowest', 'speed', 'spent', 'state', 'to', 'turn', 'until', 'was',
 ];
 
 test('every label of the table is used at least once and no fact key lacks a label', () => {
-  assert.equal(TABLE_LABELS.length, 38);
+  assert.equal(TABLE_LABELS.length, 39);
   assert.deepEqual([...new Set(Object.values(d.FACT_LABEL))].sort(), [...TABLE_LABELS].sort());
-  assert.equal(Object.keys(d.FACT_LABEL).length, 38);
+  assert.equal(Object.keys(d.FACT_LABEL).length, 39);
   const emitted = [...DECISIONS, ...EVENTS].flatMap(([, row, , , page]) => d.factsOf(row, NOW, page).map((p) => p.label));
   // The slow-down's word names the By of its rows, the held decision's and the two events', where no fact carries it.
   const named = [...DECISIONS, ...EVENTS].map(([, , by]) => by).filter((by) => TABLE_LABELS.includes(by));
@@ -1164,6 +1169,26 @@ test('the event detail draws the pairs its event carries: the effect, the meanin
   assert.deepEqual(edit['shed ahead of pace (removed)'], ['from none', 'to 90%']);
   assert.deepEqual(edit['Reading it'], ['decisions before 09:05 carry pace floor (removed) 5%', 'decisions before 09:05 carry shed ahead of pace (removed) none']);
   assert.deepEqual(pairs('poll_backoff_ended', { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) })['Backed off'], ['from 07:50', 'to 08:15']);
+});
+
+test("an account edit's drawer reads each pair and the replaced secret beside them, with no reading of decisions", () => {
+  const pairs = (diff, kind = 'account_updated', target = 'annex') =>
+    d.detailPairs(event('registry_changed', { diff, kind, target }, { accountId: null, actor: 'admin', at: iso(ms(9, 8, 30)) }), NOW, []).map((p) => [p.label, texts(p.chips)]);
+  assert.deepEqual(pairs({ label: { from: 'annex', to: 'Studio annex' }, secret_replaced: true }), [
+    ['When', ['2026-09-16 09:08:30 UTC']],
+    ['Change', ['account edited', 'annex']],
+    ['label', ['from annex', 'to Studio annex']],
+    ['Secret', ['replaced']],
+    ['Actor', ['admin']],
+  ]);
+  assert.deepEqual(pairs({ secret_replaced: true }).slice(1), [['Change', ['account edited', 'annex']], ['Secret', ['replaced']], ['Actor', ['admin']]], 'the flag alone');
+  // A decision record carries the pool's settings it was decided under, so a pool's edit alone reads one.
+  const key = pairs({ enabled: { from: true, to: false }, expires_at: { from: null, to: MIDNIGHT + 9 * 24 * HOUR } }, 'key_updated', 'ci');
+  assert.deepEqual(key.slice(1), [['Change', ['key edited', 'ci']], ['enabled', ['from on', 'to off']], ['expires at', ['from none', 'to Sep 26 00:00']], ['Actor', ['admin']]]);
+  const end = pairs({ cancelled: { from: false, to: true }, subscription_ends_at: { from: null, to: ms(18, 0) } }, 'account_updated', 'secondary');
+  assert.deepEqual(end.slice(2), [['cancelled', ['from off', 'to on']], ['subscription ends at', ['from none', 'to 18:00']], ['Actor', ['admin']]]);
+  const pool = pairs({ window_ceiling: { from: 0.95, to: 0.75 } }, 'pool_updated', 'all');
+  assert.deepEqual(pool.slice(-1), [['Reading it', ['decisions before 09:08 carry window ceiling 95%']]], 'a pool edit keeps its reading');
 });
 
 test('a registry change reads the renamed pool settings by their new word, marks the removed ones and reads each fraction as a percent', () => {
