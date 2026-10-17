@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, minuteSpan, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, minuteSpan, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -879,12 +879,13 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // nightly and studio, over 16 pinned rows, so a hero counting the pinned rows or a note counting every row's account
   // reads otherwise. A hero counting every session row reads otherwise only while the story's row count differs from
   // its pins, so the count is read first and a story where the two meet fails here.
+  const PINS = 30;
   const sessionRows = (await api.listSessions()).length;
   const hero = m.container.querySelector('.sess-summary__hero');
   results.push({
     name: "/ the sessions card counts the router's live pins, which the story keeps apart from its session rows, over the pinned rows' accounts",
-    ok: sessionRows !== 30 && hero?.querySelector('.stat__value')?.textContent === '30' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 3 accounts',
-    missing: [`${sessionRows} session rows against 30 pins`, hero?.textContent ?? 'absent'],
+    ok: sessionRows !== PINS && hero?.querySelector('.stat__value')?.textContent === String(PINS) && hero?.querySelector('.stat__note')?.textContent === 'active pins across 3 accounts',
+    missing: [`${sessionRows} session rows against ${PINS} pins`, hero?.textContent ?? 'absent'],
   });
   // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
   // the tier match reads in camelCase.
@@ -1249,9 +1250,10 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
 }
 {
   // A narrow card cuts its chip row from the end: the last chip gives up its room and ends in an ellipsis, and the
-  // chips before it keep their width.
+  // chips before it keep their width. A chip is an inline flex box, which draws no ellipsis, so the last one takes a
+  // block of its own.
   const last = declarationsOf('.qcard__chips .chip:last-child');
-  const want = { flex: '0 1 auto', 'min-width': '0', overflow: 'hidden', 'text-overflow': 'ellipsis' };
+  const want = { display: 'inline-block', flex: '0 1 auto', 'min-width': '0', overflow: 'hidden', 'text-overflow': 'ellipsis' };
   const off = Object.entries(want).filter(([property, value]) => last[property] !== value).map(([property, value]) => `${property}: ${last[property] ?? 'absent'}, not ${value}`);
   const others = declarationsOf('.qcard__chips .chip').flex ?? 'absent';
   const drawn = m.container.querySelectorAll('.qcard__chips .chip:last-child').length;
@@ -1263,7 +1265,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
 }
 {
   // A pill passes `active` only as a toggle, and every pill the view draws is a one-shot action, so none reads as
-  // pressed or not.
+  // pressed or not. No view draws a toggle pill, so the toggle pair and an action pill beside it are mounted here.
   const pills = [...m.container.querySelectorAll('button.pill')];
   const pressed = pills.filter((p) => p.hasAttribute('aria-pressed')).map((p) => `${p.textContent?.trim()}: aria-pressed ${p.getAttribute('aria-pressed')}`);
   const labels = [...new Set(pills.map((p) => p.textContent?.trim() ?? ''))].sort();
@@ -1271,6 +1273,15 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
     name: '/quota the Refresh all, Refresh and Retry pills are actions and carry no pressed state',
     ok: JSON.stringify(labels) === JSON.stringify(['Refresh', 'Refresh all', 'Retry']) && pressed.length === 0,
     missing: [JSON.stringify(labels), ...pressed.slice(0, 5)],
+  });
+  const { createElement: h, Fragment } = React;
+  const node = await mountNode(h(Fragment, null, h(Pill, { active: true, onClick() {} }, 'On'), h(Pill, { active: false, onClick() {} }, 'Off'), h(Pill, { onClick() {} }, 'Act')));
+  const read = [...node.container.querySelectorAll('button.pill')].map((p) => [p.textContent?.trim() ?? '', p.getAttribute('aria-pressed')]);
+  node.unmount();
+  results.push({
+    name: 'a toggle pill reads pressed or not, and an action pill beside it carries no pressed state',
+    ok: JSON.stringify(read) === JSON.stringify([['On', 'true'], ['Off', 'false'], ['Act', null]]),
+    missing: [JSON.stringify(read)],
   });
 }
 {
