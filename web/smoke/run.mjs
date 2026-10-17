@@ -131,6 +131,32 @@ const fillTitles = (name, table, estimated = false) => {
   const off = cells.filter((td) => (td.getAttribute('title') ?? '') !== (td.textContent?.trim() ?? '') && !marked(td)).map((td) => `${JSON.stringify(td.textContent?.trim())}: ${td.getAttribute('title') ?? 'no title'}`);
   results.push({ name, ok: cells.length > 0 && off.length === 0 && (!estimated || cells.some(marked)), missing: [`${cells.length} fill cells, ${cells.filter(marked).length} marked`, ...off.slice(0, 5)] });
 };
+/**
+ * The declarations `pages.css` gives `selector` in its top-level rules whose selector list names it, a later rule's
+ * value over an earlier one's. The smoke bundle drops the CSS and jsdom lays nothing out, so a layout rule is read
+ * off the stylesheet's text. A rule under an at-rule is left out, since it holds only where its condition does.
+ */
+const declarationsOf = (selector) => {
+  const css = readFileSync(new URL('../src/styles/pages.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const read = {};
+  let depth = 0;
+  let from = 0;
+  let head = '';
+  for (let i = 0; i < css.length; i += 1) {
+    if (css[i] === '{') {
+      if (depth === 0) [head, from] = [css.slice(from, i).trim(), i + 1];
+      depth += 1;
+    } else if (css[i] === '}') {
+      depth -= 1;
+      if (depth > 0) continue;
+      if (!head.startsWith('@') && head.split(',').map((s) => s.trim().replace(/\s+/g, ' ')).includes(selector)) {
+        for (const [, property, value] of css.slice(from, i).matchAll(/([\w-]+)\s*:\s*([^;]+)/g)) read[property] = value.trim();
+      }
+      from = i + 1;
+    }
+  }
+  return read;
+};
 /** A rail entry by its group's id, never its text, so a refused entry's annotation cannot hide it. */
 const rail = (dlg, id) => dlg?.querySelector(`.dialog-rail__group[data-group="${id}"]`);
 const buttonIn = (dlg, label) => [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === label);
@@ -851,9 +877,15 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
 {
   // The story's pools hold 25, 0 and 5 pins, one per key, session, agent and model under their keys, on primary,
   // nightly and studio, over 16 pinned rows, so a hero counting the pinned rows or a note counting every row's account
-  // reads otherwise.
+  // reads otherwise. A hero counting every session row reads otherwise only while the story's row count differs from
+  // its pins, so the count is read first and a story where the two meet fails here.
+  const sessionRows = (await api.listSessions()).length;
   const hero = m.container.querySelector('.sess-summary__hero');
-  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '30' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 3 accounts', missing: [hero?.textContent ?? 'absent'] });
+  results.push({
+    name: "/ the sessions card counts the router's live pins, which the story keeps apart from its session rows, over the pinned rows' accounts",
+    ok: sessionRows !== 30 && hero?.querySelector('.stat__value')?.textContent === '30' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 3 accounts',
+    missing: [`${sessionRows} session rows against 30 pins`, hero?.textContent ?? 'absent'],
+  });
   // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
   // the tier match reads in camelCase.
   const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
@@ -1213,6 +1245,32 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
       (secondaryEnd.getAttribute('title') ?? '').startsWith(new Date(secondaryAccount.subscription.endsAt).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })) &&
       endChips('primary').length === 0,
     missing: [secondaryEnd?.textContent?.trim() ?? 'no end chip on secondary', String(secondaryEnd?.className), secondaryEnd?.getAttribute('title') ?? 'no title', `primary ${endChips('primary').length}`],
+  });
+}
+{
+  // A narrow card cuts its chip row from the end: the last chip gives up its room and ends in an ellipsis, and the
+  // chips before it keep their width.
+  const last = declarationsOf('.qcard__chips .chip:last-child');
+  const want = { flex: '0 1 auto', 'min-width': '0', overflow: 'hidden', 'text-overflow': 'ellipsis' };
+  const off = Object.entries(want).filter(([property, value]) => last[property] !== value).map(([property, value]) => `${property}: ${last[property] ?? 'absent'}, not ${value}`);
+  const others = declarationsOf('.qcard__chips .chip').flex ?? 'absent';
+  const drawn = m.container.querySelectorAll('.qcard__chips .chip:last-child').length;
+  results.push({
+    name: "/quota the quota card's last chip shrinks and ends in an ellipsis, and the chips before it keep their width",
+    ok: drawn > 0 && off.length === 0 && others === 'none',
+    missing: [`${drawn} cards with a last chip`, ...off, `the other chips' flex ${others}`],
+  });
+}
+{
+  // A pill passes `active` only as a toggle, and every pill the view draws is a one-shot action, so none reads as
+  // pressed or not.
+  const pills = [...m.container.querySelectorAll('button.pill')];
+  const pressed = pills.filter((p) => p.hasAttribute('aria-pressed')).map((p) => `${p.textContent?.trim()}: aria-pressed ${p.getAttribute('aria-pressed')}`);
+  const labels = [...new Set(pills.map((p) => p.textContent?.trim() ?? ''))].sort();
+  results.push({
+    name: '/quota the Refresh all, Refresh and Retry pills are actions and carry no pressed state',
+    ok: JSON.stringify(labels) === JSON.stringify(['Refresh', 'Refresh all', 'Retry']) && pressed.length === 0,
+    missing: [JSON.stringify(labels), ...pressed.slice(0, 5)],
   });
 }
 {
@@ -5286,6 +5344,16 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       missing: [JSON.stringify(gridSelects), ...names, ...labels],
     });
     columnsMarked('/pools the model rules table marks Model as its fill column and every other column fit', dlg?.querySelector('[data-rule-set="plan"] table'), ['Model']);
+    {
+      // The model cell reads the short id, and its title the whole id the rule is written for.
+      const cells = [...(dlg?.querySelectorAll('[data-rule-set="plan"] table tbody tr') ?? [])].map((tr) => ({ text: tr.children[0]?.textContent?.trim() ?? '', title: tr.children[0]?.getAttribute('title') ?? null }));
+      const off = cells.filter((c) => c.title === null || c.text !== shortModel(c.title));
+      results.push({
+        name: "/pools the cache TTL table names each model by its short id with the whole id on the cell's title",
+        ok: cells.length > 0 && off.length === 0 && cells.some((c) => c.text !== c.title),
+        missing: [`${cells.length} model rows`, ...off.slice(0, 5).map((c) => `${c.text} titled ${c.title ?? 'nothing'}`)],
+      });
+    }
     const writeCost = [...(ttl?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Write cost');
     const gridHint = ttl?.querySelector('.ttl-grid')?.closest('.field')?.querySelector(':scope > .field__hint')?.textContent ?? '';
     const meteredMain = ttl?.querySelector('select[aria-label="Metered writes main conversation TTL"]');
@@ -13629,6 +13697,33 @@ m.unmount();
   results.push({ name: '/analytics Try again reads the new filters again', ok: !page.text().includes('Could not load the analytics for these filters') && JSON.stringify(keyRows()) === JSON.stringify(['desktop']), missing: keyRows() });
   page.unmount();
 }
+{
+  // Two lifetimes of one key id can share a label, and the Key list names the older first. The story holds no such
+  // pair, so the key answer here gains two, the newer handed over first, and the first of them drawn is the one a
+  // click picks.
+  const OLDER = CLOCK_ORIGIN - 2 * 86_400_000;
+  const NEWER = CLOCK_ORIGIN - 3_600_000;
+  const { getAnalyticsBreakdown } = api;
+  api.getAnalyticsBreakdown = async (q) => {
+    const groups = await getAnalyticsBreakdown.call(api, q);
+    const twin = (generation) => ({ ...groups[0], key: `twin@${generation}`, keyCreatedAt: generation, keyId: 'twin', label: 'twin' });
+    return q.groupBy === 'key' && groups.length > 0 ? [...groups, twin(NEWER), twin(OLDER)] : groups;
+  };
+  const page = await mount('/analytics', { now: CLOCK_ORIGIN });
+  await addFilter(page, 'Key');
+  const twins = boxOptions().filter((o) => o.textContent?.trim() === 'twin');
+  twins[0]?.click();
+  await page.settle(700);
+  const picked = new URLSearchParams(page.location().search).get('keys');
+  api.getAnalyticsBreakdown = getAnalyticsBreakdown;
+  await closeBoxes(page);
+  results.push({
+    name: '/analytics the Key filter lists two lifetimes of one label by their creation, the older first',
+    ok: twins.length === 2 && picked === `twin@${OLDER}`,
+    missing: [`${twins.length} options named twin`, `the first picks ${picked ?? 'nothing'}, the older is twin@${OLDER}`],
+  });
+  page.unmount();
+}
 
 // An outage of the ledger fails every analytics read at once, the section and filter-choice reads beside the three
 // the error state names, and Try again is the one control that reads again, so it has to reach all of them. A section
@@ -14011,6 +14106,24 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   results.push({ name: '/analytics choosing 7-day on the toggle moves both cards', ok: pressed('Window usage') === '7-day' && pressed('Pace') === '7-day', missing: [pressed('Window usage'), pressed('Pace')] });
   const meta = m.container.querySelector('#accounts .analytics-section__meta')?.textContent?.trim() ?? '';
   results.push({ name: '/analytics the Accounts meta names window usage and pace', ok: meta === 'Peak utilization, window usage, pace, ineligible time, and pin churn per account', missing: [meta] });
+}
+{
+  // The story samples every account's 5-hour window, so the Peak chart draws a line for each. Here studio's rows hold
+  // no 5-hour peak, so the chart draws no line for it, and the window cards beside it still list it.
+  const { listAccountRollups } = api;
+  api.listAccountRollups = async (...args) => (await listAccountRollups.apply(api, args)).map((r) => (r.accountId === 'studio' ? { ...r, peak: { ...r.peak, '5h': null } } : r));
+  const page = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
+  await page.settle(700);
+  api.listAccountRollups = listAccountRollups;
+  const legendOf = (t) => [...([...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t)?.querySelectorAll('.legend li') ?? [])].map((li) => li.textContent?.trim() ?? '');
+  const peak = legendOf('Peak 5-hour utilization');
+  const usage = legendOf('Window usage');
+  results.push({
+    name: '/analytics the Peak 5-hour legend lists an account only where the chart draws its line',
+    ok: usage.includes('studio') && peak.length > 0 && !peak.includes('studio') && JSON.stringify(peak) === JSON.stringify(usage.filter((a) => a !== 'studio')),
+    missing: [`Peak ${JSON.stringify(peak)}`, `Window usage ${JSON.stringify(usage)}`],
+  });
+  page.unmount();
 }
 {
   // The breakdown tables are picked by card title: the Cache tab draws the placements table under the same card class,
@@ -19593,6 +19706,22 @@ m.unmount();
     const titles = [fast?.children[0]?.getAttribute('title') ?? null, prompt?.children[0]?.getAttribute('title') ?? null];
     const wantTitles = ['What an answer served in fast mode costs. A subscription account pays it from usage credits, not from its window.', `What an attempt whose prompt is longer than ${long?.over.toLocaleString('en-US')} tokens costs. The prompt is its uncached input, its cache reads and its cache writes together.`];
     results.push({ name: '/sessions API prices title the fast-mode row and the prompt-length row with what each prices', ok: JSON.stringify(titles) === JSON.stringify(wantTitles), missing: titles.map(String) });
+  }
+  {
+    // A model and its sub-rows read as one entry, so the stylesheet takes the hairline off the model row and off every
+    // sub-row another sub-row follows, and the last sub-row keeps the table's.
+    const models = [...(shownPanel(dlg)?.querySelectorAll('.cost-ref__table tbody tr.has-sub') ?? [])];
+    const borderOf = (selector) => declarationsOf(selector)['border-bottom'] ?? 'absent';
+    const read = {
+      last: borderOf('.cost-ref__table tr.cost-ref__sub td'),
+      model: borderOf('.cost-ref__table tr.has-sub td'),
+      sub: borderOf('.cost-ref__table tr.cost-ref__sub:has(+ tr.cost-ref__sub) td'),
+    };
+    results.push({
+      name: "/sessions the cost reference draws a model's hairline under its last sub-row alone",
+      ok: models.length > 0 && models.every((r) => r.nextElementSibling?.classList.contains('cost-ref__sub')) && JSON.stringify(read) === JSON.stringify({ last: 'absent', model: '0', sub: '0' }),
+      missing: [`${models.length} model rows with sub-rows`, JSON.stringify(read)],
+    });
   }
 
   // Tiers and peak band.

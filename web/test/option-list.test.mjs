@@ -124,7 +124,10 @@ test('under a query Select all reaches the visible options alone', () => {
   type(container.querySelector('.mselect__search'), '');
   act(() => choices(container)[0].click());
   type(container.querySelector('.mselect__search'), 'b');
-  assert.deepEqual([changes.at(-1), stateOf(row(container))], [['a'], { checked: null, selected: 'false' }], 'a chosen option the query hides leaves the row unselected, not mixed');
+  const mixed = row(container)?.querySelector('.mselect__check .mselect__mixed') != null;
+  assert.deepEqual([changes.at(-1), { ...stateOf(row(container)), mixed }], [['a'], { checked: null, mixed: false, selected: 'false' }], 'a chosen option the query hides leaves the row unselected, with no mixed mark');
+  act(() => row(container).click());
+  assert.deepEqual(changes.at(-1), ['a', 'b'], 'the click selects the visible option and keeps the hidden one');
 });
 
 test('the keys reach the Select all row as the first choice, and a list without a search field opens onto it', () => {
