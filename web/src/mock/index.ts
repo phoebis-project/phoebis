@@ -1271,21 +1271,22 @@ export class MockApi implements Api {
     // names an unknown or a held member answers `stale_edit`.
     const current = this.pools[idx];
     if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the pool changed while it was being edited, so reload and try again', 'stale_edit'));
-    const unknown = input.members.find((m) => !this.accounts.some((a) => a.id === m.accountId));
-    if (unknown) return Promise.reject(new ApiError(404, `account ${unknown.accountId} not found`, null));
-    const held = heldElsewhere(input.members, this.pools, id);
-    if (held) return Promise.reject(new ApiError(409, held, null));
+    // The store counts the guardrail list against every key of the pool first in its transaction, then writes the
+    // members and looks each guardrail up last.
     if (guardrailIds !== undefined) {
-      // The store counts the list against every key of the pool before it looks a guardrail up.
       const keyLists = this.keys
         .filter((k) => k.poolId === id)
         .sort((a, b) => a.id.localeCompare(b.id))
         .map((k): [string, string[]] => [k.id, this.guardrailRefs('keys', k.id).map((r) => r.id)]);
       const bound = boundRefusal(id, guardrailIds, keyLists);
       if (bound !== null) return Promise.reject(new ApiError(400, bound, null));
-      const missing = guardrailIds.find((g) => !this.guardrails.some((x) => x.id === g));
-      if (missing !== undefined) return Promise.reject(new ApiError(404, `guardrail ${missing} not found`, null));
     }
+    const unknown = input.members.find((m) => !this.accounts.some((a) => a.id === m.accountId));
+    if (unknown) return Promise.reject(new ApiError(404, `account ${unknown.accountId} not found`, null));
+    const held = heldElsewhere(input.members, this.pools, id);
+    if (held) return Promise.reject(new ApiError(409, held, null));
+    const missing = guardrailIds?.find((g) => !this.guardrails.some((x) => x.id === g));
+    if (missing !== undefined) return Promise.reject(new ApiError(404, `guardrail ${missing} not found`, null));
     const verdict = new Map(current.members.map((m) => [m.accountId, m.eligible]));
     const pinned = new Map(current.members.map((m) => [m.accountId, m.activePins]));
     const next: Omit<Pool, 'activePins' | 'keys' | 'warnings'> = {

@@ -128,7 +128,7 @@ export function GuardrailsPage(): JSX.Element {
     pools.reload();
     keys.reload();
   };
-  /** One row's write, the list read again behind it; a refusal only toasts, leaving the list alone. */
+  /** One row's write, the list read again behind it. A refusal only toasts, leaving the list alone. */
   const run = async (action: () => Promise<unknown>, done?: string) => {
     try {
       await action();

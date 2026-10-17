@@ -13,7 +13,6 @@ import { endOf } from '@/lib/quota';
 import { ACCOUNTS, QUOTA_HISTORY, accountById } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor } from './catalog';
-import { GUARDRAILS } from './guardrails';
 import { leadOf } from './lead';
 import { keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';
@@ -2550,12 +2549,11 @@ export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
       output_tokens: request.usage.output,
     },
   };
-  // A guardrail refused the request before any account answered it, so the answer kept is the router's own refusal.
-  const blockedBy = request.errorCode === 'guardrail_blocked' ? GUARDRAILS.find((g) => g.id === request.guardrailId) : undefined;
-  if (blockedBy !== undefined) {
-    const refusal = { type: 'error', error: { type: 'invalid_request_error', message: `blocked by guardrail "${blockedBy.name}"` } };
+  // A guardrail refused the request before any account answered it, and the ledger keeps no answer the router wrote
+  // itself, so the capture holds the request alone.
+  if (request.errorCode === 'guardrail_blocked') {
     const requestBytes = byteLength(bodies.request);
-    return { ...bodies, response: refusal, requestBytesSeen: requestBytes, requestBytesStored: requestBytes, requestTruncated: false, responseBytesSeen: byteLength(refusal), responseBytesStored: byteLength(refusal), responseTruncated: false };
+    return { ...bodies, response: null, requestBytesSeen: requestBytes, requestBytesStored: requestBytes, requestTruncated: false, responseBytesSeen: 0, responseBytesStored: 0, responseTruncated: false };
   }
   // A stream is stored as the text of its events, the way the ledger keeps the bytes it saw, and a JSON answer as
   // its object. The opening frame carries the message with its usage, no content and no stop reason, as the

@@ -43,7 +43,8 @@ export const GUARDRAILS: Guardrail[] = [
     mode: 'observe',
     name: SUMMARY_PRESET?.name ?? 'Subagent status summary',
     pools: [{ id: 'all', label: 'all', position: 0 }],
-    preset: { currentVersion: SUMMARY_PRESET?.version ?? 1, customized: false, id: 'subagent-status-summary', version: SUMMARY_PRESET?.version ?? 1 },
+    // Stamped at the version the story created it from, so a later shipped version reads as an available update.
+    preset: { currentVersion: SUMMARY_PRESET?.version ?? 1, customized: false, id: 'subagent-status-summary', version: 1 },
     revision: 0,
     updatedAt: daysAgo(3),
   },
@@ -129,7 +130,7 @@ export function repeatedId(ids: string[] | undefined): string | null {
 /** The route's evaluation order: the cheap subjects first, the body walk, then the message regex. */
 const RANK: Record<Condition['subject'], number> = { agent_type: 2, body: 7, client: 3, header: 6, kind: 0, message: 8, model: 4, request_class: 1, user_agent: 5 };
 
-/** The headers a ledger row keeps, which the dry run reads; every other header is not on the row. */
+/** The headers a ledger row keeps, which the dry run reads. Every other header is not on the row. */
 const KEPT_HEADERS: Record<string, (r: RequestLog) => string | null> = {
   'user-agent': (r) => r.userAgent,
   'x-claude-code-agent-type': (r) => r.agentType,
@@ -138,7 +139,7 @@ const KEPT_HEADERS: Record<string, (r: RequestLog) => string | null> = {
   'x-claude-code-request-class': (r) => r.requestClass,
 };
 
-/** A pattern searched unanchored, as the route searches; the dialect's leading `(?i)` reads as the flag it sets. */
+/** A pattern searched unanchored, as the route searches. The dialect's leading `(?i)` reads as the flag it sets. */
 function searches(pattern: string, text: string): boolean {
   const insensitive = pattern.startsWith('(?i)');
   try {
