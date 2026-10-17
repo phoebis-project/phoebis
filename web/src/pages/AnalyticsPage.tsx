@@ -1496,7 +1496,8 @@ const MISS_REASON_BLURB =
 
 /**
  * A request not asked and a comparison still running read as neutral, since neither has a finished comparison behind
- * it. A diagnosed divergence reads as a fault, like the error bars above.
+ * it. Every other reason but no divergence reads as a fault, like the error bars above: a diagnosed divergence, a
+ * missing previous message, an unavailable comparison and a name the console has no label for.
  */
 function reasonColor(ink: ReturnType<typeof useChartInk>, reason: CacheMissReason): string {
   if (reason === 'none') return ink.series[2];

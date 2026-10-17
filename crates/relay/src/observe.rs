@@ -35,9 +35,9 @@ pub(crate) struct Answer {
 /// The usage block, the cache diagnostics beside it, and what the answer says about itself, from one parse.
 /// `path` names the object that holds them (`["message"]` for `message_start`, empty for a JSON answer or
 /// `message_delta`). A document that does not parse, or has none of them, yields empty members, never zeros.
-/// `asked` says whether the pass's body carried a `diagnostics` member, the one case where a null answer member
-/// reads `none`.
-pub(crate) fn answer_from_json(body: &[u8], path: &[&str], asked: bool) -> Answer {
+/// `named` says whether the pass's body carried a `diagnostics` member naming a previous message, the one case where
+/// a null answer member reads `none`.
+pub(crate) fn answer_from_json(body: &[u8], path: &[&str], named: bool) -> Answer {
     let empty = || Answer {
         usage: Usage::default(),
         response: ResponseFacts::default(),
@@ -81,9 +81,8 @@ pub(crate) fn answer_from_json(body: &[u8], path: &[&str], asked: bool) -> Answe
     }
     usage.cache_miss_reason = match at.get("diagnostics") {
         None => None,
-        // A null member is the upstream's answer to the body's own member, and says nothing where the body
-        // carried none.
-        Some(Value::Null) => asked.then(|| "none".to_string()),
+        // A null member answers the message the body named, and says nothing where the body named none.
+        Some(Value::Null) => named.then(|| "none".to_string()),
         Some(diagnostics) => match diagnostics.get("cache_miss_reason") {
             // The upstream's comparison was still running when the answer went out.
             Some(Value::Null) => Some("pending".to_string()),
@@ -177,31 +176,32 @@ mod tests {
     }
 
     #[test]
-    fn a_null_diagnostics_member_reads_none_on_a_pass_that_asked_and_a_null_reason_reads_pending() {
+    fn a_null_diagnostics_member_reads_none_where_the_body_named_a_message_and_a_null_reason_reads_pending(
+    ) {
         let reason =
-            |json: &[u8], asked: bool| answer_from_json(json, &[], asked).usage.cache_miss_reason;
+            |json: &[u8], named: bool| answer_from_json(json, &[], named).usage.cache_miss_reason;
         let absent = br#"{"type":"message","usage":{"input_tokens":1}}"#;
         let null = br#"{"type":"message","usage":{"input_tokens":1},"diagnostics":null}"#;
         let pending = br#"{"type":"message","usage":{"input_tokens":1},"diagnostics":{"cache_miss_reason":null}}"#;
-        let named = br#"{"type":"message","usage":{"input_tokens":1},"diagnostics":{"cache_miss_reason":{"type":"none"}}}"#;
-        for asked in [true, false] {
-            assert_eq!(reason(absent, asked), None, "asked {asked}");
+        let typed = br#"{"type":"message","usage":{"input_tokens":1},"diagnostics":{"cache_miss_reason":{"type":"none"}}}"#;
+        for named in [true, false] {
+            assert_eq!(reason(absent, named), None, "named {named}");
             assert_eq!(
-                reason(pending, asked).as_deref(),
+                reason(pending, named).as_deref(),
                 Some("pending"),
-                "asked {asked}"
+                "named {named}"
             );
             assert_eq!(
-                reason(named, asked).as_deref(),
+                reason(typed, named).as_deref(),
                 Some("none"),
-                "a type the upstream names is recorded as sent, asked {asked}"
+                "a type the upstream names is recorded as sent, named {named}"
             );
         }
         assert_eq!(reason(null, true).as_deref(), Some("none"));
         assert_eq!(
             reason(null, false),
             None,
-            "a null member on a pass that carried none says nothing"
+            "a null member answering a body that named no message says nothing"
         );
         let start = br#"{"type":"message_start","message":{"usage":{"input_tokens":1},"diagnostics":null}}"#;
         assert_eq!(

@@ -196,6 +196,9 @@ pub struct RelayOutcome {
     /// The source of the `diagnostics` member on the answering leg's body; `None` for an answer the relay built
     /// before any leg and for a leg that sent none.
     pub diagnostics: Option<DiagnosticsSource>,
+    /// Whether that member's `previous_message_id` named a message. A null `diagnostics` member in the answer reads
+    /// `none` only then, since a member that named no message gave the upstream nothing to compare.
+    pub diagnostics_named: bool,
     /// `budget` when the selector answered a probe pinned to a member at its spend budget, `operator`,
     /// `subscription_ended` or `attempted` when it answered one on its pinned member's standing
     /// (`Exhaustion::Pinned`), `reauth_required` when a leg of the probe marked its account for re-authentication
@@ -2559,6 +2562,14 @@ impl Relay {
             } else {
                 None
             };
+            // Read off the body this pass sends, so the client's own member and the router's insertion are judged
+            // alike.
+            let diagnostics_named = diagnostics.is_some()
+                && phoebis_cch::string_member_span(
+                    &edited,
+                    &["diagnostics", "previous_message_id"],
+                )
+                .is_some();
             // After the selection's fact, so a client that leaves from here completes an attempt the ledger holds.
             admitted.trace.on_leg(*attempt, Some(&account.id));
             let responding = Responding {
@@ -2575,6 +2586,7 @@ impl Relay {
                 credential_generation: credential.generation,
                 deadline: admitted.deadline,
                 diagnostics,
+                diagnostics_named,
                 end_guard: &mut *end_guard,
                 fallback_ms: admitted.fallback_ms,
                 fast: admitted.fast,
@@ -2815,6 +2827,7 @@ impl Relay {
         outcome.upstream_request_id = head.get("request-id").map(str::to_string);
         outcome.overage_in_use = UnifiedHeaders::parse(&head).and_then(|u| u.overage_in_use);
         outcome.diagnostics = ctx.diagnostics;
+        outcome.diagnostics_named = ctx.diagnostics_named;
         self.report_overage(ctx.account, &head, head_at).await;
         self.report_head_sample(
             ctx.account,
@@ -3937,6 +3950,7 @@ impl Relay {
         // The upstream compared this leg's body before the account left, so the canceled completion names the
         // member's source as the head's outcome does.
         outcome.diagnostics = ctx.diagnostics;
+        outcome.diagnostics_named = ctx.diagnostics_named;
         self.answer(
             ctx.trace,
             ACCOUNT_CANCELLED.response(ctx.request_id),
@@ -3987,6 +4001,7 @@ impl Relay {
             overage_in_use: None,
             account_kind: None,
             diagnostics: None,
+            diagnostics_named: false,
             obstacle: None,
             held: trace.held(),
         }
@@ -4248,7 +4263,7 @@ impl Relay {
                 // Only the error statuses `respond` drains (400, 401, 403, 404, 429) reach here, a 200 being read
                 // by the body task; the 200 arm guards a caller that would buffer one, whose usage still counts.
                 (head.status == 200)
-                    .then(|| answer_from_json(&text, &[], outcome.diagnostics.is_some()))
+                    .then(|| answer_from_json(&text, &[], outcome.diagnostics_named))
             }
         };
         let (usage, facts) = match answer {
@@ -4379,6 +4394,8 @@ struct Responding<'a> {
     /// The source of the member on this pass's body, read for the completion event, the session memory's hook and
     /// the affinity report's id: an answer is remembered only for a request that carried or received the member.
     diagnostics: Option<DiagnosticsSource>,
+    /// `RelayOutcome::diagnostics_named` for this pass's body.
+    diagnostics_named: bool,
     /// The request's end report, which a committed stream takes into its body with the permit and the ticket.
     end_guard: &'a mut Option<EndGuard>,
     fallback_ms: i64,
