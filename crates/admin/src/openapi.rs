@@ -845,6 +845,7 @@ const FIXTURES: &[(&str, &str, &str)] = &[
     fixture!("dashboard", "200"),
     fixture!("guardrails", "200"),
     fixture!("guardrail_created", "201"),
+    fixture!("guardrail_presets", "200"),
     fixture!("guardrail_show", "200"),
     fixture!("keepalive_overview", "200"),
     fixture!("keepalive_recipes", "200"),

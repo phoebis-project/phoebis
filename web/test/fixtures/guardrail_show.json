@@ -25,6 +25,12 @@
         "selector": "last_user"
       }
     ],
+    "preset": {
+      "id": "subagent-status-summary",
+      "version": 1,
+      "current_version": 1,
+      "customized": false
+    },
     "pools": [
       {
         "id": "main",

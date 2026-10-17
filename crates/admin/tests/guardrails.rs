@@ -3,17 +3,72 @@
 //! pool or per key, and every write reaching the router through the reload.
 mod common;
 
+use std::collections::BTreeSet;
+
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
 use axum::Router;
 use common::{admin_parts_full, delete, get, json, login, patch, post, Captured, Full};
+use phoebis_guardrails::{presets, Condition, GuardrailAction, GuardrailMode, Preset};
+use phoebis_store::GuardrailRow;
 use serde_json::{json as j, Value};
 
 const STALE_EDIT: &str = "the guardrail changed while it was being edited, so reload and try again";
 
+/// The preset the binary ships first.
+const SUMMARY: &str = "subagent-status-summary";
+
 /// A condition on a fact the step reads without the body or a header.
 fn condition() -> Value {
     j!({"subject": "request_class", "operator": "equals", "value": "auxiliary"})
+}
+
+/// The first preset at the version this build ships as its current one.
+fn summary() -> &'static Preset {
+    Preset::current(SUMMARY).expect("the table ships the first preset")
+}
+
+/// The conditions as the API writes them: `Condition::words`, with a member the condition lacks left out rather than
+/// written as null.
+fn views(conditions: &[Condition]) -> Value {
+    conditions
+        .iter()
+        .map(|condition| {
+            let mut words = serde_json::to_value(condition.words()).unwrap();
+            words
+                .as_object_mut()
+                .unwrap()
+                .retain(|_, value| !value.is_null());
+            words
+        })
+        .collect()
+}
+
+/// A row stamped with `preset` at `version` as a build that shipped them would write it, holding the first preset's
+/// current conditions so the stamp alone decides `customized`.
+fn stamped_row(id: &str, preset: &str, version: u32) -> GuardrailRow {
+    GuardrailRow {
+        id: id.into(),
+        name: format!("Guardrail {id}"),
+        description: String::new(),
+        enabled: true,
+        mode: GuardrailMode::Observe,
+        action: GuardrailAction::Block,
+        conditions: summary().conditions.clone(),
+        preset_id: Some(preset.into()),
+        preset_version: Some(version),
+        incarnation: 1,
+        created_at: common::NOW,
+        updated_at: common::NOW,
+    }
+}
+
+/// Creates `id` from the first preset with nothing else in the body, failing the case on any answer but 201.
+async fn from_preset(app: &Router, cookie: &str, id: &str) -> Value {
+    let body = j!({"id": id, "preset": SUMMARY});
+    let response = post(app, "/admin/guardrails", &body.to_string(), Some(cookie)).await;
+    assert_eq!(response.status(), StatusCode::CREATED, "{body}");
+    json(response).await
 }
 
 /// The pool `main` with its key `desktop` and the pool `other` with its key `laptop`, and an admin session.
@@ -369,6 +424,10 @@ async fn every_400_sentence_is_answered_one_by_one() {
         (
             j!({"id": "g1", "name": "G", "conditions": [c], "keys": ["desktop", "desktop"]}),
             "keys lists desktop twice",
+        ),
+        (
+            j!({"id": "g1", "name": "G", "conditions": [c], "preset_version": 1}),
+            "preset_version applies on edit",
         ),
         (
             j!({"id": "g1", "name": "G", "conditions": [c], "color": "red"}),
@@ -1084,4 +1143,300 @@ async fn an_unknown_pool_or_key_on_a_write_is_a_404_with_nothing_written() {
 
 fn row_of(list: &Value, member: &str, id: &str) -> Value {
     row(list, member, id).clone()
+}
+
+#[tokio::test]
+async fn the_presets_route_answers_the_tables_current_versions() {
+    let (parts, cookie) = seeded().await;
+    let answer = show(&parts.app, &cookie, "/admin/guardrails/presets").await;
+    let ids: BTreeSet<&str> = presets().iter().map(|preset| preset.id).collect();
+    let expected: Vec<Value> = ids
+        .iter()
+        .map(|id| {
+            let preset = Preset::current(id).unwrap();
+            j!({
+                "id": preset.id,
+                "version": preset.version,
+                "name": preset.name,
+                "description": preset.description,
+                "measured_on": preset.measured_on,
+                "suggested_mode": preset.suggested_mode.as_str(),
+                "conditions": views(&preset.conditions),
+            })
+        })
+        .collect();
+    assert_eq!(
+        answer,
+        j!({"presets": expected}),
+        "one entry per preset at its current version, ordered by id"
+    );
+    let entry = row(&answer, "presets", SUMMARY);
+    let summary = summary();
+    assert_eq!(entry["version"], 1);
+    assert_eq!(entry["suggested_mode"], "observe");
+    assert_eq!(entry["name"], summary.name);
+    assert_eq!(entry["description"], summary.description);
+    assert_eq!(entry["measured_on"], summary.measured_on);
+    assert_eq!(entry["conditions"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        entry["conditions"],
+        views(&summary.conditions),
+        "the conditions in the table's order"
+    );
+}
+
+#[tokio::test]
+async fn a_create_from_the_preset_copies_the_conditions_and_stamps_the_row_and_the_bodys_members_win(
+) {
+    let (parts, cookie) = seeded().await;
+    let app = &parts.app;
+    let summary = summary();
+    let response = post(
+        app,
+        "/admin/guardrails",
+        &j!({"id": "summary", "preset": SUMMARY, "mode": "enforce", "name": "Mine"}).to_string(),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let answer = json(response).await;
+    assert_eq!(answer["conditions"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        answer["conditions"],
+        views(&summary.conditions),
+        "the preset's conditions in its order"
+    );
+    assert_eq!(answer["mode"], "enforce", "the body's mode wins");
+    assert_eq!(answer["name"], "Mine", "the body's name wins");
+    assert_eq!(
+        answer["description"], "",
+        "the preset's description stays on the presets route"
+    );
+    assert_eq!(
+        answer["preset"],
+        j!({"id": SUMMARY, "version": 1, "current_version": 1, "customized": false})
+    );
+    assert_eq!(
+        show(app, &cookie, "/admin/guardrails/summary").await,
+        answer
+    );
+
+    let bare = from_preset(app, &cookie, "bare").await;
+    assert_eq!(
+        bare["name"], summary.name,
+        "the preset supplies the name the body leaves out"
+    );
+    assert_eq!(bare["mode"], "observe", "and its suggested mode");
+    assert_eq!(bare["description"], "");
+    assert_eq!(bare["conditions"], answer["conditions"]);
+    assert_eq!(bare["preset"], answer["preset"]);
+}
+
+#[tokio::test]
+async fn an_unknown_preset_is_refused() {
+    let (parts, cookie) = seeded().await;
+    let app = &parts.app;
+    let response = post(
+        app,
+        "/admin/guardrails",
+        &j!({"id": "g1", "name": "G", "conditions": [condition()], "preset": "ghost"}).to_string(),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        refusal(response).await,
+        (StatusCode::BAD_REQUEST, "unknown preset ghost".to_string())
+    );
+    assert_eq!(
+        show(app, &cookie, "/admin/guardrails").await,
+        j!({"guardrails": []}),
+        "the refused create wrote nothing"
+    );
+}
+
+#[tokio::test]
+async fn customized_reads_true_after_a_condition_changes() {
+    let (parts, cookie) = seeded().await;
+    let app = &parts.app;
+    let created = from_preset(app, &cookie, "summary").await;
+    assert_eq!(created["preset"]["customized"], false);
+    let two = Value::from(views(&summary().conditions).as_array().unwrap()[..2].to_vec());
+    let response = patch(
+        app,
+        "/admin/guardrails/summary",
+        &j!({"conditions": two}).to_string(),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let edited = json(response).await;
+    assert_eq!(edited["conditions"], two);
+    assert_eq!(
+        edited["preset"],
+        j!({"id": SUMMARY, "version": 1, "current_version": 1, "customized": true}),
+        "the stamp stays and customized says the conditions left it"
+    );
+    assert_eq!(
+        show(app, &cookie, "/admin/guardrails/summary").await["preset"],
+        edited["preset"]
+    );
+}
+
+#[tokio::test]
+async fn a_patch_with_a_version_the_table_lacks_is_refused_and_one_without_a_stamp_too() {
+    let (parts, cookie) = seeded().await;
+    let app = &parts.app;
+    assert!(
+        Preset::at(SUMMARY, 7).is_none(),
+        "the table lacks version 7"
+    );
+    let stamped = from_preset(app, &cookie, "summary").await;
+    let plain = created(app, &cookie, "g1", j!({})).await;
+    let patches = [
+        (
+            "/admin/guardrails/summary",
+            j!({"preset_version": 7}),
+            format!("preset_version is not a shipped version of {SUMMARY}"),
+        ),
+        (
+            "/admin/guardrails/g1",
+            j!({"preset_version": 1}),
+            "guardrail has no preset".to_string(),
+        ),
+        (
+            "/admin/guardrails/summary",
+            j!({"preset": SUMMARY}),
+            "preset applies on create".to_string(),
+        ),
+        (
+            "/admin/guardrails/g1",
+            j!({"preset": SUMMARY}),
+            "preset applies on create".to_string(),
+        ),
+    ];
+    for (route, body, sentence) in patches {
+        let response = patch(app, route, &body.to_string(), Some(&cookie)).await;
+        assert_eq!(
+            refusal(response).await,
+            (StatusCode::BAD_REQUEST, sentence),
+            "{route} {body}"
+        );
+    }
+    assert_eq!(
+        show(app, &cookie, "/admin/guardrails/summary").await,
+        stamped,
+        "no refused edit wrote anything"
+    );
+    assert_eq!(show(app, &cookie, "/admin/guardrails/g1").await, plain);
+}
+
+#[tokio::test]
+async fn a_patch_with_the_shipped_version_and_its_conditions_reads_customized_false_again() {
+    let (parts, cookie) = seeded().await;
+    let app = &parts.app;
+    from_preset(app, &cookie, "summary").await;
+    let response = patch(
+        app,
+        "/admin/guardrails/summary",
+        &j!({"conditions": [condition()]}).to_string(),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json(response).await["preset"]["customized"], true);
+    let current = summary();
+    let response = patch(
+        app,
+        "/admin/guardrails/summary",
+        &j!({"conditions": views(&current.conditions), "preset_version": current.version})
+            .to_string(),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let updated = json(response).await;
+    assert_eq!(updated["conditions"], views(&current.conditions));
+    assert_eq!(
+        updated["preset"],
+        j!({"id": SUMMARY, "version": 1, "current_version": 1, "customized": false}),
+        "the shipped version's conditions read as the preset again"
+    );
+
+    // A row stamped at a version the table lacks shows the stamp move whatever versions the table ships.
+    assert!(
+        Preset::at(SUMMARY, 2).is_none(),
+        "the table lacks version 2"
+    );
+    parts
+        .store
+        .insert_guardrail(&stamped_row("newer", SUMMARY, 2), &[], &[], "admin")
+        .unwrap();
+    assert_eq!(
+        show(app, &cookie, "/admin/guardrails/newer").await["preset"]["customized"],
+        true
+    );
+    let response = patch(
+        app,
+        "/admin/guardrails/newer",
+        &j!({"preset_version": current.version}).to_string(),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        json(response).await["preset"],
+        j!({"id": SUMMARY, "version": 1, "current_version": 1, "customized": false}),
+        "the stamp moves to the shipped version"
+    );
+}
+
+#[tokio::test]
+async fn a_guardrail_created_without_preset_carries_null() {
+    let (parts, cookie) = seeded().await;
+    let app = &parts.app;
+    let answer = created(app, &cookie, "g1", j!({})).await;
+    assert!(
+        answer.as_object().unwrap().contains_key("preset"),
+        "the member is written, as null"
+    );
+    assert_eq!(answer["preset"], Value::Null);
+    assert_eq!(
+        show(app, &cookie, "/admin/guardrails/g1").await["preset"],
+        Value::Null
+    );
+    let list = show(app, &cookie, "/admin/guardrails").await;
+    let listed = row(&list, "guardrails", "g1");
+    assert!(listed.as_object().unwrap().contains_key("preset"));
+    assert_eq!(listed["preset"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_stamp_the_table_cannot_answer_reads_customized_with_the_tables_current_version() {
+    let (parts, cookie) = seeded().await;
+    let app = &parts.app;
+    let current = summary();
+    assert!(
+        Preset::at(SUMMARY, 2).is_none(),
+        "the table lacks version 2"
+    );
+    assert!(Preset::current("ghost").is_none(), "the table lacks the id");
+    for row in [
+        stamped_row("newer", SUMMARY, 2),
+        stamped_row("orphan", "ghost", 1),
+    ] {
+        parts
+            .store
+            .insert_guardrail(&row, &[], &[], "admin")
+            .unwrap();
+    }
+    assert_eq!(
+        show(app, &cookie, "/admin/guardrails/newer").await["preset"],
+        j!({"id": SUMMARY, "version": 2, "current_version": current.version, "customized": true}),
+        "a version the table lacks cannot be compared"
+    );
+    assert_eq!(
+        show(app, &cookie, "/admin/guardrails/orphan").await["preset"],
+        j!({"id": "ghost", "version": 1, "current_version": 1, "customized": true}),
+        "a preset the table lacks keeps its stamp and cannot be compared"
+    );
 }

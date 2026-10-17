@@ -1,7 +1,7 @@
 //! Guardrail routes: the registry's guardrails with their attachments, edited from the guardrail's side here and
 //! from the subject's side on the pool and key routes.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -10,7 +10,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_guardrails::{
-    CompiledGuardrail, Condition, ConditionWords, GuardrailAction, GuardrailMode, MAX_CONDITIONS,
+    CompiledGuardrail, Condition, ConditionWords, GuardrailAction, GuardrailMode, Preset,
+    MAX_CONDITIONS,
 };
 use phoebis_store::{
     stamp_token, AttachmentSubject, GuardrailRow, RegistryLoad, StoreError, GUARDRAIL_BOUND,
@@ -34,10 +35,10 @@ pub(crate) const STALE_EDIT: &str =
 /// The ids the static routes of the same names take, so a guardrail under either could never be read back by id.
 const RESERVED_IDS: [&str; 2] = ["presets", "test"];
 
-/// The guardrail's fields. On a create `id`, `name` and `conditions` are required, `mode` defaults to `observe`,
-/// `enabled` to `true`, `action` to `block` and `description` to empty. On an edit any subset but `id`. An absent
-/// `pools` or `keys` leaves those attachments as they are, and an empty list detaches every one. An unknown field in
-/// the body is refused.
+/// The guardrail's fields. On a create `id` is required, and `name` and `conditions` unless `preset` supplies them,
+/// `mode` defaults to `observe`, `enabled` to `true`, `action` to `block` and `description` to empty. On an edit any
+/// subset but `id` and `preset`. An absent `pools` or `keys` leaves those attachments as they are, and an empty list
+/// detaches every one. An unknown field in the body is refused.
 #[derive(Deserialize, Default, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GuardrailInput {
@@ -66,6 +67,17 @@ pub(crate) struct GuardrailInput {
     /// index in this list.
     #[serde(default)]
     conditions: Option<Vec<ConditionView>>,
+    /// On a create alone, the id of a preset from `GET /admin/guardrails/presets`. Its current version supplies
+    /// `name`, `mode` and `conditions` where the body leaves them out, and the guardrail carries the preset's id and
+    /// version whatever the body changed.
+    #[serde(default)]
+    #[schema(example = "subagent-status-summary")]
+    preset: Option<String>,
+    /// On an edit alone, of a guardrail created from a preset: a version this build ships of that preset, which the
+    /// guardrail's `preset.version` moves to. The update to the current preset sends it with that version's
+    /// `conditions`.
+    #[serde(default)]
+    preset_version: Option<u32>,
     /// The pools the guardrail is attached to. A pool newly named takes the guardrail at the end of its list, a pool
     /// already attached keeps its place, and a pool left out is detached.
     #[serde(default)]
@@ -125,6 +137,8 @@ pub(crate) struct Guardrail {
     pub action: String,
     /// In the order they were written, the order a refusal and the dry run name them by.
     pub conditions: Vec<ConditionView>,
+    /// The preset the guardrail was created from, null for one created without.
+    pub preset: Option<GuardrailPresetState>,
     /// In position order.
     pub pools: Vec<AttachmentView>,
     /// In position order.
@@ -140,6 +154,47 @@ pub(crate) struct Guardrail {
 #[serde(deny_unknown_fields)]
 pub(crate) struct GuardrailList {
     pub guardrails: Vec<Guardrail>,
+}
+
+/// Where a guardrail came from and whether it still reads as the preset shipped it.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GuardrailPresetState {
+    /// The preset's id.
+    #[schema(example = "subagent-status-summary")]
+    pub id: String,
+    /// The version the guardrail was created from, or the one its last update took.
+    pub version: u32,
+    /// The highest version this build ships of the preset, above `version` where an update is available.
+    pub current_version: u32,
+    /// Whether the guardrail's conditions differ from the preset's at `version`.
+    pub customized: bool,
+}
+
+/// A preset at its current version: the definition a guardrail created from it starts with.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GuardrailPresetView {
+    #[schema(example = "subagent-status-summary")]
+    pub id: String,
+    pub version: u32,
+    pub name: String,
+    /// What the preset catches and what blocking it costs.
+    pub description: String,
+    /// The client versions the preset was checked against, as one line to show.
+    pub measured_on: String,
+    /// `observe` or `enforce`, the mode a guardrail created from the preset takes where the body names none.
+    #[schema(example = "observe")]
+    pub suggested_mode: String,
+    /// In the order a guardrail created from the preset holds them.
+    pub conditions: Vec<ConditionView>,
+}
+
+/// The presets this build ships, each at its current version, ordered by id.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PresetList {
+    pub presets: Vec<GuardrailPresetView>,
 }
 
 /// One registry load's guardrails and attachments indexed by subject and by guardrail, with the pools' and keys'
@@ -238,11 +293,45 @@ pub(crate) fn guardrail_json(row: &GuardrailRow, index: &AttachmentIndex) -> Gua
         mode: row.mode.as_str().to_string(),
         action: row.action.as_str().to_string(),
         conditions: row.conditions.iter().map(ConditionView::from).collect(),
+        preset: preset_state(row),
         pools: index.views_for(&row.id, "pool"),
         keys: index.views_for(&row.id, "key"),
         revision: stamp_token(row.incarnation, row.updated_at),
         created_at: row.created_at,
         updated_at: row.updated_at,
+    }
+}
+
+/// `customized` is the stored conditions against `Preset::at(id, version)`'s, `current_version` the table's highest.
+fn preset_state(row: &GuardrailRow) -> Option<GuardrailPresetState> {
+    let (Some(id), Some(version)) = (&row.preset_id, row.preset_version) else {
+        return None;
+    };
+    let (current_version, customized) = match Preset::current(id) {
+        Some(current) => (
+            current.version,
+            Preset::at(id, version).is_none_or(|stamped| stamped.conditions != row.conditions),
+        ),
+        // The table keeps every shipped preset, so this guards a row from a build that shipped one this build lacks.
+        None => (version, true),
+    };
+    Some(GuardrailPresetState {
+        id: id.clone(),
+        version,
+        current_version,
+        customized,
+    })
+}
+
+fn preset_view(preset: &Preset) -> GuardrailPresetView {
+    GuardrailPresetView {
+        id: preset.id.to_string(),
+        version: preset.version,
+        name: preset.name.to_string(),
+        description: preset.description.to_string(),
+        measured_on: preset.measured_on.to_string(),
+        suggested_mode: preset.suggested_mode.as_str().to_string(),
+        conditions: preset.conditions.iter().map(ConditionView::from).collect(),
     }
 }
 
@@ -431,7 +520,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     request_body(content = GuardrailInput, content_type = "application/json"),
     responses(
         (status = 201, description = "The guardrail, the same shape as a row of `GET /admin/guardrails`.", body = Guardrail),
-        (status = 400, description = "- `action is block`\n- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `conditions holds 1 to 16 entries`\n- `conditions[{i}]: {reason}`: the condition's index and the reason it is refused (`conditions[1]: value is required`)\n- `description is at most 256 bytes`\n- `id is required`\n- `id is reserved`: `presets` and `test`, which the routes beside `GET /admin/guardrails/{id}` take\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `key {id} would hold more than 64 guardrails`, with nothing written\n- `keys lists {id} twice`\n- `mode is observe or enforce`\n- `name is at most 256 bytes`\n- `name is required`\n- `name must not contain \"prompt is too long\"`\n- `pool {id} would hold more than 64 guardrails`, with nothing written\n- `pools lists {id} twice`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `action is block`\n- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `conditions holds 1 to 16 entries`\n- `conditions[{i}]: {reason}`: the condition's index and the reason it is refused (`conditions[1]: value is required`)\n- `description is at most 256 bytes`\n- `id is required`\n- `id is reserved`: `presets` and `test`, which the routes beside `GET /admin/guardrails/{id}` take\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `key {id} would hold more than 64 guardrails`, with nothing written\n- `keys lists {id} twice`\n- `mode is observe or enforce`\n- `name is at most 256 bytes`\n- `name is required`\n- `name must not contain \"prompt is too long\"`\n- `pool {id} would hold more than 64 guardrails`, with nothing written\n- `pools lists {id} twice`\n- `preset_version applies on edit`\n- `unknown preset {id}`: an id `GET /admin/guardrails/presets` does not list", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "- `key {id} not found`, with nothing written\n- `pool {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "pool {id} not found"})),
         (status = 409, description = "`a guardrail with this id exists`", body = ErrorBody, example = json!({"error": "a guardrail with this id exists"})),
         (status = 500, response = StorageFailure),
@@ -442,6 +531,10 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     let Ok(input) = serde_json::from_slice::<GuardrailInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
     };
+    // A new guardrail takes its stamp from `preset`, so the member that moves the stamp applies to a saved one.
+    if input.preset_version.is_some() {
+        return failure(StatusCode::BAD_REQUEST, "preset_version applies on edit");
+    }
     let Some(id) = &input.id else {
         return failure(StatusCode::BAD_REQUEST, "id is required");
     };
@@ -457,20 +550,36 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     if let Ok(Some(_)) = state.store.guardrail(id) {
         return failure(StatusCode::CONFLICT, "a guardrail with this id exists");
     }
-    let Some(name) = &input.name else {
+    let preset = match &input.preset {
+        Some(preset_id) => match Preset::current(preset_id) {
+            Some(preset) => Some(preset),
+            None => {
+                return failure(
+                    StatusCode::BAD_REQUEST,
+                    &format!("unknown preset {preset_id}"),
+                )
+            }
+        },
+        None => None,
+    };
+    let Some(name) = input.name.as_deref().or(preset.map(|preset| preset.name)) else {
         return failure(StatusCode::BAD_REQUEST, "name is required");
     };
     let now = (state.clock)();
+    // The preset's description explains the preset on its own route and can run past the 256 bytes a guardrail's
+    // description holds, so a guardrail from a preset starts with the body's description or none. The stamp is the
+    // preset's whatever the body changed, since it records where the guardrail came from and `customized` says what
+    // changed.
     let mut row = GuardrailRow {
         id: id.clone(),
-        name: name.clone(),
+        name: name.to_string(),
         description: String::new(),
         enabled: true,
-        mode: GuardrailMode::Observe,
+        mode: preset.map_or(GuardrailMode::Observe, |preset| preset.suggested_mode),
         action: GuardrailAction::Block,
         conditions: Vec::new(),
-        preset_id: None,
-        preset_version: None,
+        preset_id: preset.map(|preset| preset.id.to_string()),
+        preset_version: preset.map(|preset| preset.version),
         incarnation: 1,
         created_at: now,
         updated_at: now,
@@ -478,9 +587,13 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     if let Err(refusal) = apply(&mut row, &input) {
         return refusal;
     }
-    match validate_conditions(input.conditions.as_deref().unwrap_or_default()) {
-        Ok(conditions) => row.conditions = conditions,
-        Err(refusal) => return refusal,
+    match (&input.conditions, preset) {
+        // The table's own tests check and compile every shipped version, so the preset's conditions stand as they are.
+        (None, Some(preset)) => row.conditions = preset.conditions.clone(),
+        (views, _) => match validate_conditions(views.as_deref().unwrap_or_default()) {
+            Ok(conditions) => row.conditions = conditions,
+            Err(refusal) => return refusal,
+        },
     }
     if let Err(refusal) = distinct_subjects(&input) {
         return refusal;
@@ -495,6 +608,31 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     let mut response = publish(&state, &row.id, StatusCode::CREATED).await;
     response.extensions_mut().insert(CreatedId(row.id));
     response
+}
+
+/// List the presets this build ships.
+#[utoipa::path(
+    get,
+    path = "/admin/guardrails/presets",
+    operation_id = "guardrail_presets",
+    tag = "Guardrails",
+    responses(
+        (status = 200, description = "Every preset at its current version, ordered by id.", body = PresetList),
+    ),
+)]
+pub(crate) async fn presets() -> Response {
+    let ids: BTreeSet<&str> = phoebis_guardrails::presets()
+        .iter()
+        .map(|preset| preset.id)
+        .collect();
+    Json(PresetList {
+        presets: ids
+            .into_iter()
+            .filter_map(Preset::current)
+            .map(preset_view)
+            .collect(),
+    })
+    .into_response()
 }
 
 /// Read a guardrail.
@@ -532,7 +670,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>, Path(id): Path<St
     request_body(content = GuardrailInput, content_type = "application/json"),
     responses(
         (status = 200, description = "The guardrail, the same shape as a row of `GET /admin/guardrails`.", body = Guardrail),
-        (status = 400, description = "- `action is block`\n- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `conditions holds 1 to 16 entries`\n- `conditions[{i}]: {reason}`: the condition's index and the reason it is refused (`conditions[1]: value is required`)\n- `description is at most 256 bytes`\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `id cannot change`\n- `key {id} would hold more than 64 guardrails`, with nothing written\n- `keys lists {id} twice`\n- `mode is observe or enforce`\n- `name is at most 256 bytes`\n- `name is required`: an empty name\n- `name must not contain \"prompt is too long\"`\n- `pool {id} would hold more than 64 guardrails`, with nothing written\n- `pools lists {id} twice`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `action is block`\n- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `conditions holds 1 to 16 entries`\n- `conditions[{i}]: {reason}`: the condition's index and the reason it is refused (`conditions[1]: value is required`)\n- `description is at most 256 bytes`\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `guardrail has no preset`: a `preset_version` on a guardrail created without one\n- `id cannot change`\n- `key {id} would hold more than 64 guardrails`, with nothing written\n- `keys lists {id} twice`\n- `mode is observe or enforce`\n- `name is at most 256 bytes`\n- `name is required`: an empty name\n- `name must not contain \"prompt is too long\"`\n- `pool {id} would hold more than 64 guardrails`, with nothing written\n- `pools lists {id} twice`\n- `preset applies on create`\n- `preset_version is not a shipped version of {preset}`: a version the build does not ship of the guardrail's preset", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "- `guardrail not found`\n- `key {id} not found`, with nothing written\n- `pool {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "guardrail not found"})),
         // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
         // attribute after it fails to parse.
@@ -567,6 +705,22 @@ pub(crate) async fn patch(
     };
     if input.id.is_some() {
         return failure(StatusCode::BAD_REQUEST, "id cannot change");
+    }
+    // The stamp's id never changes here: a guardrail is re-created to come from another preset.
+    if input.preset.is_some() {
+        return failure(StatusCode::BAD_REQUEST, "preset applies on create");
+    }
+    if let Some(version) = input.preset_version {
+        let Some(preset_id) = &row.preset_id else {
+            return failure(StatusCode::BAD_REQUEST, "guardrail has no preset");
+        };
+        if Preset::at(preset_id, version).is_none() {
+            return failure(
+                StatusCode::BAD_REQUEST,
+                &format!("preset_version is not a shipped version of {preset_id}"),
+            );
+        }
+        row.preset_version = Some(version);
     }
     if let Err(refusal) = apply(&mut row, &input) {
         return refusal;

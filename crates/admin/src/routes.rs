@@ -78,6 +78,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .routes(routes!(attention::show))
         .routes(routes!(dashboard::show))
         .routes(routes!(guardrails::list, guardrails::create))
+        .routes(routes!(guardrails::presets))
         .routes(routes!(
             guardrails::show,
             guardrails::patch,

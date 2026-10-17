@@ -10205,6 +10205,12 @@ export const FIXTURES: Record<string, Fixture> = {
           "selector": "last_user"
         }
       ],
+      "preset": {
+        "id": "subagent-status-summary",
+        "version": 1,
+        "current_version": 1,
+        "customized": false
+      },
       "pools": [
         {
           "id": "main",
@@ -10216,6 +10222,39 @@ export const FIXTURES: Record<string, Fixture> = {
       "revision": 6189767511104,
       "created_at": 1791721000000,
       "updated_at": 1791721000000
+    }
+  },
+  "guardrail_presets": {
+    "route": "GET /admin/guardrails/presets",
+    "body": {
+      "presets": [
+        {
+          "id": "subagent-status-summary",
+          "version": 1,
+          "name": "Subagent status summary",
+          "description": "Claude Code forks each running subagent's whole conversation every 30 seconds to ask for a status line of three to five words. Each fork reads the subagent's full cached context for about 24 output tokens, and no client setting turns it off. On one router the forks were 22 percent of every cached token read over three days. Blocking them leaves the Agent tool's status line static and changes nothing else.",
+          "measured_on": "Claude Code 2.1.296 to 2.1.302",
+          "suggested_mode": "observe",
+          "conditions": [
+            {
+              "subject": "request_class",
+              "operator": "equals",
+              "value": "auxiliary"
+            },
+            {
+              "subject": "body",
+              "operator": "present",
+              "path": "tools"
+            },
+            {
+              "subject": "message",
+              "operator": "matches",
+              "value": "^Describe your most recent action in 3-5 words",
+              "selector": "last_user"
+            }
+          ]
+        }
+      ]
     }
   },
   "guardrail_show": {
@@ -10245,6 +10284,12 @@ export const FIXTURES: Record<string, Fixture> = {
           "selector": "last_user"
         }
       ],
+      "preset": {
+        "id": "subagent-status-summary",
+        "version": 1,
+        "current_version": 1,
+        "customized": false
+      },
       "pools": [
         {
           "id": "main",
@@ -10282,6 +10327,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "path": "max_tokens"
             }
           ],
+          "preset": null,
           "pools": [],
           "keys": [
             {
@@ -10319,6 +10365,12 @@ export const FIXTURES: Record<string, Fixture> = {
               "selector": "last_user"
             }
           ],
+          "preset": {
+            "id": "subagent-status-summary",
+            "version": 1,
+            "current_version": 1,
+            "customized": false
+          },
           "pools": [
             {
               "id": "main",

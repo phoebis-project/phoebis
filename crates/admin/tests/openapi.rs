@@ -79,6 +79,7 @@ const REFUSALS: &[(&str, &[u16])] = &[
     ("dashboard_show", &[500]),
     ("guardrails_list", &[500]),
     ("guardrails_create", &[400, 404, 409, 500, 503]),
+    ("guardrail_presets", &[]),
     ("guardrail_show", &[404, 500]),
     ("guardrail_patch", &[400, 404, 409, 500, 503]),
     ("guardrail_delete", &[404, 500, 503]),
@@ -142,6 +143,7 @@ const EXAMPLE_FILES: &[&str] = &[
     "dashboard",
     "guardrails",
     "guardrail_created",
+    "guardrail_presets",
     "guardrail_show",
     "keepalive_overview",
     "keepalive_recipes",
@@ -481,13 +483,13 @@ async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_l
     );
     assert_eq!(
         document["paths"].as_object().unwrap().len(),
-        55,
-        "the admin listener's 55 paths"
+        56,
+        "the admin listener's 56 paths"
     );
     assert_eq!(
         operations(&document).len(),
-        68,
-        "the admin listener's 68 operations"
+        69,
+        "the admin listener's 69 operations"
     );
 }
 
@@ -634,8 +636,8 @@ async fn every_example_is_its_fixtures_body_member_and_the_count_holds() {
     );
     assert_eq!(
         EXAMPLE_FILES.len(),
-        44,
-        "43 success answers and the replay's held answer"
+        45,
+        "44 success answers and the replay's held answer"
     );
     // The places the fixture manifest targets, each with the stems it attaches: a place carries as many examples
     // as stems, so a fixture attached twice or to the wrong place fails here, while a hand-written example (a
