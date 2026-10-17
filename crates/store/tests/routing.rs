@@ -386,7 +386,7 @@ fn a_pins_entrypoint_survives_a_reopen_and_a_row_from_before_reads_empty() {
     drop(conn);
     let migrated =
         Store::open(&path, &storage_key).expect("the migration completes and the store opens");
-    assert_eq!(migrated.schema_version().unwrap(), 56);
+    assert_eq!(migrated.schema_version().unwrap(), 57);
     let pins = migrated.load_routing().unwrap().pins;
     assert_eq!(
         pins.iter().find(|p| p.session_id == "before"),
@@ -1032,7 +1032,7 @@ fn an_affinity_rows_message_id_round_trips_and_a_row_from_before_the_column_read
     drop(conn);
     let migrated =
         Store::open(&path, &storage_key).expect("the migration completes and the store opens");
-    assert_eq!(migrated.schema_version().unwrap(), 56);
+    assert_eq!(migrated.schema_version().unwrap(), 57);
     assert_eq!(
         migrated.load_routing().unwrap().affinity,
         vec![AffinityRow {

@@ -55,6 +55,7 @@ fn load(revoked_at: Option<i64>) -> RegistryLoad {
             ends_at: Some(1_000),
             tier: None,
         }],
+        ..Default::default()
     }
 }
 
