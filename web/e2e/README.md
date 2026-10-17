@@ -37,33 +37,35 @@ the cell's padding) and keys table (Key the fill), each read while its group sho
 its model rules table (Model the fill, each select holding its widest option's text inside its padding), which the
 router's seed draws no override for, the Create key dialog's Key group (the Name input, the Pool select and the footer's
 buttons 32 px, the Notes field 72 px, each label above its control), the settings cards' order, the listener hint's gaps
-and size and About's lines (their order, one type and one gap), the Settings page's Unit row at 1280 and 400 px (the
-legend's button on the select's line, and its popover inside the viewport's width, uncovered, in the legend's 12 px type
-and closed by Escape), the cooling-down block's columns (Reason the fill), the Delete account button, the window bars on
-the dashboard and the Accounts page (each bar's line inside its bar, a compact bar's projection in its reset's place as
-two parts, its share and its horizon, and a whole bar's reset and projection as two parts, each part whole on its line),
-the account lines, the Quota cards' poll lines (short of the Refresh pill and inside the card, the backoff line in the
-serious ink, none wrapping, a failed poll's reason cut inside its line and whole in its title), the Quota cards' chips
-and reset cells (each chip and each reset cell without a projection on one line inside its column, a live label with its
-projection split between its reset and its projection with each part on one line inside the cell, the window grid inside
-its card) and each live window's pace mark (inside its meter and taller than the track), the timeline's chips on the
-Quota windows section (each inside its column, a chip with a share in the background and ink of the card chip of the
-same tone, primary's used fill at the share the page computed, each live bar's body and used fill its lane's color at
-two strengths, and the label's ink at 4.5:1 or better over both for every color a lane can take), the timeline at 340
-and 400 by 900 (each lane's head above its track, the now line at the chart's now share on every track and its pill in
-the axis row, the chips wrapping inside the lane with none cut, every day cell's short labels whole, no bar's label cut
-and nothing scrolling sideways), the Quota cards' one height (the head's and the foot's rules at one offset on every
-card), every Quota card's meters at least 120 px wide, its window cells inside its padding, its chip column as wide as
-its widest chip and its reset column as wide as its widest label within its 150 px bound, a split label read by its
-wider part, at 1280 by 800 with two cards in a row in the mock pass and in a window that sets two cards on the card
-grid's floor (one card in a row 1 px narrower), and at 375 by 800 and 390 by 844 with no sideways scroll on the page and
-each card inside the window (the reset label on a row of its own there, so its column goes unread), the Quota cards'
-window rows at seven widths from 340 to 1280 px (from 900 px up each reset label beside a meter of 120 px or more, under
-900 px on a row of its own under its meter, no label cut and nothing scrolling sideways), the remaining cards, the error
-state, the lines under the quota rings, the recent requests' model cells and their table's fit, the recent requests'
-columns (Key the fill), the cost-cap rows, the wasted-probe rows, the Cache warming tab's saving tiles under each unit
-position (Probe cost, Saved by probes, Net saving and Kept warm on one row at one top, the two saving tiles in the Probe
-cost tile's box and value type, and the Saved by probes chart in the box and title type of the card beside it), the burn
+and size and About's lines (their order, one type and one gap), About's two retention lines (the label's type and ink,
+the value's ink and the row's height of the Storage path line above them, the label's and the value's type and ink of
+the Admin secret line below them), the Settings page's Unit row at 1280 and 400 px (the legend's button on the select's
+line, and its popover inside the viewport's width, uncovered, in the legend's 12 px type and closed by Escape), the
+cooling-down block's columns (Reason the fill), the Delete account button, the window bars on the dashboard and the
+Accounts page (each bar's line inside its bar, a compact bar's projection in its reset's place as two parts, its share
+and its horizon, and a whole bar's reset and projection as two parts, each part whole on its line), the account lines,
+the Quota cards' poll lines (short of the Refresh pill and inside the card, the backoff line in the serious ink, none
+wrapping, a failed poll's reason cut inside its line and whole in its title), the Quota cards' chips and reset cells
+(each chip and each reset cell without a projection on one line inside its column, a live label with its projection
+split between its reset and its projection with each part on one line inside the cell, the window grid inside its card)
+and each live window's pace mark (inside its meter and taller than the track), the timeline's chips on the Quota windows
+section (each inside its column, a chip with a share in the background and ink of the card chip of the same tone,
+primary's used fill at the share the page computed, each live bar's body and used fill its lane's color at two
+strengths, and the label's ink at 4.5:1 or better over both for every color a lane can take), the timeline at 340 and
+400 by 900 (each lane's head above its track, the now line at the chart's now share on every track and its pill in the
+axis row, the chips wrapping inside the lane with none cut, every day cell's short labels whole, no bar's label cut and
+nothing scrolling sideways), the Quota cards' one height (the head's and the foot's rules at one offset on every card),
+every Quota card's meters at least 120 px wide, its window cells inside its padding, its chip column as wide as its
+widest chip and its reset column as wide as its widest label within its 150 px bound, a split label read by its wider
+part, at 1280 by 800 with two cards in a row in the mock pass and in a window that sets two cards on the card grid's
+floor (one card in a row 1 px narrower), and at 375 by 800 and 390 by 844 with no sideways scroll on the page and each
+card inside the window (the reset label on a row of its own there, so its column goes unread), the Quota cards' window
+rows at seven widths from 340 to 1280 px (from 900 px up each reset label beside a meter of 120 px or more, under 900 px
+on a row of its own under its meter, no label cut and nothing scrolling sideways), the remaining cards, the error state,
+the lines under the quota rings, the recent requests' model cells and their table's fit, the recent requests' columns
+(Key the fill), the cost-cap rows, the wasted-probe rows, the Cache warming tab's saving tiles under each unit position
+(Probe cost, Saved by probes, Net saving and Kept warm on one row at one top, the two saving tiles in the Probe cost
+tile's box and value type, and the Saved by probes chart in the box and title type of the card beside it), the burn
 cards (an odd last card spanning its row), the plan legend's estimated entry (a hollow swatch) and model unlisted entry,
 the placement and budget tables, the Analytics tables' columns, each read on the tab that draws it (the Traffic
 breakdown's group column the fill, Key on the misses-by-reason breakdown under its wrapped headers, Cache by model's

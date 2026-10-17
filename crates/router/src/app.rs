@@ -818,6 +818,8 @@ fn settings_view(config: &Config, profile: &phoebis_profile::Profile) -> Setting
         profile: profile.name.to_string(),
         proxy_listen: config.proxy.listen.to_string(),
         proxy_tls: config.proxy.tls.is_some(),
+        retention_days: config.stats.retention_days,
+        rollup_retention_days: config.stats.rollup_retention_days,
         session_expire_after_seconds: config.sessions.expire_after_seconds,
         storage_path: config.storage.path.display().to_string(),
         subscription_costs_path: config
@@ -1714,6 +1716,19 @@ revisions:
             profile,
         );
         assert_eq!((plain.proxy_tls, paired.proxy_tls), (false, true));
+    }
+
+    #[test]
+    fn the_settings_view_mirrors_the_stats_sections_two_retention_keys() {
+        let config: Config = serde_norway::from_str(
+            "admin:\n  listen: 127.0.0.1:8081\n  secret_env: TEST_SETTINGS_ADMIN\n\
+             proxy:\n  listen: 0.0.0.0:8317\n\
+             stats:\n  retention_days: 30\n  rollup_retention_days: 0\n\
+             storage:\n  encryption_key_file: storage.key\n  path: router.sqlite\n",
+        )
+        .unwrap();
+        let view = settings_view(&config, phoebis_profile::claude_code_2_1_269_linux_x64());
+        assert_eq!((view.retention_days, view.rollup_retention_days), (30, 0));
     }
 
     /// The anchor tier carries a capacity on both windows, so every model the cost model names has a burn rate on

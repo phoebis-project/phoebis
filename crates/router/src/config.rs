@@ -212,11 +212,13 @@ pub struct StatsConfig {
     pub ledger_path: PathBuf,
     #[serde(default = "default_metrics_listen")]
     pub metrics_listen: SocketAddr,
-    /// Days the raw request, attempt, and event rows, and the quota and extra-usage samples, are kept; 0 keeps
-    /// them forever.
+    /// Days the requests with their attempts, the kept-warm marks, the events, the decisions, the quota and
+    /// extra-usage samples, and the registry's settled refresh attempts and its change log are kept. 0 keeps them
+    /// forever.
     #[serde(default = "default_retention_days")]
     pub retention_days: u32,
-    /// Days the hourly rollups are kept; 0 keeps them forever, and otherwise at least `retention_days`.
+    /// Days the hourly rollups and the account rollups are kept. 0 keeps them forever, and otherwise it is at least
+    /// `retention_days`.
     #[serde(default = "default_rollup_retention_days")]
     pub rollup_retention_days: u32,
     /// A subscription cost model that overrides the shipped one; a missing file is not an error. Default
@@ -639,11 +641,11 @@ fn default_refresh_concurrency() -> usize {
 }
 
 fn default_retention_days() -> u32 {
-    90
+    365
 }
 
 fn default_rollup_retention_days() -> u32 {
-    400
+    365
 }
 
 fn default_session_expiry() -> u64 {
@@ -1277,6 +1279,58 @@ mod tests {
             ),
             (1024, 7)
         );
+    }
+
+    #[test]
+    fn a_file_naming_neither_retention_key_keeps_the_rows_and_the_rollups_365_days() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
+        let config = load(&file(dir.path(), "defaults", "")).unwrap();
+        assert_eq!(
+            (
+                config.stats.retention_days,
+                config.stats.rollup_retention_days
+            ),
+            (365, 365)
+        );
+    }
+
+    #[test]
+    fn a_rollup_retention_under_the_raw_one_is_refused_unless_either_key_is_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
+        let error = load(&file(
+            dir.path(),
+            "rollups-short",
+            "stats:\n  retention_days: 365\n  rollup_retention_days: 364\n",
+        ))
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "stats.rollup_retention_days must be 0 or at least stats.retention_days (365), not 364"
+        );
+        for (name, body, kept) in [
+            (
+                "raw-forever",
+                "stats:\n  retention_days: 0\n  rollup_retention_days: 364\n",
+                (0, 364),
+            ),
+            (
+                "rollups-forever",
+                "stats:\n  retention_days: 365\n  rollup_retention_days: 0\n",
+                (365, 0),
+            ),
+        ] {
+            let config = load(&file(dir.path(), name, body)).unwrap();
+            assert_eq!(
+                (
+                    config.stats.retention_days,
+                    config.stats.rollup_retention_days
+                ),
+                kept,
+                "{name}"
+            );
+        }
     }
 
     /// `file`'s own template names `TEST_CFG_ADMIN`; this one takes the environment variable name as a

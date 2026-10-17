@@ -1076,6 +1076,8 @@ async fn build_app_routed(
         profile: p.name.into(),
         proxy_listen: "test".into(),
         proxy_tls: tls,
+        retention_days: LedgerConfig::default().retention_days,
+        rollup_retention_days: LedgerConfig::default().rollup_retention_days,
         session_expire_after_seconds: 86_400,
         storage_path: "test".into(),
         subscription_costs_path: None,

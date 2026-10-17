@@ -1857,7 +1857,8 @@ export interface Settings {
   apiPrices: { effective: string; effectiveDate: string | null; models: ModelPrice[]; revisions: PriceRevision[]; source: string };
   /** `proxyTls`: whether the proxy listener terminates TLS itself, which sets the client snippet's scheme. */
   listeners: { metrics: string; proxy: string; proxyTls: boolean };
-  retention: { bodyCaptureMaxHours: number };
+  /** The two day counts are file settings of the `stats` section, 0 for forever. */
+  retention: { bodyCaptureMaxHours: number; retentionDays: number; rollupRetentionDays: number };
   /** How long a session stays listed after its last activity. */
   sessions: { expireAfterSeconds: number };
   /** Each path is null when no override file is configured. */

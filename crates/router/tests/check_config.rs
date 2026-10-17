@@ -297,7 +297,7 @@ fn the_summary_names_the_routing_keys() {
         lines.get(10..12),
         Some(
             &[
-                "retention 90 days, rollups 400 days",
+                "retention 365 days, rollups 365 days",
                 "keepalive: 128 sessions, 1024 agents, 256 MiB retained",
             ][..]
         ),

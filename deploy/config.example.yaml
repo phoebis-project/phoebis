@@ -48,10 +48,12 @@ stats:
   ledger_path: ./data/ledger.sqlite
   # Prometheus text format at /metrics. Bind it where your scraper can reach it.
   metrics_listen: 127.0.0.1:9464
-  # Raw requests, attempts, events, and the quota and extra-usage samples are purged past this. 0 keeps them forever.
-  retention_days: 90
-  # Hourly rollups are purged past this. 0 keeps them forever, otherwise at least retention_days.
-  rollup_retention_days: 400
+  # The requests with their attempts, the kept-warm marks, the events, the decisions, the quota and extra-usage
+  # samples, and the registry's settled refresh attempts and change log are purged past this. 0 keeps them forever.
+  retention_days: 365
+  # The hourly rollups and the account rollups are purged past this. 0 keeps them forever, otherwise at least
+  # retention_days.
+  rollup_retention_days: 365
   # Overrides the shipped subscription cost model. A missing file is fine.
   subscription_costs_path: ./subscription_costs.yaml
 storage:

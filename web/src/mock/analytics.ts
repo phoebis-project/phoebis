@@ -669,10 +669,11 @@ export function placementsOf(requests: RequestLog[], q: Pick<AnalyticsQuery, 'fr
 }
 
 /**
- * The days the ledger keeps a request row, as the mock answers it beside its windows. The settings carry no request
- * retention in days, so the figure is the mock's own, long enough that every window below finds its requests.
+ * The days the ledger keeps a request row, as the mock answers it beside its windows: the mock settings'
+ * `retention_days`, long enough that every window below finds its requests. Written out rather than read off
+ * `SETTINGS_WIRE`, since its module imports this one through the requests module.
  */
-export const REQUEST_RETENTION_DAYS = 90;
+export const REQUEST_RETENTION_DAYS = 365;
 
 /** A window the hourly fold closed within the hour after its reset, its ratio the rise over the share as stored. */
 const reconciled = (accountId: string, window: string, endMs: number, readings: [number, number], observedRise: number, predictedShare: number, requests: number): Reconciliation => ({

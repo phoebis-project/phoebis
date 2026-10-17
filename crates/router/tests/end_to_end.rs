@@ -1955,7 +1955,7 @@ fn stats_and_cooldown_settings_are_validated_with_the_specs_bounds() {
             config.stats.metrics_listen.to_string().as_str(),
             config.stats.ledger_path.to_str().unwrap()
         ),
-        (90, "127.0.0.1:9464", "./data/ledger.sqlite")
+        (365, "127.0.0.1:9464", "./data/ledger.sqlite")
     );
     let path =
         |p: &Option<std::path::PathBuf>| p.as_deref().and_then(|p| p.to_str()).map(str::to_string);

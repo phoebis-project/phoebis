@@ -2445,7 +2445,7 @@ async function settingsOrder(theme) {
     };
   });
   measurements.push(`${theme} /settings about ${JSON.stringify(about)}`);
-  const lines = ['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Admin secret'];
+  const lines = ['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Requests, samples and the routing log', 'Rollups', 'Admin secret'];
   if (JSON.stringify(about.labels) !== JSON.stringify(lines)) say(`About runs ${JSON.stringify(about.labels)}, not ${JSON.stringify(lines)}`);
   const storage = about.types[about.labels.indexOf('Storage path')];
   const offType = about.labels.filter((label, i) => about.types[i] !== storage);
@@ -2455,6 +2455,40 @@ async function settingsOrder(theme) {
   if (read.above === null || read.below === null) say('no listener hint between the client block and the variable list');
   else if (read.above !== 10 || read.below !== 14) say(`the hint sits ${read.above} px under the block and ${read.below} px over the variable list, not 10 and 14`);
   if (read.hintSize !== null && read.hintSize !== read.subtitleSize) say(`the hint reads at ${read.hintSize}, the subtitle at ${read.subtitleSize}`);
+}
+
+/**
+ * About's two retention lines drawn in the style of the lines around them: the label's type and ink, the value's ink
+ * and the row's height of the Storage path line above, and the label's and the value's type and ink of the Admin secret
+ * line below. A path line draws its value in the mono face, so the value's type is compared with the Admin secret
+ * line's, whose value is not a path.
+ */
+async function settingsRetentionLines(theme) {
+  const read = await page.evaluate(() => {
+    const card = [...document.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+    const type = (el) => (el ? `${getComputedStyle(el).fontSize} ${getComputedStyle(el).fontWeight} ${getComputedStyle(el).fontFamily}` : null);
+    const rows = [...(card?.querySelectorAll('.kv__row') ?? [])].map((row) => {
+      const dt = row.querySelector('dt');
+      const dd = row.querySelector('dd');
+      const boxes = [dt, dd].map((el) => el?.getBoundingClientRect());
+      return {
+        height: Math.round((Math.max(...boxes.map((b) => b?.bottom ?? 0)) - Math.min(...boxes.map((b) => b?.top ?? 0))) * 10) / 10,
+        label: dt?.textContent?.trim() ?? '',
+        labelInk: dt ? getComputedStyle(dt).color : null,
+        labelType: type(dt),
+        value: dd?.textContent?.trim() ?? '',
+        valueInk: dd ? getComputedStyle(dd).color : null,
+        valueType: type(dd),
+      };
+    });
+    const at = (label) => rows.find((row) => row.label === label) ?? null;
+    return { admin: at('Admin secret'), requests: at('Requests, samples and the routing log'), rollups: at('Rollups'), storage: at('Storage path') };
+  });
+  measurements.push(`${theme} /settings retention lines ${JSON.stringify(read)}`);
+  for (const [name, row] of [['requests', read.requests], ['rollups', read.rollups]]) {
+    failures.push(...compare(row, read.storage, ['height', 'labelInk', 'labelType', 'valueInk'], `${theme} /settings: About's ${name} retention line against Storage path`));
+    failures.push(...compare(row, read.admin, ['labelInk', 'labelType', 'valueInk', 'valueType'], `${theme} /settings: About's ${name} retention line against Admin secret`));
+  }
 }
 
 /**
@@ -8153,6 +8187,7 @@ try {
       }
       if (view.path === '/settings') {
         await settingsOrder(theme);
+        await settingsRetentionLines(theme);
         await settingsUnitLegend(theme);
       }
       if (view.path === '/accounts') {

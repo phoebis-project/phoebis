@@ -42,10 +42,12 @@ stats:
   ledger_path: /var/lib/phoebis/ledger.sqlite
   # Prometheus text format at /metrics. The compose example publishes it on the host's loopback.
   metrics_listen: 0.0.0.0:9464
-  # Raw requests, attempts, events, and the quota and extra-usage samples are purged past this. 0 keeps them forever.
-  retention_days: 90
-  # Hourly rollups are purged past this. 0 keeps them forever, otherwise at least retention_days.
-  rollup_retention_days: 400
+  # The requests with their attempts, the kept-warm marks, the events, the decisions, the quota and extra-usage
+  # samples, and the registry's settled refresh attempts and change log are purged past this. 0 keeps them forever.
+  retention_days: 365
+  # The hourly rollups and the account rollups are purged past this. 0 keeps them forever, otherwise at least
+  # retention_days.
+  rollup_retention_days: 365
   # Overrides the shipped subscription cost model. A missing file is fine, and the volume is where one would be dropped.
   subscription_costs_path: /var/lib/phoebis/subscription_costs.yaml
 storage:

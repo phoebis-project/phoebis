@@ -20192,7 +20192,7 @@ m.unmount();
   const rows = [...(about()?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim());
   results.push({
     name: '/settings Try again reads the settings into About and the hint beside the block',
-    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null && (failed.container.querySelector('pre.snippet')?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=http://router.example.com:8080',
+    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Requests, samples and the routing log', 'Rollups', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null && (failed.container.querySelector('pre.snippet')?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=http://router.example.com:8080',
     missing: [...rows, (failed.container.querySelector('pre.snippet')?.textContent ?? 'no block').split('\n')[0]],
   });
   failed.unmount();
@@ -20297,6 +20297,21 @@ m.unmount();
   page.unmount();
 }
 
+// A zero on a retention key keeps its rows forever, so About reads "kept forever" on that line.
+{
+  const { getSettings } = api;
+  api.getSettings = async (...args) => {
+    const settings = await getSettings.apply(api, args);
+    return { ...settings, retention: { ...settings.retention, retentionDays: 0, rollupRetentionDays: 30 } };
+  };
+  const page = await mount('/settings', { now: CLOCK_ORIGIN });
+  const about = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+  const kept = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`).filter((row) => row.startsWith('Requests, samples and the routing log=') || row.startsWith('Rollups='));
+  results.push({ name: '/settings a zero retention reads kept forever and a day count kept for its days', ok: JSON.stringify(kept) === JSON.stringify(['Requests, samples and the routing log=kept forever', 'Rollups=kept for 30 days']), missing: kept });
+  api.getSettings = getSettings;
+  page.unmount();
+}
+
 m = await mount('/settings', { now: CLOCK_ORIGIN });
 expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Unit', 'Admin secret', 'ANTHROPIC_BASE_URL=http://router.example.com:8080', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
@@ -20315,11 +20330,11 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   const revisionsText = (revisions) => `effective ${effectiveLabel(revisionAt(revisions, CLOCK_ORIGIN).effective)}, ${revisions.length === 1 ? '1 revision' : `${revisions.length} revisions`}`;
   const priceRow = `API prices path=./api_prices.yaml, ${revisionsText(wired.apiPrices.revisions)}`;
   const costRow = `Subscription costs path=./subscription_costs.yaml, ${revisionsText(wired.subscriptionCosts.revisions)}`;
-  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the two retention lines and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Requests, samples and the routing log=kept for 365 days', 'Rollups=kept for 365 days', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
   const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
   results.push({
-    name: '/settings each path line names its key in the configuration file and the admin secret line its variable',
-    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'API prices path=Set by stats.api_prices_path in the configuration file', 'Subscription costs path=Set by stats.subscription_costs_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', 'Admin secret=The secret the variable admin.secret_env names. It reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
+    name: '/settings each path and retention line names its key in the configuration file and the admin secret line its variable',
+    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'API prices path=Set by stats.api_prices_path in the configuration file', 'Subscription costs path=Set by stats.subscription_costs_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', 'Requests, samples and the routing log=Set by stats.retention_days in the configuration file', 'Rollups=Set by stats.rollup_retention_days in the configuration file', 'Admin secret=The secret the variable admin.secret_env names. It reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
     missing: titled,
   });
   const mirrored = ['Body capture, max hours', 'Cache TTL (seconds)', 'Catalog refresh (seconds)', 'Max workers', 'Sample retention (days)'].filter((w) => m.text().includes(w));

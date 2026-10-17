@@ -3786,7 +3786,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "computed_at": 1791717400000
         }
       ],
-      "request_retention_days": 90
+      "request_retention_days": 365
     }
   },
   "analytics_rewrites": {
@@ -14154,7 +14154,9 @@ export const FIXTURES: Record<string, Fixture> = {
         "proxy_tls": false
       },
       "retention": {
-        "body_capture_max_hours": 72
+        "body_capture_max_hours": 72,
+        "retention_days": 365,
+        "rollup_retention_days": 365
       },
       "sessions": {
         "expire_after_seconds": 86400

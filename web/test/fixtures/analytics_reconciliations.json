@@ -16,6 +16,6 @@
         "computed_at": 1791717400000
       }
     ],
-    "request_retention_days": 90
+    "request_retention_days": 365
   }
 }

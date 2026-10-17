@@ -110,6 +110,8 @@ pub struct SettingsView {
     pub proxy_listen: String,
     /// Whether the proxy listener terminates TLS, the console's URL scheme.
     pub proxy_tls: bool,
+    pub retention_days: u32,
+    pub rollup_retention_days: u32,
     pub session_expire_after_seconds: u64,
     pub storage_path: String,
     pub subscription_costs_path: Option<String>,

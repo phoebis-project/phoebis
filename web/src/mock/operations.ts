@@ -553,7 +553,7 @@ export const SETTINGS_WIRE = {
   access: { admin_configured: true },
   api_prices: API_PRICES_WIRE,
   listeners: { metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080', proxy_tls: false },
-  retention: { body_capture_max_hours: 72 },
+  retention: { body_capture_max_hours: 72, retention_days: 365, rollup_retention_days: 365 },
   sessions: { expire_after_seconds: SESSION_EXPIRE_SECONDS },
   storage: { api_prices_path: './api_prices.yaml', ledger_path: './data/ledger.sqlite', path: './data/router.sqlite', subscription_costs_path: './subscription_costs.yaml' },
   subscription_costs: SUBSCRIPTION_COSTS_WIRE,

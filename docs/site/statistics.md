@@ -350,11 +350,11 @@ refusal drops it.
 
 | Data | Kept for |
 | --- | --- |
-| Requests, attempts, events, decisions, kept-warm marks | `stats.retention_days` (90 days by default, 0 keeps them forever) |
-| Quota and extra-usage samples | `stats.retention_days` (90 days by default, 0 keeps them forever) |
-| Resolved credential refresh attempts and registry changes | `stats.retention_days` (90 days by default, 0 keeps them forever) |
+| Requests, attempts, events, decisions, kept-warm marks | `stats.retention_days` (365 days by default, 0 keeps them forever) |
+| Quota and extra-usage samples | `stats.retention_days` (365 days by default, 0 keeps them forever) |
+| Resolved credential refresh attempts and registry changes | `stats.retention_days` (365 days by default, 0 keeps them forever) |
 | Captured bodies | The hours the capture named |
-| Hourly rollups | `stats.rollup_retention_days` (400 days by default, 0 keeps them forever, otherwise at least `stats.retention_days`) |
+| Hourly rollups and account rollups | `stats.rollup_retention_days` (365 days by default, 0 keeps them forever, otherwise at least `stats.retention_days`) |
 
 A routing decision leaves in the purge that takes its request. One whose request never landed leaves at the same age.
 

@@ -83,8 +83,8 @@ pub struct LedgerConfig {
 impl Default for LedgerConfig {
     fn default() -> Self {
         LedgerConfig {
-            retention_days: 90,
-            rollup_retention_days: 400,
+            retention_days: 365,
+            rollup_retention_days: 365,
             purge_interval: Duration::from_secs(3_600),
             event_poll: Duration::from_secs(5),
             expire_interval: EXPIRE_INTERVAL,
@@ -2028,6 +2028,15 @@ mod tests {
             retention_days: LedgerConfig::default().retention_days,
         };
         (ledger, rx)
+    }
+
+    #[test]
+    fn the_default_ledger_keeps_the_raw_rows_and_the_rollups_365_days() {
+        let config = LedgerConfig::default();
+        assert_eq!(
+            (config.retention_days, config.rollup_retention_days),
+            (365, 365)
+        );
     }
 
     #[tokio::test]

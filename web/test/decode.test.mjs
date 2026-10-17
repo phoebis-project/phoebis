@@ -2057,7 +2057,7 @@ test('settings decode the members the route answers and nothing more', () => {
       access: ['adminConfigured'],
       apiPrices: ['effective', 'effectiveDate', 'models', 'revisions', 'source'],
       listeners: ['metrics', 'proxy', 'proxyTls'],
-      retention: ['bodyCaptureMaxHours'],
+      retention: ['bodyCaptureMaxHours', 'retentionDays', 'rollupRetentionDays'],
       sessions: ['expireAfterSeconds'],
       storage: ['apiPricesPath', 'ledgerPath', 'path', 'subscriptionCostsPath'],
       subscriptionCosts: ['capacity', 'effective', 'modelTier', 'modelWeight', 'modelWindows', 'overrides', 'peak', 'problem', 'regimes', 'revisions', 'source', 'tierOrder', 'typeMultiplier', 'unit'],
@@ -2067,7 +2067,12 @@ test('settings decode the members the route answers and nothing more', () => {
   assert.deepEqual(s.listeners, { metrics: wire.listeners.metrics, proxy: wire.listeners.proxy, proxyTls: wire.listeners.proxy_tls });
   assert.equal(d.decodeSettings({ ...wire, listeners: { metrics: wire.listeners.metrics, proxy: wire.listeners.proxy } }).listeners.proxyTls, false, 'an answer without proxy_tls reads a listener that terminates no TLS');
   assert.equal(d.decodeSettings({ ...wire, listeners: { ...wire.listeners, proxy_tls: true } }).listeners.proxyTls, true);
-  assert.deepEqual(s.retention, { bodyCaptureMaxHours: wire.retention.body_capture_max_hours });
+  assert.deepEqual(s.retention, { bodyCaptureMaxHours: wire.retention.body_capture_max_hours, retentionDays: wire.retention.retention_days, rollupRetentionDays: wire.retention.rollup_retention_days });
+  assert.deepEqual(
+    d.decodeSettings({ ...wire, retention: { body_capture_max_hours: wire.retention.body_capture_max_hours } }).retention,
+    { bodyCaptureMaxHours: wire.retention.body_capture_max_hours, retentionDays: 0, rollupRetentionDays: 0 },
+    'an answer without the two day counts reads 0 on each',
+  );
   assert.deepEqual(s.storage, { apiPricesPath: null, ledgerPath: wire.storage.ledger_path, path: wire.storage.path, subscriptionCostsPath: null }, 'no override file is a null path, never an empty one');
   const configured = d.decodeSettings({ ...wire, storage: { ...wire.storage, api_prices_path: './api_prices.yaml', subscription_costs_path: './subscription_costs.yaml' } }).storage;
   assert.deepEqual([configured.apiPricesPath, configured.subscriptionCostsPath], ['./api_prices.yaml', './subscription_costs.yaml']);
@@ -2083,7 +2088,7 @@ test('a settings member the answer leaves out decodes to its default', () => {
   assert.deepEqual(without('about'), { profile: '', version: '' });
   assert.deepEqual(without('access'), { adminConfigured: true }, 'no session reaches the console without the admin secret');
   assert.deepEqual(without('listeners'), { metrics: '', proxy: '', proxyTls: false });
-  assert.deepEqual(without('retention'), { bodyCaptureMaxHours: 0 });
+  assert.deepEqual(without('retention'), { bodyCaptureMaxHours: 0, retentionDays: 0, rollupRetentionDays: 0 });
   assert.deepEqual(without('sessions'), { expireAfterSeconds: 0 });
   assert.deepEqual(without('storage'), { apiPricesPath: null, ledgerPath: '', path: '', subscriptionCostsPath: null });
   const bare = { ...wire };

@@ -70,8 +70,8 @@ pub fn parse_range(range: Option<&str>, now: i64) -> Result<(i64, i64), String> 
     }
 }
 
-/// The widest custom range: rollups are kept for 400 days, so a wider one reads nothing more and would only
-/// size the chart.
+/// The widest custom range, 400 days, which outlasts the rollups' 365-day default retention: under the default a
+/// wider one reads nothing more and would only size the chart.
 pub const MAX_RANGE_MS: i64 = 400 * DAY_MS;
 
 /// The most points one series or traffic answer may carry; every allowed range at its bucket size stays

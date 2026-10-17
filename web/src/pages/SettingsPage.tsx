@@ -48,6 +48,9 @@ const ENV_TERMS: { body: string; term: string }[] = [
 /** These come from the configuration file and the admin API only reads them, so each says where it is set. */
 const bootstrapNote = (setting: string) => `Set by ${setting} in the configuration file`;
 
+/** About's words for a retention key's day count, where 0 keeps the rows forever. */
+const keptFor = (days: number) => (days === 0 ? 'kept forever' : `kept for ${days} days`);
+
 /**
  * A table's date in force, its revision count and the next date while one is pending, read at one instant by the rule
  * the cost reference's select reads. An answer that lists no revision names the date it sent alone.
@@ -136,6 +139,8 @@ export function SettingsPage() {
                 { label: 'API prices path', value: `${s.storage.apiPricesPath ?? 'not configured'}, ${revisionsNote(s.apiPrices.revisions, s.apiPrices.effective, now)}`, mono: s.storage.apiPricesPath !== null, title: bootstrapNote('stats.api_prices_path') },
                 { label: 'Subscription costs path', value: `${s.storage.subscriptionCostsPath ?? 'not configured'}${s.subscriptionCosts.problem === null ? `, ${revisionsNote(s.subscriptionCosts.revisions, s.subscriptionCosts.effective, now)}` : `. ${s.subscriptionCosts.problem}`}`, mono: s.subscriptionCosts.problem === null && s.storage.subscriptionCostsPath !== null, title: bootstrapNote('stats.subscription_costs_path') },
                 { label: 'Storage path', value: s.storage.path, mono: true, title: bootstrapNote('storage.path') },
+                { label: 'Requests, samples and the routing log', value: keptFor(s.retention.retentionDays), title: bootstrapNote('stats.retention_days') },
+                { label: 'Rollups', value: keptFor(s.retention.rollupRetentionDays), title: bootstrapNote('stats.rollup_retention_days') },
                 { label: 'Admin secret', value: <SecretBadge configured={s.access.adminConfigured} />, title: 'The secret the variable admin.secret_env names. It reaches every route.' },
               ]}
             />

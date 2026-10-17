@@ -107,7 +107,14 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             &["content", "effective", "revisions", "source"],
         ),
         ("listeners", &["metrics", "proxy", "proxy_tls"]),
-        ("retention", &["body_capture_max_hours"]),
+        (
+            "retention",
+            &[
+                "body_capture_max_hours",
+                "retention_days",
+                "rollup_retention_days",
+            ],
+        ),
         ("sessions", &["expire_after_seconds"]),
         (
             "storage",
@@ -143,6 +150,18 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             settings["listeners"]["proxy_tls"].as_bool(),
         ),
         (Some(72), Some(86_400), Some("127.0.0.1:9464"), Some(false))
+    );
+    let ledger = phoebis_ledger::LedgerConfig::default();
+    assert_eq!(
+        (
+            settings["retention"]["retention_days"].as_u64(),
+            settings["retention"]["rollup_retention_days"].as_u64(),
+        ),
+        (
+            Some(ledger.retention_days.into()),
+            Some(ledger.rollup_retention_days.into())
+        ),
+        "the two day counts the rig's ledger runs under"
     );
     let revisions = phoebis_ledger::PriceRevisions::shipped();
     let shipped = revisions.in_force(common::NOW);

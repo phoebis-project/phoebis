@@ -231,7 +231,12 @@ async fn a_key_override_of_zero_stores_nothing_and_an_override_of_six_captures_o
 #[tokio::test]
 async fn retention_purges_requests_events_and_samples_by_the_raw_window_and_rollups_by_theirs() {
     let up = FakeUpstream::start(vec![]).await;
-    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let config = LedgerConfig {
+        retention_days: 90,
+        rollup_retention_days: 400,
+        ..LedgerConfig::default()
+    };
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), config.clone()).await;
     let day = 86_400_000i64;
     let old = phoebis_ledger::RequestRecord {
         id: "old".into(),
@@ -297,7 +302,7 @@ async fn retention_purges_requests_events_and_samples_by_the_raw_window_and_roll
     // One second past the 90-day cutoff, so the row received at 0 and the sample at bucket 0 are older than the
     // window, and the day-89 row and the day-30 sample are not.
     let now = 90 * day + 1_000;
-    let purged = run_retention(h.db.clone(), LedgerConfig::default(), now, Vec::new())
+    let purged = run_retention(h.db.clone(), config.clone(), now, Vec::new())
         .await
         .unwrap();
     assert_eq!(
@@ -322,7 +327,7 @@ async fn retention_purges_requests_events_and_samples_by_the_raw_window_and_roll
         })
         .unwrap();
     assert_eq!(rollups.len(), 2, "rollups outlive their raw rows");
-    let purged = run_retention(h.db.clone(), LedgerConfig::default(), 401 * day, Vec::new())
+    let purged = run_retention(h.db.clone(), config, 401 * day, Vec::new())
         .await
         .unwrap();
     assert_eq!(

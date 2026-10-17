@@ -1060,13 +1060,14 @@ const decodeCostsEnvelope = (envelope: unknown): Settings['subscriptionCosts'] =
 export function decodeSettings(v: unknown): Settings {
   const s = rec(v);
   const l = rec(s.listeners);
+  const kept = rec(s.retention);
   const store = rec(s.storage);
   return {
     about: { profile: str(rec(s.about).profile), version: str(rec(s.about).version) },
     access: { adminConfigured: bool(rec(s.access).admin_configured, true) },
     apiPrices: decodePricing(s.api_prices),
     listeners: { metrics: str(l.metrics), proxy: str(l.proxy), proxyTls: bool(l.proxy_tls) },
-    retention: { bodyCaptureMaxHours: num(rec(s.retention).body_capture_max_hours) },
+    retention: { bodyCaptureMaxHours: num(kept.body_capture_max_hours), retentionDays: num(kept.retention_days), rollupRetentionDays: num(kept.rollup_retention_days) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
     storage: { apiPricesPath: strOrNull(store.api_prices_path), ledgerPath: str(store.ledger_path), path: str(store.path), subscriptionCostsPath: strOrNull(store.subscription_costs_path) },
     subscriptionCosts: decodeCostsEnvelope(s.subscription_costs),
