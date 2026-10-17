@@ -9,6 +9,7 @@ import { SessionProvider } from '@/app/session';
 import { AppSettingsProvider } from '@/app/settings';
 import { installClock } from '@/lib/clock';
 import { planLabel } from '@/lib/quota';
+import { installMockClock } from '@/mock';
 import { SETTINGS_WIRE } from '@/mock/operations';
 import { ALL_ROLLUPS, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, REQUEST_EVENTS, REQUESTS } from '@/mock/requests';
 import { SETTINGS_SAMPLE } from '@/mock/samples';
@@ -66,6 +67,24 @@ export const rollups = ALL_ROLLUPS;
 // armed through the clock module and none of the real ones the settles wait on.
 const fake = fakeClock();
 installClock(fake);
+// A mock answer lands on the tick that reaches it or after its real latency, whichever comes first. A frozen clock
+// arms no window timer, so the real wait keeps a mount's settle seeing its reads answer, and the tick lets a check that
+// steps the clock read the answer with no real wait. The pages' own timers stay on the harness clock alone.
+installMockClock({
+  now: () => fake.now(),
+  setTimeout: (fn, ms) => {
+    let real = 0;
+    const faked = fake.setTimeout(() => {
+      window.clearTimeout(real);
+      fn();
+    }, ms);
+    real = window.setTimeout(() => {
+      fake.clearTimeout(faked);
+      fn();
+    }, ms);
+    return faked;
+  },
+});
 
 /**
  * Moves a frozen clock by `ms`, firing each timer due inside the span at its own deadline; on a live clock it

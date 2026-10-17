@@ -6,7 +6,7 @@ import type {
   ModelRule, ModelsState, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
-import { clock } from '@/lib/clock';
+import { type Clock, wallClock } from '@/lib/clock';
 import { foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
@@ -27,10 +27,23 @@ import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
 // Fixed, so a pass over the mock reads the same secrets every run.
 const MOCK_SEED = 4_211;
 
-// A short delay keeps loading states honest without making the mock feel slow.
-const latency = <T,>(value: T, ms = 120): Promise<T> => new Promise((resolve) => setTimeout(() => resolve(value), ms));
+/** The clock the mock's answers wait on and its landings read. */
+type MockClock = Pick<Clock, 'now' | 'setTimeout'>;
 
-/** How long a confirm's first usage poll takes to land, on the clock the pages read: the few seconds its answer names. */
+let mockClock: MockClock = wallClock;
+
+/**
+ * The test seam: a harness that moves time hands the mock its clock, so a step of it lands the mock's answers and
+ * moves its landings. `null` puts the wall clock back.
+ */
+export function installMockClock(next: MockClock | null): void {
+  mockClock = next ?? wallClock;
+}
+
+// A short delay keeps loading states honest without making the mock feel slow.
+const latency = <T,>(value: T, ms = 120): Promise<T> => new Promise((resolve) => mockClock.setTimeout(() => resolve(value), ms));
+
+/** How long a confirm's first usage poll takes to land, on the mock's clock: the few seconds its answer names. */
 const FIRST_POLL_MS = 2_000;
 /** The windows a paired account's first poll reads: the shape the story gives primary's plan windows. */
 const FIRST_READING = ACCOUNTS.find((a) => a.id === 'primary')?.windows ?? [];
@@ -424,7 +437,7 @@ export class MockApi implements Api {
    * the closing dialog resumes read the list at once on a live clock.
    */
   private landFirstPolls() {
-    const at = clock.now();
+    const at = mockClock.now();
     for (const [id, confirmedAt] of this.firstPolls) {
       if (at - confirmedAt < FIRST_POLL_MS) continue;
       this.firstPolls.delete(id);
@@ -532,7 +545,7 @@ export class MockApi implements Api {
       // The confirm stores the tokens it exchanged, so the row carries both their expiries, as the router answers it.
       this.accounts = [...this.accounts, { ...row, credential: { ...row.credential, accessTokenExpiresAt: ahead(8 * HOUR), refreshTokenExpiresAt: ahead(30 * DAY) } }];
     }
-    if (pairing !== undefined) this.firstPolls.set(pairing.accountId, clock.now());
+    if (pairing !== undefined) this.firstPolls.set(pairing.accountId, mockClock.now());
     return latency({ accountId: pairing?.accountId ?? '', firstPollInFlight: true, status: 'confirmed' }, 250);
   }
 
@@ -844,9 +857,9 @@ export class MockApi implements Api {
   listRequests(query: RequestQuery = {}): Promise<RequestPage> {
     if (emptyStore()) return latency({ landedThrough: 0, nextCursor: null, requests: [] });
     const live = new Map(this.keys.map((k) => [k.id, Date.parse(k.createdAt)]));
-    // The ledger lists a request once it has written it, so a row whose landing the console's clock has not reached
+    // The ledger lists a request once it has written it, so a row whose landing the mock's clock has not reached
     // stays out, and the newest stamp is over every written row, as the route reads it whatever the filters keep.
-    const now = clock.now();
+    const now = mockClock.now();
     const written = REQUESTS.filter((r) => landedAt(r) <= now);
     const landedThrough = written.reduce((newest, r) => Math.max(newest, landedAt(r)), 0);
     const since = query.landedAfter;

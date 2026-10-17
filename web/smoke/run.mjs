@@ -10460,12 +10460,16 @@ m.unmount();
     await chooseInterval(page, '5 s');
     const polls = countCalls('listRequests');
     tick(5_000);
-    await page.settle();
     polls.restore();
     const end = isoAt(CLOCK_ORIGIN + 5_000);
-    const answer = await api.listRequests({ from: isoAt(CLOCK_ORIGIN - 24 * HOUR), limit: 10, to: end });
+    // The mock answers on the harness clock, so the step past its latency lands the poll's answer and this read's with
+    // no real wait, and one macrotask lets React commit the poll's rows.
+    const answered = api.listRequests({ from: isoAt(CLOCK_ORIGIN - 24 * HOUR), limit: 10, to: end });
+    tick(200);
+    await page.settle(0);
     const drawn = requestRows(page).map(idOf);
     const stood = { calls: polls.calls.length, error: errorOf(), tinted: page.container.querySelectorAll('.requests__table tbody tr.is-new').length };
+    const answer = await answered;
     const next = countCalls('listRequests');
     nextPage(page)?.click();
     await page.settle();
