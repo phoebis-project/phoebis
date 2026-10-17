@@ -16007,13 +16007,13 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     });
   }
   const bars = [...(missCard()?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
-  const labels = ['History edited', 'Model changed', 'No divergence', 'Not requested', 'Previous message not found', 'System prompt changed', 'Tools changed', 'Unavailable'];
-  results.push({ name: '/analytics misses-by-reason draws a bar per reason', ok: bars.length === 8 && labels.every((l) => bars.includes(l)), missing: bars });
+  const labels = ['History edited', 'Model changed', 'No divergence', 'Not requested', 'Pending', 'Previous message not found', 'System prompt changed', 'Tools changed', 'Unavailable'];
+  results.push({ name: '/analytics misses-by-reason draws a bar per reason', ok: bars.length === 9 && labels.every((l) => bars.includes(l)), missing: bars });
   const counts = [...(missCard()?.querySelectorAll('.hbars--reasons li .num') ?? [])].map((n) => Number(n.textContent?.trim().split(' ')[0].replace(/,/g, '')));
-  results.push({ name: '/analytics misses-by-reason sorts by count', ok: counts.length === 8 && counts.every((v, i) => i === 0 || counts[i - 1] >= v), missing: counts.map(String) });
+  results.push({ name: '/analytics misses-by-reason sorts by count', ok: counts.length === 9 && counts.every((v, i) => i === 0 || counts[i - 1] >= v), missing: counts.map(String) });
   results.push({ name: '/analytics misses-by-reason counts something', ok: counts.some((v) => v > 0), missing: counts.map(String) });
   const shares = [...(missCard()?.querySelectorAll('.hbars--reasons li .num .muted') ?? [])].map((n) => n.textContent?.trim());
-  results.push({ name: '/analytics misses-by-reason shows a share per reason', ok: shares.length === 8 && shares.every((v) => /^\d+\.\d%$/.test(v ?? '')), missing: shares });
+  results.push({ name: '/analytics misses-by-reason shows a share per reason', ok: shares.length === 9 && shares.every((v) => /^\d+\.\d%$/.test(v ?? '')), missing: shares });
   const cacheMeta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
   results.push({ name: '/analytics cache meta puts expired between turns next to hit ratio', ok: /hit ratio, \d[\d,]* expired between turns,/.test(cacheMeta), missing: [cacheMeta] });
   // The panel names a reason by its label and its links by the name the beta sent.
@@ -16022,6 +16022,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     'Model changed': 'model_changed',
     'No divergence': 'none',
     'Not requested': 'not_requested',
+    Pending: 'pending',
     'Previous message not found': 'previous_message_not_found',
     'System prompt changed': 'system_changed',
     'Tools changed': 'tools_changed',
@@ -16172,14 +16173,14 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   }
   await tab(m, 'Cache');
   // The table heads each reason with a short word and the panel's full label on the word's title.
-  const shortWords = ['History', 'Model', 'None', 'Not asked', 'No previous', 'System', 'Tools', 'Unavailable'];
+  const shortWords = ['History', 'Model', 'None', 'Not asked', 'Pending', 'No previous', 'System', 'Tools', 'Unavailable'];
   const reasonTable = [...m.container.querySelectorAll('.card--table')].map((c) => c.textContent ?? '').find((t) => t.startsWith('Misses by reason by key')) ?? '';
   results.push({ name: '/analytics misses-by-reason table breaks down per group', ok: shortWords.every((w) => reasonTable.includes(w)) && reasonTable.includes('Expired between turns') && reasonTable.includes('desktop'), missing: [reasonTable.slice(0, 160)] });
   {
     const table = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'));
     const body = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? ''));
-    const order = ['No divergence', 'Model changed', 'System prompt changed', 'Tools changed', 'History edited', 'Previous message not found', 'Unavailable', 'Not requested'];
-    const shortOrder = ['None', 'Model', 'System', 'Tools', 'History', 'No previous', 'Unavailable', 'Not asked'];
+    const order = ['No divergence', 'Model changed', 'System prompt changed', 'Tools changed', 'History edited', 'Previous message not found', 'Unavailable', 'Not requested', 'Pending'];
+    const shortOrder = ['None', 'Model', 'System', 'Tools', 'History', 'No previous', 'Unavailable', 'Not asked', 'Pending'];
     const ths = [...(table?.querySelectorAll('thead th') ?? [])];
     const heads = ths.map((th) => th.textContent?.trim());
     const titles = ths.slice(1, -1).map((th) => th.querySelector('span[title]')?.getAttribute('title') ?? null);
@@ -16189,10 +16190,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const columnSum = (i) => body.reduce((n, row) => n + Number(row[i + 1].replace(/,/g, '')), 0);
     results.push({ name: '/analytics panel counts equal the per-group column sums', ok: order.every((label, i) => panel[label] === columnSum(i)), missing: order.map((label, i) => `${label} ${panel[label]} vs ${columnSum(i)}`) });
     const ci = body.find((row) => row[0] === 'ci') ?? [];
-    results.push({ name: '/analytics an API-key account only ever reads Not requested', ok: ci.length > 0 && ci.slice(1, 8).every((v) => v === '0') && Number(ci[8]) > 0 && ci[9] === '0', missing: ci });
+    results.push({ name: '/analytics an API-key account only ever reads Not requested', ok: ci.length > 0 && ci.slice(1, 8).every((v) => v === '0') && Number(ci[8]) > 0 && ci[9] === '0' && ci[10] === '0', missing: ci });
     const meta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
     const metaExpired = Number(/([\d,]+) expired between turns/.exec(meta)?.[1].replace(/,/g, '') ?? -1);
-    results.push({ name: '/analytics cache meta matches the table expired column', ok: metaExpired === columnSum(8), missing: [String(metaExpired), String(columnSum(8))] });
+    results.push({ name: '/analytics cache meta matches the table expired column', ok: metaExpired === columnSum(9), missing: [String(metaExpired), String(columnSum(9))] });
   }
   {
     const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
@@ -16424,7 +16425,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       results.push({ name: "/analytics the key grouping's total equals the ungrouped total", ok: unfiltered.size > 1 && meta.endsWith('errors') && grouped === shown, missing: [meta, String(grouped)] });
     }
     // One hour of the month reports a reason the console has no label for; the table lists it under its own name
-    // after the eight it knows, with a break opportunity after its underscore, and the panel draws a bar for it.
+    // after the nine it knows, with a break opportunity after its underscore, and the panel draws a bar for it.
     await tab(m, 'Cache');
     const reasonThs = [...([...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'))?.querySelectorAll('thead th') ?? [])];
     const reasonHeads = reasonThs.map((th) => th.textContent?.trim());
@@ -16434,10 +16435,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     results.push({
       name: '/analytics a miss reason the console does not know keeps its own column and bar',
       ok:
-        JSON.stringify(reasonHeads.slice(-3)) === JSON.stringify(['Not asked', 'future_reason', 'Expired between turns']) &&
+        JSON.stringify(reasonHeads.slice(-3)) === JSON.stringify(['Pending', 'future_reason', 'Expired between turns']) &&
         JSON.stringify(unknownParts) === JSON.stringify(['future_', '<wbr>', 'reason']) &&
         unknownHead?.getAttribute('title') === 'future_reason' &&
-        monthBars.length === 9 &&
+        monthBars.length === 10 &&
         monthBars.includes('future_reason'),
       missing: [...reasonHeads, JSON.stringify(unknownParts), ...monthBars],
     });

@@ -1490,7 +1490,8 @@ test('request rows fold into analytics groups with the same sums the routes answ
   assert.equal(all.failovers, 1);
   assert.equal(all.tokens.cacheRead, 3000);
   assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 6);
-  assert.equal(all.cacheMissReasons.none, 6);
+  assert.equal(all.cacheMissReasons.none, 5);
+  assert.equal(all.cacheMissReasons.pending, 1, 'a comparison still running counts under its own word');
   assert.equal(all.probes.ok, 0);
   assert.equal(all.probes.held, 0, 'a group folded from request rows counts no held probe');
   const captured = page.requests.find((r) => r.id === 'r-captured');
@@ -1596,7 +1597,7 @@ test('a cache-miss reason the console does not know keeps its own name on the at
   const summed = d.sumGroups([group, group, folded]);
   assert.equal(summed.cacheMissReasons.future_reason, 7);
   assert.equal(summed.cacheMissReasons.none, 4);
-  assert.deepEqual(d.missReasonOrder([group, { cacheMissReasons: { a_reason: 1, none: 0 } }]), [...d.CACHE_MISS_REASONS, 'a_reason', 'future_reason'], 'the known eight in reading order, then the rest alphabetically');
+  assert.deepEqual(d.missReasonOrder([group, { cacheMissReasons: { a_reason: 1, none: 0 } }]), [...d.CACHE_MISS_REASONS, 'a_reason', 'future_reason'], 'the known nine in reading order, then the rest alphabetically');
   assert.equal(d.missLabel('future_reason'), 'future_reason');
   assert.equal(d.missLabel('messages_changed'), 'History edited');
 });

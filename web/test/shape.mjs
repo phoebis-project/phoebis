@@ -14,7 +14,7 @@ export function shapeOf(v) {
 export const OPAQUE = (path) => path.endsWith('.detail');
 
 /** An open map (`AnalyticsGroup.errors`, `Record<string, number>`) holds one entry per error code observed in
- * the range; its keys are data, not schema. `cacheMissReasons` is one too past its eight known keys, since the
+ * the range, and its keys are data, not schema. `cacheMissReasons` is one too past its nine known keys, since the
  * route answers any name the beta sent, unlike a closed enum-keyed record such as `wastedProbeReasons`, which
  * decodes with every key always present and stays checked by key set; so is `Pool.movesPerHour`, one entry per
  * move reason seen in the last hour, the rewrite route's `moves`, the same over the range, and a window fit's

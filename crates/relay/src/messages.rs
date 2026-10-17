@@ -4247,7 +4247,8 @@ impl Relay {
                 chunk_published = true;
                 // Only the error statuses `respond` drains (400, 401, 403, 404, 429) reach here, a 200 being read
                 // by the body task; the 200 arm guards a caller that would buffer one, whose usage still counts.
-                (head.status == 200).then(|| answer_from_json(&text, &[]))
+                (head.status == 200)
+                    .then(|| answer_from_json(&text, &[], outcome.diagnostics.is_some()))
             }
         };
         let (usage, facts) = match answer {

@@ -573,7 +573,7 @@ export interface AttemptWindow {
 
 /**
  * Why the prompt-cache prefix did not hit, as the cache diagnostics beta named it. The router stores whatever
- * name the beta sends, so a name added after the console's eight (`CACHE_MISS_REASONS`) is kept as sent.
+ * name the beta sends, so a name added after the console's nine (`CACHE_MISS_REASONS`) is kept as sent.
  */
 export type CacheMissReason = string;
 

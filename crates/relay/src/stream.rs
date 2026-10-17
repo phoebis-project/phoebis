@@ -481,7 +481,11 @@ impl Publish {
     fn phase_of(&mut self, event: &SseEvent, waiting: &mut Waiting) -> Option<Phase> {
         match event.name.as_deref() {
             Some(b"message_start") => {
-                let answer = answer_from_json(&event.data, &["message"]);
+                let answer = answer_from_json(
+                    &event.data,
+                    &["message"],
+                    self.outcome.diagnostics.is_some(),
+                );
                 self.usage.merge(&answer.usage);
                 self.response.merge(&answer.response);
                 if let Some(id) = message_id_from_json(&event.data, &["message"]) {
@@ -503,7 +507,7 @@ impl Publish {
                 None
             }
             Some(b"message_delta") => {
-                let answer = answer_from_json(&event.data, &[]);
+                let answer = answer_from_json(&event.data, &[], self.outcome.diagnostics.is_some());
                 self.usage.merge(&answer.usage);
                 self.response.merge(&answer.response);
                 Some(Phase::MessageDelta {
@@ -550,7 +554,7 @@ impl Publish {
             );
         }
         if let Some(json) = self.json.take() {
-            let answer = answer_from_json(&json, &[]);
+            let answer = answer_from_json(&json, &[], self.outcome.diagnostics.is_some());
             self.usage.merge(&answer.usage);
             self.response.merge(&answer.response);
             if let Some(id) = message_id_from_json(&json, &[]) {

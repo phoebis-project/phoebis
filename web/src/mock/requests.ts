@@ -847,6 +847,8 @@ interface StorySeed {
   kind?: RequestKind;
   model: string;
   outcome?: RequestOutcome;
+  /** The upstream's comparison was still running when its one attempt's answer went out. */
+  pending?: true;
   requestClass: string;
   /** The client's session, a prefix of the story's own ids. */
   session: string;
@@ -918,7 +920,7 @@ function storyRow(seed: StorySeed): RequestLog {
       accountId: a.accountId,
       accountKind: kindOf(a.accountId),
       // A failover lands on an account that never saw the turn before this one.
-      cacheMissReason: a.status !== 200 || kind === 'count_tokens' ? null : !oauth ? 'not_requested' : index > 0 ? 'previous_message_not_found' : 'none',
+      cacheMissReason: a.status !== 200 || kind === 'count_tokens' ? null : !oauth ? 'not_requested' : index > 0 ? 'previous_message_not_found' : seed.pending ? 'pending' : 'none',
       cooldownSet: a.cooldown ? { reason: a.cooldown.reason, until: iso(a.cooldown.until) } : null,
       durationMs: a.ms,
       index,
@@ -1051,7 +1053,7 @@ function storyRequests(): RequestLog[] {
     { agentId: 'main', at: t(14, 17, 52), attempts: [{ accountId: 'primary', at: t(14, 17, 52), ms: 3_300, status: 200 }], contextCompacted: 'auto', errorCode: 'stream_incomplete', id: 'req_31f0b7c2-6e1', outcome: 'incomplete', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 22_900, input: 1_100, output: 410 } },
     { agentId: 'main', at: t(14, 16, 40), attempts: [], errorCode: 'accounts_exhausted', id: 'req_51d0e2b8-7a0', keyId: 'ci', model: HAIKU, outcome: 'exhausted', requestClass: 'main', session: 'cd9a5904', status: 429 },
     { agentId: 'main', at: t(14, 14, 2), attempts: [], clientDrift: 'hash', errorCode: 'client_drift', id: 'req_e0a4c6f2-118', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', requestClass: 'main', session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
-    { agentId: 'main', at: t(14, 11, 44), attempts: [{ accountId: 'primary', at: t(14, 11, 44), ms: 8_300, status: 200 }], id: 'req_b2bed817-a58', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 30_900, cacheWrite1h: 21_400, input: 1_900, output: 1_480 } },
+    { agentId: 'main', at: t(14, 11, 44), attempts: [{ accountId: 'primary', at: t(14, 11, 44), ms: 8_300, status: 200 }], id: 'req_b2bed817-a58', keyId: 'desktop', model: 'claude-sonnet-5-5', pending: true, requestClass: 'main', session: 'd7167642', usage: { cacheRead: 30_900, cacheWrite1h: 21_400, input: 1_900, output: 1_480 } },
     // The model takes no inference geography parameter, so its answer reports the geography as not available.
     { agentId: 'main', at: t(14, 9, 41), attempts: [{ accountId: 'primary', at: t(14, 9, 41), ms: 4_800, status: 200 }], geo: 'not_available', id: 'req_ef099b34-453', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 31_000, input: 9_800, output: 2_100 } },
     // A token count follows its subagent's pin to secondary before its window is spent, so it never meets the cooldown

@@ -1494,10 +1494,13 @@ function EffortBars({ groups, color }: { color: string; groups: AnalyticsGroup[]
 const MISS_REASON_BLURB =
   'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.';
 
-/** The two non-answers read as neutral; a diagnosed divergence reads as a fault, like the error bars above. */
+/**
+ * A request not asked and a comparison still running read as neutral, since neither has a finished comparison behind
+ * it. A diagnosed divergence reads as a fault, like the error bars above.
+ */
 function reasonColor(ink: ReturnType<typeof useChartInk>, reason: CacheMissReason): string {
   if (reason === 'none') return ink.series[2];
-  if (reason === 'not_requested') return ink.muted;
+  if (reason === 'not_requested' || reason === 'pending') return ink.muted;
   return ink.series[7];
 }
 

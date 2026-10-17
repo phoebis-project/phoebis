@@ -1734,7 +1734,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`a row names who put the diagnostics member on its body exactly when its serving attempt reads a diagnosed reason, at ${at}`, async () => {
     const s = await story;
-    const diagnosed = (reason) => reason === 'none' || reason === 'previous_message_not_found' || reason === 'unavailable' || reason.endsWith('_changed');
+    const diagnosed = (reason) => reason === 'none' || reason === 'pending' || reason === 'previous_message_not_found' || reason === 'unavailable' || reason.endsWith('_changed');
     for (const r of s.requests) {
       const reason = r.attempts.at(-1)?.cacheMissReason ?? null;
       if (reason !== null && diagnosed(reason)) assert.ok(r.diagnosticsSource === 'client' || r.diagnosticsSource === 'router', `${r.id} reads ${reason} and names ${r.diagnosticsSource}`);
@@ -1743,6 +1743,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([...new Set(s.requests.map((r) => r.diagnosticsSource))].filter((v) => v !== null).sort(), ['client', 'router'], 'both sources occur');
     assert.ok(s.requests.some((r) => r.requestClass === null), 'a row sent no request class');
     assert.ok(s.requests.some((r) => r.shape.effort === null), 'a row asked for no effort');
+  });
+
+  test(`the story holds one request whose comparison was still running, on an account that asked, at ${at}`, async () => {
+    const s = await story;
+    const pending = s.requests.filter((r) => r.attempts.at(-1)?.cacheMissReason === 'pending');
+    assert.equal(pending.length, 1, `the pending rows: ${pending.map((r) => r.id).join(', ') || 'none'}`);
+    const [row] = pending;
+    assert.equal(s.accounts.find((a) => a.id === row.attempts.at(-1).accountId)?.kind, 'oauth', 'an OAuth account asks for the comparison');
+    assert.equal(row.diagnosticsSource, 'client', 'the body carried the member');
   });
 
   // The Analytics page's default range, the last day up to the story's instant, read off the rollups as the mock's

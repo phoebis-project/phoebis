@@ -2886,6 +2886,23 @@ mod tests {
             "a none with no cache read expired between turns"
         );
         let d = one_delta(
+            &request("succeeded", Some(200), Some("k")),
+            &[AttemptRecord {
+                cache_miss_reason: Some("pending".into()),
+                ..attempt(1, "a", None, Some(3), None)
+            }],
+            &prices(),
+        );
+        assert_eq!(
+            (
+                d.cache_miss_reasons.get("pending"),
+                d.cache_miss_reasons.get("none"),
+                d.cache_miss_reasons.get("expired_between_turns")
+            ),
+            (Some(&1), None, None),
+            "a comparison still running is counted under its own word and expired nothing"
+        );
+        let d = one_delta(
             &request("canceled", Some(503), Some("k")),
             &[attempt(1, "a", None, None, None)],
             &prices(),

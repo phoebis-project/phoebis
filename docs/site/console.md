@@ -692,9 +692,11 @@ subscription requests' 20x 7-day equivalent, the card's subtitle naming the bill
 model cell carrying them on a line under it, and the card draws the billed dollars while no subscription request is in
 range. Under the three dollar positions they read the position's dollars, and under Window shares the named account's
 7-day shares, the card reading "Shares of one account's windows alone: name one account in the Accounts filter." and
-Cache by model dashes under the same note while no account is named. Every count in Misses by reason but the expired
-column links to the Requests view on those requests with the page's filters carried over, and a count the Requests view
-cannot list exactly stays plain with the reason on hover.
+Cache by model dashes under the same note while no account is named. Misses by reason records "No divergence" for a null
+diagnostics member on a request that named a message, and lists Pending beside it. Pending: the upstream's comparison
+was still running when the answer went out. Every count in Misses by reason but the expired column links to the Requests
+view on those requests with the page's filters carried over, and a count the Requests view cannot list exactly stays
+plain with the reason on hover.
 
 Cost reads in the top bar's unit. Under Native the tiles read Cost, the subscription requests' 20x 7-day equivalent
 over the billed requests' dollars, a side with no requests left out, and Cost per request and Cost per 1k output

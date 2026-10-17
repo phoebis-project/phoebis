@@ -60,7 +60,7 @@
           },
           "idle_share": {
             "min": 0.013888888888888886,
-            "max": 0.92
+            "max": 0.9199999999999999
           },
           "parked_seconds": {
             "min": 2760.0,
@@ -140,10 +140,10 @@
         "status": "active",
         "requests_24h": 7,
         "cost_24h": 0.024900000000000005,
-        "billed_24h": 0.0107,
+        "billed_24h": 0.010700000000000001,
         "equivalent_24h": {
           "five_hour": 0.000048175000000000005,
-          "seven_day": 0.000012846666666666668
+          "seven_day": 0.000012846666666666667
         },
         "estimated_24h": true,
         "active_pins": 1,
@@ -465,7 +465,7 @@
             "requests": 4,
             "failed": 1,
             "tokens": 7200,
-            "cost_usd": 0.0107,
+            "cost_usd": 0.010700000000000001,
             "billed_usd": 0.0036,
             "equivalent": {
               "five_hour": 0.000030550000000000004,

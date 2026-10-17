@@ -43,7 +43,8 @@
           "upstream_error": 1
         },
         "cache_miss_reasons": {
-          "none": 6
+          "none": 5,
+          "pending": 1
         },
         "histograms": {
           "duration_ms": [
@@ -355,7 +356,7 @@
         "wasted_probe_reasons": {},
         "cost_shares": {
           "five_hour": 0.000048175000000000005,
-          "seven_day": 0.000012846666666666668
+          "seven_day": 0.000012846666666666667
         },
         "cache_shares": {
           "five_hour": {
@@ -363,7 +364,7 @@
             "write": 6.8333333333333345e-6
           },
           "seven_day": {
-            "read": 9.111111111111113e-8,
+            "read": 9.111111111111112e-8,
             "write": 1.8222222222222223e-6
           }
         },
@@ -372,7 +373,7 @@
         "plan_output_tokens": 500,
         "cost_equivalent": {
           "five_hour": 0.000048175000000000005,
-          "seven_day": 0.000012846666666666668
+          "seven_day": 0.000012846666666666667
         },
         "cache_equivalent": {
           "five_hour": {
@@ -380,7 +381,7 @@
             "write": 6.8333333333333345e-6
           },
           "seven_day": {
-            "read": 9.111111111111113e-8,
+            "read": 9.111111111111112e-8,
             "write": 1.8222222222222223e-6
           }
         },
@@ -397,7 +398,7 @@
         },
         "equivalent_split": {
           "input": 7.288888888888889e-6,
-          "cache_read": 9.111111111111113e-8,
+          "cache_read": 9.111111111111112e-8,
           "cache_write": 1.8222222222222223e-6,
           "output": 3.6444444444444446e-6
         },

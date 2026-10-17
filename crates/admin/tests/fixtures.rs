@@ -843,14 +843,11 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 "succeeded",
             )
         },
-        attempts: vec![attempt(
-            "r-captured",
-            1,
-            "business",
-            200,
-            "succeeded",
-            now - 60_000,
-        )],
+        // Pending beside the other rows' `none`, so the capture carries both words the relay reads from the member.
+        attempts: vec![AttemptRecord {
+            cache_miss_reason: Some("pending".into()),
+            ..attempt("r-captured", 1, "business", 200, "succeeded", now - 60_000)
+        }],
         bodies: Some(BodyRecord {
             request_id: "r-captured".into(),
             request_body: br#"{"model":"claude-sonnet-5","messages":[]}"#.to_vec(),

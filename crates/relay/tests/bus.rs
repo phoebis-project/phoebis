@@ -743,6 +743,121 @@ async fn the_completion_event_names_the_members_source_and_the_writers_follow_it
     up.shutdown().await;
 }
 
+/// A JSON 200 whose `diagnostics` member is `member`, written as its raw JSON value.
+fn answer_with_diagnostics(id: &str, member: &str) -> Respond {
+    json_answer(
+        200,
+        &format!(
+            r#"{{"id":"{id}","type":"message","content":[],"usage":{{"input_tokens":1,"output_tokens":1}},"diagnostics":{member}}}"#
+        ),
+    )
+}
+
+#[tokio::test]
+async fn a_null_diagnostics_member_reads_none_only_on_a_pass_that_carried_one_and_a_null_reason_reads_pending(
+) {
+    const PENDING: &str = r#"{"cache_miss_reason":null}"#;
+    let up = FakeUpstream::start(vec![]).await;
+    for respond in [
+        answer_with_diagnostics("msg_client_null", "null"),
+        answer_with_diagnostics("msg_sourceless_null", "null"),
+        answer_with_diagnostics("msg_client_pending", PENDING),
+        answer_with_diagnostics("msg_sourceless_pending", PENDING),
+        answer_with_diagnostics(
+            "msg_sourceless_named",
+            r#"{"cache_miss_reason":{"type":"none"}}"#,
+        ),
+        Respond::Sse {
+            status: 200,
+            headers: vec![],
+            events: vec![
+                ev(
+                    "message_start",
+                    r#"{"type":"message_start","message":{"id":"msg_client_stream","usage":{"input_tokens":1},"diagnostics":null}}"#,
+                ),
+                ev(
+                    "message_delta",
+                    r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}"#,
+                ),
+                ev("message_stop", r#"{"type":"message_stop"}"#),
+            ],
+            delay_between: Duration::from_millis(1),
+        },
+    ] {
+        up.push_credential_rule(A, "/v1/messages", respond);
+    }
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    // The pool's switch stays off, so a pass carries the member only where the client sent it.
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let client = || {
+        request_from_fixture(
+            inference_head(FixtureKind::OauthFirstParty),
+            body(BodyFixture::FirstParty9b244),
+            KEY,
+        )
+    };
+    let sourceless = |session: &str| request_for(KEY, "claude-sonnet-4-5", session);
+    let read = |complete: &RequestComplete| {
+        (
+            complete.diagnostics,
+            complete
+                .usage
+                .as_ref()
+                .and_then(|u| u.cache_miss_reason.clone()),
+        )
+    };
+    let cases = [
+        (
+            client(),
+            Some(DiagnosticsSource::Client),
+            Some("none"),
+            "a null member on a pass that carried one",
+        ),
+        (
+            sourceless("s-null"),
+            None,
+            None,
+            "a null member on a pass that carried none",
+        ),
+        (
+            client(),
+            Some(DiagnosticsSource::Client),
+            Some("pending"),
+            "the pending shape with the client's member",
+        ),
+        (
+            sourceless("s-pending"),
+            None,
+            Some("pending"),
+            "the pending shape with no member",
+        ),
+        (
+            sourceless("s-named"),
+            None,
+            Some("none"),
+            "a type the upstream names",
+        ),
+        (
+            client(),
+            Some(DiagnosticsSource::Client),
+            Some("none"),
+            "a streamed head's null member",
+        ),
+    ];
+    for (request, source, reason, case) in cases {
+        let (status, complete) = completion_of(&h, &mut sub, request).await;
+        assert_eq!(status, 200, "{case}");
+        assert_eq!(
+            read(&complete),
+            (source, reason.map(str::to_string)),
+            "{case}"
+        );
+    }
+    assert_eq!(up.requests().len(), 6, "one pass per case");
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_request_whose_account_left_after_its_head_completes_with_the_legs_source() {
     let up = FakeUpstream::start(vec![Rule {

@@ -3888,7 +3888,7 @@ async function analyticsTables(theme) {
 /**
  * The Analytics tables' columns under the width rule, each read on the tab that draws it: the Traffic breakdown on
  * the landing tab (its group column the fill, Key under the default grouping), the misses-by-reason breakdown (Key
- * again, its nine figure headers wrapped so the group column keeps its room, each known reason's header its short
+ * again, its ten figure headers wrapped so the group column keeps its room, each known reason's header its short
  * word with the full label on its title) and the placements table on Cache (Rung), and the member budgets on Burn
  * (Pool and Account, the Spent column as wide as its meter's floor) with the meter reconciliation (Upstream). The view
  * returns to Traffic afterwards, as the other Analytics checks leave it.
@@ -3909,8 +3909,9 @@ async function analyticsColumns(theme) {
       ['No previous', 'Previous message not found'],
       ['Unavailable', 'Unavailable'],
       ['Not asked', 'Not requested'],
+      ['Pending', 'Pending'],
     ];
-    if (JSON.stringify(heads.slice(1, 9)) !== JSON.stringify(known)) failures.push(`${theme} /analytics: the misses headers read ${JSON.stringify(heads.slice(1, 9))}, not the short words over their full labels`);
+    if (JSON.stringify(heads.slice(1, 10)) !== JSON.stringify(known)) failures.push(`${theme} /analytics: the misses headers read ${JSON.stringify(heads.slice(1, 10))}, not the short words over their full labels`);
     await tableColumns(theme, 'analytics', '.placements-table', ['Rung']);
     if (!(await tabTo(theme, 'Burn'))) return;
     await tableColumns(theme, 'analytics', '.budgets-table', ['Pool', 'Account']);
