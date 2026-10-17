@@ -912,6 +912,9 @@ enum Command {
     Samples {
         reply: oneshot::Sender<Vec<(String, UtilizationSample)>>,
     },
+    ReportedSamples {
+        reply: oneshot::Sender<Vec<(String, UtilizationSample)>>,
+    },
     /// The funding marks a writer wake finished, sent ahead of the reload a landed one asks for.
     FundingWritten {
         rows: Vec<FundingWritten>,
@@ -1437,6 +1440,11 @@ impl RouterHandle {
     /// a rule sweep never queues one command per account in front of selection.
     pub async fn samples(&self) -> Result<Vec<(String, UtilizationSample)>, RouterGone> {
         self.ask(|reply| Command::Samples { reply }).await
+    }
+    /// One ask for every account's stored sample, each window as the poll or a head reported it with its own reset:
+    /// no charge added and no passed reset rolled, for a view that shows the reading itself.
+    pub async fn reported_samples(&self) -> Result<Vec<(String, UtilizationSample)>, RouterGone> {
+        self.ask(|reply| Command::ReportedSamples { reply }).await
     }
     /// `rotated_at` is the key's rotation the caller authenticated under, so a touch that lands after a later
     /// rotation stamps nothing on the new grace. Waits for a slot as a report does; a stopped task takes none.
@@ -3320,6 +3328,9 @@ impl Task {
                     })
                     .collect();
                 let _ = reply.send(samples);
+            }
+            Command::ReportedSamples { reply } => {
+                let _ = reply.send(self.state.samples());
             }
             Command::Touch {
                 key_id,

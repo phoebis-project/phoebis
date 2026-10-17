@@ -150,8 +150,9 @@ The Quota view covers the subscription accounts alone, since an API-key account 
 the scheduled poll does", and at the right edge the split Refresh button, whose body reads the account list again
 ("Reads the list again now"), and the count of the accounts, `{n} accounts`, followed in the critical ink by those
 needing attention, `, {n} need attention`. Auto reload starts at 5 s. A section bar shows one of two sections at a time:
-Accounts, where the view opens, and Quota windows, which a link or a reload with `#quota-windows` lands on. The readings
-are the ledger's [quota samples](statistics.md#quota-samples).
+Accounts, where the view opens, and Quota windows, which a link or a reload with `#quota-windows` lands on. A card's
+reading is the router's reported sample where the router holds one for the window and the ledger's [quota
+sample](statistics.md#quota-samples) otherwise.
 
 Accounts draws a card per account, sorted "Default order", "Soonest recovery", "5-hour pace", "7-day pace" or "7-day
 Fable pace", every card with the same slots in the same order: the header with the label (the email on hover) and the

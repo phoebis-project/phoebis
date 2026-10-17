@@ -109,8 +109,8 @@ last run, predicted forward, and its backoff starts at once. One whose first ans
 error serves from them too and keeps the cadence. The poll counts that read as its own: it next reads each account five
 minutes after the startup step, on the account's phase, or when its hold ends after a 429, and its profile an hour
 after, on every twelfth poll. A pairing's confirm and the Quota view's Refresh read the endpoint at once, outside the
-cadence, and hand the reading to the router and the ledger as a scheduled read does, under the same hold and
-coalescing.
+cadence, and hand the reading to the router and the ledger as a scheduled read does, under the same hold and coalescing,
+and the card draws the reading the refresh took the moment it answers, its time the reading's own instant.
 
 An account the endpoint answers 429 backs off alone. Its hold grows through two, four and eight minutes to fifteen, a
 `Retry-After` honored up to the same fifteen, and the retry comes when the hold ends, sooner than the account's next

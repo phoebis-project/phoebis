@@ -1296,6 +1296,226 @@ async fn a_refresh_whose_read_ends_after_the_clock_moved_answers_the_one_reading
     assert_eq!(asked(), 1, "the GET reads nothing");
 }
 
+/// A refresh hands the router its reading as soon as it answers, while the ledger's writer may still hold the row:
+/// the card draws the reading the refresh took, at the instant it was taken, over the ledger's older row.
+#[tokio::test]
+async fn a_refresh_and_the_list_read_after_it_carry_its_reading_at_its_own_instant_while_the_ledger_holds_an_older_row(
+) {
+    use common::{get, json, login, post, NOW};
+    use std::sync::atomic::Ordering;
+    const HOUR: i64 = 3_600_000;
+    let h = common::admin_parts_full().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    assert_eq!(pair_business(&h.app, &cookie).await.status(), 200);
+    let first = phoebis_ledger::bucket_of(NOW);
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while h
+        .db
+        .quota_samples("business", first, first + 300)
+        .await
+        .unwrap()
+        .is_empty()
+    {
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the confirm's poll never recorded a sample"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    routed_sample(&h.router, "business", NOW).await;
+
+    common::hold_the_writer(
+        &h,
+        phoebis_ledger::RequestRecord {
+            id: "held".into(),
+            received_at: NOW,
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            ..Default::default()
+        },
+        vec![],
+    )
+    .await;
+    // Figures of their own, so the card's reading tells the refresh's from the confirm's.
+    let rfc3339 = |at: i64| jiff::Timestamp::from_millisecond(at).unwrap().to_string();
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: format!(
+                r#"{{"five_hour":{{"utilization":37.5,"resets_at":"{}"}},"seven_day":{{"utilization":61.0,"resets_at":"{}"}}}}"#,
+                rfc3339(NOW + 3 * HOUR),
+                rfc3339(NOW + 90 * HOUR)
+            )
+            .into_bytes(),
+        },
+    );
+    // The next bucket, off its 300-second floor, so the reading's own instant tells from the bucket's.
+    let taken = NOW + 307_654;
+    let bucket = phoebis_ledger::bucket_of(taken);
+    assert!(bucket > first && bucket * 1_000 != taken);
+    h.clock_cell.store(taken, Ordering::SeqCst);
+    let refreshed = json(
+        post(
+            &h.app,
+            "/admin/accounts/business/usage/refresh",
+            "",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert!(refreshed["error"].is_null(), "{refreshed}");
+    assert_eq!(refreshed["fetched_at"], taken);
+    let by_id = |mut windows: Vec<serde_json::Value>| {
+        windows.sort_by_key(|w| w["id"].to_string());
+        windows
+    };
+    let reading = by_id(
+        refreshed["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| {
+                serde_json::json!({
+                    "id": w["key"],
+                    "utilization": w["utilization"].as_f64().unwrap() / 100.0,
+                    "resets_at": w["resets_at"],
+                    "observed_at": taken,
+                })
+            })
+            .collect(),
+    );
+    assert_eq!(reading.len(), 2, "{refreshed}");
+    assert!(
+        h.db.quota_samples("business", bucket, bucket + 300)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the held writer has not landed the refresh's row"
+    );
+    let drawn = |account: &serde_json::Value| {
+        by_id(
+            account["windows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|w| {
+                    serde_json::json!({
+                        "id": w["id"],
+                        "utilization": w["utilization"],
+                        "resets_at": w["resets_at"],
+                        "observed_at": w["observed_at"],
+                    })
+                })
+                .collect(),
+        )
+    };
+    let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(drawn(&account), reading, "{account}");
+    let listed = json(get(&h.app, "/admin/accounts", Some(&cookie)).await).await;
+    let business = listed["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "business")
+        .unwrap();
+    assert_eq!(drawn(business), reading, "{business}");
+
+    common::free_the_writer(&h).await;
+    let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        drawn(&account),
+        reading,
+        "the landed row changes nothing: {account}"
+    );
+}
+
+/// The ledger's rows stand where the router holds no plan window of the account: an api_key account's always, and an
+/// OAuth account's while the router holds its fast lane alone. Each window reads its row's own instant, and the
+/// bucket's floor only for a row written before the samples carried one.
+#[tokio::test]
+async fn an_account_the_router_holds_no_plan_window_of_lists_the_ledger_rows_at_their_own_instants()
+{
+    use common::{get, json, login, wait_json, NOW};
+    use phoebis_ledger::QuotaSampleRecord;
+    use phoebis_routing::{Report, UtilizationSample, WindowReading, WindowSource};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    h.router
+        .report(Report::Sample {
+            account_id: "business".into(),
+            sample: UtilizationSample::default().with(
+                phoebis_relay::FAST_INPUT,
+                WindowReading {
+                    utilization: 0.3,
+                    reset: Some(NOW + 60_000),
+                    observed_at: NOW - 30_000,
+                    source: WindowSource::Head,
+                },
+            ),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    wait_json(&h.app, "/admin/accounts/business", &cookie, |v| {
+        !v["fast_lane"].is_null()
+    })
+    .await;
+    // Off the 300-second floor its bucket files it under.
+    let read_at = NOW - 42_123;
+    let bucket = phoebis_ledger::bucket_of(read_at);
+    assert_ne!(bucket * 1_000, read_at);
+    let row = |account: &str, window: &str, utilization: f64, observed_at| QuotaSampleRecord {
+        account_id: account.into(),
+        bucket,
+        window: window.into(),
+        utilization: Some(utilization),
+        reset_at: None,
+        source: "head".into(),
+        observed_at,
+    };
+    h.db.insert_samples(
+        &[
+            row("business", "five_hour", 0.4, Some(read_at)),
+            row("business", "seven_day", 0.2, None),
+            row("direct", "five_hour", 0.1, Some(read_at)),
+            row("direct", "seven_day", 0.05, None),
+        ],
+        None,
+    )
+    .unwrap();
+    for (id, five_hour, seven_day) in [("business", 0.4, 0.2), ("direct", 0.1, 0.05)] {
+        let account =
+            json(get(&h.app, &format!("/admin/accounts/{id}"), Some(&cookie)).await).await;
+        let drawn: Vec<(&str, f64, i64)> = account["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| {
+                (
+                    w["id"].as_str().unwrap(),
+                    w["utilization"].as_f64().unwrap(),
+                    w["observed_at"].as_i64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            drawn,
+            [
+                ("five_hour", five_hour, read_at),
+                ("seven_day", seven_day, bucket * 1_000)
+            ],
+            "{account}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn the_usage_get_says_no_credential_is_stored_for_a_disconnected_or_unpaired_account() {
     use common::{delete, get, json, login};
@@ -1662,7 +1882,7 @@ async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_rout
 }
 
 /// Windows the router still routes on after the ledger's last day has no sample of them, persisted from the last
-/// run and read more than a day ago, are the windows the account view lists, as the usage `GET` answers them.
+/// run and read more than a day ago, are the windows the account view lists, each reading as the router stored it.
 #[tokio::test]
 async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_router_holds() {
     use common::{get, json, login, wait_json, NOW};
@@ -1707,17 +1927,18 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
         v["error"].is_null()
     })
     .await;
-    // The 5-hour window's reset has passed, so the router predicts it empty until the next reading names one. No pin
-    // burns, so each window projects its prediction at its horizon: five hours on, the weekly windows' resets lying
-    // further out. The Fable week reads under the endpoint's key, mapped from the routing name, and its lead paces it
-    // as the week the routing name says it is.
+    // Each window reads as the router stored it, the 5-hour window's passed reset with it, while the projection reads
+    // the router's prediction, which empties that window until the next reading names a reset. No pin burns, so each
+    // window projects its prediction at its horizon: five hours on, the weekly windows' resets lying further out. The
+    // Fable week reads under the endpoint's key, mapped from the routing name, and its lead paces it as the week the
+    // routing name says it is.
     let lead = |window: &str, utilization: f64, reset: Option<i64>| {
         utilization - phoebis_routing::elapsed_share_at(window, reset, None, NOW)
     };
     let held = serde_json::json!([
-        { "id": "five_hour", "observed_at": read_at, "resets_at": null, "utilization": 0.0,
+        { "id": "five_hour", "observed_at": read_at, "resets_at": NOW - 25 * HOUR, "utilization": 0.9,
           "projection": 0.0, "horizon": NOW + 5 * HOUR, "burn": 0.0, "demand": 0.0,
-          "lead": lead(FIVE_HOUR, 0.0, None) },
+          "lead": lead(FIVE_HOUR, 0.9, Some(NOW - 25 * HOUR)) },
         { "id": "seven_day", "observed_at": read_at, "resets_at": NOW + 72 * HOUR, "utilization": 0.5,
           "projection": 0.5, "horizon": NOW + 5 * HOUR, "burn": 0.0, "demand": 0.0,
           "lead": lead(SEVEN_DAY, 0.5, Some(NOW + 72 * HOUR)) },
