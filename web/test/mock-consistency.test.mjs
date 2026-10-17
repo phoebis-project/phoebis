@@ -827,6 +827,18 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         assert.ok(pool, `${e.id}: the edit names a pool of the story`);
         const member = (field) => (field === 'label' ? 'name' : field.replace(/_([a-z])/g, (_, c) => c.toUpperCase()));
         for (const [field, change] of Object.entries(pairs)) if (member(field) in pool) assert.deepEqual(change.to, pool[member(field)], `${e.id}: ${field} reads the pool's value`);
+        // A decision record carries the pool's settings it was decided under, so the records before the edit read each
+        // pair's old value and the records after it the new one.
+        const records = (await decisionsOf(s)).filter((r) => r.request.poolId === e.detail.target && r.settings !== null);
+        const before = records.filter((r) => Date.parse(r.request.at) < Date.parse(e.at));
+        const after = records.filter((r) => Date.parse(r.request.at) >= Date.parse(e.at));
+        assert.ok(before.length > 0 && after.length > 0, `${e.id}: records stand on both sides of the edit`);
+        for (const [field, change] of Object.entries(pairs)) {
+          const setting = member(field);
+          assert.ok(setting in before[0].settings, `${e.id}: ${field} is a setting the records carry`);
+          assert.deepEqual([...new Set(before.map((r) => r.settings[setting]))], [change.from], `${e.id}: ${field} on the records before the edit`);
+          assert.deepEqual([...new Set(after.map((r) => r.settings[setting]))], [change.to], `${e.id}: ${field} on the records after it`);
+        }
       }
       if (e.detail.kind === 'account_updated') {
         const pairs = pairsOf(e, ACCOUNT_DIFF_MEMBERS);

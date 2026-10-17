@@ -141,8 +141,25 @@ interface ShedRound {
   pins: RoundPin[];
 }
 
-/** The pool's settings as the record names them, by the pool fields they are read from. */
-function settingsOf(pool: PoolSeed): RecordSettings {
+/**
+ * The settings a pool's edit at its `updatedAt` moved, each at its value before the edit, which the edit's registry
+ * change carries as each pair's old value. The story's other rows read neither, so no row before the edit contradicts
+ * them.
+ */
+const BEFORE_EDIT: Record<string, Partial<RecordSettings>> = { all: { minSharedPrefixTokens: 10_000, slowDownHoldSeconds: 60 } };
+
+/**
+ * The pool's settings as the record decided at `at` names them, by the pool fields they are read from: a
+ * record decided before the pool's edit carries the values the edit moved.
+ */
+function settingsOf(pool: PoolSeed, at: number): RecordSettings {
+  return {
+    ...settingsNow(pool),
+    ...(at < Date.parse(pool.updatedAt) ? BEFORE_EDIT[pool.id] : {}),
+  };
+}
+
+function settingsNow(pool: PoolSeed): RecordSettings {
   return {
     affinityMode: pool.affinityMode,
     affinityTtlSeconds: pool.affinityTtlSeconds,
@@ -1262,7 +1279,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     },
     requestId: r.id,
     seq: spec.seq,
-    settings: settingsOf(pool),
+    settings: settingsOf(pool, spec.at),
     version: 2,
     walk,
   };
@@ -2204,8 +2221,15 @@ function buildEvents(): RoutingEvent[] {
       kind: 'fast_credits_changed',
     },
     { accountId: 'nightly', at: iso(OVERAGE_FROM), detail: {}, kind: 'overage_started' },
-    // The edit that renamed the pool and set its ceiling.
-    { accountId: null, actor: 'admin', at: iso(t(9, 5, 12)), detail: { diff: poolDiff(pool, { label: 'All', window_ceiling: 0.95 }), kind: 'pool_updated', target: 'all' }, kind: 'registry_changed', poolId: 'all' },
+    // The edit that raised the pool's shared prefix floor and its slow-down hold, at the stamp the pool carries.
+    {
+      accountId: null,
+      actor: 'admin',
+      at: pool.updatedAt,
+      detail: { diff: poolDiff(pool, { min_shared_prefix_tokens: BEFORE_EDIT.all.minSharedPrefixTokens, slow_down_hold_seconds: BEFORE_EDIT.all.slowDownHoldSeconds }), kind: 'pool_updated', target: 'all' },
+      kind: 'registry_changed',
+      poolId: 'all',
+    },
     // The annex unpaused and renamed with its secret replaced: the store records the secret as its flag alone, and the
     // ledger's row names the account in its target alone.
     {

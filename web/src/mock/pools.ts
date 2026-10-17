@@ -198,7 +198,7 @@ const POOL_ROWS: PoolSeed[] = [
       },
     ],
     ...UNTIL_DRAWN,
-    // The 09:05:12 edit that set its ceiling, the registry change the routing log records.
+    // The 09:05:12 edit of its shared prefix floor and its slow-down hold, the registry change the routing log records.
     updatedAt: iso(NOW - (5 * HOUR + 24 * MINUTE + 48_000)),
     // The sample's failover settings are the store's defaults, so this pool reads balanced on both groups. The last
     // hour's moves are the routing log's story: three failovers, a fast lane's and two by the spent rule.

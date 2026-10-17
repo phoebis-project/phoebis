@@ -4118,7 +4118,19 @@ fn account_edit<'a>(store: &Store, id: &'a str, label: &'a str) -> AccountUpdate
 #[test]
 fn a_pool_edit_records_each_field_it_changed_with_its_value_before_and_after_and_nothing_else() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    store.insert_pool(&pool("main"), "test").unwrap();
+    let created = pool("main");
+    store
+        .insert_pool(
+            &PoolRow {
+                failover: Failover {
+                    in_flight_cap: 8,
+                    ..created.failover
+                },
+                ..created
+            },
+            "test",
+        )
+        .unwrap();
     let read = store.pool("main").unwrap().unwrap();
     let stamp = store
         .update_pool(
@@ -4140,7 +4152,7 @@ fn a_pool_edit_records_each_field_it_changed_with_its_value_before_and_after_and
             "pool_updated".to_string(),
             serde_json::json!({
                 "label": { "from": "main", "to": "Main pool" },
-                "in_flight_cap": { "from": 16, "to": 4 },
+                "in_flight_cap": { "from": 8, "to": 4 },
             })
         ),
         "the two fields the edit changed and no other"

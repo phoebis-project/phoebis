@@ -13287,6 +13287,29 @@ m.unmount();
       });
       page.unmount();
     }
+    {
+      // The kind's pick above is the account edit, so the pool edit's detail is read on its own: a row per changed field
+      // with its value before and after, and the reading of the decisions before it.
+      const listed = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 7 * DAY), kinds: ['registry_changed'], limit: 25, to: iso(CLOCK_ORIGIN + 7 * DAY) })).rows;
+      const e = listed.find((r) => r.detail.kind === 'pool_updated');
+      const at = e === undefined ? CLOCK_ORIGIN : Date.parse(e.at);
+      const page = await mount(`/routing-log?kinds=registry_changed&from=${iso(at - MINUTE)}&to=${iso(at + MINUTE)}`, { now: CLOCK_ORIGIN });
+      const panel = e === undefined ? null : await openRow(page, `event/${e.id}`);
+      const pairs = kvRows(panel?.querySelector('.event-detail > .kv'));
+      const fields = Object.entries(e?.detail.diff ?? {});
+      const said = (field) => field.replace(/_/g, ' ');
+      results.push({
+        name: "/routing-log a pool edit's detail reads each changed field before and after and the decisions before it",
+        ok:
+          e !== undefined &&
+          fields.length > 0 &&
+          JSON.stringify(pairs.map((p) => p.label)) === JSON.stringify(['When', 'Pool', ...OWN.registry_changed(e)]) &&
+          fields.every(([field, change]) => JSON.stringify(ddWords(pairs.find((p) => p.label === said(field))?.dd)) === JSON.stringify([`from ${change.from}`, `to ${change.to}`])) &&
+          JSON.stringify(ddWords(pairs.find((p) => p.label === 'Reading it')?.dd)) === JSON.stringify(fields.map(([field, change]) => `decisions before ${hhmm(at)} carry ${said(field)} ${change.from}`)),
+        missing: pairs.map((p) => `${p.label}: ${p.dd?.textContent}`),
+      });
+      page.unmount();
+    }
     // The re-made drawer check: the account that refused the model and the one that served it, and both of its names.
     const rejected = modelLinks.model_rejected;
     const permitted = modelLinks.model_permitted;

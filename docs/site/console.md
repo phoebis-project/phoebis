@@ -1027,7 +1027,7 @@ Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
 | refresh failed | An access-token refresh failed. |
 | refresh succeeded | An access-token refresh succeeded. |
 | refresh uncertain | An access-token refresh ended without a clear answer. |
-| registry changed | An operator edited a pool, a key or an account, each changed field with its value before and after. |
+| registry changed | An operator changed a pool, a key or an account: a creation records the row's snapshot, an update each changed field with its value before and after, and a deletion or a revocation nothing more. |
 | reservation expired | A request ended without usage or its booking turned an hour old, so the share it reserved left the destination's prediction. |
 | router started | The router started and loaded its pins, shedding marks, window readings and affinity entries. |
 | shedding round | A round ran on an account whose projection on a plan window read over the ceiling at the window's horizon, or whose stretch stood over the slow-down's threshold for the safety wait, with the pins it marked or why it marked none, and kept its marks across a restart. |
