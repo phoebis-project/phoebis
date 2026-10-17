@@ -260,7 +260,7 @@ const startOfMonth = (at: number) => { const d = new Date(at); return Date.UTC(d
 const endOfMonth = (at: number) => { const d = new Date(at); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1); };
 
 /** A member's spend as the ledger reported it at `at`: research crossed its day's budget at 12:41:07. */
-function budgetsAt(pool: PoolSeed, accountId: string, at: number): RecordBudget[] {
+export function budgetsAt(pool: PoolSeed, accountId: string, at: number): RecordBudget[] {
   const member = pool.members.find((m) => m.accountId === accountId);
   if (!member) return [];
   const spentOf = (period: 'day' | 'month') => {
@@ -298,7 +298,7 @@ const inOverageAt = (accountId: string, at: number) => accountId === 'nightly' &
  * cooldown that holds the request, the fast credits, the budget, the fast lane's own limit, and last the attempt this
  * request already made, so a member it tried reads the cooldown that answered rather than the attempt.
  */
-function obstacleOf(a: Account, pool: PoolSeed, at: number, model: string, fast: boolean, attempted: string[]): RecordCandidate['obstacle'] {
+export function obstacleOf(a: Account, pool: PoolSeed, at: number, model: string, fast: boolean, attempted: string[]): RecordCandidate['obstacle'] {
   const state = stateAt(a, at);
   if (state !== 'ready' || !a.routingEnabled) return { name: 'operator', reason: null, until: null, window: null };
   const endsAt = a.subscription?.endsAt ? Date.parse(a.subscription.endsAt) : null;

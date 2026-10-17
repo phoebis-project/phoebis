@@ -324,10 +324,14 @@ export function servable(accountId: string, atMs: number, model: string, fast: b
 /** An account a request is handed to, or a story attempt's, walks its windows back at a fixed factor, not a draw. */
 const SERVED_FACTOR = 0.8;
 
+/** When nightly's spend cap was raised, the instant the story fixes for the start of its overage. */
+const NIGHTLY_CAP_RAISED = clock(11, 30, 12);
+
 /**
  * The order the engine takes a token count's members in: the best tier first, then under Pace the highest score off
  * the walk back. A count takes no slot, so no cap passes a member over for it and a draw cannot stand where the
- * engine picks another. Nightly reads in overage from its spend cap's raise, the earliest its overage starts. An API
+ * engine picks another. Nightly reads in overage from its spend cap's raise: `OVERAGE_FROM` is built from the attempts
+ * this order places, and no attempt starts between the two instants, so both read nightly's overage alike. An API
  * key shares its tier with no other member here, so it keeps the pool's order, and outside Pace the drawn account
  * leads its tier.
  */
@@ -335,7 +339,7 @@ function countOrder(ids: string[], poolId: string, atMs: number, model: string, 
   const pool = poolById.get(poolId);
   if (!pool) return ids;
   const tierOf = (id: string): number[] => {
-    const overage = id === 'nightly' && atMs >= clock(11, 30, 12) ? 1 : 0;
+    const overage = id === 'nightly' && atMs >= NIGHTLY_CAP_RAISED ? 1 : 0;
     return [pool.preferSubscription ? (kindOf(id) === 'api_key' ? 2 : overage) : 0, pool.members.find((m) => m.accountId === id)?.priority ?? 0, overage];
   };
   const windowId = model.includes('fable') ? '7d_fable' : '7d';
@@ -1298,9 +1302,8 @@ keyById.get('notebook')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'notebook
  * at 11:30:12, or a minute past the raise where the draws sent none. The account's own overage reads from it.
  */
 export const OVERAGE_FROM = ((): number => {
-  const raised = clock(11, 30, 12);
-  const after = REQUESTS.flatMap((r) => r.attempts).map((a) => (a.accountId === 'nightly' ? Date.parse(a.startedAt) : Number.NaN)).filter((at) => at >= raised);
-  return after.length ? Math.min(...after) : raised + MINUTE;
+  const after = REQUESTS.flatMap((r) => r.attempts).map((a) => (a.accountId === 'nightly' ? Date.parse(a.startedAt) : Number.NaN)).filter((at) => at >= NIGHTLY_CAP_RAISED);
+  return after.length ? Math.min(...after) : NIGHTLY_CAP_RAISED + MINUTE;
 })();
 const nightly = ACCOUNTS.find((a) => a.id === 'nightly');
 if (nightly?.overage) nightly.overage.since = iso(OVERAGE_FROM);

@@ -20,16 +20,15 @@ const near = (a, b) => Math.abs(a - b) < 1e-6;
 
 /** The engine's pin key, so a session's subagents on another model, or on another account, hold pins of their own. */
 const pinOf = (r) => `${r.keyId}|${r.sessionId}|${r.agentId}|${r.model}`;
-/** The pins the story's routed requests wrote, each under the session the router routed it by. */
-const routedPinsOf = (s) => new Set(s.requests.filter((r) => r.kind !== 'probe' && r.sessionId !== null).map((r) => `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`));
+/** The affinity window of the pool a recipe's key routes through, in milliseconds. */
+const affinityOf = (s, r) => s.pools.find((p) => p.id === s.keys.find((k) => k.id === r.keyId)?.poolId).affinityTtlSeconds * 1_000;
+/** A recipe's last use, its last request or its last keepalive probe, either of which renews its pin. */
+const lastUseOf = (r) => Math.max(...[r.lastRequestAt, r.lastProbeAt].flatMap((x) => (x === null ? [] : [Date.parse(x)])));
 /**
- * The recipes whose pins the router holds: every live one, and a released one whose routed request the ledger holds,
- * since the mod's release ends the keepalive record and leaves the pin that request wrote.
+ * The recipes whose pins the router holds: every live one, and a released one whose last use is inside its pool's
+ * affinity window, since the mod's release ends the keepalive record and leaves the pin until the router expires it.
  */
-const pinnedRecipesOf = (s, recipes) => {
-  const routed = routedPinsOf(s);
-  return recipes.filter((r) => r.agentState !== 'released' || routed.has(pinOf(r)));
-};
+const pinnedRecipesOf = (s, recipes) => recipes.filter((r) => r.agentState !== 'released' || s.now - lastUseOf(r) <= affinityOf(s, r));
 
 /** The names the mock's story used before it read as one operator's, and the admin harness's own. */
 const RETIRED = ['business', 'codex', 'Console workspace', 'console', 'direct', 'evals', 'Evals workspace', 'mail', 'personal', 'team'];
@@ -567,7 +566,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(overview.limits.agents.count, s.sessions.filter((x) => x.companion !== 'none' || x.keepalive.state !== null).reduce((n, x) => n + x.agents, 0), 'the cap counts every record');
   });
 
-  test(`the all-released session lists every record released, keeps its row and the pin its one request wrote, at ${at}`, async () => {
+  test(`the all-released session lists every record released, keeps its row and the pin its last probe renewed, at ${at}`, async () => {
     const s = await story;
     const recipes = await s.api.listKeepaliveRecipes();
     const bySession = new Map();
@@ -586,12 +585,41 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const own = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === row.keyId && r.sessionId === row.sessionId);
     assert.equal(own.length, 1, 'the ledger holds the one request the session routed');
     assert.deepEqual([row.pinned, row.requests, row.lastRequestAt], [true, 1, own[0].at], 'the row reads that request as its activity');
-    assert.ok(routedPinsOf(s).has(pinOf(main)), "main's pin is the one its request wrote");
+    // Its one request is past the pool's window, so main's pin stands on the probe that followed it.
+    assert.ok(s.now - Date.parse(own[0].at) > affinityOf(s, main), "the session's request is past the window");
+    assert.ok(s.now - Date.parse(main.lastProbeAt) <= affinityOf(s, main), "main's last probe renewed its pin inside the window");
     const poolId = s.keys.find((k) => k.id === row.keyId).poolId;
     const counted = new Set(pinnedRecipesOf(s, recipes).filter((r) => s.keys.find((k) => k.id === r.keyId)?.poolId === poolId && r.accountId === main.accountId).map(pinOf));
     const member = s.pools.find((p) => p.id === poolId).members.find((m) => m.accountId === main.accountId);
     assert.ok(counted.has(pinOf(main)), 'the release left the pin in place');
     assert.equal(member.activePins, counted.size, `${main.accountId}'s figure counts it`);
+  });
+
+  test(`a released agent keeps its pin while its last request or probe is inside its pool's affinity window and loses it past the window, the written session's three released lines counting, at ${at}`, async () => {
+    const s = await story;
+    const recipes = await s.api.listKeepaliveRecipes();
+    const poolOf = new Map(s.keys.map((k) => [k.id, k.poolId]));
+    const inside = (r) => s.now - lastUseOf(r) <= affinityOf(s, r);
+    // The written session is the one that holds an agent in each lifecycle word.
+    const bySession = new Map();
+    for (const r of recipes) bySession.set(r.sessionId, [...(bySession.get(r.sessionId) ?? []), r]);
+    const [written] = [...bySession.values()].filter((rows) => ['busy', 'idle', 'parked', 'released'].every((word) => rows.some((r) => r.agentState === word)));
+    const lines = written.filter((r) => r.agentState === 'released');
+    assert.equal(lines.length, 3, 'three released lines');
+    for (const r of lines) assert.ok(inside(r), `${r.agentId}'s last use is inside its pool's window`);
+    assert.ok(lines.some((r) => s.now - Date.parse(r.lastRequestAt) > affinityOf(s, r)), 'a line whose last request is past the window counts by its probe');
+    // A pinned session no recipe warms holds one pin per agent all the same.
+    const unwarmed = (poolId, accountId) => sum(s.sessions.filter((x) => x.pinned && x.keepalive.state === null && poolOf.get(x.keyId) === poolId && x.accountId === accountId), (x) => x.agents);
+    for (const p of s.pools) {
+      for (const m of p.members) {
+        const own = recipes.filter((r) => poolOf.get(r.keyId) === p.id && r.accountId === m.accountId);
+        const released = own.filter((r) => r.agentState === 'released');
+        const kept = released.filter(inside).map((r) => r.agentId);
+        const gone = released.filter((r) => !inside(r)).map((r) => r.agentId);
+        const pins = new Set(own.filter((r) => r.agentState !== 'released' || inside(r)).map(pinOf)).size + unwarmed(p.id, m.accountId);
+        assert.equal(m.activePins, pins, `${p.id}'s ${m.accountId} with the released ${kept.join(', ') || 'none'} kept and ${gone.join(', ') || 'none'} past the window`);
+      }
+    }
   });
 
   test(`no sample of legacy is newer than its last clean poll, at ${at}`, async () => {
@@ -650,6 +678,59 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       if (blocked) assert.notEqual(r.outcome.exhaustion?.kind, 'untimed', `${id}: ${named}`);
       else assert.equal(r.outcome.exhaustion?.kind, 'untimed', `${id}: ${named}`);
     }
+  });
+
+  test(`an account that is not ready or has routing off reads the operator obstacle with no reason, at ${at}`, async () => {
+    const s = await story;
+    const pool = s.lib.poolById.get('all');
+    for (const a of [
+      { id: 'not-ready', routingEnabled: true, status: 'reauth_required', subscription: null },
+      { id: 'routing-off', routingEnabled: false, status: 'ready', subscription: null },
+    ]) {
+      assert.deepEqual(s.lib.obstacleOf(a, pool, s.now, 'claude-sonnet-5', false, []), { name: 'operator', reason: null, until: null, window: null }, a.id);
+    }
+  });
+
+  test(`a member at two reached budgets reads the budget whose period ends last, at ${at}`, async () => {
+    const s = await story;
+    const account = { id: 'budgeted', routingEnabled: true, status: 'ready', subscription: null };
+    const member = { accountId: account.id, budgetDailyUsd: 5, budgetMonthlyUsd: 50, priority: 0, spends: [{ period: 'day', spentUsd: 6 }, { period: 'month', spentUsd: 60 }] };
+    const pool = { ...s.lib.poolById.get('all'), members: [member] };
+    const [day, month] = s.lib.budgetsAt(pool, account.id, s.now);
+    assert.deepEqual([day.period, month.period], ['day', 'month']);
+    assert.ok(day.spentUsd >= day.budgetUsd && month.spentUsd >= month.budgetUsd, 'both budgets reached');
+    assert.ok(Date.parse(day.periodEnd) < Date.parse(month.periodEnd), "the day's period ends before the month's");
+    assert.deepEqual(s.lib.obstacleOf(account, pool, s.now, 'claude-sonnet-5', false, []), { name: 'budget', reason: 'month', until: month.periodEnd, window: null });
+  });
+
+  test(`a spent member stays servable for a Fable request where an allow pool reads its credits unblocked, and drops otherwise, at ${at}`, async () => {
+    const s = await story;
+    const d = s.lib;
+    const fable = { canonicalModel: 'claude-fable-5-1', kind: 'inference' };
+    const credits = (blocked) => ({ blocked, disabledReason: null, enabled: true, observedAt: iso(s.now), utilization: 0.3 });
+    const spent = (o = {}) => ({ accountId: 'spent', credits: credits(null), fit: null, inFlight: 0, inFlightCap: 4, kind: 'oauth', obstacle: null, term: null, windows: { seven_day_fable: { utilization: 1 } }, ...o });
+    const all = d.poolById.get('all');
+    const allow = { ...all, overagePolicy: 'allow' };
+    // A run-out's servable set reads the funding the spent partition reads, so the member the partition keeps is one
+    // the run-out passes over.
+    const dropped = (c, pool) => d.partitionsOf([c], pool, fable).find((f) => f.key === 'spent')?.value;
+    assert.equal(dropped(spent(), allow), 0, 'an allow pool funds it on unblocked credits');
+    assert.equal(dropped(spent({ credits: credits('org_spend_cap_reached') }), allow), 1, 'blocked credits fund nothing');
+    assert.equal(dropped(spent({ credits: null }), allow), 1, 'a member without a credits reading is not funded');
+    assert.equal(dropped(spent(), { ...all, overagePolicy: 'prefer_plan' }), 1, 'a pool that prefers the plan funds nothing');
+  });
+
+  test(`no attempt starts between nightly's spend cap raise and its overage start, so a token count's order and the records read its overage alike, at ${at}`, async () => {
+    const s = await story;
+    // A token count's order reads nightly in overage from the raise, and the records from its first head after it.
+    const nightly = (await logOf(s)).filter((x) => x.type === 'event' && x.accountId === 'nightly');
+    const raise = nightly.find((e) => e.kind === 'fast_credits_changed' && e.detail.blocked_before === 'org_spend_cap_reached' && e.detail.blocked_after === null);
+    const started = nightly.find((e) => e.kind === 'overage_started');
+    assert.ok(raise !== undefined && started !== undefined, 'the log holds the raise and the overage start');
+    const [from, until] = [Date.parse(raise.at), Date.parse(started.at)];
+    assert.ok(from < until, `the raise at ${raise.at} precedes the overage start at ${started.at}`);
+    const between = s.requests.flatMap((r) => r.attempts.filter((a) => Date.parse(a.startedAt) >= from && Date.parse(a.startedAt) < until).map((a) => `${r.id} (${r.kind}) on ${a.accountId} at ${a.startedAt}`));
+    assert.deepEqual(between, []);
   });
 
   test(`a run-out writes one held record per account its hold waited on, and its exhausted record carries the held and answer facts, at ${at}`, async () => {

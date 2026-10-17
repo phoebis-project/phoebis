@@ -472,16 +472,19 @@ if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NO
 }
 
 // A pin is the engine's: one per key, session, agent and model, so a session's subagents hold pins of their own, on
-// another account where they run there. A pin is a routed request's, and the mod's release ends the keepalive record
-// alone, so a released agent holds the pin its routed request wrote where the ledger holds that request, and none
-// otherwise. The pool view reads each member's pins and sums them, so the pool's figure, its members' pins and the
-// dashboard's sum read one count.
-const ROUTED_PINS = new Set(REQUESTS.filter((r) => r.kind !== 'probe' && r.sessionId !== null).map((r) => `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`));
+// another account where they run there. The router renews a pin on each request and each keepalive probe, and the
+// mod's release ends the keepalive record alone, so a released agent keeps its pin while its last request or probe is
+// inside its pool's affinity window, whether or not the ledger holds the request that wrote it. The pool view reads
+// each member's pins and sums them, so the pool's figure, its members' pins and the dashboard's sum read one count.
+const pinKept = (r: KeepaliveRecipe, poolId: string): boolean => {
+  const lastUse = Math.max(...[r.lastRequestAt, r.lastProbeAt].flatMap((at) => (at === null ? [] : [Date.parse(at)])));
+  return NOW - lastUse <= (poolById.get(poolId)?.affinityTtlSeconds ?? 0) * 1_000;
+};
 const PINS = new Map<string, Set<string>>();
 for (const r of RECIPES) {
   const poolId = keyById.get(r.keyId)?.poolId;
   const pin = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.model}`;
-  if (poolId === undefined || (r.agentState === 'released' && !ROUTED_PINS.has(pin))) continue;
+  if (poolId === undefined || (r.agentState === 'released' && !pinKept(r, poolId))) continue;
   const member = `${poolId}|${r.accountId}`;
   PINS.set(member, (PINS.get(member) ?? new Set()).add(pin));
 }

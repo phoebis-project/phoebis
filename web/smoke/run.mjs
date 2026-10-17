@@ -849,11 +849,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: 'the theme buttons carry their names', ok: JSON.stringify(named) === JSON.stringify([['Light', 'Light'], ['Dark', 'Dark'], ['System', 'System']]), missing: named.map((n) => n.join(' / ')) });
 }
 {
-  // The story's pools hold 20, 0 and 5 pins, one per key, session, agent and model under their keys, on primary,
+  // The story's pools hold 25, 0 and 5 pins, one per key, session, agent and model under their keys, on primary,
   // nightly and studio, over 16 pinned rows, so a hero counting the pinned rows or a note counting every row's account
   // reads otherwise.
   const hero = m.container.querySelector('.sess-summary__hero');
-  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '25' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 3 accounts', missing: [hero?.textContent ?? 'absent'] });
+  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '30' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 3 accounts', missing: [hero?.textContent ?? 'absent'] });
   // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
   // the tier match reads in camelCase.
   const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
