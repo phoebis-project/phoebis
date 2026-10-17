@@ -12,8 +12,8 @@ use phoebis_bus::{
     ResponseFacts, Usage,
 };
 use phoebis_ledger::{
-    AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, Record,
-    RequestRecord,
+    AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, GuardrailMatchRecord,
+    QuotaSampleRecord, Record, RequestRecord,
 };
 use phoebis_routing::{lane_key, ClientClass};
 use phoebis_store::{AccountState, Identity, NewBundle, Secret, StateCause, SubscriptionRow};
@@ -687,6 +687,12 @@ async fn every_route_is_captured_and_holds_its_shape() {
             auto_mode: Some("server".into()),
             held: Some(placed_held),
             diagnostics_source: Some("router".into()),
+            // An observing guardrail matched and let the request through, so the row carries a match and no block.
+            guardrails: vec![GuardrailMatchRecord {
+                guardrail_id: "subagent-status-summary".into(),
+                position: 0,
+                blocked: false,
+            }],
             // The serving attempt started 400 ms in, so the head and the first content follow its write.
             ttfb_ms: Some(400 + 120),
             ttfc_ms: Some(400 + 300),
@@ -952,6 +958,48 @@ async fn every_route_is_captured_and_holds_its_shape() {
         )],
         bodies: None,
     });
+    // An auxiliary request a guardrail refused at admission: no attempt, no answer and no captured body, the
+    // observing guardrail's match beside the blocking one's. Older than every other row, so the list keeps their
+    // order, and under no session, so the session rows keep their counts.
+    let blocked_at = hour_ago - 600;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            session_id: None,
+            finished_at: Some(blocked_at + 4),
+            attempts: 0,
+            request_bytes: Some(48_213),
+            ttfb_ms: None,
+            ttfc_ms: None,
+            duration_ms: Some(4),
+            error_code: Some("guardrail_blocked".into()),
+            request_class: Some("auxiliary".into()),
+            stream_end_at: None,
+            guardrail_id: Some("large-auxiliary".into()),
+            guardrails: vec![
+                GuardrailMatchRecord {
+                    guardrail_id: "subagent-status-summary".into(),
+                    position: 0,
+                    blocked: false,
+                },
+                GuardrailMatchRecord {
+                    guardrail_id: "large-auxiliary".into(),
+                    position: 1,
+                    blocked: true,
+                },
+            ],
+            ..request(
+                key_generation,
+                "r-blocked",
+                blocked_at,
+                "desktop",
+                "s1",
+                400,
+                "rejected",
+            )
+        },
+        attempts: Vec::new(),
+        bodies: None,
+    });
     parts
         .keepalive
         .apply_event(
@@ -1005,7 +1053,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             finished_at: now,
         }));
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
-        v["requests"].as_array().unwrap().len() == 6
+        v["requests"].as_array().unwrap().len() == 7
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
@@ -1266,6 +1314,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         (
             "analytics_burn",
             "/admin/analytics/burn?range=24h&group_by=account",
+        ),
+        (
+            "analytics_guardrails",
+            "/admin/analytics/guardrails?range=24h",
         ),
         (
             "analytics_placements",

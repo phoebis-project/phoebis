@@ -215,7 +215,15 @@
           }
         ]
       },
-      "diagnostics_source": "router"
+      "diagnostics_source": "router",
+      "guardrail_id": null,
+      "guardrails": [
+        {
+          "id": "subagent-status-summary",
+          "position": 0,
+          "blocked": false
+        }
+      ]
     },
     "events": [
       {

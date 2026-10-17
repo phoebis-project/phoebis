@@ -774,6 +774,7 @@ const FIXTURES: &[(&str, &str, &str)] = &[
     fixture!("analytics_breakdown_speed", "200"),
     fixture!("analytics_budgets", "200"),
     fixture!("analytics_burn", "200"),
+    fixture!("analytics_guardrails", "200"),
     fixture!("analytics_placements", "200"),
     fixture!("analytics_reconciliations", "200"),
     fixture!("analytics_rewrites", "200"),

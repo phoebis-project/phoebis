@@ -13,7 +13,9 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::db::{row_to_attempt, row_to_request, LedgerDb, ATTEMPT_SELECT, REQUEST_SELECT};
+use crate::db::{
+    request_guardrails, row_to_attempt, row_to_request, LedgerDb, ATTEMPT_SELECT, REQUEST_SELECT,
+};
 use crate::histogram::Histogram;
 use crate::plan::{
     entrypoint_of_client, funding_of, price_equivalent, price_shares, CostRevisions, Funding,
@@ -144,6 +146,8 @@ pub struct RequestFilter {
     /// Keep the requests whose class, folded as the rollups fold it (`-` for none, `other` outside the
     /// identifier charset or past the bound), is in the list.
     pub request_classes: Vec<String>,
+    /// Keep the requests a listed guardrail matched, `-` the requests no guardrail matched.
+    pub guardrails: Vec<String>,
 }
 
 fn in_list(
@@ -415,6 +419,30 @@ pub fn list_requests(
     );
     in_list("agent_type", &filter.agent_types, &mut args, &mut clauses);
     in_list("turn_origin", &filter.turn_origins, &mut args, &mut clauses);
+    if !filter.guardrails.is_empty() {
+        let ids: Vec<String> = filter
+            .guardrails
+            .iter()
+            .filter(|g| *g != "-")
+            .cloned()
+            .collect();
+        let mut either = Vec::new();
+        // The child table's primary key leads with the request, so each lookup is a seek per row while the outer
+        // walk keeps its own index.
+        if !ids.is_empty() {
+            let marks = bind_all(&ids, &mut args);
+            either.push(format!(
+                "EXISTS (SELECT 1 FROM request_guardrails g WHERE g.request_id = requests.id AND g.guardrail_id IN ({marks}))"
+            ));
+        }
+        if filter.guardrails.iter().any(|g| g == "-") {
+            either.push(
+                "NOT EXISTS (SELECT 1 FROM request_guardrails g WHERE g.request_id = requests.id)"
+                    .to_string(),
+            );
+        }
+        clauses.push(format!("({})", either.join(" OR ")));
+    }
     if !filter.include_probes && !filter.kinds.iter().any(|k| k == "probe") {
         clauses.push("kind != 'probe'".into());
     }
@@ -466,10 +494,11 @@ pub fn list_requests(
     let mut attempts_stmt = conn.prepare(&format!(
         "{ATTEMPT_SELECT} WHERE request_id = ?1 ORDER BY attempt"
     ))?;
-    for request in requests {
+    for mut request in requests {
         let attempts = attempts_stmt
             .query_map(params![request.id], row_to_attempt)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        request.guardrails = request_guardrails(conn, &request.id)?;
         out.push((request, attempts));
     }
     let next = more
@@ -481,7 +510,7 @@ pub fn list_requests(
     Ok((out, next))
 }
 
-/// The same two queries `LedgerDb::request` runs, over a connection the caller already holds.
+/// The same three queries `LedgerDb::request` runs, over a connection the caller already holds.
 pub fn request_by_id(
     conn: &Connection,
     id: &str,
@@ -493,7 +522,7 @@ pub fn request_by_id(
             row_to_request,
         )
         .optional()?;
-    let Some(request) = request else {
+    let Some(mut request) = request else {
         return Ok(None);
     };
     let mut stmt = conn.prepare(&format!(
@@ -502,7 +531,51 @@ pub fn request_by_id(
     let attempts = stmt
         .query_map(params![id], row_to_attempt)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    request.guardrails = request_guardrails(conn, id)?;
     Ok(Some((request, attempts)))
+}
+
+/// One guardrail's matches over a range: the ones that let the request through, the ones that blocked it, and the
+/// blocked requests' bytes.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GuardrailCountRow {
+    pub guardrail_id: String,
+    pub observed: u64,
+    pub blocked: u64,
+    pub blocked_bytes: u64,
+}
+
+/// The two statements `guardrail_counts` prepares, exported so a test can read their query plans against the index.
+pub const GUARDRAIL_COUNTS_SQL: &str = "SELECT guardrail_id, SUM(blocked = 0), SUM(blocked = 1) FROM request_guardrails WHERE received_at >= ?1 AND received_at <= ?2 GROUP BY guardrail_id ORDER BY guardrail_id";
+pub const GUARDRAIL_BLOCKED_BYTES_SQL: &str = "SELECT COALESCE(SUM(r.request_bytes), 0) FROM request_guardrails g JOIN requests r ON r.id = g.request_id WHERE g.guardrail_id = ?1 AND g.blocked = 1 AND g.received_at >= ?2 AND g.received_at <= ?3";
+
+/// One row per guardrail that matched a request in `[from, to]`, ordered by id, through the child table's index led
+/// by `received_at`, which the counts read alone and the bytes read walks over the same range.
+pub fn guardrail_counts(
+    conn: &Connection,
+    from: i64,
+    to: i64,
+) -> Result<Vec<GuardrailCountRow>, LedgerError> {
+    // The index led by `received_at` carries the guardrail and the verdict too, so the planner reads the index alone
+    // over the range and sorts its rows for the group, and seeks the same range for the bytes, whose join reaches
+    // `requests` by its primary key.
+    let mut rows = conn
+        .prepare(GUARDRAIL_COUNTS_SQL)?
+        .query_map(params![from, to], |r| {
+            Ok(GuardrailCountRow {
+                guardrail_id: r.get(0)?,
+                observed: r.get::<_, i64>(1)? as u64,
+                blocked: r.get::<_, i64>(2)? as u64,
+                blocked_bytes: 0,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut bytes = conn.prepare(GUARDRAIL_BLOCKED_BYTES_SQL)?;
+    for row in rows.iter_mut().filter(|row| row.blocked > 0) {
+        row.blocked_bytes =
+            bytes.query_row(params![row.guardrail_id, from, to], |r| r.get::<_, i64>(0))? as u64;
+    }
+    Ok(rows)
 }
 
 /// The events of the request's window under its own session, and
@@ -2664,7 +2737,10 @@ pub struct Dashboard {
     pub tokens_24h: u64,
     pub tokens_cached_24h: u64,
     pub cost_24h: f64,
+    /// The requests that did not succeed over the requests, both without the requests a guardrail blocked: a
+    /// guardrail block is a refusal the operator asked for, so it is no error of the router's.
     pub error_rate_24h: Option<f64>,
+    /// The most frequent error code but `guardrail_blocked`, for the same reason.
     pub top_error_code: Option<String>,
     pub hourly: Vec<HourPoint>,
     /// The billed rows' dollars of the day, a part of `cost_24h`.
@@ -2702,14 +2778,20 @@ pub async fn dashboard(
         .collect();
     let mut tokens_cached = 0;
     let mut estimated = false;
+    let mut rated: u64 = 0;
     read_rollups_paged(db, &RollupSelect::default(), from_hour, to_hour, |r| {
         if r.kind == "probe" {
             return;
         }
         if let Some(point) = hourly.get_mut(((r.hour - from_hour) / 3_600) as usize) {
             let (usd, billed, equivalent, fallback) = shared_figures(r, prices, costs);
+            let blocked = r.errors.get("guardrail_blocked").copied().unwrap_or(0);
             point.requests += r.requests;
-            point.errors += r.requests.saturating_sub(r.succeeded);
+            point.errors += r
+                .requests
+                .saturating_sub(r.succeeded)
+                .saturating_sub(blocked);
+            rated += r.requests.saturating_sub(blocked);
             point.cost += usd;
             point.billed += billed;
             point.equivalent.add(&equivalent);
@@ -2720,7 +2802,11 @@ pub async fn dashboard(
                 + r.cache_write_1h_tokens
                 + r.output_tokens;
         }
-        for (code, n) in &r.errors {
+        for (code, n) in r
+            .errors
+            .iter()
+            .filter(|(code, _)| *code != "guardrail_blocked")
+        {
             *errors.entry(code.clone()).or_default() += n;
         }
         tokens_cached += r.cache_read_tokens;
@@ -2736,7 +2822,7 @@ pub async fn dashboard(
         tokens_24h: hourly.iter().map(|h| h.tokens).sum(),
         tokens_cached_24h: tokens_cached,
         cost_24h: hourly.iter().map(|h| h.cost).sum(),
-        error_rate_24h: (requests > 0).then(|| failed as f64 / requests as f64),
+        error_rate_24h: (rated > 0).then(|| failed as f64 / rated as f64),
         top_error_code: errors
             .iter()
             .max_by_key(|(_, n)| **n)

@@ -1,4 +1,5 @@
-//! One struct per ledger table, field order matching the table's column order.
+//! One struct per ledger table, field order matching the table's column order. `RequestRecord::guardrails` is the one
+//! member no column holds: its rows live in the child table `request_guardrails`.
 
 use phoebis_routing::{CacheMapEntry, DecisionRecord, DecisionSummary};
 use phoebis_store::AccountKind;
@@ -91,6 +92,19 @@ pub struct RequestRecord {
     /// `client` when the client's body carried its own `diagnostics` member, `router` when the relay inserted it,
     /// `None` for a body that went without one and for a row from before the column.
     pub diagnostics_source: Option<String>,
+    /// The guardrail that blocked the request, `None` where none did and on a row from before the column.
+    pub guardrail_id: Option<String>,
+    /// Every guardrail that matched, in evaluation order, empty on a row from before the table.
+    pub guardrails: Vec<GuardrailMatchRecord>,
+}
+
+/// One row of `request_guardrails`: a guardrail that matched the request, its place in the evaluation order and
+/// whether it blocked.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GuardrailMatchRecord {
+    pub guardrail_id: String,
+    pub position: u32,
+    pub blocked: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]

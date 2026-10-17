@@ -69,6 +69,7 @@ const REFUSALS: &[(&str, &[u16])] = &[
     ("analytics_breakdown", &[400, 500]),
     ("analytics_budgets", &[503]),
     ("analytics_burn", &[400, 500]),
+    ("analytics_guardrails", &[400, 500]),
     ("analytics_placements", &[400, 500]),
     ("analytics_reconciliations", &[500]),
     ("analytics_rewrites", &[400, 500]),
@@ -125,6 +126,7 @@ const EXAMPLE_FILES: &[&str] = &[
     "analytics_breakdown_speed",
     "analytics_budgets",
     "analytics_burn",
+    "analytics_guardrails",
     "analytics_placements",
     "analytics_reconciliations",
     "analytics_rewrites",
@@ -469,13 +471,13 @@ async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_l
     );
     assert_eq!(
         document["paths"].as_object().unwrap().len(),
-        52,
-        "the admin listener's 52 paths"
+        53,
+        "the admin listener's 53 paths"
     );
     assert_eq!(
         operations(&document).len(),
-        62,
-        "the admin listener's 62 operations"
+        63,
+        "the admin listener's 63 operations"
     );
 }
 
@@ -616,8 +618,8 @@ async fn every_example_is_its_fixtures_body_member_and_the_count_holds() {
     );
     assert_eq!(
         EXAMPLE_FILES.len(),
-        40,
-        "39 success answers and the replay's held answer"
+        41,
+        "40 success answers and the replay's held answer"
     );
     // The places the fixture manifest targets, each with the stems it attaches: a place carries as many examples
     // as stems, so a fixture attached twice or to the wrong place fails here, while a hand-written example (a

@@ -70,6 +70,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .routes(routes!(analytics::breakdown))
         .routes(routes!(analytics::budgets))
         .routes(routes!(analytics::burn))
+        .routes(routes!(analytics::guardrails))
         .routes(routes!(analytics::placements))
         .routes(routes!(analytics::reconciliations))
         .routes(routes!(analytics::rewrites))

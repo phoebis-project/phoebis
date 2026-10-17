@@ -19,7 +19,7 @@ use crate::bodies::MAX_CAPTURED_BODY;
 use crate::quota::samples_from_unified;
 use crate::record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
-    KeepaliveDelta, QuotaSampleRecord, RequestRecord,
+    GuardrailMatchRecord, KeepaliveDelta, QuotaSampleRecord, RequestRecord,
 };
 
 /// A completion is never dropped, so an entry silent this long belongs to a stream the relay itself ended at
@@ -656,6 +656,16 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         },
         held: complete.held.clone(),
         diagnostics_source: complete.diagnostics.map(|s| s.as_str().to_string()),
+        guardrail_id: observed.guardrail_id.clone(),
+        guardrails: observed
+            .guardrails
+            .iter()
+            .map(|m| GuardrailMatchRecord {
+                guardrail_id: m.id.clone(),
+                position: m.position,
+                blocked: m.blocked,
+            })
+            .collect(),
     };
     records.push(Record::Request {
         request,

@@ -23,7 +23,7 @@
         "effective_body_capture_hours": 24,
         "auto_mode_server": null,
         "effective_auto_mode_server": true,
-        "prefix": "9DTXh5RA",
+        "prefix": "ZZvEUiue",
         "created_at": 1791721000000,
         "updated_at": 1791721000000,
         "revision": 6189767511104,
@@ -39,7 +39,7 @@
             "seven_day": 0.000010496666666666667
           },
           "estimated": true,
-          "requests": 6,
+          "requests": 7,
           "tokens": 12600
         },
         "lifetime": {
@@ -50,7 +50,7 @@
             "seven_day": 0.000010496666666666667
           },
           "estimated": true,
-          "requests": 6
+          "requests": 7
         }
       }
     ]

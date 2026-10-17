@@ -1538,6 +1538,7 @@ dependencies = [
  "jiff",
  "phoebis-attention",
  "phoebis-bus",
+ "phoebis-guardrails",
  "phoebis-keepalive",
  "phoebis-ledger",
  "phoebis-oauth",

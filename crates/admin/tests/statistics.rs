@@ -1887,3 +1887,218 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
     );
     assert_eq!(dashboard["sessions"]["active_pins"].as_u64(), Some(0));
 }
+
+fn guardrail_match(id: &str, position: u32, blocked: bool) -> phoebis_ledger::GuardrailMatchRecord {
+    phoebis_ledger::GuardrailMatchRecord {
+        guardrail_id: id.into(),
+        position,
+        blocked,
+    }
+}
+
+/// A request row with the given matches, the blocking one named on the row and the request refused where any blocked.
+fn guarded(
+    id: &str,
+    at: i64,
+    request_bytes: u64,
+    matches: Vec<phoebis_ledger::GuardrailMatchRecord>,
+) -> RequestRecord {
+    let blocking = matches
+        .iter()
+        .find(|m| m.blocked)
+        .map(|m| m.guardrail_id.clone());
+    let refused = blocking.is_some();
+    RequestRecord {
+        request_bytes: Some(request_bytes),
+        attempts: if refused { 0 } else { 1 },
+        error_code: refused.then(|| "guardrail_blocked".into()),
+        guardrail_id: blocking,
+        guardrails: matches,
+        ..request(
+            id,
+            at,
+            Some("desktop"),
+            "claude-sonnet-5",
+            if refused { "rejected" } else { "succeeded" },
+            if refused { 400 } else { 200 },
+            "inference",
+        )
+    }
+}
+
+fn listed_ids(page: &serde_json::Value) -> Vec<&str> {
+    page["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect()
+}
+
+/// `guardrails` keeps the requests a listed guardrail matched and `-` the ones none matched, and both the list's row
+/// and the show route carry the blocking guardrail and every match in evaluation order.
+#[tokio::test]
+async fn the_request_log_filters_by_guardrail_and_by_none_and_the_summary_carries_the_matches() {
+    let parts = common::admin_parts_full().await;
+    let now = common::NOW;
+    for row in [
+        guarded(
+            "r-blocked",
+            now - HOUR,
+            2_000,
+            vec![
+                guardrail_match("g1", 0, false),
+                guardrail_match("g2", 1, true),
+            ],
+        ),
+        guarded(
+            "r-watched",
+            now - 2 * HOUR,
+            1_000,
+            vec![guardrail_match("g1", 0, false)],
+        ),
+        guarded("r-none", now - 3 * HOUR, 1_000, Vec::new()),
+    ] {
+        parts.db.insert_request(&row, &[], None).unwrap();
+    }
+    let cookie = login(&parts.app, "admin-secret").await;
+    let page = |query: &str| {
+        let path = format!("/admin/requests?{query}");
+        let (app, cookie) = (parts.app.clone(), cookie.clone());
+        async move { json(get(&app, &path, Some(&cookie)).await).await }
+    };
+    let by_g1 = page("guardrails=g1").await;
+    assert_eq!(listed_ids(&by_g1), ["r-blocked", "r-watched"]);
+    let by_none = page("guardrails=-").await;
+    assert_eq!(listed_ids(&by_none), ["r-none"]);
+    assert_eq!(
+        listed_ids(&page("guardrails=g2,-").await),
+        ["r-blocked", "r-none"]
+    );
+    let expected = serde_json::json!([
+        { "id": "g1", "position": 0, "blocked": false },
+        { "id": "g2", "position": 1, "blocked": true },
+    ]);
+    let row = &by_g1["requests"][0];
+    assert_eq!(row["guardrail_id"], "g2");
+    assert_eq!(row["guardrails"], expected);
+    assert_eq!(
+        (
+            row["outcome"].as_str(),
+            row["status"].as_u64(),
+            row["error_code"].as_str()
+        ),
+        (Some("rejected"), Some(400), Some("guardrail_blocked"))
+    );
+    assert_eq!(
+        (
+            &by_none["requests"][0]["guardrail_id"],
+            &by_none["requests"][0]["guardrails"]
+        ),
+        (&serde_json::Value::Null, &serde_json::json!([]))
+    );
+    let shown = json(get(&parts.app, "/admin/requests/r-blocked", Some(&cookie)).await).await;
+    assert_eq!(shown["request"]["guardrail_id"], "g2");
+    assert_eq!(shown["request"]["guardrails"], expected);
+}
+
+/// The counts route answers each guardrail matched in the range with the registry's current name, null for an id the
+/// registry no longer holds, and refuses a bad range with `parse_range`'s sentence.
+#[tokio::test]
+async fn the_guardrail_counts_route_answers_the_registry_name_and_null_for_a_deleted_guardrail() {
+    let parts = common::admin_parts_full().await;
+    parts
+        .store
+        .insert_guardrail(
+            &phoebis_store::GuardrailRow {
+                id: "g1".into(),
+                name: "Large forks".into(),
+                description: String::new(),
+                enabled: true,
+                mode: phoebis_guardrails::GuardrailMode::Enforce,
+                action: phoebis_guardrails::GuardrailAction::Block,
+                conditions: vec![phoebis_guardrails::Condition {
+                    subject: phoebis_guardrails::Subject::RequestClass,
+                    operator: phoebis_guardrails::Operator::Equals,
+                    value: Some("auxiliary".into()),
+                    name: None,
+                    path: None,
+                    selector: None,
+                }],
+                preset_id: None,
+                preset_version: None,
+                incarnation: 1,
+                created_at: 0,
+                updated_at: 0,
+            },
+            &[],
+            &[],
+            "test",
+        )
+        .unwrap();
+    parts.router.reload().await.unwrap();
+    let now = common::NOW;
+    for row in [
+        guarded(
+            "r1",
+            now - HOUR,
+            3_000,
+            vec![guardrail_match("g1", 0, true)],
+        ),
+        guarded(
+            "r2",
+            now - 2 * HOUR,
+            1_000,
+            vec![
+                guardrail_match("g1", 0, false),
+                guardrail_match("ghost", 1, false),
+            ],
+        ),
+        guarded(
+            "r3",
+            now - 3 * HOUR,
+            500,
+            vec![guardrail_match("ghost", 0, true)],
+        ),
+        guarded(
+            "r4",
+            now - 48 * HOUR,
+            9_000,
+            vec![guardrail_match("g1", 0, true)],
+        ),
+    ] {
+        parts.db.insert_request(&row, &[], None).unwrap();
+    }
+    let cookie = login(&parts.app, "admin-secret").await;
+    let counts = json(
+        get(
+            &parts.app,
+            "/admin/analytics/guardrails?range=24h",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        counts,
+        serde_json::json!({
+            "from": now - 24 * HOUR,
+            "to": now,
+            "guardrails": [
+                { "id": "g1", "name": "Large forks", "observed": 1, "blocked": 1, "blocked_bytes": 3_000 },
+                { "id": "ghost", "name": null, "observed": 1, "blocked": 1, "blocked_bytes": 500 },
+            ],
+        })
+    );
+    let refused = get(
+        &parts.app,
+        "/admin/analytics/guardrails?range=bad",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(
+        json(refused).await["error"],
+        "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"
+    );
+}
