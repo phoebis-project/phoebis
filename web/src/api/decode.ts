@@ -4,8 +4,10 @@ import type {
   ModelsState, MoveCause, Overview, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, ReturnToPlan, RewritesAnswer,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SharedEquivalent, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId, WindowSample,
 } from './types';
+import type { Condition, ConditionOperator, ConditionSubject, Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailMatch, GuardrailMode, GuardrailPreset, GuardrailPresetState, GuardrailRef, GuardrailTestResult, MessageSelector, TestVerdict } from './types';
 import { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES, AUTO_MODE_VALUES, DIAGNOSTICS_SOURCE_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
+import type { GuardrailInput, GuardrailTestInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, fmtDate } from '@/lib/format';
@@ -282,6 +284,7 @@ export function decodeKey(v: unknown): ApiKey {
     createdAt: isoOr(k.created_at, epoch),
     enabled,
     expiresAt: expires,
+    guardrails: guardrailRefs(k.guardrails),
     id: str(k.id),
     keepaliveOptOut: bool(k.keepalive_opt_out),
     lastUsedAt: isoOrNull(k.last_used_at),
@@ -291,6 +294,7 @@ export function decodeKey(v: unknown): ApiKey {
     modelRulesMode: MODEL_RULES_MODE_VALUES.find((x) => x === str(k.model_rules_mode)) ?? 'extend',
     name: str(k.label),
     notes: strOrNull(k.notes),
+    poolGuardrails: guardrailRefs(k.pool_guardrails),
     poolId: str(k.pool_id),
     prefix: str(k.prefix),
     retiredSecretLastUsedAt: isoOrNull(k.retired_secret_last_used_at),
@@ -379,6 +383,7 @@ export function decodePool(v: unknown): Pool {
     cost24h: num(p.cost_24h),
     equivalent24h: sharedEquivalent(p.equivalent_24h),
     estimated24h: bool(p.estimated_24h),
+    guardrails: guardrailRefs(p.guardrails),
     id: str(p.id),
     inFlightCap: num(p.in_flight_cap, POOL_ENGINE_DEFAULTS.inFlightCap),
     keepalive: {
@@ -499,7 +504,9 @@ export function decodeRequest(v: unknown): RequestLog {
     costShares: r.cost_shares === null || r.cost_shares === undefined ? null : nullableNumberMap(r.cost_shares), costUsd: num(r.cost_usd),
     diagnosticsSource: DIAGNOSTICS_SOURCE_VALUES.find((s) => s === str(r.diagnostics_source)) ?? null,
     durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code), estimated: bool(r.estimated),
-    forkDepth: numOrNull(r.fork_depth), forkedFrom: strOrNull(r.forked_from), held: cohortHoldOf(r.held), id: str(r.id),
+    forkDepth: numOrNull(r.fork_depth), forkedFrom: strOrNull(r.forked_from),
+    guardrailId: strOrNull(r.guardrail_id), guardrails: list(r.guardrails).map(decodeGuardrailMatch),
+    held: cohortHoldOf(r.held), id: str(r.id),
     keyGeneration: num(r.key_generation), keyId: strOrNull(r.key_id),
     kind: REQUEST_KIND_VALUES.find((k) => k === str(r.kind)) ?? 'inference', model: str(r.model),
     outcome: REQUEST_OUTCOME_VALUES.find((o) => o === str(r.outcome)) ?? 'failed',
@@ -1082,6 +1089,7 @@ export const encodeKey = (i: KeyInput) => ({
   ...(i.expiresAt === undefined ? {} : { expires_at: i.expiresAt === null ? null : Date.parse(i.expiresAt) }),
   keepalive_opt_out: i.keepaliveOptOut, label: i.name, long_context_twins: i.longContextTwins,
   model_rules: encodeModelRules(i.modelRules), model_rules_mode: i.modelRulesMode, notes: i.notes, pool_id: i.poolId,
+  ...(i.guardrails === undefined ? {} : { guardrails: i.guardrails }),
 });
 export const encodePool = (i: PoolInput) => ({
   affinity_mode: i.affinityMode, affinity_ttl_seconds: i.affinityTtlSeconds, auto_mode_server: i.autoModeServer, body_capture_hours: i.bodyCaptureHours,
@@ -1095,4 +1103,137 @@ export const encodePool = (i: PoolInput) => ({
   burn_average_seconds: i.burnAverageSeconds, in_flight_cap: i.inFlightCap, load_shedding: i.loadShedding, migrate_when_spent: i.migrateWhenSpent, overage_move_grace_minutes: i.overageMoveGraceMinutes,
   retry_in_place_seconds: i.retryInPlaceSeconds, return_to_plan: i.returnToPlan, return_to_plan_dwell_seconds: i.returnToPlanDwellSeconds, shed_cap: i.shedCap, shed_dwell_seconds: i.shedDwellSeconds,
   slow_down: i.slowDown, slow_down_hold_seconds: i.slowDownHoldSeconds, slow_down_stretch_seconds: i.slowDownStretchSeconds, warm_sessions: i.warmSessions, wind_down_minutes: i.windDownMinutes, window_ceiling: i.windowCeiling,
+  ...(i.guardrails === undefined ? {} : { guardrails: i.guardrails }),
+});
+
+// The guardrails' shapes, read as leniently as the rows above: a word outside its set folds to a named default, and
+// the lists read in their `position` order, which a detach can leave with a gap, so a position is never an index.
+
+export const GUARDRAIL_MODE_VALUES = ['enforce', 'observe'] as const satisfies readonly GuardrailMode[];
+export const CONDITION_SUBJECT_VALUES = ['agent_type', 'body', 'client', 'header', 'kind', 'message', 'model', 'request_class', 'user_agent'] as const satisfies readonly ConditionSubject[];
+export const CONDITION_OPERATOR_VALUES = ['absent', 'equals', 'gt', 'lt', 'matches', 'present'] as const satisfies readonly ConditionOperator[];
+export const MESSAGE_SELECTOR_VALUES = ['any', 'any_assistant', 'any_user', 'first_user', 'last', 'last_assistant', 'last_user'] as const satisfies readonly MessageSelector[];
+export const TEST_VERDICT_VALUES = ['indeterminate', 'matched', 'unmatched'] as const satisfies readonly TestVerdict[];
+
+// `observe` is the route's own default for a guardrail created without a mode.
+const guardrailMode = (v: unknown): GuardrailMode => GUARDRAIL_MODE_VALUES.find((m) => m === str(v)) ?? 'observe';
+const byPosition = <T extends { position: number }>(rows: T[]): T[] => [...rows].sort((a, b) => a.position - b.position);
+/** A member the route leaves out where the condition takes none, never null. */
+const optional = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+
+/** Every condition carries the four optional keys, undefined where the route left the member out. */
+export function decodeCondition(v: unknown): Condition {
+  const c = rec(v);
+  const selector = optional(c.selector);
+  return {
+    name: optional(c.name),
+    operator: CONDITION_OPERATOR_VALUES.find((o) => o === str(c.operator)) ?? CONDITION_OPERATOR_VALUES[0],
+    path: optional(c.path),
+    selector: selector === undefined ? undefined : (MESSAGE_SELECTOR_VALUES.find((s) => s === selector) ?? MESSAGE_SELECTOR_VALUES[0]),
+    subject: CONDITION_SUBJECT_VALUES.find((s) => s === str(c.subject)) ?? CONDITION_SUBJECT_VALUES[0],
+    value: optional(c.value),
+  };
+}
+
+export function decodeGuardrailRef(v: unknown): GuardrailRef {
+  const r = rec(v);
+  return { enabled: bool(r.enabled, true), id: str(r.id), mode: guardrailMode(r.mode), name: str(r.name), position: num(r.position) };
+}
+const guardrailRefs = (v: unknown): GuardrailRef[] => byPosition(list(v).map(decodeGuardrailRef));
+
+export function decodeGuardrailMatch(v: unknown): GuardrailMatch {
+  const m = rec(v);
+  return { blocked: bool(m.blocked), id: str(m.id), position: num(m.position) };
+}
+
+const attachmentsOf = (v: unknown): GuardrailAttachment[] => byPosition(list(v).map(rec).map((a) => ({ id: str(a.id), label: str(a.label), position: num(a.position) })));
+
+/** The member is on the wire whether null or the stamp, while the OpenAPI document marks it optional: absent reads none. */
+const presetStateOf = (v: unknown): GuardrailPresetState | null => {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const p = rec(v);
+  const version = num(p.version, 1);
+  return { currentVersion: num(p.current_version, version), customized: bool(p.customized), id: str(p.id), version };
+};
+
+export function decodeGuardrail(v: unknown): Guardrail {
+  const g = rec(v);
+  return {
+    action: 'block',
+    conditions: list(g.conditions).map(decodeCondition),
+    createdAt: isoOr(g.created_at, epoch),
+    description: str(g.description),
+    enabled: bool(g.enabled, true),
+    id: str(g.id),
+    keys: attachmentsOf(g.keys),
+    mode: guardrailMode(g.mode),
+    name: str(g.name),
+    pools: attachmentsOf(g.pools),
+    preset: presetStateOf(g.preset),
+    // A row whose answer carried none reads 0, which the route refuses as stale, so the dialog offers Reload.
+    revision: num(g.revision),
+    updatedAt: isoOr(g.updated_at, epoch),
+  };
+}
+
+export function decodeGuardrailPreset(v: unknown): GuardrailPreset {
+  const p = rec(v);
+  return {
+    conditions: list(p.conditions).map(decodeCondition),
+    description: str(p.description),
+    id: str(p.id),
+    measuredOn: str(p.measured_on),
+    name: str(p.name),
+    suggestedMode: guardrailMode(p.suggested_mode),
+    version: num(p.version, 1),
+  };
+}
+
+export function decodeGuardrailTest(v: unknown): GuardrailTestResult {
+  const t = rec(v);
+  const sample = rec(t.sample);
+  const totals = rec(t.totals);
+  return {
+    requests: list(t.requests)
+      .map(rec)
+      // A verdict this build does not know claims neither a match nor a miss.
+      .map((r) => ({ condition: numOrNull(r.condition), id: str(r.id), receivedAt: isoOr(r.received_at, epoch), verdict: TEST_VERDICT_VALUES.find((x) => x === str(r.verdict)) ?? 'indeterminate' })),
+    // The route writes the side it sampled and leaves the other out.
+    sample: { keyId: strOrNull(sample.key_id), limit: num(sample.limit), poolId: strOrNull(sample.pool_id), windowHours: num(sample.window_hours) },
+    totals: { indeterminate: num(totals.indeterminate), matched: num(totals.matched), sampled: num(totals.sampled), unmatched: num(totals.unmatched) },
+  };
+}
+
+export function decodeGuardrailCounts(v: unknown): GuardrailCounts {
+  const c = rec(v);
+  return {
+    from: isoOr(c.from, epoch),
+    guardrails: list(c.guardrails)
+      .map(rec)
+      .map((g) => ({ blocked: num(g.blocked), blockedBytes: num(g.blocked_bytes), id: str(g.id), name: strOrNull(g.name), observed: num(g.observed) })),
+    to: isoOr(c.to, epoch),
+  };
+}
+
+const encodeCondition = (c: Condition) => ({ name: c.name, operator: c.operator, path: c.path, selector: c.selector, subject: c.subject, value: c.value });
+
+/** The members `input` defines, in the route's spelling. The transport's JSON leaves an undefined member out. */
+export const encodeGuardrail = (input: Partial<GuardrailInput>): Record<string, unknown> => ({
+  conditions: input.conditions?.map(encodeCondition),
+  description: input.description,
+  enabled: input.enabled,
+  keys: input.keys,
+  mode: input.mode,
+  name: input.name,
+  pools: input.pools,
+  preset: input.preset,
+  preset_version: input.presetVersion,
+});
+
+export const encodeGuardrailTest = (input: GuardrailTestInput): Record<string, unknown> => ({
+  conditions: input.conditions?.map(encodeCondition),
+  guardrail: input.guardrail,
+  key_id: input.keyId,
+  limit: input.limit,
+  pool_id: input.poolId,
 });

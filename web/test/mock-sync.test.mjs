@@ -48,6 +48,7 @@ const SYNC = {
   analytics_breakdown_speed: { decode: (b) => b.rows.map(d.decodeAnalyticsGroup), mock: (api) => api.getAnalyticsBreakdown({ ...query, groupBy: 'speed' }) },
   analytics_budgets: { decode: (b) => b.members.map(d.decodeMemberBudget), mock: (api) => api.analyticsBudgets() },
   analytics_burn: { decode: (b) => d.decodeBurn(b), mock: (api) => api.getAnalyticsBurn(query, 'account') },
+  analytics_guardrails: { decode: (b) => d.decodeGuardrailCounts(b), mock: (api) => api.getAnalyticsGuardrails(query) },
   analytics_placements: { decode: (b) => b.rows.map(d.decodePlacementRow), mock: (api) => api.analyticsPlacements(query) },
   analytics_reconciliations: { decode: (b) => d.decodeReconciliations(b), mock: (api) => api.getAnalyticsReconciliations() },
   // Its moves by reason and fit are a map of maps keyed by data on both levels, which the mock's consistency test holds
@@ -59,6 +60,12 @@ const SYNC = {
   dashboard: { decode: (b) => d.decodeDashboard(b), mock: (api) => api.getOverview() },
   // The story's static placement, whose `raw` is the record the mock answers where the fixture's is the route's body.
   decision: { decode: (b) => recordShape(d.decodeDecisionRecord(b)), mock: async (api) => recordShape(await api.getDecision('req_b2bed817-a58', 1)), opaque: (path) => path === '.settings' || path === '.raw' },
+  // From the preset with a pool, so the answer carries the stamp and an attachment as the captured create does.
+  guardrail_created: { decode: (b) => d.decodeGuardrail(b), mock: (api) => api.createGuardrail({ description: '', enabled: true, mode: 'observe', name: 'sync', pools: ['all'], preset: 'subagent-status-summary' }) },
+  guardrail_presets: { decode: (b) => b.presets.map(d.decodeGuardrailPreset), mock: (api) => api.listGuardrailPresets() },
+  guardrail_show: { decode: (b) => d.decodeGuardrail(b), mock: (api) => api.getGuardrail('subagent-status-summary') },
+  guardrail_test: { decode: (b) => d.decodeGuardrailTest(b), mock: (api) => api.testGuardrail({ guardrail: 'subagent-status-summary', limit: 50, poolId: 'all' }) },
+  guardrails: { decode: (b) => b.guardrails.map(d.decodeGuardrail), mock: (api) => api.listGuardrails() },
   keepalive_overview: { decode: (b) => d.decodeKeepaliveOverview(b), mock: (api) => api.getKeepaliveOverview() },
   keepalive_recipes: { decode: (b) => b.recipes.map(d.decodeRecipe), mock: (api) => api.listKeepaliveRecipes() },
   key_created: { decode: (b) => ({ key: d.decodeKey(b), secret: b.secret }), mock: (api) => api.createKey({ bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'sync', notes: null, poolId: 'all' }) },
@@ -80,7 +87,7 @@ const SYNC = {
   settings: { decode: (b) => d.decodeSettings(b), mock: (api) => api.getSettings() },
 };
 /** Fixtures no decoder and no `Api` method reads: captured for their route's shape, or read by a test of their own. */
-const UNCONSUMED = ['analytics_guardrails', 'bound_refusals', 'guardrail_created', 'guardrail_presets', 'guardrail_show', 'guardrail_test', 'guardrails', 'pool_traffic', 'pricing', 'replay_held', 'sessions_costs', 'system', 'test_tables'];
+const UNCONSUMED = ['bound_refusals', 'pool_traffic', 'pricing', 'replay_held', 'sessions_costs', 'system', 'test_tables'];
 
 test('the generated fixtures module is a fresh render', () => {
   const committed = readFileSync(new URL('../src/mock/generated/fixtures.ts', import.meta.url), 'utf8');
@@ -119,6 +126,10 @@ const CLOSED = {
   analytics_budgets: { '[].budgetPeriod': d.BUDGET_PERIOD_VALUES, '[].kind': d.ACCOUNT_KIND_VALUES },
   analytics_placements: { '[].rung': d.PLACEMENT_RUNG_VALUES },
   attention: { '[].kind': d.ATTENTION_KIND_VALUES, '[].link.page': [...d.ATTENTION_PAGE_VALUES, undefined], '[].subject.type': d.ATTENTION_SUBJECT_VALUES },
+  // A condition of another subject than `message` carries no selector.
+  guardrail_presets: { '[].conditions[].selector': [...d.MESSAGE_SELECTOR_VALUES, undefined] },
+  guardrail_test: { '.requests[].verdict': d.TEST_VERDICT_VALUES },
+  guardrails: { '[].conditions[].operator': d.CONDITION_OPERATOR_VALUES, '[].conditions[].subject': d.CONDITION_SUBJECT_VALUES, '[].mode': d.GUARDRAIL_MODE_VALUES },
   keepalive_recipes: { '[].agentState': d.AGENT_STATE_VALUES, '[].cause': d.RECIPE_CAUSE_VALUES, '[].parkKind': [...d.PARK_KIND_VALUES, null], '[].state': d.RECIPE_STATE_VALUES },
   pools: {
     '[].members[].eligible': d.ELIGIBILITY_VALUES,
@@ -162,8 +173,11 @@ for (const [name, paths] of Object.entries(CLOSED)) {
   });
 }
 
-/** The pool as the dialog would send it back unchanged, so a refusal below is the one field the case edits. */
-const poolInputOf = (p) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, priority: m.priority })) });
+/**
+ * The pool as the dialog would send it back unchanged, so a refusal below is the one field the case edits. The listed
+ * pool's guardrails are refs, and the dialog sends that list only when its group changed.
+ */
+const poolInputOf = ({ guardrails: _, ...p }) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, priority: m.priority })) });
 
 test('the mock refuses the affinity and the keepalive values the route refuses', async () => {
   const api = await admin();

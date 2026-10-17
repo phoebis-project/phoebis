@@ -1788,6 +1788,57 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const upstreamErrors = rows.filter((r) => r.status !== 200 && r.status !== 429 && r.status !== 529 && r.errorCode !== 'stream_undecodable');
     assert.equal(totals.errors.api_error ?? 0, upstreamErrors.length, 'and counts no closed stream as an upstream error');
   });
+
+  test(`only_the_storys_fork_and_blocked_rows_carry_a_match at ${at}`, async () => {
+    const s = await story;
+    const ids = s.lib.GUARDRAIL_STORY_IDS;
+    assert.ok(ids !== undefined && ids.size > 0, 'the story seeds rows a guardrail matched');
+    assert.deepEqual(s.requests.filter((r) => r.guardrails.length > 0).map((r) => r.id).sort(), [...ids].sort(), 'the seeds alone carry a match');
+    // The request fixture's row carries a match, which a row drawn over the sample would inherit.
+    const unmatched = s.requests.filter((r) => !ids.has(r.id) && (r.guardrailId !== null || r.guardrails.length > 0)).map((r) => r.id);
+    assert.deepEqual(unmatched, []);
+    assert.ok(s.requests.some((r) => r.kind === 'probe'), 'the read holds the probes');
+    for (const r of s.requests.filter((x) => ids.has(x.id))) {
+      assert.notEqual(r.kind, 'probe', `${r.id} is no probe`);
+      assert.equal(r.guardrailId, r.guardrails.find((m) => m.blocked)?.id ?? null, `${r.id} names the guardrail that blocked it, or none`);
+    }
+  });
+
+  test(`every_blocked_story_row_reads_rejected_400_guardrail_blocked_with_no_attempt_and_a_captured_body_and_carries_its_blocking_match at ${at}`, async () => {
+    const s = await story;
+    const blocked = s.requests.filter((r) => r.guardrailId !== null);
+    assert.equal(blocked.length, 3, 'the story blocks three requests');
+    for (const r of blocked) {
+      const usage = r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output;
+      assert.deepEqual([r.outcome, r.status, r.errorCode, r.attempts.length, r.accountId, usage, r.capturedBodies, r.requestClass], ['rejected', 400, 'guardrail_blocked', 0, null, 0, true, 'auxiliary'], r.id);
+      assert.deepEqual([r.guardrailId, r.guardrails], ['large-auxiliary', [{ blocked: false, id: 'subagent-status-summary', position: 0 }, { blocked: true, id: 'large-auxiliary', position: 1 }]], `${r.id} matched its pool's guardrail first and was blocked by its key's`);
+      assert.ok((await s.api.getCapturedBodies(r.id)) !== null, `${r.id} keeps its body`);
+    }
+  });
+
+  test(`the_counts_route_answers_the_storys_matches_in_range_and_the_guardrails_views_day_reads_the_same at ${at}`, async () => {
+    const s = await story;
+    const from = s.now - DAY;
+    const counts = await s.api.getAnalyticsGuardrails({ from: iso(from), to: iso(s.now) });
+    const want = new Map();
+    for (const r of s.requests.filter((x) => Date.parse(x.at) >= from && Date.parse(x.at) <= s.now)) {
+      for (const m of r.guardrails) {
+        const row = want.get(m.id) ?? { blocked: 0, blockedBytes: 0, observed: 0 };
+        if (m.blocked) {
+          row.blocked += 1;
+          row.blockedBytes += (await s.api.getCapturedBodies(r.id)).requestBytesSeen;
+        } else row.observed += 1;
+        want.set(m.id, row);
+      }
+    }
+    const read = counts.guardrails.map((c) => [c.id, c.observed, c.blocked, c.blockedBytes]);
+    assert.ok(read.some(([, observed]) => observed > 0) && read.some(([, , blocked]) => blocked > 0), 'the day holds an observed match and a block');
+    assert.deepEqual(read, [...want].sort(([a], [b]) => a.localeCompare(b)).map(([id, c]) => [id, c.observed, c.blocked, c.blockedBytes]));
+    const names = new Map((await s.api.listGuardrails()).map((g) => [g.id, g.name]));
+    assert.deepEqual(counts.guardrails.map((c) => c.name), counts.guardrails.map((c) => names.get(c.id) ?? null));
+    const day = await s.api.getAnalyticsGuardrails('24h');
+    assert.deepEqual([day.from, day.to, day.guardrails], [iso(from), iso(s.now), counts.guardrails], "the view's day is the last 24 hours");
+  });
 }
 
 // An instant whose hour a full day back carries traffic before the dashboard's first bucket.

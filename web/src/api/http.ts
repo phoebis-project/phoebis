@@ -1,4 +1,5 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from './client';
+import type { GuardrailInput, GuardrailRange, GuardrailTestInput } from './client';
 import * as d from './decode';
 import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, PairingInput, PairingPreview, PairingStart, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
 
@@ -154,6 +155,7 @@ export class HttpApi implements Api {
   };
   confirmPairing = (pairingId: string) => call<void>('POST', `/admin/oauth/sessions/${enc(pairingId)}/confirm`);
   createAccount = async (input: AccountInput): Promise<Account> => d.decodeAccount(await call('POST', '/admin/accounts', { id: input.id, kind: input.kind, label: input.label, secret: input.secret }, false, DIALOG_WRITE));
+  createGuardrail = async (input: GuardrailInput) => d.decodeGuardrail(await call('POST', '/admin/guardrails', { ...d.encodeGuardrail(input), id: slug(input.name) }, false, DIALOG_WRITE));
   createKey = async (input: CreateKeyInput): Promise<CreatedApiKey> => {
     const expires_at = input.expiresInDays === null ? null : Date.now() + input.expiresInDays * 86_400_000;
     const r = await call<Record<string, unknown>>('POST', '/admin/keys', { ...d.encodeKey(input), expires_at, id: slug(input.name) }, false, DIALOG_WRITE);
@@ -161,6 +163,7 @@ export class HttpApi implements Api {
   };
   createPool = async (input: PoolInput) => d.decodePool(await call('POST', '/admin/pools', { ...d.encodePool(input), id: slug(input.name) }, false, DIALOG_WRITE));
   deleteAccount = (accountId: string) => call<void>('DELETE', `/admin/accounts/${enc(accountId)}`);
+  deleteGuardrail = (id: string) => call<void>('DELETE', `/admin/guardrails/${enc(id)}`);
   deleteKey = (id: string) => call<void>('DELETE', `/admin/keys/${enc(id)}`);
   deletePool = (id: string) => call<void>('DELETE', `/admin/pools/${enc(id)}`);
   disconnectAccount = (accountId: string) => call<void>('DELETE', `/admin/accounts/${enc(accountId)}/credentials`);
@@ -168,6 +171,7 @@ export class HttpApi implements Api {
   getAnalyticsBreakdown = async (q: AnalyticsQuery): Promise<AnalyticsGroup[]> => (await call<{ rows: unknown[] }>('GET', `/admin/analytics/breakdown${analytics(q)}`)).rows.map(d.decodeAnalyticsGroup);
   getAnalyticsBurn = async (r: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup, filters: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'> = {}) =>
     d.decodeBurn(await call('GET', `/admin/analytics/burn${qs({ accounts: filters.accountIds, group_by: groupBy, range: range(r.from, r.to), user_agent_groups: filters.userAgentGroups?.join('\n') })}`));
+  getAnalyticsGuardrails = async (r: GuardrailRange) => d.decodeGuardrailCounts(await call('GET', `/admin/analytics/guardrails${qs({ range: r === '24h' ? r : range(r.from, r.to) })}`));
   getAnalyticsReconciliations = async (filters: Pick<AnalyticsQuery, 'accountIds'> = {}) => d.decodeReconciliations(await call('GET', `/admin/analytics/reconciliations${qs({ accounts: filters.accountIds })}`));
   getAnalyticsRewrites = async (r: Pick<AnalyticsQuery, 'from' | 'to'>) => d.decodeRewrites(await call('GET', `/admin/analytics/rewrites${qs({ range: range(r.from, r.to) })}`));
   getAnalyticsSeries = async (q: AnalyticsQuery): Promise<AnalyticsPoint[]> => (await call<{ points: unknown[] }>('GET', `/admin/analytics/series${analytics(q)}`)).points.map(d.decodeAnalyticsPoint);
@@ -188,6 +192,7 @@ export class HttpApi implements Api {
       throw e;
     }
   };
+  getGuardrail = async (id: string) => d.decodeGuardrail(await call('GET', `/admin/guardrails/${enc(id)}`));
   getKeepaliveOverview = async () => d.decodeKeepaliveOverview(await call('GET', '/admin/keepalive/overview'));
   getKeyModels = async (keyId: string) => d.decodeKeyModels(await call('GET', `/admin/keys/${enc(keyId)}/models`));
   getModelsState = async () => d.decodeModelsState(await call('GET', '/admin/models/state'));
@@ -226,12 +231,14 @@ export class HttpApi implements Api {
     return this.listCatalogOf(accounts.map((a) => a.id));
   };
   listCatalogOf = async (accountIds: string[]): Promise<CatalogModel[]> => catalogUnion(await Promise.all(accountIds.map((id) => this.getAccountCatalog(id).catch(() => null))));
+  listGuardrailPresets = async () => (await call<{ presets: unknown[] }>('GET', '/admin/guardrails/presets')).presets.map(d.decodeGuardrailPreset);
+  listGuardrails = async () => (await call<{ guardrails: unknown[] }>('GET', '/admin/guardrails')).guardrails.map(d.decodeGuardrail);
   listKeepaliveRecipes = async () => (await call<{ recipes: unknown[] }>('GET', '/admin/keepalive/recipes')).recipes.map(d.decodeRecipe);
   listKeys = async () => (await call<{ keys: unknown[] }>('GET', '/admin/keys')).keys.map(d.decodeKey);
   listPools = async () => (await call<{ pools: unknown[] }>('GET', '/admin/pools')).pools.map(d.decodePool);
   listRequests = async (q: RequestQuery = {}) =>
     d.decodeRequestPage(
-      await call('GET', `/admin/requests${qs({ accounts: q.accountIds, agent_types: q.agentTypes, cache_miss_reasons: q.cacheMissReasons, client: q.client, cursor: q.cursor, efforts: q.efforts, from: q.from ? Date.parse(q.from) : undefined, held: q.held, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kind ? [q.kind] : undefined, limit: q.limit, models: q.models, outcomes: q.outcomes, pools: q.poolIds, request: q.request, request_classes: q.requestClasses, session: q.session, speeds: q.speeds, statuses: q.statuses?.map(String), text: q.search, to: q.to ? Date.parse(q.to) : undefined, turn_origins: q.turnOrigins, user_agent: q.userAgent })}`),
+      await call('GET', `/admin/requests${qs({ accounts: q.accountIds, agent_types: q.agentTypes, cache_miss_reasons: q.cacheMissReasons, client: q.client, cursor: q.cursor, efforts: q.efforts, from: q.from ? Date.parse(q.from) : undefined, guardrails: q.guardrails, held: q.held, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kind ? [q.kind] : undefined, limit: q.limit, models: q.models, outcomes: q.outcomes, pools: q.poolIds, request: q.request, request_classes: q.requestClasses, session: q.session, speeds: q.speeds, statuses: q.statuses?.map(String), text: q.search, to: q.to ? Date.parse(q.to) : undefined, turn_origins: q.turnOrigins, user_agent: q.userAgent })}`),
     );
   // The route reads RFC 3339 instants, so the two times pass through as the page wrote them.
   listRoutingLog = async (q: RoutingLogQuery = {}) =>
@@ -261,10 +268,13 @@ export class HttpApi implements Api {
   };
   startPairing = async (start: PairingStart) =>
     d.decodePairingSession(await call('POST', '/admin/oauth/sessions', 'accountId' in start ? { account_id: start.accountId, login: 'claude_ai' } : { login: 'claude_ai', new: { id: start.id, label: start.label } }, false, DIALOG_WRITE));
+  // The test panel draws a refusal in its own slot.
+  testGuardrail = async (input: GuardrailTestInput) => d.decodeGuardrailTest(await call('POST', '/admin/guardrails/test', d.encodeGuardrailTest(input), false, DIALOG_WRITE));
   updateAccount = async (accountId: string, patch: AccountPatch, revision?: number) =>
     d.decodeAccount(
       await call('PATCH', `/admin/accounts/${enc(accountId)}`, withRevision(d.encodeAccountPatch(patch), revision), false, DIALOG_WRITE),
     );
+  updateGuardrail = async (id: string, input: Partial<GuardrailInput>, revision?: number) => d.decodeGuardrail(await call('PATCH', `/admin/guardrails/${enc(id)}`, withRevision(d.encodeGuardrail(input), revision), false, DIALOG_WRITE));
   updateKey = async (id: string, input: KeyInput, revision?: number): Promise<ApiKey> => d.decodeKey(await call('PATCH', `/admin/keys/${enc(id)}`, withRevision(d.encodeKey(input), revision), false, DIALOG_WRITE));
   // The route writes the settings and the members in one transaction, so a refusal stores nothing; a 409
   // `stale_edit` means the row moved since the dialog read it, which the dialog answers with Reload.

@@ -2429,3 +2429,61 @@ test('an attention item with a spelling the console does not know reads the wors
   );
   assert.equal(d.decodeAttention({ ...fixture('attention').items[0], link: { id: 'main' } }).link, null, 'a link that names no page opens nothing');
 });
+
+test('a_guardrail_decodes_with_its_conditions_preset_and_attachments', () => {
+  const g = d.decodeGuardrail(fixture('guardrail_show'));
+  assert.deepEqual([g.id, g.enabled, g.mode, g.action, g.keys], ['subagent-status-summary', true, 'observe', 'block', []]);
+  assert.equal(typeof g.name, 'string');
+  assert.equal(typeof g.description, 'string');
+  assert.deepEqual(g.preset, { currentVersion: 1, customized: false, id: 'subagent-status-summary', version: 1 });
+  assert.deepEqual(g.pools, [{ id: 'main', label: 'Main', position: 0 }]);
+  assert.ok(isIso(g.createdAt) && isIso(g.updatedAt) && typeof g.revision === 'number');
+  assert.deepEqual(g.conditions[0], { name: undefined, operator: 'equals', path: undefined, selector: undefined, subject: 'request_class', value: 'auxiliary' }, 'the route leaves an absent member out');
+  assert.deepEqual(g.conditions.map((c) => Object.keys(c).sort()), Array.from({ length: 3 }, () => ['name', 'operator', 'path', 'selector', 'subject', 'value']), 'every condition reads the same four optional keys');
+  assert.deepEqual([g.conditions[1].path, g.conditions[2].selector], ['tools', 'last_user']);
+  const [large] = fixture('guardrails').guardrails.map(d.decodeGuardrail);
+  assert.deepEqual([large.id, large.mode, large.preset, large.keys], ['large-auxiliary', 'enforce', null, [{ id: 'desktop', label: 'Desktop', position: 0 }]]);
+  // A list can skip a position after a detach, so the decoder orders by it and keeps the values as sent.
+  const out = d.decodeGuardrail({ ...fixture('guardrail_show'), mode: 'audit', pools: [{ id: 'b', label: 'B', position: 3 }, { id: 'a', label: 'A', position: 0 }], preset: undefined });
+  assert.deepEqual([out.mode, out.preset, out.pools.map((p) => [p.id, p.position])], ['observe', null, [['a', 0], ['b', 3]]], "an unknown mode reads the route's default and a missing stamp none");
+  const odd = d.decodeCondition({ operator: 'near', selector: 'middle', subject: 'size' });
+  assert.deepEqual([odd.subject, odd.operator, odd.selector], ['agent_type', 'absent', 'any'], "a word outside its set reads the set's first");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(d.encodeGuardrail({ conditions: [{ name: undefined, operator: 'present', path: 'tools', selector: undefined, subject: 'body', value: undefined }], description: '', enabled: true, mode: 'observe', name: 'Forks', pools: ['all'], presetVersion: 2 }))),
+    { conditions: [{ operator: 'present', path: 'tools', subject: 'body' }], description: '', enabled: true, mode: 'observe', name: 'Forks', pools: ['all'], preset_version: 2 },
+    'the body carries the members the input defines and the route spells',
+  );
+  assert.deepEqual(Object.keys(JSON.parse(JSON.stringify(d.encodeGuardrail({ enabled: false })))), ['enabled'], 'a patch sends the members it changes alone');
+});
+
+test('the_presets_the_test_answer_and_the_counts_decode', () => {
+  const preset = d.decodeGuardrailPreset(fixture('guardrail_presets').presets[0]);
+  assert.deepEqual([preset.id, preset.version, preset.suggestedMode, preset.conditions.length], ['subagent-status-summary', 1, 'observe', 3]);
+  assert.ok(typeof preset.name === 'string' && typeof preset.description === 'string' && typeof preset.measuredOn === 'string');
+  const run = d.decodeGuardrailTest(fixture('guardrail_test'));
+  assert.deepEqual(run.sample, { keyId: null, limit: 50, poolId: 'main', windowHours: 72 });
+  assert.deepEqual(run.totals, { indeterminate: 0, matched: 0, sampled: 1, unmatched: 1 });
+  assert.deepEqual(run.requests, [{ condition: 0, id: 'r-captured', receivedAt: new Date(fixture('guardrail_test').requests[0].received_at).toISOString(), verdict: 'unmatched' }]);
+  assert.equal(d.decodeGuardrailTest({ ...fixture('guardrail_test'), requests: [{ condition: null, id: 'x', received_at: 0, verdict: 'maybe' }] }).requests[0].verdict, 'indeterminate', 'a verdict outside the three reads undecided');
+  const counts = d.decodeGuardrailCounts(fixture('analytics_guardrails'));
+  assert.ok(isIso(counts.from) && isIso(counts.to));
+  assert.deepEqual(counts.guardrails.map((c) => [c.id, c.observed, c.blocked, c.blockedBytes]), [['large-auxiliary', 0, 1, 48213], ['subagent-status-summary', 2, 0, 0]]);
+  assert.equal(d.decodeGuardrailCounts({ ...fixture('analytics_guardrails'), guardrails: [{ id: 'gone', name: null }] }).guardrails[0].name, null, 'a guardrail deleted since it matched has no name');
+});
+
+test('a_pool_and_a_key_decode_their_guardrail_lists_and_a_request_its_matches', () => {
+  assert.deepEqual(d.decodePool(fixture('pools').pools[0]).guardrails, [{ enabled: true, id: 'subagent-status-summary', mode: 'observe', name: 'Subagent status summary', position: 0 }]);
+  const key = d.decodeKey(fixture('keys').keys[0]);
+  assert.deepEqual(key.poolGuardrails.map((r) => r.id), ['subagent-status-summary']);
+  assert.deepEqual(key.guardrails.map((r) => [r.id, r.mode, r.position]), [['large-auxiliary', 'enforce', 0]]);
+  assert.deepEqual([d.decodeKey({}).guardrails, d.decodeKey({}).poolGuardrails, d.decodePool({}).guardrails], [[], [], []], 'a row without the lists reads none');
+  const rows = fixture('requests').requests.map(d.decodeRequest);
+  const blocked = rows.find((r) => r.id === 'r-blocked');
+  assert.deepEqual([blocked.guardrailId, blocked.guardrails], ['large-auxiliary', [{ blocked: false, id: 'subagent-status-summary', position: 0 }, { blocked: true, id: 'large-auxiliary', position: 1 }]]);
+  assert.deepEqual([rows[0].guardrailId, rows[0].guardrails], [null, []]);
+  const pool = d.decodePool(fixture('pools').pools[0]);
+  assert.equal('guardrails' in d.encodePool({ ...pool, guardrails: undefined, status: 'active' }), false, 'a pool body leaves the list out unless the group changed');
+  assert.deepEqual(d.encodePool({ ...pool, guardrails: ['b', 'a'], status: 'active' }).guardrails, ['b', 'a']);
+  assert.deepEqual(d.encodeKey({ ...key, guardrails: ['a'] }).guardrails, ['a']);
+  assert.equal('guardrails' in d.encodeKey({ ...key, guardrails: undefined }), false);
+});

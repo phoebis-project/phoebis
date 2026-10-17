@@ -2,6 +2,7 @@ import type {
   AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
   PriceCells, QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
 } from '@/api/types';
+import type { GuardrailMatch } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
 import { equivalentOf, fundingOf, modelWeeks, shareOrFallback } from '@/lib/costs';
@@ -12,6 +13,7 @@ import { endOf } from '@/lib/quota';
 import { ACCOUNTS, QUOTA_HISTORY, accountById } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor } from './catalog';
+import { GUARDRAILS } from './guardrails';
 import { leadOf } from './lead';
 import { keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';
@@ -550,6 +552,8 @@ function buildRequests(): RequestLog[] {
     const agentId = rng.pick(AGENT_IDS);
     rows.push({
       ...REQUEST_SAMPLE,
+      guardrailId: null,
+      guardrails: [],
       id,
       at: iso(atMs),
       autoMode,
@@ -839,8 +843,12 @@ interface StorySeed {
   clientDrift?: string;
   contextCompacted?: string;
   errorCode?: string;
+  /** The client's subagent summary fork: its captured body carries the fork's tools and its question last. */
+  fork?: boolean;
   /** The answer's inference geography where it is not the story's `us`. */
   geo?: StoryGeo;
+  /** The guardrails that matched, in the order they ran. The one marked blocked refused the request. */
+  guardrails?: GuardrailMatch[];
   held?: CohortHold;
   id: string;
   keyId: string;
@@ -965,6 +973,8 @@ function storyRow(seed: StorySeed): RequestLog {
     errorCode: seed.errorCode ?? (status === 200 ? null : 'rate_limit_error'),
     forkDepth: null,
     forkedFrom: null,
+    guardrailId: seed.guardrails?.find((m) => m.blocked)?.id ?? null,
+    guardrails: seed.guardrails ?? [],
     held: seed.held ?? null,
     id: seed.id,
     keyGeneration: Date.parse(keyById.get(seed.keyId)!.createdAt),
@@ -1247,8 +1257,86 @@ function storyRequests(): RequestLog[] {
       session: IDLE_NOTEBOOK_SESSION_ID,
       usage: { cacheWrite1h: 150_000, input: 3_100, output: 1_700 },
     },
+    ...guardrailSeeds(),
   ];
   return seeds.map(storyRow);
+}
+
+/** The laptop session whose subagent the client forks every 30 seconds for a status line. */
+const FORK_SESSION_ID = '9e4c2b7a-5d31-4f86-a0b9-3c7e1d5f2a48';
+/** The desktop session whose summary forks the key's own guardrail refused. */
+const BLOCKED_SESSION_ID = '2b8f5e1c-7a46-4d93-b1e0-6c9a3f4d7e25';
+/** The pool's guardrail matched first, at its pool position, and the key's own refused the request. */
+const BLOCKED_MATCHES: GuardrailMatch[] = [
+  { blocked: false, id: 'subagent-status-summary', position: 0 },
+  { blocked: true, id: 'large-auxiliary', position: 1 },
+];
+
+/**
+ * The guardrails' story: the summary forks of a subagent on the laptop key, which the pool's guardrail observes, each a
+ * full cached context read for a few words, and three forks on the desktop key that its own guardrail refused over the
+ * day, before any account was selected. The forks sit on laptop alone, so a dry run of the desktop key's guardrail
+ * reads the three it refused and no fork it let through.
+ */
+function guardrailSeeds(): StorySeed[] {
+  const t = clock;
+  const observed: GuardrailMatch[] = [{ blocked: false, id: 'subagent-status-summary', position: 0 }];
+  const fork = (at: number, id: string, cacheRead: number): StorySeed => ({
+    agentId: 'b7d3',
+    at,
+    attempts: [{ accountId: 'primary', at, ms: 1_400, status: 200 }],
+    capturedBodies: true,
+    fork: true,
+    guardrails: observed,
+    id,
+    keyId: 'laptop',
+    model: HAIKU,
+    requestClass: 'auxiliary',
+    session: FORK_SESSION_ID,
+    usage: { cacheRead, input: 60, output: 24 },
+  });
+  const blocked = (at: number, id: string): StorySeed => ({
+    agentId: 'c6a2',
+    at,
+    attempts: [],
+    capturedBodies: true,
+    errorCode: 'guardrail_blocked',
+    fork: true,
+    guardrails: BLOCKED_MATCHES,
+    id,
+    keyId: 'desktop',
+    model: 'claude-sonnet-5-5',
+    outcome: 'rejected',
+    requestClass: 'auxiliary',
+    session: BLOCKED_SESSION_ID,
+    status: 400,
+  });
+  return [
+    fork(t(12, 40), 'req_3f7a2c91-d05', 84_200),
+    fork(t(12, 40, 30), 'req_8b4e6d12-a37', 84_900),
+    fork(t(12, 41), 'req_c25f9e48-b81', 85_600),
+    fork(t(12, 41, 30), 'req_e916a3d7-c42', 86_300),
+    blocked(t(1, 12, 40), 'req_0c4e7a91-b5d'),
+    blocked(t(7, 33, 10), 'req_5d1b8e2f-c64'),
+    blocked(t(12, 52, 20), 'req_a8f3c6d0-e17'),
+  ];
+}
+
+/** The ids of the story's seeds that carry a match, the fork rows and the blocked rows: the one source of a mock match. */
+export const GUARDRAIL_STORY_IDS: ReadonlySet<string> = new Set(guardrailSeeds().filter((s) => (s.guardrails ?? []).length > 0).map((s) => s.id));
+/** The seeds in the fork's shape, whose captured body is the fork's. */
+const FORK_IDS: ReadonlySet<string> = new Set(guardrailSeeds().filter((s) => s.fork).map((s) => s.id));
+// Seeded by hand as the routing log's rows are, so the draws after the rows leave them as the story wrote them, and the
+// routing log derives no decision for them: a block is refused before any selection.
+for (const id of GUARDRAIL_STORY_IDS) STORY_IDS.add(id);
+
+/** A summary fork rides its subagent's pin, so each fork's one attempt renewed the pin the subagent's turns hold. */
+function traceForks() {
+  for (const r of REQUESTS) {
+    if (!FORK_IDS.has(r.id) || r.attempts.length === 0) continue;
+    const strategy = poolById.get(r.poolId ?? '')?.strategy ?? 'pace';
+    r.attempts = r.attempts.map((a) => ({ ...a, selection: { cacheRead: r.usage.cacheRead, cohortHold: null, moved: null, placement: null, renewed: true, skipped: [], strategy, tier: null } }));
+  }
 }
 
 export const REQUESTS: RequestLog[] = buildRequests();
@@ -1756,6 +1844,7 @@ seedHolds();
 liftCooldowns(REQUESTS);
 identifyRequests();
 phaseRequests();
+traceForks();
 
 const outputTps = (r: RequestLog): number | null => {
   if (r.status !== 200 || r.kind !== 'inference' || r.ttftMs === null) return null;
@@ -2416,12 +2505,16 @@ const sseFrame = (event: string, data: unknown): string => `event: ${event}\ndat
 /** The answer's text, which a stream delivers in two deltas. */
 const ANSWER_TEXT = 'The hook awaits a promise that resolves before the writer flushes. Moving the flush into the same tick fixes the race.';
 
+/** The question the client's summary fork asks after the subagent's last turn. */
+const FORK_QUESTION = 'Describe your most recent action in 3-5 words using present tense (-ing). Output only the words.';
+
 /** A cut answer ran a megabyte past the cap before the ledger stopped storing it. */
 const DROPPED_BYTES = 1_048_576;
 
 export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
   if (!request.capturedBodies) return null;
   const isClaude = request.model.startsWith('claude');
+  const toolResult = { type: 'tool_result', tool_use_id: 'toolu_01', content: '[file contents: 212 lines]' };
   const bodies = {
     requestId: request.id,
     request: {
@@ -2435,7 +2528,8 @@ export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
       messages: [
         { role: 'user', content: [{ type: 'text', text: 'Fix the flaky pre-commit hook and add a test.' }] },
         { role: 'assistant', content: [{ type: 'text', text: 'Reading the hook first.' }, { type: 'tool_use', id: 'toolu_01', name: 'Read', input: { file_path: 'hooks/pre-commit.ts' } }] },
-        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_01', content: '[file contents: 212 lines]' }] },
+        // The summary fork copies the subagent's conversation and asks its question after the last tool result.
+        { role: 'user', content: FORK_IDS.has(request.id) ? [toolResult, { type: 'text', text: FORK_QUESTION }] : [toolResult] },
       ],
       metadata: { user_id: `session_${request.sessionId}` },
       tools: [{ name: 'Read', description: 'Reads a file', input_schema: { type: 'object', properties: { file_path: { type: 'string' } } } }],
@@ -2456,6 +2550,13 @@ export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
       output_tokens: request.usage.output,
     },
   };
+  // A guardrail refused the request before any account answered it, so the answer kept is the router's own refusal.
+  const blockedBy = request.errorCode === 'guardrail_blocked' ? GUARDRAILS.find((g) => g.id === request.guardrailId) : undefined;
+  if (blockedBy !== undefined) {
+    const refusal = { type: 'error', error: { type: 'invalid_request_error', message: `blocked by guardrail "${blockedBy.name}"` } };
+    const requestBytes = byteLength(bodies.request);
+    return { ...bodies, response: refusal, requestBytesSeen: requestBytes, requestBytesStored: requestBytes, requestTruncated: false, responseBytesSeen: byteLength(refusal), responseBytesStored: byteLength(refusal), responseTruncated: false };
+  }
   // A stream is stored as the text of its events, the way the ledger keeps the bytes it saw, and a JSON answer as
   // its object. The opening frame carries the message with its usage, no content and no stop reason, as the
   // upstream sends it, the reason arriving on the message_delta frame.

@@ -98,6 +98,7 @@ const VIEWS = [
   { path: '/accounts', title: 'Accounts', wait: '.detail__head', slug: 'accounts' },
   { path: '/pools', title: 'Pools', wait: '.pool .serving', slug: 'pools' },
   { path: '/keys', title: 'Keys', wait: '.card--table tbody tr', slug: 'keys' },
+  { path: '/guardrails', title: 'Guardrails', wait: '.guardrails__table', slug: 'guardrails' },
   { path: '/models', title: 'Models', wait: '.models__rules', slug: 'models' },
   { path: '/requests', title: 'Requests', wait: '.requests__table', slug: 'requests' },
   { path: '/analytics', title: 'Analytics', wait: '.analytics-section#traffic', slug: 'analytics' },

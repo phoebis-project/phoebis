@@ -436,6 +436,8 @@ export interface Pool {
   equivalent24h: SharedEquivalent;
   /** True when any request of the day priced through the model tier's fallback weight. */
   estimated24h: boolean;
+  /** The pool's own guardrails, which run before a key's, ordered by `position`. */
+  guardrails: GuardrailRef[];
   id: string;
   /** Requests in flight one member may hold before a fresh session skips it. */
   inFlightCap: number;
@@ -513,6 +515,8 @@ export interface ApiKey {
   /** The stored switch, which `status` folds expiry and revocation over; an edit sends it back as it stands. */
   enabled: boolean;
   expiresAt: string | null;
+  /** The key's own guardrails, which run after its pool's, ordered by `position`. */
+  guardrails: GuardrailRef[];
   id: string;
   /** Sessions on this key never receive cache-warming probes. */
   keepaliveOptOut: boolean;
@@ -526,6 +530,8 @@ export interface ApiKey {
   modelRulesMode: ModelRulesMode;
   name: string;
   notes: string | null;
+  /** The pool's guardrails as the key inherits them, read-only here, ordered by `position`. */
+  poolGuardrails: GuardrailRef[];
   poolId: string;
   prefix: string;
   /** When the secret the last rotation retired last authenticated; null until it does or once rotation clears it. */
@@ -741,6 +747,10 @@ export interface RequestLog {
   /** A request whose session branched from another: the depth where the two part, and the session it branched from. */
   forkDepth: number | null;
   forkedFrom: string | null;
+  /** The guardrail that refused the request, null where none did. */
+  guardrailId: string | null;
+  /** Every guardrail that matched, in the order they ran, the one that blocked marked. */
+  guardrails: GuardrailMatch[];
   /** The holds the request waited through, with the wait; null for a request never held. */
   held: CohortHold | null;
   id: string;
@@ -845,6 +855,8 @@ export interface RequestQuery {
   /** The effort as the rollups fold it: a level, `none` or `other`. */
   efforts?: string[];
   from?: string;
+  /** Guardrail ids, `-` for a request no guardrail matched. */
+  guardrails?: string[];
   /** Keep the requests that waited for a slot. */
   held?: boolean;
   includeProbes?: boolean;
@@ -1899,4 +1911,119 @@ export interface Overview {
   tokens24h: number;
   tokensCached24h: number;
   topErrorCode: string | null;
+}
+
+/** Observe records a match on the request, enforce refuses the request with a 400. */
+export type GuardrailMode = 'enforce' | 'observe';
+export type ConditionSubject = 'agent_type' | 'body' | 'client' | 'header' | 'kind' | 'message' | 'model' | 'request_class' | 'user_agent';
+export type ConditionOperator = 'absent' | 'equals' | 'gt' | 'lt' | 'matches' | 'present';
+export type MessageSelector = 'any' | 'any_assistant' | 'any_user' | 'first_user' | 'last' | 'last_assistant' | 'last_user';
+
+/**
+ * One condition as the route spells it, every member a string. `name` is the `header` subject's, `path` the `body`
+ * subject's, `selector` the `message` subject's, and `value` the operand of `equals`, `gt`, `lt` and `matches`.
+ */
+export interface Condition {
+  name?: string;
+  operator: ConditionOperator;
+  path?: string;
+  selector?: MessageSelector;
+  subject: ConditionSubject;
+  value?: string;
+}
+
+/** A pool or key a guardrail is attached to, and the guardrail's place in that subject's list. */
+export interface GuardrailAttachment {
+  id: string;
+  /** The pool's or the key's label at the read. */
+  label: string;
+  /** Orders the subject's list. It keeps its value when another guardrail is detached, so it is no index. */
+  position: number;
+}
+
+/** Where a guardrail came from, as the route reads it against the presets this build ships. */
+export interface GuardrailPresetState {
+  /** The highest version this build ships of the preset. */
+  currentVersion: number;
+  /** The conditions differ from the stamped version's. */
+  customized: boolean;
+  id: string;
+  version: number;
+}
+
+export interface Guardrail {
+  action: 'block';
+  /** In the written order, which every refusal and the dry run name by index. */
+  conditions: Condition[];
+  createdAt: string;
+  description: string;
+  enabled: boolean;
+  id: string;
+  keys: GuardrailAttachment[];
+  mode: GuardrailMode;
+  name: string;
+  pools: GuardrailAttachment[];
+  preset: GuardrailPresetState | null;
+  /** The row's edit token, which an edit sends back as `expected_revision`. */
+  revision: number;
+  updatedAt: string;
+}
+
+/** A guardrail on a pool's or a key's list. */
+export interface GuardrailRef {
+  enabled: boolean;
+  id: string;
+  mode: GuardrailMode;
+  name: string;
+  /** Orders the list. It keeps its value when another guardrail is detached, so it is no index. */
+  position: number;
+}
+
+/** A preset the binary ships, at its current version. */
+export interface GuardrailPreset {
+  conditions: Condition[];
+  description: string;
+  id: string;
+  /** The client versions the preset was checked against, as one line to show. */
+  measuredOn: string;
+  name: string;
+  suggestedMode: GuardrailMode;
+  version: number;
+}
+
+/** A guardrail that matched a request, in evaluation order. */
+export interface GuardrailMatch {
+  blocked: boolean;
+  id: string;
+  position: number;
+}
+
+export type TestVerdict = 'indeterminate' | 'matched' | 'unmatched';
+
+/** The dry run's answer over the captured bodies of a pool or a key. */
+export interface GuardrailTestResult {
+  /**
+   * Newest first. `condition` is the written index of the failing condition on `unmatched`, of the header condition
+   * the row cannot answer on `indeterminate`, and null on `matched`.
+   */
+  requests: { condition: number | null; id: string; receivedAt: string; verdict: TestVerdict }[];
+  sample: { keyId: string | null; limit: number; poolId: string | null; windowHours: number };
+  totals: { indeterminate: number; matched: number; sampled: number; unmatched: number };
+}
+
+/** One guardrail's matches over a range: the observed ones, the blocks, and the blocked requests' bytes. */
+export interface GuardrailCount {
+  blocked: number;
+  blockedBytes: number;
+  id: string;
+  /** Null for a guardrail deleted since it matched. */
+  name: string | null;
+  observed: number;
+}
+
+export interface GuardrailCounts {
+  from: string;
+  /** One row per guardrail that matched a request in the range, ordered by id. */
+  guardrails: GuardrailCount[];
+  to: string;
 }

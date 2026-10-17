@@ -12,8 +12,11 @@ const signedIn = async () => {
   return api;
 };
 
-/** The pool as the dialog would send it back unchanged, so a case edits only the fields it is about. */
-const poolInputOf = (p) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, budgetDailyUsd: m.budgetDailyUsd, budgetMonthlyUsd: m.budgetMonthlyUsd, priority: m.priority })) });
+/**
+ * The pool as the dialog would send it back unchanged, so a case edits only the fields it is about. The listed pool's
+ * guardrails are refs, and the dialog sends that list only when its group changed.
+ */
+const poolInputOf = ({ guardrails: _, ...p }) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, budgetDailyUsd: m.budgetDailyUsd, budgetMonthlyUsd: m.budgetMonthlyUsd, priority: m.priority })) });
 const storyPool = async (api) => poolInputOf((await api.listPools()).find((p) => p.id === 'all'));
 const keyInput = { autoModeServer: null, bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'fresh', notes: null, poolId: 'all' };
 
@@ -628,4 +631,58 @@ test("the mock answers a two-field mistake with the route's first sentence, the 
     [{ ...slowed, returnToPlan: 'never', slowDownHoldSeconds: 1, slowDownStretchSeconds: 60 }, 'return_to_plan_dwell_seconds is between 0 and 86400'],
   ];
   for (const [patch, error] of cases) await assert.rejects(() => api.updatePool('all', { ...base, ...patch }), refusedAs(400, error), JSON.stringify(patch));
+});
+
+test('a_guardrail_is_created_edited_attached_and_deleted_on_the_mock_with_the_routes_refusals', async () => {
+  const api = await signedIn();
+  const GUARDRAIL_STALE = 'the guardrail changed while it was being edited, so reload and try again';
+  const conditions = [{ operator: 'equals', subject: 'request_class', value: 'auxiliary' }];
+  const input = { conditions, description: '', enabled: true, mode: 'observe', name: 'Fresh' };
+  const ids = async () => (await api.listGuardrails()).map((g) => g.id);
+  const listOf = async (pool) => (await api.listPools()).find((p) => p.id === pool).guardrails.map((r) => [r.id, r.position]);
+  const before = await ids();
+  await assert.rejects(() => api.createGuardrail({ ...input, name: 'Large auxiliary' }), refusedAs(409, 'a guardrail with this id exists'));
+  await assert.rejects(() => api.createGuardrail({ ...input, name: 'Test' }), refusedAs(400, 'id is reserved'));
+  await assert.rejects(() => api.createGuardrail({ ...input, conditions: [] }), refusedAs(400, 'conditions holds 1 to 16 entries'));
+  await assert.rejects(() => api.createGuardrail({ ...input, conditions: [...conditions, { operator: 'present', subject: 'header' }] }), refusedAs(400, 'conditions[1]: name is required'));
+  await assert.rejects(() => api.createGuardrail({ ...input, keys: ['ghost'] }), refusedAs(404, 'key ghost not found'));
+  assert.deepEqual(await ids(), before, 'a refused create stores nothing');
+
+  const fresh = await api.createGuardrail({ ...input, keys: ['laptop'], pools: ['all'] });
+  assert.deepEqual([fresh.id, fresh.preset, fresh.pools, fresh.keys], ['fresh', null, [{ id: 'all', label: 'all', position: 1 }], [{ id: 'laptop', label: 'laptop', position: 0 }]], 'a new guardrail joins the end of each list it names');
+  const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
+  assert.deepEqual([laptop.poolGuardrails.map((r) => r.id), laptop.guardrails.map((r) => r.id)], [['subagent-status-summary', 'fresh'], ['fresh']], "a key reads its pool's list apart from its own");
+  const other = { ...(await storyPool(api)), guardrails: ['fresh'], members: [], name: 'other' };
+  await assert.rejects(() => api.createPool(other), refusedAs(400, 'guardrails applies on edit'));
+
+  await assert.rejects(() => api.updateGuardrail('fresh', { mode: 'enforce' }, fresh.revision - 1), staleAs(GUARDRAIL_STALE));
+  await assert.rejects(() => api.updateGuardrail('fresh', { presetVersion: 1 }), refusedAs(400, 'guardrail has no preset'));
+  await assert.rejects(() => api.updateGuardrail('fresh', { preset: 'subagent-status-summary' }), refusedAs(400, 'preset applies on create'));
+  await assert.rejects(() => api.updateGuardrail('ghost', { mode: 'enforce' }), refusedAs(404, 'guardrail not found'));
+  const enforced = await api.updateGuardrail('fresh', { mode: 'enforce' }, fresh.revision);
+  assert.equal(enforced.mode, 'enforce');
+  assert.ok(enforced.revision > fresh.revision, 'the save moves the revision');
+
+  const all = (await api.listPools()).find((p) => p.id === 'all');
+  await assert.rejects(() => api.updatePool('all', { ...poolInputOf(all), guardrails: ['fresh', 'fresh'] }), refusedAs(400, 'guardrails lists fresh twice'));
+  await assert.rejects(() => api.updatePool('all', { ...poolInputOf(all), guardrails: ['ghost'] }), refusedAs(404, 'guardrail ghost not found'));
+  const saved = await api.updatePool('all', { ...poolInputOf(all), guardrails: ['fresh', 'subagent-status-summary'] }, all.revision);
+  assert.deepEqual(saved.guardrails.map((r) => [r.id, r.position]), [['fresh', 0], ['subagent-status-summary', 1]], "the pool's side replaces its list whole");
+  assert.deepEqual((await api.getGuardrail('subagent-status-summary')).pools, [{ id: 'all', label: 'all', position: 1 }]);
+  await api.updateGuardrail('fresh', { pools: [] }, enforced.revision);
+  assert.deepEqual(await listOf('all'), [['subagent-status-summary', 1]], 'a detach from the guardrail side keeps the other positions');
+
+  const many = [];
+  for (let i = 0; i < 64; i += 1) many.push((await api.createGuardrail({ ...input, name: `bound ${i}` })).id);
+  const pool = (await api.listPools()).find((p) => p.id === 'all');
+  await assert.rejects(() => api.updatePool('all', { ...poolInputOf(pool), guardrails: [...many, 'fresh'] }), refusedAs(400, 'pool all would hold more than 64 guardrails'));
+  await assert.rejects(() => api.updateKey('laptop', { ...keyInput, expiresAt: undefined, guardrails: many, name: 'laptop' }), refusedAs(400, 'key laptop would hold more than 64 guardrails'));
+  assert.deepEqual(await listOf('all'), [['subagent-status-summary', 1]], 'a refused attachment stores nothing');
+  assert.deepEqual((await api.listKeys()).find((k) => k.id === 'laptop').guardrails.map((r) => r.id), ['fresh']);
+
+  await api.deleteGuardrail('fresh');
+  await assert.rejects(() => api.getGuardrail('fresh'), refusedAs(404, 'guardrail not found'));
+  const keys = await api.listKeys();
+  assert.ok(keys.every((k) => k.guardrails.every((r) => r.id !== 'fresh')), 'the delete detaches the guardrail from every key');
+  assert.deepEqual(await listOf('all'), [['subagent-status-summary', 1]]);
 });

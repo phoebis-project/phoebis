@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, minuteSpan, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, minuteSpan, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -211,6 +211,11 @@ async function emailLines(name, rows) {
   results.push({ name, ok: rows.length > 0 && wrong.length === 0, missing: wrong.map(([id, line]) => `${id}: ${JSON.stringify(line)}`) });
 }
 const idOf = (link) => link.getAttribute('href')?.split('/').pop() ?? '';
+/**
+ * A listed pool as a write's input: its guardrails are refs, and the pool dialog sends that list only when its group
+ * changed, so a write built from the listing leaves it out.
+ */
+const poolInput = ({ guardrails: _, ...pool }) => pool;
 /** The request drawer's sections, in the order it draws them. */
 const DRAWER_SECTIONS = ['Outcome', 'Phases', 'Usage', 'Request', 'Request shape', 'Client hints', 'Captured bodies'];
 /** A row of the request drawer by its label, wherever its section is. */
@@ -1926,7 +1931,7 @@ m = await mount('/accounts');
 results.push({ name: 'nav calls the pages Accounts and Keys, and no text names the old page', ok: [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Accounts') && [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Keys') && !/\bupstreams\b/i.test(m.text()), missing: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim() ?? '') });
 {
   const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
-  results.push({ name: 'nav has Quota after Dashboard and Sessions, the navigation lists no live view, Keepalive or Plugins', ok: JSON.stringify(nav) === JSON.stringify(['Dashboard', 'Quota', 'Accounts', 'Pools', 'Keys', 'Models', 'Requests', 'Analytics', 'Sessions', 'Settings']), missing: nav });
+  results.push({ name: 'nav has Quota after Dashboard and Sessions, the navigation lists no live view, Keepalive or Plugins', ok: JSON.stringify(nav) === JSON.stringify(['Dashboard', 'Quota', 'Accounts', 'Pools', 'Keys', 'Guardrails', 'Models', 'Requests', 'Analytics', 'Sessions', 'Settings']), missing: nav });
 }
 expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Identity', 'OAuth login', 'Max 20x since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete account', 'Extra usage this month', 'Add account']);
 {
@@ -4192,7 +4197,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 {
   // A warming pool with no member resolves nothing: its card draws the chip and no line, and its dialog no figure.
   const work = (await api.listPools()).find((p) => p.id === 'work');
-  await api.createPool({ ...work, members: [], name: 'bare' });
+  await api.createPool({ ...poolInput(work), members: [], name: 'bare' });
   const page = await mount('/pools?edit=bare&group=keepalive');
   await page.settle(300);
   const card = [...page.container.querySelectorAll('.pool')].find((c) => c.id === 'bare');
@@ -4213,7 +4218,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // annex too, so the checks of one figure read it with its plan member alone.
   const storyWork = (await api.listPools()).find((p) => p.id === 'work');
   const memberOf = (x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority });
-  await api.updatePool('work', { ...storyWork, members: storyWork.members.filter((x) => x.kind === 'oauth').map(memberOf) });
+  await api.updatePool('work', { ...poolInput(storyWork), members: storyWork.members.filter((x) => x.kind === 'oauth').map(memberOf) });
   m.unmount();
   m = await mount('/pools');
   const cards = [...m.container.querySelectorAll('.pool')];
@@ -4286,7 +4291,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
     await cancel(dlg);
   }
-  await api.updatePool('work', { ...storyWork, members: storyWork.members.map(memberOf) });
+  await api.updatePool('work', { ...poolInput(storyWork), members: storyWork.members.map(memberOf) });
   // The story's `all` resolves to a range: the card and the dialog read both ends.
   const allLine = ceilingsOf('all')?.textContent;
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
@@ -5513,7 +5518,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: reads.map(String),
   });
   const story = (await api.listPools()).find((p) => p.id === 'all');
-  const written = { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
+  const written = { ...poolInput(story), members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
   const shedChip = () => m.container.querySelector('.pool__features a[href="/pools?edit=all&group=shedding"]')?.textContent?.trim() ?? null;
   const stale = await openAll();
   // Save pressed at the end of a long group, where the callout above the groups would sit out of view.
@@ -5670,7 +5675,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [String(freed), JSON.stringify(stored)],
   });
   // The story's own pool back, status and list, so the key dialogs below read the pool the fixture holds.
-  await api.updatePool('all', { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
+  await api.updatePool('all', { ...poolInput(story), members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
 }
 {
   // A key is posted against a pool id, so the create dialog offers none until the pool has been saved.
@@ -5947,7 +5952,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   dlg = await openAll();
   const story = (await api.listPools()).find((p) => p.id === 'all');
   // Another operator's write through the API: the same settings under a later stamp.
-  await api.updatePool('all', { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
+  await api.updatePool('all', { ...poolInput(story), members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
   footButton(dlg, 'Save pool')?.click();
   await page.settle(600);
   const held = [dlg?.querySelector('.dialog__status')?.textContent ?? '', toast()];
@@ -5998,13 +6003,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [String(stored), JSON.stringify(cleared ?? null), m.container.querySelector('dialog[open] .callout--critical')?.textContent ?? ''],
   });
   // The story's budget back, so the checks below read the pool the fixture holds.
-  await api.updatePool('all', { ...before, members: before.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
+  await api.updatePool('all', { ...poolInput(before), members: before.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
 }
 {
   // A budget on a subscription member bounds its metered spend: one stored through the API draws its two fields and
   // its metered lines, and the dialog's save keeps it.
   const work = (await api.listPools()).find((p) => p.id === 'work');
-  await api.updatePool('work', { ...work, members: [{ accountId: 'studio', budgetDailyUsd: 30, budgetMonthlyUsd: 300, priority: 0 }] });
+  await api.updatePool('work', { ...poolInput(work), members: [{ accountId: 'studio', budgetDailyUsd: 30, budgetMonthlyUsd: 300, priority: 0 }] });
   m.unmount();
   m = await mount('/pools');
   const card = [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'work');
@@ -6031,7 +6036,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [...lines, ...standingBadges, ...fields.map((f) => (f === null ? 'no field' : `field ${f}`)), JSON.stringify(stored ?? null)],
   });
   // The story's membership back, so the budgets card below reads the rows the fixture holds.
-  await api.updatePool('work', work);
+  await api.updatePool('work', poolInput(work));
 }
 {
   // A round counts the triggering pool's pins alone: with primary moved from all into work and laptop moved into work,
@@ -6041,7 +6046,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // for the check, and the annex is the sibling with runway.
   const pools = await api.listPools();
   const story = (id) => pools.find((p) => p.id === id);
-  const written = (p, members) => ({ ...p, members: members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
+  const written = (p, members) => ({ ...poolInput(p), members: members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
   await api.updatePool('all', written(story('all'), story('all').members.filter((x) => x.accountId !== 'primary')));
   await api.updatePool('work', written(story('work'), [...story('work').members.filter((x) => x.accountId !== 'studio'), { accountId: 'primary', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }]));
   const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
@@ -6090,7 +6095,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // A ceiling the API stored finer than a percent reopens as stored and survives a save of another field, and one
   // typed out of its range holds the save until a value inside it is typed back.
   const story = (await api.listPools()).find((p) => p.id === 'all');
-  const written = { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
+  const written = { ...poolInput(story), members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
   const openAll = async () => {
     [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
     await m.settle(300);
@@ -6232,7 +6237,7 @@ m.unmount();
   // The mock refuses a member its registry lacks, as the route does, so the stored member stays registered and the
   // list the page reads leaves it out.
   const story = (await api.listPools()).find((p) => p.id === 'all');
-  const written = { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
+  const written = { ...poolInput(story), members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
   await api.updatePool('all', written);
   const listAccounts = api.listAccounts;
   api.listAccounts = async () => (await listAccounts.call(api)).filter((a) => a.id !== 'secondary');
@@ -6337,7 +6342,7 @@ localStorage.removeItem('phoebis.expertView');
 {
   // No member, since each of the story's accounts already belongs to a pool.
   const work = (await api.listPools()).find((p) => p.id === 'work');
-  await api.createPool({ ...work, members: [], name: 'keyless' });
+  await api.createPool({ ...poolInput(work), members: [], name: 'keyless' });
   const read = (page) => {
     const card = [...page.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'keyless');
     const tile = [...(card?.querySelectorAll('.pool__stats > div') ?? [])].find((d) => d.querySelector('dt')?.textContent?.trim() === 'Keys')?.querySelector('dd');
@@ -6874,7 +6879,7 @@ localStorage.removeItem('phoebis.expertView');
       !p.container.querySelector('dialog[open]'),
     missing: [JSON.stringify(typed), hidden === null ? 'hidden' : 'drawn', `${sent.length} saves`, JSON.stringify(kept(sent[0])), JSON.stringify(kept(reread))],
   });
-  await api.updatePool('all', { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
+  await api.updatePool('all', { ...poolInput(story), members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
   p.unmount();
 
   // A shed cap past 100 typed in the expert view, then the mode turned off: the refused field stays drawn and the
@@ -8059,6 +8064,153 @@ await readsAgain('/keys', 'listKeys', 5_000);
   page.unmount();
 }
 
+// The Guardrails view over the story's two guardrails: the pool's observed preset and the desktop key's enforced one,
+// whose 24-hour figures the story's fork and blocked rows hold.
+const guardrailRows = (page) => [...page.container.querySelectorAll('.guardrails__table tbody tr.guardrail-row')];
+const guardrailRow = (page, name) => guardrailRows(page).find((tr) => tr.querySelector('td b')?.textContent?.trim() === name);
+/** A row's cells as they read, the Name cell its name alone. */
+const guardrailCells = (tr) => [...(tr?.children ?? [])].map((td, i) => (i === 0 ? (td.querySelector('b')?.textContent?.trim() ?? '') : (td.textContent?.trim() ?? '')));
+/** Opens the row's menu and answers its items' labels, the menu left open. */
+const guardrailMenu = async (page, tr) => {
+  tr?.querySelector('.menu__trigger')?.click();
+  await page.settle(120);
+  return [...page.container.querySelectorAll('.menu__list [role="menuitem"]')].map((b) => b.textContent?.trim());
+};
+/** The row's Edit, through its menu: the dialog it opens. */
+const editGuardrail = async (page, name) => {
+  await guardrailMenu(page, guardrailRow(page, name));
+  [...page.container.querySelectorAll('.menu__list [role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
+  await page.settle(400);
+  return openDialogs(page).pop() ?? null;
+};
+{
+  const page = await mount('/guardrails');
+  await page.settle(400);
+  const day = await api.getAnalyticsGuardrails('24h');
+  const countOf = (id) => day.guardrails.find((c) => c.id === id) ?? { blocked: 0, observed: 0 };
+  const large = guardrailCells(guardrailRow(page, 'Large auxiliary requests'));
+  const summary = guardrailCells(guardrailRow(page, 'Subagent status summary'));
+  const figures = (id) => `${countOf(id).observed} observed${countOf(id).blocked} blocked`;
+  results.push({
+    name: '/guardrails lists the two guardrails with their mode, state, attachments, 24-hour matches and preset',
+    ok:
+      page.container.querySelector('.filter-bar__count')?.textContent === '2 guardrails' &&
+      page.text().includes('A guardrail checks each request against its conditions before any account is selected. Observe records the matches, enforce refuses them with a 400.') &&
+      JSON.stringify(large.slice(0, 6)) === JSON.stringify(['Large auxiliary requests', 'enforce', 'on', '0 pools, 1 key', figures('large-auxiliary'), '-']) &&
+      JSON.stringify(summary.slice(0, 6)) === JSON.stringify(['Subagent status summary', 'observe', 'on', '1 pool, 0 keys', figures('subagent-status-summary'), 'Subagent status summary v1']) &&
+      countOf('large-auxiliary').blocked === 3 &&
+      countOf('subagent-status-summary').observed > 0,
+    missing: [page.container.querySelector('.filter-bar__count')?.textContent ?? 'no count', JSON.stringify(large), JSON.stringify(summary), JSON.stringify(day.guardrails)],
+  });
+  results.push({
+    name: '/guardrails names the pools and keys a row applies to on its hover',
+    ok: guardrailRow(page, 'Large auxiliary requests')?.children[3]?.getAttribute('title') === 'key desktop' && guardrailRow(page, 'Subagent status summary')?.children[3]?.getAttribute('title') === 'pool all',
+    missing: guardrailRows(page).map((tr) => tr.children[3]?.getAttribute('title') ?? 'no title'),
+  });
+  columnsMarked('/guardrails every header cell is fit or fill, and Name and Preset are the fill columns', page.container.querySelector('.guardrails__table'), ['Name', 'Preset']);
+  // A second press of the trigger closes the menu, as on the Keys page.
+  const enforcing = await guardrailMenu(page, guardrailRow(page, 'Large auxiliary requests'));
+  await guardrailMenu(page, guardrailRow(page, 'Large auxiliary requests'));
+  const observing = await guardrailMenu(page, guardrailRow(page, 'Subagent status summary'));
+  await guardrailMenu(page, guardrailRow(page, 'Subagent status summary'));
+  results.push({
+    name: "/guardrails a row's menu offers Edit, Duplicate, Disable, the other mode and Delete",
+    ok: JSON.stringify(enforcing) === JSON.stringify(['Edit', 'Duplicate', 'Disable', 'Switch to observe', 'Delete']) && JSON.stringify(observing) === JSON.stringify(['Edit', 'Duplicate', 'Disable', 'Switch to enforce', 'Delete']),
+    missing: [JSON.stringify(enforcing), JSON.stringify(observing)],
+  });
+  const create = [...page.container.querySelectorAll('.filter-bar button')].find((b) => b.textContent?.trim() === 'Create guardrail');
+  create?.click();
+  await page.settle(150);
+  const menu = [...document.querySelectorAll('.popover .guardrails__create')].pop();
+  const entries = [...(menu?.children ?? [])].map((e) => `${e.getAttribute('role')}:${e.textContent?.trim()}`);
+  pressKey('Escape', menu);
+  await page.settle(100);
+  results.push({
+    name: '/guardrails Create guardrail offers a blank guardrail and each preset under its heading',
+    ok: JSON.stringify(entries) === JSON.stringify(['menuitem:Blank guardrail', 'presentation:From a preset', 'menuitem:Subagent status summary']),
+    missing: entries,
+  });
+  page.unmount();
+}
+await readsAgain('/guardrails', 'listGuardrails', 5_000);
+{
+  const page = await mount('/guardrails');
+  await page.settle(400);
+  const dlg = await editGuardrail(page, 'Subagent status summary');
+  const labels = [...(dlg?.querySelectorAll('section.dialog-group') ?? [])].map((s) => s.getAttribute('aria-label'));
+  const conditions = group(dlg, 'Conditions');
+  const subjects = [...(conditions?.querySelectorAll('.conditions-editor__row') ?? [])].map((row) => row.querySelector('select')?.value);
+  const identity = group(dlg, 'Identity');
+  const line = identity?.querySelector('.guardrails__preset > p');
+  const pickers = [...(group(dlg, 'Applies to')?.querySelectorAll('button[aria-haspopup="dialog"]') ?? [])].map((b) => b.textContent?.trim());
+  results.push({
+    name: '/guardrails the dialog opens on a row with its four groups and the editor\'s rows',
+    ok:
+      dlg?.querySelector('.dialog__title')?.textContent?.trim() === 'Edit guardrail Subagent status summary' &&
+      JSON.stringify(labels) === JSON.stringify(['Identity', 'Conditions', 'Applies to', 'Test']) &&
+      JSON.stringify(subjects) === JSON.stringify(['request_class', 'body', 'message']) &&
+      (conditions?.textContent ?? '').includes('3 of 16') &&
+      line?.textContent?.trim() === 'From the preset Subagent status summary v1' &&
+      line?.querySelector('.badge') === null &&
+      JSON.stringify(pickers) === JSON.stringify(['1 pool', 'No keys']) &&
+      (dlg?.textContent ?? '').includes('Every group saves together.'),
+    missing: [dlg?.querySelector('.dialog__title')?.textContent ?? 'no dialog', JSON.stringify(labels), JSON.stringify(subjects), line?.textContent ?? 'no preset line', JSON.stringify(pickers)],
+  });
+  buttonIn(dlg, 'Cancel')?.click();
+  await page.settle(200);
+  page.unmount();
+}
+{
+  // A stamp behind the build's version: the line carries both badges, and the update takes the current conditions.
+  const [stored] = (await api.listGuardrails()).filter((g) => g.id === 'subagent-status-summary');
+  const [preset] = await api.listGuardrailPresets();
+  const behind = { ...stored, conditions: stored.conditions.slice(0, 2), preset: { ...stored.preset, currentVersion: 2, customized: true } };
+  const page = await mountNode(React.createElement(GuardrailDialog, { existing: behind, existingIds: new Set(), keys: [], onClose: () => undefined, onSaved: () => undefined, open: true, pools: [], presets: [{ ...preset, version: 2 }] }));
+  const dlg = openDialogs(page).pop() ?? null;
+  const badges = [...(dlg?.querySelectorAll('.guardrails__preset > p .badge') ?? [])].map((b) => b.textContent?.trim());
+  const notice = dlg?.querySelector('.guardrails__preset .callout')?.textContent ?? '';
+  buttonIn(dlg, 'Update to the current preset')?.click();
+  await page.settle(150);
+  const rows = group(dlg, 'Conditions')?.querySelectorAll('.conditions-editor__row').length ?? 0;
+  results.push({
+    name: '/guardrails a stamp behind the build reads customized and update available, and the update takes the current conditions',
+    ok: JSON.stringify(badges) === JSON.stringify(['customized', 'update available']) && notice.includes('This build ships version 2 of the preset.') && rows === 3 && (dlg?.textContent ?? '').includes('Saving takes version 2.'),
+    missing: [JSON.stringify(badges), notice, `${rows} rows`],
+  });
+  page.unmount();
+}
+{
+  const page = await mount('/guardrails');
+  await page.settle(400);
+  const dlg = await editGuardrail(page, 'Subagent status summary');
+  rail(dlg, 'test')?.click();
+  await page.settle(150);
+  const test = group(dlg, 'Test');
+  const side = test?.querySelector('.segmented button[aria-pressed="true"]')?.textContent?.trim();
+  const subject = test?.querySelector('select[aria-label="Pool"]')?.value;
+  buttonIn(dlg, 'Run test')?.click();
+  await until(page, () => (test?.querySelectorAll('.guardrails__sample tbody tr').length ?? 0) > 0);
+  const stored = (await api.listGuardrails()).find((g) => g.id === 'subagent-status-summary');
+  const want = (await api.testGuardrail({ conditions: stored.conditions, limit: 200, poolId: 'all' })).totals;
+  const totals = test?.querySelector('.guardrails__totals')?.textContent?.trim();
+  const verdicts = [...(test?.querySelectorAll('.guardrails__sample tbody tr') ?? [])].map((tr) => tr.children[2]?.textContent?.trim());
+  results.push({
+    name: '/guardrails the test panel runs against the pool and reads its totals',
+    ok:
+      side === 'Pool' &&
+      subject === 'all' &&
+      totals === `${want.matched} matched, ${want.unmatched} unmatched, ${want.indeterminate} indeterminate of ${want.sampled} sampled` &&
+      want.matched > 0 &&
+      verdicts.length === want.sampled &&
+      verdicts[0] === 'matched' &&
+      verdicts.lastIndexOf('matched') === want.matched - 1,
+    missing: [String(side), String(subject), String(totals), JSON.stringify(want), verdicts.slice(0, 3).join(', ')],
+  });
+  buttonIn(dlg, 'Cancel')?.click();
+  await page.settle(200);
+  page.unmount();
+}
+
 // A helper that cannot find the control a check needs fails that check by name, so a control that disappears
 // fails the run rather than leaving the check to read a page nothing narrowed.
 const controlMissing = (check, label) => results.push({ name: check, ok: false, missing: [`no control labeled ${label}`] });
@@ -8098,7 +8250,7 @@ m = await mount('/models');
   // The route's own answer for the key, so an edit an earlier check made to a key's list is read rather than assumed.
   const answeredRules = async (keyId) => (await api.getKeyModels(keyId)).rules.map((r) => [r.level, r.not ? 'Deny' : 'Allow', r.pattern, [...new Set(r.cooldowns.map((c) => c.accountId))].join(', ') || '-'].join(' | '));
   const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
-  results.push({ name: '/models sits in the nav after Keys and titles the page', ok: nav.indexOf('Models') === nav.indexOf('Keys') + 1 && document.title === 'Models - Phoebis Router' && m.container.querySelector('.topbar__title')?.textContent === 'Models', missing: [...nav, document.title] });
+  results.push({ name: '/models sits in the nav after Guardrails and titles the page', ok: nav.indexOf('Models') === nav.indexOf('Guardrails') + 1 && document.title === 'Models - Phoebis Router' && m.container.querySelector('.topbar__title')?.textContent === 'Models', missing: [...nav, document.title] });
   // The keys checks leave a key of their own at the head of the list, so the first key is read, not assumed.
   const first = (await api.listKeys())[0];
   expect('/models', m.text(), [`Processed rules for ${first?.name}`, "Extends the pool's rules", 'Level', 'Rule', 'Pattern', 'Cooling', 'View rejections and permits in the routing log', 'written with a trailing *', story?.canonicalModel ?? 'no story request']);
@@ -20215,6 +20367,7 @@ m.unmount();
     // Under native, the shell's default, the cost tile reads an empty day's zero in each unit.
     ['/pools', (c) => c.querySelector('.pool-grid')?.childElementCount === 0 && zeroTiles(c).slice(0, 4).join(' ') === '0 0 0 0' && pairLines(c).join(' over ') === '0% subscription over $0.00 billed', 'no pool card, tiles 0 0 0 0, the cost tile 0% subscription over $0.00 billed'],
     ['/keys', (c, t) => t.includes('No keys yet'), 'No keys yet'],
+    ['/guardrails', (c) => c.querySelector('.guardrails__table .empty__title')?.textContent === 'No guardrails yet', 'No guardrails yet inside the table'],
     ['/models', (c, t) => t.includes("No keys: a key's processed rules show here once one exists."), 'No keys: ...'],
     ['/requests', (c, t) => t.includes('No requests match'), 'No requests match'],
     ['/analytics', (c, t) => t.includes('No traffic in this range.'), 'No traffic in this range.'],
