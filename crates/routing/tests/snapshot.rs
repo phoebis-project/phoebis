@@ -139,8 +139,8 @@ fn attached(guardrail_id: &str, subject: AttachmentSubject, position: u32) -> Gu
     }
 }
 
-/// `k1` in pool `p` and `k2` in pool `q`. `g1` sits on both `p` and `k1`, `g3` is disabled, `g4`'s lookaround is
-/// a pattern the compiler refuses, and `g5` is attached to nothing.
+/// `k1` in pool `p` and `k2` in pool `q`. `g0` sits last on `p`, `g1` on both `p` and `k1`, `g3` is disabled, `g4`'s
+/// lookaround is a pattern the compiler refuses, and `g5` is attached to nothing.
 fn guarded_load() -> RegistryLoad {
     let base = load(None);
     let key = |id: &str, pool_id: &str| ApiKeyRow {
@@ -158,15 +158,19 @@ fn guarded_load() -> RegistryLoad {
     let p = || AttachmentSubject::Pool("p".into());
     let k1 = || AttachmentSubject::Key("k1".into());
     RegistryLoad {
-        // The load's own order, kind first, so the key's rows come ahead of its pool's.
+        // Kind first as the load answers them, so a build in this order lists the key's rows ahead of its pool's.
+        // `g0` at the pool's last position is written ahead of the pool's first, so a build that skips the sort by
+        // position lists it first, and its id sorts first, so a build in id order does too.
         guardrail_attachments: vec![
             attached("g2", k1(), 0),
             attached("g1", k1(), 1),
+            attached("g0", p(), 3),
             attached("g1", p(), 0),
             attached("g3", p(), 1),
             attached("g4", p(), 2),
         ],
         guardrails: vec![
+            guardrail("g0", true, "zero"),
             guardrail("g1", true, "one"),
             guardrail("g2", true, "two"),
             guardrail("g3", false, "three"),
@@ -194,7 +198,7 @@ fn ids_for<'a>(s: &'a RegistrySnapshot, key_id: &str) -> Vec<&'a str> {
 #[test]
 fn build_lists_a_keys_pool_guardrails_before_its_own_and_a_guardrail_on_both_once_at_its_pool_position(
 ) {
-    assert_eq!(ids_for(&guarded(), "k1"), ["g1", "g2"]);
+    assert_eq!(ids_for(&guarded(), "k1"), ["g1", "g0", "g2"]);
 }
 
 #[test]
