@@ -2405,6 +2405,87 @@ async fn a_reload_between_a_funding_mark_s_stamp_and_its_commit_keeps_the_five_m
     );
 }
 
+/// A verdict formed under a key the operator then replaced, and the verdict under the new key: each stamps the
+/// account's funding retry, and each write parks behind a hold of its own. The first write's fences refuse it, and
+/// its acknowledgment names the superseded stamp, so a load that reads the account `Ready` before the newer write's
+/// commit keeps the retry, and the newer write's own acknowledgment is the one that credits it.
+#[tokio::test]
+async fn a_superseded_verdicts_refused_write_leaves_the_newer_funding_mark_unacknowledged_until_its_own_write_lands(
+) {
+    let store = keyed_a();
+    let now = Arc::new(AtomicI64::new(1_000));
+    // With the purge tick held, the first mark's write is the writer's first wake, so it parks on the first hold.
+    let first = store.debug_hold_next_routing_write();
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            hold_first_purge: true,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    handle.report(funding_mark("a")).await;
+    wait_for(WRITTEN, || first.is_parked().then_some(())).await;
+    let second = store.debug_hold_next_routing_write();
+    store
+        .set_api_key_secret("a", &phoebis_store::Secret::new("k2"))
+        .unwrap();
+    handle.reload().await.unwrap();
+    now.store(2_000, Ordering::SeqCst);
+    handle
+        .report(Report::AccountState {
+            account_id: "a".into(),
+            state: AccountState::FundingRequired,
+            lifecycle_generation: 1,
+            credential_generation: 2,
+            incarnation: 1,
+            cause: StateCause::FundingRefused,
+            detail: None,
+            dispatched_at: None,
+        })
+        .await;
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 302_000)],
+        "the verdict under the new key stamped the retry again"
+    );
+    first.release();
+    // The newer write's wake parks only once the writer has handed the loop the first write's acknowledgment.
+    wait_for(WRITTEN, || second.is_parked().then_some(())).await;
+    assert_eq!(
+        store.account("a").unwrap().unwrap().state,
+        AccountState::Ready,
+        "the first write named the replaced key, so its fences refused it"
+    );
+    handle.reload().await.unwrap();
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 302_000)],
+        "the refused write's acknowledgment names the superseded stamp, so the load before the newer commit drops \
+         nothing"
+    );
+    second.release();
+    snapshot_marked(&handle, "a").await;
+    assert_eq!(
+        placed_on(&handle.select(request(&handle, None, 2_000)).await.unwrap()),
+        None,
+        "the five-minute wait from the newer mark holds"
+    );
+    // The operator's Clear: the newer write's acknowledgment credited the retry, so a load at a later revision
+    // drops it.
+    store
+        .set_state("a", AccountState::Ready, StateCause::Operator)
+        .unwrap();
+    handle.reload().await.unwrap();
+    assert!(handle.funding_retries().await.unwrap().is_empty());
+    assert_eq!(
+        placed_on(&handle.select(request(&handle, None, 2_000)).await.unwrap()),
+        Some("a"),
+        "the cleared account is a plain candidate"
+    );
+}
+
 #[tokio::test]
 async fn after_a_restart_the_first_request_retries_a_marked_account_at_once_and_holds_the_second_off(
 ) {

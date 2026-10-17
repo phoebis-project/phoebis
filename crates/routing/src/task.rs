@@ -1873,11 +1873,12 @@ struct MovedState {
     detail: Option<String>,
 }
 
-/// A funding mark's write as the writer finished it, for the retry the loop stamped: the row's revision after it,
-/// `None` when the fences refused it.
+/// A funding mark's write as the writer finished it, for the retry the loop stamped at `stamped_at`: the row's
+/// revision after it, `None` when the fences refused it.
 struct FundingWritten {
     account_id: String,
     incarnation: u64,
+    stamped_at: i64,
     revision: Option<u64>,
 }
 
@@ -1907,6 +1908,7 @@ impl Marks {
             incarnation,
             cause,
             detail,
+            marked_at,
             ..
         } = write
         else {
@@ -1916,6 +1918,9 @@ impl Marks {
             .then(|| FundingWritten {
                 account_id: account_id.clone(),
                 incarnation: *incarnation,
+                // An unstamped mark, a superseded verdict's, names no entry: the loop's clock reads epoch
+                // milliseconds, so no entry carries the stamp 0 and `funding_written` credits nothing for it.
+                stamped_at: marked_at.unwrap_or(0),
                 revision: answer.map(|(revision, _)| revision),
             })
             .into_iter()
@@ -3092,8 +3097,12 @@ impl Task {
             Command::Coalesced => {}
             Command::FundingWritten { rows } => {
                 for row in rows {
-                    self.state
-                        .funding_written(&row.account_id, row.incarnation, row.revision);
+                    self.state.funding_written(
+                        &row.account_id,
+                        row.incarnation,
+                        row.stamped_at,
+                        row.revision,
+                    );
                 }
             }
             Command::StateMoved { rows } => self.state_moved(rows),
@@ -3956,6 +3965,7 @@ impl Task {
                 }
                 // The store keeps no instant for a mark, so the retry is stamped here. A verdict about a holder the
                 // id no longer has moves no retry, as its write moves no state.
+                let mut marked_at = None;
                 if !self.superseded(
                     &account_id,
                     incarnation,
@@ -3965,12 +3975,12 @@ impl Task {
                     if state == AccountState::FundingRequired {
                         let interval = i64::try_from(self.config.funding_retry.as_millis())
                             .unwrap_or(i64::MAX);
-                        self.state.funding_marked(
+                        marked_at = Some(self.state.funding_marked(
                             &account_id,
                             incarnation,
                             (self.clock)(),
                             interval,
-                        );
+                        ));
                     } else {
                         self.state.funding_cleared(&account_id);
                     }
@@ -3989,6 +3999,7 @@ impl Task {
                     credential_generation,
                     cause,
                     detail,
+                    marked_at,
                 }]);
             }
         }
@@ -4704,6 +4715,7 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             credential_generation,
             cause,
             detail,
+            marked_at,
         } => one(
             DeferredKey::AccountState {
                 account_id: account_id.clone(),
@@ -4719,6 +4731,7 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
                 credential_generation,
                 cause,
                 detail,
+                marked_at,
             },
         ),
         StateWrite::DeleteAffinity(keys) => Ok(keys

@@ -1711,14 +1711,14 @@ fn a_reload_drops_a_funding_retry_its_snapshot_reads_off_the_mark_unless_it_read
         RegistrySnapshot::from_load(load, [0; 32], 3_000, 2)
     };
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    st.funding_marked("a", 1, 2_000, 300_000);
+    let stamp = st.funding_marked("a", 1, 2_000, 300_000);
     st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 1));
     assert_eq!(
         st.funding_retries(),
         vec![("a".to_string(), 302_000)],
         "the writer has not acknowledged the mark, so the load may predate its write"
     );
-    st.funding_written("a", 1, Some(5));
+    st.funding_written("a", 1, stamp, Some(5));
     st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 4));
     assert_eq!(
         st.funding_retries().len(),
@@ -1732,15 +1732,15 @@ fn a_reload_drops_a_funding_retry_its_snapshot_reads_off_the_mark_unless_it_read
         st.funding_retries().is_empty(),
         "the id names another holder, whose mark is its own"
     );
-    st.funding_marked("a", 1, 2_000, 300_000);
-    st.funding_written("a", 1, Some(5));
+    let stamp = st.funding_marked("a", 1, 2_000, 300_000);
+    st.funding_written("a", 1, stamp, Some(5));
     st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 6));
     assert!(
         st.funding_retries().is_empty(),
         "the operator cleared the mark"
     );
-    st.funding_marked("a", 1, 2_000, 300_000);
-    st.funding_written("a", 1, None);
+    let stamp = st.funding_marked("a", 1, 2_000, 300_000);
+    st.funding_written("a", 1, stamp, None);
     st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 1));
     assert!(
         st.funding_retries().is_empty(),

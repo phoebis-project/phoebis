@@ -260,6 +260,10 @@ pub enum StateWrite {
         credential_generation: u64,
         cause: StateCause,
         detail: Option<String>,
+        /// The instant the loop stamped the account's funding retry for this mark, `None` for a mark that is not
+        /// `FundingRequired` and for a superseded verdict's write, which its fences refuse, carried back on the
+        /// writer's acknowledgment so it credits that entry alone.
+        marked_at: Option<i64>,
     },
     DeleteAffinity(Vec<(String, String)>),
     DeleteCooldown(String, String),
@@ -1093,8 +1097,10 @@ pub struct FundingRetry {
     /// The in-flight id of the claiming attempt's `AccountTicket`. The claim lasts while the ticket is in the
     /// table, so a slow upstream head never frees it early.
     pub claimed_by: Option<u64>,
-    /// When the entry was made: the mark's landing, or the claim that found none after a restart. A retry's success
-    /// that went out before it says nothing of the balance the mark found.
+    /// When the entry was made: the mark's landing, or the claim that found none after a restart. A mark's stamp is
+    /// strictly later than the account's previous one, so it is unique per account while the entry lives and names
+    /// the entry the mark's acknowledgment credits. A retry's success that went out before it says nothing of the
+    /// balance the mark found.
     pub stamped_at: i64,
     /// The account row's revision once the writer acknowledged the mark's write, `None` until then. A load that read
     /// the row below it read the registry before the mark landed, so it drops nothing. A mark the fences refused and a
@@ -1569,35 +1575,49 @@ impl RoutingState {
         v
     }
 
-    /// Stamps the account's retry `interval_ms` past `now` under the mark's `incarnation`, and frees the slot: the
-    /// attempt that held it ended in this mark.
+    /// Stamps the account's retry `interval_ms` past `now` under the mark's `incarnation`, frees the slot, and answers
+    /// the entry's stamp, `max(now, the account's previous stamp + 1)`: two marks in one millisecond still name two
+    /// entries, so the first one's acknowledgment cannot credit the second.
     pub fn funding_marked(
         &mut self,
         account_id: &str,
         incarnation: u64,
         now: i64,
         interval_ms: i64,
-    ) {
+    ) -> i64 {
+        let stamped_at = self
+            .funding_retries
+            .get(account_id)
+            .map_or(now, |previous| {
+                now.max(previous.stamped_at.saturating_add(1))
+            });
         self.funding_retries.insert(
             account_id.to_string(),
             FundingRetry {
                 retry_at: now.saturating_add(interval_ms),
                 incarnation,
                 claimed_by: None,
-                stamped_at: now,
+                stamped_at,
                 mark_revision: None,
             },
         );
+        stamped_at
     }
 
-    /// The writer finished the mark's write for `account_id` under `incarnation`: landed at `revision`, or refused by
-    /// its fences.
-    pub fn funding_written(&mut self, account_id: &str, incarnation: u64, revision: Option<u64>) {
-        if let Some(retry) = self
-            .funding_retries
-            .get_mut(account_id)
-            .filter(|retry| retry.incarnation == incarnation && retry.mark_revision.is_none())
-        {
+    /// The writer finished the mark's write for `account_id` under `incarnation`, the entry stamped at `stamped_at`:
+    /// landed at `revision`, or refused by its fences. A newer entry under the same incarnation stays unacknowledged.
+    pub fn funding_written(
+        &mut self,
+        account_id: &str,
+        incarnation: u64,
+        stamped_at: i64,
+        revision: Option<u64>,
+    ) {
+        if let Some(retry) = self.funding_retries.get_mut(account_id).filter(|retry| {
+            retry.incarnation == incarnation
+                && retry.stamped_at == stamped_at
+                && retry.mark_revision.is_none()
+        }) {
             retry.mark_revision = Some(revision.unwrap_or(0));
         }
     }
@@ -3230,6 +3250,27 @@ mod tests {
         );
         state.forget_sample("a");
         assert_eq!(state.credits("a"), None);
+    }
+
+    #[test]
+    fn two_funding_marks_in_one_millisecond_take_two_stamps_and_only_the_second_ones_acknowledgment_credits_it(
+    ) {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        let first = state.funding_marked("a", 1, 1_000, 300_000);
+        let second = state.funding_marked("a", 1, 1_000, 300_000);
+        assert_eq!(
+            (first, second),
+            (1_000, 1_001),
+            "the second mark is stamped one past the first"
+        );
+        assert_eq!(state.funding_retries["a"].retry_at, 301_000);
+        state.funding_written("a", 1, first, None);
+        assert_eq!(
+            state.funding_retries["a"].mark_revision, None,
+            "the first write's acknowledgment names the entry the second mark replaced"
+        );
+        state.funding_written("a", 1, second, Some(5));
+        assert_eq!(state.funding_retries["a"].mark_revision, Some(5));
     }
 
     #[test]
