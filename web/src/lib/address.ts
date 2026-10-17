@@ -1,5 +1,6 @@
 import { REQUEST_KIND_VALUES } from '@/api/decode';
 import type { BurnGroup, KeyStatus, RequestKind } from '@/api/types';
+import { clock } from './clock';
 import { ACCOUNT_STATUSES } from './quota';
 
 const HOUR = 3_600_000;
@@ -39,7 +40,7 @@ export type KeySpec =
   | { kind: 'range'; default: string; presets: readonly RangePreset[] }
   | { kind: 'text'; name: string };
 
-export type Codec<F> = { fromParams(params: URLSearchParams): F; toParams(filters: F): URLSearchParams };
+export type Codec<F> = { fromParams(params: URLSearchParams, now?: number): F; toParams(filters: F): URLSearchParams };
 
 /** The instant a window key carries, or empty: any RFC 3339 instant parses, a bare integer reads as milliseconds. */
 export const instantOf = (value: string | null): string => {
@@ -49,7 +50,7 @@ export const instantOf = (value: string | null): string => {
   return Number.isFinite(at.getTime()) ? at.toISOString() : '';
 };
 
-function readKey(key: KeySpec, params: URLSearchParams): unknown {
+function readKey(key: KeySpec, params: URLSearchParams, now: number): unknown {
   switch (key.kind) {
     case 'choice': {
       const value = params.get(key.name);
@@ -61,7 +62,10 @@ function readKey(key: KeySpec, params: URLSearchParams): unknown {
       return (params.get(key.name) ?? '').split(',').filter(Boolean);
     case 'range': {
       const from = instantOf(params.get('from'));
-      const to = instantOf(params.get('to'));
+      const asked = instantOf(params.get('to'));
+      // The end is capped before the pair is judged, as the range control caps it, so a pair wholly after now reads
+      // as one that ends before it starts.
+      const to = asked !== '' && Date.parse(asked) > now ? new Date(now).toISOString() : asked;
       // A pair is a span only while `from` precedes `to`, so a half, backward or unreadable pair reads as the preset.
       if (from !== '' && to !== '' && Date.parse(from) < Date.parse(to)) return { from, preset: 'custom', to } satisfies RangeValue;
       const name = params.get('range');
@@ -100,13 +104,14 @@ function writeKey(key: KeySpec, value: unknown, params: URLSearchParams): void {
  * The grammar every filtered view reads its address through. A filter at its default leaves the address, and an
  * unknown key is dropped on the next write. A window's `from` and `to` are RFC 3339 UTC instants at millisecond
  * precision (`toISOString()`), read through `Date.parse`. A bare integer reads as Unix milliseconds, a form no page
- * writes. The address lists the keys in the specification's order.
+ * writes. A `to` past `now`, the console clock's unless given, reads as `now`. The address lists the keys in the
+ * specification's order.
  */
 export function codecOf<F extends object>(spec: { [K in keyof F]: KeySpec }): Codec<F> {
   const keys = Object.entries(spec) as [string, KeySpec][];
   return {
-    fromParams(params) {
-      return Object.fromEntries(keys.map(([field, key]) => [field, readKey(key, params)])) as F;
+    fromParams(params, now = clock.now()) {
+      return Object.fromEntries(keys.map(([field, key]) => [field, readKey(key, params, now)])) as F;
     },
     toParams(filters) {
       const params = new URLSearchParams();

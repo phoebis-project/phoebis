@@ -90,6 +90,15 @@ test('a lone from, an unknown preset, an epoch from without to and a pair whose 
   assert.deepEqual(read(d.ANALYTICS_CODEC, `range=7d&from=${TO}&to=${FROM}`).range, preset('7d'));
 });
 
+test('a custom pair whose to lies past now reads with to at now, and a pair wholly after now reads as the preset', () => {
+  const now = Date.parse('2026-10-10T15:00:00Z');
+  const at = (ms) => new Date(ms).toISOString();
+  const rangeOf = (search) => d.ROUTING_LOG_CODEC.fromParams(new URLSearchParams(search), now).range;
+  assert.deepEqual(rangeOf(`from=${FROM}&to=${at(now + 3_600_000)}`), { from: FROM, preset: 'custom', to: at(now) });
+  assert.deepEqual(rangeOf(`from=${FROM}&to=${at(now)}`), { from: FROM, preset: 'custom', to: at(now) }, 'an end at now stands');
+  assert.deepEqual(rangeOf(`range=6h&from=${at(now + 3_600_000)}&to=${at(now + 7_200_000)}`), preset('6h'));
+});
+
 test('an epoch-millisecond pair reads as the custom span and writes back as the ISO pair', () => {
   const filters = read(d.ROUTING_LOG_CODEC, `from=${Date.parse(FROM)}&to=${Date.parse(TO)}`);
   assert.deepEqual(filters.range, CUSTOM);

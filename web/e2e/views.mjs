@@ -5947,6 +5947,72 @@ async function wideBodyDialog(theme) {
   colorsHeld();
 }
 
+/**
+ * The wide view's width floor holds a line whose tabs draw it wider than its character count. The mock's story
+ * captures the page an edge answers an upstream 502 with, indented with tabs, so the measure lists the laptop key's
+ * requests answered 502 and opens each one's Response wide until the widest row it draws holds a tab, then reads the
+ * block of rows at least as wide as that row's text. The rows are placed absolutely, so the block's width is what keeps
+ * the scroll area once that row leaves the window. A row's text is read through a range, since a row's box takes the
+ * block's width at the least. The floor is a whole pixel count, so a shortfall under one pixel is its rounding. The mock
+ * pass's alone, on a load of its own, since the edge's page is the mock story's.
+ */
+async function bodyWidthFloor(theme) {
+  const say = (what) => failures.push(`${theme} /requests body width floor: ${what}`);
+  const address = '/requests?keys=laptop&statuses=502';
+  await page.goto(`${base}${address}`);
+  await booted();
+  await advance(LOAD_MS);
+  const rows = page.locator('.requests__table tbody tr');
+  try {
+    await page.waitForSelector('.requests__table tbody tr', { timeout: 15_000 });
+  } catch {
+    say(`${address} lists no request`);
+    return;
+  }
+  const loaded = () => page.waitForFunction(() => document.querySelector('.drawer .skeleton') === null, null, { timeout: 5_000 }).catch(() => {});
+  const widestRow = () =>
+    page.evaluate(() => {
+      const block = document.querySelector('dialog[open].dialog--wide .body-block__pre .body-rows');
+      if (!block) return null;
+      const drawn = [...block.querySelectorAll('.body-row')].map((row) => {
+        const range = document.createRange();
+        range.selectNodeContents(row);
+        return { chars: row.textContent?.length ?? 0, tabs: row.textContent?.includes('\t') ?? false, width: range.getBoundingClientRect().width };
+      });
+      const widest = drawn.reduce((most, row) => (row.width > most.width ? row : most), { chars: 0, tabs: false, width: 0 });
+      return { drawn: drawn.length, floor: Math.round(block.getBoundingClientRect().width * 10) / 10, row: { chars: widest.chars, tabs: widest.tabs, width: Math.round(widest.width * 10) / 10 } };
+    });
+  let read = null;
+  let request = null;
+  for (let i = 0, n = await rows.count(); i < n && read === null; i += 1) {
+    await rows.nth(i).click();
+    await advance(LOAD_MS);
+    await loaded();
+    const opened = await page.evaluate(() => {
+      const block = [...document.querySelectorAll('.drawer .body-block')].find((b) => b.querySelector('.body-block__head')?.children[0]?.textContent?.trim() === 'Response');
+      const open = block?.querySelector('.link-btn');
+      open?.click();
+      return Boolean(open);
+    });
+    if (!opened) continue;
+    const drew = await page
+      .waitForSelector('dialog[open].dialog--wide .body-row', { timeout: 5_000 })
+      .then(() => true)
+      .catch(() => false);
+    await settle();
+    const got = drew ? await widestRow() : null;
+    await page.keyboard.press('Escape');
+    await settle();
+    if (got?.row.tabs) {
+      read = got;
+      request = new URL(page.url()).pathname.split('/').pop();
+    }
+  }
+  measurements.push(`${theme} /requests body width floor ${JSON.stringify({ request, ...read })}`);
+  if (read === null) say(`no request ${address} lists draws a Response whose widest row holds a tab`);
+  else if (read.floor + 1 <= read.row.width) say(`the block of rows is ${read.floor}px wide under a drawn row of ${read.row.width}px`);
+}
+
 const DECISION_ROWS = '.routing-log__table tbody tr.routing-log__row:not([data-row^="event/"])';
 
 /** Opens `row` beneath itself and answers whether a card with its strip arrived. */
@@ -8632,6 +8698,11 @@ try {
       at = `${theme} /analytics reasons panel link`;
       await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
       await reasonLink(theme);
+    }
+    for (const theme of ['light', 'dark']) {
+      at = `${theme} /requests body width floor`;
+      await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+      await bodyWidthFloor(theme);
     }
   }
   // Headless Chromium hides scrollbars, and with them the gutter a list in flow gives a clipping wrap, which pushes a

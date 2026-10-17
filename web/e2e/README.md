@@ -116,7 +116,9 @@ the request drawer, which opens once the request list's shot is taken (its chips
 Estimated cost row's 20x equivalent chips and muted equivalent on one line each inside the cell at 1280 by 800 and 1440
 by 900, the story's Fable request reading a 20x 5-hour, a 20x 7-day and a 20x Fable week equivalent in that order), a
 reasons panel link landing on a list whose first row's drawer reads the reason (mock pass, on a load of its own once
-every view's shot is taken), the routing log's decision card, which opens once the log's shot is taken (the strip and
+every view's shot is taken), the wide body view's width floor (mock pass, on a load of its own once every view's shot is
+taken: the page an edge answered an upstream 502 with, indented with tabs, opened wide, its block of rows no narrower
+than its widest row's text), the routing log's decision card, which opens once the log's shot is taken (the strip and
 the candidate table inside the card at 1280 by 800 and 1440 by 900 with nothing scrolling sideways, the table 958 then
 1118 px, the strip's drawing as wide as the strip at each width, every station badge in the kind badge's box, the
 station labels clear of the leaf rows and the brackets, every station's and way out's dot, the gap to its words and its

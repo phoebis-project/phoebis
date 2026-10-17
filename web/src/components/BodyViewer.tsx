@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { highlightJson } from '@/lib/bodies';
 
 /** One row of the mono font's line height, 12 px at 1.5. `--body-row` in pages.css carries the same figure. */
@@ -19,6 +19,34 @@ const spanOf = (top: number, height: number): Span => ({
   first: Math.max(0, Math.floor(top / ROW_PX) - WINDOW_ROWS),
   last: Math.ceil((top + height) / ROW_PX) + WINDOW_ROWS,
 });
+
+/** A tab or a code point from U+1100 up, the only characters that may draw other than one column. */
+const NOT_NARROW = /[\t\u{1100}-\u{10ffff}]/u;
+/** The East Asian wide and fullwidth ranges, each code point two columns. */
+const WIDE =
+  /[\u{1100}-\u{115f}\u{2e80}-\u{303e}\u{3041}-\u{33ff}\u{3400}-\u{4dbf}\u{4e00}-\u{9fff}\u{a000}-\u{a4cf}\u{a960}-\u{a97f}\u{ac00}-\u{d7a3}\u{f900}-\u{faff}\u{fe10}-\u{fe19}\u{fe30}-\u{fe6f}\u{ff00}-\u{ff60}\u{ffe0}-\u{ffe6}\u{1f300}-\u{1f64f}\u{1f900}-\u{1f9ff}\u{20000}-\u{2fffd}\u{30000}-\u{3fffd}]/u;
+
+/** A line's columns as a terminal counts them: a tab to the next 8-column stop, a wide code point 2, any other 1. */
+function columnsOf(line: string): number {
+  if (!NOT_NARROW.test(line)) return line.length;
+  let columns = 0;
+  for (const ch of line) columns = ch === '\t' ? columns + 8 - (columns % 8) : columns + (WIDE.test(ch) ? 2 : 1);
+  return columns;
+}
+
+/** The line of the most columns, the first of them on a tie. */
+function widestLine(lines: readonly string[]): string {
+  let widest = '';
+  let most = -1;
+  for (const line of lines) {
+    const columns = columnsOf(line);
+    if (columns > most) {
+      most = columns;
+      widest = line;
+    }
+  }
+  return widest;
+}
 
 /**
  * One line, tokenized alone. Memoized on its own props, so a row tokenizes once while the window keeps it, and its
@@ -72,14 +100,33 @@ export function BodyViewer({ highlight, lines }: { highlight: boolean; lines: re
       cancel();
     };
   }, [read]);
-  // Absolutely placed rows widen the scroll area only while drawn, so the longest line sets the block's width in the
-  // mono font's ch, and a reader scrolled sideways keeps the place when a long line leaves the window.
-  const widest = useMemo(() => lines.reduce((most, line) => Math.max(most, line.length), 0), [lines]);
+  // Absolutely placed rows widen the scroll area only while drawn, so the block's floor is the width the widest line
+  // draws in the pre's font, read off a hidden copy of it once per text, and a reader scrolled sideways keeps the place
+  // when that line leaves the window. A character count would miss a tab's stop and a wide character's second column,
+  // so the copy holds the line of the most columns.
+  const widest = useMemo(() => widestLine(lines), [lines]);
+  const probe = useRef<HTMLDivElement>(null);
+  const [floor, setFloor] = useState(0);
+  useLayoutEffect(() => {
+    const el = probe.current;
+    if (!el) return;
+    setFloor(el.scrollWidth);
+    // The wide dialog lays its children out only once it opens, after they mount, so there the copy reads 0 wide
+    // until the observer reports its drawn width.
+    if (typeof ResizeObserver !== 'function') return;
+    const observer = new ResizeObserver(() => setFloor(el.scrollWidth));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [widest]);
   const rows = [];
   for (let i = span.first, end = Math.min(span.last, lines.length); i < end; i += 1) rows.push(<Row key={i} highlight={highlight} line={lines[i]} top={i * ROW_PX} />);
   return (
     <pre ref={box} className="body-block__pre body-block__pre--rows" tabIndex={0} onScroll={onScroll}>
-      <div className="body-rows" style={{ height: lines.length * ROW_PX, minWidth: `${widest}ch` }}>
+      <div className="body-rows" style={{ height: lines.length * ROW_PX, minWidth: floor }}>
+        {/* Before the rows and outside their class, so a row stays the block's last child and the rows count alone. */}
+        <div ref={probe} aria-hidden="true" style={{ position: 'absolute', visibility: 'hidden', whiteSpace: 'pre' }}>
+          {widest}
+        </div>
         {rows}
       </div>
     </pre>

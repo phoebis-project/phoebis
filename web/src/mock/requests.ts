@@ -2454,6 +2454,32 @@ const ANSWER_TEXT = 'The hook awaits a promise that resolves before the writer f
 /** A cut answer ran a megabyte past the cap before the ledger stopped storing it. */
 const DROPPED_BYTES = 1_048_576;
 
+/**
+ * The page an edge answers an upstream 502 with in place of the API's JSON error, indented with tabs, so a captured
+ * body holds a line whose tab stops draw it wider than its character count.
+ */
+const EDGE_PAGE = [
+  '<!DOCTYPE html>',
+  '<html lang="en">',
+  '<head>',
+  '\t<meta charset="utf-8">',
+  '\t<title>502 Bad Gateway</title>',
+  '</head>',
+  '<body>',
+  '\t<div class="page">',
+  '\t\t<main>',
+  '\t\t\t<section class="notice">',
+  '\t\t\t\t<div class="notice__text">',
+  '\t\t\t\t\t<h1>502 Bad Gateway</h1>',
+  "\t\t\t\t\t<p>The edge reached no healthy origin for this request. Try it again in a few moments, and contact the site's owner if it persists.</p>",
+  '\t\t\t\t</div>',
+  '\t\t\t</section>',
+  '\t\t</main>',
+  '\t</div>',
+  '</body>',
+  '</html>',
+].join('\n');
+
 export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
   if (!request.capturedBodies) return null;
   const isClaude = request.model.startsWith('claude');
@@ -2513,12 +2539,13 @@ export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
             : []),
         ].join('')
       : { ...message, content: [{ type: 'text', text: ANSWER_TEXT }] };
+  const stored = request.attempts[request.attempts.length - 1]?.upstreamStatus === 502 ? EDGE_PAGE : response;
   // Counted once here, as the router counts the vectors it stored; the drawer reads these and measures nothing.
   const requestBytes = byteLength(bodies.request);
-  const responseBytes = byteLength(response);
+  const responseBytes = byteLength(stored);
   return {
     ...bodies,
-    response,
+    response: stored,
     requestBytesSeen: requestBytes,
     requestBytesStored: requestBytes,
     requestTruncated: request.requestTruncated,
