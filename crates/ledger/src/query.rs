@@ -578,6 +578,102 @@ pub fn guardrail_counts(
     Ok(rows)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SampleSubject<'a> {
+    Key(&'a str),
+    Pool(&'a str),
+}
+
+/// The columns the dry run reads off a request row: the facts subjects and the five hints the row keeps.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SampleRow {
+    pub id: String,
+    pub received_at: i64,
+    pub kind: String,
+    pub canonical_model: String,
+    pub client: Option<String>,
+    pub request_class: Option<String>,
+    pub agent_type: Option<String>,
+    pub user_agent: Option<String>,
+    pub compaction: Option<String>,
+    pub context_compacted: Option<String>,
+}
+
+/// The newest captured, non-probe rows of the subject since `since`, newest first, at most `limit`, with the next
+/// cursor in `list_requests`'s spelling where more exist. Walks `requests_received` for a pool and `requests_key`
+/// for a key.
+pub fn guardrail_sample_page(
+    conn: &Connection,
+    subject: SampleSubject<'_>,
+    since: i64,
+    cursor: Option<&str>,
+    limit: usize,
+) -> Result<(Vec<SampleRow>, Option<String>), LedgerError> {
+    let (column, id) = match subject {
+        SampleSubject::Key(id) => ("key_id", id),
+        SampleSubject::Pool(id) => ("pool_id", id),
+    };
+    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(id.to_string()), Box::new(since)];
+    // The pool's walk takes `requests_received` and the key's `requests_key`, both bounded below by the capture
+    // window, so a pool or a key whose capture is off scans no months of rows before it answers an empty page.
+    let mut clauses = format!(
+        "r.{column} = ?1 AND r.bodies_captured = 1 AND r.kind != 'probe' AND r.received_at >= ?2"
+    );
+    if let Some(cursor) = cursor {
+        let (at, id) = cursor
+            .split_once(':')
+            .ok_or_else(|| LedgerError::Yaml("cursor is <received_at>:<id>".into()))?;
+        let at: i64 = at
+            .parse()
+            .map_err(|_| LedgerError::Yaml("cursor is <received_at>:<id>".into()))?;
+        args.push(Box::new(at));
+        args.push(Box::new(id.to_string()));
+        clauses.push_str(" AND (r.received_at < ?3 OR (r.received_at = ?3 AND r.id < ?4))");
+    }
+    // One row past the page says whether a next page exists, as `list_requests` reads it.
+    args.push(Box::new((limit + 1) as i64));
+    let sql = format!(
+        "SELECT r.id, r.received_at, r.kind, r.canonical_model, r.client, r.request_class, r.agent_type, \
+         r.user_agent, r.compaction, r.context_compacted FROM requests r WHERE {clauses} \
+         ORDER BY r.received_at DESC, r.id DESC LIMIT ?{}",
+        args.len()
+    );
+    let mut rows = conn
+        .prepare(&sql)?
+        .query_map(params_from_iter(args.iter().map(|a| a.as_ref())), |r| {
+            Ok(SampleRow {
+                id: r.get(0)?,
+                received_at: r.get(1)?,
+                kind: r.get(2)?,
+                canonical_model: r.get(3)?,
+                client: r.get(4)?,
+                request_class: r.get(5)?,
+                agent_type: r.get(6)?,
+                user_agent: r.get(7)?,
+                compaction: r.get(8)?,
+                context_compacted: r.get(9)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let more = rows.len() > limit;
+    rows.truncate(limit);
+    let next = more
+        .then(|| rows.last().map(|r| format!("{}:{}", r.received_at, r.id)))
+        .flatten();
+    Ok((rows, next))
+}
+
+/// The captured request body by primary key, `None` where the body row has aged out.
+pub fn request_body(conn: &Connection, id: &str) -> Result<Option<Vec<u8>>, LedgerError> {
+    Ok(conn
+        .query_row(
+            "SELECT request_body FROM bodies WHERE request_id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
 /// The events of the request's window under its own session, and
 /// every event that names the request itself.
 pub fn request_events(

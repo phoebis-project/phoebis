@@ -80,6 +80,7 @@ const REFUSALS: &[(&str, &[u16])] = &[
     ("guardrails_list", &[500]),
     ("guardrails_create", &[400, 404, 409, 500, 503]),
     ("guardrail_presets", &[]),
+    ("guardrails_test", &[400, 404, 500]),
     ("guardrail_show", &[404, 500]),
     ("guardrail_patch", &[400, 404, 409, 500, 503]),
     ("guardrail_delete", &[404, 500, 503]),
@@ -145,6 +146,7 @@ const EXAMPLE_FILES: &[&str] = &[
     "guardrail_created",
     "guardrail_presets",
     "guardrail_show",
+    "guardrail_test",
     "keepalive_overview",
     "keepalive_recipes",
     "keys",
@@ -483,13 +485,13 @@ async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_l
     );
     assert_eq!(
         document["paths"].as_object().unwrap().len(),
-        56,
-        "the admin listener's 56 paths"
+        57,
+        "the admin listener's 57 paths"
     );
     assert_eq!(
         operations(&document).len(),
-        69,
-        "the admin listener's 69 operations"
+        70,
+        "the admin listener's 70 operations"
     );
 }
 
@@ -636,8 +638,8 @@ async fn every_example_is_its_fixtures_body_member_and_the_count_holds() {
     );
     assert_eq!(
         EXAMPLE_FILES.len(),
-        45,
-        "44 success answers and the replay's held answer"
+        46,
+        "45 success answers and the replay's held answer"
     );
     // The places the fixture manifest targets, each with the stems it attaches: a place carries as many examples
     // as stems, so a fixture attached twice or to the wrong place fails here, while a hand-written example (a
@@ -867,8 +869,9 @@ fn admits_null(schema: &Value) -> bool {
 async fn a_key_the_route_leaves_out_rather_than_writing_null_does_not_render_nullable() {
     let (_app, _up, document) = document().await;
     let schemas = &document["components"]["schemas"];
-    let fields: [(&str, &[&str]); 5] = [
+    let fields: [(&str, &[&str]); 6] = [
         ("ConditionView", &["name", "path", "selector", "value"]),
+        ("GuardrailTestSample", &["key_id", "pool_id"]),
         ("ModelRowView", &["fast", "long_context"]),
         ("OverrideView", &["type_multiplier", "weight_by_window"]),
         ("RoutingLog", &["counts"]),

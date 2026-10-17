@@ -1,6 +1,7 @@
 //! The guardrail routes: a guardrail created, read, edited and deleted under its id, attached to pools and keys from
 //! either side with the positions read back on all three shapes, refused one sentence per rule, never past 64 per
-//! pool or per key, and every write reaching the router through the reload.
+//! pool or per key, every write reaching the router through the reload, and a definition tested against the captured
+//! bodies of a pool or a key.
 mod common;
 
 use std::collections::BTreeSet;
@@ -10,6 +11,7 @@ use axum::http::{Response, StatusCode};
 use axum::Router;
 use common::{admin_parts_full, delete, get, json, login, patch, post, Captured, Full};
 use phoebis_guardrails::{presets, Condition, GuardrailAction, GuardrailMode, Preset};
+use phoebis_ledger::{BodyRecord, RequestRecord};
 use phoebis_store::GuardrailRow;
 use serde_json::{json as j, Value};
 
@@ -1439,4 +1441,556 @@ async fn a_stamp_the_table_cannot_answer_reads_customized_with_the_tables_curren
         j!({"id": "ghost", "version": 1, "current_version": 1, "customized": true}),
         "a preset the table lacks keeps its stamp and cannot be compared"
     );
+}
+
+/// The client's subagent summary fork and an auto mode classifier call, in their documented shapes.
+const FORK: &[u8] = include_bytes!("../../guardrails/tests/fixtures/subagent_summary_fork.json");
+const CLASSIFIER: &[u8] =
+    include_bytes!("../../guardrails/tests/fixtures/auto_mode_classifier.json");
+
+const MINUTE: i64 = 60_000;
+
+/// An inference request of `key` in the pool `main`, `minutes` before the clock, with nothing captured.
+fn ledger_row(id: &str, minutes: i64, key: &str) -> RequestRecord {
+    let at = common::NOW - minutes * MINUTE;
+    RequestRecord {
+        id: id.into(),
+        received_at: at,
+        finished_at: Some(at + 1_000),
+        key_id: Some(key.into()),
+        pool_id: Some("main".into()),
+        model: "claude-sonnet-5".into(),
+        canonical_model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        status: Some(200),
+        outcome: "succeeded".into(),
+        client: Some("claude-code".into()),
+        ..Default::default()
+    }
+}
+
+/// A fork of the summary as the row records it: the auxiliary class and the agent type hint.
+fn fork_row(id: &str, minutes: i64, key: &str) -> RequestRecord {
+    RequestRecord {
+        request_class: Some("auxiliary".into()),
+        agent_type: Some("general-purpose".into()),
+        ..ledger_row(id, minutes, key)
+    }
+}
+
+/// Writes the row, flagged captured with `body` beside it where one is given.
+fn write_row(parts: &Full, row: RequestRecord, body: Option<&[u8]>) {
+    let bodies = body.map(|body| BodyRecord {
+        request_id: row.id.clone(),
+        request_body: body.to_vec(),
+        response_body: None,
+        request_len_seen: body.len() as u64,
+        response_len_seen: 0,
+        expires_at: common::NOW + 3_600_000,
+    });
+    let row = RequestRecord {
+        bodies_captured: row.bodies_captured || bodies.is_some(),
+        ..row
+    };
+    parts.db.insert_request(&row, &[], bodies.as_ref()).unwrap();
+}
+
+/// The pool `main` with both of its keys, `desktop` and `laptop`, an admin session, and eight rows in the pool, newest
+/// first: a fork, a classifier call and a fork with their bodies, an uncaptured row, a probe with a body, a row flagged
+/// captured whose body row is gone, another uncaptured row, and a classifier call with its body.
+async fn seeded_sample() -> (Full, String) {
+    let parts = admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for (route, body) in [
+        ("/admin/pools", r#"{"id":"main","label":"Main"}"#),
+        (
+            "/admin/keys",
+            r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        ),
+        (
+            "/admin/keys",
+            r#"{"id":"laptop","label":"Laptop","pool_id":"main"}"#,
+        ),
+    ] {
+        let response = post(&parts.app, route, body, Some(&cookie)).await;
+        assert_eq!(response.status(), StatusCode::CREATED, "{route} {body}");
+    }
+    write_row(&parts, fork_row("r1-fork", 1, "desktop"), Some(FORK));
+    write_row(
+        &parts,
+        ledger_row("r2-classifier", 2, "laptop"),
+        Some(CLASSIFIER),
+    );
+    write_row(&parts, fork_row("r3-fork", 3, "laptop"), Some(FORK));
+    write_row(&parts, ledger_row("r4-uncaptured", 4, "desktop"), None);
+    write_row(
+        &parts,
+        RequestRecord {
+            kind: "probe".into(),
+            ..ledger_row("r5-probe", 5, "desktop")
+        },
+        Some(FORK),
+    );
+    write_row(
+        &parts,
+        RequestRecord {
+            bodies_captured: true,
+            ..ledger_row("r6-gone", 6, "laptop")
+        },
+        None,
+    );
+    write_row(&parts, ledger_row("r7-uncaptured", 7, "laptop"), None);
+    write_row(
+        &parts,
+        ledger_row("r8-classifier", 8, "desktop"),
+        Some(CLASSIFIER),
+    );
+    (parts, cookie)
+}
+
+/// The fork as three conditions: the class, the tools and the opening words of the last user turn.
+fn fork_conditions() -> Value {
+    j!([
+        {"subject": "request_class", "operator": "equals", "value": "auxiliary"},
+        {"subject": "body", "operator": "present", "path": "tools"},
+        {"subject": "message", "operator": "matches", "selector": "last_user", "value": "^Describe your most recent action"},
+    ])
+}
+
+/// `POST /admin/guardrails/test` with `body`: the status and the answer.
+async fn dry_run(app: &Router, cookie: &str, body: Value) -> (StatusCode, Value) {
+    let response = post(
+        app,
+        "/admin/guardrails/test",
+        &body.to_string(),
+        Some(cookie),
+    )
+    .await;
+    let status = response.status();
+    (status, json(response).await)
+}
+
+/// The sampled requests' ids in the answer's order.
+fn sample_ids(answer: &Value) -> Vec<String> {
+    answer["requests"]
+        .as_array()
+        .expect("the answer lists its requests")
+        .iter()
+        .map(|request| request["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// Each sampled request's id, verdict and condition index, in the answer's order.
+fn verdicts(answer: &Value) -> Vec<(String, String, Value)> {
+    answer["requests"]
+        .as_array()
+        .expect("the answer lists its requests")
+        .iter()
+        .map(|request| {
+            (
+                request["id"].as_str().unwrap().to_string(),
+                request["verdict"].as_str().unwrap().to_string(),
+                request["condition"].clone(),
+            )
+        })
+        .collect()
+}
+
+fn verdict(id: &str, word: &str, condition: Value) -> (String, String, Value) {
+    (id.to_string(), word.to_string(), condition)
+}
+
+#[tokio::test]
+async fn the_pool_sample_walks_both_keys_newest_first_and_the_key_sample_one_key() {
+    let (parts, cookie) = seeded_sample().await;
+    let app = &parts.app;
+    let (status, pool) = dry_run(
+        app,
+        &cookie,
+        j!({"conditions": [condition()], "pool_id": "main"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{pool}");
+    assert_eq!(pool["sample"]["pool_id"], "main");
+    assert!(
+        pool["sample"].get("key_id").is_none(),
+        "the sample names the one subject the test named"
+    );
+    assert_eq!(pool["totals"]["sampled"], 4);
+    assert_eq!(
+        sample_ids(&pool),
+        ["r1-fork", "r2-classifier", "r3-fork", "r8-classifier"],
+        "both keys of the pool, newest first"
+    );
+    for (key, expected) in [
+        ("desktop", ["r1-fork", "r8-classifier"]),
+        ("laptop", ["r2-classifier", "r3-fork"]),
+    ] {
+        let (status, answer) = dry_run(
+            app,
+            &cookie,
+            j!({"conditions": [condition()], "key_id": key}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+        assert_eq!(answer["sample"]["key_id"], key);
+        assert!(answer["sample"].get("pool_id").is_none());
+        assert_eq!(answer["totals"]["sampled"], 2);
+        assert_eq!(sample_ids(&answer), expected, "{key} alone");
+    }
+}
+
+#[tokio::test]
+async fn the_limit_and_the_window_hold() {
+    let (parts, cookie) = seeded_sample().await;
+    let app = &parts.app;
+    // Past any capture window the harness could configure, with everything else the sample reads.
+    write_row(&parts, fork_row("r-old", 1_000 * 60, "desktop"), Some(FORK));
+    let (status, limited) = dry_run(
+        app,
+        &cookie,
+        j!({"conditions": [condition()], "pool_id": "main", "limit": 2}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{limited}");
+    assert_eq!(sample_ids(&limited), ["r1-fork", "r2-classifier"]);
+    assert_eq!(limited["totals"]["sampled"], 2);
+    assert_eq!(limited["sample"]["limit"], 2);
+
+    let (status, whole) = dry_run(
+        app,
+        &cookie,
+        j!({"conditions": [condition()], "pool_id": "main"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{whole}");
+    assert_eq!(
+        sample_ids(&whole),
+        ["r1-fork", "r2-classifier", "r3-fork", "r8-classifier"],
+        "the row older than the window is left out"
+    );
+    assert_eq!(whole["sample"]["limit"], 200, "the default limit");
+    // The admin harness builds its state with `BODY_CAPTURE_MAX_HOURS`, 72, as the longest capture a key may ask for.
+    assert_eq!(whole["sample"]["window_hours"], 72);
+}
+
+#[tokio::test]
+async fn an_uncaptured_row_a_probe_and_a_row_whose_body_is_gone_are_skipped_without_counting() {
+    let (parts, cookie) = seeded_sample().await;
+    // The first page of four reads the row whose body is gone as its fourth, so a skipped row counted toward the
+    // limit would leave the oldest captured row out.
+    let (status, answer) = dry_run(
+        &parts.app,
+        &cookie,
+        j!({"conditions": [condition()], "pool_id": "main", "limit": 4}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(
+        sample_ids(&answer),
+        ["r1-fork", "r2-classifier", "r3-fork", "r8-classifier"]
+    );
+    assert_eq!(answer["totals"]["sampled"], 4);
+}
+
+#[tokio::test]
+async fn the_verdicts_carry_the_failing_index_in_the_written_order() {
+    let (parts, cookie) = seeded_sample().await;
+    // Every condition fails on a classifier call, and the class runs first whatever the order, so the index names the
+    // class where a walk in the written order would name the tools.
+    let written = j!([
+        {"subject": "body", "operator": "present", "path": "tools"},
+        {"subject": "message", "operator": "matches", "selector": "last_user", "value": "^Describe your most recent action"},
+        {"subject": "request_class", "operator": "equals", "value": "auxiliary"},
+    ]);
+    let (status, answer) = dry_run(
+        &parts.app,
+        &cookie,
+        j!({"conditions": written, "pool_id": "main"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(
+        verdicts(&answer),
+        [
+            verdict("r1-fork", "matched", Value::Null),
+            verdict("r2-classifier", "unmatched", j!(2)),
+            verdict("r3-fork", "matched", Value::Null),
+            verdict("r8-classifier", "unmatched", j!(2)),
+        ]
+    );
+    assert_eq!(
+        answer["totals"],
+        j!({"sampled": 4, "matched": 2, "unmatched": 2, "indeterminate": 0})
+    );
+}
+
+#[tokio::test]
+async fn a_header_condition_on_a_kept_hint_evaluates_and_one_on_another_header_reads_indeterminate_unless_a_later_condition_fails(
+) {
+    let (parts, cookie) = seeded_sample().await;
+    let app = &parts.app;
+    let (status, hint) = dry_run(
+        app,
+        &cookie,
+        j!({"conditions": [{"subject": "header", "operator": "present", "name": "x-claude-code-agent-type"}], "pool_id": "main"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{hint}");
+    assert_eq!(
+        verdicts(&hint),
+        [
+            verdict("r1-fork", "matched", Value::Null),
+            verdict("r2-classifier", "unmatched", j!(0)),
+            verdict("r3-fork", "matched", Value::Null),
+            verdict("r8-classifier", "unmatched", j!(0)),
+        ],
+        "the row keeps the agent type, so the header reads from it"
+    );
+
+    let (status, unknown) = dry_run(
+        app,
+        &cookie,
+        j!({"conditions": [
+            {"subject": "header", "operator": "present", "name": "anthropic-beta"},
+            {"subject": "request_class", "operator": "equals", "value": "auxiliary"},
+        ], "pool_id": "main"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{unknown}");
+    assert_eq!(
+        verdicts(&unknown),
+        [
+            verdict("r1-fork", "indeterminate", j!(0)),
+            verdict("r2-classifier", "unmatched", j!(1)),
+            verdict("r3-fork", "indeterminate", j!(0)),
+            verdict("r8-classifier", "unmatched", j!(1)),
+        ],
+        "the row keeps no other header, and the class decides where it fails"
+    );
+    assert_eq!(
+        unknown["totals"],
+        j!({"sampled": 4, "matched": 0, "unmatched": 2, "indeterminate": 2})
+    );
+}
+
+#[tokio::test]
+async fn a_saved_guardrail_and_the_same_unsaved_definition_answer_alike() {
+    let (parts, cookie) = seeded_sample().await;
+    let app = &parts.app;
+    created(
+        app,
+        &cookie,
+        "forks",
+        j!({"enabled": false, "conditions": fork_conditions()}),
+    )
+    .await;
+    let (status, saved) =
+        dry_run(app, &cookie, j!({"guardrail": "forks", "pool_id": "main"})).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let (status, unsaved) = dry_run(
+        app,
+        &cookie,
+        j!({"conditions": fork_conditions(), "pool_id": "main"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{unsaved}");
+    assert_eq!(
+        saved["totals"]["matched"], 2,
+        "a disabled guardrail is evaluated as stored"
+    );
+    assert_eq!(saved["requests"], unsaved["requests"]);
+    assert_eq!(saved["totals"], unsaved["totals"]);
+    assert_eq!(saved["sample"], unsaved["sample"]);
+}
+
+#[tokio::test]
+async fn an_unknown_guardrail_pool_or_key_is_a_404() {
+    let (parts, cookie) = seeded_sample().await;
+    for (body, expected) in [
+        (
+            j!({"guardrail": "missing", "pool_id": "main"}),
+            "no such guardrail",
+        ),
+        (
+            j!({"conditions": [condition()], "pool_id": "missing"}),
+            "no such pool",
+        ),
+        (
+            j!({"conditions": [condition()], "key_id": "missing"}),
+            "no such key",
+        ),
+    ] {
+        let response = post(
+            &parts.app,
+            "/admin/guardrails/test",
+            &body.to_string(),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(
+            refusal(response).await,
+            (StatusCode::NOT_FOUND, expected.to_string()),
+            "{body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_exclusive_members_and_the_limit_are_refused() {
+    let (parts, cookie) = seeded_sample().await;
+    let app = &parts.app;
+    for (body, expected) in [
+        (
+            j!({"pool_id": "main"}),
+            "guardrail or conditions is required",
+        ),
+        (
+            j!({"guardrail": "forks", "conditions": [condition()], "pool_id": "main"}),
+            "guardrail and conditions are exclusive",
+        ),
+        (
+            j!({"conditions": [condition()]}),
+            "pool_id or key_id is required",
+        ),
+        (
+            j!({"conditions": [condition()], "pool_id": "main", "key_id": "desktop"}),
+            "pool_id and key_id are exclusive",
+        ),
+        (
+            j!({"conditions": [condition()], "pool_id": "main", "limit": 0}),
+            "limit is 1 to 500",
+        ),
+        (
+            j!({"conditions": [condition()], "pool_id": "main", "limit": 501}),
+            "limit is 1 to 500",
+        ),
+    ] {
+        let response = post(
+            app,
+            "/admin/guardrails/test",
+            &body.to_string(),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(
+            refusal(response).await,
+            (StatusCode::BAD_REQUEST, expected.to_string()),
+            "{body}"
+        );
+    }
+    for limit in [1, 500] {
+        let (status, answer) = dry_run(
+            app,
+            &cookie,
+            j!({"conditions": [condition()], "pool_id": "main", "limit": limit}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "limit {limit}: {answer}");
+        assert_eq!(answer["sample"]["limit"], limit);
+    }
+}
+
+#[tokio::test]
+async fn an_invalid_unsaved_condition_reads_its_index() {
+    let (parts, cookie) = seeded_sample().await;
+    let body =
+        j!({"conditions": [{"subject": "request_class", "operator": "equals"}], "pool_id": "main"});
+    let response = post(
+        &parts.app,
+        "/admin/guardrails/test",
+        &body.to_string(),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        refusal(response).await,
+        (
+            StatusCode::BAD_REQUEST,
+            "conditions[0]: value is required".to_string()
+        )
+    );
+}
+
+#[tokio::test]
+async fn the_mutation_log_writes_one_line_for_a_dry_run() {
+    let captured = Captured::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(captured.clone())
+        .finish();
+    // The harness drives every request through `oneshot` on this test's own task, so a thread-local subscriber
+    // sees every line the gate writes.
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let (parts, cookie) = seeded_sample().await;
+    // The other cases of this file write mutation lines on threads with no subscriber, and one of them can register
+    // the line's callsite as unwanted while this case's subscriber is being set. The seeding registered it by now,
+    // so a rebuild reads every subscriber's interest again.
+    tracing::callsite::rebuild_interest_cache();
+    let app = &parts.app;
+    let session = show(app, &cookie, "/admin/session").await["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (status, _) = dry_run(
+        app,
+        &cookie,
+        j!({"conditions": [condition()], "pool_id": "main"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    const MARK: &str = " INFO phoebis_admin::routes: admin mutation ";
+    let lines: Vec<String> = captured
+        .text()
+        .lines()
+        .filter_map(|line| line.split_once(MARK).map(|(_, fields)| fields.to_string()))
+        .filter(|fields| fields.contains("route=/admin/guardrails/test"))
+        .collect();
+    assert_eq!(
+        lines,
+        [format!(
+            "method=POST route=/admin/guardrails/test status=200 entity=guardrail id=- credential=session session={session}"
+        )]
+    );
+}
+
+#[tokio::test]
+async fn the_answer_carries_no_body_text() {
+    let (parts, cookie) = seeded_sample().await;
+    let (status, answer) = dry_run(
+        &parts.app,
+        &cookie,
+        j!({"conditions": [condition()], "pool_id": "main"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["totals"]["sampled"], 4, "the bodies were read");
+    let text = answer.to_string();
+    for marker in [
+        "Describe your most recent action",
+        "Classify the command",
+        "notes.txt",
+        "tool_one",
+    ] {
+        assert!(
+            !text.contains(marker),
+            "the answer carries {marker:?} from a body: {text}"
+        );
+    }
+    for request in answer["requests"].as_array().unwrap() {
+        let mut keys: Vec<&str> = request
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["condition", "id", "received_at", "verdict"],
+            "ids and instants alone"
+        );
+    }
 }

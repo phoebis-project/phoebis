@@ -1,6 +1,6 @@
 //! A request's guardrail matches: the column and the child table migration 39 adds, the write and the two reads, the
-//! request log's filter, the retention purge, the counts per guardrail with their query plans, and a blocked request's
-//! row and body as the assembler lands them.
+//! request log's filter, the retention purge, the counts per guardrail with their query plans, a blocked request's row
+//! and body as the assembler lands them, and the dry run's sample pages with the body each row captured.
 mod common;
 
 use std::sync::Arc;
@@ -12,9 +12,10 @@ use phoebis_bus::{
     RequestComplete, RequestObserved, RequestShape, ResponseFacts,
 };
 use phoebis_ledger::{
-    guardrail_counts, list_requests, request_by_id, run_retention, GuardrailCountRow,
-    GuardrailMatchRecord, LedgerConfig, LedgerDb, LiveKeys, RequestFilter, RequestRecord,
-    GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL,
+    guardrail_counts, guardrail_sample_page, list_requests, request_body, request_by_id,
+    run_retention, BodyRecord, GuardrailCountRow, GuardrailMatchRecord, LedgerConfig, LedgerDb,
+    LiveKeys, RequestFilter, RequestRecord, SampleRow, SampleSubject, GUARDRAIL_BLOCKED_BYTES_SQL,
+    GUARDRAIL_COUNTS_SQL,
 };
 
 const DAY_MS: i64 = 86_400_000;
@@ -459,4 +460,151 @@ async fn a_blocked_request_with_a_body_keeps_its_body_row_under_the_keys_window(
     assert_eq!(stored.request_body, body);
     assert_eq!(stored.expires_at, NOW + 5 + 24 * 3_600_000);
     up.shutdown().await;
+}
+
+/// A row of `key` in the pool `main`, captured or not, of the given kind, with no match.
+fn sampled(id: &str, at: i64, key: &str, captured: bool, kind: &str) -> RequestRecord {
+    RequestRecord {
+        bodies_captured: captured,
+        kind: kind.into(),
+        ..request(id, at, key, Vec::new())
+    }
+}
+
+/// The ids of one sample page and its next cursor.
+fn sample_ids(
+    db: &LedgerDb,
+    subject: SampleSubject<'_>,
+    since: i64,
+    cursor: Option<&str>,
+    limit: usize,
+) -> (Vec<String>, Option<String>) {
+    let (rows, next) = db
+        .read_blocking(|c| guardrail_sample_page(c, subject, since, cursor, limit))
+        .unwrap();
+    (rows.into_iter().map(|row| row.id).collect(), next)
+}
+
+/// A pool's sample reads both of its keys and a key's sample the one key, newest first, each leaving out a probe, an
+/// uncaptured row, another pool's row and a row older than the window, and the cursor carries the walk across pages.
+#[test]
+fn the_sample_page_walks_the_newest_captured_rows_of_a_pool_or_a_key_and_skips_probes_and_uncaptured_rows(
+) {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let hinted = RequestRecord {
+        client: Some("claude-code".into()),
+        request_class: Some("auxiliary".into()),
+        agent_type: Some("general-purpose".into()),
+        user_agent: Some("claude-cli/2.1.300".into()),
+        compaction: Some("auto".into()),
+        context_compacted: Some("true".into()),
+        ..sampled("a", 10_000, "k1", true, "inference")
+    };
+    for row in [
+        hinted,
+        sampled("b", 9_000, "k2", true, "count_tokens"),
+        sampled("c", 8_000, "k1", false, "inference"),
+        sampled("d", 7_000, "k2", true, "probe"),
+        sampled("e", 6_000, "k1", true, "inference"),
+        sampled("f", 5_000, "k2", true, "inference"),
+        sampled("old", 1_000, "k1", true, "inference"),
+        RequestRecord {
+            pool_id: Some("other".into()),
+            ..sampled("x", 9_500, "k3", true, "inference")
+        },
+    ] {
+        db.insert_request(&row, &[], None).unwrap();
+    }
+    let since = 2_000;
+    let pool = SampleSubject::Pool("main");
+    assert_eq!(
+        sample_ids(&db, pool, since, None, 10),
+        (vec!["a".into(), "b".into(), "e".into(), "f".into()], None),
+        "both keys of the pool, newest first"
+    );
+    assert_eq!(
+        sample_ids(&db, SampleSubject::Key("k1"), since, None, 10),
+        (vec!["a".into(), "e".into()], None)
+    );
+    assert_eq!(
+        sample_ids(&db, SampleSubject::Key("k2"), since, None, 10),
+        (vec!["b".into(), "f".into()], None)
+    );
+    assert_eq!(
+        sample_ids(&db, pool, 0, None, 10).0,
+        ["a", "b", "e", "f", "old"],
+        "the window alone leaves the old row out"
+    );
+
+    let (first, next) = sample_ids(&db, pool, since, None, 2);
+    assert_eq!(
+        (first, next.as_deref()),
+        (vec!["a".into(), "b".into()], Some("9000:b"))
+    );
+    assert_eq!(
+        sample_ids(&db, pool, since, next.as_deref(), 2),
+        (vec!["e".into(), "f".into()], None),
+        "a last page of exactly the limit offers no cursor"
+    );
+
+    let (rows, _) = db
+        .read_blocking(|c| guardrail_sample_page(c, pool, since, None, 1))
+        .unwrap();
+    assert_eq!(
+        rows,
+        [SampleRow {
+            id: "a".into(),
+            received_at: 10_000,
+            kind: "inference".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            client: Some("claude-code".into()),
+            request_class: Some("auxiliary".into()),
+            agent_type: Some("general-purpose".into()),
+            user_agent: Some("claude-cli/2.1.300".into()),
+            compaction: Some("auto".into()),
+            context_compacted: Some("true".into()),
+        }],
+        "the row carries the facts and the five hints it keeps"
+    );
+}
+
+/// The captured body comes back byte for byte, and a row whose body row has gone answers none, as does a row that
+/// never had one.
+#[test]
+fn request_body_answers_the_captured_bytes_and_none_where_the_body_row_is_gone() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let body = br#"{"model":"claude-sonnet-5","messages":[]}"#;
+    for id in ["kept", "aged"] {
+        db.insert_request(
+            &sampled(id, 5_000, "k", true, "inference"),
+            &[],
+            Some(&BodyRecord {
+                request_id: id.into(),
+                request_body: body.to_vec(),
+                response_body: None,
+                request_len_seen: body.len() as u64,
+                response_len_seen: 0,
+                expires_at: 1_000_000,
+            }),
+        )
+        .unwrap();
+    }
+    db.write(|c| {
+        c.execute("DELETE FROM bodies WHERE request_id = 'aged'", [])?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        db.read_blocking(|c| request_body(c, "kept")).unwrap(),
+        Some(body.to_vec())
+    );
+    assert_eq!(
+        db.read_blocking(|c| request_body(c, "aged")).unwrap(),
+        None,
+        "the row still reads captured, and its body has aged out"
+    );
+    assert_eq!(
+        db.read_blocking(|c| request_body(c, "never")).unwrap(),
+        None
+    );
 }

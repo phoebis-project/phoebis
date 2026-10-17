@@ -9,10 +9,12 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use phoebis_bus::OTHER_CLIENT;
 use phoebis_guardrails::{
-    CompiledGuardrail, Condition, ConditionWords, GuardrailAction, GuardrailMode, Preset,
-    MAX_CONDITIONS,
+    evaluate, parse_body, CompiledGuardrail, Condition, ConditionWords, GuardrailAction,
+    GuardrailMode, HintLookup, Preset, RequestFacts, Verdict, MAX_CONDITIONS,
 };
+use phoebis_ledger::{guardrail_sample_page, request_body, SampleSubject};
 use phoebis_store::{
     stamp_token, AttachmentSubject, GuardrailRow, RegistryLoad, StoreError, GUARDRAIL_BOUND,
 };
@@ -21,6 +23,7 @@ use serde_json::Value;
 use utoipa::ToSchema;
 
 use crate::accounts::within_text_bound;
+use crate::analytics::ledger_failure;
 use crate::openapi::{ConditionView, ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::pools::valid_slug;
 use crate::routes::{
@@ -195,6 +198,85 @@ pub(crate) struct GuardrailPresetView {
 #[serde(deny_unknown_fields)]
 pub(crate) struct PresetList {
     pub presets: Vec<GuardrailPresetView>,
+}
+
+/// Rows per `read` call, so a console read waits for at most one page of the dry run.
+const SAMPLE_PAGE: usize = 50;
+
+/// A definition and the requests to test it on: `guardrail` or `conditions`, and `pool_id` or `key_id`. The mode and
+/// the action play no part, since the test answers whether the definition matches. An unknown field in the body is
+/// refused.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GuardrailTestInput {
+    /// A saved guardrail's id, evaluated as stored whether enabled or not.
+    #[serde(default)]
+    #[schema(example = "subagent-status-summary")]
+    guardrail: Option<String>,
+    /// An unsaved definition, refused as a create refuses its conditions.
+    #[serde(default)]
+    conditions: Option<Vec<ConditionView>>,
+    /// The pool whose requests are sampled, across every key of the pool.
+    #[serde(default)]
+    pool_id: Option<String>,
+    /// The key whose requests are sampled.
+    #[serde(default)]
+    key_id: Option<String>,
+    /// The most requests the sample holds, 1 to 500, default 200.
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+/// The requests a test read: the one subject it named, its limit, and how far back it reached.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GuardrailTestSample {
+    /// The pool sampled, where the test named one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub pool_id: Option<String>,
+    /// The key sampled, where the test named one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub key_id: Option<String>,
+    pub limit: u32,
+    /// The longest body capture a key may ask for, since no captured body is older.
+    pub window_hours: u32,
+}
+
+/// The sample's verdicts counted.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GuardrailTestTotals {
+    pub sampled: u32,
+    pub matched: u32,
+    pub unmatched: u32,
+    pub indeterminate: u32,
+}
+
+/// One sampled request and what the definition answered on it.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GuardrailTestRequest {
+    pub id: String,
+    pub received_at: i64,
+    /// `matched`, `unmatched` or `indeterminate`.
+    #[schema(example = "unmatched")]
+    pub verdict: String,
+    /// The written index of the failing condition for `unmatched`, of the unknown one for `indeterminate`, null for
+    /// `matched`.
+    pub condition: Option<usize>,
+}
+
+/// The verdicts on the newest captured requests of a pool or a key. The answer carries ids and instants, never a
+/// body's text.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GuardrailTestResult {
+    pub sample: GuardrailTestSample,
+    pub totals: GuardrailTestTotals,
+    /// Newest first.
+    pub requests: Vec<GuardrailTestRequest>,
 }
 
 /// One registry load's guardrails and attachments indexed by subject and by guardrail, with the pools' and keys'
@@ -633,6 +715,219 @@ pub(crate) async fn presets() -> Response {
             .collect(),
     })
     .into_response()
+}
+
+/// Test a guardrail definition against the captured bodies of a pool or a key.
+#[utoipa::path(
+    post,
+    path = "/admin/guardrails/test",
+    operation_id = "guardrails_test",
+    tag = "Guardrails",
+    request_body(content = GuardrailTestInput, content_type = "application/json"),
+    responses(
+        (status = 200, description = "The verdict on each of the newest requests of the pool or the key with a captured body, no further back than the longest body capture. A sample with no such request answers `sampled` 0.", body = GuardrailTestResult),
+        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `conditions holds 1 to 16 entries`\n- `conditions[{i}]: {reason}`: the condition's index and the reason it is refused (`conditions[0]: value is required`), for an unsaved definition or a saved one this build no longer compiles\n- `guardrail and conditions are exclusive`\n- `guardrail or conditions is required`\n- `limit is 1 to 500`\n- `pool_id and key_id are exclusive`\n- `pool_id or key_id is required`", body = ErrorBody, example = json!({"error": "guardrail or conditions is required"})),
+        (status = 404, description = "- `no such guardrail`\n- `no such key`\n- `no such pool`", body = ErrorBody, example = json!({"error": "no such guardrail"})),
+        (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
+    ),
+)]
+pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
+    let Ok(input) = serde_json::from_slice::<GuardrailTestInput>(&body) else {
+        return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
+    };
+    match (&input.guardrail, &input.conditions) {
+        (Some(_), Some(_)) => {
+            return failure(
+                StatusCode::BAD_REQUEST,
+                "guardrail and conditions are exclusive",
+            )
+        }
+        (None, None) => {
+            return failure(
+                StatusCode::BAD_REQUEST,
+                "guardrail or conditions is required",
+            )
+        }
+        _ => {}
+    }
+    let (side, subject_id) = match (input.pool_id, input.key_id) {
+        (Some(_), Some(_)) => {
+            return failure(StatusCode::BAD_REQUEST, "pool_id and key_id are exclusive")
+        }
+        (Some(id), None) => (Side::Pool, id),
+        (None, Some(id)) => (Side::Key, id),
+        (None, None) => return failure(StatusCode::BAD_REQUEST, "pool_id or key_id is required"),
+    };
+    let limit = input.limit.unwrap_or(200);
+    if !(1..=500).contains(&limit) {
+        return failure(StatusCode::BAD_REQUEST, "limit is 1 to 500");
+    }
+    let (id, conditions) = match &input.guardrail {
+        Some(id) => match state.store.guardrail(id) {
+            Ok(Some(row)) => (row.id, row.conditions),
+            Ok(None) => return failure(StatusCode::NOT_FOUND, "no such guardrail"),
+            Err(error) => return store_failure(error),
+        },
+        None => match validate_conditions(input.conditions.as_deref().unwrap_or_default()) {
+            Ok(conditions) => ("test".to_string(), conditions),
+            Err(refusal) => return refusal,
+        },
+    };
+    // A saved row written under rules this build tightened can fail to compile, and its sentence names the condition
+    // to edit.
+    let compiled = match CompiledGuardrail::compile(
+        &id,
+        &id,
+        GuardrailMode::Observe,
+        GuardrailAction::Block,
+        &conditions,
+    ) {
+        Ok(compiled) => Arc::new(compiled),
+        Err(error) => return failure(StatusCode::BAD_REQUEST, &error.to_string()),
+    };
+    let known = match side {
+        Side::Key => state.store.api_key(&subject_id).map(|key| key.is_some()),
+        Side::Pool => state.store.pool(&subject_id).map(|pool| pool.is_some()),
+    };
+    match known {
+        Ok(true) => {}
+        Ok(false) => return failure(StatusCode::NOT_FOUND, side.missing()),
+        Err(error) => return store_failure(error),
+    }
+    let window_hours = state.body_capture_max_hours;
+    let since = (state.clock)() - i64::from(window_hours) * 3_600_000;
+    let limit_rows = limit as usize;
+    let mut sampled: Vec<(String, i64, Verdict)> = Vec::new();
+    let mut cursor: Option<String> = None;
+    // One `read` per page, so the reader mutex is released between pages and a console read waits for one page at
+    // most. A page asks for no more rows than the sample still has room for, and each body is parsed and dropped
+    // inside the closure, so no body outlives its row.
+    loop {
+        let page = SAMPLE_PAGE.min(limit_rows - sampled.len());
+        let compiled = Arc::clone(&compiled);
+        let subject_id = subject_id.clone();
+        let after = cursor.take();
+        let read = state
+            .ledger
+            .db()
+            .read(move |c| {
+                let (rows, next) = guardrail_sample_page(
+                    c,
+                    side.subject(&subject_id),
+                    since,
+                    after.as_deref(),
+                    page,
+                )?;
+                let mut out = Vec::with_capacity(rows.len());
+                for row in rows {
+                    // The row outlived its body's retention, so it answers nothing and takes no place in the sample.
+                    let Some(body) = request_body(c, &row.id)? else {
+                        continue;
+                    };
+                    let tree = parse_body(&body);
+                    let hints = HintLookup {
+                        request_class: row.request_class.as_deref(),
+                        agent_type: row.agent_type.as_deref(),
+                        user_agent: row.user_agent.as_deref(),
+                        compaction: row.compaction.as_deref(),
+                        context_compacted: row.context_compacted.as_deref(),
+                    };
+                    let facts = RequestFacts {
+                        kind: &row.kind,
+                        request_class: row.request_class.as_deref(),
+                        agent_type: row.agent_type.as_deref(),
+                        client: row.client.as_deref().unwrap_or(OTHER_CLIENT),
+                        model: &row.canonical_model,
+                        user_agent: row.user_agent.as_deref(),
+                        headers: &hints,
+                        body: tree.as_ref(),
+                    };
+                    let verdict = evaluate(&compiled, &facts);
+                    out.push((row.id, row.received_at, verdict));
+                }
+                Ok((out, next))
+            })
+            .await;
+        let (verdicts, next) = match read {
+            Ok(page) => page,
+            Err(error) => return ledger_failure(error),
+        };
+        sampled.extend(verdicts);
+        match next {
+            Some(next) if sampled.len() < limit_rows => cursor = Some(next),
+            _ => break,
+        }
+    }
+    let mut totals = GuardrailTestTotals {
+        sampled: 0,
+        matched: 0,
+        unmatched: 0,
+        indeterminate: 0,
+    };
+    let requests: Vec<GuardrailTestRequest> = sampled
+        .into_iter()
+        .map(|(id, received_at, verdict)| {
+            totals.sampled += 1;
+            let (word, condition) = match verdict {
+                Verdict::Matched => {
+                    totals.matched += 1;
+                    ("matched", None)
+                }
+                Verdict::Unmatched { failed } => {
+                    totals.unmatched += 1;
+                    ("unmatched", Some(failed))
+                }
+                Verdict::Indeterminate { condition } => {
+                    totals.indeterminate += 1;
+                    ("indeterminate", Some(condition))
+                }
+            };
+            GuardrailTestRequest {
+                id,
+                received_at,
+                verdict: word.to_string(),
+                condition,
+            }
+        })
+        .collect();
+    let (pool_id, key_id) = match side {
+        Side::Key => (None, Some(subject_id)),
+        Side::Pool => (Some(subject_id), None),
+    };
+    Json(GuardrailTestResult {
+        sample: GuardrailTestSample {
+            pool_id,
+            key_id,
+            limit,
+            window_hours,
+        },
+        totals,
+        requests,
+    })
+    .into_response()
+}
+
+/// The side a dry run samples, owned apart from its id so each page's closure carries both onto the blocking worker.
+#[derive(Clone, Copy)]
+enum Side {
+    Key,
+    Pool,
+}
+
+impl Side {
+    fn subject(self, id: &str) -> SampleSubject<'_> {
+        match self {
+            Side::Key => SampleSubject::Key(id),
+            Side::Pool => SampleSubject::Pool(id),
+        }
+    }
+
+    fn missing(self) -> &'static str {
+        match self {
+            Side::Key => "no such key",
+            Side::Pool => "no such pool",
+        }
+    }
 }
 
 /// Read a guardrail.

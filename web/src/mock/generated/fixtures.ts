@@ -10303,6 +10303,30 @@ export const FIXTURES: Record<string, Fixture> = {
       "updated_at": 1791721000000
     }
   },
+  "guardrail_test": {
+    "route": "POST /admin/guardrails/test",
+    "body": {
+      "sample": {
+        "pool_id": "main",
+        "limit": 50,
+        "window_hours": 72
+      },
+      "totals": {
+        "sampled": 1,
+        "matched": 0,
+        "unmatched": 1,
+        "indeterminate": 0
+      },
+      "requests": [
+        {
+          "id": "r-captured",
+          "received_at": 1791720940000,
+          "verdict": "unmatched",
+          "condition": 0
+        }
+      ]
+    }
+  },
   "guardrails": {
     "route": "GET /admin/guardrails",
     "body": {

@@ -1381,6 +1381,22 @@ async fn every_route_is_captured_and_holds_its_shape() {
             json(response).await,
         );
     }
+    // The pool's one captured row carries no request class, so the observing guardrail's answer holds an unmatched
+    // verdict with its failing index, the shape the console's test panel reads.
+    let response = post(
+        app,
+        "/admin/guardrails/test",
+        r#"{"guardrail":"subagent-status-summary","pool_id":"main","limit":50}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(response.status(), 200, "the dry run answers");
+    hold(
+        &planted,
+        "guardrail_test",
+        "POST /admin/guardrails/test",
+        json(response).await,
+    );
     // Main goes idle and a tick opens its idle window, so the overview carries a pool's row with its ten buckets for
     // the console to decode. It is read after the others, which show main busy.
     let request_generation = parts
