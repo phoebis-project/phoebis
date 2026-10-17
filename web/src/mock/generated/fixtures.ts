@@ -12597,6 +12597,28 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
+          "id": 27,
+          "at": 1791721000000,
+          "kind": "window_cleared",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "window": "five_hour",
+            "utilization_before": 1,
+            "utilization": 0,
+            "reset": 1791724600000,
+            "source": "poll",
+            "source_request_id": null
+          }
+        },
+        {
+          "type": "event",
           "id": 21,
           "at": 1791721000000,
           "kind": "cooldown_set",
@@ -12995,28 +13017,6 @@ export const FIXTURES: Record<string, Fixture> = {
             "duration_ms": 1080000,
             "factor_min": 0.35,
             "held_ms": 240000
-          }
-        },
-        {
-          "type": "event",
-          "id": 27,
-          "at": 1791718600000,
-          "kind": "window_cleared",
-          "account_id": "direct",
-          "key_id": null,
-          "pool_id": null,
-          "session_id": null,
-          "agent_id": null,
-          "model": null,
-          "request_id": null,
-          "actor": null,
-          "detail": {
-            "window": "five_hour",
-            "utilization_before": 1,
-            "utilization": 0,
-            "reset": 1791733000000,
-            "source": "poll",
-            "source_request_id": null
           }
         },
         {

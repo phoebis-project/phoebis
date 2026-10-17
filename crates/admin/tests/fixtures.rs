@@ -2099,15 +2099,16 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             restored: false,
             at: at(4),
         },
+        // The 5-hour window the probe's head spent, read back under its limit under the same reset.
         RouterEvent::WindowCleared {
-            account_id: "direct".into(),
+            account_id: "business".into(),
             window: "five_hour".into(),
             utilization_before: 1.0,
             utilization: 0.0,
-            reset: Some(at(20) + 4 * 3_600_000),
+            reset: Some(now + 3_600_000),
             source: phoebis_routing::WindowSource::Poll,
             source_request_id: None,
-            at: at(20),
+            at: now,
         },
         RouterEvent::WindowReset {
             account_id: "business".into(),

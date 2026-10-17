@@ -4367,7 +4367,8 @@ impl Task {
                     window: window.to_string(),
                     utilization_before: stored.utilization,
                     utilization: reading.utilization,
-                    reset: reading.reset,
+                    // A reading that names no reset before the stored one passed stands under the stored reset.
+                    reset: reading.reset.or(stored.reset),
                     source: reading.source,
                     source_request_id: source_request_id.map(String::from),
                     at: now,

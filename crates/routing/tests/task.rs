@@ -8793,6 +8793,47 @@ async fn a_reading_at_the_limit_after_a_clear_emits_window_spent_again_under_the
 }
 
 #[tokio::test]
+async fn a_clear_whose_reading_names_no_reset_carries_the_stored_reset() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 5 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 1.0, Some(reset)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::WindowSpent { .. }
+    ));
+    // Read before the stored reset, so no reset passed and the window stands under the reset it read.
+    handle
+        .report(observed("a", sample_with(2_000, FIVE_HOUR, 0.4, None)))
+        .await;
+    handle.samples().await.unwrap();
+    let event = next_event(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            0.4,
+            Some(reset),
+            WindowSource::Poll,
+            None
+        )),
+        "{event:?}"
+    );
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
 async fn the_clock_walk_announces_the_stored_reset_once_it_passes_after_a_clear() {
     use phoebis_routing::RouterEvent;
     let store = seeded_oauth(&["a"]);
