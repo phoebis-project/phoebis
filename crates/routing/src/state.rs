@@ -1098,8 +1098,8 @@ pub struct FundingRetry {
     /// table, so a slow upstream head never frees it early.
     pub claimed_by: Option<u64>,
     /// When the entry was made: the mark's landing, or the claim that found none after a restart. A mark's stamp is
-    /// strictly later than the account's previous one, so it is unique per account while the entry lives and names
-    /// the entry the mark's acknowledgment credits. A retry's success that went out before it says nothing of the
+    /// strictly later than the entry it replaces, so it is unique per account while the entry lives and names the
+    /// entry the mark's acknowledgment credits. A retry's success that went out before it says nothing of the
     /// balance the mark found.
     pub stamped_at: i64,
     /// The account row's revision once the writer acknowledged the mark's write, `None` until then. A load that read
@@ -1575,9 +1575,10 @@ impl RoutingState {
         v
     }
 
-    /// Stamps the account's retry `interval_ms` past `now` under the mark's `incarnation`, frees the slot, and answers
-    /// the entry's stamp, `max(now, the account's previous stamp + 1)`: two marks in one millisecond still name two
-    /// entries, so the first one's acknowledgment cannot credit the second.
+    /// Stamps the account's retry `interval_ms` past `now` under the mark's `incarnation`, frees the slot, since the
+    /// attempt that held it ended in this mark, and answers the entry's stamp, `max(now, the account's previous
+    /// stamp + 1)`: two marks in one millisecond still name two entries, so the first one's acknowledgment cannot
+    /// credit the second.
     pub fn funding_marked(
         &mut self,
         account_id: &str,
