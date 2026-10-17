@@ -2,13 +2,21 @@
 
 # The builder cooks the dependency tree with cargo-chef so BoringSSL and the crates stay a cached layer until
 # Cargo.lock or a manifest changes; the runtime is distroless, so the health check is the binary's own subcommand.
+FROM node:26-trixie-slim AS node
+
 FROM rust:1.96.1-trixie AS chef
-# clang, cmake, libclang-dev, and pkg-config build BoringSSL and its bindings; nodejs and npm build the console.
+# clang, cmake, libclang-dev, and pkg-config build BoringSSL and its bindings.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends clang cmake libclang-dev nodejs npm pkg-config \
+ && apt-get install -y --no-install-recommends clang cmake libclang-dev pkg-config \
  && rm -rf /var/lib/apt/lists/* \
  && rustup component add clippy rustfmt \
  && cargo install cargo-chef --locked --version 0.1.78
+# The node stage's Node and npm build the console. npm and npx are linked here because a COPY follows a link and
+# lands npm-cli.js as a plain file, whose relative require then fails.
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 WORKDIR /src
 
 FROM chef AS planner

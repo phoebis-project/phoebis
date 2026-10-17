@@ -17,10 +17,10 @@ toolchain install` reads. BoringSSL builds from source through the `boring` and 
 its bindings need clang, cmake, libclang and pkg-config on the host.
 
 The console is embedded at build time. The UI crate's build script builds `web/dist` when the bundle is missing or older
-than its sources: it checks `node --version` against `^20.19.0 || >=22.12.0` and stops with
-`the console build needs Node ^20.19.0 || >=22.12.0, and {found} was found` outside that range, then runs
+than its sources: it checks `node --version` against `>=26.0.0` and stops with
+`the console build needs Node >=26.0.0, and {found} was found` outside that range, then runs
 `npm ci --no-audit --no-fund` in `web/` unless `node_modules` carries the stamp of an install at least as new as the
-lockfile, and `npm run build`. `web/.nvmrc` names 20.19, the version the workflows install. When the bundle cannot be
+lockfile, and `npm run build`. `web/.nvmrc` names 26.11.1, the version the workflows install. When the bundle cannot be
 built, the script discards `web/dist` and warns
 `the web bundle could not be built, so web/dist was discarded and the router will serve the placeholder page. Set
 PHOEBIS_SKIP_UI_BUILD=1 to embed the bundle on disk as it is.`, since a build that quietly embeds the previous console

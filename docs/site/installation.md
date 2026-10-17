@@ -40,11 +40,10 @@ The binary lands at `target/release/phoebis`. The build needs a Unix host, Linux
 permission checks, the backup and the bootstrap file's loader use `std::os::unix::fs`, and the service's stop signal is
 the Unix `SIGTERM`, so the router does not build on Windows. A Windows machine runs it on a Linux host or in a Linux
 runtime instead. The toolchain is pinned in `rust-toolchain.toml` to 1.96.1, and BoringSSL builds from source, which
-needs cmake, clang and libclang. The embedded console needs Node 20.19 or a later 20, or 22.12 or later, and npm on the
-path: the build script checks `node --version` against that range, then runs `npm ci` and `npm run build` in `web/`
-whenever the bundle is missing or older than its sources. `PHOEBIS_SKIP_UI_BUILD=1` skips the Node step and embeds
-`web/dist` as it is, and a build with no bundle on disk embeds a placeholder page, which the admin listener then serves
-in place of the console.
+needs cmake, clang and libclang. The embedded console needs Node 26 or later, and npm on the path: the build script
+checks `node --version` against that range, then runs `npm ci` and `npm run build` in `web/` whenever the bundle is
+missing or older than its sources. `PHOEBIS_SKIP_UI_BUILD=1` skips the Node step and embeds `web/dist` as it is, and a
+build with no bundle on disk embeds a placeholder page, which the admin listener then serves in place of the console.
 
 ## Install as a service
 
