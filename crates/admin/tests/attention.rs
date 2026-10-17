@@ -67,6 +67,7 @@ fn complete(id: &str, outcome: Outcome, drift: Option<&str>, at: i64) -> Event {
         held: None,
         diagnostics: None,
         message_id: None,
+        skipped_events: 0,
         finished_at: at,
     })
 }

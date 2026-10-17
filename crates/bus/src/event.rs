@@ -446,6 +446,9 @@ pub struct RequestComplete {
     /// The `id` of the message the committed answer carried (`message_start`, or the JSON document), as the
     /// upstream sent it; `None` for a local answer, a cut before the first event, or an answer without one.
     pub message_id: Option<String>,
+    /// Events the stream's parser skipped for passing its bound, 0 where none was: the relay logs them and the
+    /// ledger reads nothing of it.
+    pub skipped_events: u32,
     pub finished_at: i64,
 }
 

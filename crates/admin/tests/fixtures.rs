@@ -1006,6 +1006,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             held: None,
             diagnostics: None,
             message_id: Some("msg_k1_1".into()),
+            skipped_events: 0,
             finished_at: now,
         }));
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
@@ -1105,6 +1106,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             held: None,
             diagnostics: None,
             message_id: None,
+            skipped_events: 0,
             finished_at: now,
         }));
     // The replay's counts while the parked table is still empty.

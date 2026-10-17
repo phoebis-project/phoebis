@@ -697,6 +697,7 @@ impl Rig {
             held: None,
             diagnostics: None,
             message_id: None,
+            skipped_events: 0,
             finished_at: self.now(),
         })
     }

@@ -861,6 +861,7 @@ mod tests {
             held: None,
             diagnostics: None,
             message_id: None,
+            skipped_events: 0,
             finished_at: 1_500,
         })
     }
@@ -901,6 +902,7 @@ mod tests {
             held: None,
             diagnostics: None,
             message_id: None,
+            skipped_events: 0,
             finished_at: 1_500,
         }
     }

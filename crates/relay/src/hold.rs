@@ -13,7 +13,8 @@ use crate::sse::{Overflow, SseEvent, SseParser};
 use crate::stream::STREAM_DECODED_CHUNK_MAX;
 
 pub const HOLD_BUFFER: usize = 64 * 1024;
-pub const INSPECT_BUFFER: usize = 64 * 1024;
+/// The bytes one event may hold before the hold's parser gives up and the stream's parser skips it.
+pub const INSPECT_BUFFER: usize = 512 * 1024;
 
 #[derive(Debug)]
 pub enum Commit {

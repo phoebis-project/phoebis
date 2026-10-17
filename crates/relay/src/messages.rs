@@ -709,6 +709,7 @@ impl Trace {
         response_chunks: Option<u32>,
         end: Option<(Outcome, Option<String>)>,
         message_id: Option<String>,
+        skipped_events: u32,
         finished_at: i64,
     ) {
         // Held by value across the publish: a handler dropped while a durable slot is full drops the guard still
@@ -739,6 +740,7 @@ impl Trace {
                 .and_then(|h| serde_json::to_string(h).ok()),
             diagnostics: outcome.diagnostics,
             message_id,
+            skipped_events,
             finished_at,
         }))
         .await;
@@ -807,6 +809,7 @@ impl Drop for CompletionGuard {
                 .and_then(|h| serde_json::to_string(&h).ok()),
             diagnostics: None,
             message_id: None,
+            skipped_events: 0,
             finished_at: (self.trace.clock)(),
         });
         // `Drop` cannot await, so the durable publish runs on the runtime that is dropping the handler, under the body
@@ -3827,6 +3830,7 @@ impl Relay {
                 None,
                 None,
                 None,
+                0,
                 (self.clock)(),
             )
             .await;
@@ -4128,9 +4132,11 @@ impl Relay {
         .then(|| {
             // A copy that stopped following the stream, and a body no hold read, are read afresh.
             let (bus_decoder, parser, held) = match handover {
-                Some((bus_decoder, parser, held)) => {
-                    (bus_decoder, event_stream.then_some(parser), Some(held))
-                }
+                Some((bus_decoder, parser, held)) => (
+                    bus_decoder,
+                    event_stream.then_some(parser.into_skipping(INSPECT_BUFFER)),
+                    Some(held),
+                ),
                 None => (
                     (!caller_decodes)
                         .then(|| {
@@ -4140,7 +4146,7 @@ impl Relay {
                                 .map(|coding| self.copy_decoder(coding))
                         })
                         .flatten(),
-                    event_stream.then(|| SseParser::new(INSPECT_BUFFER)),
+                    event_stream.then(|| SseParser::skipping(INSPECT_BUFFER)),
                     None,
                 ),
             };
@@ -4289,6 +4295,7 @@ impl Relay {
                 None,
                 // An error document carries no message `id`.
                 None,
+                0,
                 (self.clock)(),
             )
             .await;

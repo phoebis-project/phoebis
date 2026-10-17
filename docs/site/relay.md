@@ -223,8 +223,12 @@ Every upstream response head is classified before a byte reaches the client, by 
 until its `message_start` or its first `error` event, at most 64 KiB and 30 seconds, so a rate-limit error delivered as
 a `200` stream can still fail over without a byte having reached the client. A stream that has not reached its first
 committing event by then is forwarded as it stands, because the client is waiting and a longer hold buys no better
-verdict. Every cooldown deadline carries a second of margin, so a request sent at the reset is not refused by a clock a
-hair behind.
+verdict. Past the commit, the router's own reading of a stream, the copy the ledger and the other bus readers take their
+phases and usage from, holds at most 512 KiB of one event while that event is still arriving. An event that outgrows
+the bound before its end is skipped in that copy and the events after it are still read, while one that arrives whole
+in one decoded piece is parsed whatever its size. The relay logs one warning at the end of a stream that had an event
+skipped, and the client receives every byte as sent either way. Every cooldown deadline carries a second of margin, so
+a request sent at the reset is not refused by a clock a hair behind.
 
 | Head | Verdict | What follows |
 | --- | --- | --- |
