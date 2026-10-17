@@ -1482,7 +1482,7 @@ test("a refusal's record decodes its pin reason as not looked up", () => {
 test('request rows fold into analytics groups with the same sums the routes answer', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   const [all] = d.foldGroups(page.requests, 'all');
-  assert.equal(all.requests, 6);
+  assert.equal(all.requests, 7);
   assert.equal(all.succeeded, 4);
   assert.equal(all.failed, 1, 'a stream that ended short is not a failure');
   assert.equal(all.incomplete, 1);
@@ -1899,7 +1899,7 @@ test('a session fold keeps two holders of one key id apart and labels the earlie
   const groups = inZone('UTC', () => d.foldGroups(rows, 'key'));
   assert.deepEqual(
     groups.map((g) => [g.key, g.label, g.requests]),
-    [[`desktop@${live.keyGeneration}`, 'desktop', 5], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created Oct 11, 2026, 12:15)', 1]],
+    [[`desktop@${live.keyGeneration}`, 'desktop', 6], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created Oct 11, 2026, 12:15)', 1]],
     'the key a group carries is the lifetime the requests route selects by',
   );
   assert.deepEqual(d.foldGroups([{ ...live, keyGeneration: 0, keyId: null }], 'key').map((g) => [g.key, g.label]), [['-@0', 'unattributed']]);
@@ -1925,12 +1925,12 @@ test('a session view folds every page the cursor names', () => {
   const load = async (cursor) => { calls += 1; return cursor === undefined ? pages[0] : pages[1]; };
   return d.loadSessionRequests(load, 20).then(({ partial, requests }) => {
     assert.equal(calls, 2);
-    assert.equal(requests.length, 6, 'both pages folded');
+    assert.equal(requests.length, 7, 'both pages folded');
     assert.equal(partial, false);
     return d.loadSessionRequests(async () => ({ nextCursor: 'more', requests: page.requests }), 2);
   }).then(({ partial, requests }) => {
     assert.equal(partial, true, 'the page bound marks the result partial');
-    assert.equal(requests.length, 12);
+    assert.equal(requests.length, 14);
   });
 });
 
