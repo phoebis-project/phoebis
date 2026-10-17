@@ -528,6 +528,7 @@ fn a_registry_from_a_newer_build_is_refused_at_the_open_before_the_key_file_and_
         "{}",
         printed(&out)
     );
+    assert_no_key(&out, &[OLD_KEY]);
     assert!(!key_file(dir.path()).exists(), "{}", printed(&out));
     assert!(
         !lock.exists(),
@@ -606,6 +607,9 @@ fn a_declined_run_on_a_registry_without_a_key_file_writes_no_key_and_removes_the
     assert!(!key_file(dir.path()).exists(), "{}", printed(&out));
     assert!(!lock.exists(), "{}", printed(&out));
     assert_no_key(&out, &[OLD_KEY]);
+    // The key the run generated stayed in memory, so its hex is unknown here: stdout is pinned whole above, and
+    // stderr carries nothing.
+    assert!(out.stderr.is_empty(), "{}", printed(&out));
     assert_untouched(&registry(dir.path()), &old);
 }
 
@@ -689,6 +693,9 @@ fn a_discard_that_does_not_land_removes_the_key_file_its_directory_and_the_lock_
     assert!(!keys.exists(), "{}", printed(&out));
     assert!(!lock.exists(), "{}", printed(&out));
     assert_no_key(&out, &[OLD_KEY]);
+    // The key file the run wrote is gone, so its hex is unknown here: stdout is pinned above up to the error, and
+    // stderr carries nothing.
+    assert!(out.stderr.is_empty(), "{}", printed(&out));
     assert_untouched(&registry(dir.path()), &old);
 }
 

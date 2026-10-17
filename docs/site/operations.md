@@ -159,7 +159,7 @@ service layout, as root:
    accounts disconnected, API-key accounts unpaired and open refresh attempts failed.
 5. Answer the prompt `type yes to discard them: `. Any other answer prints `the registry was not changed` and exits 2,
    and a declined run discards nothing, writes no key file and removes the registry's lock file where this run
-   created it, naming the file in its last line, `removed the lock file {path} this run created`. `--yes` skips the
+   created it, naming the file in its removal line, `removed the lock file {path} this run created`. `--yes` skips the
    question for a script.
 
 It refuses with `the registry is locked, stop the service first` while a router holds the registry, with `the storage
@@ -173,13 +173,13 @@ and a preparation that fails prints `the registry's schema could not be prepared
 discarded: {error}` and exits 1. A run that stops before the preparation leaves the registry at the schema version it
 found, and one whose preparation fails leaves it at the step it reached, since each migration step commits alone. A
 run that exits 1 or 2 removes the key file it wrote, with any directory it created for it, and the registry's lock
-file where this run created it, and past the registry's open its last line names them, `removed the key file {path}
-and the lock file {path} this run created`, naming the one it created where it created one. Then it runs the sequence
-under [What it runs](#what-it-runs) as one transaction, seals a new canary under the new key in that same transaction,
-prints the counts again under `discarded what the old key sealed:` and `and marked the accounts:`, then `sealed a new
-canary under the key at {path}`, then `start the service, then:` over the three steps that remain, and exits 0 once
-the accounts are marked, keeping the key file and the lock file for the service's next start. It prints counts and
-paths, never a key. Then start the service, and:
+file where this run created it, and past the registry's open the removal line names them, `removed the key file {path}
+and the lock file {path} this run created`, naming the one it created where it created one, with a line after it for
+each it could not remove. Then it runs the sequence under [What it runs](#what-it-runs) as one transaction, seals a new
+canary under the new key in that same transaction, prints the counts again under `discarded what the old key sealed:`
+and `and marked the accounts:`, then `sealed a new canary under the key at {path}`, then `start the service, then:`
+over the three steps that remain, and exits 0 once the accounts are marked, keeping the key file and the lock file for
+the service's next start. It prints counts and paths, never a key. Then start the service, and:
 
 - Re-enter every API-key secret in the console.
 - Pair every OAuth account again in the console.
