@@ -1606,6 +1606,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "phoebis-guardrails"
+version = "0.1.0"
+dependencies = [
+ "phoebis-cch",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "phoebis-keepalive"
 version = "0.1.0"
 dependencies = [

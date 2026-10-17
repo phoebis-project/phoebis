@@ -1,0 +1,51 @@
+{
+  "model": "claude-opus-5",
+  "max_tokens": 512,
+  "stream": true,
+  "system": [
+    {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.300; cc_entrypoint=cli"},
+    {"type": "text", "text": "You help with work in a software project."},
+    {"type": "text", "text": "Keep answers short and on the subject."}
+  ],
+  "tools": [
+    {"name": "tool_one", "description": "The first tool.", "input_schema": {"type": "object"}},
+    {"name": "tool_two", "description": "The second tool.", "input_schema": {"type": "object"}},
+    {"name": "tool_three", "description": "The third tool.", "input_schema": {"type": "object"}},
+    {"name": "tool_four", "description": "The fourth tool.", "input_schema": {"type": "object"}},
+    {"name": "tool_five", "description": "The fifth tool.", "input_schema": {"type": "object"}},
+    {"name": "tool_six", "description": "The sixth tool.", "input_schema": {"type": "object"}},
+    {"name": "tool_seven", "description": "The seventh tool.", "input_schema": {"type": "object"}},
+    {"name": "tool_eight", "description": "The eighth tool.", "input_schema": {"type": "object"}},
+    {"name": "tool_nine", "description": "The ninth tool.", "input_schema": {"type": "object"}},
+    {"name": "tool_ten", "description": "The tenth tool.", "input_schema": {"type": "object"}}
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "Read the notes and report what they say."}
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {"type": "text", "text": "Opening the notes now."},
+        {"type": "tool_use", "id": "toolu_1", "name": "tool_one", "input": {"path": "notes.txt"}}
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "The notes list three items."},
+        {"type": "text", "text": "Describe your most recent action in 3-5 words using present tense (-ing). Output only the words."}
+      ]
+    },
+    {
+      "role": "system",
+      "output_config": {"effort": "high"},
+      "content": [
+        {"type": "text", "text": "control"}
+      ]
+    }
+  ]
+}
