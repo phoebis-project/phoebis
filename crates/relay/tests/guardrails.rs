@@ -141,7 +141,8 @@ async fn harness(up: &FakeUpstream, pool: PoolSpec) -> (Harness, Subscriber) {
 struct Answer {
     status: u16,
     headers: HeaderMap,
-    /// `error.message` of a local refusal, empty for an answer that carries none.
+    /// `error.type` and `error.message` of a local refusal, empty for an answer that carries none.
+    error_type: String,
     message: String,
     /// The request's events in publish order, the response chunks left out.
     events: Vec<Event>,
@@ -152,10 +153,11 @@ impl Answer {
         let status = resp.status().as_u16();
         let headers = resp.headers().clone();
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let message = serde_json::from_slice::<serde_json::Value>(&body)
-            .ok()
-            .and_then(|v| v["error"]["message"].as_str().map(String::from))
+        let error = serde_json::from_slice::<serde_json::Value>(&body)
+            .map(|v| v["error"].clone())
             .unwrap_or_default();
+        let text = |member: &str| error[member].as_str().unwrap_or_default().to_string();
+        let (error_type, message) = (text("type"), text("message"));
         let events = drain_until_complete(sub)
             .await
             .into_iter()
@@ -164,6 +166,7 @@ impl Answer {
         Answer {
             status,
             headers,
+            error_type,
             message,
             events,
         }
@@ -200,12 +203,14 @@ async fn an_enforcing_pool_guardrail_refuses_the_fork_before_the_upstream_sees_i
             answer.status,
             answer.header("x-phoebis-error-code"),
             answer.header("x-should-retry"),
+            answer.error_type.as_str(),
             answer.message.as_str()
         ),
         (
             400,
             Some("guardrail_blocked"),
             Some("false"),
+            "invalid_request_error",
             r#"blocked by guardrail "Subagent status summary""#
         )
     );
@@ -462,10 +467,15 @@ async fn a_second_request_on_the_key_is_admitted_after_a_block() {
     let row = summary(GuardrailMode::Enforce);
     guarded(&h, &row, &["main"], &[]).await;
     assert_eq!(send(&h, &mut sub, fork()).await.status, 400);
+    assert_eq!(
+        h.router.in_flight().key("desktop"),
+        0,
+        "the block released the key's permit when it answered"
+    );
     let answer = send(&h, &mut sub, classifier()).await;
     assert_eq!(
         answer.status, 200,
-        "the block released the key's permit when it answered"
+        "the key admits the next request, which this guardrail does not match"
     );
     assert!(answer.observed().guardrails.is_empty());
     assert_eq!(up.requests().len(), 1);

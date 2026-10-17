@@ -1470,8 +1470,9 @@ impl Relay {
         );
         // Before the facts are published and before any account is read: a block is a refusal the operator asked
         // for, so no selection, pin or window sees the request. A probe is the router's own traffic and is never
-        // evaluated.
-        let evaluation = if trace.kind == Kind::Probe {
+        // evaluated, and a key without guardrails pays the one lookup and builds no facts.
+        let set = snapshot.guardrails_for(&key);
+        let evaluation = if trace.kind == Kind::Probe || set.is_empty() {
             Evaluation::default()
         } else {
             let headers = HeaderMapLookup(&parts.headers);
@@ -1481,7 +1482,7 @@ impl Relay {
                 .and_then(|v| v.to_str().ok())
                 .map(phoebis_bus::user_agent_cut);
             let agent_type = crate::identity::header_id(&parts.headers, "x-claude-code-agent-type");
-            let facts = RequestFacts {
+            let request = RequestFacts {
                 kind: trace.kind.as_str(),
                 request_class: request_class.as_deref(),
                 agent_type: agent_type.as_deref(),
@@ -1491,10 +1492,7 @@ impl Relay {
                 headers: &headers,
                 body: tree.as_ref(),
             };
-            evaluate_all(
-                snapshot.guardrails_for(&key).iter().map(Arc::as_ref),
-                &facts,
-            )
+            evaluate_all(set.iter().map(Arc::as_ref), &request)
         };
         drop(tree);
         let guardrails: Vec<GuardrailMatch> = evaluation
