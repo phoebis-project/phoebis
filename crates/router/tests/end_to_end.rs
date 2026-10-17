@@ -4206,6 +4206,14 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         },
     )
     .await;
+    // The release took `e2e-ui`'s pin and the exhaustion below pins nothing, so this session of its own is the pin
+    // the pool's member holds when the pass reads `/pools`, where the members' pins must sum to more than 0.
+    let pinned = fixture_request(&client, proxy_port, &secret, "e2e-pinned")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(pinned.status(), 200);
+    let _ = pinned.text().await.unwrap();
     // The pool's only member answers a unified 429 once: the router cools it, finds no sibling, answers the
     // exhaustion 429, and the attention reader holds the pool's pool_exhausted condition. The standing answer
     // under this credential stays the 200, so a keepalive probe after the 429 is still served.

@@ -1537,7 +1537,8 @@ async function utilizationCeiling(theme) {
 
 /**
  * Every pool card's member Pins cells sum to its Active pins tile. The route counts both under the pool's keys, the
- * pool's whole and each member's on its own account, so a column that drifts from the tile is a read gone wrong.
+ * pool's whole and each member's on its own account, so a column that drifts from the tile is a read gone wrong. The
+ * router's seed leaves a pin under its pool's member, so there a card whose members sum to 0 compares nothing.
  */
 async function poolMemberPins(theme) {
   const say = (what) => failures.push(`${theme} /pools member pins: ${what}`);
@@ -1561,6 +1562,7 @@ async function poolMemberPins(theme) {
     if (Number.isNaN(active)) say(`the ${card.name} card draws no Active pins figure`);
     else if (members.some(Number.isNaN)) say(`the ${card.name} card's Pins column reads ${JSON.stringify(card.members)}`);
     else if (sum !== active) say(`the ${card.name} card's members hold ${members.join(' + ')} = ${sum} pins, not its Active pins ${active}`);
+    else if (!mock && sum === 0) say(`the ${card.name} card's members hold no pin, so the sum proves nothing`);
   }
 }
 
@@ -7899,6 +7901,11 @@ async function burnShot(theme) {
   measurements.push(`${theme} /analytics burn plan chart shades ${areas} band runs`);
   if (areas === 0) failures.push(`${theme} /analytics: the Burn view's 5-hour plan card shades no hour of the peak band`);
   await atRest();
+  // As the view shots do: a full-page capture paints the fixed header and sidebar at the window's scroll offset, and
+  // a shot of a scrolled page reproduces byte for byte, so no later diff would catch it.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const offset = await page.evaluate(() => window.scrollY);
+  if (offset !== 0) failures.push(`${theme} /analytics burn: the shot was taken ${offset} px down the page`);
   await page.screenshot({ fullPage: true, path: join(shots, theme, 'analytics-burn.png') });
 }
 
