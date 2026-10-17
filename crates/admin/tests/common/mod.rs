@@ -189,6 +189,27 @@ pub async fn admin_parts_full_on_rated(
                 share: SharePricer::default().with_rate(rate),
                 ..RouterConfig::default()
             },
+            LedgerConfig::default(),
+        )
+        .await,
+    )
+}
+
+/// The full harness with its ledger on `ledger_config`, whose two day counts the settings route mirrors: a case that
+/// sets them apart tells each member from the other, which the default's two equal figures cannot.
+pub async fn admin_parts_full_retained(ledger_config: LedgerConfig) -> Full {
+    full_from(
+        build_app_routed(
+            None,
+            ACCOUNT_UUID,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            RouterConfig::default(),
+            ledger_config,
         )
         .await,
     )
@@ -851,11 +872,13 @@ async fn build_app(
         tls_reload,
         costs,
         RouterConfig::default(),
+        LedgerConfig::default(),
     )
     .await
 }
 
-/// `build_app` with the router spawned on `routing`.
+/// `build_app` with the router spawned on `routing` and the ledger on `ledger_config`, whose two day counts the
+/// settings view mirrors.
 #[allow(clippy::too_many_arguments)]
 async fn build_app_routed(
     identity: Option<Identity>,
@@ -867,6 +890,7 @@ async fn build_app_routed(
     tls_reload: Option<Arc<dyn TlsReload>>,
     costs: Option<PlanTables>,
     routing: RouterConfig,
+    ledger_config: LedgerConfig,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_269_linux_x64();
@@ -1003,7 +1027,7 @@ async fn build_app_routed(
         router_handle.clone(),
         clock.clone(),
         metrics.clone(),
-        LedgerConfig::default(),
+        ledger_config.clone(),
     );
     // The admin harness had no relay before this task; keepalive needs one to probe through, even though
     // nothing here drives its scheduler.
@@ -1076,8 +1100,8 @@ async fn build_app_routed(
         profile: p.name.into(),
         proxy_listen: "test".into(),
         proxy_tls: tls,
-        retention_days: LedgerConfig::default().retention_days,
-        rollup_retention_days: LedgerConfig::default().rollup_retention_days,
+        retention_days: ledger_config.retention_days,
+        rollup_retention_days: ledger_config.rollup_retention_days,
         session_expire_after_seconds: 86_400,
         storage_path: "test".into(),
         subscription_costs_path: None,

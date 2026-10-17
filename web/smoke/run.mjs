@@ -20297,17 +20297,18 @@ m.unmount();
   page.unmount();
 }
 
-// A zero on a retention key keeps its rows forever, so About reads "kept forever" on that line.
+// A zero on a retention key keeps its rows forever, so About reads "kept forever" on that line, and one day reads in
+// the singular.
 {
   const { getSettings } = api;
   api.getSettings = async (...args) => {
     const settings = await getSettings.apply(api, args);
-    return { ...settings, retention: { ...settings.retention, retentionDays: 0, rollupRetentionDays: 30 } };
+    return { ...settings, retention: { ...settings.retention, retentionDays: 0, rollupRetentionDays: 1 } };
   };
   const page = await mount('/settings', { now: CLOCK_ORIGIN });
   const about = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
   const kept = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`).filter((row) => row.startsWith('Requests, samples and the routing log=') || row.startsWith('Rollups='));
-  results.push({ name: '/settings a zero retention reads kept forever and a day count kept for its days', ok: JSON.stringify(kept) === JSON.stringify(['Requests, samples and the routing log=kept forever', 'Rollups=kept for 30 days']), missing: kept });
+  results.push({ name: '/settings a zero retention reads kept forever and a one-day retention kept for 1 day', ok: JSON.stringify(kept) === JSON.stringify(['Requests, samples and the routing log=kept forever', 'Rollups=kept for 1 day']), missing: kept });
   api.getSettings = getSettings;
   page.unmount();
 }

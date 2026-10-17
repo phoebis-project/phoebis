@@ -49,7 +49,7 @@ const ENV_TERMS: { body: string; term: string }[] = [
 const bootstrapNote = (setting: string) => `Set by ${setting} in the configuration file`;
 
 /** About's words for a retention key's day count, where 0 keeps the rows forever. */
-const keptFor = (days: number) => (days === 0 ? 'kept forever' : `kept for ${days} days`);
+const keptFor = (days: number) => (days === 0 ? 'kept forever' : days === 1 ? 'kept for 1 day' : `kept for ${days} days`);
 
 /**
  * A table's date in force, its revision count and the next date while one is pending, read at one instant by the rule
@@ -131,6 +131,7 @@ export function SettingsPage() {
         {s ? (
           <>
             <KeyValue
+              className="settings__about"
               rows={[
                 { label: 'Version', value: s.about.version, mono: true },
                 { label: 'Profile', value: s.about.profile, mono: true },

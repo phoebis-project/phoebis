@@ -1296,6 +1296,22 @@ mod tests {
     }
 
     #[test]
+    fn a_file_naming_a_rollup_retention_alone_under_the_default_raw_window_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
+        let error = load(&file(
+            dir.path(),
+            "rollups-alone",
+            "stats:\n  rollup_retention_days: 364\n",
+        ))
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "stats.rollup_retention_days must be 0 or at least stats.retention_days (365), not 364"
+        );
+    }
+
+    #[test]
     fn a_rollup_retention_under_the_raw_one_is_refused_unless_either_key_is_zero() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");

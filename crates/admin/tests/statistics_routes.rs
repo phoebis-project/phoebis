@@ -79,7 +79,13 @@ fn keys_in_order(object: &serde_json::Value) -> Vec<&str> {
 
 #[tokio::test]
 async fn settings_and_system_show_effective_values_ledger_health_and_gaps_without_secrets() {
-    let parts = common::admin_parts_full().await;
+    // Two day counts apart, so each member reads its own key's figure.
+    let parts = common::admin_parts_full_retained(phoebis_ledger::LedgerConfig {
+        retention_days: 400,
+        rollup_retention_days: 500,
+        ..phoebis_ledger::LedgerConfig::default()
+    })
+    .await;
     let cookie = login(&parts.app, "admin-secret").await;
     let settings = json(get(&parts.app, "/admin/settings", Some(&cookie)).await).await;
     let keys_of = |member: &serde_json::Value| {
@@ -151,17 +157,13 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         ),
         (Some(72), Some(86_400), Some("127.0.0.1:9464"), Some(false))
     );
-    let ledger = phoebis_ledger::LedgerConfig::default();
     assert_eq!(
         (
             settings["retention"]["retention_days"].as_u64(),
             settings["retention"]["rollup_retention_days"].as_u64(),
         ),
-        (
-            Some(ledger.retention_days.into()),
-            Some(ledger.rollup_retention_days.into())
-        ),
-        "the two day counts the rig's ledger runs under"
+        (Some(400), Some(500)),
+        "the two day counts the rig's ledger runs under, each under its own key"
     );
     let revisions = phoebis_ledger::PriceRevisions::shipped();
     let shipped = revisions.in_force(common::NOW);

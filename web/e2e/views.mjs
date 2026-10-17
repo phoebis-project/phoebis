@@ -2461,11 +2461,13 @@ async function settingsOrder(theme) {
  * About's two retention lines drawn in the style of the lines around them: the label's type and ink, the value's ink
  * and the row's height of the Storage path line above, and the label's and the value's type and ink of the Admin secret
  * line below. A path line draws its value in the mono face, so the value's type is compared with the Admin secret
- * line's, whose value is not a path.
+ * line's, whose value is not a path. In the 720 px strip and at 400 px the types and inks are read again, with the
+ * label column at most half the list's width.
  */
 async function settingsRetentionLines(theme) {
-  const read = await page.evaluate(() => {
+  const reading = () => page.evaluate(() => {
     const card = [...document.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+    const list = card?.querySelector('.kv');
     const type = (el) => (el ? `${getComputedStyle(el).fontSize} ${getComputedStyle(el).fontWeight} ${getComputedStyle(el).fontFamily}` : null);
     const rows = [...(card?.querySelectorAll('.kv__row') ?? [])].map((row) => {
       const dt = row.querySelector('dt');
@@ -2482,13 +2484,39 @@ async function settingsRetentionLines(theme) {
       };
     });
     const at = (label) => rows.find((row) => row.label === label) ?? null;
-    return { admin: at('Admin secret'), requests: at('Requests, samples and the routing log'), rollups: at('Rollups'), storage: at('Storage path') };
+    const round = (px) => Math.round(px * 10) / 10;
+    return {
+      admin: at('Admin secret'),
+      labelColumn: round(Math.max(0, ...[...(list?.querySelectorAll('dt') ?? [])].map((dt) => dt.getBoundingClientRect().width))),
+      list: list ? round(list.getBoundingClientRect().width) : null,
+      requests: at('Requests, samples and the routing log'),
+      rollups: at('Rollups'),
+      storage: at('Storage path'),
+    };
   });
+  const read = await reading();
   measurements.push(`${theme} /settings retention lines ${JSON.stringify(read)}`);
   for (const [name, row] of [['requests', read.requests], ['rollups', read.rollups]]) {
     failures.push(...compare(row, read.storage, ['height', 'labelInk', 'labelType', 'valueInk'], `${theme} /settings: About's ${name} retention line against Storage path`));
     failures.push(...compare(row, read.admin, ['labelInk', 'labelType', 'valueInk', 'valueType'], `${theme} /settings: About's ${name} retention line against Admin secret`));
   }
+  // The retention label is the card's longest, so in a narrow card it would take the values' room unless its column
+  // stops at half the list. A wrapped label makes its row taller than a neighbor's, so the height is read wide alone.
+  for (const width of [720, 400]) {
+    await page.setViewportSize({ height: 800, width });
+    await settle();
+    const narrow = await reading();
+    measurements.push(`${theme} /settings retention lines at ${width} px ${JSON.stringify(narrow)}`);
+    for (const [name, row] of [['requests', narrow.requests], ['rollups', narrow.rollups]]) {
+      failures.push(...compare(row, narrow.admin, ['labelInk', 'labelType', 'valueInk', 'valueType'], `${theme} /settings at ${width} px: About's ${name} retention line against Admin secret`));
+    }
+    if (narrow.list === null || narrow.labelColumn > narrow.list / 2 + 0.5) {
+      failures.push(`${theme} /settings at ${width} px: About's label column is ${narrow.labelColumn} px of the list's ${narrow.list}, past half`);
+    }
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  await atRest();
 }
 
 /**

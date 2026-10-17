@@ -5300,8 +5300,8 @@ fn a_purge_of_the_periods_raw_requests_leaves_the_members_spend_in_force() {
         .unwrap();
     assert_eq!(before[0].spent_usd, 50.0);
 
-    // A retention window shorter than the month purges the raw request and its attempt; the rollup that
-    // folded them keeps its default 400-day life, so the query still answers the same spend.
+    // A retention window shorter than the month purges the raw request and its attempt. The rollup that
+    // folded them keeps its default 365-day life, so the query still answers the same spend.
     let purged = run_retention_blocking(
         &db,
         &LedgerConfig {

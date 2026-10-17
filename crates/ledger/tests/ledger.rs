@@ -17,7 +17,7 @@ use phoebis_ledger::{
     apply_filter, breakdown, list_requests, member_spends, parked_count, parked_summary,
     read_rollups, run_retention, Assembler, AttemptRecord, AttentionGauges, BodyRecord,
     BudgetedMember, CacheMapWrite, DecisionRow, EventRecord, LedgerConfig, LedgerDb, LedgerError,
-    LiveKeys, ParkedSummary, PlanTables, PriceRevisions, Record, Replayed, RequestFilter,
+    LiveKeys, ParkedSummary, PlanTables, PriceRevisions, Purged, Record, Replayed, RequestFilter,
     RequestRecord, RollupFilter, RollupRow, RollupSelect, Speed, BATCH_RETRY_DELAYS,
     BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH, UNATTRIBUTED,
 };
@@ -6139,7 +6139,8 @@ async fn a_parked_record_refused_again_at_the_start_keeps_its_row_with_this_star
 
 /// The parked row leaves in the transaction that lands its record. A start whose acknowledgement the database refuses
 /// lands nothing, so the record stays parked past a retention pass that would have cut its raw rows, and the start that
-/// lands it charges it once.
+/// lands it charges it once. The pass runs on a configuration of the case's own, 90 days for the raw rows and 400 for
+/// the rollups, so one day past the raw window cuts what the record would have landed and keeps the rollups.
 #[tokio::test]
 async fn a_parked_record_whose_acknowledgement_is_refused_is_charged_once() {
     let up = FakeUpstream::start(vec![]).await;
@@ -6166,11 +6167,34 @@ async fn a_parked_record_whose_acknowledgement_is_refused_is_charged_once() {
     .await;
     h.ledger.clone().shutdown().await.unwrap();
     drop_trigger(&h.db, "refuse_ack");
-    // A pass past the raw window: the request and attempt rows go, the rollups stay.
+    // The refused start landed no row, so a witness received with the record shows what the pass cuts.
+    h.db.insert_request(
+        &RequestRecord {
+            pool_id: None,
+            ..finished_row("witness")
+        },
+        &[],
+        None,
+    )
+    .unwrap();
+    // A pass past the raw window: the request rows go, the rollups stay.
+    let window = LedgerConfig {
+        retention_days: 90,
+        rollup_retention_days: 400,
+        ..LedgerConfig::default()
+    };
     let later = NOW + 91 * 86_400_000;
-    run_retention(h.db.clone(), LedgerConfig::default(), later, Vec::new())
+    let purged = run_retention(h.db.clone(), window, later, Vec::new())
         .await
         .unwrap();
+    assert_eq!(
+        purged,
+        Purged {
+            requests: 1,
+            ..Purged::default()
+        },
+        "the pass cuts the witness, as it would have cut the record's own rows"
+    );
     drop(h);
     let h = on_disk(&up, store, &path, quick()).await;
     wait_for_async(Duration::from_secs(5), || async {
