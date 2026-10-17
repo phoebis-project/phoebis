@@ -486,6 +486,14 @@ pub(crate) struct Trace {
     /// stopped draining fills the bus queue behind its channel and a refusal that waited there would hold its
     /// connection. Shared across the trace's clones, which the body task and the awaits each hold.
     facts_best_effort: Arc<AtomicBool>,
+    /// The relay's clock, which stamps a completion the guard's drop publishes.
+    clock: Clock,
+    /// The relay's body tracker, under which the guard's drop spawns its publish, so the shutdown's drain waits for
+    /// the completion a handler it cut still owes the ledger.
+    bodies: TaskTracker,
+    /// The handler's armed guard. The handler's own trace holds the slot, and the stream body's copy is detached
+    /// after the hand-off emptied it, so the handler future's drop is the guard's drop.
+    completion: Arc<Mutex<Option<CompletionGuard>>>,
 }
 
 impl Trace {
@@ -522,6 +530,43 @@ impl Trace {
 
     fn facts_best_effort(&self) {
         self.facts_best_effort.store(true, Ordering::Relaxed);
+    }
+
+    /// Called by `observed` right after it published the request's first fact. A second call keeps the guard
+    /// already armed, whose drop would otherwise publish a completion for a request still running.
+    fn arm_completion(&self) {
+        self.completion
+            .lock()
+            .expect("completion lock poisoned")
+            .get_or_insert_with(|| CompletionGuard::arm(self));
+    }
+
+    /// A no-op once the guard left the slot.
+    fn on_leg(&self, attempt: u8, account_id: Option<&str>) {
+        if let Some(guard) = self
+            .completion
+            .lock()
+            .expect("completion lock poisoned")
+            .as_mut()
+        {
+            guard.on_leg(attempt, account_id);
+        }
+    }
+
+    /// The armed guard, by value, leaving the slot empty.
+    fn take_completion(&self) -> Option<CompletionGuard> {
+        self.completion
+            .lock()
+            .expect("completion lock poisoned")
+            .take()
+    }
+
+    /// A clone with an empty slot of its own.
+    fn detached(&self) -> Trace {
+        Trace {
+            completion: Arc::new(Mutex::new(None)),
+            ..self.clone()
+        }
     }
 
     pub(crate) fn publish_chunk(&self, chunk: ResponseChunk) {
@@ -593,6 +638,8 @@ impl Trace {
             received_at: self.received_at,
         }))
         .await;
+        // The assembler holds an entry for the request from this fact on, and only a completion closes it.
+        self.arm_completion();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -664,6 +711,9 @@ impl Trace {
         message_id: Option<String>,
         finished_at: i64,
     ) {
+        // Held by value across the publish: a handler dropped while a durable slot is full drops the guard still
+        // armed, and its `Drop` publishes the completion this await never delivered.
+        let guard = self.take_completion();
         let (final_outcome, error_code) = match end {
             Some((o, code)) => (o, code.or_else(|| outcome.error_code.clone())),
             None => (outcome_of(outcome), outcome.error_code.clone()),
@@ -692,6 +742,85 @@ impl Trace {
             finished_at,
         }))
         .await;
+        if let Some(mut guard) = guard {
+            guard.disarm();
+        }
+    }
+}
+
+/// Armed once the request's first fact opened the assembler's entry, disarmed by `Trace::complete` once its
+/// awaited publish returns or by the hand-off to the stream body, which completes on its own path. A drop while
+/// armed is a client that left before the completion landed: hyper dropped the handler future, or the keepalive
+/// dropped a probe's exchange at its deadline or its cancel, so the completion is published from here, with what
+/// the handler knew (the attempt it was on and the account of the leg in flight), and the entry lands rather than
+/// aging out as a `ledger_gap`.
+struct CompletionGuard {
+    /// `Trace::detached`: the guard sits in the trace's slot, so a clone holding that slot would keep itself alive.
+    trace: Trace,
+    /// The leg the handler is on, updated at each `Responding`: `(attempt, account_id)`.
+    leg: (u8, Option<String>),
+    armed: bool,
+}
+
+impl CompletionGuard {
+    fn arm(trace: &Trace) -> CompletionGuard {
+        CompletionGuard {
+            trace: trace.detached(),
+            leg: (0, None),
+            armed: true,
+        }
+    }
+
+    fn on_leg(&mut self, attempt: u8, account_id: Option<&str>) {
+        self.leg = (attempt, account_id.map(str::to_string));
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for CompletionGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let (attempt, account_id) = std::mem::take(&mut self.leg);
+        let event = Event::RequestComplete(RequestComplete {
+            request_id: self.trace.request_id.clone(),
+            attempt,
+            account_id,
+            outcome: Outcome::Canceled,
+            status: 0,
+            usage: None,
+            response: ResponseFacts::default(),
+            ttfb_ms: None,
+            ttfc_ms: None,
+            error_code: Some("client_gone".into()),
+            client_drift: None,
+            client_version: None,
+            response_bytes: None,
+            response_chunks: None,
+            held: self
+                .trace
+                .held()
+                .and_then(|h| serde_json::to_string(&h).ok()),
+            diagnostics: None,
+            message_id: None,
+            finished_at: (self.trace.clock)(),
+        });
+        // `Drop` cannot await, so the durable publish runs on the runtime that is dropping the handler, under the body
+        // tracker the shutdown drains. With no handle current (a trace dropped outside a runtime) the bus's counted
+        // drop is the fallback.
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                let trace = self.trace.clone();
+                self.trace
+                    .bodies
+                    .spawn_on(async move { trace.publish_fact(event).await }, &handle);
+            }
+            Err(_) => self.trace.publish(event),
+        }
     }
 }
 
@@ -968,6 +1097,9 @@ impl Relay {
             probe_generation: probe.as_ref().map(|p| p.key_generation),
             held: Arc::new(Mutex::new(None)),
             facts_best_effort: Arc::new(AtomicBool::new(false)),
+            clock: self.clock.clone(),
+            bodies: self.bodies.clone(),
+            completion: Arc::new(Mutex::new(None)),
         };
         let (parts, body) = request.into_parts();
         let original = parts.extensions.get::<OriginalHead>();
@@ -2424,6 +2556,8 @@ impl Relay {
             } else {
                 None
             };
+            // After the selection's fact, so a client that leaves from here completes an attempt the ledger holds.
+            admitted.trace.on_leg(*attempt, Some(&account.id));
             let responding = Responding {
                 account,
                 attempt: *attempt,
@@ -3978,6 +4112,11 @@ impl Relay {
             }
             _ => None,
         };
+        // The body completes on its own path, a client that leaves mid-body included, so the handler's guard stands
+        // down here, before the body takes its copy of the trace.
+        if let Some(mut guard) = trace.take_completion() {
+            guard.disarm();
+        }
         // Without a bus every emit and the completion are no-ops; a hook with no bus still needs the parse run
         // for it, a committed 200 needs it too, since the served-model check reads the answer, and so does a
         // renewal, which carries the usage the parse assembles.
@@ -4006,7 +4145,7 @@ impl Relay {
                 ),
             };
             Publish {
-                trace: trace.clone(),
+                trace: trace.detached(),
                 clock: self.clock.clone(),
                 outcome: outcome.clone(),
                 catalog: self.catalog.clone(),

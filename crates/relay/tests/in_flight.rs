@@ -1287,6 +1287,206 @@ async fn a_cancelled_leg_releases_its_ticket() {
     up.shutdown().await;
 }
 
+/// The id of the first request whose observation `sub` carries, read off the queue up to it.
+async fn observed_id(sub: &mut phoebis_bus::Subscriber) -> String {
+    wait_for(Duration::from_secs(5), || {
+        std::iter::from_fn(|| sub.events.try_recv().ok()).find_map(|e| match e {
+            Event::RequestObserved(o) => Some(o.request_id),
+            _ => None,
+        })
+    })
+    .await
+}
+
+/// Whether nothing queued on `sub` completes `request_id`, reading what is queued.
+fn no_completion_queued(sub: &mut phoebis_bus::Subscriber, request_id: &str) -> bool {
+    !std::iter::from_fn(|| sub.events.try_recv().ok())
+        .any(|e| matches!(e, Event::RequestComplete(c) if c.request_id == request_id))
+}
+
+/// The completions for `request_id` among `events`.
+fn completions_in(events: Vec<Event>, request_id: &str) -> Vec<phoebis_bus::RequestComplete> {
+    events
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::RequestComplete(c) if c.request_id == request_id => Some(c),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A rejection the relay drains whole and forwards as it came.
+fn rejection_400() -> Respond {
+    Respond::Json {
+        status: 400,
+        headers: vec![],
+        body: br#"{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}"#
+            .to_vec(),
+    }
+}
+
+#[tokio::test]
+async fn a_client_that_leaves_before_the_head_lands_a_client_gone_completion() {
+    let up = FakeUpstream::start(messages(Respond::Gated(Box::new(json_200())))).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus_limits(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        bus,
+        default_limits(),
+    )
+    .await;
+    let app = h.app.clone();
+    let request =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
+    wait_for(Duration::from_secs(5), || (posts(&up) == 1).then_some(())).await;
+    let request_id = observed_id(&mut sub).await;
+    request.abort();
+    assert!(request.await.unwrap_err().is_cancelled());
+    let complete = completion_of(&mut sub, &request_id).await;
+    assert_eq!(
+        (
+            complete.outcome,
+            complete.error_code.as_deref(),
+            complete.status,
+            complete.attempt,
+            complete.account_id.as_deref()
+        ),
+        (
+            phoebis_bus::Outcome::Canceled,
+            Some("client_gone"),
+            0,
+            1,
+            Some("a")
+        ),
+        "the dropped handler completes the attempt it was on with nothing answered"
+    );
+    stays_for(HELD_FOR, || no_completion_queued(&mut sub, &request_id)).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_request_served_to_its_end_publishes_one_completion_and_no_client_gone_after_it() {
+    let up = FakeUpstream::start(messages(json_200())).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus_limits(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        bus,
+        default_limits(),
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let request_id = outcome(&resp).request_id;
+    drain(resp).await;
+    let completions = completions_in(drain_until_complete(&mut sub).await, &request_id);
+    assert_eq!(
+        completions
+            .iter()
+            .map(|c| (c.outcome, c.error_code.as_deref()))
+            .collect::<Vec<_>>(),
+        [(phoebis_bus::Outcome::Succeeded, None)],
+        "the body's own completion, and no other"
+    );
+    stays_for(HELD_FOR, || no_completion_queued(&mut sub, &request_id)).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_forwarded_rejection_publishes_one_completion_and_no_client_gone_after_it() {
+    let up = FakeUpstream::start(messages(rejection_400())).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus_limits(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        bus,
+        default_limits(),
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 400);
+    let request_id = outcome(&resp).request_id;
+    drain(resp).await;
+    let completions = completions_in(drain_until_complete(&mut sub).await, &request_id);
+    assert_eq!(
+        completions
+            .iter()
+            .map(|c| (c.status, c.outcome, c.error_code.as_deref()))
+            .collect::<Vec<_>>(),
+        [(400, phoebis_bus::Outcome::Failed, None)],
+        "the forwarded answer's own completion, and no other"
+    );
+    stays_for(HELD_FOR, || no_completion_queued(&mut sub, &request_id)).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_client_that_leaves_while_the_completion_waits_for_the_ledger_lands_one_completion() {
+    let up = FakeUpstream::start(messages(Respond::Gated(Box::new(rejection_400())))).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus_limits(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        bus.clone(),
+        default_limits(),
+    )
+    .await;
+    let app = h.app.clone();
+    let request =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
+    wait_for(Duration::from_secs(5), || (posts(&up) == 1).then_some(())).await;
+    let request_id = observed_id(&mut sub).await;
+    while sub.events.try_recv().is_ok() {}
+    // One slot stays free, which the head takes: the rejection's chunk then finds the queue full and is counted as a
+    // drop, and the completion that follows it with no await between waits for room.
+    for index in 0..phoebis_bus::QUEUE_DEPTH as u32 - 1 {
+        bus.publish(Event::ResponseChunk(phoebis_bus::ResponseChunk {
+            request_id: "filler".into(),
+            attempt: 1,
+            index,
+            body: Bytes::new(),
+            phase: None,
+        }));
+    }
+    up.release();
+    wait_for(Duration::from_secs(5), || {
+        (sub.stats.dropped.load(Ordering::SeqCst) == 1).then_some(())
+    })
+    .await;
+    request.abort();
+    assert!(request.await.unwrap_err().is_cancelled());
+    let completions = completions_in(drain_until_complete(&mut sub).await, &request_id);
+    assert_eq!(
+        completions
+            .iter()
+            .map(|c| (c.outcome, c.error_code.as_deref(), c.status))
+            .collect::<Vec<_>>(),
+        [(phoebis_bus::Outcome::Canceled, Some("client_gone"), 0)],
+        "the completion the wait never delivered lands from the dropped handler, once"
+    );
+    stays_for(HELD_FOR, || no_completion_queued(&mut sub, &request_id)).await;
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_probe_and_a_count_take_no_key_permit() {
     let up = FakeUpstream::start(vec![]).await;

@@ -1402,6 +1402,112 @@ async fn a_request_whose_completion_never_arrives_lands_an_expired_gap_naming_it
     up.shutdown().await;
 }
 
+/// A request whose client left before the head completes as a cancel with the status 0 the relay answered nothing
+/// with: the row lands at once with the attempts it reached and a null status, an attempt that never had a head reads
+/// canceled since no transport failed it, and the expiry sweep that ages a silent sibling out names neither request.
+#[tokio::test]
+async fn a_client_gone_completion_lands_the_attempts_it_reached_and_no_gap() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        (0, None),
+        LedgerConfig {
+            expire_interval: Duration::from_millis(5),
+            ..LedgerConfig::default()
+        },
+    )
+    .await;
+    let client_gone = |id: &str| {
+        let BusEvent::RequestComplete(mut complete) = complete_event(id) else {
+            unreachable!()
+        };
+        complete.attempt = 1;
+        complete.account_id = Some("a".into());
+        complete.outcome = BusOutcome::Canceled;
+        complete.status = 0;
+        complete.error_code = Some("client_gone".into());
+        BusEvent::RequestComplete(complete)
+    };
+    h.bus.publish(observed_event("silent"));
+    for id in ["headed", "headless"] {
+        h.bus.publish(observed_event(id));
+        h.bus.publish(selected_event(id, 1, "a", NOW));
+    }
+    h.bus.publish(head_event("headed", 200, NOW));
+    for id in ["headed", "headless"] {
+        h.bus.publish(client_gone(id));
+    }
+    let (row, attempts) = ledgered(&h, "headed").await;
+    assert_eq!(
+        (
+            row.status,
+            row.outcome.as_str(),
+            row.error_code.as_deref(),
+            row.attempts
+        ),
+        (None, "canceled", Some("client_gone"), 1),
+        "the client was answered nothing, so the row's status is null"
+    );
+    assert_eq!(
+        attempts
+            .iter()
+            .map(|a| (
+                a.attempt,
+                a.account_id.as_str(),
+                a.upstream_status,
+                a.outcome.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        [(1, "a", Some(200), "canceled")],
+        "the attempt the head reached keeps its head"
+    );
+    let (row, attempts) = ledgered(&h, "headless").await;
+    assert_eq!(
+        (row.status, row.error_code.as_deref()),
+        (None, Some("client_gone"))
+    );
+    assert_eq!(
+        attempts
+            .iter()
+            .map(|a| (a.attempt, a.upstream_status, a.outcome.as_str()))
+            .collect::<Vec<_>>(),
+        [(1, None, "canceled")],
+        "the client cut the attempt before its head, and no transport failed it"
+    );
+    h.clock
+        .fetch_add(phoebis_ledger::IN_FLIGHT_TTL_MS, Ordering::SeqCst);
+    let gap_for = |event: &EventRecord| -> Option<String> {
+        if event.kind != "ledger_gap" {
+            return None;
+        }
+        let detail: serde_json::Value = serde_json::from_str(event.detail.as_deref()?).ok()?;
+        detail["request_id"].as_str().map(str::to_string)
+    };
+    wait_for_async(Duration::from_secs(5), || async {
+        h.db.events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .iter()
+            .any(|e| gap_for(e).as_deref() == Some("silent"))
+            .then_some(())
+    })
+    .await;
+    let gaps: Vec<String> =
+        h.db.events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .iter()
+            .filter_map(gap_for)
+            .collect();
+    assert_eq!(
+        gaps,
+        ["silent"],
+        "the sweep aged the silent request out and found nothing of the two that completed"
+    );
+    up.shutdown().await;
+}
+
 fn auto_mode_observed(id: &str, auto_mode: Option<AutoMode>) -> BusEvent {
     let BusEvent::RequestObserved(mut observed) = observed_event(id) else {
         unreachable!()
