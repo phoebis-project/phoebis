@@ -623,6 +623,7 @@ pub const EVENT_KINDS: &[&str] = &[
     "slow_down_started",
     "warm_prefix_expired",
     "wind_down_started",
+    "window_cleared",
     "window_reset",
     "window_spent",
 ];

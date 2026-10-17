@@ -1035,6 +1035,7 @@ Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
 | slow-down started | An account's slow-down began: its factor read under 1, so requests of its sessions wait their cycle times the slow-down up to the hold. |
 | warm prefix expired | A warm prefix's cache-map entry lapsed past its TTL. |
 | wind-down started | An account's subscription end entered the pool's wind-down, so no fresh session starts on it. |
+| window cleared | A quota window read under its limit again after a reading at the limit, with the readings before and after and the reset unchanged. |
 | window reset | A quota window reset, with the reading before it. |
 | window spent | A response head, the poll or the prediction read a quota window at its limit. |
 

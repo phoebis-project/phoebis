@@ -2099,6 +2099,16 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             restored: false,
             at: at(4),
         },
+        RouterEvent::WindowCleared {
+            account_id: "direct".into(),
+            window: "five_hour".into(),
+            utilization_before: 1.0,
+            utilization: 0.0,
+            reset: Some(at(20) + 4 * 3_600_000),
+            source: phoebis_routing::WindowSource::Poll,
+            source_request_id: None,
+            at: at(20),
+        },
         RouterEvent::WindowReset {
             account_id: "business".into(),
             window: "seven_day".into(),

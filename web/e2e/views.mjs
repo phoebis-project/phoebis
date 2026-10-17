@@ -1078,6 +1078,55 @@ async function routingLogRegistryTarget(theme) {
 }
 
 /**
+ * A cleared window's By chip against a spent window's, under the 7-day range on the two kinds: each chip's type, ink,
+ * height, padding and top in its cell, with its text, its title, the width it draws and the width its text needs, so a
+ * chip cut behind its ellipsis is recorded. The page's column read holds the By column to its longest cell, as the bare
+ * log's does. The router's seed clears no window, so its pass records that the read stands down. The bare log loads
+ * again after.
+ */
+async function routingLogClearedChip(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  try {
+    await loadAtOrigin('/routing-log?range=7d&kinds=window_cleared,window_spent', '.routing-log__table');
+    const read = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.routing-log__table tbody tr.routing-log__row')];
+      const kind = (tr) => tr.querySelector('td.routing-log__kind')?.textContent?.trim() ?? '';
+      const box = (tr) => {
+        const chip = tr?.querySelector('td.routing-log__by .routing-log__chip') ?? null;
+        if (chip === null) return null;
+        const at = chip.getBoundingClientRect();
+        const style = getComputedStyle(chip);
+        const round = (n) => Math.round(n * 10) / 10;
+        return {
+          drawn: round(at.width),
+          height: round(at.height),
+          ink: style.color,
+          need: chip.scrollWidth,
+          padding: `${style.paddingLeft} ${style.paddingRight}`,
+          text: chip.textContent ?? '',
+          title: chip.getAttribute('title'),
+          top: round(at.top - chip.closest('td').getBoundingClientRect().top),
+          type: `${style.fontSize} ${style.fontWeight} ${style.fontFamily}`,
+        };
+      };
+      return { cleared: box(rows.find((tr) => kind(tr) === 'window cleared')), spent: box(rows.find((tr) => kind(tr) === 'window spent')) };
+    });
+    if (!mock && read.cleared === null) {
+      measurements.push(`${theme} /routing-log cleared chip skipped: the seed clears no window (${JSON.stringify(read)})`);
+      return;
+    }
+    const got = await page.evaluate(routingLogCells, []);
+    const by = got?.longest.find(([name]) => name === 'by') ?? null;
+    measurements.push(`${theme} /routing-log cleared chip under 7d ${JSON.stringify({ ...read, by })}`);
+    failures.push(...compare(read.cleared, read.spent, ['height', 'ink', 'padding', 'top', 'type'], `${theme} /routing-log: a cleared window's By chip against a spent window's`));
+    if (by === null) say('under 7d on the window kinds the By column is not drawn');
+    else if (by[1] !== null && by[1] > by[2] + 0.5) say(`under 7d on the window kinds the By column is ${by[2]}px, narrower than its longest cell "${by[3]}" at ${by[1]}px`);
+  } finally {
+    await loadAtOrigin('/routing-log', '.routing-log__table');
+  }
+}
+
+/**
  * The Diagnostics group: on the Dashboard with the expert view off the sidebar draws neither the heading nor the
  * Routing log link, and with the log open both are drawn and the link is the active one.
  */
@@ -4653,7 +4702,7 @@ async function barRow(theme, view) {
 }
 
 /**
- * The Kinds list through Add filter on the routing log at 1280 by 800, Select all, the eight presets and the 39 kinds:
+ * The Kinds list through Add filter on the routing log at 1280 by 800, Select all, the eight presets and the 40 kinds:
  * its popover keeps 8 px inside the window above and below, where the list scrolls. Records the box.
  */
 async function kindsPopoverInside(theme) {
@@ -4672,7 +4721,7 @@ async function kindsPopoverInside(theme) {
   measurements.push(`${theme} /routing-log kinds popover inside ${JSON.stringify(read)}`);
   if (read === null) say('did not open');
   else {
-    if (read.rows !== 48) say(`lists ${read.rows} rows, not Select all, the eight presets and the 39 kinds`);
+    if (read.rows !== 49) say(`lists ${read.rows} rows, not Select all, the eight presets and the 40 kinds`);
     if (read.top < 8 || read.bottom > read.view - 8) say(`spans ${read.top} to ${read.bottom} px, outside the ${read.view} px window less 8 px above and below`);
   }
   await page.keyboard.press('Escape');
@@ -8308,6 +8357,7 @@ try {
         // Before the first decision opens, since the read leaves the bare log and loads it again.
         await routingLogDatedTime(theme);
         await routingLogRegistryTarget(theme);
+        await routingLogClearedChip(theme);
         await firstDecisionOpen(theme);
         await pagerControls(theme, view.path);
       }

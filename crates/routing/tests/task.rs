@@ -8500,6 +8500,358 @@ async fn a_reading_with_no_reset_after_the_stored_reset_passed_announces_it_by_s
     no_further_event(&mut events).await;
 }
 
+/// The next window edge on `events`, a spent, a cleared or a reset window, every other event passed over.
+async fn next_window_edge(
+    events: &mut tokio::sync::broadcast::Receiver<phoebis_routing::RouterEvent>,
+) -> phoebis_routing::RouterEvent {
+    use phoebis_routing::RouterEvent;
+    loop {
+        let event = next_event(events).await;
+        if matches!(
+            event,
+            RouterEvent::WindowSpent { .. }
+                | RouterEvent::WindowCleared { .. }
+                | RouterEvent::WindowReset { .. }
+        ) {
+            return event;
+        }
+    }
+}
+
+/// A cleared window's edge as `(account, window, before, after, reset, source, request)`.
+type Cleared<'a> = (
+    &'a str,
+    &'a str,
+    f64,
+    f64,
+    Option<i64>,
+    WindowSource,
+    Option<&'a str>,
+);
+
+fn cleared_of(event: &phoebis_routing::RouterEvent) -> Option<Cleared<'_>> {
+    match event {
+        phoebis_routing::RouterEvent::WindowCleared {
+            account_id,
+            window,
+            utilization_before,
+            utilization,
+            reset,
+            source,
+            source_request_id,
+            ..
+        } => Some((
+            account_id.as_str(),
+            window.as_str(),
+            *utilization_before,
+            *utilization,
+            *reset,
+            *source,
+            source_request_id.as_deref(),
+        )),
+        _ => None,
+    }
+}
+
+#[tokio::test]
+async fn a_sample_whose_every_window_falls_under_its_limit_under_the_same_reset_emits_window_cleared_for_each(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let resets = [
+        (FIVE_HOUR, 5 * HOUR),
+        (SEVEN_DAY, 7 * 24 * HOUR),
+        (SEVEN_DAY_FABLE, 7 * 24 * HOUR),
+    ];
+    let read = |at: i64, utilization: f64| {
+        resets.iter().fold(sample(at), |sample, (window, reset)| {
+            sample.with(
+                window,
+                WindowReading {
+                    utilization,
+                    reset: Some(*reset),
+                    observed_at: at,
+                    source: WindowSource::Poll,
+                },
+            )
+        })
+    };
+    handle.report(observed("a", read(1_000, 1.0))).await;
+    handle.samples().await.unwrap();
+    for (window, _) in resets {
+        assert!(matches!(
+            next_event(&mut events).await,
+            RouterEvent::WindowSpent { window: spent, .. } if spent == window
+        ));
+    }
+    // Every window of the answer falls together under its unchanged reset, as an account's one-time reset grant reads.
+    handle.report(observed("a", read(2_000, 0.0))).await;
+    handle.samples().await.unwrap();
+    for (window, reset) in resets {
+        let event = next_event(&mut events).await;
+        assert_eq!(
+            cleared_of(&event),
+            Some(("a", window, 1.0, 0.0, Some(reset), WindowSource::Poll, None)),
+            "{event:?}"
+        );
+        assert!(matches!(
+            event,
+            RouterEvent::WindowCleared { at: 4_000, .. }
+        ));
+    }
+    // A clear announces no reset.
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_head_whose_one_window_falls_under_its_limit_emits_window_cleared_for_that_window_alone()
+{
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let (five_hour, week) = (Some(5 * HOUR), Some(7 * 24 * HOUR));
+    let head = |at: i64, five_hour_utilization: f64, request_id: &str| Report::Sample {
+        account_id: "a".into(),
+        sample: sample(at)
+            .with(
+                FIVE_HOUR,
+                WindowReading {
+                    utilization: five_hour_utilization,
+                    reset: five_hour,
+                    observed_at: at,
+                    source: WindowSource::Head,
+                },
+            )
+            .with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 1.0,
+                    reset: week,
+                    observed_at: at,
+                    source: WindowSource::Head,
+                },
+            ),
+        incarnation: 1,
+        source_request_id: Some(request_id.into()),
+    };
+    handle.report(head(1_000, 1.0, "r-1")).await;
+    handle.samples().await.unwrap();
+    for window in [FIVE_HOUR, SEVEN_DAY] {
+        assert!(matches!(
+            next_event(&mut events).await,
+            RouterEvent::WindowSpent { window: spent, .. } if spent == window
+        ));
+    }
+    handle.report(head(2_000, 0.0, "r-2")).await;
+    handle.samples().await.unwrap();
+    let event = next_event(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            0.0,
+            five_hour,
+            WindowSource::Head,
+            Some("r-2")
+        )),
+        "{event:?}"
+    );
+    // The week still reads its limit under its reset, which crosses nothing.
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_reading_under_the_limit_with_a_reset_past_the_slack_emits_window_reset_and_no_clear() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 1.0, Some(5 * HOUR)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::WindowSpent { .. }
+    ));
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 0.1, Some(10 * HOUR)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    match next_event(&mut events).await {
+        RouterEvent::WindowReset {
+            utilization_before,
+            reset_at,
+            next_reset,
+            observed,
+            ..
+        } => assert_eq!(
+            (utilization_before, reset_at, next_reset, observed),
+            (1.0, 5 * HOUR, Some(10 * HOUR), "sample")
+        ),
+        other => panic!("the passed reset, not {other:?}"),
+    }
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_reading_at_the_limit_after_a_clear_emits_window_spent_again_under_the_reset_the_prediction_announced(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(2_000));
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            share: a_tenth_per_million_written(),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let reset = 10 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.99, Some(reset)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    // The 200 000 token body books 0.02, which takes the 0.99 reading past the wall before any usage lands.
+    handle
+        .select(placement(&handle, "r-1", "s1", 2_000))
+        .await
+        .unwrap();
+    assert!(matches!(
+        next_window_edge(&mut events).await,
+        RouterEvent::WindowSpent {
+            source: WindowSource::Predicted,
+            ..
+        }
+    ));
+    // The head that confirms the wall names the reset the prediction announced, and announces nothing.
+    for (at, utilization, request_id) in [(3_000, 1.0, "r-2"), (4_000, 0.0, "r-3")] {
+        now.store(at, Ordering::SeqCst);
+        handle
+            .report(head_reading(at, utilization, Some(reset), request_id))
+            .await;
+        handle.samples().await.unwrap();
+    }
+    let event = next_window_edge(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            0.0,
+            Some(reset),
+            WindowSource::Head,
+            Some("r-3")
+        )),
+        "{event:?}"
+    );
+    now.store(5_000, Ordering::SeqCst);
+    handle
+        .report(head_reading(5_000, 1.0, Some(reset), "r-4"))
+        .await;
+    handle.samples().await.unwrap();
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowSpent {
+            utilization,
+            reset: spent_reset,
+            source,
+            source_request_id,
+            ..
+        } => assert_eq!(
+            (
+                utilization,
+                spent_reset,
+                source,
+                source_request_id.as_deref()
+            ),
+            (1.0, Some(reset), WindowSource::Head, Some("r-4"))
+        ),
+        other => panic!("the window spent again, not {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn the_clock_walk_announces_the_stored_reset_once_it_passes_after_a_clear() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    for (at, utilization) in [(1_000, 1.0), (1_500, 0.0)] {
+        handle
+            .report(observed(
+                "a",
+                sample_with(at, FIVE_HOUR, utilization, Some(2_000)),
+            ))
+            .await;
+        handle.samples().await.unwrap();
+    }
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::WindowSpent { .. }
+    ));
+    let event = next_event(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            0.0,
+            Some(2_000),
+            WindowSource::Poll,
+            None
+        )),
+        "{event:?}"
+    );
+    now.store(2_000, Ordering::SeqCst);
+    match next_event(&mut events).await {
+        RouterEvent::WindowReset {
+            utilization_before,
+            reset_at,
+            next_reset,
+            observed,
+            at,
+            ..
+        } => assert_eq!(
+            (utilization_before, reset_at, next_reset, observed, at),
+            (0.0, 2_000, None, "clock", 2_000)
+        ),
+        other => panic!("the tick's reset, not {other:?}"),
+    }
+    no_further_event(&mut events).await;
+}
+
 #[tokio::test]
 async fn a_member_entering_its_wind_down_emits_once() {
     use phoebis_routing::RouterEvent;

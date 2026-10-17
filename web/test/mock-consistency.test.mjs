@@ -729,7 +729,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // A window reads its limit from its crossing until it resets, so each reset a record reads at 1 is one crossing.
     const crossings = new Map();
     const add = (map, key, reset) => map.set(key, new Set([...(map.get(key) ?? []), reset]));
-    for (const r of await decisionsOf(s)) {
+    const records = await decisionsOf(s);
+    for (const r of records) {
       for (const c of r.candidates) {
         for (const w of ['five_hour', 'seven_day']) if (c.windows[w]?.utilization === 1) add(crossings, `${c.accountId} ${w}`, Date.parse(c.windows[w].reset));
       }
@@ -737,10 +738,40 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const spent = new Map();
     for (const e of events.filter((x) => x.kind === 'window_spent')) add(spent, `${e.accountId} ${e.detail.window}`, e.detail.reset);
     assert.ok(crossings.size > 0, 'a record reads a window at its limit');
-    for (const key of new Set([...crossings.keys(), ...spent.keys()])) {
+    // The comparison runs where a record reads the account, since a record reads the members of its pool alone.
+    const read = new Set(records.flatMap((r) => r.candidates.map((c) => c.accountId)));
+    for (const key of new Set([...crossings.keys(), ...spent.keys()].filter((key) => read.has(key.split(' ')[0])))) {
       assert.deepEqual([...(spent.get(key) ?? [])].sort(), [...(crossings.get(key) ?? [])].sort(), `${key}'s crossings`);
     }
     assert.equal(events.filter((x) => x.kind === 'window_spent').length, [...spent.values()].reduce((n, x) => n + x.size, 0), 'one spent row per crossing');
+  });
+
+  test(`a cleared window follows its spent row under the same reset, before the reset, with no reading at the limit after it, at ${at}`, async () => {
+    const s = await story;
+    const events = (await logOf(s)).filter((x) => x.type === 'event');
+    const cleared = events.filter((e) => e.kind === 'window_cleared');
+    assert.ok(cleared.length > 0, 'the story holds a cleared window');
+    const WINDOW = { '5h': 'five_hour', '7d': 'seven_day', '7d_fable': 'seven_day_fable' };
+    const records = await decisionsOf(s);
+    for (const e of cleared) {
+      const d = e.detail;
+      const id = `${e.accountId} ${d.window} at ${e.at}`;
+      const after = (ms) => ms > Date.parse(e.at);
+      assert.deepEqual(Object.keys(d).sort(), ['reset', 'source', 'source_request_id', 'utilization', 'utilization_before', 'window'], `${id} carries the readings and the reset alone`);
+      assert.ok(d.utilization_before >= 1 && d.utilization < 1 && Date.parse(e.at) < d.reset, `${id} reads ${d.utilization_before} then ${d.utilization} before its reset`);
+      assert.equal(e.requestId, d.source_request_id, `${id} names its head's request where a head read it`);
+      const spent = events.filter((x) => x.kind === 'window_spent' && x.accountId === e.accountId && x.detail.window === d.window && x.detail.reset === d.reset);
+      assert.equal(spent.length, 1, `${id} follows one spent row under its reset`);
+      assert.ok(Date.parse(spent[0].at) < Date.parse(e.at), `${id} follows its spent row at ${spent[0].at}`);
+      // A reading back at the limit under the same reset would be spent again, which the story writes no row for, and
+      // the account's standing reading is its newest, so under that reset it reads under the limit too.
+      const limits = [
+        ...records.filter((r) => after(Date.parse(r.request.at))).flatMap((r) => r.candidates.filter((c) => c.accountId === e.accountId).map((c) => c.windows[d.window])),
+        ...s.requests.flatMap((r) => r.attempts.filter((a) => a.accountId === e.accountId && after(Date.parse(a.startedAt))).flatMap((a) => a.windows.filter((w) => WINDOW[w.id] === d.window))).map((w) => ({ reset: w.resetsAt, utilization: w.utilization })),
+        ...s.accounts.filter((a) => a.id === e.accountId).flatMap((a) => a.windows.filter((w) => WINDOW[w.id] === d.window)).map((w) => ({ reset: w.resetsAt, utilization: w.utilization })),
+      ].filter((w) => w !== undefined && w.reset !== null && Date.parse(w.reset) === d.reset && (w.utilization ?? 0) >= 1);
+      assert.deepEqual(limits, [], `${id} has no reading at the limit after it under its reset`);
+    }
   });
 
   test(`no event reads the retired spellings, at ${at}`, async () => {

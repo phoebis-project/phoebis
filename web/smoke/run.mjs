@@ -11218,7 +11218,7 @@ m.unmount();
       ok:
         box !== null && entries[0] === '+ Select all' && at('Presets') === 1 && JSON.stringify(entries.slice(2, 10)) === JSON.stringify(presets.map((p) => `+ ${p}`)) &&
         at('Decisions') === 10 && JSON.stringify(entries.slice(11, 18)) === JSON.stringify(decisions.map((k) => `+ ${k}`)) && at('Events') === 18 &&
-        events.length === 32 && ['+ Mark cleared', '+ Reservation expired', '+ Slow-down ended', '+ Slow-down started'].every((e) => events.includes(e)) && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
+        events.length === 33 && ['+ Mark cleared', '+ Reservation expired', '+ Slow-down ended', '+ Slow-down started'].every((e) => events.includes(e)) && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
         !entries.some((e) => e.includes('hidden')),
       missing: entries.slice(0, 20),
     });
@@ -11246,7 +11246,7 @@ m.unmount();
       ok:
         rest.address === null && rest.chip === 'no kinds chip' && before === 'true' &&
         one.address === keepalive.join(',') && one.chip === 'kinds: keepalive' && answer.rows.length > 0 && JSON.stringify(one.rows) === JSON.stringify(answer.rows.map(rowKeyOf)) &&
-        back.address === null && back.chip === 'no kinds chip' && back.options === 39 && back.checked === 39,
+        back.address === null && back.chip === 'no kinds chip' && back.options === 40 && back.checked === 40,
       missing: [JSON.stringify(rest), String(before), JSON.stringify(one), `${answer.rows.length} keepalive rows`, JSON.stringify(back)],
     });
   }
@@ -13225,6 +13225,7 @@ m.unmount();
       slow_down_started: ['Speed', 'Stretch', 'Demand', 'Reset', 'Effect'],
       warm_prefix_expired: ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed'],
       wind_down_started: ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from'],
+      window_cleared: ['Window', 'Before', 'After', 'Reset', 'Read from'],
       window_reset: ['Window', 'Before the reset', 'Prediction', 'Next reset'],
       window_spent: ['Window', 'Reading', 'Read from', 'Resets', 'Effect', 'Request'],
     };
@@ -13232,7 +13233,7 @@ m.unmount();
       'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
       'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
       'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'warm_prefix_expired', 'wind_down_started',
-      'window_reset', 'window_spent',
+      'window_cleared', 'window_reset', 'window_spent',
     ];
     const utc = (at) => `${new Date(at).toISOString().slice(0, 19).replace('T', ' ')} UTC`;
     const hhmm = (at) => new Date(at).toISOString().slice(11, 16);

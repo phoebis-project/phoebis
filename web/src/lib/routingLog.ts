@@ -166,6 +166,7 @@ export const EVENT_KIND_LABEL: Record<string, string> = {
   slow_down_started: 'slow-down started',
   warm_prefix_expired: 'warm prefix expired',
   wind_down_started: 'wind-down started',
+  window_cleared: 'window cleared',
   window_reset: 'window reset',
   window_spent: 'window spent',
 };
@@ -181,14 +182,14 @@ export const KIND_PRESETS: readonly KindPreset[] = [
   { label: 'placements and pins', members: ['placed', 'renewed', 'pin_created', 'pin_migrated', 'pin_released', 'pin_expired', 'reservation_expired'] },
   { label: 'moves and holds', members: ['moved', 'held', 'shedding_round', 'mark_cleared', 'wind_down_started', 'slow_down_started', 'slow_down_ended'] },
   { label: 'exhaustion and refusals', members: ['exhausted', 'refused', 'window_spent', 'budget_reached'] },
-  { label: 'account state and windows', members: ['account_state_changed', 'window_reset', 'overage_started', 'overage_ended', 'budget_period_ended', 'fast_credits_changed', 'refresh_failed', 'refresh_succeeded', 'refresh_uncertain'] },
+  { label: 'account state and windows', members: ['account_state_changed', 'window_reset', 'window_cleared', 'overage_started', 'overage_ended', 'budget_period_ended', 'fast_credits_changed', 'refresh_failed', 'refresh_succeeded', 'refresh_uncertain'] },
   { label: 'cooldowns and backoff', members: ['cooldown_set', 'cooldown_cleared', 'poll_backoff_started', 'poll_backoff_ended'] },
   { label: 'keepalive', members: ['probe', 'warm_prefix_expired'] },
   { label: 'registry changes', members: ['registry_changed', 'catalog_changed', 'model_permitted', 'model_rejected'] },
   { label: 'router life cycle', members: ['router_started', 'ledger_gap'] },
 ];
 
-/** Every kind the Kinds list offers: the six decision kinds, `probe`, and the 32 event kinds. */
+/** Every kind the Kinds list offers: the six decision kinds, `probe`, and the 33 event kinds. */
 export const ALL_KINDS: readonly string[] = [...Object.keys(DECISION_KIND_LABEL), 'probe', ...Object.keys(EVENT_KIND_LABEL)];
 
 /** A kind's word: "probe decisions" for the pseudo-kind, else its label. */
@@ -530,6 +531,12 @@ function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
     }
     case 'wind_down_started':
       return { value: 'subscription ends' };
+    // The sentence runs past the By column, so the chip draws its first words and its title carries it whole.
+    case 'window_cleared': {
+      const window = wordOf(WINDOW_WORD, str(d.window) ?? '');
+      const reading = num(d.utilization);
+      return reading === null ? { value: `${window} cleared` } : { title: `${window} cleared to ${fmtPct(reading)} under its reset`, value: `${window} cleared` };
+    }
     case 'window_reset':
       return { value: `${wordOf(WINDOW_WORD, str(d.window) ?? '')} reset` };
     case 'window_spent':
@@ -2018,6 +2025,13 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('End from', text(d.end_source));
       break;
     }
+    case 'window_cleared':
+      add('Window', window === null ? null : plain(wordOf(WINDOW_WORD, window)));
+      add('Before', pct(d.utilization_before));
+      add('After', pct(d.utilization));
+      add('Reset', time(d.reset));
+      add('Read from', text(d.source, SOURCE_WORD));
+      break;
     case 'window_reset':
       add('Window', window === null ? null : plain(wordOf(WINDOW_WORD, window)));
       add('Before the reset', pct(d.utilization_before));

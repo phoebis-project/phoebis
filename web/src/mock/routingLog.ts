@@ -2107,6 +2107,17 @@ function buildEvents(): RoutingEvent[] {
   // within the hour of the least-bad move onto it.
   const nightlyReset = clock(13, 11);
   seeds.push({ accountId: 'nightly', at: iso(clock(12, 1, 5)), detail: { reset: nightlyReset, source: 'poll', source_request_id: null, utilization: 1, window: 'five_hour' }, kind: 'window_spent' });
+  // Legacy's 5-hour window, spent at a poll and read back under its limit under the same reset by its last clean poll,
+  // the reading its account still answers, so no reading at the limit follows the clear.
+  const legacy = accountOf.get('legacy')?.windows.find((w) => w.id === '5h');
+  if (legacy?.resetsAt && legacy.utilization !== null && legacy.utilization < 1) {
+    const reset = Date.parse(legacy.resetsAt);
+    const read = { reset, source: 'poll', source_request_id: null, window: 'five_hour' };
+    seeds.push(
+      { accountId: 'legacy', at: iso(reset - 5 * HOUR + 40 * MINUTE), detail: { ...read, utilization: 1 }, kind: 'window_spent' },
+      { accountId: 'legacy', at: legacy.observedAt, detail: { ...read, utilization: legacy.utilization, utilization_before: 1 }, kind: 'window_cleared' },
+    );
+  }
   // A window's spent edge is the first head of any answer that reads it at its limit, once per account and window.
   const heads = REQUESTS.flatMap((r) => r.attempts.map((a) => ({ a, at: Date.parse(a.startedAt) + (a.durationMs ?? 0), r }))).sort((x, y) => x.at - y.at);
   const spent = new Set<string>([`nightly|five_hour|${iso(nightlyReset)}`]);
@@ -2238,7 +2249,7 @@ const EVENT_KINDS: readonly string[] = [
   'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
   'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
   'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'warm_prefix_expired', 'wind_down_started',
-  'window_reset', 'window_spent',
+  'window_cleared', 'window_reset', 'window_spent',
 ];
 
 /** The route's merged order: newest first, a decision before an event at one instant. */

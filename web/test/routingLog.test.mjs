@@ -160,6 +160,7 @@ const EVENTS = [
   ['fast credits changed, room again', event('fast_credits_changed', { after: { disabled_reason: null, enabled: true, utilization: 0.31 }, blocked_after: null, blocked_before: 'org_spend_cap_reached' }), 'room', ['state available']],
   ['window spent', event('window_spent', { reset: ms(15, 42), source: 'head', source_request_id: 'req_1', utilization: 1, window: 'five_hour' }), 'head on 5h', ['resets 15:42']],
   ['window spent, read by the poll', event('window_spent', { reset: ms(15, 42), source: 'poll', utilization: 1, window: 'seven_day' }), 'poll on 7d', ['resets 15:42']],
+  ['window cleared', event('window_cleared', { reset: ms(15, 42), source: 'poll', source_request_id: null, utilization: 0, utilization_before: 1, window: 'five_hour' }), '5h cleared', []],
   ['window reset', event('window_reset', { next_reset: ms(19, 0), observed: 'sample', reset_at: at, utilization_before: 0.92, window: 'five_hour' }), '5h reset', ['was 92%']],
   ['router started', event('router_started', { pins_loaded: 10, version: '0.1.0' }, { accountId: null }), 'restart', ['pins 10']],
   ['warm prefix expired', event('warm_prefix_expired', { cause: 'ttl', deepest: { depth: 1, prefix_tokens: 18_400, tier: 'message', ttl_ms: 300_000 }, entries: 2, root: 's0' }), '5 min tier', ['prefix 18.4K', 'depth 1']],
@@ -271,16 +272,18 @@ test('every event kind has its words and its tone', () => {
     'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
     'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
     'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'warm_prefix_expired', 'wind_down_started',
-    'window_reset', 'window_spent',
+    'window_cleared', 'window_reset', 'window_spent',
   ];
   assert.deepEqual(Object.keys(d.EVENT_KIND_LABEL).sort(), kinds);
-  assert.equal(kinds.length, 32);
+  assert.equal(kinds.length, 33);
   assert.equal(d.EVENT_KIND_LABEL.pin_migrated, 'pin moved');
   assert.equal(d.EVENT_KIND_LABEL.shedding_round, 'shedding round');
   // A cleared mark and a booking the request's end let go report no trouble, so both read neutral.
   assert.deepEqual([d.EVENT_KIND_LABEL.mark_cleared, d.EVENT_KIND_LABEL.reservation_expired], ['mark cleared', 'reservation expired']);
   // A slowed account warns while its requests wait, and the end of the span reports no trouble.
   assert.deepEqual([d.EVENT_KIND_LABEL.slow_down_started, d.EVENT_KIND_LABEL.slow_down_ended], ['slow-down started', 'slow-down ended']);
+  // A window read under its limit again reports no trouble, as its reset does, so both read neutral.
+  assert.deepEqual([d.EVENT_KIND_LABEL.window_cleared, d.EVENT_KIND_LABEL.window_reset], ['window cleared', 'window reset']);
   const tones = Object.fromEntries(kinds.map((k) => [k, d.eventTone(k)]).filter(([, t]) => t !== 'neutral'));
   assert.deepEqual(tones, { account_state_changed: 'serious', budget_reached: 'serious', cooldown_set: 'warning', ledger_gap: 'serious', model_rejected: 'warning', slow_down_started: 'warning', window_spent: 'warning' });
   assert.equal(d.eventTone('a_kind_added_later'), 'neutral');
@@ -898,6 +901,7 @@ const DETAIL_EVENTS = {
   slow_down_started: [{ demand: 0.12, factor: 0.5, reset: ms(18, 20), stretch_ms: 2_520_000, threshold_ms: 1_800_000 }, ['Speed', 'Stretch', 'Demand', 'Reset', 'Effect']],
   warm_prefix_expired: [{ cause: 'ttl', deepest: { depth: 1, prefix_tokens: 18_400, tier: 'message', ttl_ms: 300_000, written_at: ms(14, 19, 52) }, entries: 1, root: 's0' }, ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed']],
   wind_down_started: [{ end_source: 'cancelled', ends_at: ms(15, 0), wind_down_minutes: 30 }, ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from']],
+  window_cleared: [{ reset: ms(15, 42), source: 'poll', source_request_id: null, utilization: 0, utilization_before: 1, window: 'five_hour' }, ['Window', 'Before', 'After', 'Reset', 'Read from']],
   window_reset: [{ next_reset: ms(19, 0), observed: 'sample', reset_at: ms(14, 0), utilization_before: 0.92, window: 'five_hour' }, ['Window', 'Before the reset', 'Prediction', 'Next reset']],
   window_spent: [{ reset: ms(15, 42), source: 'head', source_request_id: 'req_1', utilization: 1, window: 'five_hour' }, ['Window', 'Reading', 'Read from', 'Resets', 'Effect', 'Request']],
 };
@@ -944,6 +948,24 @@ test("a round's off-window pin reads its word and the rewrite cell names its uni
   const unnamed = { ...sonnet };
   delete unnamed.rewrite_window;
   assert.equal(fiveHour(unnamed), '0.5%', 'a pin whose record names no window draws the bare share');
+});
+
+test('a cleared window reads its readings before and after, its unchanged reset and its source, and nothing of why', () => {
+  const pairs = (detail) => Object.fromEntries(d.detailPairs(event('window_cleared', detail), NOW, []).map((p) => [p.label, texts(p.chips)]));
+  assert.deepEqual(pairs(DETAIL_EVENTS.window_cleared[0]), {
+    When: ['2026-09-16 14:00:00 UTC'],
+    Account: ['primary'],
+    Window: ['5h'],
+    Before: ['100%'],
+    After: ['0%'],
+    Reset: ['15:42'],
+    'Read from': ['the poll'],
+  });
+  const head = { reset: ms(15, 42), source: 'head', source_request_id: 'req_1', utilization: 0.4, utilization_before: 1.02, window: 'seven_day' };
+  // The chip draws the window's word and its title the sentence whole, which the By column has no room for.
+  assert.deepEqual(d.byOf(event('window_cleared', head)), { title: '7d cleared to 40% under its reset', value: '7d cleared' });
+  assert.deepEqual(d.byOf(event('window_cleared', DETAIL_EVENTS.window_cleared[0])), { title: '5h cleared to 0% under its reset', value: '5h cleared' });
+  assert.deepEqual(pairs(head)['Read from'], ['the response head']);
 });
 
 test('the two slow-down events read their pairs and effects', () => {

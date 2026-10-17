@@ -1639,7 +1639,7 @@ fn two_agents_pin_created_rows_differ_in_their_detail() {
 fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically() {
     use phoebis_ledger::EVENT_KINDS;
     use phoebis_routing::{CacheMapEntry, CreditsState, PinKeyFacts, ShedRoundFacts, WindowSource};
-    const KINDS: [&str; 32] = [
+    const KINDS: [&str; 33] = [
         "account_state_changed",
         "budget_period_ended",
         "budget_reached",
@@ -1670,6 +1670,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
         "slow_down_started",
         "warm_prefix_expired",
         "wind_down_started",
+        "window_cleared",
         "window_reset",
         "window_spent",
     ];
@@ -1884,6 +1885,16 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             wind_down_minutes: 30,
             end_source: "ends_at",
             restored: false,
+            at: 1,
+        },
+        RouterEvent::WindowCleared {
+            account_id: "a".into(),
+            window: "five_hour".into(),
+            utilization_before: 1.0,
+            utilization: 0.0,
+            reset: Some(2),
+            source: WindowSource::Poll,
+            source_request_id: None,
             at: 1,
         },
         RouterEvent::WindowReset {

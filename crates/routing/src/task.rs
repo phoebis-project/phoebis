@@ -264,6 +264,19 @@ pub enum RouterEvent {
         source_request_id: Option<String>,
         at: i64,
     },
+    /// A plan window read under 1.0 after a reading at 1.0 or above under the same reset: the readings before and
+    /// after and the unchanged reset, nothing of why, since a reset grant and an upstream correction read alike
+    /// and the router infers no cause.
+    WindowCleared {
+        account_id: String,
+        window: String,
+        utilization_before: f64,
+        utilization: f64,
+        reset: Option<i64>,
+        source: WindowSource,
+        source_request_id: Option<String>,
+        at: i64,
+    },
     /// A window's reset passed: a sample named a later reset, or none once it was read past the stored one
     /// (`observed` `sample`), or the purge tick found the clock past a stored reset with no newer sample (`clock`),
     /// once per account, window and reset.
@@ -4305,8 +4318,9 @@ impl Task {
     }
 
     /// The edges a plan window's new reading crosses against the stored one: its reset passing, which a later
-    /// reset names, or no reset on a reading taken past it, then the window spent, which a reading at 1.0 or above
-    /// names over one under it.
+    /// reset names, or no reset on a reading taken past it, then the window cleared, which a reading under 1.0 names
+    /// over one at 1.0 or above with no reset passed, or the window spent, which a reading at 1.0 or above names over
+    /// one under it.
     fn window_edges(
         &mut self,
         account_id: &str,
@@ -4338,6 +4352,24 @@ impl Task {
                     next_reset,
                     observed: "sample",
                     restored: false,
+                    at: now,
+                });
+            }
+        }
+        // The clear leaves the reset to the next sample or the clock walk, and the wall the prediction announced
+        // leaves with it, so a reading back at the limit under the same reset is spent again.
+        if let Some(stored) = stored.filter(|stored| stored.utilization >= 1.0) {
+            if reading.utilization < 1.0 && passed.is_none() {
+                self.spent_announced
+                    .remove(&(account_id.to_string(), window.to_string()));
+                self.emit(RouterEvent::WindowCleared {
+                    account_id: account_id.to_string(),
+                    window: window.to_string(),
+                    utilization_before: stored.utilization,
+                    utilization: reading.utilization,
+                    reset: reading.reset,
+                    source: reading.source,
+                    source_request_id: source_request_id.map(String::from),
                     at: now,
                 });
             }
