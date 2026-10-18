@@ -83,6 +83,13 @@ struct Invalidated {
 /// reset lands hours after the last.
 const RESET_SLACK_MS: i64 = 60_000;
 
+/// How far under 1.0 a reading may land over a stored reading at the wall and still read the wall. A poll reads the
+/// endpoint's whole percent and a head the utilization's float, so near a wall a head lands up to a point under the
+/// poll's figure (0.96 against 0.97, 0.99 after 1.0) and can sit a hair under that point too (0.989 where the poll
+/// read 1.0), which a one-point margin would read as a clear. Two points cover the head's point under the poll with
+/// one point of room. It is a constant, measured on live samples.
+pub const SPENT_MARGIN: f64 = 0.02;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum RouterEvent {
     CooldownCleared {
@@ -1634,9 +1641,9 @@ struct Task {
     reset_announced: HashMap<(String, String), i64>,
     revision: u64,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
-    /// The reset each account and window's predicted wall was announced for, `None` for a 5-hour window open past its
-    /// reset, beside the instant of the announcement: a charge or a booking announces a wall once per reset cycle, and
-    /// the sample that confirms it names that cycle's reset and announces nothing.
+    /// The reset each account and window's wall was announced for, `None` for a 5-hour window open past its reset,
+    /// beside the instant of the announcement: a charge, a booking or a sample announces a wall once per reset cycle,
+    /// and the sample that confirms it names that cycle's reset and announces nothing.
     spent_announced: HashMap<(String, String), (Option<i64>, i64)>,
     state: RoutingState,
     store: Arc<Store>,
@@ -3808,22 +3815,23 @@ impl Task {
                 }
                 // The edges compare each plan window's stored reading with the one that replaces it, so the stored
                 // ones are read before the fold.
-                let stored: HashMap<&str, WindowReading> = sample
+                let stored: HashMap<String, WindowReading> = sample
                     .windows
                     .keys()
                     .filter(|window| is_plan_window(window))
                     .filter_map(|window| {
                         let reading = self.state.sample(&account_id)?.reading(window)?;
-                        Some((window.as_str(), reading))
+                        Some((window.clone(), reading))
                     })
                     .collect();
+                let now = (self.clock)();
+                let sample = self.held_at_the_wall(&account_id, sample, &stored, now);
                 // A cooled account sends no requests, so a window the upstream reset ahead of the deadline it
                 // announced reaches the router here and nowhere else. Only a sample newer than the stored one
                 // answers for the account now: a head and a poll can cross, and the older one's reading is one
                 // the window has already moved past.
                 let moved = self.state.record_sample(&account_id, sample.clone());
                 if !moved.is_empty() {
-                    let now = (self.clock)();
                     for row in self.state.recovered_cooldowns(&account_id, &sample, now) {
                         self.release_cooldown(row.account_id, row.scope, "recovered");
                     }
@@ -3837,7 +3845,7 @@ impl Task {
                         self.window_edges(
                             &account_id,
                             window,
-                            stored.get(window.as_str()).copied(),
+                            stored.get(window).copied(),
                             reading,
                             source_request_id.as_deref(),
                             now,
@@ -4343,6 +4351,12 @@ impl Task {
             && reading.utilization >= 1.0
             && !announced
         {
+            // Recorded as the prediction records its own, so a repeat of this cycle announces nothing whichever
+            // source announced first.
+            self.spent_announced.insert(
+                (account_id.to_string(), window.to_string()),
+                (reading.reset, now),
+            );
             self.emit(RouterEvent::WindowSpent {
                 account_id: account_id.to_string(),
                 window: window.to_string(),
@@ -4353,6 +4367,42 @@ impl Task {
                 at: now,
             });
         }
+    }
+
+    /// The sample as the routing reads it: a plan window's reading within `SPENT_MARGIN` of 1.0 over a stored
+    /// reading at the wall under the same reset cycle is raised to the stored utilization, with its own instant,
+    /// reset and source, so a head after a poll at 1.0 neither clears the window nor lets the next poll announce the
+    /// wall again. A reading under the margin is a real clear and forgets the announcement, so the next crossing
+    /// announces anew. A reading of another cycle lands as read.
+    fn held_at_the_wall(
+        &mut self,
+        account_id: &str,
+        mut sample: UtilizationSample,
+        stored: &HashMap<String, WindowReading>,
+        now: i64,
+    ) -> UtilizationSample {
+        for (window, reading) in sample.windows.iter_mut() {
+            let Some(stored) = stored.get(window) else {
+                continue;
+            };
+            if stored.utilization < 1.0 || reading.utilization >= 1.0 {
+                continue;
+            }
+            if reading.utilization >= 1.0 - SPENT_MARGIN {
+                if same_cycle(
+                    (stored.reset, stored.observed_at),
+                    reading.reset,
+                    now,
+                    window,
+                ) {
+                    reading.utilization = stored.utilization;
+                }
+            } else {
+                self.spent_announced
+                    .remove(&(account_id.to_string(), window.clone()));
+            }
+        }
+        sample
     }
 
     /// Announces the window spent when the router's own figure took its prediction from `before`, under 1.0, to 1.0 or
