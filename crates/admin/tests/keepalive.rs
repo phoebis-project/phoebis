@@ -976,6 +976,78 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
 }
 
 #[tokio::test]
+async fn the_overview_counts_the_plan_funded_answered_probes_apart_from_the_billed_ones() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    // One answered probe on the subscription account's plan and one through the API key account.
+    for (id, account, account_kind) in [
+        ("probe-plan", "business", "oauth"),
+        ("probe-billed", "direct", "api_key"),
+    ] {
+        parts
+            .db
+            .insert_request(
+                &phoebis_ledger::RequestRecord {
+                    id: id.into(),
+                    received_at: now,
+                    finished_at: Some(now + 500),
+                    key_id: Some("desktop".into()),
+                    pool_id: Some("main".into()),
+                    canonical_model: "claude-sonnet-5".into(),
+                    kind: "probe".into(),
+                    origin: "keepalive".into(),
+                    outcome: "succeeded".into(),
+                    status: Some(200),
+                    attempts: 1,
+                    ..Default::default()
+                },
+                &[phoebis_ledger::AttemptRecord {
+                    request_id: id.into(),
+                    attempt: 1,
+                    account_id: account.into(),
+                    account_kind: account_kind.into(),
+                    started_at: now,
+                    finished_at: Some(now + 500),
+                    outcome: "succeeded".into(),
+                    input_tokens: Some(100),
+                    output_tokens: Some(10),
+                    ..Default::default()
+                }],
+                None,
+            )
+            .unwrap();
+    }
+    let rows = parts
+        .db
+        .read_blocking(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
+        .unwrap();
+    let plan_served: u64 = rows
+        .iter()
+        .filter(|r| {
+            r.kind == "probe"
+                && phoebis_ledger::Funding::of_rollup(&r.funding) == phoebis_ledger::Funding::Plan
+        })
+        .map(|r| r.succeeded)
+        .sum();
+    assert_eq!(
+        plan_served, 1,
+        "the rows file one answered probe under the plan: {rows:?}"
+    );
+    let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            overview["probes_24h"]["ok"].as_u64(),
+            overview["probes_24h"]["plan_ok"].as_u64()
+        ),
+        (Some(2), Some(plan_served)),
+        "both answered probes count, the plan-funded one apart: {overview}"
+    );
+}
+
+#[tokio::test]
 async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_only() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
