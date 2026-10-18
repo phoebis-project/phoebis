@@ -1464,6 +1464,45 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(new Set(read.map((x) => x[3])).size > 1, `the causes read ${[...new Set(read.map((x) => x[3]))].join(', ')}`);
   });
 
+  test(`the story's shed move stamps its pin with the round and its failed-over pin with the cooldown, which the next request's record reads, at ${at}`, async () => {
+    const s = await story;
+    const records = await decisionsOf(s);
+    const keyOf = (r) => `${r.request.keyId}|${r.request.sessionId}|${r.request.agentId}|${r.request.canonicalModel}`;
+    const writer = (id, seq) => records.find((r) => r.requestId === id && r.seq === seq);
+    // A record reads the pin row from before its decision, so a stamp shows on the pin's next request.
+    const next = (w) => records.filter((r) => keyOf(r) === keyOf(w) && Date.parse(r.request.at) > Date.parse(w.request.at)).sort((x, y) => Date.parse(x.request.at) - Date.parse(y.request.at))[0];
+    const moved = writer('req_868264bc-611', 1);
+    const failedOver = writer('req_b8c3e9d4-e61', 2);
+    assert.deepEqual(next(moved)?.pin?.shed, { at: moved.request.at, from: 'secondary', reason: 'round' }, "the shed move's session");
+    assert.deepEqual(next(failedOver)?.pin?.shed, { at: failedOver.request.at, from: 'secondary', reason: 'cooldown' }, 'the failed-over session');
+    // Every stamp names the move or the failover landing on its pin that wrote it, by the round or the failover's word.
+    for (const r of records.filter((x) => x.pin?.shed)) {
+      const w = records.find((x) => keyOf(x) === keyOf(r) && x.request.at === r.pin.shed.at && x.outcome.fromAccountId === r.pin.shed.from && x.outcome.pinWritten?.action === 'moved');
+      assert.ok(w, `${r.requestId}/${r.seq} reads a stamp no record of its pin wrote`);
+      const word = w.outcome.rule === 'shed' ? 'round' : w.outcome.pinEvents.find((e) => e.kind === 'pin_migrated')?.reason;
+      assert.equal(r.pin.shed.reason, word, `${r.requestId}/${r.seq} after ${w.requestId}/${w.seq}`);
+    }
+  });
+
+  test(`a wall reads the newest round on its newest wall's window before it by the round's trigger, at ${at}`, async () => {
+    const s = await story;
+    const events = (await logOf(s)).filter((row) => row.type === 'event').sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
+    const walls = s.attention.filter((i) => i.kind === 'wall_reached');
+    for (const item of walls) {
+      const newest = events.filter((e) => e.kind === 'window_spent' && e.accountId === item.subject.id && Date.parse(e.at) >= s.now - DAY && Date.parse(e.at) <= s.now).at(-1);
+      const wallAt = Date.parse(newest.at);
+      const length = newest.detail.window === 'five_hour' ? 5 * HOUR : 7 * DAY;
+      const round = events.filter((e) => e.kind === 'shedding_round' && e.accountId === item.subject.id && e.detail.window === newest.detail.window && Date.parse(e.at) <= wallAt && wallAt - Date.parse(e.at) <= length).at(-1);
+      // A stretch round's projection is the demand's at a moved horizon, so its wall reads how early it came instead.
+      const slowed = round?.detail.trigger === 'slow_down';
+      const early = slowed && typeof newest.detail.reset === 'number' ? Math.max(0, newest.detail.reset - wallAt) : null;
+      const error = round && !slowed ? Math.round((1 - round.detail.projection) * 1_000) / 1_000 : null;
+      assert.deepEqual([item.detail.early_ms, item.detail.projection_error], [early, error], item.subject.id);
+    }
+    // Nightly's wall follows no 5-hour round and secondary's the projection round at 11:00, so neither reads early.
+    assert.deepEqual(walls.map((i) => [i.subject.id, i.detail.early_ms, i.detail.projection_error]), [['nightly', null, null], ['secondary', null, -0.087]]);
+  });
+
   test(`the four routing conditions are the trailing day's fold of the routing log, one item per subject in the route's order, at ${at}`, async () => {
     const s = await story;
     const day = (await logOf(s)).filter((row) => row.type === 'event' && Date.parse(row.at) >= s.now - DAY && Date.parse(row.at) <= s.now).sort((x, y) => Date.parse(x.at) - Date.parse(y.at));

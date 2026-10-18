@@ -1127,6 +1127,73 @@ async function routingLogClearedChip(theme) {
 }
 
 /**
+ * The Pin and warmth fold's Shed mark on the story's two stamped pins, read on the next request of the shed session
+ * and of the failed-over session, each opened on its request's page a quarter hour either side of it: the origin chip
+ * opens on its word (`shed from` after a round's move, `failed over from` after a failover), holds the box, the type
+ * and the ink of the instant's chip beside it on one line, its label the type and ink of that chip's label, and needs
+ * no more width than it draws. The router's seed stamps no pin, so the mock pass reads it alone.
+ */
+async function pinShedMark(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const quarter = 15 * 60_000;
+  const read = [];
+  try {
+    for (const { ago, id, word } of [
+      { ago: (3 * 3_600 + 16 * 60 + 20) * 1_000, id: 'req_5d1f8c3a-b27', word: 'shed from' },
+      { ago: (16 * 60 + 55) * 1_000, id: 'req_e2c7a4f9-d13', word: 'failed over from' },
+    ]) {
+      const at = (await page.evaluate(() => Date.now())) - ago;
+      await page.goto(`${base}/routing-log?request=${id}&from=${new Date(at - quarter).toISOString()}&to=${new Date(at + quarter).toISOString()}`);
+      await booted();
+      await advance(LOAD_MS);
+      const row = page.locator(`.routing-log__table tbody tr[data-row="${id}/1"]`);
+      if ((await row.count()) === 0 || !(await openDecision(row))) {
+        say(`the stamped pin's request ${id} opened to no card on its request's page`);
+        continue;
+      }
+      const fold = page.locator('.routing-log__panel .decision-card').last().locator('details.decision-card__fold', { has: page.locator('summary', { hasText: 'Pin and warmth' }) });
+      await fold.locator('summary').click();
+      await settle();
+      const chips = await fold.evaluate((el) => {
+        const mark = [...el.querySelectorAll('.kv__row')].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Shed mark');
+        const round = (n) => Math.round(n * 10) / 10;
+        return [...(mark?.querySelectorAll('dd .chip') ?? [])].map((chip) => {
+          const at = chip.getBoundingClientRect();
+          const s = getComputedStyle(chip);
+          const label = chip.querySelector('.chip__label');
+          const l = label ? getComputedStyle(label) : null;
+          return {
+            background: s.backgroundColor,
+            border: `${s.borderTopWidth} ${s.borderTopStyle} ${s.borderTopColor}`,
+            drawn: round(at.width),
+            height: round(at.height),
+            ink: s.color,
+            label: label?.textContent ?? null,
+            labelInk: l?.color ?? null,
+            labelType: l ? `${l.fontSize} ${l.fontWeight} ${l.fontFamily}` : null,
+            need: chip.scrollWidth,
+            padding: `${s.paddingLeft} ${s.paddingRight}`,
+            text: chip.textContent ?? '',
+            top: round(at.top - chip.closest('dd').getBoundingClientRect().top),
+            type: `${s.fontSize} ${s.fontWeight} ${s.fontFamily}`,
+          };
+        });
+      });
+      read.push({ chips, id, word });
+    }
+  } finally {
+    await loadAtOrigin('/routing-log', '.routing-log__table');
+  }
+  for (const { chips, id, word } of read) {
+    const [origin, instant] = chips;
+    measurements.push(`${theme} /routing-log shed mark of ${id} ${JSON.stringify(chips)}`);
+    if (origin?.label !== word) say(`the Shed mark of ${id} opens on ${JSON.stringify(origin?.label ?? null)}, not "${word}"`);
+    failures.push(...compare(origin, instant, ['background', 'border', 'height', 'ink', 'labelInk', 'labelType', 'padding', 'top', 'type'], `${theme} /routing-log: the ${word} chip of ${id} against the instant's chip beside it`));
+    if (origin && origin.need > origin.drawn + 0.5) say(`the ${word} chip of ${id} needs ${origin.need}px and draws ${origin.drawn}px`);
+  }
+}
+
+/**
  * The Diagnostics group: on the Dashboard with the expert view off the sidebar draws neither the heading nor the
  * Routing log link, and with the log open both are drawn and the link is the active one.
  */
@@ -1396,6 +1463,56 @@ async function poolSheddingSwitch(theme) {
     if (differs.length) say(`the Load shedding switch's ${differs.join(', ')} differs from the ${label} switch's`);
   }
   await closeByEscape(dialog, `${theme} /pools load shedding switch dialog`, say);
+  await expertView(false).catch(() => {});
+  await atRest();
+}
+
+/**
+ * The Burn average field's hint in the expert view's Windows group: it closes on the sentence naming the preset that
+ * unlocks the field, and holds the type, the ink, the line height, the margin, the left edge and the offset under its
+ * field's top of the Window ceiling field's hint beside it, as wide as its own field.
+ */
+async function poolBurnAverageHint(theme) {
+  const say = (what) => failures.push(`${theme} /pools: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  try {
+    await expertView(true);
+    await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await railEntry(dialog, 'Windows').click();
+  } catch (error) {
+    say(`the pool dialog never reached its Windows group (${error instanceof Error ? error.message : String(error)})`);
+    await page.keyboard.press('Escape');
+    await expertView(false).catch(() => {});
+    return;
+  }
+  await settle();
+  const hints = await dialog.evaluate((el) => {
+    const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === 'Windows');
+    const read = (text) => {
+      const field = [...(section?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text);
+      const hint = field?.querySelector(':scope > .field__hint');
+      if (!field || !hint || section.hidden) return null;
+      const s = getComputedStyle(hint);
+      const at = hint.getBoundingClientRect();
+      const frame = field.getBoundingClientRect();
+      return {
+        color: s.color,
+        font: `${s.fontFamily} ${s.fontSize} ${s.fontWeight}`,
+        left: Math.round(at.left - frame.left),
+        lineHeight: s.lineHeight,
+        margin: s.marginTop,
+        text: hint.textContent ?? '',
+        top: Math.round(at.top - frame.top),
+        wide: Math.round(at.width) === Math.round(frame.width),
+      };
+    };
+    return { average: read('Burn average (s)'), ceiling: read('Window ceiling (%)') };
+  });
+  measurements.push(`${theme} /pools burn average hint ${JSON.stringify(hints)}`);
+  if (!hints.average?.text.endsWith('. Editable under the Custom preset in Load shedding.')) say(`the Burn average hint reads ${JSON.stringify(hints.average?.text ?? null)}, not closing on the preset that unlocks it`);
+  for (const finding of compare(hints.average, hints.ceiling, ['color', 'font', 'left', 'lineHeight', 'margin', 'top', 'wide'], 'the Burn average hint against the Window ceiling hint beside it')) say(finding);
+  await closeByEscape(dialog, `${theme} /pools burn average hint dialog`, say);
   await expertView(false).catch(() => {});
   await atRest();
 }
@@ -8694,6 +8811,7 @@ try {
         await poolTooltipColumns(theme);
         await poolCachingControls(theme);
         await poolSheddingSwitch(theme);
+        await poolBurnAverageHint(theme);
         await poolRoutingCards(theme);
         await poolCardLayout(theme);
         await poolMemberPins(theme);
@@ -8763,6 +8881,7 @@ try {
         await routingLogDatedTime(theme);
         await routingLogRegistryTarget(theme);
         await routingLogClearedChip(theme);
+        if (mock) await pinShedMark(theme);
         await firstDecisionOpen(theme);
         await pagerControls(theme, view.path);
       }

@@ -853,6 +853,21 @@ test('the pin fold reads the cycle and the slowed-until time', () => {
   assert.deepEqual(rows({ ...pin, slowDownUntil: null }).slice(-1), [['Cycle', ['42 s']]], 'a cycle stands without a deadline');
 });
 
+test("the pin fold's Shed mark reads a round's move as shed from its source and every other stamp as failed over from it", () => {
+  const pin = {
+    accountId: 'primary', createdAt: iso(ms(14, 7, 51)), cycleMs: null, epoch: 61, found: 'live', idleMs: 314_000, incarnation: 1, lane: 'x|standard|enabled|high', lastRefreshAt: iso(ms(14, 7, 51)), lastUsedAt: iso(ms(14, 7, 51)),
+    marked: false, markedAt: null, markedOn: null, markedWindow: null, refreshAgeMs: 314_000, released: [], shed: null, slowDownUntil: null, warmth: 'refresh', warmthCause: 'continues_pin',
+  };
+  const mark = (p) => d.pinRows(record({ pin: p, pinReason: null }), NOW).find((r) => r.label === 'Shed mark');
+  const stamped = (reason) => texts(mark({ ...pin, shed: { at: iso(ms(14, 7, 51)), from: 'secondary', reason } }).chips);
+  assert.deepEqual(stamped('round'), ['shed from secondary', 'at 14:07'], "a shedding round's move");
+  for (const reason of ['cooldown', 'fast_lane', 'mark']) assert.deepEqual(stamped(reason), ['failed over from secondary', 'at 14:07'], `a failover's landing on ${reason}`);
+  // A marked pin reads its mark first, and the stamp of the move that brought it after it.
+  const marked = { ...pin, marked: true, markedAt: iso(ms(14, 12, 30)), markedOn: 'primary', markedWindow: 'five_hour', shed: { at: iso(ms(14, 7, 51)), from: 'secondary', reason: 'cooldown' } };
+  assert.deepEqual(texts(mark(marked).chips), ['marked on primary', 'at 14:12', 'by the 5h trigger', 'failed over from secondary', 'at 14:07']);
+  assert.equal(mark(pin), undefined, 'a pin no round marked and nothing stamped draws no Shed mark');
+});
+
 /** One event per kind, its detail in the shape its writer stores, each naming an account and a pool. */
 const DETAIL_EVENTS = {
   account_state_changed: [{ cause: 'funding_refused', detail: 'Your credit balance is too low', from: 'ready', to: 'funding_required' }, ['From', 'To', 'Cause', 'Detail', 'Effect']],

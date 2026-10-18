@@ -680,7 +680,7 @@ export function decodeDecisionRecord(v: unknown): DecisionRecord {
     pin: orNull(r.pin, (p) => ({
       accountId: strOrNull(p.account_id), createdAt: isoOrNull(p.created_at), cycleMs: numOrNull(p.cycle_ms), epoch: numOrNull(p.epoch), found: str(p.found, 'none'), idleMs: numOrNull(p.idle_ms), incarnation: numOrNull(p.incarnation), lane: strOrNull(p.lane), lastRefreshAt: isoOrNull(p.last_refresh_at), lastUsedAt: isoOrNull(p.last_used_at),
       marked: bool(p.marked), markedAt: isoOrNull(p.marked_at), markedOn: strOrNull(p.marked_on), markedWindow: strOrNull(p.marked_window), refreshAgeMs: numOrNull(p.refresh_age_ms), released: strings(p.released),
-      shed: orNull(p.shed, (x) => ({ at: isoOr(x.at, epoch), from: str(x.from) })), slowDownUntil: isoOrNull(p.slow_down_until), warmth: strOrNull(p.warmth), warmthCause: strOrNull(p.warmth_cause),
+      shed: orNull(p.shed, (x) => ({ at: isoOr(x.at, epoch), from: str(x.from), reason: str(x.reason, 'round') })), slowDownUntil: isoOrNull(p.slow_down_until), warmth: strOrNull(p.warmth), warmthCause: strOrNull(p.warmth_cause),
     })),
     // A word this build does not know reads as none, as a poll outcome does. The raw answer still carries it.
     pinReason: PIN_REASON_VALUES.find((x) => x === r.pin_reason) ?? null,

@@ -1065,7 +1065,12 @@ export interface RecordPin {
   markedWindow: string | null;
   refreshAgeMs: number | null;
   released: string[];
-  shed: { at: string; from: string } | null;
+  /**
+   * The source a shed move or a failover's landing left the pin with. `reason` is `round` for a shedding round's move
+   * and the failover's word (`cooldown`, `fast_lane`, `mark`) for a landing, and `round` on a record from before the
+   * member.
+   */
+  shed: { at: string; from: string; reason: string } | null;
   /** The slow-down deadline standing on the pin, null without one or on a record from before the member. */
   slowDownUntil: string | null;
   warmth: string | null;

@@ -750,6 +750,16 @@ test("a record's pin decodes its shed mark and its request the body's estimated 
   assert.equal(d.decodeDecisionRecord({ ...body, request: refused }).request.bodyTokens, null, 'a refusal carries no estimate');
 });
 
+test("a record's pin decodes the word its stamp was written by, and a stamp from before the member reads round", () => {
+  const body = fixture('decision');
+  const at = 1_791_717_520_000;
+  const shedOf = (shed) => d.decodeDecisionRecord({ ...body, pin: { ...body.pin, shed } }).pin.shed;
+  assert.equal(shedOf(null), null, 'a pin no move or failover stamped');
+  assert.deepEqual(shedOf({ at, from: 'business', reason: 'round' }), { at: new Date(at).toISOString(), from: 'business', reason: 'round' }, "a round's move");
+  assert.deepEqual(shedOf({ at, from: 'business', reason: 'cooldown' }), { at: new Date(at).toISOString(), from: 'business', reason: 'cooldown' }, "a failover's landing");
+  assert.deepEqual(shedOf({ at, from: 'business' }), { at: new Date(at).toISOString(), from: 'business', reason: 'round' }, 'a record from before the member keeps the word it was read by');
+});
+
 test('the rewrites answer decodes its moves by reason and fit', () => {
   const body = fixture('analytics_rewrites');
   assert.deepEqual(d.decodeRewrites(body).movesByReasonAndFit, body.moves_by_reason_and_fit);

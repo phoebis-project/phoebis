@@ -4920,7 +4920,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         shedSwitch()?.closest('.field')?.className === migrate?.closest('.field')?.className &&
         migrate?.closest('.field')?.classList.contains('field--beside') === true &&
         hintOf('Load shedding', 'Shed cap (%)') === "The most of the member's burn one round removes. The round removes what brings the window under the ceiling, up to this." &&
-        hintOf('Windows', 'Burn average (s)') === "The time constant of each session's burn average. The projection, the slow-down and the round read it. A 5-hour window younger than twice it fires no round." &&
+        hintOf('Windows', 'Burn average (s)') ===
+          "The time constant of each session's burn average. The projection, the slow-down and the round read it. A 5-hour window younger than twice it fires no round. Editable under the Custom preset in Load shedding." &&
         hintOf('Load shedding', 'Shed dwell (s)') === 'The least time between two rounds on one member, and how long a moved session stays off it.' &&
         field('Load shedding', 'Shed cap (%)')?.getAttribute('min') === '10' &&
         field('Load shedding', 'Shed cap (%)')?.getAttribute('max') === '100',
@@ -8810,6 +8811,24 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
       name: "/requests a held row's marker reads waited, and its hover each wait's reason with its span and the account it waited on",
       ok: read.every((x) => x.want !== null && x.cell?.marker === x.want.marker && x.cell.title === x.want.title) && read[0].want?.title.endsWith(' on studio') === true,
       missing: read.map((x) => `${x.reason}: ${JSON.stringify(x.cell)} against ${JSON.stringify(x.want)}`),
+    });
+  }
+  {
+    // Waits that span two accounts name each wait's own, since the router fills the accounts from the holds in the
+    // waits' order. The story holds no such row, so its slowed row answers with a second wait on another account.
+    const slowed = requests.find((r) => r.held?.waits.length === 1 && r.held.waits[0].reason === 'slow_down');
+    const spanning = { cohort: null, heldMs: 45_000, waitedOn: ['studio', 'primary'], waits: [{ heldMs: 42_000, reason: 'slow_down' }, { heldMs: 3_000, reason: 'cap' }] };
+    const listRequests = api.listRequests;
+    api.listRequests = async (...args) => {
+      const answer = await listRequests.apply(api, args);
+      return { ...answer, requests: answer.requests.map((r) => (r.id === slowed?.id ? { ...r, held: spanning } : r)) };
+    };
+    const cell = slowed ? await attemptsCellOf(slowed.id) : null;
+    api.listRequests = listRequests;
+    results.push({
+      name: "/requests a held row whose waits span two accounts names each wait's own account in its hover",
+      ok: cell?.marker === 'waited 45 s' && cell.title === 'waited for the slow-down 42 s on studio, for a slot 3 s on primary',
+      missing: [JSON.stringify(cell)],
     });
   }
   // Under native, the shell's default, the Cost cell reads a row in the unit its funding pays in: dollars over the
@@ -12851,6 +12870,31 @@ m.unmount();
     });
     results.push({ name: "/routing-log the open card's verdict badge carries its row's tone class", ok: toneClasses.every((c) => c.split(' ').includes('badge--warning')), missing: toneClasses });
     round.page.unmount();
+  }
+  {
+    // The shed move and the failover landing each stamp the pin they write, and the next request of each session reads
+    // the stamp in its Pin and warmth fold: a round's move as shed from its source, a landing as failed over from it.
+    const stampOf = async (id) => {
+      if ((await api.getDecision(id, 1)) === null) return { read: [`no decision of ${id}`], shed: null, want: null };
+      const { card, page, record } = await story(id);
+      scan(`stamped pin ${id}`, card);
+      const mark = kvRows(card?.querySelectorAll('details.decision-card__fold')[1]?.querySelector('.kv')).find((r) => r.label === 'Shed mark');
+      page.unmount();
+      const shed = record?.pin?.shed ?? null;
+      return { read: ddWords(mark?.dd), shed, want: shed === null ? null : [`${shed.reason === 'round' ? 'shed from' : 'failed over from'} ${shed.from}`, `at ${new Date(shed.at).toISOString().slice(11, 16)}`] };
+    };
+    const moved = await stampOf('req_5d1f8c3a-b27');
+    const failedOver = await stampOf('req_e2c7a4f9-d13');
+    results.push({
+      name: "/routing-log the Shed mark reads a round's move as shed from its source and a failover's landing as failed over from it",
+      ok:
+        moved.shed?.reason === 'round' &&
+        failedOver.shed?.reason === 'cooldown' &&
+        JSON.stringify(moved.read) === JSON.stringify(moved.want) &&
+        JSON.stringify(failedOver.read) === JSON.stringify(failedOver.want) &&
+        JSON.stringify([moved.read[0], failedOver.read[0]]) === JSON.stringify(['shed from secondary', 'failed over from secondary']),
+      missing: [JSON.stringify(moved), JSON.stringify(failedOver)],
+    });
   }
   {
     // The Fable-week round on nightly at 08:30: the 5-hour window opened 19 minutes before, under all's hold of an

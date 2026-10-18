@@ -91,8 +91,10 @@ settings they name (with the pool's values where the item carries them) and the 
 `main: 4 rounds marked nothing, no destination had runway, window_ceiling 95 %, since 14:45` for a pool whose rounds
 found no destination with runway. An account's count reads `2 moves landed and the 5h window was spent within the hour`
 where moves onto it were followed by a spent window, or `1 wall reached on the 5h window` where it reached its wall,
-followed by `the last round projected 96 %` where a round on that window came before. An account slowed past twice its
-pool's stretch threshold within the day reads, under the label "Slowed past twice the stretch",
+followed by `the last round projected 96 %` where a projection round on that window came before, or by
+`the wall came 25 min before the reset` where a slow-down round came before (`the wall came at the reset` for a wall at
+or after the reset). An account slowed past twice its pool's stretch threshold within the day reads, under the label
+"Slowed past twice the stretch",
 `studio: slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12`, the
 bar after `over`, the lowest factor of its spans and the pool's threshold. Each opens the [routing log](#routing-log) on
 the pool's shedding rounds, the account's moves and spent windows, its spent windows, or its slow-down starts and ends,
@@ -358,11 +360,12 @@ session's burn is averaged over." and holds `Window ceiling (%)`, from 50 to 100
 lands on a member only where its windows stay under this share until they reset, or for the next five hours on a weekly
 window. A round runs on a member whose window would pass it.", and in the expert view `Burn average (s)`, from 600 to
 7200, with the hint "The time constant of each session's burn average. The projection, the slow-down and the round read
-it. A 5-hour window younger than twice it fires no round." It closes on the "Member utilization" bar, whose hint reads
-"Each tick is a member's latest 5-hour or 7-day reading, as on the Quota page. Drag the ceiling's handle, or focus it
-and use the arrow keys." The bar is one track of used shares holding both windows' readings, a tick per member window
-with the hover `{account}: {window} {used}` and the legend "5-hour reading" and "7-day reading", and the ceiling stands
-on it in every view as the "Window ceiling" handle, dragged or moved with the arrow keys, with the field following it.
+it. A 5-hour window younger than twice it fires no round. Editable under the Custom preset in Load shedding." It closes
+on the "Member utilization" bar, whose hint reads "Each tick is a member's latest 5-hour or 7-day reading, as on the
+Quota page. Drag the ceiling's handle, or focus it and use the arrow keys." The bar is one track of used shares holding
+both windows' readings, a tick per member window with the hover `{account}: {window} {used}` and the legend "5-hour
+reading" and "7-day reading", and the ceiling stands on it in every view as the "Window ceiling" handle, dragged or
+moved with the arrow keys, with the field following it.
 
 Load shedding opens on "A member whose window would pass the ceiling before its reset, or within five hours on a weekly
 window, runs a round that marks the sessions that cover the excess, and each moves to a sibling with runway at its next
@@ -554,7 +557,8 @@ request did not succeed (`canceled`, `exhausted`, `failed`, `incomplete` or `rej
 however many attempts it took: Attempts reads `2 attempts` with the trail of account and status on hover, nothing for a
 request of one attempt, and a `waited 42 s` badge for a request that waited through a hold, for a slot while every
 account was at its cap, for a reset or for the slow-down, whose hover names each wait with its reason in the row's order
-and the account it waited on, `waited for the slow-down 42 s, for a slot 3 s on {account}` (a row from before the
+and the account it waited on, `waited for the slow-down 42 s, for a slot 3 s on {account}`, or each with its own account
+where the waits span two, `waited for the slow-down 42 s on {account}, for a slot 3 s on {other}` (a row from before the
 reasons reads `waited 1 s on {account}`, and a wait under a second reads `1 s`). Cost reads in the top bar's unit, its
 header's hover naming what each kind of request reads under the position. Under Native a request a subscription window
 paid reads its 20x 5-hour equivalent over its 20x 7-day one (`1.47% 20x 5h` over `0.244% 20x 7d`), with every window,

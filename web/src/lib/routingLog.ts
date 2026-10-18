@@ -2103,7 +2103,9 @@ export function pinRows(record: DecisionRecord, now: number): CardRow[] {
     // A version 1 record carried the mark alone, with no account, instant or window.
     const trigger = p.markedWindow === null ? [] : [plain(`by the ${wordOf(WINDOW_WORD, p.markedWindow)} trigger`)];
     const marked = p.markedOn !== null && p.markedAt !== null ? [accountChip(p.markedOn, 'marked on'), plain(formatFact(p.markedAt, 'time', now), 'at'), ...trigger] : [plain('marked by a round')];
-    rows.push({ chips: [...(p.marked ? marked : []), ...(p.shed !== null ? [accountChip(p.shed.from, 'shed from'), plain(formatFact(p.shed.at, 'time', now), 'at')] : [])], label: 'Shed mark' });
+    // A failover's landing stamps the pin as a round's move does, so the reason picks the word the status page uses.
+    const origin = p.shed?.reason === 'round' ? 'shed from' : 'failed over from';
+    rows.push({ chips: [...(p.marked ? marked : []), ...(p.shed !== null ? [accountChip(p.shed.from, origin), plain(formatFact(p.shed.at, 'time', now), 'at')] : [])], label: 'Shed mark' });
   }
   return [...rows, ...released];
 }

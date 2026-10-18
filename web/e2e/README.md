@@ -29,9 +29,14 @@ range on the registry and state changes (the link the cell reads off the change'
 state change in type, ink, height, left edge and top, and against the pool's and the key's links of the other registry
 rows in all but their left edge, which their muted word moves), a cleared window's By chip under the 7-day range on the
 cleared and spent windows (against a spent window's chip in type, ink, height, padding and top, the width its text needs
-recorded, and the By column as wide as its longest cell), the Diagnostics group (neither its heading nor the Routing log
-link on the dashboard with the expert view off, both with the log open and the link active), pool chips, the caching
-controls, the Load shedding switch against Migrate when spent, the load groups (the overage grace field against the
+recorded, and the By column as wide as its longest cell), the Shed mark of the two pins the story stamps in the mock
+pass alone (on the next request of the shed session and of the failed-over session, the origin chip opening on
+`shed from` or `failed over from`, against the chip of the instant beside it in box, type, ink and top, its label
+against that chip's label in type and ink, and its text whole), the Diagnostics group (neither its heading nor the
+Routing log link on the dashboard with the expert view off, both with the log open and the link active), pool chips, the
+caching controls, the Load shedding switch against Migrate when spent, the Burn average field's hint in the expert view
+(ending on the preset that unlocks the field, against the Window ceiling field's hint beside it in type, ink, line
+height, margin, left edge and top, and as wide as its field), the load groups (the overage grace field against the
 window ceiling field, the utilization bar's ceiling handle and the shedding preview line), the pool dialog's ceiling
 handle in the plain view (on the track at the field's value, centered on the track and taller than it), the pool card's
 serving table and its seven tiles, its attention rows ending with their age (the row's last cell, on the detail's line

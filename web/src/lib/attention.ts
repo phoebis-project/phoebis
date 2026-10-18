@@ -207,8 +207,10 @@ function conditionWords(item: AttentionItem, now: number): string {
       }
       default: {
         const error = typeof d.projection_error === 'number' && Number.isFinite(d.projection_error) ? `, the last round projected ${Math.round((1 - d.projection_error) * 100)} %` : '';
+        // A slow-down round paces the window to its reset, so its wall reads how early it came instead.
+        const early = typeof d.early_ms === 'number' && Number.isFinite(d.early_ms) ? (d.early_ms > 0 ? `, the wall came ${formatFact(d.early_ms, 'ms', now)} before the reset` : ', the wall came at the reset') : null;
         const on = windowsOf(d.windows);
-        return `${plural(count(d.walls), 'wall', 'walls')} reached${on ? ` on${on}` : ''}${error}`;
+        return `${plural(count(d.walls), 'wall', 'walls')} reached${on ? ` on${on}` : ''}${early ?? error}`;
       }
     }
   })();

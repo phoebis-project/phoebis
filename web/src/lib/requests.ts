@@ -21,12 +21,16 @@ const waitWord = (ms: number) => ageWord(Math.max(1_000, ms));
 
 /**
  * A held row's badge, `waited 42 s`, and its hover, each wait with its reason in the row's order and the account it
- * waited on: `waited for the slow-down 42 s, for a slot 3 s on acct-a`. A row from before the waits names no reason, a
- * reason the console has no words for reads as the router sent it, and a wait under a second reads `1 s`.
+ * waited on: `waited for the slow-down 42 s, for a slot 3 s on acct-a`, or where the waits span two accounts each with
+ * its own, `waited for the slow-down 42 s on studio, for a slot 3 s on primary`. A row from before the waits names no
+ * reason, a reason the console has no words for reads as the router sent it, and a wait under a second reads `1 s`.
  */
 export function heldWords(held: CohortHold): { badge: string; title: string } {
   const waits = held.waits.map((w) => `${own(WAIT_REASON_WORD, w.reason) ? WAIT_REASON_WORD[w.reason] : `for ${w.reason}`} ${waitWord(w.heldMs)}`);
-  return { badge: `waited ${waitWord(held.heldMs)}`, title: `waited ${waits.length > 0 ? waits.join(', ') : waitWord(held.heldMs)} on ${heldOn(held)}` };
+  const badge = `waited ${waitWord(held.heldMs)}`;
+  // The router fills the accounts waited on from the same holds in the same order, so each wait names its own.
+  if (waits.length > 0 && new Set(held.waitedOn).size > 1) return { badge, title: `waited ${waits.map((w, i) => `${w} on ${held.waitedOn[i] ?? heldOn(held)}`).join(', ')}` };
+  return { badge, title: `waited ${waits.length > 0 ? waits.join(', ') : waitWord(held.heldMs)} on ${heldOn(held)}` };
 }
 
 /** The two windows every subscription shares, drawn first in this order, and a model's own week follows them. */

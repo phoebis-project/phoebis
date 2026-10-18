@@ -997,6 +997,8 @@ interface PinState {
   epoch: number;
   lastRefreshAt: number;
   lastUsedAt: number;
+  /** The source a shed move or a failover's landing left, which a renewal keeps and any other write clears. */
+  shed: { at: number; from: string; reason: string } | null;
 }
 const pins = new Map<string, PinState>();
 let epochs = 0;
@@ -1062,7 +1064,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     // A drawn trace names where the pin lived. A pin the day's rows last left past its window was used by a request
     // the day does not hold, so the trace's own idle age stands.
     const recent = held !== undefined && held.accountId === on && spec.at - held.lastUsedAt <= pool.affinityTtlSeconds * 1_000;
-    const found = recent ? held : { accountId: on, createdAt: held?.createdAt ?? spec.at - 40 * MINUTE, epoch: held?.epoch ?? (epochs += 1), lastRefreshAt: spec.at - spec.pin.idleMs, lastUsedAt: spec.at - spec.pin.idleMs };
+    const found = recent ? held : { accountId: on, createdAt: held?.createdAt ?? spec.at - 40 * MINUTE, epoch: held?.epoch ?? (epochs += 1), lastRefreshAt: spec.at - spec.pin.idleMs, lastUsedAt: spec.at - spec.pin.idleMs, shed: null };
     pins.set(pinKey, found);
     const idleMs = spec.at - found.lastUsedAt;
     const released = spec.failover ? [spec.failover === 'fast_lane' ? 'fast_rate_limit' : 'cooldown'] : [];
@@ -1070,7 +1072,8 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     const mark = spec.rule === 'shed' ? markOf(found.accountId, spec.at) : null;
     pin = {
       accountId: found.accountId, createdAt: iso(found.createdAt), cycleMs: spec.pinPace?.cycleMs ?? null, epoch: found.epoch, found: 'live', idleMs, incarnation: 1, lane: laneOf(r), lastRefreshAt: iso(spec.at - idleMs), lastUsedAt: iso(spec.at - idleMs),
-      marked: mark !== null, markedAt: mark === null ? null : iso(mark.at), markedOn: mark?.on ?? null, markedWindow: mark?.window ?? null, refreshAgeMs: idleMs, released, shed: null,
+      marked: mark !== null, markedAt: mark === null ? null : iso(mark.at), markedOn: mark?.on ?? null, markedWindow: mark?.window ?? null, refreshAgeMs: idleMs, released,
+      shed: found.shed === null ? null : { at: iso(found.shed.at), from: found.shed.from, reason: found.shed.reason },
       slowDownUntil: spec.pinPace?.slowDownUntil === null || spec.pinPace?.slowDownUntil === undefined ? null : iso(spec.pinPace.slowDownUntil), warmth: spec.pin.warmth, warmthCause: spec.pin.cause,
     };
     walk.push(step('pin', 'match', [fact('found', 'live'), fact('account_id', found.accountId, null, found.accountId), fact('epoch', found.epoch, 'count'), fact('idle_ms', idleMs, 'ms'), fact('refresh_age_ms', idleMs, 'ms'), fact('warmth', spec.pin.warmth), fact('cause', spec.pin.cause), fact('marked', pin.marked)]));
@@ -1199,7 +1202,11 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     const action = spec.kind === 'renewed' ? 'renewed' : pin?.found === 'live' || spec.failover ? 'moved' : 'created';
     const prior = pins.get(pinKey);
     const epoch = action === 'renewed' && prior ? prior.epoch : (epochs += 1);
-    pins.set(pinKey, { accountId: spec.accountId ?? '', createdAt: action === 'renewed' && prior ? prior.createdAt : spec.at, epoch, lastRefreshAt: spec.at, lastUsedAt: spec.at });
+    // The engine stamps the row a shed move or a failover's landing writes with its source, a renewal keeps the row's
+    // stamp, and every other write clears it.
+    const source = spec.from ?? '';
+    const shed = action === 'renewed' ? (prior?.shed ?? null) : spec.failover ? { at: spec.at, from: source, reason: spec.failover } : spec.kind === 'moved' && spec.rule === 'shed' ? { at: spec.at, from: source, reason: 'round' } : null;
+    pins.set(pinKey, { accountId: spec.accountId ?? '', createdAt: action === 'renewed' && prior ? prior.createdAt : spec.at, epoch, lastRefreshAt: spec.at, lastUsedAt: spec.at, shed });
     pinWritten = action === 'renewed' ? { action, epoch, hashesStamped: stamps.hashes, lane: laneOf(r), refreshStamped: stamps.refresh } : { action, epoch, hashesStamped: r.kind === 'inference', lane: laneOf(r), refreshStamped: true };
   }
   const usage = r.usage;
@@ -1626,6 +1633,8 @@ function storySpecs(): Spec[] {
       prefix: { secondary: { content: message('c64358b5', 10, 72_000, t(11, 8, 30), t(11, 6, 2), FIVE_MINUTES), contentMatch: null } },
       rule: 'shed',
     }),
+    // The moved session's next turn renews its pin on primary, whose row carries the source the move left.
+    at('req_5d1f8c3a-b27', 1, 1, t(11, 13, 40), 'renewed', 'primary', { pin: live('continues_pin', 310_000) }),
     // The hour's sessions placed on secondary before its spent edge.
     at('req_a1f04c2e-7b3', 1, 1, t(14, 0, 10), 'placed', 'secondary'),
     at('req_b72e9d05-c14', 1, 1, t(14, 1, 30), 'placed', 'secondary'),
@@ -1737,6 +1746,8 @@ function storySpecs(): Spec[] {
     at('req_d2a8f6c1-d50', 1, 1, t(14, 1, 45), 'placed', 'secondary'),
     at('req_b8c3e9d4-e61', 1, 1, t(14, 7, 50), 'renewed', 'secondary', { pin: live('continues_pin', 365_000) }),
     at('req_b8c3e9d4-e61', 2, 2, t(14, 7, 51), 'placed', 'primary', { attempted: ['secondary'], failover: 'cooldown', from: 'secondary', pin: live() }),
+    // Its next turn renews the pin the landing wrote on primary, whose row carries the source the failover left.
+    at('req_e2c7a4f9-d13', 1, 1, t(14, 13, 5), 'renewed', 'primary', { pin: live('continues_pin', 314_000) }),
     // Studio's closed span in work: a placement reads no entry, so the session placed at 09:11:24 opens the span at
     // its first turn after the placement, which reads the factor at 0.91 in the last 77 minutes of the window that
     // resets at 10:29.
