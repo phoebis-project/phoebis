@@ -423,7 +423,9 @@ const slowReadAt = (accountId: string, pool: PoolSeed, at: number): SlowRead | n
 
 /**
  * The ramp standing at `at`, 0 at a factor of 1 and capped at 1. A read at 1 or the purge ends the span, so the next
- * read under 1 starts the ramp afresh, as the engine's stamp does.
+ * read under 1 starts the ramp afresh, as the engine's stamp does. No story read stands at or past the ceiling, where
+ * the engine's ramp reads 1 at once, and no span under 1 crosses a reset, where the engine drops the stamp, so the
+ * helper reads neither case.
  */
 function rampAt(accountId: string, pool: PoolSeed, at: number): number {
   let since: number | null = null;
@@ -1608,8 +1610,9 @@ function storySpecs(): Spec[] {
     const gaps = Math.min(pace.gaps + 1, 8);
     return { cycleMs: Math.round(pace.cycleMs + (gapMs - pace.cycleMs) / gaps), gaps };
   };
-  // Studio's morning pin reads its 24 s cycle at 10:12:36 from two gaps, its turns of 10:11:36, 10:12 and 10:12:36.
-  const morningPace = { cycleMs: 24_000, gaps: 2 };
+  // Studio's morning pin holds one gap at 10:12:36, from its turn of 10:11:36 to 10:12: the placement before it and
+  // the renewal that carries the hold fold nothing.
+  const morningPace = { cycleMs: 24_000, gaps: 1 };
   return [
     // Two of the round's sessions placed on secondary just before it. Every pin a beat renews or moves is a request's.
     at('req_e5a1c093-4d7', 1, 1, t(10, 58, 59), 'placed', 'secondary'),
@@ -1747,7 +1750,8 @@ function storySpecs(): Spec[] {
     // The morning session's first turn after its placement sets its pin's dispatch, and the next one, 24 s later,
     // gives the pin its cycle: at 0.40 it waits 36 s, and the renewal after the wait reads 0.35 and runs no round,
     // since the stretch reads under the threshold. Its turns after the reset read 1, and the second, past the wait,
-    // ends the span. Each turn after the hold folds its gap into the cycle over the pool's burn average.
+    // ends the span. The first turn after the hold comes past the pool's burn average, a pause that folds nothing, and
+    // the next folds its gap into the cycle.
     at('req_3d7b9e2f-a41', 1, 1, t(10, 11), 'placed', 'studio'),
     at('req_2b9e4c7f-d36', 1, 1, t(10, 11, 36), 'renewed', 'studio', { pin: live('continues_pin', 36_000) }),
     at('req_8e1c4a6d-b52', 1, 1, t(10, 12), 'held', 'studio', {
