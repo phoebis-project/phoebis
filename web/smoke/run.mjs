@@ -424,6 +424,16 @@ const changeSelect = async (page, select, value) => {
   await page.settle(900);
 };
 const chooseUnit = (page, value) => changeSelect(page, shellUnit(page), value);
+/** The Cost header's title under each position and the Cost cell's two dashes, spelled as the console words them. */
+const COST_HEADER_TITLE = {
+  all: 'Dollar equivalent for a request a subscription window paid, dollars for an overage, fast mode or API key request',
+  equivalent: 'Dollar equivalent for a request a subscription window paid, a dash for an overage, fast mode or API key request',
+  native: '20x window equivalents for a request a subscription window paid, dollars for an overage, fast mode or API key request',
+  share: 'Window shares for a request a subscription window paid, dollars for an overage, fast mode or API key request',
+  usd: 'A dash for a request a subscription window paid, dollars for an overage, fast mode or API key request',
+};
+const NOTHING_BILLED_TITLE = 'Nothing billed: a subscription request';
+const NO_EQUIVALENT_TITLE = 'Billed in dollars, no subscription equivalent';
 /** The Analytics filter bar's Group by select, the one the Burn section follows, told by its Burn-only option. */
 const pageGroupBy = (page) => {
   const select = groupBySelect(page);
@@ -1016,9 +1026,12 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // its 20x 5-hour equivalent alone in the short form, with every equivalent, the dollar equivalent and the revisions
   // in force on its title and the mark where the row is estimated, while the Requests cell keeps the full reading. An
   // API key row reads its dollars over API key. The story's API key accounts stop serving before its end, so the ten
-  // newest rows may hold none, and the check then reads the subscription rows alone. A dollar position reads every
-  // row's dollars.
+  // newest rows may hold none, and the check then reads the subscription rows alone. The three dollar positions read
+  // what the unit legend names: a subscription row's dollar equivalent under All in dollars and Dollar equivalent and a
+  // dash under Billed dollars, a billed row's dollars under All in dollars and Billed dollars and a dash under Dollar
+  // equivalent, and the header's title names the position's reading.
   const byId = new Map(requests.map((r) => [r.id, r]));
+  const costHeader = () => [...m.container.querySelectorAll('.dash__recent thead th')].find((th) => th.textContent?.trim() === 'Cost')?.getAttribute('title') ?? null;
   const recentCosts = () =>
     [...m.container.querySelectorAll('.dash__recent tbody tr')].map((tr) => {
       const td = tr.lastElementChild;
@@ -1058,15 +1071,53 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     ok: native.length === 10 && plan.length > 0 && wrongPlan.length === 0 && (apiKey === undefined || (apiKey.main.startsWith('$') && apiKey.sub === 'API key' && apiKey.title === 'Billed in dollars: API key')),
     missing: [`${native.length} rows, ${plan.length} subscription rows`, ...wrongPlan.map((c) => JSON.stringify(c)), JSON.stringify(apiKey ?? null)],
   });
-  await chooseUnit(m, 'all');
-  const dollars = recentCosts().find((c) => c.id === plan[0]?.id);
-  results.push({
-    name: "/ under All in dollars a recent subscription request's Cost cell reads its dollars alone",
-    ok: shellUnit(m)?.value === 'all' && dollars !== undefined && /^\$[\d,.]+$/.test(dollars.main) && dollars.sub === null && dollars.title === null,
-    missing: [String(shellUnit(m)?.value), JSON.stringify(dollars ?? null)],
-  });
+  const nativeHeader = costHeader();
+  const billedRows = native.filter((c) => byId.has(c.id) && costUnitOf(byId.get(c.id), 'native').kind === 'dollars');
+  const read = {};
+  for (const position of ['all', 'equivalent', 'usd']) {
+    await chooseUnit(m, position);
+    read[position] = { header: costHeader(), rows: new Map(recentCosts().map((c) => [c.id, c])), unit: shellUnit(m)?.value ?? null };
+  }
   await chooseUnit(m, 'native');
   localStorage.removeItem('phoebis.unit');
+  results.push({
+    name: "/ the recent requests' Cost header names what a subscription and a billed request read under Native and the three dollar positions",
+    ok: nativeHeader === COST_HEADER_TITLE.native && ['all', 'equivalent', 'usd'].every((position) => read[position].header === COST_HEADER_TITLE[position]),
+    missing: [String(nativeHeader), ...['all', 'equivalent', 'usd'].map((position) => `${position}: ${read[position].header}`)],
+  });
+  // The native title reads every equivalent and the dollar equivalent before the revisions in force, and a dollar
+  // position's cell keeps that reading as its whole title.
+  const readingOf = (c) => (c.title ?? '').split(' equivalent. ')[0];
+  const wrongEquivalent = (position) =>
+    plan.filter((c) => {
+      const r = byId.get(c.id);
+      const reading = readingOf(c);
+      const cell = read[position].rows.get(c.id);
+      return !(cell !== undefined && cell.main === `${r.estimated ? '~' : ''}${reading.split(', ').at(-1)}` && cell.sub === 'equivalent' && cell.title === `${reading} equivalent${r.estimated ? `. ${ESTIMATED_TITLE}.` : ''}`);
+    });
+  const unlikeNative = (position) => billedRows.filter((c) => JSON.stringify(read[position].rows.get(c.id)) !== JSON.stringify(c));
+  const undashed = (position, rows, title) =>
+    rows.filter((c) => {
+      const cell = read[position].rows.get(c.id);
+      return !(cell !== undefined && cell.main === '-' && cell.sub === null && cell.title === title);
+    });
+  const billedTail = billedRows.length > 0 ? '' : ', with no billed row among the ten newest to read';
+  const counts = `${plan.length} subscription rows, ${plan.filter((c) => byId.get(c.id).estimated).length} of them estimated, ${billedRows.length} billed rows`;
+  results.push({
+    name: `/ under All in dollars a recent subscription request's Cost cell reads its dollar equivalent over equivalent with every equivalent on the title, and a billed row its dollars as under Native${billedTail}`,
+    ok: read.all.unit === 'all' && plan.length > 0 && wrongEquivalent('all').length === 0 && unlikeNative('all').length === 0,
+    missing: [counts, ...wrongEquivalent('all').map((c) => JSON.stringify(read.all.rows.get(c.id) ?? c.id)), ...unlikeNative('all').map((c) => JSON.stringify(read.all.rows.get(c.id) ?? c.id))],
+  });
+  results.push({
+    name: `/ under Dollar equivalent a recent subscription request's Cost cell reads its dollar equivalent over equivalent, and a billed row a dash titled no subscription equivalent${billedTail}`,
+    ok: read.equivalent.unit === 'equivalent' && plan.length > 0 && wrongEquivalent('equivalent').length === 0 && undashed('equivalent', billedRows, NO_EQUIVALENT_TITLE).length === 0,
+    missing: [counts, ...wrongEquivalent('equivalent').map((c) => JSON.stringify(read.equivalent.rows.get(c.id) ?? c.id)), ...undashed('equivalent', billedRows, NO_EQUIVALENT_TITLE).map((c) => JSON.stringify(read.equivalent.rows.get(c.id) ?? c.id))],
+  });
+  results.push({
+    name: `/ under Billed dollars a recent subscription request's Cost cell reads a dash titled nothing billed with no mark, and a billed row its dollars as under Native${billedTail}`,
+    ok: read.usd.unit === 'usd' && plan.length > 0 && undashed('usd', plan, NOTHING_BILLED_TITLE).length === 0 && unlikeNative('usd').length === 0,
+    missing: [counts, ...undashed('usd', plan, NOTHING_BILLED_TITLE).map((c) => JSON.stringify(read.usd.rows.get(c.id) ?? c.id)), ...unlikeNative('usd').map((c) => JSON.stringify(read.usd.rows.get(c.id) ?? c.id))],
+  });
 }
 {
   // The day's tile sums both fundings, so under native it stacks the plan rows' 20x 5-hour equivalent over the billed
@@ -8764,17 +8815,18 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   // Under native, the shell's default, the Cost cell reads a row in the unit its funding pays in: dollars over the
   // funding word for an answer an API key account served, and 20x equivalents for a subscription request, the story's
   // Sonnet 4.6 turns among them, which the cost model does not weigh and which read their model tier's latest weighed
-  // model, estimated. The share position reads the account's own shares.
+  // model, estimated. The share position reads the account's own shares, so the rows are picked by their reading there,
+  // and the three dollar positions read what the unit legend names under each.
   const servedBy = (r) => r.attempts[r.attempts.length - 1] ?? null;
   const apiKeyRow = requests.find((r) => servedBy(r)?.accountKind === 'api_key');
   // An estimated row with tokens, so the mark is read on figures above zero.
   const fallbackRow = requests.find((r) => {
     const native = costUnitOf(r, 'native');
-    return r.canonicalModel === 'claude-sonnet-4-6' && r.estimated && costUnitOf(r, 'all').kind === 'shares' && native.kind === 'equivalent' && native.equivalents.every((e) => e.share > 0);
+    return r.canonicalModel === 'claude-sonnet-4-6' && r.estimated && costUnitOf(r, 'share').kind === 'shares' && native.kind === 'equivalent' && native.equivalents.every((e) => e.share > 0);
   });
   // A request no account served (a refusal or an exhaustion) is billed in dollars at zero with no funding to name.
   const unservedRow = requests.find((r) => r.attempts.length === 0 && (r.status === 401 || r.status === 429));
-  const unpriced = requests.filter((r) => costUnitOf(r, 'all').kind === 'unpriced' || costUnitOf(r, 'native').kind === 'unpriced');
+  const unpriced = requests.filter((r) => costUnitOf(r, 'share').kind === 'unpriced' || costUnitOf(r, 'native').kind === 'unpriced');
   results.push({ name: 'fixture: a request an API key account served, an estimated subscription request with tokens on a model the cost model does not weigh, and one no account served', ok: apiKeyRow !== undefined && fallbackRow !== undefined && unservedRow !== undefined && unpriced.length === 0, missing: [String(apiKeyRow?.id), String(fallbackRow?.id), String(unservedRow?.id), ...unpriced.map((r) => `unpriced ${r.id}`)] });
   const costAt = [...m.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Cost');
   const costCellOf = async (id) => {
@@ -8803,7 +8855,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   }
   // A subscription request the story prices on two windows, read with no estimate so its figures lead the cell. An
   // overage row of nightly and a fast row read dollars.
-  const sharedRow = requests.find((r) => { const u = costUnitOf(r, 'all'); return !r.estimated && u.kind === 'shares' && u.shares.length >= 2; });
+  const sharedRow = requests.find((r) => { const u = costUnitOf(r, 'share'); return !r.estimated && u.kind === 'shares' && u.shares.length >= 2; });
   const overageRow = requests.find((r) => { const u = costUnitOf(r, 'all'); return u.kind === 'dollars' && u.funding === 'overage' && servedBy(r)?.accountId === 'nightly'; });
   const fastRow = requests.find((r) => { const u = costUnitOf(r, 'all'); return u.kind === 'dollars' && u.funding === 'fast'; });
   results.push({ name: 'fixture: a subscription request priced on two windows, an overage request of nightly and a fast request', ok: sharedRow !== undefined && overageRow !== undefined && fastRow !== undefined, missing: [String(sharedRow?.id), String(overageRow?.id), String(fastRow?.id)] });
@@ -8859,7 +8911,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
         /^\d[\d.]*% (7d|Fable week)$/.test(shareCell.main) &&
         /^\d[\d.]*% 5h$/.test(shareCell.sub ?? '') &&
         /^\$[\d,.]+ equivalent$/.test(parts[parts.length - 1] ?? '') &&
-        named.length === costUnitOf(sharedRow, 'all').shares.length &&
+        named.length === costUnitOf(sharedRow, 'share').shares.length &&
         named.every((n) => /^\d[\d.]*% of (5-hour|7-day|7-day Fable)$/.test(n)) &&
         named.includes(full(shareCell.main)) &&
         named.includes(full(shareCell.sub)),
@@ -8872,6 +8924,57 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
       name: "/requests under the share position a subscription row on a model the cost model does not weigh reads its model tier's shares with the tilde and the estimate too",
       ok: /^~\d[\d.]*% 7d$/.test(fallback.main) && !fallback.main.startsWith('~0%') && /^\d[\d.]*% 5h$/.test(fallback.sub ?? '') && (unmarked(fallback.title) ?? '').endsWith(' equivalent'),
       missing: [fallbackRow.id, JSON.stringify(fallback)],
+    });
+  }
+  // The three dollar positions read what the unit legend names: a subscription row's dollar equivalent over equivalent
+  // under All in dollars and Dollar equivalent, its title the native cell's, and a dash titled nothing billed under
+  // Billed dollars, unmarked on an estimated row. A billed row reads its native dollars under All in dollars and
+  // Billed dollars and a dash titled no subscription equivalent under Dollar equivalent.
+  const costHeaderOf = () => (costAt < 0 ? null : ([...m.container.querySelectorAll('.requests__table thead th')][costAt]?.getAttribute('title') ?? null));
+  const byPosition = {};
+  for (const position of ['native', 'share', 'all', 'equivalent', 'usd']) {
+    await chooseUnit(m, position);
+    byPosition[position] = {
+      fallback: fallbackRow ? await costCellOf(fallbackRow.id) : null,
+      fast: fastRow ? await costCellOf(fastRow.id) : null,
+      header: costHeaderOf(),
+      overage: overageRow ? await costCellOf(overageRow.id) : null,
+      shared: sharedRow ? await costCellOf(sharedRow.id) : null,
+      unit: shellUnit(m)?.value ?? null,
+    };
+  }
+  results.push({
+    name: '/requests the Cost header names what a subscription and a billed request read under each position',
+    ok: Object.entries(byPosition).every(([position, read]) => read.unit === position && read.header === COST_HEADER_TITLE[position]),
+    missing: Object.entries(byPosition).map(([position, read]) => `${position} (${read.unit}): ${read.header}`),
+  });
+  /** A Requests cell under a dollar position as a native title's dollar equivalent reads it. */
+  const dollarEquivalentOf = (nativeCell, estimated) => {
+    const reading = (estimated ? unmarked(nativeCell?.title) : nativeCell?.title) ?? '';
+    return { main: `${estimated ? '~' : ''}${reading.split(', ').at(-1)?.replace(/ equivalent$/, '')}`, sub: 'equivalent', title: nativeCell?.title ?? null };
+  };
+  if (sharedRow && fallbackRow) {
+    const want = { fallback: dollarEquivalentOf(byPosition.native.fallback, true), shared: dollarEquivalentOf(byPosition.native.shared, false) };
+    const wrong = ['all', 'equivalent'].filter((position) => JSON.stringify(byPosition[position].shared) !== JSON.stringify(want.shared) || JSON.stringify(byPosition[position].fallback) !== JSON.stringify(want.fallback));
+    results.push({
+      name: "/requests under All in dollars and Dollar equivalent a subscription row's Cost cell reads its dollar equivalent over equivalent with the native cell's full reading on the title, an estimated row with the tilde and the estimate",
+      ok: /^\$[\d,.]+$/.test(want.shared.main) && /^~\$[\d,.]+$/.test(want.fallback.main) && wrong.length === 0,
+      missing: [JSON.stringify(want), ...wrong.map((position) => `${position}: ${JSON.stringify({ fallback: byPosition[position].fallback, shared: byPosition[position].shared })}`)],
+    });
+    const dash = { main: '-', sub: null, title: NOTHING_BILLED_TITLE };
+    results.push({
+      name: "/requests under Billed dollars a subscription row's Cost cell reads a dash titled nothing billed, with no mark on an estimated row",
+      ok: JSON.stringify(byPosition.usd.shared) === JSON.stringify(dash) && JSON.stringify(byPosition.usd.fallback) === JSON.stringify(dash),
+      missing: [JSON.stringify(byPosition.usd.shared), JSON.stringify(byPosition.usd.fallback)],
+    });
+  }
+  if (overageRow && fastRow) {
+    const dash = { main: '-', sub: null, title: NO_EQUIVALENT_TITLE };
+    const wrong = ['overage', 'fast'].filter((row) => ['all', 'usd'].some((position) => JSON.stringify(byPosition[position][row]) !== JSON.stringify(byPosition.native[row])) || JSON.stringify(byPosition.equivalent[row]) !== JSON.stringify(dash));
+    results.push({
+      name: '/requests an overage row and a fast row read their dollars under All in dollars and Billed dollars and a dash titled no subscription equivalent under Dollar equivalent',
+      ok: (byPosition.native.overage?.main ?? '').startsWith('$') && (byPosition.native.fast?.main ?? '').startsWith('$') && wrong.length === 0,
+      missing: wrong.map((row) => `${row}: ${JSON.stringify(Object.fromEntries(Object.entries(byPosition).map(([position, read]) => [position, read[row]])))}`),
     });
   }
   await chooseUnit(m, 'native');
@@ -8900,6 +9003,15 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
       ok: figure !== null && (figure.textContent ?? '').startsWith('$') && titled === 0 && value?.getAttribute('title') === `Billed in dollars: API key. ${inForceAt(apiKeyRow.at)}`,
       missing: [String(figure?.textContent), `${titled} titled elements inside the cell`, String(value?.getAttribute('title'))],
     });
+    await chooseUnit(m, 'equivalent');
+    const dashValue = [...m.container.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'Estimated cost')?.querySelector('td:last-child') ?? null;
+    const dash = { figure: dashValue?.querySelector(':scope > b')?.textContent ?? null, text: dashValue?.textContent?.trim() ?? null, title: dashValue?.getAttribute('title') ?? null };
+    results.push({
+      name: "/requests under Dollar equivalent the drawer's cost row of an API key request reads a dash with no subscription equivalent on its title",
+      ok: dash.figure === '-' && dash.text === '-' && dash.title === `${NO_EQUIVALENT_TITLE}. ${inForceAt(apiKeyRow.at)}`,
+      missing: [JSON.stringify(dash), `${NO_EQUIVALENT_TITLE}. ${inForceAt(apiKeyRow.at)}`],
+    });
+    await chooseUnit(m, 'native');
   }
   if (sharedRow && nativeCell && shareCell) {
     // The chips read the figures in the cell's title order, and the dollar equivalent follows them muted in the one
@@ -8914,6 +9026,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
         chips: [...(value?.querySelectorAll('.chip') ?? [])].map((c) => c.textContent?.trim() ?? ''),
         ends: value?.querySelector(':scope > .usage-table__end')?.lastElementChild?.classList.contains('muted') === true,
         equivalent: value?.querySelector('.muted')?.textContent?.trim() ?? null,
+        figure: value?.querySelector(':scope > b')?.textContent?.trim() ?? null,
         title: value?.getAttribute('title') ?? null,
       };
     };
@@ -8933,7 +9046,39 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
       ok: share.chips.length >= 2 && JSON.stringify(share.chips) === JSON.stringify(shareTitled.slice(0, -1)) && share.equivalent === shareTitled[shareTitled.length - 1] && share.ends,
       missing: [sharedRow.id, JSON.stringify(share), shareCell.title ?? 'no title'],
     });
+    // The dollar positions draw no chips: the dollar equivalent with its muted word, or the dash with its title first.
+    const dollars = {};
+    for (const position of ['all', 'equivalent', 'usd']) {
+      await chooseUnit(m, position);
+      dollars[position] = readRow();
+    }
+    const tiered = `Account tier ${planLabel(sharedRow.tier)}. ${inForce}`;
+    const equivalentRow = { chips: [], ends: false, equivalent: 'equivalent', figure: titled[titled.length - 1], title: tiered };
+    const dashRow = { chips: [], ends: false, equivalent: null, figure: '-', title: `${NOTHING_BILLED_TITLE}. ${tiered}` };
+    results.push({
+      name: "/requests the drawer's cost row of a subscription row reads its dollar equivalent with equivalent under All in dollars and Dollar equivalent, and a dash titled nothing billed under Billed dollars",
+      ok: /^\$[\d,.]+ equivalent$/.test(equivalentRow.figure ?? '') && JSON.stringify(dollars.all) === JSON.stringify(equivalentRow) && JSON.stringify(dollars.equivalent) === JSON.stringify(equivalentRow) && JSON.stringify(dollars.usd) === JSON.stringify(dashRow),
+      missing: [sharedRow.id, JSON.stringify(dollars), JSON.stringify({ dashRow, equivalentRow })],
+    });
     await chooseUnit(m, 'native');
+  }
+  if (fallbackRow) {
+    // An estimated row's dollar equivalent keeps the mark and the estimate, and its dash reads neither.
+    await m.navigate(`/requests/${fallbackRow.id}`);
+    await m.settle(300);
+    const valueOf = () => [...m.container.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'Estimated cost')?.querySelector('td:last-child') ?? null;
+    const readValue = () => ({ figure: valueOf()?.querySelector(':scope > b')?.textContent?.trim() ?? null, title: valueOf()?.getAttribute('title') ?? null });
+    await chooseUnit(m, 'all');
+    const all = readValue();
+    await chooseUnit(m, 'usd');
+    const usd = readValue();
+    await chooseUnit(m, 'native');
+    const tiered = [fallbackRow.tier === null ? null : `Account tier ${planLabel(fallbackRow.tier)}`, inForceAt(fallbackRow.at)].filter((part) => part !== null).join('. ');
+    results.push({
+      name: "/requests the drawer's cost row of an estimated subscription row reads its dollar equivalent with the tilde and the estimate under All in dollars, and an unmarked dash under Billed dollars",
+      ok: /^~\$[\d,.]+ equivalent$/.test(all.figure ?? '') && all.title === `${tiered}. ${ESTIMATED_TITLE}.` && usd.figure === '-' && usd.title === `${NOTHING_BILLED_TITLE}. ${tiered}`,
+      missing: [fallbackRow.id, JSON.stringify({ all, usd }), tiered],
+    });
   }
   localStorage.removeItem('phoebis.unit');
   {

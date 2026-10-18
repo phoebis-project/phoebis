@@ -17,7 +17,7 @@ import { equivalentOrDash, nativeFiguresOf, SHARE_NOTE, UNPRICED_TITLE } from '@
 import { ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope, slowedOf } from '@/lib/quota';
-import { costUnitOf, glanceCellOf, revisionsTitle } from '@/lib/requests';
+import { costHeaderTitle, costUnitOf, glanceCellOf, revisionsTitle } from '@/lib/requests';
 import { fmtWindows, ringFigures, type RingFigures, type RingLeftOut, type RingRow } from '@/lib/rings';
 import { speedHover } from '@/lib/selection';
 import type { UnitPosition } from '@/lib/unit';
@@ -319,12 +319,10 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
 const MODEL_CHARS = 12;
 
 /**
- * A recent request's Cost cell. Native reads the request in the unit its funding pays in, a subscription request at a
- * glance, and the share position its account's own shares, as the Requests cell does. The three dollar positions read
- * the request's dollars.
+ * A recent request's Cost cell, read under each position as the Requests cell reads it, except that Native reads a
+ * subscription request at a glance.
  */
 function RecentCost({ request, settings, unit }: { request: RequestLog; settings: Settings | null; unit: UnitPosition }) {
-  if (unit !== 'native' && unit !== 'share') return <td className="right num col-fit">{fmtUsd(request.costUsd)}</td>;
   const cell = glanceCellOf(costUnitOf(request, unit), revisionsTitle(settings, request.at));
   return (
     <td className="right num col-fit" title={cell.title || undefined}>
@@ -348,7 +346,7 @@ function RecentTable({ rows, error, settings }: { error: string | null; rows: Re
             <th className="col-fit">Status</th>
             <th className="right col-fit">TTFB</th>
             <th className="right col-fit">Tokens</th>
-            <th className="right col-fit">Cost</th>
+            <th className="right col-fit" title={costHeaderTitle(unit)}>Cost</th>
           </tr>
         </thead>
         <tbody>

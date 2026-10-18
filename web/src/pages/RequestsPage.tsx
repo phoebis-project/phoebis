@@ -27,7 +27,7 @@ import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, readEnd, spa
 import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtEquivalent, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, tokensTotal, withEstimate } from '@/lib/format';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { planLabel } from '@/lib/quota';
-import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, heldWords, NO_SHARE_TITLE, revisionsTitle } from '@/lib/requests';
+import { costCellOf, costHeaderTitle, type CostUnit, costUnitOf, FUNDING_WORD, heldWords, NO_SHARE_TITLE, revisionsTitle } from '@/lib/requests';
 import { requestsWiden } from '@/lib/requestsLink';
 import { type Chip, logHref, requestLink } from '@/lib/routingLog';
 import type { UnitPosition } from '@/lib/unit';
@@ -141,7 +141,8 @@ function CostCell({ request, unit }: { request: RequestLog; unit: UnitPosition }
 }
 
 /**
- * The drawer's cost row: the equivalent or share chips with the dollar equivalent muted after them, or the dollars.
+ * The drawer's cost row: the equivalent or share chips with the dollar equivalent muted after them, the dollars, the
+ * dollar equivalent with `equivalent` muted after it, or the dash of a position that reads nothing for the request.
  * An estimated figure reads a tilde before its first value, and the row's title says why.
  */
 function costRowValue(unit: CostUnit) {
@@ -162,11 +163,20 @@ function costRowValue(unit: CostUnit) {
           <span className="muted">{fmtUsd(unit.usd)} equivalent</span>
         </span>
       );
+    case 'dash':
+      return <b>-</b>;
     case 'dollars':
       return (
         <b>
           {mark}
           {fmtUsd(unit.usd)}
+        </b>
+      );
+    case 'equivalent_dollars':
+      return (
+        <b>
+          {mark}
+          {fmtUsd(unit.usd)} <span className="muted">equivalent</span>
         </b>
       );
     case 'unpriced':
@@ -187,14 +197,15 @@ function costRowValue(unit: CostUnit) {
 }
 
 /**
- * The drawer's cost value under one title: why a dollar figure stands where it does, the serving account's tier by its
- * plan, the price list and the cost model in force at the request's instant while the settings are at hand, and the
- * estimate. A title on an element inside the cell would hide the row's own wherever the figure is hovered.
+ * The drawer's cost value under one title: why a dollar figure or a dash stands where it does, the serving account's
+ * tier by its plan, the price list and the cost model in force at the request's instant while the settings are at hand,
+ * and the estimate of a figure. A title on an element inside the cell would hide the row's own wherever the figure is
+ * hovered.
  */
 function CostRowCell({ request: r, settings, unit }: { request: RequestLog; settings: Settings | null; unit: UnitPosition }) {
   const cost = costUnitOf(r, unit);
-  const why = cost.kind === 'dollars' ? `Billed in dollars: ${FUNDING_WORD[cost.funding]}` : cost.kind === 'unpriced' ? NO_SHARE_TITLE : null;
-  const title = withEstimate([why, r.tier === null ? null : `Account tier ${planLabel(r.tier)}`, revisionsTitle(settings, r.at)].filter((part) => part !== null).join('. '), cost.estimated);
+  const why = cost.kind === 'dollars' ? `Billed in dollars: ${FUNDING_WORD[cost.funding]}` : cost.kind === 'unpriced' ? NO_SHARE_TITLE : cost.kind === 'dash' ? cost.title : null;
+  const title = withEstimate([why, r.tier === null ? null : `Account tier ${planLabel(r.tier)}`, revisionsTitle(settings, r.at)].filter((part) => part !== null).join('. '), cost.estimated && cost.kind !== 'dash');
   return (
     <td className="right num" title={title || undefined}>
       {costRowValue(cost)}
@@ -372,7 +383,7 @@ export function RequestsPage() {
                   {shown.has('ttfb') && <th className="right col-fit">TTFB</th>}
                   {shown.has('tokens') && <th className="right col-fit">Tokens</th>}
                   {shown.has('cost') && (
-                    <th className="right col-fit" title={unit === 'native' ? '20x window equivalents for a request a subscription window paid, dollars for an overage, fast mode or API key request' : 'Window shares for a request a subscription window paid, dollars for an overage, fast mode or API key request'}>
+                    <th className="right col-fit" title={costHeaderTitle(unit)}>
                       Cost
                     </th>
                   )}

@@ -3702,6 +3702,55 @@ async function recentRowsOneLine(theme) {
   }
 }
 
+/** The Cost cell's dash under Billed dollars. The pass reads no module of the console, so it spells it here. */
+const NOTHING_BILLED_TITLE = 'Nothing billed: a subscription request';
+
+/**
+ * The Dashboard's recent requests under the dollar positions, the mock pass's alone, since the router's seed has no
+ * subscription request: under All in dollars a subscription row's Cost cell reads its dollar equivalent over an
+ * `equivalent` line in the size, line height and ink of the Tokens cell's second line beside it, and under Billed
+ * dollars its cell reads a dash titled nothing billed. The switch returns to native, the pass's default, before the
+ * next read.
+ */
+async function recentDollarCosts(theme) {
+  const say = (what) => failures.push(`${theme} /: ${what}`);
+  const unit = page.locator('.topbar select[aria-label="Unit"]');
+  try {
+    await unit.selectOption('all');
+    await settle();
+    const all = await page.evaluate(() => {
+      const type = (el) => {
+        if (!el) return null;
+        const s = getComputedStyle(el);
+        return { color: s.color, lineHeight: s.lineHeight, size: s.fontSize, text: el.textContent?.trim() ?? '' };
+      };
+      const cost = [...document.querySelectorAll('.dash__recent tbody tr')].map((tr) => tr.lastElementChild).find((td) => td?.querySelector('.sub')?.textContent?.trim() === 'equivalent');
+      if (!cost) return null;
+      return { main: cost.firstChild?.textContent?.trim() ?? '', sub: type(cost.querySelector('.sub')), title: cost.getAttribute('title'), tokens: type(cost.previousElementSibling?.querySelector('.sub') ?? null) };
+    });
+    await unit.selectOption('usd');
+    await settle();
+    const dashes = await page.evaluate(() =>
+      [...document.querySelectorAll('.dash__recent tbody tr')]
+        .map((tr) => tr.lastElementChild)
+        .filter((td) => td?.textContent?.trim() === '-')
+        .map((td) => ({ sub: td.querySelector('.sub') !== null, text: td.textContent?.trim() ?? '', title: td.getAttribute('title') })),
+    );
+    measurements.push(`${theme} / the recent Cost cell under All in dollars ${JSON.stringify(all)}, under Billed dollars ${dashes.length} dashes ${JSON.stringify(dashes[0] ?? null)}`);
+    if (all === null) say('no recent Cost cell reads equivalent under All in dollars');
+    else {
+      if (!/^~?\$[\d,.]+$/.test(all.main)) say(`the recent Cost cell's dollar equivalent reads ${JSON.stringify(all.main)} under All in dollars`);
+      if (!(all.title ?? '').includes(`${all.main.replace(/^~/, '')} equivalent`)) say(`the recent Cost cell's title ${JSON.stringify(all.title)} does not end its reading with the dollar equivalent`);
+      for (const what of compare(all.sub, all.tokens, ['color', 'lineHeight', 'size'], "the recent Cost cell's equivalent line against the Tokens cell's second line")) say(what);
+    }
+    if (dashes.length === 0) say('no recent Cost cell reads a dash under Billed dollars');
+    for (const dash of dashes) if (dash.title !== NOTHING_BILLED_TITLE || dash.sub) say(`a recent Cost cell's dash under Billed dollars reads ${JSON.stringify(dash)}`);
+  } finally {
+    await unit.selectOption('native');
+    await settle();
+  }
+}
+
 /** The mock's switch that adds its one plan request on a model the cost model lists in no tier. */
 const UNPRICED_SWITCH = 'phoebis.mockUnpriced';
 /** The dash's title where a window priced nothing. The pass reads no module of the console, so it spells it here. */
@@ -8618,6 +8667,7 @@ try {
         await recentRowsOneLine(theme);
         await tableColumns(theme, '', '.dash__recent', ['Key'], 0, { overflowRecorded: mock });
         if (mock) await recentUnderShares(theme);
+        if (mock) await recentDollarCosts(theme);
         await remainingCards(theme);
         await ringLinesSpan(theme);
         // Its loads end on the bare dashboard, so the measures after it read the view as it first drew.

@@ -68,9 +68,11 @@ floor (one card in a row 1 px narrower), and at 375 by 800 and 390 by 844 with n
 card inside the window (the reset label on a row of its own there, so its column goes unread), the Quota cards' window
 rows at seven widths from 340 to 1280 px (from 900 px up each reset label beside a meter of 120 px or more, under 900 px
 on a row of its own under its meter, no label cut and nothing scrolling sideways), the remaining cards, the error state,
-the lines under the quota rings, the recent requests' model cells and their table's fit, the Estimated cost, 24h tile
-under the mock's unpriced switch (mock pass, on loads of its own: the subscription line's dash under the unpriced title,
-in the size, weight and ink of the billed figure beside it and in the weight and ink of the Tokens, 24h tile's lone
+the lines under the quota rings, the recent requests' model cells and their table's fit, the recent requests' Cost cell
+under All in dollars and Billed dollars (mock pass: a subscription row's equivalent line in the size, line height and
+ink of the Tokens cell's second line, and its dash under the nothing billed title), the Estimated cost, 24h tile under
+the mock's unpriced switch (mock pass, on loads of its own: the subscription line's dash under the unpriced title, in
+the size, weight and ink of the billed figure beside it and in the weight and ink of the Tokens, 24h tile's lone
 figure), the recent requests' columns (Key the fill), the cost-cap rows, the wasted-probe rows, the Cache warming tab's
 saving tiles under each unit position (Probe cost, Saved by probes, Net saving and Kept warm on one row at one top, the
 two saving tiles in the Probe cost tile's box and value type, and the Saved by probes chart in the box and title type of

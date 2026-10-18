@@ -134,12 +134,14 @@ not list draws muted.
 slowed account (`0.5x`, as [Quota](#quota) describes it), the email, "Overage active" while requests bill as extra
 usage, the cooldown line, and "API key" for an API-key account. "Recent requests" ("Last 10 across every pool", with
 "All requests" opening the Requests view) lists Time, Key, Account, Model, Status, TTFB, Tokens and Cost, the status
-badge reading `×{n}` for a request of several attempts. Cost reads a request's dollars under the three dollar positions,
-its account's shares under Window shares as the Requests view's column does, and under Native a subscription request's
-20x 5-hour equivalent alone, with the other windows, the dollar equivalent and the price list and cost model in force on
-hover. Where the table runs wider than its card it scrolls inside it. "Sessions" ("Sticky pins and cache-warming
-agents", with "Open") reads the active pins as `active pins across {n} accounts` and the agents as Agents, Busy, Idle
-and Parked. What each figure means is on [Statistics](statistics.md).
+badge reading `×{n}` for a request of several attempts. Cost reads a subscription request's dollar equivalent over
+`equivalent` under All in dollars and Dollar equivalent, a dash under Billed dollars and its account's shares under
+Window shares, and a billed request's dollars under every position but Dollar equivalent, where it reads a dash, as the
+Requests view's column does, and under Native a subscription request's 20x 5-hour equivalent alone, with the other
+windows, the dollar equivalent and the price list and cost model in force on hover. The column header's hover names what
+each kind of request reads under the position. Where the table runs wider than its card it scrolls inside it. "Sessions"
+("Sticky pins and cache-warming agents", with "Open") reads the active pins as `active pins across {n} accounts` and the
+agents as Agents, Busy, Idle and Parked. What each figure means is on [Statistics](statistics.md).
 
 ## Quota
 
@@ -553,16 +555,20 @@ however many attempts it took: Attempts reads `2 attempts` with the trail of acc
 request of one attempt, and a `waited 42 s` badge for a request that waited through a hold, for a slot while every
 account was at its cap, for a reset or for the slow-down, whose hover names each wait with its reason in the row's order
 and the account it waited on, `waited for the slow-down 42 s, for a slot 3 s on {account}` (a row from before the
-reasons reads `waited 1 s on {account}`, and a wait under a second reads `1 s`). Cost reads in the top bar's unit. Under
-Native a request a subscription window paid reads its 20x 5-hour equivalent over its 20x 7-day one (`1.47% 20x 5h` over
-`0.244% 20x 7d`), with every window, the model week among them, and the dollar equivalent on hover. Under the four other
-positions it reads its account's own window shares, each with its window's short word (`0.12% Fable week` over
-`0.42% 5h`, the full labels on hover). An overage, fast mode or API-key request reads dollars under every position, and
-a figure an estimate priced leads with `~`, its hover adding "Estimated at the model tier's latest weighted model". The
-table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous and Next, holds the requests up to the
-moment you opened it so paging does not shift, and the split Refresh button's body brings it up to now. An empty table
-reads "No requests match" with "Widen the date range or clear a filter." and "Reset filters", which clears the filters,
-the search and the range. What each figure means is on [Statistics](statistics.md).
+reasons reads `waited 1 s on {account}`, and a wait under a second reads `1 s`). Cost reads in the top bar's unit, its
+header's hover naming what each kind of request reads under the position. Under Native a request a subscription window
+paid reads its 20x 5-hour equivalent over its 20x 7-day one (`1.47% 20x 5h` over `0.244% 20x 7d`), with every window,
+the model week among them, and the dollar equivalent on hover. Under Window shares it reads its account's own window
+shares, each with its window's short word (`0.12% Fable week` over `0.42% 5h`, the full labels on hover), under All in
+dollars and Dollar equivalent its dollar equivalent over `equivalent` with every 20x equivalent on hover, and under
+Billed dollars a dash with the hover "Nothing billed: a subscription request". An overage, fast mode or API-key request
+reads dollars under every position but Dollar equivalent, where it reads a dash with the hover "Billed in dollars, no
+subscription equivalent". A figure an estimate priced leads with `~`, its hover adding "Estimated at the model tier's
+latest weighted model", and a dash carries no mark. The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with
+First, Previous and Next, holds the requests up to the moment you opened it so paging does not shift, and the split
+Refresh button's body brings it up to now. An empty table reads "No requests match" with "Widen the date range or clear
+a filter." and "Reset filters", which clears the filters, the search and the range. What each figure means is on
+[Statistics](statistics.md).
 
 Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
 and the choice stays with the open page, out of its address. At each interval it reads the list again, a preset's range
@@ -588,10 +594,12 @@ Selecting a row opens the "Request details" drawer, with the request's id and ti
 - Phases: a waterfall over Received, Selected, Written, Head, First content, Stream end and Finished, a phase the
   ledger holds no instant for reading "not measured".
 - Usage: Input (uncached), Cache read, "Cache write, 5m", "Cache write, 1h", "Output, thinking", "Output, plain",
-  Server tool calls and Estimated cost in the top bar's unit: a subscription request's 20x equivalents under Native, or
-  its account's window shares under the four other positions, one chip per window with the dollar equivalent after them,
-  and a billed request's dollars. Its hover names the serving account's tier (`Account tier {tier}`) and the price list
-  and cost model in force when the request arrived (`Priced at the API prices of {date} and the cost model of {date}`).
+  Server tool calls and Estimated cost in the top bar's unit: a subscription request's 20x equivalents under Native or
+  its account's window shares under Window shares, one chip per window with the dollar equivalent after them, its dollar
+  equivalent with `equivalent` under All in dollars and Dollar equivalent and a dash under Billed dollars, and a billed
+  request's dollars, or a dash under Dollar equivalent. Its hover names why a dash stands, as the Cost cell's hover
+  does, the serving account's tier (`Account tier {tier}`) and the price list and cost model in force when the request
+  arrived (`Priced at the API prices of {date} and the cost model of {date}`).
 - Request: Session, Agent, Client with the request class badge, User agent (such as
   `claude-cli/2.1.269 (external, cli)`), Key, Pool, Kind, and one `Attempt {n}` row per attempt with the upstream's
   request id and, on the answer that served, its message id.
