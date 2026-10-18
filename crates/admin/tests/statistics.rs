@@ -1038,6 +1038,7 @@ async fn a_request_answers_its_hold_with_its_wait_and_held_filters_the_list() {
             ran_out: false,
             reason: "cap",
             until: None,
+            waits_for: None,
         },
     ]))
     .unwrap();

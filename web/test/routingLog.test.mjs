@@ -86,6 +86,8 @@ const DECISIONS = [
   ["held on the strategy's pick", decision({ by: by('hold', 'strategy_pick'), fact: [fact('in_flight', '16/16', 'text')], kind: 'held', tier: [0, 0, 0] }), 'Pace P0', ['in flight 16/16']],
   ['held, the bound ran out', decision({ by: by('hold', 'cohort'), fact: [fact('answer', 429, 'count'), fact('held', 10_000, 'ms')], kind: 'held' }), 'cohort', ['answer 429', 'held 10 s']],
   ['held for the slow-down', decision({ by: by('hold', 'slow_down'), fact: [fact('until', ms(18, 20), 'time'), fact('factor', 0.5, null)], kind: 'held' }), 'slow-down', ['until 18:20', 'speed 0.5x']],
+  ['held for the rewrite in flight', decision({ by: by('hold', 'rewrite'), fact: [fact('until', ms(11, 3), 'time')], kind: 'held' }), 'rewrite in flight', ['until 11:03']],
+  ['renewed after the rewrite in flight', decision({ by: by('hold', 'rewrite'), kind: 'renewed' }), 'rewrite in flight', []],
   ['exhausted, a budget', decision({ accountId: null, by: by('exhaustion', 'timed'), exhaustion: { deadline: iso(MIDNIGHT), kind: 'timed', obstacle: null, reason: null, window: 'overage' }, fact: [fact('retry', MIDNIGHT, 'time')], kind: 'exhausted' }), 'budget', ['retry 00:00']],
   ['exhausted, every account cooling', decision({ accountId: null, by: by('exhaustion', 'timed'), exhaustion: { deadline: iso(ms(15, 42)), kind: 'timed', obstacle: null, reason: null, window: 'five_hour' }, fact: [fact('retry', ms(15, 42), 'time')], kind: 'exhausted' }), 'cooldown', ['retry 15:42']],
   ['exhausted, every account rejects the model', decision({ accountId: null, by: by('exhaustion', 'model_rejected'), exhaustion: { deadline: null, kind: 'model_rejected', obstacle: null, reason: null, window: null }, fact: [fact('retry', 'none', 'text')], kind: 'exhausted' }), 'model rejected', ['retry none']],
@@ -246,18 +248,19 @@ test('a fact key the console has no label for is dropped rather than drawn under
 
 const TABLE_LABELS = [
   '5h', '7d', 'Fable', 'answer', 'attempt', 'capture', 'cause', 'client', 'depth', 'epoch', 'field', 'fields', 'fit', 'gap', 'held', 'idle', 'in flight', 'key', 'lasted', 'models', 'next', 'over', 'pick', 'pins', 'prefix',
-  'rank', 'resets', 'retry', 'runway', 'slow-down', 'slowest', 'speed', 'spent', 'state', 'to', 'turn', 'until', 'was',
+  'rank', 'resets', 'retry', 'rewrite in flight', 'runway', 'slow-down', 'slowest', 'speed', 'spent', 'state', 'to', 'turn', 'until', 'was',
 ];
 
 test('every label of the table is used at least once and no fact key lacks a label', () => {
-  assert.equal(TABLE_LABELS.length, 38);
+  assert.equal(TABLE_LABELS.length, 39);
   assert.deepEqual([...new Set(Object.values(d.FACT_LABEL))].sort(), [...TABLE_LABELS].sort());
-  assert.equal(Object.keys(d.FACT_LABEL).length, 38);
+  assert.equal(Object.keys(d.FACT_LABEL).length, 39);
   const emitted = [...DECISIONS, ...EVENTS].flatMap(([, row, , , page]) => d.factsOf(row, NOW, page).map((p) => p.label));
-  // The slow-down's word names the By of its rows, the held decision's and the two events', where no fact carries it.
+  // The slow-down's word names the By of its rows, the held decision's and the two events', where no fact carries it, and
+  // the rewrite's names the By of its held row and its renewal.
   const named = [...DECISIONS, ...EVENTS].map(([, , by]) => by).filter((by) => TABLE_LABELS.includes(by));
   assert.deepEqual([...new Set([...emitted, ...named])].sort(), [...TABLE_LABELS].sort());
-  assert.deepEqual([...new Set(named)].sort(), ['idle', 'slow-down']);
+  assert.deepEqual([...new Set(named)].sort(), ['idle', 'rewrite in flight', 'slow-down']);
   for (const label of emitted) assert.ok(Object.values(d.FACT_LABEL).includes(label), label);
 });
 
@@ -789,6 +792,17 @@ test("a held outcome's verdict chips and Hold row read the slow-down's figures o
   assert.deepEqual(read(decision({ ...row, fact: [fact('until', ms(18, 20), 'time'), fact('factor', 0.4, null)] })).facts, ['until 18:20', 'speed 0.4x']);
 });
 
+test("a rewrite hold's verdict chips and Hold row name the request it waits for, its link one chip of its own", () => {
+  const rewriteHold = { accountId: 'nightly', boundMs: 120_000, cohort: null, cycleMs: null, factor: null, reason: 'rewrite', speed: null, stretchMs: null, thresholdMs: null, until: iso(ms(11, 3)), waitsFor: 'req_5b2e8d47-c19' };
+  const held = record({ candidates: [candidate({ accountId: 'nightly', verdict: 'held_on' })], outcome: { accountId: 'nightly', hold: rewriteHold, kind: 'held' } });
+  const row = decision({ accountId: 'nightly', by: by('hold', 'rewrite'), fact: [fact('until', ms(11, 3), 'time')], kind: 'held' });
+  assert.deepEqual(texts(d.verdictChips(held, row)).slice(-2), ['rewrite in flight', 'held for the rewrite in flight']);
+  const rows = (r) => d.outcomeRows(r, NOW).map((line) => [line.label, texts(line.chips)]);
+  assert.deepEqual(rows(held), [['Hold', ['on nightly', 'for the rewrite in flight of', 'req_5b2e8d47-c19', 'until 11:03', 'bound 2 min']]]);
+  const link = d.outcomeRows(held, NOW)[0].chips.find((c) => c.value === 'req_5b2e8d47-c19');
+  assert.ok(link?.href, 'the request it waited for is a link');
+});
+
 test("a renewal after a slow-down hold reads the hold's label and one Hold row per wait with its reason", () => {
   // The router names the hold the renewal followed, as a placement after a hold names its own.
   assert.deepEqual(read(decision({ by: by('hold', 'slow_down'), fact: [fact('held', 42_000, 'ms')], kind: 'renewed' })), { by: 'slow-down', facts: ['held 42 s'] });
@@ -815,6 +829,8 @@ test("a renewal after a slow-down hold reads the hold's label and one Hold row p
   ]);
   // A row written before the waits reads one row of the summed wait.
   assert.deepEqual(rows({ cohort: null, heldMs: 2_000, waitedOn: ['primary'], waits: [] }), [[['on primary', 'strategy pick', 'freed after 2.0 s'], d.HOLD_HINT]]);
+  // A wait for the head of the request that carried a move reads in the drawer's words.
+  assert.deepEqual(rows({ cohort: null, heldMs: 1_000, waitedOn: ['nightly'], waits: [{ heldMs: 1_000, reason: 'rewrite' }] }), [[['on nightly', 'for the rewrite in flight', 'freed after 1.0 s'], undefined]]);
 });
 
 test("an outcome with a cause reads it in the event card's words", () => {
@@ -1115,6 +1131,10 @@ test('the verdict line words the kind with its accounts and its pool as entities
   assert.equal(words(failover, attempt), 'Attempt 3 of 3: placed on [account primary]');
   assert.deepEqual(texts(d.verdictChips(failover, attempt)), ['tier plan quota P0', 'static rung', 'depth 2', 'cache hit 31K of 31.2K promised']);
   assert.equal(words(record({ outcome: { hold: { accountId: 'primary', boundMs: 10_000, cohort: 'primary' }, kind: 'held' } }), decision({ kind: 'held' })), 'Held on [account primary]');
+  assert.equal(
+    words(record({ outcome: { hold: { accountId: 'nightly', boundMs: 120_000, cohort: null, reason: 'rewrite', until: iso(ms(11, 3)), waitsFor: 'req_5b2e8d47-c19' }, kind: 'held' } }), decision({ kind: 'held' })),
+    'Held on [account nightly] for the rewrite in flight of req_5b2e8d47-c19 until 11:03',
+  );
   assert.equal(words(record({ outcome: { accountId: null, kind: 'exhausted' }, request: { poolId: 'jobs' } }), decision({ kind: 'exhausted' })), 'Exhausted in [pool jobs]');
   assert.equal(words(record({ outcome: { accountId: null, kind: 'refused' } }), decision({ kind: 'refused' })), 'Refused before selection');
   const pending = record({ outcome: { completion: completion({}) } });

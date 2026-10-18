@@ -8472,12 +8472,14 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
     });
   }
   {
-    // The story holds one request for the slow-down on studio and one for the reset, each with its one wait.
+    // The story holds one request for the slow-down on studio, one for the reset and one for the rewrite in flight, each
+    // with its one wait.
     const onlyWait = (reason) => requests.find((r) => r.held?.waits.length === 1 && r.held.waits[0].reason === reason);
     const read = [];
     for (const [reason, words] of [
       ['slow_down', 'for the slow-down'],
       ['reset', 'for the reset'],
+      ['rewrite', 'for the rewrite in flight'],
     ]) {
       const r = onlyWait(reason);
       const cell = r ? await attemptsCellOf(r.id) : null;
@@ -12628,6 +12630,18 @@ m.unmount();
           );
         },
         what: 'slowed request',
+      },
+      {
+        expected: [['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'no'], ['Renew', 'not run'], ['Reserve', 'none']],
+        id: 'req_5d6f1b3a-e27',
+        seq: 1,
+        terminus: ['held_rewrite', 'Held for the rewrite in flight', 'held'],
+        // The moved session's next request waits for the head of the request that carried the move, which its lead names
+        // and its Hold row links with the hold's bound.
+        own: (card) =>
+          sentenceOf(card) === 'Held on [nightly] for the rewrite in flight of req_5b2e8d47-c19 until 11:03' &&
+          JSON.stringify(outcomeOf(card).Hold) === JSON.stringify(['on nightly', 'for the rewrite in flight of', 'req_5b2e8d47-c19', 'until 11:03', 'bound 2 min']),
+        what: 'request held for the rewrite in flight',
       },
       {
         expected: RENEWAL_STATIONS,

@@ -533,6 +533,14 @@ pub enum Report {
         at: i64,
         cause: &'static str,
     },
+    /// A leg's answer is known: its head came, the pre-commit hold ended without one, or the leg ended before
+    /// either. The mark the moved pin's next requests wait on clears where it names `request_id` at `attempt`. A
+    /// control fact, never coalesced.
+    Head {
+        request_id: String,
+        attempt: u32,
+        at: i64,
+    },
     /// The ledger's latest read of a pool member's spend, replacing every row it names.
     MemberSpend(Vec<MemberSpend>),
     Overage {
@@ -605,6 +613,7 @@ impl Report {
         "cooldown",
         "credits",
         "ended",
+        "head",
         "member_spend",
         "overage",
         "pin_invalidated",
@@ -624,6 +633,7 @@ impl Report {
             Report::Cooldown { .. } => "cooldown",
             Report::Credits { .. } => "credits",
             Report::Ended { .. } => "ended",
+            Report::Head { .. } => "head",
             Report::MemberSpend(_) => "member_spend",
             Report::Overage { .. } => "overage",
             Report::PinInvalidated { .. } => "pin_invalidated",
@@ -729,6 +739,7 @@ impl Report {
             Report::Affinity(_)
             | Report::Cooldown { .. }
             | Report::Ended { .. }
+            | Report::Head { .. }
             | Report::PinInvalidated { .. }
             | Report::PinReleased { .. }
             | Report::PinRenewed { .. }
@@ -3672,6 +3683,15 @@ impl Task {
                     agent_id: pin.agent_id.clone(),
                     model: pin.model.clone(),
                 };
+                // The request that created the pin has ended, so a mark its landing set waits for nothing: the
+                // backstop for a `Head` the closed mailbox refused.
+                if self
+                    .state
+                    .pin(&key)
+                    .is_some_and(|current| current.epoch == pin.epoch)
+                {
+                    self.state.clear_head_mark_of(&key);
+                }
                 // The epoch names the one pin the request created, and with it the account the generations are
                 // checked against; a pin replaced since is another placement's to keep. A pin some selection
                 // renewed after its placement is serving another turn of the session, so the error that ended
@@ -3729,6 +3749,11 @@ impl Task {
                     model: pin.model.clone(),
                 };
                 if let Some(current) = self.state.pin(&key).cloned() {
+                    // A request of the standing row reached its stream's end, so the head of the request that
+                    // carried the landing came before: the backstop for a `Head` the closed mailbox refused.
+                    if current.epoch == pin.epoch {
+                        self.state.clear_head_mark_of(&key);
+                    }
                     // A probe's renewal is the refresh of the cache it read, which is another cache once the session
                     // changed lanes while it was in flight. A client's renewal folds its own burn whatever lane
                     // the pin moved to since, so it is not held to the lane.
@@ -3862,6 +3887,8 @@ impl Task {
                 at,
                 cause,
             } => {
+                // The request ended, so no head of it is still to come.
+                self.state.clear_head_mark(&request_id, None);
                 // A request that holds no booking (a count, a probe, a fast request, a renewal, one the purge gave up
                 // on, one from before a restart) ends with nothing to release and nothing to say.
                 if let Some(reservation) = self.state.release_reservation(&request_id) {
@@ -3875,6 +3902,15 @@ impl Task {
                         at,
                     });
                 }
+            }
+            // A leg's report clears the mark its own landing set and never one a later landing of the same request
+            // set, since the full mailbox's fallback can deliver an earlier leg's report after the failover's landing.
+            Report::Head {
+                request_id,
+                attempt,
+                ..
+            } => {
+                self.state.clear_head_mark(&request_id, Some(attempt));
             }
             Report::Usage {
                 account_id,

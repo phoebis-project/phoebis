@@ -11,7 +11,7 @@ export const FUNDING_WORD: Record<Exclude<Funding, 'plan'>, string> = { api_key:
 export const NO_SHARE_TITLE = 'The cost model prices no share for this request';
 
 /** A wait's reason as a held row's hover names it: `cap` waited for a slot the in-flight cap freed. */
-const WAIT_REASON_WORD: Record<string, string> = { cap: 'for a slot', reset: 'for the reset', slow_down: 'for the slow-down' };
+const WAIT_REASON_WORD: Record<string, string> = { cap: 'for a slot', reset: 'for the reset', rewrite: 'for the rewrite in flight', slow_down: 'for the slow-down' };
 /** Where a hold waited: its cohort's account, else the last one it waited on. */
 const heldOn = (held: CohortHold) => held.cohort ?? held.waitedOn[held.waitedOn.length - 1] ?? 'an account';
 // Whole seconds round a wait under half a second to `0 s`, which would read as no wait at all.

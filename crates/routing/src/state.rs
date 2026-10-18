@@ -853,6 +853,18 @@ pub struct PinPace {
     pub deadline: Option<i64>,
 }
 
+/// The request a moved pin's next requests wait for the head of, the wire attempt whose leg carries it, and the
+/// instant its selection dispatched it: the upstream makes a cache entry readable only once the response that
+/// writes it has begun, so a request out before that head would write the prefix again. Memory only, as the pace
+/// is: the next landing rebuilds it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeadMark {
+    pub request_id: String,
+    /// The selection's `attempt`, the leg's number: a failover lands the same request again under the next one.
+    pub attempt: u32,
+    pub at: i64,
+}
+
 /// The `window_ceiling` a pool is created with.
 pub const DEFAULT_WINDOW_CEILING: f64 = 0.95;
 
@@ -1147,6 +1159,9 @@ pub struct RoutingState {
     /// Each `funding_required` account's retry by account id. Memory only: the store keeps no instant for a mark,
     /// so a restart starts with none.
     funding_retries: HashMap<String, FundingRetry>,
+    /// The request each moved pin's next requests wait for the head of, by the pin's key. Memory only, as the paces
+    /// are, and it leaves with the row in `take_pin`, so a restart holds none.
+    head_marks: HashMap<PinKey, HeadMark>,
     in_flight: InFlight,
     /// The ledger's last-answered spend per pool member and budgeted period, by `(pool_id, account_id, period)`;
     /// memory only.
@@ -1238,6 +1253,7 @@ impl RoutingState {
                 })
                 .collect(),
             funding_retries: HashMap::new(),
+            head_marks: HashMap::new(),
             in_flight: InFlight::default(),
             member_spend: HashMap::new(),
             next_epoch,
@@ -1408,6 +1424,7 @@ impl RoutingState {
     fn take_pin(&mut self, key: &PinKey) -> Option<PinRow> {
         let pin = self.pins.remove(key)?;
         self.renewed.remove(key);
+        self.head_marks.remove(key);
         Some(pin)
     }
 
@@ -2364,6 +2381,41 @@ impl RoutingState {
         self.pace_held_until(key, until);
     }
 
+    /// A landing that finds a mark replaces it, since the earlier request's entry is on an account the pin left.
+    pub(crate) fn mark_head(&mut self, key: &PinKey, request_id: &str, attempt: u32, at: i64) {
+        self.head_marks.insert(
+            key.clone(),
+            HeadMark {
+                request_id: request_id.to_string(),
+                attempt,
+                at,
+            },
+        );
+    }
+
+    /// The mark under `key` as the pin row spells it, with no resolution applied.
+    pub fn head_mark(&self, key: &PinKey) -> Option<&HeadMark> {
+        self.head_marks.get(key)
+    }
+
+    /// Clears the mark naming `request_id` at `attempt`, or at any attempt under `None`, wherever it stands: at most
+    /// one, since a landing replaces the mark. A `Head` report names its leg's attempt, so an earlier leg's report
+    /// delivered late never clears the mark a failover's landing set for the same request, while `Ended` names none
+    /// and clears whatever the request left.
+    pub(crate) fn clear_head_mark(&mut self, request_id: &str, attempt: Option<u32>) -> bool {
+        let before = self.head_marks.len();
+        self.head_marks.retain(|_, mark| {
+            !(mark.request_id == request_id
+                && attempt.is_none_or(|attempt| mark.attempt == attempt))
+        });
+        self.head_marks.len() != before
+    }
+
+    /// Clears the mark under `key`, the renewal's and the release's backstop for a report the closed queue refused.
+    pub(crate) fn clear_head_mark_of(&mut self, key: &PinKey) -> bool {
+        self.head_marks.remove(key).is_some()
+    }
+
     /// Set by the task at spawn from its config, and by a test that prices a round through its own tables.
     pub fn set_rates(&mut self, rates: BurnRates) {
         self.rates = rates;
@@ -2861,6 +2913,9 @@ impl RoutingState {
             // The pin keeps its epoch under the dated id, so a renewal it had still fences its release there, and
             // its fast usage moves with it.
             let renewed = self.renewed.contains(&spelled);
+            // Read ahead of `take_pin`, which drops it: the mark lives as long as its row, so a `Head` report still
+            // finds it under the dated id.
+            let mark = self.head_marks.remove(&spelled);
             self.take_pin(&spelled);
             // The pace follows the row the merge keeps, so the session's cycle reads on under the dated id.
             let pace = self.pin_paces.remove(&spelled);
@@ -2879,6 +2934,11 @@ impl RoutingState {
                 if let Some(pace) = pace {
                     self.pin_paces.insert(dated_key.clone(), pace);
                 }
+                // A dated row this one replaces leaves with its own mark.
+                match mark {
+                    Some(mark) => self.head_marks.insert(dated_key.clone(), mark),
+                    None => self.head_marks.remove(&dated_key),
+                };
                 let moved = PinRow {
                     model: dated_id.to_string(),
                     lane: relaned(&pin.lane, spelling, dated_id),
@@ -4552,6 +4612,71 @@ mod tests {
             ),
             "a gap one millisecond under the burn average folds"
         );
+    }
+
+    fn head_mark_of(request_id: &str, attempt: u32, at: i64) -> HeadMark {
+        HeadMark {
+            request_id: request_id.into(),
+            attempt,
+            at,
+        }
+    }
+
+    #[test]
+    fn mark_head_replaces_a_standing_mark_with_the_later_request() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.mark_head(&paced(), "r-1", 1, 1_000);
+        assert_eq!(
+            state.head_mark(&paced()),
+            Some(&head_mark_of("r-1", 1, 1_000))
+        );
+        state.mark_head(&paced(), "r-2", 2, 2_000);
+        assert_eq!(
+            state.head_mark(&paced()),
+            Some(&head_mark_of("r-2", 2, 2_000)),
+            "the later landing's request wins, its attempt with it"
+        );
+    }
+
+    #[test]
+    fn clear_head_mark_matches_the_request_and_its_attempt() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.mark_head(&paced(), "r-1", 2, 1_000);
+        assert!(!state.clear_head_mark("r-2", None), "another request");
+        assert!(
+            !state.clear_head_mark("r-1", Some(1)),
+            "an earlier leg of the request"
+        );
+        assert!(state.head_mark(&paced()).is_some(), "the mark stands");
+        assert!(state.clear_head_mark("r-1", Some(2)));
+        assert_eq!(state.head_mark(&paced()), None);
+        state.mark_head(&paced(), "r-1", 3, 2_000);
+        assert!(
+            state.clear_head_mark("r-1", None),
+            "no attempt clears the request's mark whatever its attempt"
+        );
+        assert!(!state.clear_head_mark("r-1", None), "once cleared");
+    }
+
+    #[test]
+    fn clear_head_mark_of_clears_the_key() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        assert!(!state.clear_head_mark_of(&paced()));
+        state.mark_head(&paced(), "r-1", 1, 1_000);
+        assert!(state.clear_head_mark_of(&paced()));
+        assert_eq!(state.head_mark(&paced()), None);
+    }
+
+    #[test]
+    fn take_pin_drops_the_mark() {
+        let (pin, _) = burning("s", 1.0);
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![pin.clone()],
+            ..RoutingLoad::default()
+        });
+        state.mark_head(&pin.key(), "r-1", 1, 1_000);
+        state.remove_pin(&pin.key());
+        assert_eq!(state.head_mark(&pin.key()), None);
     }
 
     #[test]

@@ -7,7 +7,7 @@ use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
     credits_from_usage, decide, lane_key, resolve, sample_from_usage, shed_dwell_ms, spawn,
     AffinityReport, BandWeight, BurnRates, BurnUnit, ClientClass, ConversationLookup, CreditsState,
-    DecisionRecord, DecisionSummary, Exhaustion, KeyRefusal, LongContextRates,
+    DecisionRecord, DecisionSummary, Exhaustion, HoldFacts, KeyRefusal, LongContextRates,
     MemberSpend, MoveCause, PinRef, PinUsage, PredecessorQuery, Presented, RateTable, Rates,
     Refusal, RefusalFacts, RefusedRequest, RegimeRates, ReloadError, Report, ResolveError,
     RouterConfig, RouterHandle, RoutingState, SelectRequest, SelectResult, SharePricer,
@@ -838,6 +838,11 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
             at: 1_000,
             cause: "canceled",
         },
+        Report::Head {
+            request_id: "r".into(),
+            attempt: 1,
+            at: 1_000,
+        },
         Report::MemberSpend(Vec::new()),
         Report::Overage {
             account_id: "a".into(),
@@ -879,6 +884,7 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
             | Report::Cooldown { .. }
             | Report::Credits { .. }
             | Report::Ended { .. }
+            | Report::Head { .. }
             | Report::MemberSpend(_)
             | Report::Overage { .. }
             | Report::PinInvalidated { .. }
@@ -10539,5 +10545,218 @@ async fn a_fail_over_whose_landing_was_held_names_the_account_left_on_the_next_r
         (sel.account.id.as_str(), sel.left.as_deref()),
         ("b", Some("a")),
         "the session's next request lands the carried failover and names the account it left"
+    );
+}
+
+/// `s1` moved off `a`'s spent window to `b` by its request `r-1` at 3_100 on `shedding_store(ids)`, as
+/// `the_spent_state_reads_the_raised_reading_through_a_head_within_the_margin` stages it, `b`'s windows read before
+/// the move.
+async fn moved_off_a(ids: &[&str]) -> (RouterHandle, Arc<AtomicI64>) {
+    use phoebis_routing::MigrateReason;
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(shedding_store(ids), clock(&now), RouterConfig::default()).unwrap();
+    assert_eq!(
+        landed_on(
+            handle
+                .select(request(&handle, Some("s1"), 1_000))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), None)
+    );
+    handle.report(windows("b", 0.2, 0.1, 1_500)).await;
+    now.store(2_000, Ordering::SeqCst);
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 1.0, Some(10 * HOUR)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    now.store(3_100, Ordering::SeqCst);
+    assert_eq!(
+        landed_on(
+            handle
+                .select(request(&handle, Some("s1"), 3_100))
+                .await
+                .unwrap()
+        ),
+        ("b".into(), Some(MigrateReason::Spent)),
+        "r-1 moves the pin off a's spent window"
+    );
+    (handle, now)
+}
+
+/// The session's request `request_id` at `now`.
+fn request_of(handle: &RouterHandle, request_id: &str, now: i64) -> SelectRequest {
+    SelectRequest {
+        request_id: request_id.into(),
+        ..request(handle, Some("s1"), now)
+    }
+}
+
+/// The rewrite hold a selection answered, naming `r-1`.
+fn rewrite_hold(answer: phoebis_routing::SelectAnswer) -> HoldFacts {
+    match answer.result {
+        SelectResult::Held { hold, .. } => {
+            assert_eq!(
+                (hold.reason, hold.waits_for.as_deref()),
+                ("rewrite", Some("r-1"))
+            );
+            hold
+        }
+        other => panic!("expected the rewrite's hold, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_head_report_clears_the_mark_and_the_pins_next_request_renews_unheld() {
+    let (handle, now) = moved_off_a(&["a", "b"]).await;
+    now.store(3_300, Ordering::SeqCst);
+    let req = request_of(&handle, "r-2", 3_300);
+    let hold = rewrite_hold(handle.select(req.clone()).await.unwrap());
+    handle
+        .report(Report::Head {
+            request_id: "r-1".into(),
+            attempt: 1,
+            at: 3_400,
+        })
+        .await;
+    now.store(3_500, Ordering::SeqCst);
+    let carried = SelectRequest {
+        seq: 2,
+        now: 3_500,
+        holds: vec![hold],
+        ..req
+    };
+    assert_eq!(
+        landed_on(handle.select(carried).await.unwrap()),
+        ("b".into(), None),
+        "the request that waited renews"
+    );
+    assert_eq!(
+        landed_on(
+            handle
+                .select(request_of(&handle, "r-3", 3_600))
+                .await
+                .unwrap()
+        ),
+        ("b".into(), None),
+        "with the mark gone a request carrying no hold renews too"
+    );
+}
+
+#[tokio::test]
+async fn an_end_report_clears_the_mark() {
+    let (handle, now) = moved_off_a(&["a", "b"]).await;
+    now.store(3_300, Ordering::SeqCst);
+    rewrite_hold(
+        handle
+            .select(request_of(&handle, "r-2", 3_300))
+            .await
+            .unwrap(),
+    );
+    handle
+        .report(Report::Ended {
+            request_id: "r-1".into(),
+            attempt: 1,
+            at: 3_400,
+            cause: "transport_error",
+        })
+        .await;
+    assert_eq!(
+        landed_on(
+            handle
+                .select(request_of(&handle, "r-3", 3_500))
+                .await
+                .unwrap()
+        ),
+        ("b".into(), None)
+    );
+}
+
+#[tokio::test]
+async fn a_pin_invalidated_report_drops_the_mark_with_the_row() {
+    let (handle, now) = moved_off_a(&["a", "b"]).await;
+    now.store(3_300, Ordering::SeqCst);
+    rewrite_hold(
+        handle
+            .select(request_of(&handle, "r-2", 3_300))
+            .await
+            .unwrap(),
+    );
+    handle
+        .report(Report::PinInvalidated {
+            account_id: "b".into(),
+            pin: pin_of(&handle).await,
+            mark: None,
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        })
+        .await;
+    let answer = handle
+        .select(request_of(&handle, "r-3", 3_500))
+        .await
+        .unwrap();
+    assert!(
+        matches!(&answer.result, SelectResult::Selected(sel) if !sel.trace.renewed),
+        "the session's next request is placed afresh: {:?}",
+        answer.result
+    );
+}
+
+#[tokio::test]
+async fn a_head_of_an_earlier_leg_leaves_the_mark_a_later_landing_set() {
+    use phoebis_routing::MigrateReason;
+    let (handle, now) = moved_off_a(&["a", "b", "c"]).await;
+    handle.report(windows("c", 0.2, 0.1, 3_200)).await;
+    handle
+        .report(observed(
+            "b",
+            sample_with(3_200, FIVE_HOUR, 1.0, Some(10 * HOUR)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    now.store(3_300, Ordering::SeqCst);
+    // The failover's re-selection of the same request lands it again under the next attempt.
+    let again = SelectRequest {
+        attempt: 2,
+        ..request_of(&handle, "r-1", 3_300)
+    };
+    assert_eq!(
+        landed_on(handle.select(again).await.unwrap()),
+        ("c".into(), Some(MigrateReason::Spent))
+    );
+    handle
+        .report(Report::Head {
+            request_id: "r-1".into(),
+            attempt: 1,
+            at: 3_400,
+        })
+        .await;
+    now.store(3_500, Ordering::SeqCst);
+    rewrite_hold(
+        handle
+            .select(request_of(&handle, "r-2", 3_500))
+            .await
+            .unwrap(),
+    );
+    handle
+        .report(Report::Head {
+            request_id: "r-1".into(),
+            attempt: 2,
+            at: 3_600,
+        })
+        .await;
+    assert_eq!(
+        landed_on(
+            handle
+                .select(request_of(&handle, "r-3", 3_700))
+                .await
+                .unwrap()
+        ),
+        ("c".into(), None),
+        "the later leg's report clears its own landing's mark"
     );
 }

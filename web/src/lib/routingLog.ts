@@ -14,7 +14,7 @@ export { ageWord };
 // The routing log's words. The routes answer structured values and no English, so a label change touches this module
 // alone and never a route or a fixture.
 
-export type FactLabel = '5h' | '7d' | 'Fable' | 'answer' | 'attempt' | 'capture' | 'cause' | 'client' | 'depth' | 'epoch' | 'field' | 'fields' | 'fit' | 'gap' | 'held' | 'idle' | 'in flight' | 'key' | 'lasted' | 'models' | 'next' | 'over' | 'pick' | 'pins' | 'prefix' | 'rank' | 'resets' | 'retry' | 'runway' | 'slow-down' | 'slowest' | 'speed' | 'spent' | 'state' | 'to' | 'turn' | 'until' | 'was';
+export type FactLabel = '5h' | '7d' | 'Fable' | 'answer' | 'attempt' | 'capture' | 'cause' | 'client' | 'depth' | 'epoch' | 'field' | 'fields' | 'fit' | 'gap' | 'held' | 'idle' | 'in flight' | 'key' | 'lasted' | 'models' | 'next' | 'over' | 'pick' | 'pins' | 'prefix' | 'rank' | 'resets' | 'retry' | 'rewrite in flight' | 'runway' | 'slow-down' | 'slowest' | 'speed' | 'spent' | 'state' | 'to' | 'turn' | 'until' | 'was';
 
 const LABELS = {
   answer: 'answer',
@@ -45,6 +45,7 @@ const LABELS = {
   rank: 'rank',
   resets: 'resets',
   retry: 'retry',
+  rewrite: 'rewrite in flight',
   runway: 'runway',
   seven_day: '7d',
   seven_day_fable: 'Fable',
@@ -368,13 +369,14 @@ function exhaustionWord(row: DecisionSummary): string {
 
 function decisionBy(row: DecisionSummary): Chip {
   const { kind, value } = row.by;
-  // A renewal after a slow-down hold names the hold, since the wait explains the row more than the renewal does.
-  if (row.kind === 'renewed' && !(kind === 'hold' && value === 'slow_down')) return { value: row.probe ? 'keepalive' : 'no rule fired' };
+  // A renewal after a slow-down hold or a wait for a rewrite in flight names the hold, since the wait explains the row
+  // more than the renewal does.
+  if (row.kind === 'renewed' && !(kind === 'hold' && (value === 'slow_down' || value === 'rewrite'))) return { value: row.probe ? 'keepalive' : 'no rule fired' };
   switch (kind) {
     case 'exhaustion':
       return { value: exhaustionWord(row) };
     case 'hold':
-      return value === 'strategy_pick' ? strategyChip(row.strategy, row.tier) : { value: value === 'slow_down' ? LABELS.slow_down : words(value) };
+      return value === 'strategy_pick' ? strategyChip(row.strategy, row.tier) : { value: value === 'slow_down' ? LABELS.slow_down : value === 'rewrite' ? LABELS.rewrite : words(value) };
     case 'none':
       return { value: 'no rule fired' };
     case 'refusal':
@@ -1105,7 +1107,7 @@ export function verdictSentence(record: DecisionRecord, row: DecisionSummary): C
     case 'exhausted':
       return [plain('Exhausted in'), { entity: { id: record.request.poolId, kind: 'pool' }, value: record.request.poolId }];
     case 'held':
-      return [lead('Held on'), ...on(o.hold?.accountId ?? o.accountId)];
+      return [lead('Held on'), ...on(o.hold?.accountId ?? o.accountId), ...(o.hold?.reason === 'rewrite' ? rewriteWords(o.hold, Date.parse(record.request.at)) : [])];
     case 'moved':
       return [lead('Moved'), ...on(o.fromAccountId), plain('to'), ...on(o.accountId)];
     case 'refused':
@@ -1132,6 +1134,12 @@ function shareChips(shares: Record<string, unknown>): Chip[] {
 const resetWords = (hold: NonNullable<RecordOutcome['hold']>, now: number) => (hold.until === null ? 'for the reset' : `for the reset at ${formatFact(hold.until, 'time', now)}`);
 /** `for the slow-down until 18:20`, the pin's deadline, or the slow-down alone where the hold carried none. */
 const slowDownWords = (hold: NonNullable<RecordOutcome['hold']>, now: number) => (hold.until === null ? 'for the slow-down' : `for the slow-down until ${formatFact(hold.until, 'time', now)}`);
+/** `for the rewrite in flight of {request} until 18:20`: the first request's head the hold waited for, linked. */
+const rewriteWords = (hold: NonNullable<RecordOutcome['hold']>, now: number): Chip[] => [
+  plain('for the rewrite in flight of'),
+  ...(hold.waitsFor === null ? [] : [requestChip(hold.waitsFor)]),
+  ...(hold.until === null ? [] : [plain(`until ${formatFact(hold.until, 'time', now)}`)]),
+];
 
 /** The tier, the rule or the rung, the pin's warmth and the cache verdict once the attempt has usage. */
 export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip[] {
@@ -1155,6 +1163,7 @@ export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip
     chips.push(plain(`held ${slowDownWords(o.hold, Date.parse(record.request.at))}`));
     if (o.hold.factor !== null) chips.push(plain(speedWord(o.hold.factor)));
   }
+  if (o.kind === 'held' && o.hold?.reason === 'rewrite') chips.push(plain('held for the rewrite in flight'));
   // The chip names the first plan window the booking holds a share of, the 5-hour one wherever it does.
   const booked = o.reservation === null ? undefined : WINDOWS.find((w) => num(o.reservation?.rewrite[w]) !== null);
   if ((o.kind === 'moved' || o.kind === 'placed') && o.reservation !== null && booked !== undefined) chips.push(plain(`reserved ${fmtShare(o.reservation.rewrite[booked])} of ${WINDOW_WORD[booked]}`));
@@ -1503,6 +1512,10 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
       ...(h.cycleMs === null ? [] : [plain(span(h.cycleMs), 'cycle')]),
     ];
     rows.push({ chips: [accountChip(h.accountId, 'on'), plain(slowDownWords(h, now)), ...figures, ...ranOutChip], label: 'Hold' });
+  } else if (o.hold !== null && o.hold.reason === 'rewrite') {
+    // The pin waits for the head of the request that carried its move rather than for a slot.
+    const h = o.hold;
+    rows.push({ chips: [accountChip(h.accountId, 'on'), ...rewriteWords(h, now), plain(span(h.boundMs), 'bound'), ...ranOutChip], label: 'Hold' });
   } else if (o.hold !== null) {
     const place = str(record.walk.find((s) => s.step === 'hold')?.facts.find((f) => f.key === 'place')?.value) ?? (o.hold.cohort !== null ? 'cohort' : 'strategy_pick');
     rows.push({ chips: [accountChip(o.hold.accountId, 'on'), plain(wordOf(PLACE_WORD, place)), plain(span(o.hold.boundMs), 'bound'), ...ranOutChip], label: 'Hold', title: HOLD_HINT });
@@ -1519,7 +1532,7 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
       // A wait for a reset or the slow-down is no slot's, so the in-flight cap's hover titles a slot's wait alone.
       h.waits.forEach((w, i) => {
         const final = i === h.waits.length - 1;
-        const reason = w.reason === 'cap' ? slot : plain(w.reason === 'slow_down' ? 'for the slow-down' : w.reason === 'reset' ? 'for the reset' : words(w.reason));
+        const reason = w.reason === 'cap' ? slot : plain(w.reason === 'slow_down' ? 'for the slow-down' : w.reason === 'reset' ? 'for the reset' : w.reason === 'rewrite' ? 'for the rewrite in flight' : words(w.reason));
         // The router fills the accounts waited on from the same holds in the same order, so each wait names its own.
         const waited = h.waitedOn[i] ?? null;
         const own = waited === null ? on : [accountChip(waited, 'on')];

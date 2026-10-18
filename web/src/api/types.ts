@@ -614,7 +614,7 @@ export interface CohortHold {
   /** The holds' waits summed, in milliseconds, whether a slot freed or the bound ran out. */
   heldMs: number;
   waitedOn: string[];
-  /** Each wait with its reason (`cap`, `reset`, `slow_down`), oldest first, and none on a row from before the member. */
+  /** Each wait with its reason (`cap`, `reset`, `slow_down`, `rewrite`), oldest first, and none on a row from before the member. */
   waits: { heldMs: number; reason: string }[];
 }
 
@@ -1213,7 +1213,8 @@ export interface RecordCompletion {
 
 /**
  * A hold: `cap` waits for a slot, `reset` for the spent window's reset at `until`, `slow_down` for the pin's deadline at
- * `until`. The slow-down's figures are set under `slow_down` alone and read null on a record from before them.
+ * `until`, `rewrite` for the head of the request that carried a move, `waitsFor`, bounded at `until`. The slow-down's
+ * figures are set under `slow_down` alone and read null on a record from before them.
  */
 export interface RecordHold {
   accountId: string;
@@ -1229,6 +1230,8 @@ export interface RecordHold {
   stretchMs: number | null;
   thresholdMs: number | null;
   until: string | null;
+  /** The request whose head the hold waited for, under `rewrite`. */
+  waitsFor: string | null;
 }
 
 /**

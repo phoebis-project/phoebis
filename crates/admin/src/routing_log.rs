@@ -231,11 +231,12 @@ pub(crate) struct SummaryHold {
     pub cohort: Option<String>,
     pub bound_ms: i64,
     /// `cap` for a hold on a slot, `reset` for a spent window about to reset, `slow_down` for a slowed pin's wait
-    /// before its head.
+    /// before its head, `rewrite` for a moved pin's wait for the head of the request that carried the move.
     #[schema(example = "cap")]
     pub reason: String,
     /// The instant the request waits for: under `reset` the later of the spent window's reset and the end of the
-    /// account's cooldown, under `slow_down` the pin's deadline. Null under `cap`.
+    /// account's cooldown, under `slow_down` the pin's deadline, under `rewrite` the first request's dispatch plus the
+    /// pool's hold cap. Null under `cap`.
     pub until: Option<i64>,
     /// The factor the hold was sized from: the account's factor pulled toward 1 by the ramp, the shed line's `ramp`.
     /// Set under `slow_down`, null otherwise.
@@ -248,6 +249,9 @@ pub(crate) struct SummaryHold {
     pub threshold_ms: Option<i64>,
     /// The pin's cycle the hold was sized from. Set under `slow_down`, null otherwise.
     pub cycle_ms: Option<i64>,
+    /// The request whose head the hold waited for. Set under `rewrite`, null otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waits_for: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -330,7 +334,9 @@ pub(crate) struct DecisionRecord {
     /// `static_hash`), `attempted` (the accounts already tried), `holds` (each `account_id`, `cohort`, `held_ms`,
     /// `attempt`, `seq` (the decision that held), `ran_out` (the wait's bound ran out with no slot freed), `reason`
     /// (`cap` for a slot, `reset` for a spent window about to reset, `slow_down` for a slowed pin's wait before its
-    /// head), `until` (the instant the wait ends: a reset's, or the pin's slow-down deadline, null under `cap`)),
+    /// head, `rewrite` for a moved pin's wait for the head of the request that carried the move), `until` (the
+    /// instant the wait ends: a reset's, the pin's slow-down deadline, or the rewrite's bound, null under `cap`),
+    /// `waits_for` (the request whose head a `rewrite` hold waited for, absent under the other reasons)),
     /// `registry_revision`, `body_tokens` (the relay's estimate of the body's prompt tokens, which a fresh session's
     /// rewrite reads, null on a refusal).
     ///
@@ -396,12 +402,14 @@ pub(crate) struct DecisionRecord {
     /// `kind`, `account_id`, `from_account_id`, `upstream_model`, `tier`, `strategy`, `rule`, `rung` (`rung`,
     /// `depth`, `prefix_tokens`), `in_overage`, `pin_written` (`action`, `epoch`, `lane`, `refresh_stamped`,
     /// `hashes_stamped`), `pin_events` (each `kind`, `reason`), `hold` (`account_id`, `cohort`, `bound_ms`,
-    /// `reason` (`cap`, `reset` or `slow_down`), `until` (the end of a reset's wait, or the pin's slow-down deadline),
-    /// and under `slow_down` the read the hold was sized from, null otherwise: `factor`, `speed` (the speed the
-    /// account's holds realize together), `stretch_ms`, `threshold_ms` and `cycle_ms` (the pin's cycle)),
-    /// `exhaustion` (`kind`, `deadline`, `window`, `reason`, `obstacle`), `refusal` (`kind`, `code`, `reason`),
-    /// `cohort_hold` (`waited_on`, `cohort`, `held_ms` (every wait summed), `waits` (each `reason`, `cap`, `reset` or
-    /// `slow_down`, and its `held_ms`)), `shed_marks`, `mark_cleared` (`reason`, `marked_at`, `marked_on`,
+    /// `reason` (`cap`, `reset`, `slow_down` or `rewrite` for a moved pin's wait for the head of the request that
+    /// carried the move), `until` (the end of a reset's wait, the pin's slow-down deadline, or the rewrite's bound),
+    /// `waits_for` (under `rewrite` the request whose head the hold waited for, absent otherwise), and under
+    /// `slow_down` the read the hold was sized from, null otherwise: `factor`, `speed` (the speed the account's holds
+    /// realize together), `stretch_ms`, `threshold_ms` and `cycle_ms` (the pin's cycle)), `exhaustion` (`kind`,
+    /// `deadline`, `window`, `reason`, `obstacle`), `refusal` (`kind`, `code`, `reason`), `cohort_hold`
+    /// (`waited_on`, `cohort`, `held_ms` (every wait summed), `waits` (each `reason`, `cap`, `reset`, `slow_down` or
+    /// `rewrite`, and its `held_ms`)), `shed_marks`, `mark_cleared` (`reason`, `marked_at`, `marked_on`,
     /// `marked_window`, `projection`, `stretch_ms` and `threshold_ms` (the stretch and the threshold the heal read
     /// where the stretch made the mark)), `reservation` (`account_id`, `rewrite` and `burn` by plan window, the burn
     /// per hour, `expires_at`, null for a decision that booked nothing), `cause` (why the failover this decision lands

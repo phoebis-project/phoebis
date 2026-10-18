@@ -1,16 +1,16 @@
 use phoebis_routing::{
     cohort_hold, decide, effective_warm, lane_key, release_reasons, resolve, select, shed_dwell_ms,
-    warm, warmth_of, windows::MODEL_WINDOWS, AccountTicket, AffinityChain, AffinityMap,
-    AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit, CandidateFacts, ChainFacts,
-    ClientClass, CohortHold, CreditsState, Decided, DecisionRecord, EvidenceSource, Exhaustion,
-    FactEntity, FactValue, FailedOver, HoldFacts, HoldOutcome, HoldWait,
-    LaneFacts, LongContextRates, MemberSpend, MigrateReason, MoveCause, OverageEvidence,
-    PinKeyFacts, PinRef, Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegimeRates,
-    RegistrySnapshot, RequestFlags, Reservation, RoutingState, SelectRequest, SelectResult,
-    SharePricer, SlowDownEdge, SlowDownRead, SlowDownState, StateWrite, UtilizationSample,
-    WalkStep, Warmth, WarmthCause, WindowReading, WindowSource, FAST_CREDITS_REASON,
-    FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY,
-    SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, WEEK_MS,
+    slow_down_hold_ms, warm, warmth_of, windows::MODEL_WINDOWS, AccountTicket, AffinityChain,
+    AffinityMap, AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit,
+    CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditsState, Decided, DecisionRecord,
+    EvidenceSource, Exhaustion, FactEntity, FactValue, FailedOver, HeadMark, HoldFacts,
+    HoldOutcome, HoldWait, LaneFacts, LongContextRates, MemberSpend,
+    MigrateReason, MoveCause, OverageEvidence, PinKeyFacts, PinRef, Placement, RateTable, Rates,
+    RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot, RequestFlags, Reservation,
+    RoutingState, SelectRequest, SelectResult, SharePricer, SlowDownEdge, SlowDownRead,
+    SlowDownState, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading,
+    WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
+    MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -6625,6 +6625,7 @@ fn a_held_subagent_is_held_on_its_cohorts_account() {
             ran_out: false,
             reason: "cap",
             until: None,
+            waits_for: None,
         },
     );
 }
@@ -6966,6 +6967,7 @@ fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
                 ran_out: false,
                 reason: "cap",
                 until: None,
+                waits_for: None,
             }],
             ..subagent(
                 request(&s, Some("session"), "claude-sonnet-5", true, &["a"], 1_500),
@@ -6995,6 +6997,7 @@ fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
             ran_out: false,
             reason: "cap",
             until: None,
+            waits_for: None,
         },
     );
 
@@ -7033,6 +7036,7 @@ fn a_cohort_hold_names_every_account_waited_on_the_last_cohort_and_the_waits_sum
         ran_out: false,
         reason: "cap",
         until: None,
+        waits_for: None,
     };
     assert_eq!(
         cohort_hold(&[]),
@@ -8749,6 +8753,7 @@ fn every_candidate_at_its_cap_answers_held_with_the_best_of_them() {
                 ran_out: false,
                 reason: "cap",
                 until: None,
+                waits_for: None,
             },
         },
         "b is the one priority would have chosen"
@@ -8799,6 +8804,7 @@ fn a_held_round_robin_selection_leaves_the_turn_with_the_account_it_named() {
                 ran_out: false,
                 reason: "cap",
                 until: None,
+                waits_for: None,
             },
         },
         "the round starts at a"
@@ -8873,6 +8879,7 @@ fn the_cap_binds_before_the_fit_so_a_free_account_without_runway_takes_the_place
                 ran_out: false,
                 reason: "cap",
                 until: None,
+                waits_for: None,
             },
         },
         "with both at their cap the request is held on the one the fit keeps"
@@ -14287,6 +14294,7 @@ fn a_hold_records_its_place_and_bound() {
             stretch_ms: None,
             threshold_ms: None,
             cycle_ms: None,
+            waits_for: None,
         })
     );
     assert_eq!(candidate(&d.record, "b").verdict, "held_on");
@@ -14475,6 +14483,7 @@ fn a_refusal_the_task_records_carries_the_request_s_attempted_accounts_and_holds
         ran_out: true,
         reason: "cap",
         until: None,
+        waits_for: None,
     };
     let req = SelectRequest {
         seq: 3,
@@ -15204,6 +15213,7 @@ fn a_placement_after_a_cohort_hold_reads_by_cohort_and_the_wait() {
             ran_out: false,
             reason: "cap",
             until: None,
+            waits_for: None,
         }],
         ..static_req(&s, &["s1"])
     };
@@ -15271,6 +15281,7 @@ fn a_session_pin_placement_after_a_hold_reads_the_wait_beside_the_in_flight_coun
             ran_out: false,
             reason: "cap",
             until: None,
+            waits_for: None,
         }],
         ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], T)
     };
@@ -15321,6 +15332,7 @@ fn a_session_pin_placement_with_no_wait_reads_the_in_flight_count_alone() {
             ran_out: false,
             reason: "cap",
             until: None,
+            waits_for: None,
         }],
         ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], T)
     };
@@ -15355,6 +15367,7 @@ fn after_a_wait_on_a(
             ran_out,
             reason: "cap",
             until: None,
+            waits_for: None,
         }],
         held_out: ran_out,
         ..request(s, None, "claude-sonnet-5", true, attempted, T)
@@ -16473,6 +16486,7 @@ fn a_hold_books_nothing_and_the_selection_after_it_books_for_the_request() {
             ran_out: false,
             reason: "cap",
             until: None,
+            waits_for: None,
         }],
         ..req
     };
@@ -17745,6 +17759,7 @@ fn a_spent_pin_waits_in_place_for_a_reset_inside_the_retry_bound_and_moves_past_
                 ran_out: false,
                 reason: "reset",
                 until: Some(T + 30_000),
+                waits_for: None,
             },
         },
         "a reset 30 s out under a bound of 60 s holds the request on its own account"
@@ -17797,6 +17812,7 @@ fn a_spent_pin_waits_in_place_for_a_reset_inside_the_retry_bound_and_moves_past_
             stretch_ms: None,
             threshold_ms: None,
             cycle_ms: None,
+            waits_for: None,
         })
     );
     assert_eq!(candidate(&d.record, "a").verdict, "held_on");
@@ -20383,6 +20399,7 @@ fn a_pins_cycle_folds_from_its_arrivals_and_an_exempt_class_folds_nothing() {
             ran_out: false,
             reason: "slow_down",
             until: Some(T + 49_000),
+            waits_for: None,
         }],
         ..main_turn(&s, "s1", T + 49_000)
     };
@@ -20786,6 +20803,7 @@ fn a_slowed_pins_main_turn_is_held_for_its_cycle_over_the_factor_before_the_rene
                 ran_out: false,
                 reason: "slow_down",
                 until: Some(until),
+                waits_for: None,
             }
         )
     );
@@ -25451,4 +25469,368 @@ fn a_renewal_and_a_placement_with_no_row_name_no_account_left() {
     };
     assert!(sel.trace.renewed);
     assert_eq!(left_of(&renewed), None, "a renewal stays on its account");
+}
+
+/// The hold cap of the rewrite cases' pool, the case's own rather than the shipped default.
+const REWRITE_HOLD_SECONDS: u32 = 90;
+
+/// `s1` moved by `a`'s round to `b` under its request `r-1` at the returned instant, as
+/// `a_shed_moves_selection_names_the_account_it_left` stages it, on a pool over `members` whose hold cap is
+/// `REWRITE_HOLD_SECONDS`.
+fn moved_to_b(members: Vec<(&'static str, u32)>) -> (RegistrySnapshot, RoutingState, i64) {
+    let s = tiered(Pool {
+        members,
+        slow_down: SlowDown {
+            slow_down_hold_seconds: REWRITE_HOLD_SECONDS,
+            ..SlowDown::default()
+        },
+        ..shedding_pool(Shedding {
+            warm_sessions: WarmSessions::Always,
+            ..Shedding::default()
+        })
+    });
+    let mut st = rounding(vec![
+        burning("s1", "a", 4.0, true, T),
+        burning("s0", "a", 1.0, true, T),
+    ]);
+    let moved_at = T - 5_000;
+    over_a_fitting_b(&mut st, moved_at - 500);
+    past_the_wait(&mut st, &s, "p", "a", moved_at);
+    let d = decide(&mut st, &s, &main_turn(&s, "s1", moved_at), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "a's round moves s1 to b"
+    );
+    assert_eq!(left_of(&d.result), Some("a"));
+    (s, st, moved_at)
+}
+
+/// A main turn of `s1` at `now` under its own request id.
+fn turn_of(s: &RegistrySnapshot, request_id: &str, now: i64) -> SelectRequest {
+    SelectRequest {
+        request_id: request_id.into(),
+        ..main_turn(s, "s1", now)
+    }
+}
+
+/// The rewrite cases' bound on `s`: the pool's hold cap from the instant the move dispatched.
+fn rewrite_bound(s: &RegistrySnapshot, moved_at: i64) -> i64 {
+    moved_at + slow_down_hold_ms(s.pool("p").expect("the case's pool"))
+}
+
+#[test]
+fn a_landing_on_another_account_marks_the_request_whose_head_the_pins_next_requests_wait_for() {
+    let (_, st, moved_at) = moved_to_b(vec![("a", 0), ("b", 1)]);
+    assert_eq!(
+        st.head_mark(&pin_key("s1")),
+        Some(&HeadMark {
+            request_id: "r-1".into(),
+            attempt: 1,
+            at: moved_at,
+        })
+    );
+}
+
+#[test]
+fn the_moved_pins_next_request_is_held_for_the_rewrite_until_the_cap_from_the_first_requests_dispatch(
+) {
+    let (s, mut st, moved_at) = moved_to_b(vec![("a", 0), ("b", 1)]);
+    let d = decide(&mut st, &s, &turn_of(&s, "r-2", moved_at + 200), &mut rng());
+    let (account_id, hold) = held_on(&d);
+    assert_eq!(account_id, "b");
+    assert_eq!(
+        (
+            hold.reason,
+            hold.waits_for.as_deref(),
+            hold.until,
+            hold.cohort.as_deref(),
+            hold.held_ms
+        ),
+        (
+            "rewrite",
+            Some("r-1"),
+            Some(rewrite_bound(&s, moved_at)),
+            None,
+            0
+        )
+    );
+    let outcome = d.record.outcome.hold.as_ref().expect("a held outcome");
+    assert_eq!(
+        (
+            outcome.reason,
+            outcome.waits_for.as_deref(),
+            outcome.bound_ms
+        ),
+        (
+            "rewrite",
+            Some("r-1"),
+            slow_down_hold_ms(s.pool("p").unwrap())
+        )
+    );
+    assert_eq!(
+        (
+            outcome.factor,
+            outcome.speed,
+            outcome.stretch_ms,
+            outcome.threshold_ms,
+            outcome.cycle_ms
+        ),
+        (None, None, None, None, None),
+        "the slow-down's figures stay empty"
+    );
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("hold", "rewrite")
+    );
+    assert_eq!(
+        st.pin_pace(&pin_key("s1")).map(|pace| pace.dispatched_at),
+        Some(moved_at + 200),
+        "the hold moves no dispatch"
+    );
+}
+
+#[test]
+fn a_fresh_placement_writes_no_mark_and_its_next_request_is_not_held() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let (placed, _) = select(&mut st, &s, &turn_of(&s, "r-1", T), &mut rng());
+    assert_eq!(picked(&placed), "a");
+    assert_eq!(st.head_mark(&pin_key("s1")), None);
+    let (next, _) = select(&mut st, &s, &turn_of(&s, "r-2", T + 200), &mut rng());
+    assert_eq!(picked(&next), "a");
+}
+
+#[test]
+fn a_renewal_keeps_the_mark_and_a_second_landing_replaces_it() {
+    let (s, mut st, moved_at) = moved_to_b(vec![("a", 0), ("b", 1), ("c", 2)]);
+    let mark = st.head_mark(&pin_key("s1")).cloned();
+    let (renewed, _) = select(&mut st, &s, &turn_of(&s, "r-1", moved_at + 100), &mut rng());
+    let SelectResult::Selected(ref sel) = renewed else {
+        panic!("the move's own request renews, got {renewed:?}")
+    };
+    assert!(sel.trace.renewed);
+    assert_eq!(
+        st.head_mark(&pin_key("s1")).cloned(),
+        mark,
+        "the renewal keeps the mark"
+    );
+    st.record_sample("c", refreshing(0.1, T + HOUR, T + 72 * HOUR, moved_at));
+    st.record_cooldown(cooled(
+        "b",
+        "model:claude-sonnet-5",
+        T + 10 * MINUTE,
+        "retry_after",
+        "rate_limit",
+    ));
+    let (moved, _) = select(&mut st, &s, &turn_of(&s, "r-2", moved_at + 200), &mut rng());
+    assert_eq!(left_of(&moved), Some("b"));
+    assert_eq!(
+        st.head_mark(&pin_key("s1")),
+        Some(&HeadMark {
+            request_id: "r-2".into(),
+            attempt: 1,
+            at: moved_at + 200,
+        }),
+        "the second landing's request replaces the first"
+    );
+}
+
+#[test]
+fn a_token_count_on_the_moved_pin_is_selected_and_never_held() {
+    let (s, mut st, moved_at) = moved_to_b(vec![("a", 0), ("b", 1)]);
+    let count = SelectRequest {
+        count: true,
+        ..turn_of(&s, "r-2", moved_at + 200)
+    };
+    let (result, _) = select(&mut st, &s, &count, &mut rng());
+    assert_eq!(picked(&result), "b");
+}
+
+#[test]
+fn a_request_that_already_waited_is_not_held_for_the_rewrite() {
+    let (s, mut st, moved_at) = moved_to_b(vec![("a", 0), ("b", 1)]);
+    let waited = HoldFacts {
+        account_id: "b".into(),
+        cohort: None,
+        held_ms: 1_000,
+        attempt: 1,
+        seq: 1,
+        ran_out: false,
+        reason: "rewrite",
+        until: Some(rewrite_bound(&s, moved_at)),
+        waits_for: Some("r-1".into()),
+    };
+    let req = SelectRequest {
+        seq: 2,
+        holds: vec![waited.clone()],
+        received_at: moved_at + 200,
+        ..turn_of(&s, "r-2", moved_at + 1_200)
+    };
+    let d = decide(&mut st, &s, &req, &mut rng());
+    let SelectResult::Selected(ref sel) = d.result else {
+        panic!("a request carrying a wait goes on, got {:?}", d.result)
+    };
+    assert!(sel.trace.renewed);
+    assert_eq!(d.record.request.holds, vec![waited]);
+}
+
+#[test]
+fn a_bound_under_a_second_answers_no_hold() {
+    let (s, mut st, moved_at) = moved_to_b(vec![("a", 0), ("b", 1)]);
+    let late = turn_of(
+        &s,
+        "r-2",
+        rewrite_bound(&s, moved_at) - SLOW_DOWN_MIN_HOLD_MS + 1,
+    );
+    let (result, _) = select(&mut st, &s, &late, &mut rng());
+    assert_eq!(picked(&result), "b");
+}
+
+#[test]
+fn a_request_that_waited_for_the_rewrite_is_not_held_for_the_slow_down() {
+    let (off, on) = held_pools(120);
+    // s1 builds its cycle on a, and b, where s0's turns stamped the ramp a burn average before, reads a factor of
+    // about a half once s1 lands there too.
+    let mut st = rounding(vec![
+        burning("s1", "a", 15.0, true, T),
+        burning("s0", "b", 15.0, true, T),
+    ]);
+    reading(&mut st, "a", 0.1, 2 * HOUR, T);
+    reading(&mut st, "b", 0.80, 2 * HOUR, T);
+    let at = T + 20 * SECOND;
+    stamped(&mut st, &on, "s0", at);
+    cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
+    st.record_cooldown(cooled(
+        "a",
+        "model:claude-sonnet-5",
+        T + 10 * MINUTE,
+        "retry_after",
+        "rate_limit",
+    ));
+    let moved = decide(&mut st, &on, &turn_of(&on, "r-1", at), &mut rng());
+    assert_eq!(picked(&moved.result), "b");
+    assert_eq!(left_of(&moved.result), Some("a"));
+    let req = turn_of(&on, "r-2", at + 200);
+    let d = decide(&mut st, &on, &req, &mut rng());
+    let (_, hold) = held_on(&d);
+    assert_eq!(
+        (hold.reason, hold.waits_for.as_deref()),
+        ("rewrite", Some("r-1")),
+        "the rewrite's hold comes first"
+    );
+    let again = SelectRequest {
+        seq: 2,
+        now: at + 1_200,
+        holds: vec![HoldFacts {
+            held_ms: 1_000,
+            ..hold
+        }],
+        ..req
+    };
+    let d = decide(&mut st, &on, &again, &mut rng());
+    assert!(
+        number(fact(line(&d.record, "move:shed"), "factor")) < 1.0,
+        "b reads a slow-down"
+    );
+    let SelectResult::Selected(ref sel) = d.result else {
+        panic!("the request that waited goes on, got {:?}", d.result)
+    };
+    assert!(sel.trace.renewed);
+    assert_eq!(d.record.outcome.hold, None);
+    assert_eq!(
+        d.record.pin.as_ref().and_then(|pin| pin.slow_down_until),
+        None,
+        "no slow-down deadline stands for it"
+    );
+}
+
+#[test]
+fn a_non_portable_request_of_the_moved_pin_is_held_for_the_rewrite() {
+    let (s, mut st, moved_at) = moved_to_b(vec![("a", 0), ("b", 1)]);
+    let bound = SelectRequest {
+        portable: false,
+        ..turn_of(&s, "r-2", moved_at + 200)
+    };
+    let d = decide(&mut st, &s, &bound, &mut rng());
+    let (account_id, hold) = held_on(&d);
+    assert_eq!(
+        (
+            account_id.as_str(),
+            hold.reason,
+            hold.waits_for.as_deref(),
+            hold.until
+        ),
+        (
+            "b",
+            "rewrite",
+            Some("r-1"),
+            Some(rewrite_bound(&s, moved_at))
+        )
+    );
+    assert!(
+        !steps(&d.record).iter().any(|(step, _)| *step == "bound"),
+        "the hold comes before the bound renewal: {:?}",
+        steps(&d.record)
+    );
+    let count = SelectRequest {
+        count: true,
+        portable: false,
+        ..turn_of(&s, "r-3", moved_at + 300)
+    };
+    let (result, _) = select(&mut st, &s, &count, &mut rng());
+    assert_eq!(picked(&result), "b", "a count passes at the bound renewal");
+}
+
+#[test]
+fn a_renewal_after_a_rewrite_wait_dates_the_pins_dispatch_at_the_release() {
+    let (s, mut st, moved_at) = moved_to_b(vec![("a", 0), ("b", 1)]);
+    let req = turn_of(&s, "r-2", moved_at + 200);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    let (_, hold) = held_on(&d);
+    assert_eq!(hold.reason, "rewrite");
+    let gaps = st.pin_pace(&pin_key("s1")).expect("a pace").gaps;
+    let released = SelectRequest {
+        seq: 2,
+        now: moved_at + 1_500,
+        holds: vec![HoldFacts {
+            held_ms: 1_300,
+            ..hold
+        }],
+        ..req
+    };
+    let d = decide(&mut st, &s, &released, &mut rng());
+    let SelectResult::Selected(ref sel) = d.result else {
+        panic!("the request that waited renews, got {:?}", d.result)
+    };
+    assert!(sel.trace.renewed);
+    assert_eq!(
+        st.pin_pace(&pin_key("s1"))
+            .map(|pace| (pace.dispatched_at, pace.gaps)),
+        Some((moved_at + 1_500, gaps)),
+        "the renewal dates the dispatch at the release and folds nothing"
+    );
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("hold", "rewrite")
+    );
+    assert_eq!(
+        summary_facts(&d),
+        vec![("held", FactValue::Int(1_300), Some("ms"))]
+    );
+    select(
+        &mut st,
+        &s,
+        &turn_of(&s, "r-3", moved_at + 11_500),
+        &mut rng(),
+    );
+    assert_eq!(
+        st.pin_pace(&pin_key("s1"))
+            .map(|pace| (pace.dispatched_at, pace.gaps)),
+        Some((moved_at + 11_500, gaps + 1)),
+        "the next gap is measured from the release"
+    );
 }

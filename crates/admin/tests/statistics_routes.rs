@@ -339,6 +339,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             "cooldown",
             "credits",
             "ended",
+            "head",
             "member_spend",
             "overage",
             "pin_invalidated",
@@ -4449,6 +4450,183 @@ async fn the_routing_log_s_decision_row_and_record_read_the_answering_attempt_af
             &serde_json::json!(now + 2_000)
         )
     );
+}
+
+/// A selection of `s1` through the harness's router as the relay asks for it, at `at`, with the accounts the request
+/// already tried and the holds it waited through.
+async fn select_s1(
+    parts: &common::Full,
+    request_id: &str,
+    seq: u32,
+    at: i64,
+    attempted: &[&str],
+    holds: Vec<phoebis_routing::HoldFacts>,
+) -> phoebis_routing::SelectResult {
+    let snapshot = parts.router.snapshot();
+    let key = snapshot
+        .key("desktop")
+        .expect("the key is in the snapshot")
+        .clone();
+    let candidates =
+        phoebis_routing::resolve(&snapshot, &key, "claude-sonnet-5", "claude-sonnet-5")
+            .expect("the pool allows the model");
+    parts
+        .router
+        .select(phoebis_routing::SelectRequest {
+            request_id: request_id.into(),
+            attempt: 1,
+            seq,
+            key_id: "desktop".into(),
+            key_generation: common::generation(&parts.store, "desktop"),
+            agent_id: "main".into(),
+            session_id: Some("s1".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            folded_model: "claude-sonnet-5".into(),
+            candidates,
+            portable: true,
+            attempted: attempted.iter().map(|a| a.to_string()).collect(),
+            now: at,
+            received_at: at,
+            fallback_ms: 60_000,
+            revision: snapshot.revision,
+            probe: false,
+            count: false,
+            request_class: None,
+            context_compacted: false,
+            static_hash: None,
+            boundaries: std::sync::Arc::from([]),
+            client: phoebis_routing::ClientClass::ClaudeCode,
+            entrypoint: None,
+            static_boundaries: std::sync::Arc::from([]),
+            marker: false,
+            parent_agent_id: None,
+            failed_over: None,
+            holds,
+            dialed: false,
+            held_out: false,
+            lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+            fast: false,
+            body_tokens: 0,
+        })
+        .await
+        .unwrap()
+        .result
+}
+
+#[tokio::test]
+async fn the_routing_log_reads_a_rewrite_hold_and_the_request_it_waited_for() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // The harness's other account is unpaired, so the session's second landing needs a sibling of its own.
+    parts
+        .store
+        .insert_account(&AccountRow {
+            id: "sibling".into(),
+            kind: AccountKind::ApiKey,
+            label: "Sibling".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+            state_cause: StateCause::Operator,
+        })
+        .unwrap();
+    parts
+        .store
+        .set_api_key_secret(
+            "sibling",
+            &phoebis_store::Secret::new("sk-ant-api03-SIBLING"),
+        )
+        .unwrap();
+    post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority","slow_down_hold_seconds":120,"members":[{"account_id":"direct","priority":0},{"account_id":"sibling","priority":1}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let now = common::NOW;
+    let placed = select_s1(&parts, "r0", 1, now - 1_000, &[], Vec::new()).await;
+    assert!(
+        matches!(&placed, phoebis_routing::SelectResult::Selected(sel) if sel.account.id == "direct"),
+        "s1 pins direct: {placed:?}"
+    );
+    // The relay passed direct over for r1, so r1 lands the session on the sibling.
+    let landed = select_s1(&parts, "r1", 1, now, &["direct"], Vec::new()).await;
+    assert!(
+        matches!(&landed, phoebis_routing::SelectResult::Selected(sel) if sel.left.as_deref() == Some("direct")),
+        "r1 leaves direct: {landed:?}"
+    );
+    let hold = match select_s1(&parts, "r2", 1, now + 200, &[], Vec::new()).await {
+        phoebis_routing::SelectResult::Held { hold, .. } => hold,
+        other => panic!("the session's next request waits for r1's head, not {other:?}"),
+    };
+    let renewed = select_s1(
+        &parts,
+        "r2",
+        2,
+        now + 1_200,
+        &[],
+        vec![phoebis_routing::HoldFacts {
+            held_ms: 1_000,
+            ..hold
+        }],
+    )
+    .await;
+    assert!(
+        matches!(&renewed, phoebis_routing::SelectResult::Selected(sel) if sel.trace.renewed),
+        "{renewed:?}"
+    );
+    wait_json(
+        &parts.app,
+        &format!("/admin/routing-log?from={now}&to={}&request=r2", now + 200),
+        &cookie,
+        |v| v["rows"][0]["kind"] == "held",
+    )
+    .await;
+    let held = json(get(&parts.app, "/admin/requests/r2/decisions/1", Some(&cookie)).await).await;
+    let hold = &held["outcome"]["hold"];
+    assert_eq!(
+        (
+            &hold["reason"],
+            &hold["waits_for"],
+            &hold["until"],
+            &hold["bound_ms"]
+        ),
+        (
+            &serde_json::json!("rewrite"),
+            &serde_json::json!("r1"),
+            &serde_json::json!(now + 120_000),
+            &serde_json::json!(120_000)
+        )
+    );
+    for figure in ["factor", "speed", "stretch_ms", "threshold_ms", "cycle_ms"] {
+        assert!(hold[figure].is_null(), "{figure} is null: {hold}");
+    }
+    let renewal = wait_json(&parts.app, "/admin/requests/r2/decisions/2", &cookie, |v| {
+        v["outcome"]["kind"] == "renewed"
+    })
+    .await;
+    let waited = &renewal["request"]["holds"][0];
+    assert_eq!(
+        (&waited["reason"], &waited["waits_for"], &waited["held_ms"]),
+        (
+            &serde_json::json!("rewrite"),
+            &serde_json::json!("r1"),
+            &serde_json::json!(1_000)
+        ),
+        "the renewal names the wait it followed: {renewal}"
+    );
+    assert_eq!(renewal["outcome"]["hold"], serde_json::Value::Null);
 }
 
 #[tokio::test]

@@ -150,8 +150,8 @@ pub(crate) struct RequestSummary {
     /// `{waited_on, cohort, held_ms, waits}` for the holds the request waited through, whether or not an attempt
     /// followed, `held_ms` every wait summed in milliseconds and `waits` each wait apart, oldest first, with its
     /// `reason` (`cap` for a slot, `reset` for a spent window about to reset, `slow_down` for a slowed pin's wait
-    /// before its head) and its `held_ms`. A row from before the waits were kept carries no `waits`. Null for a request
-    /// never held.
+    /// before its head, `rewrite` for a moved pin's wait for the head of the request that carried the move) and its
+    /// `held_ms`. A row from before the waits were kept carries no `waits`. Null for a request never held.
     #[schema(value_type = Option<Object>)]
     pub held: Option<Value>,
     /// `client` when the client's body carried its own `diagnostics` member, `router` when the relay inserted it,

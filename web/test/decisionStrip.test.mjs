@@ -273,6 +273,23 @@ test('a spent move held for the reset ends in the fourth terminus drawn at the H
   }
 });
 
+test('a rewrite hold ends in the sixth terminus drawn at the Held position while a fresh line keeps three', async () => {
+  const record = await recordOf('req_5d6f1b3a-e27/1');
+  const held = modelOf(record);
+  assert.deepEqual(held.termini.map((t) => t.kind), ['chosen', 'held_rewrite', 'refused'], "neither the slot's, the reset's nor the slow-down's way out stands");
+  assert.deepEqual(terminiOf(held), ['Chosen: - (idle)', 'Held for the rewrite in flight: held (taken)', 'Refused: - (idle, not drawn)']);
+  assert.deepEqual(held.termini.map(d.terminusName), ['Chosen, not reached', 'Held for the rewrite in flight, held', 'Refused, not reached']);
+  const layout = d.layoutStrip(held, 958);
+  assert.deepEqual(Object.keys(layout.termini), ['chosen', 'held_rewrite']);
+  assert.deepEqual(layout.termini.held_rewrite, { x: layout.termini.chosen.x, y: layout.termini.chosen.y + 36 });
+  const plan = planOf(record, { id: 'held_rewrite', kind: 'terminus' });
+  assert.deepEqual([plan.renderer, plan.head.word, plan.head.badge], ['outcome', 'Held for the rewrite in flight', 'held']);
+  for (const id of ['req_ef099b34-453/1', 'req_69e30548-32e/1']) {
+    const m = modelOf(await recordOf(id));
+    assert.deepEqual(m.termini.map((t) => t.kind), ['chosen', 'held', 'refused'], id);
+  }
+});
+
 test('a slowed selection ends in the fifth terminus drawn at the Held position while a fresh line keeps three', async () => {
   for (const id of ['req_9f2e7c5a-c49/1', 'req_8e1c4a6d-b52/1']) {
     const record = await recordOf(id);
@@ -807,7 +824,7 @@ const STORY = [
   'req_e8b7eb13-060/1',
   'req_e8b7eb13-060/2',
   'req_77634945-72b/2',
-  ...['9d4c1a73-e58/1', '9d4c1a73-e58/2', '5b2e8d47-c19/1', '6e1f3b98-a24/1', '2c7d9f15-b63/1', '7a3f0c26-d81/1', '4e8b1d36-f72/1', '9f2e7c5a-c49/1', '9f2e7c5a-c49/2', 'b8c3e9d4-e61/2'].map((id) => `req_${id}`),
+  ...['9d4c1a73-e58/1', '9d4c1a73-e58/2', '5b2e8d47-c19/1', '6e1f3b98-a24/1', '2c7d9f15-b63/1', '7a3f0c26-d81/1', '4e8b1d36-f72/1', '9f2e7c5a-c49/1', '9f2e7c5a-c49/2', 'b8c3e9d4-e61/2', '5d6f1b3a-e27/1', '5d6f1b3a-e27/2'].map((id) => `req_${id}`),
 ];
 const chipText = (c) => (c.label ? `${c.label} ${c.value}` : c.value);
 const rowsOf = (plan) => (plan.block.kind === 'groups' ? plan.block.groups.flatMap((g) => g.rows) : plan.block.kind === 'table' ? plan.block.table.loose : []);
@@ -840,6 +857,7 @@ const INVENTORY = [
   ['a placeholder', (x) => x.station !== undefined && x.step === null, 'sentence'],
   ['Held for the reset', (x) => x.terminus?.kind === 'held_reset', 'outcome'],
   ['Held for the slow-down', (x) => x.terminus?.kind === 'held_slow_down', 'outcome'],
+  ['Held for the rewrite in flight', (x) => x.terminus?.kind === 'held_rewrite', 'outcome'],
   ['an idle terminus', (x) => x.terminus?.state === 'idle', 'sentence'],
   ['a recorded step that did not run, with no facts', (x) => x.step?.verdict === 'not_run' && x.step.facts.length === 0, 'sentence'],
   ['a taken terminus', (x) => x.terminus?.state === 'taken', 'outcome'],

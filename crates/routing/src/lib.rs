@@ -42,7 +42,7 @@ pub use state::{
     budget_deadline, burn_average_ms, burn_decayed, ceiling, cooldown_holds, entrypoint_of,
     is_plan_window, load_shedding, return_to_plan_dwell_ms, shed_cap, shed_dwell_ms, slow_down,
     slow_down_hold_ms, slow_down_stretch_ms, warm, AccountTicket, BandSegment, BurnUnit,
-    CreditsState, EvidenceSource, InFlight, KeyPermit, LongContextRates, MemberSpend,
+    CreditsState, EvidenceSource, HeadMark, InFlight, KeyPermit, LongContextRates, MemberSpend,
     OverageEvidence, PinPace, PinRef, PinUsage, Purged, RateTable, Rates, Reservation,
     RoutingState, SharePricer, SlowDownEdge, SlowDownState, StateWrite, UtilizationSample,
     WindowReading, WindowSource, BUCKET_LIFE_MS, BUCKET_TTL_MS, CYCLE_GAPS, DEFAULT_WINDOW_CEILING,
