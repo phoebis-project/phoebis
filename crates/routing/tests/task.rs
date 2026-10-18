@@ -10532,6 +10532,121 @@ async fn a_head_raised_to_the_wall_keeps_the_stored_reset_so_a_later_reset_reads
     no_further_event(&mut events).await;
 }
 
+/// A reset-less clear read before the stored reset stands under it and is stored with it, so a later poll naming a
+/// later reset reads the stored one passed.
+#[tokio::test]
+async fn a_clear_that_names_no_reset_is_stored_under_the_stored_reset_so_a_later_reset_reads_it_passed(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(2_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 10 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 1.0, Some(reset)),
+        ))
+        .await;
+    assert!(matches!(
+        next_spent(&mut events).await,
+        RouterEvent::WindowSpent { at: 2_000, .. }
+    ));
+    now.store(3_000, Ordering::SeqCst);
+    handle.report(head_reading(3_000, 0.4, None, "r-1")).await;
+    let event = next_window_edge(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            0.4,
+            Some(reset),
+            WindowSource::Head,
+            Some("r-1")
+        )),
+        "{event:?}"
+    );
+    let cleared = predicted_reading(&handle, FIVE_HOUR).await;
+    assert_eq!(
+        (cleared.utilization, cleared.reset),
+        (0.4, Some(reset)),
+        "the clear is stored under the stored reset"
+    );
+    now.store(4_000, Ordering::SeqCst);
+    handle
+        .report(observed(
+            "a",
+            sample_with(4_000, FIVE_HOUR, 0.1, Some(15 * HOUR)),
+        ))
+        .await;
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowReset {
+            reset_at,
+            next_reset,
+            utilization_before,
+            ..
+        } => assert_eq!(
+            (reset_at, next_reset, utilization_before),
+            (reset, Some(15 * HOUR), 0.4)
+        ),
+        other => panic!("the stored reset reads passed, not {other:?}"),
+    }
+    handle.samples().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
+/// A reset-less head at the wall over a stored reading under it announces the wall under the stored reset and is stored
+/// with it, so a poll taken past that reset naming a later one reads it passed rather than cleared.
+#[tokio::test]
+async fn a_wall_read_by_a_head_that_names_no_reset_is_stored_under_the_stored_reset_and_resets_past_it(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 10 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.5, Some(reset)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    now.store(2_000, Ordering::SeqCst);
+    handle.report(head_reading(2_000, 1.0, None, "r-1")).await;
+    assert!(matches!(
+        next_window_edge(&mut events).await,
+        RouterEvent::WindowSpent { at: 2_000, .. }
+    ));
+    let spent = predicted_reading(&handle, FIVE_HOUR).await;
+    assert_eq!(
+        (spent.utilization, spent.reset),
+        (1.0, Some(reset)),
+        "the wall is stored under the stored reset"
+    );
+    now.store(reset + 1_000, Ordering::SeqCst);
+    handle
+        .report(observed(
+            "a",
+            sample_with(reset + 1_000, FIVE_HOUR, 0.1, Some(15 * HOUR)),
+        ))
+        .await;
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowReset {
+            reset_at,
+            next_reset,
+            ..
+        } => assert_eq!((reset_at, next_reset), (reset, Some(15 * HOUR))),
+        other => panic!("the stored reset reads passed, not {other:?}"),
+    }
+    handle.samples().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
 #[tokio::test]
 async fn a_late_reading_under_the_margin_that_the_fold_drops_leaves_the_wall_announced() {
     use phoebis_routing::RouterEvent;

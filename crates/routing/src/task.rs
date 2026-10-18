@@ -4489,15 +4489,15 @@ impl Task {
         }
     }
 
-    /// The sample as the routing reads it: a plan window's reading within `SPENT_MARGIN` of 1.0 over a stored reading
-    /// at the wall under the same reset cycle is raised to the stored utilization, with its own instant and source and
-    /// the reset it stands under, so a head after a poll at 1.0 neither clears the window nor lets the next poll
-    /// announce the wall again, and a raised head that named no reset keeps the stored one for the next edge. A reading
-    /// under the margin is a real clear and lands as read, so `window_edges` reads the window cleared and forgets the
-    /// announcement, and the next crossing announces anew. A reading that names no reset, taken before the stored reset
-    /// passed, is of that reset's cycle, and a reading of another cycle lands as read. Only a reading newer than the
-    /// stored one counts, since the fold drops any other: an older reading, or one of the stored instant, goes to the
-    /// fold as read.
+    /// The sample as the routing reads it. A plan window's reading that names no reset, taken before the stored
+    /// reading's reset passed, is of that reset's cycle and takes that reset, raised or not, so the reading the fold
+    /// stores keeps it and the next edge reads it passed. A reading within `SPENT_MARGIN` of 1.0 over a stored reading
+    /// at the wall under the same reset cycle is then raised to the stored utilization with its own instant and source,
+    /// so a head after a poll at 1.0 neither clears the window nor lets the next poll announce the wall again. A
+    /// reading under the margin is a real clear and lands at its own utilization, so `window_edges` reads the window
+    /// cleared and forgets the announcement, and the next crossing announces anew. A reading of another cycle lands as
+    /// read. Only a reading newer than the stored one counts, since the fold drops any other: an older reading, or one
+    /// of the stored instant, goes to the fold as read.
     fn held_at_the_wall(
         &self,
         mut sample: UtilizationSample,
@@ -4508,18 +4508,18 @@ impl Task {
             let Some(stored) = stored.get(window) else {
                 continue;
             };
-            if reading.observed_at <= stored.observed_at
-                || stored.utilization < 1.0
-                || reading.utilization >= 1.0
-            {
+            if reading.observed_at <= stored.observed_at {
                 continue;
             }
             let reset = reset_under(Some(stored), reading);
+            reading.reset = reset;
+            if stored.utilization < 1.0 || reading.utilization >= 1.0 {
+                continue;
+            }
             if reading.utilization >= 1.0 - SPENT_MARGIN
                 && same_cycle((stored.reset, stored.observed_at), reset, now, window)
             {
                 reading.utilization = stored.utilization;
-                reading.reset = reset;
             }
         }
         sample
