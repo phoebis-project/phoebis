@@ -379,27 +379,28 @@ the ones this page uses.
 
 ### The windows the router works from
 
-The router judges a subscription account by the 5-hour and the 7-day window every model shares, and a model family's
-own week where the family table names one (its one row is Fable's `seven_day_fable`). A weekly reading the endpoint
-reports under a key the table does not name (such as `seven_day_opus`) is kept, shown and persisted, cools the account
-when a 429 claims it, and feeds no allowance until a row names it. The windows are read from two sources: every
-response head the account answers, and a poll of the usage endpoint every five minutes per account, each account on
-its own phase, backed off alone on a 429 ([Quota samples](statistics.md#quota-samples)). Between readings the router
-predicts: a reading stands until its window's reset, plus the share of the window the router's own requests consumed
-since the reading (priced through the subscription cost model on the account's tier). A window the cost model cannot
-price for the request adds nothing and holds its reading. At the reset it reads zero and counts the requests since, a
-weekly window's reset advanced by whole weeks, the 5-hour window's next reset named by the next reading. A reading that
-names no reset stands until the next reading, and an API-key account's rate-limit buckets stand until their reset or,
-without one, for a minute. The share is priced through the account's stored tier: a tier change is read at the next
-profile refresh, within the hour, and applied when the router reloads, and a tier changed while the router was down is
-read at start. The newest reading per account and window is kept in the registry and loaded at startup, so a restart,
-and an account whose first poll the endpoint refuses, route from the last known windows. The router never fetches usage
-at a selection: use of an account outside the router shows in the next head or poll, so a decision can lag it by up to
-five minutes plus any backoff, and by up to one more interval after a failed poll or a restart. The
-[Quota view](console.md#quota) shows when the poll last asked the endpoint for each OAuth account and how it answered,
-and while an account backs off, since when and when its next attempt comes. The `poll_backoff` condition of the
-[`phoebis_attention` gauge](statistics.md#conditions-and-gauges) holds once an account has backed off for thirty
-minutes.
+The router judges a subscription account by the 5-hour and the 7-day window every model shares, and a model family's own
+week where the family table names one (its one row is Fable's `seven_day_fable`). A weekly reading the endpoint reports
+under a key the table does not name (such as `seven_day_opus`) is kept, shown and persisted, cools the account when a
+429 claims it, and feeds no allowance until a row names it. The windows are read from two sources: every response head
+the account answers, and a poll of the usage endpoint every five minutes per account, each account on its own phase,
+backed off alone on a 429 ([Quota samples](statistics.md#quota-samples)). Between readings the router predicts: a
+reading stands until its window's reset, plus the share of the window the router's own requests consumed since the
+reading (priced through the subscription cost model on the account's tier). A window the cost model cannot price for the
+request adds nothing and holds its reading. At the reset it reads zero and counts the requests since, a weekly window's
+reset advanced by whole weeks, the 5-hour window's next reset named by the next reading. A reading that names no reset,
+taken before the reset of the reading it replaces, stands under that reset and reads zero at it. One taken at or past
+that reset opens the next window and stands until the next reading, as does one with no earlier reset to stand under. An
+API-key account's rate-limit buckets stand until their reset or, without one, for a minute. The share is priced through
+the account's stored tier: a tier change is read at the next profile refresh, within the hour, and applied when the
+router reloads, and a tier changed while the router was down is read at start. The newest reading per account and window
+is kept in the registry and loaded at startup, so a restart, and an account whose first poll the endpoint refuses, route
+from the last known windows. The router never fetches usage at a selection: use of an account outside the router shows
+in the next head or poll, so a decision can lag it by up to five minutes plus any backoff, and by up to one more
+interval after a failed poll or a restart. The [Quota view](console.md#quota) shows when the poll last asked the
+endpoint for each OAuth account and how it answered, and while an account backs off, since when and when its next
+attempt comes. The `poll_backoff` condition of the [`phoebis_attention` gauge](statistics.md#conditions-and-gauges)
+holds once an account has backed off for thirty minutes.
 
 **The projection** Every move and placement reads where each plan window of a subscription account is headed: its
 prediction plus the burn of the sessions pinned to it under the pool's keys, priced per window on the account's tier,
@@ -473,19 +474,19 @@ runway and verdict, and names the siblings the runway kept where it narrowed the
 
 **Spent** The pinned account's allowance for the session's model is spent: the model's own week and both shared windows
 for a model with a week of its own, the shared plan windows otherwise (any of those readings at or above 1.0), while
-that reading stands (until its reset, or until the next reading for one that names none). With `migrate_when_spent` on
-(the default), the pin moves on this request to a sibling that holds allowance in those windows, without waiting for the
-upstream's 429. The siblings that hold allowance pass the destination gate's three orders, so the session lands on one
-it fits when one exists, else on the one its rewrite fits with the longest runway, else on the least bad. When every
-spent window of the account names a reset within `retry_in_place_seconds`, the request waits in place for the reset
-instead of moving cold, once per account, and the decision reads held for the reset. The wait runs to the later of the
-reset and the end of any cooldown the 429 set, so the request does not select again on a cooling account, and it holds
-only when that later instant falls within the bound and the request's own deadline. The router has to know the sibling's
-allowance: an API-key account has no plan window to spend, and any other sibling needs a reading of each of those
-windows, from a head, the poll or the windows kept across restarts, carried forward as the windows passage says. A
-sibling with none stays out of the choice. Under `prefer_plan` a sibling in overage does not receive a spent pin, since
-the overage move would hand the session straight back. With the toggle off, or no sibling holding allowance, the session
-stays.
+that reading stands (until its reset, or for one that names none, until the reset of the reading it replaces when taken
+before that reset, else until the next reading). With `migrate_when_spent` on (the default), the pin moves on this
+request to a sibling that holds allowance in those windows, without waiting for the upstream's 429. The siblings that
+hold allowance pass the destination gate's three orders, so the session lands on one it fits when one exists, else on
+the one its rewrite fits with the longest runway, else on the least bad. When every spent window of the account names a
+reset within `retry_in_place_seconds`, the request waits in place for the reset instead of moving cold, once per
+account, and the decision reads held for the reset. The wait runs to the later of the reset and the end of any cooldown
+the 429 set, so the request does not select again on a cooling account, and it holds only when that later instant falls
+within the bound and the request's own deadline. The router has to know the sibling's allowance: an API-key account has
+no plan window to spend, and any other sibling needs a reading of each of those windows, from a head, the poll or the
+windows kept across restarts, carried forward as the windows passage says. A sibling with none stays out of the choice.
+Under `prefer_plan` a sibling in overage does not receive a spent pin, since the overage move would hand the session
+straight back. With the toggle off, or no sibling holding allowance, the session stays.
 
 **Overage** Under `prefer_plan`, a pin on a subscription account in overage returns to plan quota: warm or cold, it
 moves to a subscription sibling that is not in overage, never to an API-key account. The sibling has to hold allowance
