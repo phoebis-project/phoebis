@@ -6307,6 +6307,52 @@ async fn the_dashboard_the_traffic_and_the_totals_split_the_billed_dollars_from_
     );
 }
 
+/// A guardrail's block is a refusal the operator asked for: the day's error rate and its most common code leave the
+/// blocked requests out, numerator and denominator and the hour's errors alike, and the day's requests keep them.
+#[tokio::test]
+async fn the_dashboard_leaves_the_blocked_requests_out_of_the_rate_and_the_top_code_and_keeps_them_in_the_requests(
+) {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let row = |n: usize, outcome: &str, status: u16, code: Option<&str>| RequestRecord {
+        id: format!("r{n}"),
+        received_at: WEEKDAY_OFF_PEAK - 60_000 + n as i64,
+        key_id: Some("k".into()),
+        pool_id: Some("p".into()),
+        model: "claude-opus-5-5".into(),
+        canonical_model: "claude-opus-5-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        status: Some(status),
+        outcome: outcome.into(),
+        error_code: code.map(String::from),
+        ..RequestRecord::default()
+    };
+    for n in 0..10 {
+        let request = match n {
+            0..6 => row(n, "succeeded", 200, None),
+            6..9 => row(n, "rejected", 400, Some("guardrail_blocked")),
+            _ => row(n, "failed", 502, Some("upstream_error")),
+        };
+        db.insert_request(&request, &[], None).unwrap();
+    }
+    let hour = hour_of(WEEKDAY_OFF_PEAK - 60_000);
+    let day = phoebis_ledger::dashboard(&db, WEEKDAY_OFF_PEAK, &PRICES, &COSTS)
+        .await
+        .unwrap();
+    let point = day
+        .hourly
+        .iter()
+        .find(|h| h.at == hour * 1_000)
+        .expect("the planted hour");
+    assert_eq!(
+        (day.requests_24h, point.requests, point.errors),
+        (10, 10, 1),
+        "the blocked requests count among the requests and not among the hour's errors"
+    );
+    assert_eq!(day.error_rate_24h, Some(1.0 / 7.0));
+    assert_eq!(day.top_error_code.as_deref(), Some("upstream_error"));
+}
+
 /// A probe on a model the revision does not list consumed quota all the same, so its row prices its counts and its
 /// wasted counts at the dearest listed cell of each type of the entry in force, while an inference row on the same
 /// model stays unpriced.

@@ -1,0 +1,83 @@
+{
+  "route": "GET /admin/guardrails",
+  "body": {
+    "guardrails": [
+      {
+        "id": "large-auxiliary",
+        "name": "Large auxiliary requests",
+        "description": "Auxiliary requests that ask for more than 4096 output tokens.",
+        "enabled": true,
+        "mode": "enforce",
+        "action": "block",
+        "conditions": [
+          {
+            "subject": "request_class",
+            "operator": "equals",
+            "value": "auxiliary"
+          },
+          {
+            "subject": "body",
+            "operator": "gt",
+            "value": "4096",
+            "path": "max_tokens"
+          }
+        ],
+        "preset": null,
+        "pools": [],
+        "keys": [
+          {
+            "id": "desktop",
+            "label": "Desktop",
+            "position": 0
+          }
+        ],
+        "revision": 6189767511104,
+        "created_at": 1791721000000,
+        "updated_at": 1791721000000
+      },
+      {
+        "id": "subagent-status-summary",
+        "name": "Subagent status summary",
+        "description": "The status line fork the client sends for each running subagent.",
+        "enabled": true,
+        "mode": "observe",
+        "action": "block",
+        "conditions": [
+          {
+            "subject": "request_class",
+            "operator": "equals",
+            "value": "auxiliary"
+          },
+          {
+            "subject": "body",
+            "operator": "present",
+            "path": "tools"
+          },
+          {
+            "subject": "message",
+            "operator": "matches",
+            "value": "^Describe your most recent action in 3-5 words",
+            "selector": "last_user"
+          }
+        ],
+        "preset": {
+          "id": "subagent-status-summary",
+          "version": 1,
+          "current_version": 1,
+          "customized": false
+        },
+        "pools": [
+          {
+            "id": "main",
+            "label": "Main",
+            "position": 0
+          }
+        ],
+        "keys": [],
+        "revision": 6189767511104,
+        "created_at": 1791721000000,
+        "updated_at": 1791721000000
+      }
+    ]
+  }
+}

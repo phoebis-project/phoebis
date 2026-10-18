@@ -314,6 +314,10 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// newest of each window for the meter's drift, so a cost model whose figures stray from the upstream's readings is
 /// seen. The table starts empty, and the first fold reconciles every completed window of the trailing 30 days whose
 /// readings and requests the ledger still holds.
+///
+/// Version 39: the guardrail that blocked a request on its row and one child row per guardrail that matched it, with
+/// the request's instant copied so the index answers the range without a join. Most rows carry neither, so the column
+/// is nullable and the table starts empty.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -977,5 +981,11 @@ ALTER TABLE rollups_hourly ADD COLUMN kept_warm_1h_tokens INTEGER NOT NULL DEFAU
   requests INTEGER NOT NULL, estimated INTEGER NOT NULL, computed_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, window, window_end)
 );",
+    ),
+    (
+        39,
+        "ALTER TABLE requests ADD COLUMN guardrail_id TEXT;
+CREATE TABLE request_guardrails (request_id TEXT NOT NULL, guardrail_id TEXT NOT NULL, position INTEGER NOT NULL, blocked INTEGER NOT NULL, received_at INTEGER NOT NULL, PRIMARY KEY (request_id, guardrail_id));
+CREATE INDEX request_guardrails_received ON request_guardrails (received_at, guardrail_id, blocked);",
     ),
 ];

@@ -158,6 +158,19 @@ pub(crate) struct RequestSummary {
     /// null for a body that went without one and on a row from before the column existed.
     #[schema(example = "client")]
     pub diagnostics_source: Option<String>,
+    /// The guardrail that blocked the request, null where none did.
+    pub guardrail_id: Option<String>,
+    /// Every guardrail that matched, in evaluation order, observed or blocking.
+    pub guardrails: Vec<GuardrailMatchView>,
+}
+
+/// A guardrail that matched a request: its id, its place in the evaluation order and whether it blocked.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GuardrailMatchView {
+    pub id: String,
+    pub position: u32,
+    pub blocked: bool,
 }
 
 /// Each key as the request sent it.
@@ -478,6 +491,16 @@ pub(crate) fn request_summary(
             .as_deref()
             .and_then(|h| serde_json::from_str::<Value>(h).ok()),
         diagnostics_source: r.diagnostics_source.clone(),
+        guardrail_id: r.guardrail_id.clone(),
+        guardrails: r
+            .guardrails
+            .iter()
+            .map(|m| GuardrailMatchView {
+                id: m.guardrail_id.clone(),
+                position: m.position,
+                blocked: m.blocked,
+            })
+            .collect(),
     }
 }
 
@@ -748,6 +771,8 @@ pub(crate) struct RequestsQuery {
     pub efforts: Option<String>,
     /// A comma list of classes as the rollups fold them: the class, `-`, `other`.
     pub request_classes: Option<String>,
+    /// A comma list of guardrail ids, `-` for a request no guardrail matched.
+    pub guardrails: Option<String>,
     /// A comma list of `fast`, `standard`, read off the serving attempt, else `fast` for a request that asked for
     /// it and `standard` otherwise.
     pub speeds: Option<String>,
@@ -821,6 +846,7 @@ pub(crate) async fn list(
         cache_miss_reasons: list_param(&q, "cache_miss_reasons"),
         efforts: list_param(&q, "efforts"),
         request_classes: list_param(&q, "request_classes"),
+        guardrails: list_param(&q, "guardrails"),
     };
     if !phoebis_ledger::patterns_within_bounds(filter.user_agent.as_slice())
         || !phoebis_ledger::patterns_within_bounds(filter.client.as_slice())

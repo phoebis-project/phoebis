@@ -44,6 +44,8 @@ fn observed(id: &str, key: &str, pool: &str) -> Event {
         fork: phoebis_bus::Fork::default(),
         presented_retired: false,
         rotation_at: None,
+        guardrail_id: None,
+        guardrails: Vec::new(),
         received_at: 0,
     })
 }

@@ -133,12 +133,12 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "9DTXh5RA",
+            "prefix": "rKbKVPL_",
             "enabled": true
           }
         ],
         "status": "active",
-        "requests_24h": 7,
+        "requests_24h": 8,
         "cost_24h": 0.024900000000000005,
         "billed_24h": 0.0107,
         "equivalent_24h": {
@@ -449,8 +449,8 @@
           },
           {
             "at": 1791716400000,
-            "requests": 3,
-            "failed": 1,
+            "requests": 4,
+            "failed": 2,
             "tokens": 7200,
             "cost_usd": 0.0142,
             "billed_usd": 0.0071,
@@ -472,6 +472,15 @@
               "seven_day": 8.146666666666666e-6
             },
             "estimated": true
+          }
+        ],
+        "guardrails": [
+          {
+            "id": "subagent-status-summary",
+            "name": "Subagent status summary",
+            "mode": "observe",
+            "enabled": true,
+            "position": 0
           }
         ],
         "warnings": [

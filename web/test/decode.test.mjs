@@ -1484,7 +1484,7 @@ test("a refusal's record decodes its pin reason as not looked up", () => {
 test('request rows fold into analytics groups with the same sums the routes answer', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   const [all] = d.foldGroups(page.requests, 'all');
-  assert.equal(all.requests, 6);
+  assert.equal(all.requests, 7);
   assert.equal(all.succeeded, 4);
   assert.equal(all.failed, 1, 'a stream that ended short is not a failure');
   assert.equal(all.incomplete, 1);
@@ -1901,7 +1901,7 @@ test('a session fold keeps two holders of one key id apart and labels the earlie
   const groups = inZone('UTC', () => d.foldGroups(rows, 'key'));
   assert.deepEqual(
     groups.map((g) => [g.key, g.label, g.requests]),
-    [[`desktop@${live.keyGeneration}`, 'desktop', 5], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created Oct 11, 2026, 12:15)', 1]],
+    [[`desktop@${live.keyGeneration}`, 'desktop', 6], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created Oct 11, 2026, 12:15)', 1]],
     'the key a group carries is the lifetime the requests route selects by',
   );
   assert.deepEqual(d.foldGroups([{ ...live, keyGeneration: 0, keyId: null }], 'key').map((g) => [g.key, g.label]), [['-@0', 'unattributed']]);
@@ -1927,12 +1927,12 @@ test('a session view folds every page the cursor names', () => {
   const load = async (cursor) => { calls += 1; return cursor === undefined ? pages[0] : pages[1]; };
   return d.loadSessionRequests(load, 20).then(({ partial, requests }) => {
     assert.equal(calls, 2);
-    assert.equal(requests.length, 6, 'both pages folded');
+    assert.equal(requests.length, 7, 'both pages folded');
     assert.equal(partial, false);
     return d.loadSessionRequests(async () => ({ nextCursor: 'more', requests: page.requests }), 2);
   }).then(({ partial, requests }) => {
     assert.equal(partial, true, 'the page bound marks the result partial');
-    assert.equal(requests.length, 12);
+    assert.equal(requests.length, 14);
   });
 });
 
@@ -2430,4 +2430,70 @@ test('an attention item with a spelling the console does not know reads the wors
     ['pool_exhausted', 'pool', null, ['all'], '1970-01-01T00:00:00.000Z', {}],
   );
   assert.equal(d.decodeAttention({ ...fixture('attention').items[0], link: { id: 'main' } }).link, null, 'a link that names no page opens nothing');
+});
+
+test('a_guardrail_decodes_with_its_conditions_preset_and_attachments', () => {
+  const raw = fixture('guardrail_show');
+  const g = d.decodeGuardrail(raw);
+  assert.deepEqual([g.id, g.enabled, g.mode, g.action, g.keys], ['subagent-status-summary', true, raw.mode, 'block', []]);
+  assert.equal(typeof g.name, 'string');
+  assert.equal(typeof g.description, 'string');
+  assert.deepEqual(g.preset, { currentVersion: raw.preset.current_version, customized: raw.preset.customized, id: raw.preset.id, version: raw.preset.version });
+  assert.deepEqual(g.pools, [{ id: 'main', label: 'Main', position: 0 }]);
+  assert.ok(isIso(g.createdAt) && isIso(g.updatedAt) && typeof g.revision === 'number');
+  assert.deepEqual(g.conditions[0], { name: raw.conditions[0].name, operator: raw.conditions[0].operator, path: raw.conditions[0].path, selector: raw.conditions[0].selector, subject: raw.conditions[0].subject, value: raw.conditions[0].value }, 'the route leaves an absent member out');
+  assert.deepEqual(g.conditions.map((c) => Object.keys(c).sort()), Array.from({ length: raw.conditions.length }, () => ['name', 'operator', 'path', 'selector', 'subject', 'value']), 'every condition reads the same four optional keys');
+  assert.ok(raw.conditions.length >= 3, `the captured preset holds ${raw.conditions.length} conditions, and the line below reads the path of the second and the selector of the third`);
+  assert.deepEqual([g.conditions[1].path, g.conditions[2].selector], [raw.conditions[1].path, raw.conditions[2].selector]);
+  const [large] = fixture('guardrails').guardrails.map(d.decodeGuardrail);
+  assert.deepEqual([large.id, large.mode, large.preset, large.keys], ['large-auxiliary', 'enforce', null, [{ id: 'desktop', label: 'Desktop', position: 0 }]]);
+  // A list can skip a position after a detach, so the decoder orders by it and keeps the values as sent.
+  const out = d.decodeGuardrail({ ...fixture('guardrail_show'), mode: 'audit', pools: [{ id: 'b', label: 'B', position: 3 }, { id: 'a', label: 'A', position: 0 }], preset: undefined });
+  assert.deepEqual([out.mode, out.preset, out.pools.map((p) => [p.id, p.position])], ['observe', null, [['a', 0], ['b', 3]]], "an unknown mode reads the route's default and a missing stamp none");
+  const odd = d.decodeCondition({ operator: 'near', selector: 'middle', subject: 'size' });
+  assert.deepEqual([odd.subject, odd.operator, odd.selector], ['agent_type', 'absent', 'any'], "a word outside its set reads the set's first");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(d.encodeGuardrail({ conditions: [{ name: undefined, operator: 'present', path: 'tools', selector: undefined, subject: 'body', value: undefined }], description: '', enabled: true, mode: 'observe', name: 'Forks', pools: ['all'], presetVersion: 2 }))),
+    { conditions: [{ operator: 'present', path: 'tools', subject: 'body' }], description: '', enabled: true, mode: 'observe', name: 'Forks', pools: ['all'], preset_version: 2 },
+    'the body carries the members the input defines and the route spells',
+  );
+  assert.deepEqual(Object.keys(JSON.parse(JSON.stringify(d.encodeGuardrail({ enabled: false })))), ['enabled'], 'a patch sends the members it changes alone');
+});
+
+test('the_presets_the_test_answer_and_the_counts_decode', () => {
+  const raws = fixture('guardrail_presets').presets;
+  const presets = raws.map(d.decodeGuardrailPreset);
+  assert.deepEqual(presets.map((p) => p.id), ['away-recap', 'prompt-suggestion', 'subagent-status-summary'], "the route's order by id");
+  const raw = raws.find((p) => p.id === 'subagent-status-summary');
+  const preset = presets.find((p) => p.id === 'subagent-status-summary');
+  assert.deepEqual(
+    [preset.version, preset.suggestedMode, preset.conditions.length, preset.name, preset.description, preset.measuredOn],
+    [raw.version, raw.suggested_mode, raw.conditions.length, raw.name, raw.description, raw.measured_on],
+  );
+  const run = d.decodeGuardrailTest(fixture('guardrail_test'));
+  assert.deepEqual(run.sample, { keyId: null, limit: 50, poolId: 'main', windowHours: 72 });
+  assert.deepEqual(run.totals, { indeterminate: 0, matched: 0, sampled: 1, unmatched: 1 });
+  assert.deepEqual(run.requests, [{ condition: 0, id: 'r-captured', receivedAt: new Date(fixture('guardrail_test').requests[0].received_at).toISOString(), verdict: 'unmatched' }]);
+  assert.equal(d.decodeGuardrailTest({ ...fixture('guardrail_test'), requests: [{ condition: null, id: 'x', received_at: 0, verdict: 'maybe' }] }).requests[0].verdict, 'indeterminate', 'a verdict outside the three reads undecided');
+  const counts = d.decodeGuardrailCounts(fixture('analytics_guardrails'));
+  assert.ok(isIso(counts.from) && isIso(counts.to));
+  assert.deepEqual(counts.guardrails.map((c) => [c.id, c.observed, c.blocked, c.blockedBytes]), [['large-auxiliary', 0, 1, 48213], ['subagent-status-summary', 2, 0, 0]]);
+  assert.equal(d.decodeGuardrailCounts({ ...fixture('analytics_guardrails'), guardrails: [{ id: 'gone', name: null }] }).guardrails[0].name, null, 'a guardrail deleted since it matched has no name');
+});
+
+test('a_pool_and_a_key_decode_their_guardrail_lists_and_a_request_its_matches', () => {
+  assert.deepEqual(d.decodePool(fixture('pools').pools[0]).guardrails, [{ enabled: true, id: 'subagent-status-summary', mode: 'observe', name: 'Subagent status summary', position: 0 }]);
+  const key = d.decodeKey(fixture('keys').keys[0]);
+  assert.deepEqual(key.poolGuardrails.map((r) => r.id), ['subagent-status-summary']);
+  assert.deepEqual(key.guardrails.map((r) => [r.id, r.mode, r.position]), [['large-auxiliary', 'enforce', 0]]);
+  assert.deepEqual([d.decodeKey({}).guardrails, d.decodeKey({}).poolGuardrails, d.decodePool({}).guardrails], [[], [], []], 'a row without the lists reads none');
+  const rows = fixture('requests').requests.map(d.decodeRequest);
+  const blocked = rows.find((r) => r.id === 'r-blocked');
+  assert.deepEqual([blocked.guardrailId, blocked.guardrails], ['large-auxiliary', [{ blocked: false, id: 'subagent-status-summary', position: 0 }, { blocked: true, id: 'large-auxiliary', position: 1 }]]);
+  assert.deepEqual([rows[0].guardrailId, rows[0].guardrails], [null, []]);
+  const pool = d.decodePool(fixture('pools').pools[0]);
+  assert.equal('guardrails' in d.encodePool({ ...pool, guardrails: undefined, status: 'active' }), false, 'a pool body leaves the list out unless the group changed');
+  assert.deepEqual(d.encodePool({ ...pool, guardrails: ['b', 'a'], status: 'active' }).guardrails, ['b', 'a']);
+  assert.deepEqual(d.encodeKey({ ...key, guardrails: ['a'] }).guardrails, ['a']);
+  assert.equal('guardrails' in d.encodeKey({ ...key, guardrails: undefined }), false);
 });

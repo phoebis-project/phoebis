@@ -11,6 +11,7 @@ version.workspace = true
 debug-hooks = []
 
 [dependencies]
+phoebis-guardrails = { path = "../guardrails" }
 phoebis-oauth = { path = "../oauth" }
 phoebis-store = { path = "../store" }
 rand = { workspace = true }

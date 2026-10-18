@@ -245,6 +245,11 @@ export const IconShield = (p: Props) => (
     <path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6l-8-3Z" />
   </svg>
 );
+export const IconFunnel = (p: Props) => (
+  <svg {...base(p)}>
+    <path d="M3 4h18l-7 8.5V19l-4 2v-8.5L3 4Z" />
+  </svg>
+);
 export const IconServer = (p: Props) => (
   <svg {...base(p)}>
     <rect x="3" y="4" width="18" height="6" rx="1.5" />

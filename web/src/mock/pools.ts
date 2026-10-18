@@ -130,6 +130,7 @@ const UNTIL_DRAWN: Pick<PoolSeed, 'billed24h' | 'cost24h' | 'equivalent24h' | 'e
 const POOL_ROWS: PoolSeed[] = [
   {
     ...POOL_SAMPLE,
+    guardrails: [],
     id: 'all',
     name: 'all',
     status: 'degraded',
@@ -206,6 +207,7 @@ const POOL_ROWS: PoolSeed[] = [
   },
   {
     ...POOL_SAMPLE,
+    guardrails: [],
     id: 'jobs',
     name: 'jobs',
     // Its one member has spent its daily budget, which leaves the pool nothing to route to until the day ends.
@@ -258,6 +260,7 @@ const POOL_ROWS: PoolSeed[] = [
   },
   {
     ...POOL_SAMPLE,
+    guardrails: [],
     // A subscription member and the API-key annex a round moves studio's sessions to, behind a key that admits any
     // client.
     id: 'work',
@@ -312,6 +315,8 @@ export const poolById = new Map(POOLS.map((p) => [p.id, p]));
 export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
+    guardrails: [],
+    poolGuardrails: [],
     id: 'desktop',
     autoModeServer: null,
     name: 'desktop',
@@ -339,6 +344,8 @@ export const KEYS: ApiKey[] = [
   },
   {
     ...KEY_SAMPLE,
+    guardrails: [],
+    poolGuardrails: [],
     id: 'laptop',
     autoModeServer: null,
     name: 'laptop',
@@ -368,6 +375,8 @@ export const KEYS: ApiKey[] = [
   },
   {
     ...KEY_SAMPLE,
+    guardrails: [],
+    poolGuardrails: [],
     id: 'batch',
     autoModeServer: null,
     name: 'batch',
@@ -394,6 +403,8 @@ export const KEYS: ApiKey[] = [
   },
   {
     ...KEY_SAMPLE,
+    guardrails: [],
+    poolGuardrails: [],
     id: 'ci',
     autoModeServer: null,
     name: 'ci',
@@ -423,6 +434,8 @@ export const KEYS: ApiKey[] = [
   },
   {
     ...KEY_SAMPLE,
+    guardrails: [],
+    poolGuardrails: [],
     id: 'notebook',
     // Off under a pool that is off, so the key dialog reads an explicit key value beside the pool's.
     autoModeServer: false,

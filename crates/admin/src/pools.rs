@@ -12,13 +12,15 @@ use phoebis_keepalive::KeepalivePolicy;
 use phoebis_relay::{CacheTtl, CacheTtlPolicy};
 use phoebis_routing::{MemberSpend, OverageEvidence, RegistrySnapshot};
 use phoebis_store::{
-    stamp_token, AccountRow, Affinity, AffinityMode, ApiKeyRow, CooldownRow, Failover, MemberWrite,
-    OveragePolicy, PinRow, PoolMember, PoolRow, ReturnToPlan, SessionPlacement, Shedding, SlowDown,
-    StoreError, Strategy, SubagentPlacement, WarmSessions,
+    stamp_token, AccountRow, Affinity, AffinityMode, ApiKeyRow, AttachmentSubject, CooldownRow,
+    Failover, MemberWrite, OveragePolicy, PinRow, PoolMember, PoolRow, ReturnToPlan,
+    SessionPlacement, Shedding, SlowDown, StoreError, Strategy, SubagentPlacement, WarmSessions,
+    GUARDRAIL_BOUND,
 };
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
+use crate::guardrails::{distinct_ids, AttachmentIndex, GuardrailRef};
 use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::routes::{
     double_option, failure, failure_with_code, fence_token, present, reload_or_refuse,
@@ -219,6 +221,10 @@ pub(crate) struct PoolInput {
     /// Default `20000`.
     #[serde(default)]
     min_shared_prefix_tokens: Option<u64>,
+    /// The pool's guardrail ids in the order its keys run them, replacing the pool's list whole, on an edit alone: a
+    /// new pool starts with none, so a create refuses the field.
+    #[serde(default)]
+    guardrails: Option<Vec<String>>,
     /// Optional, the `revision` the row was read at, which the edit reads. A create accepts it and ignores it, since a
     /// create has no row to fence on. The write lands only while the pool still carries the `updated_at` the route
     /// read, or the `revision` the body sent here, so an edit that raced another write to the pool, a `PUT` of its
@@ -674,7 +680,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     request_body(content = PoolInput, content_type = "application/json"),
     responses(
         (status = 201, description = "The pool, the same shape as a row of `GET /admin/pools`.", body = Pool),
-        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `id and label are required`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `strategy must be pace, priority, or round_robin`\n- `affinity_ttl_seconds is 0 or at least 60`\n- `overage_policy must be prefer_plan, allow, or never`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `keepalive is not a policy object: {detail}`: the keepalive policy's own sentence for a bad shape, or for a field the policy does not hold (`keepalive is not a policy object: unknown field ...`)\n- `keepalive.{field} must be between {min} and {max}, not {value}`: an out-of-range field (`keepalive.max_parked_seconds must be between 60 and 604800, not 59`)\n- `cache_ttl is not a policy object: {detail}`: the cache TTL policy's own sentence for a bad shape or an unknown field\n- `{set}[].model must be a model id`: an empty model id, `{set}` naming the rule set's list (`cache_ttl.plan.models` or `cache_ttl.metered.models`)\n- `{set} lists {model} twice`: a model listed twice\n- `cache_diagnostics must be true or false`\n- `auto_mode_server must be true or false`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed`\n- `burn_average_seconds is between 600 and 7200`\n- `shed_cap is between 0.1 and 1.0`\n- `shed_dwell_seconds is between 300 and 7200`\n- `window_ceiling is between 0.5 and 1.0`\n- `warm_sessions must be always, never, or when_needed`\n- `retry_in_place_seconds is 0 to 300`\n- `in_flight_cap is at least 1`\n- `overage_move_grace_minutes is 0 to 300`\n- `wind_down_minutes is at most 10080 (one week)`\n- `return_to_plan must be always, when_cold, or never`\n- `return_to_plan_dwell_seconds is between 0 and 86400`\n- `slow_down_hold_seconds is between 1 and 300`\n- `slow_down_stretch_seconds is between 60 and 18000`\n- `affinity_mode must be always or when_cached`\n- `subagent_placement must be by_cohort, by_strategy, or with_main`\n- `session_placement must be by_strategy or by_warm_prefix`\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `id and label are required`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `strategy must be pace, priority, or round_robin`\n- `affinity_ttl_seconds is 0 or at least 60`\n- `overage_policy must be prefer_plan, allow, or never`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `keepalive is not a policy object: {detail}`: the keepalive policy's own sentence for a bad shape, or for a field the policy does not hold (`keepalive is not a policy object: unknown field ...`)\n- `keepalive.{field} must be between {min} and {max}, not {value}`: an out-of-range field (`keepalive.max_parked_seconds must be between 60 and 604800, not 59`)\n- `cache_ttl is not a policy object: {detail}`: the cache TTL policy's own sentence for a bad shape or an unknown field\n- `{set}[].model must be a model id`: an empty model id, `{set}` naming the rule set's list (`cache_ttl.plan.models` or `cache_ttl.metered.models`)\n- `{set} lists {model} twice`: a model listed twice\n- `cache_diagnostics must be true or false`\n- `auto_mode_server must be true or false`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed`\n- `burn_average_seconds is between 600 and 7200`\n- `shed_cap is between 0.1 and 1.0`\n- `shed_dwell_seconds is between 300 and 7200`\n- `window_ceiling is between 0.5 and 1.0`\n- `warm_sessions must be always, never, or when_needed`\n- `retry_in_place_seconds is 0 to 300`\n- `in_flight_cap is at least 1`\n- `overage_move_grace_minutes is 0 to 300`\n- `wind_down_minutes is at most 10080 (one week)`\n- `return_to_plan must be always, when_cold, or never`\n- `return_to_plan_dwell_seconds is between 0 and 86400`\n- `slow_down_hold_seconds is between 1 and 300`\n- `slow_down_stretch_seconds is between 60 and 18000`\n- `affinity_mode must be always or when_cached`\n- `subagent_placement must be by_cohort, by_strategy, or with_main`\n- `session_placement must be by_strategy or by_warm_prefix`\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`\n- `guardrails applies on edit`: a new pool starts with no guardrail", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "`account {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "account {id} not found"})),
         (status = 409, description = "- `a pool with this id exists`\n- `account {id} is a member of pool {pool}`, with nothing written\n- `members name account {id} twice`, with nothing written", body = ErrorBody, example = json!({"error": "a pool with this id exists"})),
         (status = 500, response = StorageFailure),
@@ -685,6 +691,10 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     let Ok(input) = serde_json::from_slice::<PoolInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
     };
+    // A new pool starts with no guardrail, so the create's transaction writes the pool and its members alone.
+    if input.guardrails.is_some() {
+        return failure(StatusCode::BAD_REQUEST, "guardrails applies on edit");
+    }
     let (Some(id), Some(_)) = (&input.id, &input.label) else {
         return failure(StatusCode::BAD_REQUEST, "id and label are required");
     };
@@ -778,8 +788,8 @@ async fn publish_created(state: &AdminState, row: &PoolRow) -> Response {
     request_body(content = PoolInput, content_type = "application/json"),
     responses(
         (status = 200, description = "The pool, the same shape as a row of `GET /admin/pools`.", body = Pool),
-        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `strategy must be pace, priority, or round_robin`\n- `affinity_ttl_seconds is 0 or at least 60`\n- `overage_policy must be prefer_plan, allow, or never`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `keepalive is not a policy object: {detail}`: the keepalive policy's own sentence for a bad shape, or for a field the policy does not hold (`keepalive is not a policy object: unknown field ...`)\n- `keepalive.{field} must be between {min} and {max}, not {value}`: an out-of-range field (`keepalive.max_parked_seconds must be between 60 and 604800, not 59`)\n- `cache_ttl is not a policy object: {detail}`: the cache TTL policy's own sentence for a bad shape or an unknown field\n- `{set}[].model must be a model id`: an empty model id, `{set}` naming the rule set's list (`cache_ttl.plan.models` or `cache_ttl.metered.models`)\n- `{set} lists {model} twice`: a model listed twice\n- `cache_diagnostics must be true or false`\n- `auto_mode_server must be true or false`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed`\n- `burn_average_seconds is between 600 and 7200`\n- `shed_cap is between 0.1 and 1.0`\n- `shed_dwell_seconds is between 300 and 7200`\n- `window_ceiling is between 0.5 and 1.0`\n- `warm_sessions must be always, never, or when_needed`\n- `retry_in_place_seconds is 0 to 300`\n- `in_flight_cap is at least 1`\n- `overage_move_grace_minutes is 0 to 300`\n- `wind_down_minutes is at most 10080 (one week)`\n- `return_to_plan must be always, when_cold, or never`\n- `return_to_plan_dwell_seconds is between 0 and 86400`\n- `slow_down_hold_seconds is between 1 and 300`\n- `slow_down_stretch_seconds is between 60 and 18000`\n- `affinity_mode must be always or when_cached`\n- `subagent_placement must be by_cohort, by_strategy, or with_main`\n- `session_placement must be by_strategy or by_warm_prefix`\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
-        (status = 404, description = "- `pool not found`\n- `account {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "pool not found"})),
+        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `strategy must be pace, priority, or round_robin`\n- `affinity_ttl_seconds is 0 or at least 60`\n- `overage_policy must be prefer_plan, allow, or never`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `keepalive is not a policy object: {detail}`: the keepalive policy's own sentence for a bad shape, or for a field the policy does not hold (`keepalive is not a policy object: unknown field ...`)\n- `keepalive.{field} must be between {min} and {max}, not {value}`: an out-of-range field (`keepalive.max_parked_seconds must be between 60 and 604800, not 59`)\n- `cache_ttl is not a policy object: {detail}`: the cache TTL policy's own sentence for a bad shape or an unknown field\n- `{set}[].model must be a model id`: an empty model id, `{set}` naming the rule set's list (`cache_ttl.plan.models` or `cache_ttl.metered.models`)\n- `{set} lists {model} twice`: a model listed twice\n- `cache_diagnostics must be true or false`\n- `auto_mode_server must be true or false`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed`\n- `burn_average_seconds is between 600 and 7200`\n- `shed_cap is between 0.1 and 1.0`\n- `shed_dwell_seconds is between 300 and 7200`\n- `window_ceiling is between 0.5 and 1.0`\n- `warm_sessions must be always, never, or when_needed`\n- `retry_in_place_seconds is 0 to 300`\n- `in_flight_cap is at least 1`\n- `overage_move_grace_minutes is 0 to 300`\n- `wind_down_minutes is at most 10080 (one week)`\n- `return_to_plan must be always, when_cold, or never`\n- `return_to_plan_dwell_seconds is between 0 and 86400`\n- `slow_down_hold_seconds is between 1 and 300`\n- `slow_down_stretch_seconds is between 60 and 18000`\n- `affinity_mode must be always or when_cached`\n- `subagent_placement must be by_cohort, by_strategy, or with_main`\n- `session_placement must be by_strategy or by_warm_prefix`\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`\n- `guardrails lists {id} twice`\n- `key {id} would hold more than 64 guardrails`, with nothing written\n- `pool {id} would hold more than 64 guardrails`, with nothing written", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 404, description = "- `pool not found`\n- `account {id} not found`, with nothing written\n- `guardrail {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "pool not found"})),
         // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
         // attribute after it fails to parse.
         (status = 409, description = "- `account {id} is a member of pool {pool}`, with nothing written\n- `members name account {id} twice`, with nothing written\n- `the pool changed while it was being edited, so reload and try again`, which carries the `stale_edit` code",
@@ -821,19 +831,42 @@ pub(crate) async fn patch(
         },
         None => None,
     };
+    if let Some(guardrails) = &input.guardrails {
+        if let Err(refusal) = distinct_ids("guardrails", guardrails) {
+            return refusal;
+        }
+    }
     if read_at != row.updated_at {
         return failure_with_code(StatusCode::CONFLICT, "stale_edit", STALE_EDIT);
     }
-    match state
-        .store
-        .update_pool_with_members(&row, row.updated_at, writes.as_deref(), ACTOR)
-    {
+    match state.store.update_pool_with_members_and_guardrails(
+        &row,
+        row.updated_at,
+        writes.as_deref(),
+        input.guardrails.as_deref(),
+        ACTOR,
+    ) {
         Ok(at) => row.updated_at = at,
         Err(StoreError::Stale) => {
             return failure_with_code(StatusCode::CONFLICT, "stale_edit", STALE_EDIT)
         }
         Err(StoreError::PoolNotFound(_)) => {
             return failure(StatusCode::NOT_FOUND, "pool not found")
+        }
+        Err(StoreError::GuardrailNotFound(id)) => {
+            return failure(StatusCode::NOT_FOUND, &format!("guardrail {id} not found"))
+        }
+        Err(StoreError::PoolGuardrailBound(id)) => {
+            return failure(
+                StatusCode::BAD_REQUEST,
+                &format!("pool {id} would hold more than {GUARDRAIL_BOUND} guardrails"),
+            )
+        }
+        Err(StoreError::KeyGuardrailBound(id)) => {
+            return failure(
+                StatusCode::BAD_REQUEST,
+                &format!("key {id} would hold more than {GUARDRAIL_BOUND} guardrails"),
+            )
         }
         Err(StoreError::AccountNotFound(id)) => {
             return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"))
@@ -1052,6 +1085,8 @@ pub(crate) struct Pool {
     /// `requests` sum to `requests_24h`.
     #[schema(value_type = Vec<crate::openapi::TrafficBucketView>)]
     pub traffic_24h: Vec<phoebis_ledger::TrafficBucket>,
+    /// The pool's guardrails in position order, which every key of the pool runs ahead of its own.
+    pub guardrails: Vec<GuardrailRef>,
     /// The static checks that hold on the pool's settings, sorted by `code`, empty when none does.
     pub warnings: Vec<PoolWarning>,
 }
@@ -1311,6 +1346,7 @@ pub(crate) struct PoolContext {
     cooldowns: Vec<CooldownRow>,
     /// The day's request totals per pool.
     day: BTreeMap<String, phoebis_ledger::Totals>,
+    guardrails: AttachmentIndex,
     keys: Vec<ApiKeyRow>,
     members: Vec<PoolMember>,
     now: i64,
@@ -1327,6 +1363,7 @@ pub(crate) struct PoolContext {
 /// of the router for each of its tables, in the shape of the account list's context.
 pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, StoreError> {
     let registry = state.store.load_registry()?;
+    let guardrails = AttachmentIndex::from_load(&registry);
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
     // The end of the current hour rather than `hour_ceil(now)`, which is `now` itself on the hour's first millisecond
@@ -1352,6 +1389,7 @@ pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, Stor
         accounts: registry.accounts,
         cooldowns: state.router.cooldowns().await.unwrap_or_default(),
         day,
+        guardrails,
         keys: registry.keys,
         members: registry.members,
         now,
@@ -1570,6 +1608,9 @@ pub(crate) async fn pool_json_from(
         estimated_24h: day.get(&row.id).is_some_and(|t| t.estimated),
         active_pins,
         traffic_24h: traffic,
+        guardrails: context
+            .guardrails
+            .refs_for(&AttachmentSubject::Pool(row.id.clone())),
         warnings: warnings_of(row, cohort),
     }
 }
@@ -1698,6 +1739,7 @@ mod tests {
         estimated_24h: bool,
         active_pins: usize,
         traffic_24h: Vec<TrafficBucketView>,
+        guardrails: Vec<crate::guardrails::GuardrailRef>,
         warnings: Vec<super::PoolWarning>,
     }
 

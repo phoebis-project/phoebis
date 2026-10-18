@@ -37,12 +37,13 @@ pub(crate) struct Dashboard {
     /// Whether a plan-funded row of the window priced at its model tier's latest weight, for a model the cost model
     /// does not weight.
     pub estimated_24h: bool,
-    /// The requests that did not succeed over the requests, null with no request.
+    /// The requests that did not succeed over the requests, both without the requests a guardrail blocked, null
+    /// with none left.
     pub error_rate_24h: Option<f64>,
-    /// The window's most frequent error code, null with none.
+    /// The window's most frequent error code, `guardrail_blocked` left out, null with none.
     pub top_error_code: Option<String>,
     /// The window's 24 hours, oldest first: each hour's start as `at`, and its `billed`, `cost`, `equivalent`,
-    /// `errors` (the requests that did not succeed), `requests` and `tokens`.
+    /// `errors` (the requests that did not succeed, the ones a guardrail blocked left out), `requests` and `tokens`.
     pub hourly: Vec<HourPointView>,
     /// One row per recent request and attempt.
     pub recent: Vec<RequestSummary>,

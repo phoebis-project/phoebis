@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // zone, and `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtEquivalent, fmtHours, fmtHourTick, fmtMiB, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, instant, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
+const { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtBytes, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtEquivalent, fmtHours, fmtHourTick, fmtMiB, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, instant, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
 
 test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
   const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };
@@ -246,4 +246,13 @@ test('a byte count reads in MiB, a whole number without decimals and any other t
   assert.equal(fmtMiB(268_435_456), '256 MiB');
   assert.equal(fmtMiB(1_572_864), '1.5 MiB');
   assert.equal(fmtMiB(0), '0 MiB');
+});
+
+test('a byte count reads in the largest binary unit it reaches, a whole figure without decimals and any other to one decimal', () => {
+  assert.equal(fmtBytes(0), '0 B');
+  assert.equal(fmtBytes(1023), '1023 B', 'below a KiB the bytes read whole');
+  assert.equal(fmtBytes(1024), '1 KiB');
+  assert.equal(fmtBytes(1_048_576), '1 MiB');
+  assert.equal(fmtBytes(1_572_864), '1.5 MiB');
+  assert.equal(fmtBytes(1_073_741_824), '1 GiB');
 });

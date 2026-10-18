@@ -53,20 +53,22 @@ pub use query::{apply_filter, breakdown, burn_rows, burn_series, series};
 pub mod test_tables;
 pub use query::{
     breakdown_paged, bucket_seconds, burn_groups_paged, burn_series_over, dashboard,
-    decision_record, group_of, held_series, hour_ceil, hourly_window_samples, key_request_totals,
-    latest_extra_usage, latest_quota, list_requests, list_routing_log, literal_like, member_spends,
-    moves_by_reason, moves_by_reason_and_fit, names_one_account, parked_count, parked_summary,
-    parse_range, pin_migrations_by_reason, placements, pool_traffic, recent_events_of_kind,
-    recent_gaps, request_by_id, request_events, request_totals, revision_spans, rewrite_series,
-    routing_conditions, series_paged,
-    session_activity, session_burn_series, session_identities, BudgetedMember, BurnPoint,
-    CacheEquivalent, CacheFacts, CacheShare, Dashboard, DecisionListRow, Equivalent, EventListRow,
-    FundingFilter, GroupRow, HourlyWindowSample, LiveKeys, ParkedSummary, PlacementRow,
-    ProbeCounts, ProbeEquivalent, ProbeShare, RequestFilter, RollupFilter, RoutingCondition,
-    RoutingLogCursor, RoutingLogFilter, RoutingLogPage, RoutingLogRow, SeriesFilter, SeriesPoint,
-    SessionActivity, SessionIdentity, SharePricing, SharedEquivalent, Span, Totals, TrafficBucket,
-    DECISION_KINDS, EVENT_KINDS, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
+    decision_record, group_of, guardrail_counts, held_series, hour_ceil, hourly_window_samples,
+    key_request_totals, latest_extra_usage, latest_quota, list_requests, list_routing_log,
+    literal_like, member_spends, moves_by_reason, moves_by_reason_and_fit, names_one_account,
+    parked_count, parked_summary, parse_range, pin_migrations_by_reason, placements, pool_traffic,
+    recent_events_of_kind, recent_gaps, request_by_id, request_events, request_totals,
+    revision_spans, rewrite_series, routing_conditions,
+    series_paged, session_activity, session_burn_series, session_identities,
+    BudgetedMember, BurnPoint, CacheEquivalent, CacheFacts, CacheShare, Dashboard, DecisionListRow,
+    Equivalent, EventListRow, FundingFilter, GroupRow, GuardrailCountRow, HourlyWindowSample,
+    LiveKeys, ParkedSummary, PlacementRow, ProbeCounts, ProbeEquivalent, ProbeShare, RequestFilter,
+    RollupFilter, RoutingCondition, RoutingLogCursor, RoutingLogFilter, RoutingLogPage,
+    RoutingLogRow, SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, SharePricing,
+    SharedEquivalent, Span, Totals, TrafficBucket, DECISION_KINDS, EVENT_KINDS, GROUP_BYS,
+    GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL, MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
 };
+pub use query::{guardrail_sample_page, request_body, SampleRow, SampleSubject};
 pub use quota::{
     lead_over_pace, polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled,
     POLL_INTERVAL, PROFILE_EVERY_POLLS,
@@ -77,7 +79,7 @@ pub use reconcile::{
 };
 pub use record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
-    KeepaliveDelta, ParkedRecord, QuotaSampleRecord, RequestRecord,
+    GuardrailMatchRecord, KeepaliveDelta, ParkedRecord, QuotaSampleRecord, RequestRecord,
 };
 pub use refold::{refold_bands, PRICE_BANDS_KEY, PRICE_BANDS_REFOLD_KEY};
 pub use rollup::{

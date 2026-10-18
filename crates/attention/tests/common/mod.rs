@@ -331,6 +331,8 @@ pub fn observed_as(
         fork: phoebis_bus::Fork::default(),
         presented_retired: false,
         rotation_at: None,
+        guardrail_id: None,
+        guardrails: Vec::new(),
         received_at: NOW,
     })
 }

@@ -1,0 +1,50 @@
+{
+  "model": "claude-opus-5",
+  "max_tokens": 64000,
+  "stream": true,
+  "system": [
+    {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.300; cc_entrypoint=cli"},
+    {"type": "text", "text": "You are a command line assistant."},
+    {"type": "text", "text": "You help with work in a software project."},
+    {"type": "text", "text": "Keep answers short and on the subject."}
+  ],
+  "tools": [
+    {"name": "tool_one", "description": "The first tool.", "input_schema": {"type": "object"}},
+    {"name": "tool_two", "description": "The second tool.", "input_schema": {"type": "object"}},
+    {"name": "tool_three", "description": "The third tool.", "input_schema": {"type": "object"}},
+    {"name": "tool_four", "description": "The fourth tool.", "input_schema": {"type": "object"}}
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "Read the notes and report what they say."}
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {"type": "text", "text": "Opening the notes now."},
+        {"type": "tool_use", "id": "toolu_1", "name": "tool_one", "input": {"path": "notes.txt"}}
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "The notes list three items."}
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {"type": "text", "text": "The notes list three items."}
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]\n\nReply with ONLY the suggestion, no quotes or explanation."}
+      ]
+    }
+  ]
+}

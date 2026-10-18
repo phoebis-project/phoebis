@@ -12,12 +12,15 @@ use axum::Json;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use phoebis_routing::RegistrySnapshot;
-use phoebis_store::{stamp_token, ApiKeyRow, StoreError, ROTATION_GRACE_MS};
+use phoebis_store::{
+    stamp_token, ApiKeyRow, AttachmentSubject, StoreError, GUARDRAIL_BOUND, ROTATION_GRACE_MS,
+};
 use rand::Rng;
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
 use crate::accounts::within_text_bound;
+use crate::guardrails::{distinct_ids, AttachmentIndex, GuardrailRef};
 use crate::openapi::{ErrorBody, RegistryUnavailable, SharedEquivalentView, StorageFailure};
 use crate::pools::valid_slug;
 use crate::routes::{
@@ -72,6 +75,10 @@ pub(crate) struct KeyInput {
     #[serde(default, deserialize_with = "double_option")]
     #[schema(value_type = Option<bool>, nullable)]
     auto_mode_server: Option<Option<Value>>,
+    /// The key's own guardrail ids in the order it runs them after its pool's, replacing the key's list whole, on an
+    /// edit alone: a new key starts with none of its own, so a create refuses the field.
+    #[serde(default)]
+    guardrails: Option<Vec<String>>,
     /// Optional, the `revision` the row was read at. The write lands only while the key still carries it, and a body
     /// without it fences on the route's own read. A create accepts it and ignores it, since a create has no row to
     /// fence on. `revision` names one state of one key: an edit, a rotation or a revocation moves it, and a key
@@ -131,6 +138,11 @@ pub(crate) struct Key {
     /// Live sessions whose newest request presented the secret the last rotation retired, 0 once the 15-minute
     /// grace ends, and a session the keepalive mod registered that sent no request since counts as switched.
     pub sessions_on_retired_secret: usize,
+    /// The key's own guardrails in position order, which it runs after its pool's. One its pool holds too runs once,
+    /// at the pool's position.
+    pub guardrails: Vec<GuardrailRef>,
+    /// The pool's guardrails in the pool's order, which the key runs first and cannot drop.
+    pub pool_guardrails: Vec<GuardrailRef>,
     pub usage_7d: KeyUsage,
     pub lifetime: KeyLifetime,
 }
@@ -193,6 +205,8 @@ pub(crate) struct KeyCreated {
     pub last_used_at: Option<i64>,
     pub retired_secret_last_used_at: Option<i64>,
     pub sessions_on_retired_secret: usize,
+    pub guardrails: Vec<GuardrailRef>,
+    pub pool_guardrails: Vec<GuardrailRef>,
     pub usage_7d: KeyUsage,
     pub lifetime: KeyLifetime,
     /// The secret, issued once.
@@ -378,6 +392,10 @@ fn sessions_on_retired_secret(
 pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     match state.store.api_keys() {
         Ok(rows) => {
+            let index = match state.store.load_registry() {
+                Ok(load) => AttachmentIndex::from_load(&load),
+                Err(error) => return store_failure(error),
+            };
             let (week, lifetime) = totals(&state).await;
             let now = (state.clock)();
             // Every count is 0 without a key inside its grace, so the grouped read is worth running only then.
@@ -390,7 +408,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
             let mut out = Vec::new();
             for row in rows {
                 let count = sessions_on_retired_secret(&row, &activity, now);
-                out.push(key_json(&snapshot, &row, &week, &lifetime, count));
+                out.push(key_json(&snapshot, &row, &week, &lifetime, count, &index));
             }
             Json(KeyList { keys: out }).into_response()
         }
@@ -407,7 +425,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     request_body(content = KeyInput, content_type = "application/json"),
     responses(
         (status = 201, description = "The created key.", body = KeyCreated),
-        (status = 400, description = "- `body must be a JSON object`\n- `id, label, and pool_id are required`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `body must be a JSON object`\n- `id, label, and pool_id are required`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`\n- `guardrails applies on edit`: a new key starts with none of its own", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "`pool not found`", body = ErrorBody, example = json!({"error": "pool not found"})),
         (status = 409, description = "`a key with this id exists`", body = ErrorBody, example = json!({"error": "a key with this id exists"})),
         (status = 500, response = StorageFailure),
@@ -418,6 +436,10 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     let Ok(input) = serde_json::from_slice::<KeyInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
     };
+    // A new key starts with none of its own, and its pool's list never passes the bound, so a create counts nothing.
+    if input.guardrails.is_some() {
+        return failure(StatusCode::BAD_REQUEST, "guardrails applies on edit");
+    }
     let (Some(id), Some(_), Some(_)) = (&input.id, &input.label, &input.pool_id) else {
         return failure(
             StatusCode::BAD_REQUEST,
@@ -474,14 +496,18 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     // The row exists from here on, so every answer, a refusal included, names it to the mutation log.
     let mut response = match reload_or_refuse(&state).await {
         Err(refusal) => refusal,
-        Ok(()) => {
-            let (week, lifetime) = totals(&state).await;
-            // A key this route just created has never rotated, so no session can present a retired secret of it.
-            let key = key_json(&state.router.snapshot(), &row, &week, &lifetime, 0);
-            let mut v = serde_json::to_value(key).expect("a key serializes");
-            v["secret"] = json!(secret);
-            (StatusCode::CREATED, Json(v)).into_response()
-        }
+        Ok(()) => match state.store.load_registry() {
+            Ok(load) => {
+                let index = AttachmentIndex::from_load(&load);
+                let (week, lifetime) = totals(&state).await;
+                // A key this route just created has never rotated, so no session can present a retired secret of it.
+                let key = key_json(&state.router.snapshot(), &row, &week, &lifetime, 0, &index);
+                let mut v = serde_json::to_value(key).expect("a key serializes");
+                v["secret"] = json!(secret);
+                (StatusCode::CREATED, Json(v)).into_response()
+            }
+            Err(error) => store_failure(error),
+        },
     };
     response.extensions_mut().insert(CreatedId(row.id));
     response
@@ -497,8 +523,8 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     request_body(content = KeyInput, content_type = "application/json"),
     responses(
         (status = 200, description = "The key's fields, the same shape as `POST /admin/keys` without `secret`.", body = Key),
-        (status = 400, description = "- `body must be a JSON object`\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
-        (status = 404, description = "- `key not found`\n- `pool not found`", body = ErrorBody, example = json!({"error": "key not found"})),
+        (status = 400, description = "- `body must be a JSON object`\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`\n- `guardrails lists {id} twice`\n- `key {id} would hold more than 64 guardrails`, with nothing written, also where a `pool_id` change alone moves the key under a pool whose guardrails take it over the bound", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 404, description = "- `key not found`\n- `pool not found`\n- `guardrail {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "key not found"})),
         // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
         // attribute after it fails to parse.
         (status = 409, description = "- `a revoked key cannot be re-enabled`\n- `the key changed while it was being edited, so reload and try again`, which carries the `stale_edit` code",
@@ -533,10 +559,20 @@ pub(crate) async fn patch(
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;
     }
+    if let Some(guardrails) = &input.guardrails {
+        if let Err(refusal) = distinct_ids("guardrails", guardrails) {
+            return refusal;
+        }
+    }
     if read_at != row.updated_at {
         return failure_with_code(StatusCode::CONFLICT, "stale_edit", STALE_EDIT);
     }
-    match state.store.update_api_key(&row, row.updated_at, ACTOR) {
+    match state.store.update_api_key_with_guardrails(
+        &row,
+        row.updated_at,
+        input.guardrails.as_deref(),
+        ACTOR,
+    ) {
         Ok(updated_at) => row.updated_at = updated_at,
         Err(StoreError::Stale) => {
             return failure_with_code(StatusCode::CONFLICT, "stale_edit", STALE_EDIT)
@@ -545,16 +581,37 @@ pub(crate) async fn patch(
         Err(StoreError::PoolNotFound(_)) => {
             return failure(StatusCode::NOT_FOUND, "pool not found")
         }
+        Err(StoreError::GuardrailNotFound(id)) => {
+            return failure(StatusCode::NOT_FOUND, &format!("guardrail {id} not found"))
+        }
+        // The store counts the pool the row names, so a `pool_id` change alone is refused here too.
+        Err(StoreError::KeyGuardrailBound(id)) => {
+            return failure(
+                StatusCode::BAD_REQUEST,
+                &format!("key {id} would hold more than {GUARDRAIL_BOUND} guardrails"),
+            )
+        }
         Err(error) => return store_failure(error),
     }
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;
     }
+    let index = match state.store.load_registry() {
+        Ok(load) => AttachmentIndex::from_load(&load),
+        Err(error) => return store_failure(error),
+    };
     let (week, lifetime) = totals(&state).await;
     let now = (state.clock)();
     let activity = recent_activity(&state, now).await;
     let count = sessions_on_retired_secret(&row, &activity, now);
-    let key = key_json(&state.router.snapshot(), &row, &week, &lifetime, count);
+    let key = key_json(
+        &state.router.snapshot(),
+        &row,
+        &week,
+        &lifetime,
+        count,
+        &index,
+    );
     Json(key).into_response()
 }
 
@@ -601,10 +658,21 @@ pub(crate) async fn rotate(
     }
     match state.store.api_key(&id) {
         Ok(Some(row)) => {
+            let index = match state.store.load_registry() {
+                Ok(load) => AttachmentIndex::from_load(&load),
+                Err(error) => return store_failure(error),
+            };
             let (week, lifetime) = totals(&state).await;
             let activity = recent_activity(&state, now).await;
             let count = sessions_on_retired_secret(&row, &activity, now);
-            let key = key_json(&state.router.snapshot(), &row, &week, &lifetime, count);
+            let key = key_json(
+                &state.router.snapshot(),
+                &row,
+                &week,
+                &lifetime,
+                count,
+                &index,
+            );
             let mut v = serde_json::to_value(key).expect("a key serializes");
             v["secret"] = json!(secret);
             Json(v).into_response()
@@ -677,6 +745,7 @@ fn key_json(
     week: &BTreeMap<String, phoebis_ledger::Totals>,
     lifetime: &BTreeMap<String, phoebis_ledger::Totals>,
     sessions_on_retired_secret: usize,
+    index: &AttachmentIndex,
 ) -> Key {
     let week = week.get(&row.id);
     let lifetime = lifetime.get(&row.id);
@@ -704,6 +773,8 @@ fn key_json(
         last_used_at: row.last_used_at,
         retired_secret_last_used_at: row.retired_secret_last_used_at,
         sessions_on_retired_secret,
+        guardrails: index.refs_for(&AttachmentSubject::Key(row.id.clone())),
+        pool_guardrails: index.refs_for(&AttachmentSubject::Pool(row.pool_id.clone())),
         usage_7d: KeyUsage {
             billed_usd: week.map_or(0.0, |t| t.billed_usd),
             cost_usd: week.map_or(0.0, |t| t.cost_usd),

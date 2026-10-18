@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
 import { iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
-import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, DiagnosticsSource, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, Usage } from '@/api/types';
+import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, DiagnosticsSource, Guardrail, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, Usage } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { type Paging, useFollow } from '@/app/useFollow';
 import { BodyViewer } from '@/components/BodyViewer';
@@ -25,6 +25,7 @@ import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION }
 import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, FOLLOW_OVERRUN, readEnd, spanEnded } from '@/lib/follow';
 import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtEquivalent, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, tokensTotal, withEstimate } from '@/lib/format';
+import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { planLabel } from '@/lib/quota';
 import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, heldWords, NO_SHARE_TITLE, revisionsTitle } from '@/lib/requests';
@@ -232,6 +233,7 @@ export function RequestsPage() {
   const now = useNow();
   const keys = useAsync(() => api.listKeys(), []);
   const pools = useAsync(() => api.listPools(), []);
+  const guardrails = useAsync(() => api.listGuardrails(), []);
   const accounts = useAsync(() => api.listAccounts(), []);
   const catalog = useAsync(() => api.listCatalog(), []);
   // The revisions the drawer's cost row names. The cells read no cost model, since the route prices every figure.
@@ -270,7 +272,7 @@ export function RequestsPage() {
   const polledMs = effectiveInterval(intervalMs, ended);
   const query = useMemo<RequestQuery>(
     // Probes are off the log unless they are what the filter asks for.
-    () => ({ accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, request: filters.request || undefined, requestClasses: filters.requestClasses, search: filters.search, session: filters.session || undefined, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: iso(readEnd(custom, span.to, pagedTo ?? span.to)), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
+    () => ({ accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), guardrails: filters.guardrails, held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, request: filters.request || undefined, requestClasses: filters.requestClasses, search: filters.search, session: filters.session || undefined, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: iso(readEnd(custom, span.to, pagedTo ?? span.to)), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
     [filters, cursor, custom, span, pagedTo],
   );
   const requests = useAsync(() => api.listRequests(query), [query]);
@@ -303,6 +305,7 @@ export function RequestsPage() {
     agentTypes: AGENT_TYPES.map((v) => ({ label: v, value: v })),
     cacheMissReasons: missReasonOptions(rows, filters.cacheMissReasons),
     efforts: [...EFFORT_LEVELS, NO_EFFORT, OTHER_DIMENSION].map((v) => ({ label: v, value: v })),
+    guardrails: guardrailOptions(guardrails.data, rows, filters.guardrails),
     keys: keyOptions(keys.data, filters.keys),
     kind: [
       { label: 'Inference', value: 'inference' },
@@ -320,7 +323,7 @@ export function RequestsPage() {
     statuses: statusOptions(rows, filters.statuses),
     turnOrigins: TURN_ORIGINS.map((v) => ({ label: v, value: v })),
   };
-  const disabled = { ...notLoadedReason('keys', 'key', keys), ...notLoadedReason('pools', 'pool', pools), ...notLoadedReason('accounts', 'account', accounts), ...notLoadedReason('models', 'model', catalog) };
+  const disabled = { ...notLoadedReason('keys', 'key', keys), ...notLoadedReason('pools', 'pool', pools), ...notLoadedReason('accounts', 'account', accounts), ...notLoadedReason('models', 'model', catalog), ...notLoadedReason('guardrails', 'guardrail', guardrails) };
   const selected = requestId ? rows.find((r) => r.id === requestId) ?? null : null;
   const shown = requestId ? new Set<ColumnId>(COMPACT) : visible;
   const fills = COLUMNS.some((c) => shown.has(c.id) && 'fill' in c && c.fill);
@@ -512,14 +515,14 @@ export function RequestsPage() {
 
       {requestId && (
         <Descriptions>
-          <RequestDrawer request={selected} requestId={requestId} now={now} rows={read.rows} settings={settings.data} unit={unit} onClose={() => navigate({ pathname: '/requests', search: location.search })} />
+          <RequestDrawer request={selected} requestId={requestId} guardrails={guardrails.data} now={now} rows={read.rows} settings={settings.data} unit={unit} onClose={() => navigate({ pathname: '/requests', search: location.search })} />
         </Descriptions>
       )}
     </div>
   );
 }
 
-function RequestDrawer({ request, requestId, now, onClose, rows, settings, unit }: { now: number; onClose: () => void; request: RequestLog | null; requestId: string; rows: string; settings: Settings | null; unit: UnitPosition }) {
+function RequestDrawer({ guardrails, request, requestId, now, onClose, rows, settings, unit }: { guardrails: Guardrail[] | null; now: number; onClose: () => void; request: RequestLog | null; requestId: string; rows: string; settings: Settings | null; unit: UnitPosition }) {
   // The drawer reads the request on every open, and draws the list's own row whenever the page holds it.
   const detail = useAsync(() => api.getRequest(requestId), [requestId]);
   // A load that is pending or has failed leaves the answer to the request before it in hand, so only an answer
@@ -607,6 +610,17 @@ function RequestDrawer({ request, requestId, now, onClose, rows, settings, unit 
               ]}
             />
           </section>
+
+          {r.guardrails.length > 0 && (
+            <section>
+              <h3 className="section-title">Guardrails</h3>
+              <KeyValue
+                rows={[...r.guardrails]
+                  .sort((a, b) => a.position - b.position)
+                  .map((m) => ({ label: guardrailLabel(m.id, guardrails), value: m.blocked ? <Badge tone="critical">blocked</Badge> : <Badge tone="neutral">observed</Badge> }))}
+              />
+            </section>
+          )}
 
           <section>
             <h3 className="section-title">Phases</h3>
@@ -733,7 +747,18 @@ function RequestDrawer({ request, requestId, now, onClose, rows, settings, unit 
               <div className="bodies">
                 {/* Keyed on the request, so the next request's block starts with its dialog closed. */}
                 <BodyBlock key={`request ${r.id}`} label="Request" requestId={r.id} value={bodies.data.request} dropped={bodies.data.requestTruncated ? bytesDropped(bodies.data.requestBytesSeen, bodies.data.requestBytesStored) : undefined} />
-                <BodyBlock key={`response ${r.id}`} label="Response" requestId={r.id} value={bodies.data.response} dropped={bodies.data.responseTruncated ? bytesDropped(bodies.data.responseBytesSeen, bodies.data.responseBytesStored) : undefined} />
+                {bodies.data.response === null ? (
+                  // A capture without a response byte has nothing to open or copy, so the block says why there is none.
+                  // A request no account was tried for was answered by the router itself.
+                  <div className="body-block">
+                    <div className="body-block__head">
+                      <span>Response</span>
+                    </div>
+                    <p className="muted">{r.attempts.length === 0 ? 'No response: the router refused the request before an account answered.' : 'No response was captured.'}</p>
+                  </div>
+                ) : (
+                  <BodyBlock key={`response ${r.id}`} label="Response" requestId={r.id} value={bodies.data.response} dropped={bodies.data.responseTruncated ? bytesDropped(bodies.data.responseBytesSeen, bodies.data.responseBytesStored) : undefined} />
+                )}
               </div>
             ) : (
               <p className="muted">Bodies for this request have aged out of retention.</p>

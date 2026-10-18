@@ -937,7 +937,7 @@ enum Command {
     },
     /// A finished registry load, sent back by the task that ran it; the loop applies the swap.
     Swap {
-        loaded: Result<(RegistryLoad, [u8; 32]), String>,
+        loaded: Result<(RegistryLoad, crate::CompiledGuardrails, [u8; 32]), String>,
         started_at: i64,
     },
     Touch {
@@ -1679,12 +1679,13 @@ pub fn spawn(
     let now = clock();
     store.purge_cooldowns_before(now)?;
     store.purge_stale_windows()?;
-    let snapshot = Arc::new(RwLock::new(Arc::new(RegistrySnapshot::from_load(
-        store.load_registry()?,
-        store.digest_key(),
-        now,
-        1,
-    ))));
+    let registry = store.load_registry()?;
+    // Built here as well as on each reload, else no guardrail would run between the start and the first reload.
+    let guardrails = crate::CompiledGuardrails::build(&registry);
+    let snapshot = Arc::new(RwLock::new(Arc::new(
+        RegistrySnapshot::from_load(registry, store.digest_key(), now, 1)
+            .with_guardrails(guardrails),
+    )));
     let load = store.load_routing()?;
     let load_counts = LoadCounts::of(
         &load,
@@ -3173,8 +3174,9 @@ impl Task {
                 }
             }
             Command::Swap { loaded, started_at } => {
-                let answer =
-                    loaded.map(|(load, digest_key)| self.swap(load, digest_key, started_at));
+                let answer = loaded.map(|(load, guardrails, digest_key)| {
+                    self.swap(load, guardrails, digest_key, started_at)
+                });
                 for waiter in self.load_waiters.drain(..) {
                     let _ = waiter.send(answer.clone());
                 }
@@ -4135,7 +4137,11 @@ impl Task {
         // no reload waits on an answer that never comes.
         tokio::spawn(async move {
             let loaded = match tokio::task::spawn_blocking(move || {
-                store.load_registry().map(|load| (load, store.digest_key()))
+                store.load_registry().map(|load| {
+                    // Compiled here on the blocking thread, so no pattern compiles on the router task.
+                    let guardrails = crate::CompiledGuardrails::build(&load);
+                    (load, guardrails, store.digest_key())
+                })
             })
             .await
             {
@@ -4158,14 +4164,18 @@ impl Task {
 
     /// The in-memory half of a reload: the load becomes the snapshot under the next revision, the streams of a
     /// departed holder end, and what the registry no longer holds is purged.
-    fn swap(&mut self, load: RegistryLoad, digest_key: [u8; 32], loaded_at: i64) {
+    fn swap(
+        &mut self,
+        load: RegistryLoad,
+        guardrails: crate::CompiledGuardrails,
+        digest_key: [u8; 32],
+        loaded_at: i64,
+    ) {
         self.revision += 1;
-        let next = Arc::new(RegistrySnapshot::from_load(
-            load,
-            digest_key,
-            loaded_at,
-            self.revision,
-        ));
+        let next = Arc::new(
+            RegistrySnapshot::from_load(load, digest_key, loaded_at, self.revision)
+                .with_guardrails(guardrails),
+        );
         let previous = self
             .snapshot
             .read()

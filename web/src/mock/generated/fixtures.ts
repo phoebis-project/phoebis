@@ -605,18 +605,18 @@ export const FIXTURES: Record<string, Fixture> = {
           "key": "desktop",
           "label": "desktop",
           "key_id": "desktop",
-          "requests": 6,
+          "requests": 7,
           "succeeded": 4,
           "rate_limited": 0,
           "failed": 1,
           "exhausted": 0,
-          "rejected": 0,
+          "rejected": 1,
           "attempts": 7,
           "failovers": 1,
           "incomplete": 1,
           "cache_hits": 6,
           "cache_misses": 0,
-          "uncached": 0,
+          "uncached": 1,
           "expired_between_turns": 0,
           "tokens": {
             "cache_read": 3500,
@@ -636,6 +636,7 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.02135,
           "errors": {
+            "guardrail_blocked": 1,
             "stream_incomplete": 1,
             "upstream_error": 1
           },
@@ -651,7 +652,7 @@ export const FIXTURES: Record<string, Fixture> = {
               0,
               0,
               0,
-              0,
+              1,
               0,
               0,
               0,
@@ -953,7 +954,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_shares": null,
           "cache_shares": null,
           "probe_shares": null,
-          "plan_requests": 4,
+          "plan_requests": 5,
           "plan_output_tokens": 400,
           "cost_equivalent": {
             "five_hour": 0.0000393625,
@@ -2146,6 +2147,372 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "equivalent_split": {},
           "estimated": false
+        },
+        {
+          "key": "-",
+          "label": "unattributed",
+          "requests": 1,
+          "succeeded": 0,
+          "rate_limited": 0,
+          "failed": 0,
+          "exhausted": 0,
+          "rejected": 1,
+          "attempts": 0,
+          "failovers": 0,
+          "incomplete": 0,
+          "cache_hits": 0,
+          "cache_misses": 0,
+          "uncached": 1,
+          "expired_between_turns": 0,
+          "tokens": {
+            "cache_read": 0,
+            "cache_write_1h": 0,
+            "cache_write_5m": 0,
+            "output": 0,
+            "thinking": 0,
+            "uncached_input": 0,
+            "web_fetch": 0,
+            "web_search": 0
+          },
+          "cost": {
+            "cache_read": 0,
+            "cache_write": 0,
+            "input": 0,
+            "output": 0
+          },
+          "cost_usd": 0,
+          "errors": {
+            "guardrail_blocked": 1
+          },
+          "cache_miss_reasons": {},
+          "histograms": {
+            "duration_ms": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "output_tps": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "ttfb_ms": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "ttft_ms": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "percentiles": {
+            "duration_ms": {
+              "p50": 3.854228868623104,
+              "p90": 3.854228868623104,
+              "p95": 3.854228868623104,
+              "p99": 3.854228868623104
+            },
+            "output_tps": {
+              "p50": null,
+              "p90": null,
+              "p95": null,
+              "p99": null
+            },
+            "ttfb_ms": {
+              "p50": null,
+              "p90": null,
+              "p95": null,
+              "p99": null
+            },
+            "ttft_ms": {
+              "p50": null,
+              "p90": null,
+              "p95": null,
+              "p99": null
+            }
+          },
+          "kept_warm": {
+            "requests": 0,
+            "tokens_5m": 0,
+            "tokens_1h": 0
+          },
+          "probes": {
+            "failed": 0,
+            "held": 0,
+            "migrated": 0,
+            "ok": 0,
+            "skipped": 0
+          },
+          "probe_cost_usd": 0,
+          "wasted_probes": 0,
+          "wasted_probe_usd": 0,
+          "wasted_probe_reasons": {},
+          "cost_shares": null,
+          "cache_shares": null,
+          "probe_shares": null,
+          "plan_requests": 1,
+          "plan_output_tokens": 0,
+          "cost_equivalent": {},
+          "cache_equivalent": {},
+          "probe_equivalent": {},
+          "saving_usd": 0,
+          "saving_shares": null,
+          "saving_equivalent": {},
+          "billed_usd": 0,
+          "billed": {
+            "cache_read": 0,
+            "cache_write": 0,
+            "input": 0,
+            "output": 0
+          },
+          "equivalent_split": {},
+          "estimated": false
         }
       ]
     }
@@ -2526,18 +2893,18 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "key": "standard",
           "label": "standard",
-          "requests": 6,
+          "requests": 7,
           "succeeded": 4,
           "rate_limited": 0,
           "failed": 1,
           "exhausted": 0,
-          "rejected": 0,
+          "rejected": 1,
           "attempts": 7,
           "failovers": 0,
           "incomplete": 1,
           "cache_hits": 6,
           "cache_misses": 0,
-          "uncached": 0,
+          "uncached": 1,
           "expired_between_turns": 0,
           "tokens": {
             "cache_read": 3500,
@@ -2557,6 +2924,7 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.02135,
           "errors": {
+            "guardrail_blocked": 1,
             "stream_incomplete": 1,
             "upstream_error": 1
           },
@@ -2572,7 +2940,7 @@ export const FIXTURES: Record<string, Fixture> = {
               0,
               0,
               0,
-              0,
+              1,
               0,
               0,
               0,
@@ -2874,7 +3242,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_shares": null,
           "cache_shares": null,
           "probe_shares": null,
-          "plan_requests": 5,
+          "plan_requests": 6,
           "plan_output_tokens": 500,
           "cost_equivalent": {
             "five_hour": 0.000048175000000000005,
@@ -2945,6 +3313,406 @@ export const FIXTURES: Record<string, Fixture> = {
       "bucket_seconds": 3600,
       "group_by": "account",
       "points": [
+        {
+          "at": 1791633600000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791637200000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791640800000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791644400000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791648000000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791651600000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791655200000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791658800000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791662400000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791666000000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791669600000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791673200000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791676800000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791680400000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791684000000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791687600000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791691200000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791694800000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791698400000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791702000000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791705600000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791709200000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791712800000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791716400000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
+        {
+          "at": 1791720000000,
+          "group": "-",
+          "unit": null,
+          "usd": 0,
+          "five_hour_share": null,
+          "seven_day_share": null,
+          "model_week_share": null,
+          "five_hour_equivalent": null,
+          "seven_day_equivalent": null,
+          "model_week_equivalent": null,
+          "estimated": false,
+          "cached_tokens": 0,
+          "tokens": 0,
+          "uncached_tokens": 0
+        },
         {
           "at": 1791633600000,
           "group": "business",
@@ -3748,6 +4516,29 @@ export const FIXTURES: Record<string, Fixture> = {
       ]
     }
   },
+  "analytics_guardrails": {
+    "route": "GET /admin/analytics/guardrails?range=24h",
+    "body": {
+      "from": 1791634600000,
+      "to": 1791721000000,
+      "guardrails": [
+        {
+          "id": "large-auxiliary",
+          "name": "Large auxiliary requests",
+          "observed": 0,
+          "blocked": 1,
+          "blocked_bytes": 48213
+        },
+        {
+          "id": "subagent-status-summary",
+          "name": "Subagent status summary",
+          "observed": 2,
+          "blocked": 0,
+          "blocked_bytes": 0
+        }
+      ]
+    }
+  },
   "analytics_placements": {
     "route": "GET /admin/analytics/placements?range=24h",
     "body": {
@@ -4138,18 +4929,18 @@ export const FIXTURES: Record<string, Fixture> = {
               "key": "desktop",
               "label": "desktop",
               "key_id": "desktop",
-              "requests": 2,
+              "requests": 3,
               "succeeded": 1,
               "rate_limited": 0,
               "failed": 0,
               "exhausted": 0,
-              "rejected": 0,
+              "rejected": 1,
               "attempts": 3,
               "failovers": 1,
               "incomplete": 1,
               "cache_hits": 2,
               "cache_misses": 0,
-              "uncached": 0,
+              "uncached": 1,
               "expired_between_turns": 0,
               "tokens": {
                 "cache_read": 1500,
@@ -4169,6 +4960,7 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "cost_usd": 0.01065,
               "errors": {
+                "guardrail_blocked": 1,
                 "stream_incomplete": 1
               },
               "cache_miss_reasons": {
@@ -4183,7 +4975,7 @@ export const FIXTURES: Record<string, Fixture> = {
                   0,
                   0,
                   0,
-                  0,
+                  1,
                   0,
                   0,
                   0,
@@ -4485,7 +5277,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cost_shares": null,
               "cache_shares": null,
               "probe_shares": null,
-              "plan_requests": 1,
+              "plan_requests": 2,
               "plan_output_tokens": 100,
               "cost_equivalent": {
                 "five_hour": 0.0000088125,
@@ -5800,6 +6592,372 @@ export const FIXTURES: Record<string, Fixture> = {
                 "output": 0.0000013333333333333334
               },
               "estimated": false
+            },
+            {
+              "key": "-",
+              "label": "unattributed",
+              "requests": 1,
+              "succeeded": 0,
+              "rate_limited": 0,
+              "failed": 0,
+              "exhausted": 0,
+              "rejected": 1,
+              "attempts": 0,
+              "failovers": 0,
+              "incomplete": 0,
+              "cache_hits": 0,
+              "cache_misses": 0,
+              "uncached": 1,
+              "expired_between_turns": 0,
+              "tokens": {
+                "cache_read": 0,
+                "cache_write_1h": 0,
+                "cache_write_5m": 0,
+                "output": 0,
+                "thinking": 0,
+                "uncached_input": 0,
+                "web_fetch": 0,
+                "web_search": 0
+              },
+              "cost": {
+                "cache_read": 0,
+                "cache_write": 0,
+                "input": 0,
+                "output": 0
+              },
+              "cost_usd": 0,
+              "errors": {
+                "guardrail_blocked": 1
+              },
+              "cache_miss_reasons": {},
+              "histograms": {
+                "duration_ms": [
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "output_tps": [
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "ttfb_ms": [
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "ttft_ms": [
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ]
+              },
+              "percentiles": {
+                "duration_ms": {
+                  "p50": 3.854228868623104,
+                  "p90": 3.854228868623104,
+                  "p95": 3.854228868623104,
+                  "p99": 3.854228868623104
+                },
+                "output_tps": {
+                  "p50": null,
+                  "p90": null,
+                  "p95": null,
+                  "p99": null
+                },
+                "ttfb_ms": {
+                  "p50": null,
+                  "p90": null,
+                  "p95": null,
+                  "p99": null
+                },
+                "ttft_ms": {
+                  "p50": null,
+                  "p90": null,
+                  "p95": null,
+                  "p99": null
+                }
+              },
+              "kept_warm": {
+                "requests": 0,
+                "tokens_5m": 0,
+                "tokens_1h": 0
+              },
+              "probes": {
+                "failed": 0,
+                "held": 0,
+                "migrated": 0,
+                "ok": 0,
+                "skipped": 0
+              },
+              "probe_cost_usd": 0,
+              "wasted_probes": 0,
+              "wasted_probe_usd": 0,
+              "wasted_probe_reasons": {},
+              "cost_shares": null,
+              "cache_shares": null,
+              "probe_shares": null,
+              "plan_requests": 1,
+              "plan_output_tokens": 0,
+              "cost_equivalent": {},
+              "cache_equivalent": {},
+              "probe_equivalent": {},
+              "saving_usd": 0,
+              "saving_shares": null,
+              "saving_equivalent": {},
+              "billed_usd": 0,
+              "billed": {
+                "cache_read": 0,
+                "cache_write": 0,
+                "input": 0,
+                "output": 0
+              },
+              "equivalent_split": {},
+              "estimated": false
             }
           ]
         },
@@ -7108,7 +8266,7 @@ export const FIXTURES: Record<string, Fixture> = {
   "dashboard": {
     "route": "GET /admin/dashboard",
     "body": {
-      "requests_24h": 7,
+      "requests_24h": 8,
       "tokens_24h": 14400,
       "tokens_cached_24h": 4000,
       "cost_24h": 0.0249,
@@ -7394,7 +8552,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0.0000047
           },
           "errors": 1,
-          "requests": 3,
+          "requests": 4,
           "tokens": 7200
         },
         {
@@ -7537,7 +8695,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": null
+          "diagnostics_source": null,
+          "guardrail_id": null,
+          "guardrails": []
         },
         {
           "id": "r-unweighted",
@@ -7669,7 +8829,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": null
+          "diagnostics_source": null,
+          "guardrail_id": null,
+          "guardrails": []
         },
         {
           "id": "r-captured",
@@ -7797,7 +8959,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": "client"
+          "diagnostics_source": "client",
+          "guardrail_id": null,
+          "guardrails": []
         },
         {
           "id": "r-failed",
@@ -7925,7 +9089,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": null
+          "diagnostics_source": null,
+          "guardrail_id": null,
+          "guardrails": []
         },
         {
           "id": "r-incomplete",
@@ -8057,7 +9223,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": null
+          "diagnostics_source": null,
+          "guardrail_id": null,
+          "guardrails": []
         },
         {
           "id": "r-earlier-holder",
@@ -8185,7 +9353,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": null
+          "diagnostics_source": null,
+          "guardrail_id": null,
+          "guardrails": []
         },
         {
           "id": "r-failover",
@@ -8401,7 +9571,111 @@ export const FIXTURES: Record<string, Fixture> = {
               }
             ]
           },
-          "diagnostics_source": "router"
+          "diagnostics_source": "router",
+          "guardrail_id": null,
+          "guardrails": [
+            {
+              "id": "subagent-status-summary",
+              "position": 0,
+              "blocked": false
+            }
+          ]
+        },
+        {
+          "id": "r-blocked",
+          "at": 1791717399400,
+          "finished_at": 1791717399404,
+          "key_id": "desktop",
+          "key_generation": 1791721000000,
+          "pool_id": "main",
+          "account_id": null,
+          "session_id": null,
+          "agent_id": "main",
+          "parent_agent_id": null,
+          "model": "claude-sonnet-5-5",
+          "canonical_model": "claude-sonnet-5-5",
+          "kind": "inference",
+          "origin": "client",
+          "transport": "sse",
+          "request_class": "auxiliary",
+          "auto_mode": null,
+          "forked_from": null,
+          "fork_depth": null,
+          "status": 400,
+          "outcome": "rejected",
+          "error_code": "guardrail_blocked",
+          "client_drift": null,
+          "ttfb_ms": null,
+          "ttft_ms": null,
+          "duration_ms": 4,
+          "request_bytes": 48213,
+          "response_bytes": null,
+          "kept_warm": false,
+          "captured_bodies": false,
+          "request_truncated": false,
+          "response_truncated": false,
+          "user_agent": "claude-cli/2.1.269 (external, cli)",
+          "client": "claude-code/cli",
+          "agent_type": null,
+          "compaction": null,
+          "context_compacted": null,
+          "prev_tool_ms": null,
+          "turn_origin": null,
+          "shape": {
+            "context_edits": [
+              "clear_thinking_20251015"
+            ],
+            "effort": "high",
+            "max_tokens": 32000,
+            "message_count": 1,
+            "requested_service_tier": null,
+            "requested_speed": null,
+            "system_blocks": 4,
+            "temperature": null,
+            "thinking_budget": 31999,
+            "thinking_type": "enabled",
+            "tool_count": 12
+          },
+          "usage": {
+            "cache_read": 0,
+            "cache_write_1h": 0,
+            "cache_write_5m": 0,
+            "input": 0,
+            "output": 0,
+            "thinking": 0,
+            "web_fetch": 0,
+            "web_search": 0
+          },
+          "cost_usd": 0,
+          "cost_shares": null,
+          "cost_equivalent": null,
+          "estimated": false,
+          "tier": null,
+          "phases": {
+            "received_at": 1791717399400,
+            "selected_at": null,
+            "written_at": null,
+            "head_at": null,
+            "first_content_at": null,
+            "stream_end_at": null,
+            "finished_at": 1791717399404
+          },
+          "attempts": [],
+          "held": null,
+          "diagnostics_source": null,
+          "guardrail_id": "large-auxiliary",
+          "guardrails": [
+            {
+              "id": "subagent-status-summary",
+              "position": 0,
+              "blocked": false
+            },
+            {
+              "id": "large-auxiliary",
+              "position": 1,
+              "blocked": true
+            }
+          ]
         }
       ],
       "accounts": [
@@ -8481,7 +9755,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         "attempted": [],
         "holds": [],
-        "registry_revision": 62,
+        "registry_revision": 64,
         "body_tokens": 0
       },
       "pin": {
@@ -8904,6 +10178,290 @@ export const FIXTURES: Record<string, Fixture> = {
       }
     }
   },
+  "guardrail_created": {
+    "route": "POST /admin/guardrails",
+    "body": {
+      "id": "subagent-status-summary",
+      "name": "Subagent status summary",
+      "description": "The status line fork the client sends for each running subagent.",
+      "enabled": true,
+      "mode": "observe",
+      "action": "block",
+      "conditions": [
+        {
+          "subject": "request_class",
+          "operator": "equals",
+          "value": "auxiliary"
+        },
+        {
+          "subject": "body",
+          "operator": "present",
+          "path": "tools"
+        },
+        {
+          "subject": "message",
+          "operator": "matches",
+          "value": "^Describe your most recent action in 3-5 words",
+          "selector": "last_user"
+        }
+      ],
+      "preset": {
+        "id": "subagent-status-summary",
+        "version": 1,
+        "current_version": 1,
+        "customized": false
+      },
+      "pools": [
+        {
+          "id": "main",
+          "label": "Main",
+          "position": 0
+        }
+      ],
+      "keys": [],
+      "revision": 6189767511104,
+      "created_at": 1791721000000,
+      "updated_at": 1791721000000
+    }
+  },
+  "guardrail_presets": {
+    "route": "GET /admin/guardrails/presets",
+    "body": {
+      "presets": [
+        {
+          "id": "away-recap",
+          "version": 1,
+          "name": "Away recap",
+          "description": "When the user steps away and comes back, Claude Code forks the main thread's whole conversation to ask for a recap of the session in under 40 words. Each fork reads the thread's full cached context for about 90 output tokens. The setting awaySummaryEnabled turns the feature off on one machine.",
+          "measured_on": "Claude Code 2.1.296 to 2.1.301",
+          "suggested_mode": "observe",
+          "conditions": [
+            {
+              "subject": "request_class",
+              "operator": "equals",
+              "value": "auxiliary"
+            },
+            {
+              "subject": "body",
+              "operator": "present",
+              "path": "tools"
+            },
+            {
+              "subject": "message",
+              "operator": "matches",
+              "value": "^The user stepped away and is coming back\\. Recap in under 40 words",
+              "selector": "last_user"
+            }
+          ]
+        },
+        {
+          "id": "prompt-suggestion",
+          "version": 1,
+          "name": "Prompt suggestion",
+          "description": "In an interactive session Claude Code forks the main thread's whole conversation to predict what the user types next and shows the answer in the input. Each fork reads the thread's full cached context for about seven output tokens. The setting promptSuggestionEnabled turns the feature off on one machine.",
+          "measured_on": "Claude Code 2.1.296 to 2.1.301",
+          "suggested_mode": "observe",
+          "conditions": [
+            {
+              "subject": "request_class",
+              "operator": "equals",
+              "value": "auxiliary"
+            },
+            {
+              "subject": "body",
+              "operator": "present",
+              "path": "tools"
+            },
+            {
+              "subject": "message",
+              "operator": "matches",
+              "value": "^\\[SUGGESTION MODE: Suggest what the user might naturally type next",
+              "selector": "last_user"
+            }
+          ]
+        },
+        {
+          "id": "subagent-status-summary",
+          "version": 1,
+          "name": "Subagent status summary",
+          "description": "Claude Code forks each running subagent's whole conversation every 30 seconds to ask for a status line of three to five words. Each fork reads the subagent's full cached context for about 24 output tokens, and no client setting turns it off. On one router the forks were 22 percent of every cached token read over three days. Blocking them leaves the Agent tool's status line static and changes nothing else.",
+          "measured_on": "Claude Code 2.1.296 to 2.1.302",
+          "suggested_mode": "observe",
+          "conditions": [
+            {
+              "subject": "request_class",
+              "operator": "equals",
+              "value": "auxiliary"
+            },
+            {
+              "subject": "body",
+              "operator": "present",
+              "path": "tools"
+            },
+            {
+              "subject": "message",
+              "operator": "matches",
+              "value": "^Describe your most recent action in 3-5 words",
+              "selector": "last_user"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "guardrail_show": {
+    "route": "GET /admin/guardrails/subagent-status-summary",
+    "body": {
+      "id": "subagent-status-summary",
+      "name": "Subagent status summary",
+      "description": "The status line fork the client sends for each running subagent.",
+      "enabled": true,
+      "mode": "observe",
+      "action": "block",
+      "conditions": [
+        {
+          "subject": "request_class",
+          "operator": "equals",
+          "value": "auxiliary"
+        },
+        {
+          "subject": "body",
+          "operator": "present",
+          "path": "tools"
+        },
+        {
+          "subject": "message",
+          "operator": "matches",
+          "value": "^Describe your most recent action in 3-5 words",
+          "selector": "last_user"
+        }
+      ],
+      "preset": {
+        "id": "subagent-status-summary",
+        "version": 1,
+        "current_version": 1,
+        "customized": false
+      },
+      "pools": [
+        {
+          "id": "main",
+          "label": "Main",
+          "position": 0
+        }
+      ],
+      "keys": [],
+      "revision": 6189767511104,
+      "created_at": 1791721000000,
+      "updated_at": 1791721000000
+    }
+  },
+  "guardrail_test": {
+    "route": "POST /admin/guardrails/test",
+    "body": {
+      "sample": {
+        "pool_id": "main",
+        "limit": 50,
+        "window_hours": 72
+      },
+      "totals": {
+        "sampled": 1,
+        "matched": 0,
+        "unmatched": 1,
+        "indeterminate": 0
+      },
+      "requests": [
+        {
+          "id": "r-captured",
+          "received_at": 1791720940000,
+          "verdict": "unmatched",
+          "condition": 0
+        }
+      ]
+    }
+  },
+  "guardrails": {
+    "route": "GET /admin/guardrails",
+    "body": {
+      "guardrails": [
+        {
+          "id": "large-auxiliary",
+          "name": "Large auxiliary requests",
+          "description": "Auxiliary requests that ask for more than 4096 output tokens.",
+          "enabled": true,
+          "mode": "enforce",
+          "action": "block",
+          "conditions": [
+            {
+              "subject": "request_class",
+              "operator": "equals",
+              "value": "auxiliary"
+            },
+            {
+              "subject": "body",
+              "operator": "gt",
+              "value": "4096",
+              "path": "max_tokens"
+            }
+          ],
+          "preset": null,
+          "pools": [],
+          "keys": [
+            {
+              "id": "desktop",
+              "label": "Desktop",
+              "position": 0
+            }
+          ],
+          "revision": 6189767511104,
+          "created_at": 1791721000000,
+          "updated_at": 1791721000000
+        },
+        {
+          "id": "subagent-status-summary",
+          "name": "Subagent status summary",
+          "description": "The status line fork the client sends for each running subagent.",
+          "enabled": true,
+          "mode": "observe",
+          "action": "block",
+          "conditions": [
+            {
+              "subject": "request_class",
+              "operator": "equals",
+              "value": "auxiliary"
+            },
+            {
+              "subject": "body",
+              "operator": "present",
+              "path": "tools"
+            },
+            {
+              "subject": "message",
+              "operator": "matches",
+              "value": "^Describe your most recent action in 3-5 words",
+              "selector": "last_user"
+            }
+          ],
+          "preset": {
+            "id": "subagent-status-summary",
+            "version": 1,
+            "current_version": 1,
+            "customized": false
+          },
+          "pools": [
+            {
+              "id": "main",
+              "label": "Main",
+              "position": 0
+            }
+          ],
+          "keys": [],
+          "revision": 6189767511104,
+          "created_at": 1791721000000,
+          "updated_at": 1791721000000
+        }
+      ]
+    }
+  },
   "keepalive_overview": {
     "route": "GET /admin/keepalive/overview",
     "body": {
@@ -9069,7 +10627,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "effective_body_capture_hours": 24,
       "auto_mode_server": null,
       "effective_auto_mode_server": true,
-      "prefix": "ZFPxvgA5",
+      "prefix": "rKbKVPL_",
       "created_at": 1791721000000,
       "updated_at": 1791721000000,
       "revision": 6189767511104,
@@ -9077,6 +10635,8 @@ export const FIXTURES: Record<string, Fixture> = {
       "last_used_at": null,
       "retired_secret_last_used_at": null,
       "sessions_on_retired_secret": 0,
+      "guardrails": [],
+      "pool_guardrails": [],
       "usage_7d": {
         "billed_usd": 0,
         "cost_usd": 0,
@@ -9149,7 +10709,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "effective_body_capture_hours": 24,
           "auto_mode_server": null,
           "effective_auto_mode_server": true,
-          "prefix": "9DTXh5RA",
+          "prefix": "rKbKVPL_",
           "created_at": 1791721000000,
           "updated_at": 1791721000000,
           "revision": 6189767511104,
@@ -9157,6 +10717,24 @@ export const FIXTURES: Record<string, Fixture> = {
           "last_used_at": null,
           "retired_secret_last_used_at": null,
           "sessions_on_retired_secret": 0,
+          "guardrails": [
+            {
+              "id": "large-auxiliary",
+              "name": "Large auxiliary requests",
+              "mode": "enforce",
+              "enabled": true,
+              "position": 0
+            }
+          ],
+          "pool_guardrails": [
+            {
+              "id": "subagent-status-summary",
+              "name": "Subagent status summary",
+              "mode": "observe",
+              "enabled": true,
+              "position": 0
+            }
+          ],
           "usage_7d": {
             "billed_usd": 0.0107,
             "cost_usd": 0.02135,
@@ -9165,7 +10743,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "seven_day": 0.000010496666666666667
             },
             "estimated": true,
-            "requests": 6,
+            "requests": 7,
             "tokens": 12600
           },
           "lifetime": {
@@ -9176,7 +10754,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "seven_day": 0.000010496666666666667
             },
             "estimated": true,
-            "requests": 6
+            "requests": 7
           }
         }
       ]
@@ -9547,8 +11125,8 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "at": 1791716400000,
-          "requests": 3,
-          "failed": 1,
+          "requests": 4,
+          "failed": 2,
           "tokens": 7200,
           "cost_usd": 0.0142,
           "billed_usd": 0.0071,
@@ -9709,12 +11287,12 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "9DTXh5RA",
+              "prefix": "rKbKVPL_",
               "enabled": true
             }
           ],
           "status": "active",
-          "requests_24h": 7,
+          "requests_24h": 8,
           "cost_24h": 0.024900000000000005,
           "billed_24h": 0.0107,
           "equivalent_24h": {
@@ -10025,8 +11603,8 @@ export const FIXTURES: Record<string, Fixture> = {
             },
             {
               "at": 1791716400000,
-              "requests": 3,
-              "failed": 1,
+              "requests": 4,
+              "failed": 2,
               "tokens": 7200,
               "cost_usd": 0.0142,
               "billed_usd": 0.0071,
@@ -10048,6 +11626,15 @@ export const FIXTURES: Record<string, Fixture> = {
                 "seven_day": 0.000008146666666666666
               },
               "estimated": true
+            }
+          ],
+          "guardrails": [
+            {
+              "id": "subagent-status-summary",
+              "name": "Subagent status summary",
+              "mode": "observe",
+              "enabled": true,
+              "position": 0
             }
           ],
           "warnings": [
@@ -10813,7 +12400,15 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ]
         },
-        "diagnostics_source": "router"
+        "diagnostics_source": "router",
+        "guardrail_id": null,
+        "guardrails": [
+          {
+            "id": "subagent-status-summary",
+            "position": 0,
+            "blocked": false
+          }
+        ]
       },
       "events": [
         {
@@ -11046,7 +12641,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": null
+          "diagnostics_source": null,
+          "guardrail_id": null,
+          "guardrails": []
         },
         {
           "id": "r-captured",
@@ -11174,7 +12771,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": "client"
+          "diagnostics_source": "client",
+          "guardrail_id": null,
+          "guardrails": []
         },
         {
           "id": "r-failed",
@@ -11302,7 +12901,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": null
+          "diagnostics_source": null,
+          "guardrail_id": null,
+          "guardrails": []
         },
         {
           "id": "r-incomplete",
@@ -11434,7 +13035,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": null
+          "diagnostics_source": null,
+          "guardrail_id": null,
+          "guardrails": []
         },
         {
           "id": "r-earlier-holder",
@@ -11562,7 +13165,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "held": null,
-          "diagnostics_source": null
+          "diagnostics_source": null,
+          "guardrail_id": null,
+          "guardrails": []
         },
         {
           "id": "r-failover",
@@ -11778,7 +13383,111 @@ export const FIXTURES: Record<string, Fixture> = {
               }
             ]
           },
-          "diagnostics_source": "router"
+          "diagnostics_source": "router",
+          "guardrail_id": null,
+          "guardrails": [
+            {
+              "id": "subagent-status-summary",
+              "position": 0,
+              "blocked": false
+            }
+          ]
+        },
+        {
+          "id": "r-blocked",
+          "at": 1791717399400,
+          "finished_at": 1791717399404,
+          "key_id": "desktop",
+          "key_generation": 1791721000000,
+          "pool_id": "main",
+          "account_id": null,
+          "session_id": null,
+          "agent_id": "main",
+          "parent_agent_id": null,
+          "model": "claude-sonnet-5-5",
+          "canonical_model": "claude-sonnet-5-5",
+          "kind": "inference",
+          "origin": "client",
+          "transport": "sse",
+          "request_class": "auxiliary",
+          "auto_mode": null,
+          "forked_from": null,
+          "fork_depth": null,
+          "status": 400,
+          "outcome": "rejected",
+          "error_code": "guardrail_blocked",
+          "client_drift": null,
+          "ttfb_ms": null,
+          "ttft_ms": null,
+          "duration_ms": 4,
+          "request_bytes": 48213,
+          "response_bytes": null,
+          "kept_warm": false,
+          "captured_bodies": false,
+          "request_truncated": false,
+          "response_truncated": false,
+          "user_agent": "claude-cli/2.1.269 (external, cli)",
+          "client": "claude-code/cli",
+          "agent_type": null,
+          "compaction": null,
+          "context_compacted": null,
+          "prev_tool_ms": null,
+          "turn_origin": null,
+          "shape": {
+            "context_edits": [
+              "clear_thinking_20251015"
+            ],
+            "effort": "high",
+            "max_tokens": 32000,
+            "message_count": 1,
+            "requested_service_tier": null,
+            "requested_speed": null,
+            "system_blocks": 4,
+            "temperature": null,
+            "thinking_budget": 31999,
+            "thinking_type": "enabled",
+            "tool_count": 12
+          },
+          "usage": {
+            "cache_read": 0,
+            "cache_write_1h": 0,
+            "cache_write_5m": 0,
+            "input": 0,
+            "output": 0,
+            "thinking": 0,
+            "web_fetch": 0,
+            "web_search": 0
+          },
+          "cost_usd": 0,
+          "cost_shares": null,
+          "cost_equivalent": null,
+          "estimated": false,
+          "tier": null,
+          "phases": {
+            "received_at": 1791717399400,
+            "selected_at": null,
+            "written_at": null,
+            "head_at": null,
+            "first_content_at": null,
+            "stream_end_at": null,
+            "finished_at": 1791717399404
+          },
+          "attempts": [],
+          "held": null,
+          "diagnostics_source": null,
+          "guardrail_id": "large-auxiliary",
+          "guardrails": [
+            {
+              "id": "subagent-status-summary",
+              "position": 0,
+              "blocked": false
+            },
+            {
+              "id": "large-auxiliary",
+              "position": 1,
+              "blocked": true
+            }
+          ]
         }
       ],
       "next_cursor": null
@@ -14399,8 +16108,8 @@ export const FIXTURES: Record<string, Fixture> = {
       "ready": true,
       "dead": [],
       "ledger": {
-        "schema_version": 38,
-        "written": 19,
+        "schema_version": 39,
+        "written": 20,
         "dropped": 0,
         "write_failures": 0,
         "cache_map_orphans": 1,

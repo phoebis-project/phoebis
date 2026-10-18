@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use crate::chains::Chains;
 
+#[derive(Debug, PartialEq)]
 pub struct BodyFacts {
     /// The last `messages` entry whose role is not `system` has role `user` and carries no `tool_result`
     /// block: a per-turn control entry after the user's turn is the client's, not a turn of its own.
@@ -56,24 +57,15 @@ pub struct ClientHints {
     pub request_class: Option<String>,
 }
 
-/// The strict parse, else a parse of a reading copy with every lone surrogate escape mapped to U+FFFD: the
-/// client cuts a string mid-pair and sends it, so a body no strict decoder reads still carries the facts the
-/// router needs. The copy is the router's own reading; the bytes toward the upstream are never rewritten.
-pub(crate) fn tolerant_value(body: &[u8]) -> Option<Value> {
-    serde_json::from_slice(body).ok().or_else(|| {
-        let copy = phoebis_cch::lone_surrogates_mapped(body)?;
-        serde_json::from_slice(&copy).ok()
-    })
-}
-
 impl BodyFacts {
-    pub fn read(body: &[u8]) -> BodyFacts {
+    /// The facts and the parsed root they were read from, for a caller that reads the tree once more and drops it.
+    pub fn read_with_tree(body: &[u8]) -> (BodyFacts, Option<Value>) {
         // Counted over decoded keys on the walk the cut runs on rather than read from the parse below, so the
         // request row says what the cut acts on under an off setting whatever the parse makes of the body.
         let safeguards =
             phoebis_cch::top_level_member_count(body, "safeguards").is_ok_and(|n| n >= 1);
-        let Some(root) = tolerant_value(body) else {
-            return BodyFacts {
+        let Some(root) = phoebis_guardrails::parse_body(body) else {
+            let facts = BodyFacts {
                 fresh_user_turn: false,
                 prompt_units: vec![[b'0' as u16; 3]],
                 prompt_id: None,
@@ -92,6 +84,7 @@ impl BodyFacts {
                 // prove, and the upstream refuses it anyway.
                 portable: true,
             };
+            return (facts, None);
         };
         let messages = root.get("messages").and_then(Value::as_array);
         let is_system = |entry: &Value| entry.get("role").and_then(Value::as_str) == Some("system");
@@ -166,7 +159,7 @@ impl BodyFacts {
         };
         let chains = Chains::read(&root);
         let markers_ttl_ms = markers_ttl_ms(&root);
-        BodyFacts {
+        let facts = BodyFacts {
             fresh_user_turn,
             prompt_units,
             prompt_id,
@@ -179,7 +172,14 @@ impl BodyFacts {
             markers_ttl_ms,
             system_is_array: matches!(root.get("system"), Some(Value::Array(_))),
             portable: crate::portability::portable_of(&root),
-        }
+        };
+        (facts, Some(root))
+    }
+
+    /// The handler keeps the tree for the guardrail step, so the facts alone are what the tests read.
+    #[cfg(test)]
+    pub fn read(body: &[u8]) -> BodyFacts {
+        Self::read_with_tree(body).0
     }
 }
 
@@ -893,5 +893,39 @@ mod tests {
             (Some(0.5), Some("fast"), Some("auto"))
         );
         assert_eq!(BodyFacts::read(b"not json").shape, RequestShape::default());
+    }
+
+    #[test]
+    fn read_with_tree_answers_the_tree_for_a_parsed_body_and_none_for_one_that_does_not_parse() {
+        let body = br#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#;
+        let (_, tree) = BodyFacts::read_with_tree(body);
+        assert_eq!(tree, Some(serde_json::from_slice::<Value>(body).unwrap()));
+        // The client cuts a string mid-pair, and the reading copy still yields a tree.
+        let cut = br#"{"model":"m","messages":[{"role":"user","content":"a\ud83d"}]}"#;
+        assert!(serde_json::from_slice::<Value>(cut).is_err());
+        assert!(BodyFacts::read_with_tree(cut).1.is_some());
+        let (facts, tree) = BodyFacts::read_with_tree(b"not json");
+        assert_eq!(tree, None);
+        assert!(facts.chains.is_none());
+    }
+
+    /// The guardrails crate carries its own copy of `texts`, and a message condition has to read the text blocks
+    /// the version suffix reads.
+    #[test]
+    fn the_relays_texts_and_the_crates_agree_on_both_fixtures() {
+        for fixture in [
+            include_str!("../../guardrails/tests/fixtures/subagent_summary_fork.json"),
+            include_str!("../../guardrails/tests/fixtures/auto_mode_classifier.json"),
+        ] {
+            let root: Value = serde_json::from_str(fixture).unwrap();
+            let messages = root["messages"].as_array().unwrap();
+            assert!(!messages.is_empty());
+            for message in messages {
+                assert_eq!(
+                    texts(message).collect::<Vec<_>>(),
+                    phoebis_guardrails::texts(message).collect::<Vec<_>>()
+                );
+            }
+        }
     }
 }

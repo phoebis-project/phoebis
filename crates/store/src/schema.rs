@@ -86,11 +86,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (54, V54),
     (55, V55),
     (56, V56),
+    (57, V57),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 56;
+pub const SCHEMA_VERSION: u32 = 57;
 
 /// The version that bounds an account to one pool; a file below it is read for overlaps before it migrates.
 pub const ONE_POOL_VERSION: u32 = 47;
@@ -811,3 +812,23 @@ UPDATE pools SET return_to_plan_dwell_seconds = shed_dwell_seconds;
 // key, so the table is not rebuilt, and a row from before reads `''`, the base regime, until its next request stamps
 // it.
 const V56: &str = "ALTER TABLE pins ADD COLUMN entrypoint TEXT NOT NULL DEFAULT '';";
+
+// A guardrail is a named list of conditions a request is checked against before any account is selected, attached to
+// pools and keys in a position per subject. One attachment table with a kind column rather than two, since the pool's
+// and the key's lists are one shape with one writer, and a subject column cannot reference two tables, so the pool and
+// key deletes remove their rows themselves. The tombstones outlive the rows as the pools' do.
+const V57: &str = r#"
+CREATE TABLE IF NOT EXISTS guardrails (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1, mode TEXT NOT NULL DEFAULT 'observe', action TEXT NOT NULL DEFAULT 'block',
+  conditions_json TEXT NOT NULL, preset_id TEXT, preset_version INTEGER,
+  incarnation INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS guardrail_tombstones (id TEXT PRIMARY KEY, incarnation INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS guardrail_attachments (
+  guardrail_id TEXT NOT NULL REFERENCES guardrails(id) ON DELETE CASCADE,
+  subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL, position INTEGER NOT NULL,
+  PRIMARY KEY (guardrail_id, subject_kind, subject_id)
+);
+CREATE INDEX IF NOT EXISTS guardrail_attachments_subject ON guardrail_attachments (subject_kind, subject_id, position);
+"#;

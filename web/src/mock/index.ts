@@ -1,11 +1,14 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
+import type { GuardrailInput, GuardrailRange, GuardrailTestInput } from '@/api/client';
 import { AFFINITY_MODE_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeSettings } from '@/api/decode';
+import { GUARDRAIL_MODE_VALUES } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, MemberEligibility,
   ModelRule, ModelsState, Overview, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
+import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, GuardrailTestResult } from '@/api/types';
 import { foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
@@ -15,9 +18,11 @@ import { ACCOUNTS, QUOTA_HISTORY, usageOf } from './accounts';
 import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, rewritesOf, seriesOf } from './analytics';
 import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
+import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
 import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE, memberPins } from './operations';
 import { KEYS, POOLS, composedFor, resolvedFor, servedFigures } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById, requestSidesOf } from './requests';
+import { GUARDRAIL_STORY_IDS } from './requests';
 import { createRng } from './rng';
 import { ROUTING_LOG_KINDS, getDecision, listRoutingLog } from './routingLog';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
@@ -110,6 +115,14 @@ const affinityRefusal = (input: Partial<PoolInput>): string | null => {
   if (input.subagentPlacement !== undefined && !SUBAGENT_PLACEMENT_VALUES.some((p) => p === input.subagentPlacement)) return 'subagent_placement must be by_cohort, by_strategy, or with_main';
   if (input.sessionPlacement !== undefined && !SESSION_PLACEMENT_VALUES.some((p) => p === input.sessionPlacement)) return 'session_placement must be by_strategy or by_warm_prefix';
   return null;
+};
+
+/** The guardrail routes' refusal of a pool or a key named twice, the pools read first. */
+const subjectsTwice = (input: Pick<Partial<GuardrailInput>, 'keys' | 'pools'>): string | null => {
+  const pool = repeatedId(input.pools);
+  if (pool !== null) return `pools lists ${pool} twice`;
+  const key = repeatedId(input.keys);
+  return key === null ? null : `keys lists ${key} twice`;
 };
 
 /** The account a member list names twice, which the routes refuse with 409 before any other member check. */
@@ -336,6 +349,11 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
   }
   if (q.efforts?.length && !q.efforts.includes(foldEffort(r.shape.effort))) return false;
   if (q.requestClasses?.length && !q.requestClasses.includes(foldRequestClass(r.requestClass))) return false;
+  // `-` keeps a request no guardrail matched, the spelling the class filter uses for none.
+  if (q.guardrails?.length) {
+    const listed = q.guardrails;
+    if (!r.guardrails.some((m) => listed.includes(m.id)) && !(listed.includes('-') && r.guardrails.length === 0)) return false;
+  }
   // Probes are off the log unless they are what the query asks for, as the route lists them.
   if (r.kind === 'probe' && !q.includeProbes && q.kind !== 'probe') return false;
   return true;
@@ -358,10 +376,15 @@ export class MockApi implements Api {
   private accounts = ACCOUNTS.map((a) => ({ ...a }));
   /** The incarnation each deleted id reached, which its next account starts above. */
   private buried = new Map<string, number>();
+  /** The incarnation each deleted guardrail id reached, which its next guardrail starts above. */
+  private buriedGuardrails = new Map<string, number>();
   /** The incarnation each deleted key id reached, which its next key starts above. */
   private buriedKeys = new Map<string, number>([['desktop', 1]]);
   /** The incarnation each deleted pool id reached, which its next pool starts above. */
   private buriedPools = new Map<string, number>();
+  // The attachments live on the guardrails alone, as one table holds them in the registry, and every pool and key view
+  // reads its lists from here.
+  private guardrails: Guardrail[] = GUARDRAILS.map((g) => ({ ...g, revision: stampToken(1, g.updatedAt) }));
   // The live desktop key was issued under the id its deleted earlier holder had, so it is that id's second; every other
   // key of the story is its id's first.
   private keys: ApiKey[] = KEYS.map((k) => ({ ...k, revision: stampToken((this.buriedKeys.get(k.id) ?? 0) + 1, k.updatedAt) }));
@@ -396,7 +419,92 @@ export class MockApi implements Api {
     const keys = this.keys.filter((k) => k.poolId === p.id).map((k) => ({ enabled: k.enabled, id: k.id, label: k.name, prefix: k.prefix }));
     const ids = new Set(keys.map((k) => k.id));
     const cohort = Math.max(0, ...this.sessions.filter((s) => s.pinned && ids.has(s.keyId)).map((s) => s.agents));
-    return { ...p, activePins: poolPins(p), keys, warnings: poolWarnings(p, cohort) };
+    return { ...p, activePins: poolPins(p), guardrails: this.guardrailRefs('pools', p.id), keys, warnings: poolWarnings(p, cohort) };
+  }
+
+  /** The key as the route answers it, its own guardrails and its pool's read from the attachments at the time of the read. */
+  private keyView(k: ApiKey): ApiKey {
+    return { ...k, guardrails: this.guardrailRefs('keys', k.id), poolGuardrails: this.guardrailRefs('pools', k.poolId) };
+  }
+
+  /** A pool's or a key's guardrails in the order it runs them. */
+  private guardrailRefs(kind: 'keys' | 'pools', subjectId: string): GuardrailRef[] {
+    return this.guardrails
+      .flatMap((g) => g[kind].filter((a) => a.id === subjectId).map((a) => ({ enabled: g.enabled, id: g.id, mode: g.mode, name: g.name, position: a.position })))
+      .sort((a, b) => a.position - b.position);
+  }
+
+  /** The guardrail as the route answers it, each attachment labeled by its pool's or key's name at the read. */
+  private guardrailView(g: Guardrail): Guardrail {
+    const labeled = (list: GuardrailAttachment[], nameOf: (id: string) => string | undefined) => list.map((a) => ({ ...a, label: nameOf(a.id) ?? a.id })).sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
+    return { ...g, keys: labeled(g.keys, (id) => this.keys.find((k) => k.id === id)?.name), pools: labeled(g.pools, (id) => this.pools.find((p) => p.id === id)?.name) };
+  }
+
+  /** A subject's list replaced whole from its own side, positions 0 to n-1 in the given order. */
+  private setSubjectGuardrails(kind: 'keys' | 'pools', subjectId: string, ids: string[]) {
+    this.guardrails = this.guardrails.map((g) => {
+      const others = g[kind].filter((a) => a.id !== subjectId);
+      const at = ids.indexOf(g.id);
+      return withAttachments(g, kind, at < 0 ? others : [...others, { id: subjectId, label: subjectId, position: at }]);
+    });
+  }
+
+  /**
+   * The bound of a write from the guardrail's side over the lists it would leave, pool by pool in id order: a named pool
+   * takes the guardrail at the end of its list, a named key at the end of its own, and every key of a named pool and
+   * every named key is counted against its pool's list. An absent list leaves that kind's lists as they stand.
+   */
+  private sideBoundRefusal(id: string, pools: string[] | undefined, keys: string[] | undefined): string | null {
+    const place = (list: string[], attached: boolean) => (attached ? (list.includes(id) ? list : [...list, id]) : list.filter((x) => x !== id));
+    const listOf = (kind: 'keys' | 'pools', subjectId: string) => this.guardrailRefs(kind, subjectId).map((r) => r.id);
+    const affected = new Set([...(pools ?? []), ...(keys ?? []).flatMap((k) => this.keys.find((x) => x.id === k)?.poolId ?? [])]);
+    for (const poolId of [...affected].sort()) {
+      const poolNamed = pools?.includes(poolId) ?? false;
+      const poolList = pools === undefined ? listOf('pools', poolId) : place(listOf('pools', poolId), poolNamed);
+      const keyLists = this.keys
+        .filter((k) => k.poolId === poolId && (poolNamed || (keys?.includes(k.id) ?? false)))
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map((k): [string, string[]] => [k.id, keys === undefined ? listOf('keys', k.id) : place(listOf('keys', k.id), keys.includes(k.id))]);
+      const refusal = boundRefusal(poolId, poolList, keyLists);
+      if (refusal) return refusal;
+    }
+    return null;
+  }
+
+  /** From the guardrail's side: a subject newly named joins the end of its list, one already attached keeps its place. */
+  private attached(g: Guardrail, kind: 'keys' | 'pools', ids: string[] | undefined): GuardrailAttachment[] {
+    if (ids === undefined) return g[kind];
+    const kept = g[kind].filter((a) => ids.includes(a.id));
+    const next = (subjectId: string) => Math.max(-1, ...this.guardrails.filter((x) => x.id !== g.id).flatMap((x) => x[kind].filter((a) => a.id === subjectId).map((a) => a.position))) + 1;
+    return [...kept, ...ids.filter((s) => !kept.some((a) => a.id === s)).map((s) => ({ id: s, label: s, position: next(s) }))];
+  }
+
+  /** The route's checks of a guardrail's own members, in its order: the name, the description, the mode. */
+  private guardrailFieldRefusal(input: Partial<GuardrailInput>): string | null {
+    const bytes = (text: string) => new TextEncoder().encode(text).length;
+    if (input.name !== undefined) {
+      if (bytes(input.name) > 256) return 'name is at most 256 bytes';
+      if (input.name === '') return 'name is required';
+      if (input.name.toLowerCase().includes('prompt is too long')) return 'name must not contain "prompt is too long"';
+    }
+    if (input.description !== undefined && bytes(input.description) > 256) return 'description is at most 256 bytes';
+    if (input.mode !== undefined && !GUARDRAIL_MODE_VALUES.some((m) => m === input.mode)) return 'mode is observe or enforce';
+    return null;
+  }
+
+  /** The pools and keys a guardrail-side write names that the registry lacks, which the store refuses by name. */
+  private missingSubject(pools: string[] | undefined, keys: string[] | undefined): string | null {
+    const pool = (pools ?? []).find((id) => !this.pools.some((p) => p.id === id));
+    if (pool !== undefined) return `pool ${pool} not found`;
+    const key = (keys ?? []).find((id) => !this.keys.some((k) => k.id === id));
+    return key === undefined ? null : `key ${key} not found`;
+  }
+
+  /** The stamp as the route reads it against the shipped presets: customized where the conditions left the stamped version's. */
+  private presetStateOf(preset: Guardrail['preset'], conditions: Guardrail['conditions']): Guardrail['preset'] {
+    if (preset === null) return null;
+    const stamped = PRESETS.find((p) => p.id === preset.id && p.version === preset.version);
+    return { ...preset, currentVersion: PRESETS.find((p) => p.id === preset.id)?.version ?? preset.version, customized: stamped === undefined || !sameConditions(conditions, stamped.conditions) };
   }
 
   private account(accountId: string): Account {
@@ -518,7 +626,55 @@ export class MockApi implements Api {
     return latency(this.withPool(account), 300);
   }
 
+  /**
+   * The create route's checks in its order. A preset supplies the name, the mode and the conditions the input leaves
+   * out, never the description, and stamps the row whatever the input changed.
+   */
+  async createGuardrail(input: GuardrailInput): Promise<Guardrail> {
+    if (input.presetVersion !== undefined) throw new ApiError(400, 'preset_version applies on edit', null);
+    const preset = input.preset === undefined ? undefined : PRESETS.find((p) => p.id === input.preset);
+    // The client sends the id it derives from the name, so a name already taken is an id already taken.
+    const id = slug(input.name ?? preset?.name ?? '');
+    if (GUARDRAIL_RESERVED_IDS.includes(id)) throw new ApiError(400, 'id is reserved', null);
+    if (this.guardrails.some((g) => g.id === id)) throw new ApiError(409, GUARDRAIL_TAKEN, null);
+    if (input.preset !== undefined && preset === undefined) throw new ApiError(400, `unknown preset ${input.preset}`, null);
+    const name = input.name ?? preset?.name;
+    if (name === undefined) throw new ApiError(400, 'name is required', null);
+    const fields = this.guardrailFieldRefusal({ ...input, name });
+    if (fields !== null) throw new ApiError(400, fields, null);
+    // The shipped table's own tests hold every preset to the rules, so a preset's conditions stand as they are.
+    const refusal = (input.conditions === undefined && preset !== undefined ? null : conditionsRefusal(input.conditions)) ?? subjectsTwice(input);
+    if (refusal !== null) throw new ApiError(400, refusal, null);
+    const conditions = input.conditions ?? preset?.conditions ?? [];
+    const attach = this.sideBoundRefusal(id, input.pools, input.keys);
+    if (attach !== null) throw new ApiError(400, attach, null);
+    const missing = this.missingSubject(input.pools, input.keys);
+    if (missing !== null) throw new ApiError(404, missing, null);
+    const at = iso(NOW);
+    const blank: Guardrail = {
+      action: 'block',
+      conditions: conditions.map((c) => ({ name: c.name, operator: c.operator, path: c.path, selector: c.selector, subject: c.subject, value: c.value })),
+      createdAt: at,
+      description: input.description ?? '',
+      enabled: input.enabled ?? true,
+      id,
+      keys: [],
+      mode: input.mode ?? preset?.suggestedMode ?? 'observe',
+      name,
+      pools: [],
+      preset: null,
+      revision: stampToken((this.buriedGuardrails.get(id) ?? 0) + 1, at),
+      updatedAt: at,
+    };
+    const stamp = preset === undefined ? null : { currentVersion: preset.version, customized: false, id: preset.id, version: preset.version };
+    const row: Guardrail = { ...blank, keys: this.attached(blank, 'keys', input.keys), pools: this.attached(blank, 'pools', input.pools), preset: this.presetStateOf(stamp, blank.conditions) };
+    this.guardrails = [...this.guardrails, row];
+    return latency(this.guardrailView(row), 300);
+  }
+
   async createKey(input: CreateKeyInput): Promise<CreatedApiKey> {
+    // A new key starts with none of its own, so the route refuses the member before it reads anything else.
+    if (input.guardrails !== undefined) throw new ApiError(400, 'guardrails applies on edit', null);
     // The client sends the id it derives from the name, so a name already taken is an id already taken.
     const id = slug(input.name);
     if (this.keys.some((k) => k.id === id)) throw new ApiError(409, KEY_TAKEN, null);
@@ -528,6 +684,8 @@ export class MockApi implements Api {
     const secret = `phoebis-${body}`;
     const key: ApiKey = {
       ...KEY_SAMPLE,
+      guardrails: [],
+      poolGuardrails: [],
       id,
       name: input.name,
       prefix: secret.slice(0, 16),
@@ -550,10 +708,12 @@ export class MockApi implements Api {
       lifetime: { billedUsd: 0, cost: 0, equivalent: { fiveHour: 0, sevenDay: 0 }, estimated: false, requests: 0 },
     };
     this.keys = [key, ...this.keys];
-    return latency({ key, secret }, 300);
+    return latency({ key: this.keyView(key), secret }, 300);
   }
 
   async createPool(input: PoolInput): Promise<Pool> {
+    // A new pool starts with no guardrail, so the route refuses the member before it reads anything else.
+    if (input.guardrails !== undefined) throw new ApiError(400, 'guardrails applies on edit', null);
     const id = slug(input.name);
     if (this.pools.some((p) => p.id === id)) throw new ApiError(409, POOL_TAKEN, null);
     const refusal = poolRefusal(input);
@@ -568,6 +728,7 @@ export class MockApi implements Api {
     const pool: Omit<Pool, 'activePins' | 'keys' | 'warnings'> = {
       ...POOL_SAMPLE,
       ...input,
+      guardrails: [],
       cost24h: 0,
       id,
       // From the members' kinds, as the router composes them, and nothing for a pool with no member.
@@ -598,10 +759,21 @@ export class MockApi implements Api {
     return latency(undefined, 250);
   }
 
+  async deleteGuardrail(id: string) {
+    const row = this.guardrails.find((g) => g.id === id);
+    if (!row) throw new ApiError(404, 'guardrail not found', null);
+    this.buriedGuardrails.set(id, Math.floor(row.revision / INCARNATION_STAMP));
+    // The attachments live on the row, so they leave with it and every other guardrail keeps its positions.
+    this.guardrails = this.guardrails.filter((g) => g.id !== id);
+    return latency(undefined, 200);
+  }
+
   async deleteKey(id: string) {
     const key = this.keys.find((k) => k.id === id);
     if (key) this.buriedKeys.set(id, Math.floor(key.revision / INCARNATION_STAMP));
     this.keys = this.keys.filter((k) => k.id !== id);
+    // The key's attachments go in the delete's own transaction, since one subject column cannot cascade from two tables.
+    this.setSubjectGuardrails('keys', id, []);
     return latency(undefined, 200);
   }
 
@@ -611,6 +783,7 @@ export class MockApi implements Api {
     const pool = this.pools.find((p) => p.id === id);
     if (pool) this.buriedPools.set(id, Math.floor(pool.revision / INCARNATION_STAMP));
     this.pools = this.pools.filter((p) => p.id !== id);
+    this.setSubjectGuardrails('pools', id, []);
     return latency(undefined, 200);
   }
 
@@ -639,6 +812,33 @@ export class MockApi implements Api {
     return latency(burnOf(emptyStore() ? [] : ALL_ROLLUPS, range, groupBy, filters));
   }
 
+  /**
+   * The counts route over the story's rows: every match in the range, the blocks' captured request bytes, and the name
+   * the registry holds now, none for a guardrail deleted since it matched. The trailing day ends at the story's own
+   * instant, as the dashboard's does.
+   */
+  getAnalyticsGuardrails(range: GuardrailRange): Promise<GuardrailCounts> {
+    const from = range === '24h' ? NOW - DAY : Date.parse(range.from);
+    const to = range === '24h' ? NOW : Date.parse(range.to);
+    const counts = new Map<string, { blocked: number; blockedBytes: number; observed: number }>();
+    for (const r of emptyStore() ? [] : REQUESTS) {
+      const at = Date.parse(r.at);
+      if (at < from || at > to) continue;
+      for (const m of r.guardrails) {
+        const c = counts.get(m.id) ?? { blocked: 0, blockedBytes: 0, observed: 0 };
+        if (m.blocked) {
+          c.blocked += 1;
+          c.blockedBytes += capturedBodiesFor(r)?.requestBytesSeen ?? 0;
+        } else c.observed += 1;
+        counts.set(m.id, c);
+      }
+    }
+    const guardrails = [...counts]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([id, c]) => ({ ...c, id, name: this.guardrails.find((g) => g.id === id)?.name ?? null }));
+    return latency({ from: iso(from), guardrails, to: iso(to) });
+  }
+
   getAnalyticsReconciliations(filters?: Pick<AnalyticsQuery, 'accountIds'>) {
     return latency(reconciliationsOf(emptyStore() ? [] : RECONCILIATIONS, filters));
   }
@@ -660,6 +860,12 @@ export class MockApi implements Api {
   async getCapturedBodies(requestId: string) {
     const r = requestById.get(requestId);
     return latency(r ? capturedBodiesFor(r) : null);
+  }
+
+  getGuardrail(id: string): Promise<Guardrail> {
+    const row = emptyStore() ? undefined : this.guardrails.find((g) => g.id === id);
+    if (!row) return Promise.reject(new ApiError(404, 'guardrail not found', null));
+    return latency(this.guardrailView(row));
   }
 
   getKeepaliveOverview() {
@@ -720,6 +926,10 @@ export class MockApi implements Api {
     let cached = 0;
     let cost = 0;
     const errorCodes = new Map<string, number>();
+    // A guardrail block is a refusal the operator asked for, so it is no error of the router's: the rate, the hourly
+    // errors and the top code leave it out, while the request count keeps it, since the router received it.
+    const blocked = (r: RequestLog) => r.errorCode === 'guardrail_blocked';
+    const rated = last24h.filter((r) => !blocked(r));
     for (const r of last24h) {
       const at = iso(Math.floor(Date.parse(r.at) / 3_600_000) * 3_600_000);
       const bucket = hourlyMap.get(at);
@@ -727,12 +937,12 @@ export class MockApi implements Api {
       tokens += total;
       cached += r.usage.cacheRead;
       cost += r.costUsd;
-      if (r.errorCode) errorCodes.set(r.errorCode, (errorCodes.get(r.errorCode) ?? 0) + 1);
+      if (r.errorCode && !blocked(r)) errorCodes.set(r.errorCode, (errorCodes.get(r.errorCode) ?? 0) + 1);
       if (bucket) {
         bucket.requests += 1;
         bucket.tokens += total;
         bucket.cost += r.costUsd;
-        if (r.status !== 200) bucket.errors += 1;
+        if (r.status !== 200 && !blocked(r)) bucket.errors += 1;
       }
     }
     const top = [...errorCodes.entries()].sort((a, b) => b[1] - a[1])[0];
@@ -743,7 +953,7 @@ export class MockApi implements Api {
       billed24h: day.billedUsd,
       cost24h: cost,
       equivalent24h: day.equivalent,
-      errorRate24h: last24h.length ? last24h.filter((r) => r.status !== 200).length / last24h.length : null,
+      errorRate24h: rated.length ? rated.filter((r) => r.status !== 200).length / rated.length : null,
       estimated24h: day.estimated,
       hourly: [...hourlyMap.values()],
       requests24h: last24h.length,
@@ -804,12 +1014,21 @@ export class MockApi implements Api {
     return catalogUnion(fetched);
   }
 
+  /** The presets are the binary's, so a fresh installation lists them too. */
+  listGuardrailPresets() {
+    return latency(PRESETS.map((p) => ({ ...p, conditions: p.conditions.map((c) => ({ ...c })) })));
+  }
+
+  listGuardrails() {
+    return latency(emptyStore() ? [] : [...this.guardrails].sort((a, b) => a.id.localeCompare(b.id)).map((g) => this.guardrailView(g)));
+  }
+
   listKeepaliveRecipes() {
     return latency(emptyStore() ? [] : RECIPES);
   }
 
   listKeys() {
-    return latency(emptyStore() ? [] : this.keys);
+    return latency(emptyStore() ? [] : this.keys.map((k) => this.keyView(k)));
   }
 
   listPools() {
@@ -903,7 +1122,7 @@ export class MockApi implements Api {
     const secret = `phoebis-${this.token(40)}`;
     const next: ApiKey = { ...key, prefix: secret.slice(0, 16), retiredSecretLastUsedAt: null, sessionsOnRetiredSecret: 2, ...restamp(key) };
     this.keys = this.keys.map((k) => (k.id === id ? next : k));
-    return latency({ key: next, secret }, 300);
+    return latency({ key: this.keyView(next), secret }, 300);
   }
 
   async startPairing(start: PairingStart): Promise<PairingSession> {
@@ -926,6 +1145,40 @@ export class MockApi implements Api {
     return latency({ ...PAIRING_SAMPLE, authorizeUrl: `https://claude.ai/oauth/authorize?${params.toString()}`, expiresAt: ahead(10 * MINUTE), id, redirectUri: PAIRING_REDIRECT_URI, state }, 200);
   }
 
+  /**
+   * The dry run over the story's captured rows of the pool or the key, newest first, no further back than the longest
+   * capture window and never a probe, each verdict as `dryRunVerdict` reads it. The route's refusals come in its order.
+   */
+  async testGuardrail(input: GuardrailTestInput): Promise<GuardrailTestResult> {
+    if (input.guardrail !== undefined && input.conditions !== undefined) throw new ApiError(400, 'guardrail and conditions are exclusive', null);
+    if (input.guardrail === undefined && input.conditions === undefined) throw new ApiError(400, 'guardrail or conditions is required', null);
+    if (input.poolId !== undefined && input.keyId !== undefined) throw new ApiError(400, 'pool_id and key_id are exclusive', null);
+    if (input.poolId === undefined && input.keyId === undefined) throw new ApiError(400, 'pool_id or key_id is required', null);
+    const limit = input.limit ?? 200;
+    if (!(Number.isInteger(limit) && limit >= 1 && limit <= 500)) throw new ApiError(400, 'limit is 1 to 500', null);
+    const windowHours = this.settings.retention.bodyCaptureMaxHours;
+    const sample = { keyId: input.keyId ?? null, limit, poolId: input.poolId ?? null, windowHours };
+    if (emptyStore()) return latency({ requests: [], sample, totals: { indeterminate: 0, matched: 0, sampled: 0, unmatched: 0 } });
+    let conditions = input.conditions ?? [];
+    if (input.guardrail !== undefined) {
+      const saved = this.guardrails.find((g) => g.id === input.guardrail);
+      if (!saved) throw new ApiError(404, 'no such guardrail', null);
+      conditions = saved.conditions;
+    } else {
+      const refusal = conditionsRefusal(input.conditions);
+      if (refusal !== null) throw new ApiError(400, refusal, null);
+    }
+    if (input.poolId !== undefined && !this.pools.some((p) => p.id === input.poolId)) throw new ApiError(404, 'no such pool', null);
+    if (input.keyId !== undefined && !this.keys.some((k) => k.id === input.keyId)) throw new ApiError(404, 'no such key', null);
+    const since = NOW - windowHours * HOUR;
+    const rows = REQUESTS.filter((r) => r.kind !== 'probe' && r.capturedBodies && Date.parse(r.at) >= since && (input.poolId !== undefined ? r.poolId === input.poolId : r.keyId === input.keyId))
+      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+      .slice(0, limit);
+    const requests = rows.map((r) => ({ ...dryRunVerdict(conditions, r, GUARDRAIL_STORY_IDS.has(r.id)), id: r.id, receivedAt: r.at }));
+    const count = (verdict: string) => requests.filter((r) => r.verdict === verdict).length;
+    return latency({ requests, sample, totals: { indeterminate: count('indeterminate'), matched: count('matched'), sampled: requests.length, unmatched: count('unmatched') } }, 300);
+  }
+
   /** The account route's refusals in its order and words; the end is kept only while the flag stands. */
   async updateAccount(accountId: string, patch: AccountPatch, revision?: number): Promise<Account> {
     const a = this.account(accountId);
@@ -942,20 +1195,68 @@ export class MockApi implements Api {
     return latency(this.withPool(this.putAccount(revised({ ...a, cancelled: patch.cancelled, subscription }))), 250);
   }
 
+  /**
+   * The edit route's checks in its order. An edit stamps the guardrail alone: the attachments it changes from its side
+   * leave the pools' and keys' stamps where they were.
+   */
+  async updateGuardrail(id: string, input: Partial<GuardrailInput>, revision?: number): Promise<Guardrail> {
+    const current = this.guardrails.find((g) => g.id === id);
+    if (!current) throw new ApiError(404, 'guardrail not found', null);
+    if (input.preset !== undefined) throw new ApiError(400, 'preset applies on create', null);
+    let stamp = current.preset;
+    if (input.presetVersion !== undefined) {
+      if (stamp === null) throw new ApiError(400, 'guardrail has no preset', null);
+      const presetId = stamp.id;
+      if (!PRESETS.some((p) => p.id === presetId && p.version === input.presetVersion)) throw new ApiError(400, `preset_version is not a shipped version of ${presetId}`, null);
+      stamp = { ...stamp, version: input.presetVersion };
+    }
+    const refusal = this.guardrailFieldRefusal(input) ?? (input.conditions === undefined ? null : conditionsRefusal(input.conditions)) ?? subjectsTwice(input);
+    if (refusal !== null) throw new ApiError(400, refusal, null);
+    if (revision !== undefined && revision !== current.revision) throw new ApiError(409, GUARDRAIL_STALE, 'stale_edit');
+    const attach = input.pools === undefined && input.keys === undefined ? null : this.sideBoundRefusal(id, input.pools, input.keys);
+    if (attach !== null) throw new ApiError(400, attach, null);
+    const missing = this.missingSubject(input.pools, input.keys);
+    if (missing !== null) throw new ApiError(404, missing, null);
+    const conditions = input.conditions ?? current.conditions;
+    const next: Guardrail = {
+      ...current,
+      conditions: conditions.map((c) => ({ name: c.name, operator: c.operator, path: c.path, selector: c.selector, subject: c.subject, value: c.value })),
+      description: input.description ?? current.description,
+      enabled: input.enabled ?? current.enabled,
+      keys: this.attached(current, 'keys', input.keys),
+      mode: input.mode ?? current.mode,
+      name: input.name ?? current.name,
+      pools: this.attached(current, 'pools', input.pools),
+      preset: this.presetStateOf(stamp, conditions),
+      ...restamp(current),
+    };
+    this.guardrails = this.guardrails.map((g) => (g.id === id ? next : g));
+    return latency(this.guardrailView(next), 250);
+  }
+
   async updateKey(id: string, input: KeyInput, revision?: number): Promise<ApiKey> {
     const idx = this.keys.findIndex((k) => k.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown key ${id}`));
     const refusal = keyRulesRefusal(input);
     if (refusal) return Promise.reject(new ApiError(400, refusal, null));
-    const { expiresAt: expiry, ...rest } = input;
+    const { expiresAt: expiry, guardrails: ownIds, ...rest } = input;
+    const twice = repeatedId(ownIds);
+    if (twice !== null) return Promise.reject(new ApiError(400, `guardrails lists ${twice} twice`, null));
     const current = this.keys[idx];
     if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the key changed while it was being edited, so reload and try again', 'stale_edit'));
+    // The pool the key lands in, a new one on a move, with the key's own list as the edit leaves it.
+    const own = ownIds ?? this.guardrailRefs('keys', id).map((r) => r.id);
+    const bound = boundRefusal(rest.poolId, this.guardrailRefs('pools', rest.poolId).map((r) => r.id), [[id, own]]);
+    if (bound !== null) return Promise.reject(new ApiError(400, bound, null));
+    const unknown = (ownIds ?? []).find((g) => !this.guardrails.some((x) => x.id === g));
+    if (unknown !== undefined) return Promise.reject(new ApiError(404, `guardrail ${unknown} not found`, null));
     const expiresAt = expiry === undefined ? current.expiresAt : expiry;
     // The status is the decoder's fold of the stored flags, so a key switched off or lapsed reads that way at once.
     const status = current.status === 'revoked' ? 'revoked' : expiresAt !== null && Date.parse(expiresAt) <= Date.now() ? 'expired' : rest.enabled ? 'active' : 'disabled';
     const next: ApiKey = { ...current, ...rest, expiresAt, status, ...restamp(current) };
     this.keys = this.keys.map((k, i) => (i === idx ? next : k));
-    return latency(next, 250);
+    if (ownIds !== undefined) this.setSubjectGuardrails('keys', id, ownIds);
+    return latency(this.keyView(next), 250);
   }
 
   async updatePool(id: string, input: PoolInput, revision?: number): Promise<Pool> {
@@ -972,19 +1273,34 @@ export class MockApi implements Api {
     if (repeated) return Promise.reject(new ApiError(409, `members name account ${repeated} twice`, null));
     const members = memberRefusal(input.members);
     if (members) return Promise.reject(new ApiError(400, members, null));
+    const { guardrails: guardrailIds, ...fields } = input;
+    const twice = repeatedId(guardrailIds);
+    if (twice !== null) return Promise.reject(new ApiError(400, `guardrails lists ${twice} twice`, null));
     // In the route's order: the stamp after the list's own shape and ahead of the member lookups, so a stale edit that
     // names an unknown or a held member answers `stale_edit`.
     const current = this.pools[idx];
     if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the pool changed while it was being edited, so reload and try again', 'stale_edit'));
+    // The store counts the guardrail list against every key of the pool first in its transaction, then writes the
+    // members and looks each guardrail up last.
+    if (guardrailIds !== undefined) {
+      const keyLists = this.keys
+        .filter((k) => k.poolId === id)
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map((k): [string, string[]] => [k.id, this.guardrailRefs('keys', k.id).map((r) => r.id)]);
+      const bound = boundRefusal(id, guardrailIds, keyLists);
+      if (bound !== null) return Promise.reject(new ApiError(400, bound, null));
+    }
     const unknown = input.members.find((m) => !this.accounts.some((a) => a.id === m.accountId));
     if (unknown) return Promise.reject(new ApiError(404, `account ${unknown.accountId} not found`, null));
     const held = heldElsewhere(input.members, this.pools, id);
     if (held) return Promise.reject(new ApiError(409, held, null));
+    const missing = guardrailIds?.find((g) => !this.guardrails.some((x) => x.id === g));
+    if (missing !== undefined) return Promise.reject(new ApiError(404, `guardrail ${missing} not found`, null));
     const verdict = new Map(current.members.map((m) => [m.accountId, m.eligible]));
     const pinned = new Map(current.members.map((m) => [m.accountId, m.activePins]));
     const next: Omit<Pool, 'activePins' | 'keys' | 'warnings'> = {
       ...current,
-      ...input,
+      ...fields,
       // From the saved members' kinds, as the router composes them on every save.
       keepaliveResolved: resolvedFor(composedFor(input.members.map((m) => this.accounts.find((a) => a.id === m.accountId)?.kind ?? 'oauth'), input.cacheTtl), input.keepalive),
       // Eligibility is the router's reading of live cooldowns and overages, not something a save can set. A save
@@ -997,6 +1313,7 @@ export class MockApi implements Api {
       ...restamp(current),
     };
     this.pools = this.pools.map((p, i) => (i === idx ? next : p));
+    if (guardrailIds !== undefined) this.setSubjectGuardrails('pools', id, guardrailIds);
     return latency(this.poolView(next), 250);
   }
 

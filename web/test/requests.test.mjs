@@ -188,3 +188,12 @@ test("a held row reads waited with each wait's reason, and a row without waits r
   assert.deepEqual(d.heldWords(hold([{ heldMs: 300, reason: 'cap' }, { heldMs: 100, reason: 'cap' }])), { badge: 'waited 1 s', title: 'waited for a slot 1 s, for a slot 1 s on acct-a' }, 'a wait that happened reads at least a second');
   assert.deepEqual(d.heldWords({ ...hold([]), heldMs: 400 }), { badge: 'waited 1 s', title: 'waited 1 s on acct-a' }, 'a row from before the waits reads at least a second too');
 });
+
+test('the_codec_reads_and_writes_the_guardrails_list', () => {
+  const read = d.REQUESTS_CODEC.fromParams(new URLSearchParams('guardrails=large-auxiliary,-'));
+  assert.deepEqual(read.guardrails, ['large-auxiliary', '-'], 'an id and none, as the route reads the comma list');
+  const written = d.REQUESTS_CODEC.toParams(read);
+  assert.deepEqual([...written.keys()], ['guardrails'], 'every other filter stands at its default');
+  assert.equal(written.get('guardrails'), 'large-auxiliary,-');
+  assert.deepEqual(d.REQUESTS_CODEC.fromParams(new URLSearchParams('')).guardrails, [], 'a bare address filters on no guardrail');
+});

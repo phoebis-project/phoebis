@@ -27,12 +27,13 @@ The proxy listener answers `HEAD /api/hello`, `HEAD` and `GET /api/ready`, `POST
 ## How a request travels
 
 The client sends `/v1/messages` to the proxy listener with a key the router issued, in the credential header it would
-have used for Anthropic. The router authenticates the key, resolves its pool and selects one account: the session's
-pin when it has one, otherwise the pool's strategy ([Pools, keys and routing](routing.md)). It puts the account's
-credential where the client put the key, edits the body and the headers as [The relay](relay.md) lists them, and
-sends the request in the client's own header order and spelling to `api.anthropic.com`. The response head is
-classified before a byte reaches the client, so a 429 on one account fails over to a sibling inside the same call.
-The request, each attempt and the usage land in the ledger.
+have used for Anthropic. The router authenticates the key, resolves its pool, runs the pool's guardrails and then the
+key's, refusing a request an enforcing guardrail matches before any account is touched ([Guardrails](guardrails.md)),
+and selects one account: the session's pin when it has one, otherwise the pool's strategy ([Pools, keys and
+routing](routing.md)). It puts the account's credential where the client put the key, edits the body and the headers as
+[The relay](relay.md) lists them, and sends the request in the client's own header order and spelling to
+`api.anthropic.com`. The response head is classified before a byte reaches the client, so a 429 on one account fails
+over to a sibling inside the same call. The request, each attempt and the usage land in the ledger.
 
 ## The vocabulary
 
@@ -53,18 +54,18 @@ site calls the client Claude Code and the plugin that reports to the router the 
 ## Where to start
 
 The [Quick start](quickstart.md) is for the person with one machine who wants Claude Code answering through the router
-on loopback. [The client](client.md) is for the person pointing Claude Code at the router and for the key holder. Once
+on loopback. [The client](client.md) is for the person pointing Claude Code at the router and for the key holder.
+[Guardrails](guardrails.md) is for the operator blocking a request shape, the client's subagent summary fork first. Once
 a loopback router works, [A second machine](second-machine.md) covers a LAN host serving several machines.
-[Installation](installation.md) is for the operator installing on a host or in the container and for the one who
-needs every setting. [Pairing an account](pairing.md) is for the operator adding an account in the console or by
-`curl`. An operator tuning pools and keys, or reading why a request landed where it did, reads
-[Pools, keys and routing](routing.md). [Keepalive](keepalive.md) is for the operator turning cache warming on, and
-[The keepalive mod](keepalive-mod.md) for the one installing and configuring the mod on a client machine.
-[The relay](relay.md) says what the router changes on the wire and sends on its own. [The console](console.md) is for
-the operator reading or using a view. [Statistics](statistics.md) is for the operator reading a figure's meaning or
-alerting on a gauge. [Operations](operations.md) is for the operator running the router for months.
-[Development](development.md) is for the contributor. The [API reference](api-reference.md) is for the operator
-scripting the admin API.
+[Installation](installation.md) is for the operator installing on a host or in the container and for the one who needs
+every setting. [Pairing an account](pairing.md) is for the operator adding an account in the console or by `curl`. An
+operator tuning pools and keys, or reading why a request landed where it did, reads [Pools, keys and
+routing](routing.md). [Keepalive](keepalive.md) is for the operator turning cache warming on, and [The keepalive
+mod](keepalive-mod.md) for the one installing and configuring the mod on a client machine. [The relay](relay.md) says
+what the router changes on the wire and sends on its own. [The console](console.md) is for the operator reading or using
+a view. [Statistics](statistics.md) is for the operator reading a figure's meaning or alerting on a gauge.
+[Operations](operations.md) is for the operator running the router for months. [Development](development.md) is for the
+contributor. The [API reference](api-reference.md) is for the operator scripting the admin API.
 
 ## License
 

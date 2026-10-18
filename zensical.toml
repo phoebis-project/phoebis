@@ -20,6 +20,7 @@ nav = [
     { "Installation" = "installation.md" },
     { "Pairing an account" = "pairing.md" },
     { "Pools, keys and routing" = "routing.md" },
+    { "Guardrails" = "guardrails.md" },
     { "Keepalive" = "keepalive.md" },
     { "The keepalive mod" = "keepalive-mod.md" },
     { "The relay" = "relay.md" },

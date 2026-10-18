@@ -92,6 +92,17 @@ export const fmtMiB = (bytes: number) => {
   const mib = bytes / 1_048_576;
   return `${Number.isInteger(mib) ? mib : mib.toFixed(1)} MiB`;
 };
+/** A byte count in the largest binary unit it reaches, each figure printed as `fmtMiB` prints its own. */
+export const fmtBytes = (bytes: number) => {
+  const units = ['KiB', 'MiB', 'GiB'];
+  let unit = 'B';
+  let figure = bytes;
+  for (let i = 0; i < units.length && figure >= 1024; i += 1) {
+    figure /= 1024;
+    unit = units[i];
+  }
+  return `${Number.isInteger(figure) ? figure : figure.toFixed(1)} ${unit}`;
+};
 
 export function fmtDuration(ms: number): string {
   const abs = Math.abs(ms);

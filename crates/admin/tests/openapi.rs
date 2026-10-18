@@ -22,12 +22,13 @@ const ROUTES_RS: &str = include_str!("../src/routes.rs");
 /// The two catch-alls, the paths a plain `.route(` registers, which the introduction describes.
 const PLAIN_ROUTES: &[&str] = &["/admin", "/admin/{*rest}"];
 
-/// The seventeen tags in the order the document declares them, the API page's area order.
-const TAGS: [&str; 17] = [
+/// The eighteen tags in the order the document declares them, the API page's area order.
+const TAGS: [&str; 18] = [
     "Accounts",
     "Analytics",
     "Attention",
     "Dashboard",
+    "Guardrails",
     "Keepalive",
     "Keys",
     "Ledger",
@@ -69,12 +70,20 @@ const REFUSALS: &[(&str, &[u16])] = &[
     ("analytics_breakdown", &[400, 500]),
     ("analytics_budgets", &[503]),
     ("analytics_burn", &[400, 500]),
+    ("analytics_guardrails", &[400, 500]),
     ("analytics_placements", &[400, 500]),
     ("analytics_reconciliations", &[500]),
     ("analytics_rewrites", &[400, 500]),
     ("analytics_series", &[400, 500]),
     ("attention_show", &[500]),
     ("dashboard_show", &[500]),
+    ("guardrails_list", &[500]),
+    ("guardrails_create", &[400, 404, 409, 500, 503]),
+    ("guardrail_presets", &[]),
+    ("guardrails_test", &[400, 404, 500]),
+    ("guardrail_show", &[404, 500]),
+    ("guardrail_patch", &[400, 404, 409, 500, 503]),
+    ("guardrail_delete", &[404, 500, 503]),
     ("keepalive_overview", &[500]),
     ("keepalive_recipes", &[]),
     ("keys_list", &[500]),
@@ -125,6 +134,7 @@ const EXAMPLE_FILES: &[&str] = &[
     "analytics_breakdown_speed",
     "analytics_budgets",
     "analytics_burn",
+    "analytics_guardrails",
     "analytics_placements",
     "analytics_reconciliations",
     "analytics_rewrites",
@@ -132,6 +142,11 @@ const EXAMPLE_FILES: &[&str] = &[
     "analytics_series_accounts",
     "attention",
     "dashboard",
+    "guardrails",
+    "guardrail_created",
+    "guardrail_presets",
+    "guardrail_show",
+    "guardrail_test",
     "keepalive_overview",
     "keepalive_recipes",
     "keys",
@@ -171,6 +186,7 @@ const HANDLER_MODULES: &[(&str, &str)] = &[
     ("analytics", include_str!("../src/analytics.rs")),
     ("attention", include_str!("../src/attention.rs")),
     ("dashboard", include_str!("../src/dashboard.rs")),
+    ("guardrails", include_str!("../src/guardrails.rs")),
     ("keepalive", include_str!("../src/keepalive.rs")),
     ("keys", include_str!("../src/keys.rs")),
     ("ledger", include_str!("../src/ledger.rs")),
@@ -469,13 +485,13 @@ async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_l
     );
     assert_eq!(
         document["paths"].as_object().unwrap().len(),
-        52,
-        "the admin listener's 52 paths"
+        57,
+        "the admin listener's 57 paths"
     );
     assert_eq!(
         operations(&document).len(),
-        62,
-        "the admin listener's 62 operations"
+        70,
+        "the admin listener's 70 operations"
     );
 }
 
@@ -566,11 +582,17 @@ async fn every_operation_declares_one_success_and_the_refusals_of_its_row_as_err
                 == "#/components/schemas/ErrorBody";
             assert!(shared || inline, "{id} {status}: the body is an ErrorBody");
             if status == "409" {
-                let stale_edit = ["account_patch", "key_patch", "pool_patch"].contains(&id);
+                let stale_edit = [
+                    "account_patch",
+                    "guardrail_patch",
+                    "key_patch",
+                    "pool_patch",
+                ]
+                .contains(&id);
                 assert_eq!(
                     response["headers"]["x-phoebis-error-code"].is_object(),
                     stale_edit,
-                    "{id} 409: the code header on the three stale_edit sites alone"
+                    "{id} 409: the code header on the four stale_edit sites alone"
                 );
             }
         }
@@ -616,8 +638,8 @@ async fn every_example_is_its_fixtures_body_member_and_the_count_holds() {
     );
     assert_eq!(
         EXAMPLE_FILES.len(),
-        40,
-        "39 success answers and the replay's held answer"
+        46,
+        "45 success answers and the replay's held answer"
     );
     // The places the fixture manifest targets, each with the stems it attaches: a place carries as many examples
     // as stems, so a fixture attached twice or to the wrong place fails here, while a hand-written example (a
@@ -847,7 +869,9 @@ fn admits_null(schema: &Value) -> bool {
 async fn a_key_the_route_leaves_out_rather_than_writing_null_does_not_render_nullable() {
     let (_app, _up, document) = document().await;
     let schemas = &document["components"]["schemas"];
-    let fields: [(&str, &[&str]); 4] = [
+    let fields: [(&str, &[&str]); 6] = [
+        ("ConditionView", &["name", "path", "selector", "value"]),
+        ("GuardrailTestSample", &["key_id", "pool_id"]),
         ("ModelRowView", &["fast", "long_context"]),
         ("OverrideView", &["type_multiplier", "weight_by_window"]),
         ("RoutingLog", &["counts"]),

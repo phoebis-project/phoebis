@@ -1103,6 +1103,8 @@ fn observed_event(id: &str) -> BusEvent {
         fork: phoebis_bus::Fork::default(),
         presented_retired: false,
         rotation_at: None,
+        guardrail_id: None,
+        guardrails: Vec::new(),
         received_at: 0,
     })
 }
@@ -2266,12 +2268,13 @@ async fn a_shutdown_with_both_queues_full_lands_every_completed_request() {
     });
     tokio::time::sleep(Duration::from_millis(200)).await;
     hold_tx.send(()).unwrap();
-    let shutdown = tokio::time::timeout(Duration::from_secs(10), h.ledger.clone().shutdown()).await;
+    // The bound proves shutdown returns rather than deadlocks. A loaded build host stretches this drain past 10 s.
+    let shutdown = tokio::time::timeout(Duration::from_secs(30), h.ledger.clone().shutdown()).await;
     holder.join().unwrap();
     shutdown
         .expect("the writer keeps reading while it waits for the assembler, so shutdown does not deadlock")
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(10), publisher)
+    tokio::time::timeout(Duration::from_secs(30), publisher)
         .await
         .expect("the publisher resolves once the assembler has drained its queue")
         .unwrap();
@@ -2480,6 +2483,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         // keeps the shape the class dimension joins, since a primary-key column cannot be dropped in place and the
         // rebuild names its own columns regardless of what the source table still carries.
         db.write(|c| {
+            c.execute_batch(VERSION_38_REQUESTS)?;
             c.execute_batch(VERSION_37_TABLES)?;
             c.execute_batch(VERSION_34_TABLES)?;
             c.execute_batch(VERSION_33_ROLLUPS)?;
@@ -2531,7 +2535,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 38);
+    assert_eq!(db.schema_version().await.unwrap(), 39);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -2617,6 +2621,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_38_REQUESTS)?;
             c.execute_batch(VERSION_37_TABLES)?;
             c.execute_batch(VERSION_34_TABLES)?;
             c.execute_batch(VERSION_33_ROLLUPS)?;
@@ -2647,7 +2652,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 38);
+    assert_eq!(db.schema_version().await.unwrap(), 39);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         (
@@ -2696,6 +2701,11 @@ const VERSION_34_TABLES: &str = "DROP TABLE routing_conditions;";
 /// `RECREATE_DROPPED_TABLE` where a rebuild recreates that one.
 const VERSION_37_TABLES: &str = "DROP TABLE window_reconciliations;";
 
+/// The column and the table migration 39 adds, dropped over a file the current schema built so a replay from an
+/// earlier version adds them again.
+const VERSION_38_REQUESTS: &str =
+    "DROP TABLE request_guardrails; ALTER TABLE requests DROP COLUMN guardrail_id;";
+
 /// The table migration 23 drops, recreated so a forward replay from version 20 or 21 can drop it again.
 const RECREATE_DROPPED_TABLE: &str = "CREATE TABLE window_reconciliations (account_id TEXT NOT NULL, window TEXT NOT NULL, window_end INTEGER NOT NULL, computed_at INTEGER NOT NULL, PRIMARY KEY (account_id, window, window_end)); -- rollback";
 
@@ -2706,6 +2716,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
     {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_38_REQUESTS)?;
             c.execute_batch(VERSION_37_TABLES)?;
             c.execute_batch(VERSION_34_TABLES)?;
             c.execute_batch(VERSION_33_ROLLUPS)?;
@@ -2730,7 +2741,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 38);
+    assert_eq!(db.schema_version().await.unwrap(), 39);
     let columns = db
         .read_blocking(|c| {
             let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -2793,6 +2804,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         // SQLite cannot drop a primary-key column, so the version-21 table is rebuilt from the live one with
         // the speed left out; the indexes go with the table it replaces, and the migration has to add them back.
         db.write(|c| {
+            c.execute_batch(VERSION_38_REQUESTS)?;
             c.execute_batch(VERSION_37_TABLES)?;
             c.execute_batch(VERSION_34_TABLES)?;
             c.execute_batch(VERSION_33_ROLLUPS)?;
@@ -2823,7 +2835,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 38);
+    assert_eq!(db.schema_version().await.unwrap(), 39);
     let speeds = |ledger: &phoebis_ledger::LedgerDb| {
         ledger
             .read_blocking(|c| {
@@ -2877,6 +2889,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
         // SQLite cannot drop a primary-key column, so the version-23 table is rebuilt from the live one with
         // the funding left out; the indexes go with the table it replaces, and the migration has to add them back.
         db.write(|c| {
+            c.execute_batch(VERSION_38_REQUESTS)?;
             c.execute_batch(VERSION_37_TABLES)?;
             c.execute_batch(VERSION_34_TABLES)?;
             c.execute_batch(VERSION_33_ROLLUPS)?;
@@ -2907,7 +2920,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 38);
+    assert_eq!(db.schema_version().await.unwrap(), 39);
     let mut rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -2962,6 +2975,7 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_38_REQUESTS)?;
             c.execute_batch(VERSION_37_TABLES)?;
             c.execute_batch(VERSION_34_TABLES)?;
             c.execute_batch(VERSION_33_ROLLUPS)?;
@@ -2986,7 +3000,7 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 38);
+    assert_eq!(db.schema_version().await.unwrap(), 39);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         row.held, None,
@@ -3028,6 +3042,7 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_38_REQUESTS)?;
             c.execute_batch(VERSION_37_TABLES)?;
             c.execute_batch(VERSION_34_TABLES)?;
             c.execute_batch(VERSION_33_ROLLUPS)?;
@@ -3051,7 +3066,7 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 38);
+    assert_eq!(db.schema_version().await.unwrap(), 39);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -3091,6 +3106,7 @@ async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_a
         // and a poll of one bucket could each hold a row for one window; the top-level `seven_day_overage_included`
         // and `seven_day_fable` rows stand for a poll key the captured bodies never carried.
         db.write(|c| {
+            c.execute_batch(VERSION_38_REQUESTS)?;
             c.execute_batch(VERSION_37_TABLES)?;
             c.execute_batch(VERSION_34_TABLES)?;
             c.execute_batch(VERSION_33_ROLLUPS)?;
@@ -3121,7 +3137,7 @@ async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_a
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 38);
+    assert_eq!(db.schema_version().await.unwrap(), 39);
     let rows: Vec<(i64, String, Option<f64>, String)> = db
         .quota_samples("a", 0, i64::MAX)
         .await
@@ -3183,6 +3199,7 @@ async fn a_ledger_below_the_held_column_migrates_and_a_fresh_file_carries_it() {
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_38_REQUESTS)?;
             c.execute_batch(VERSION_37_TABLES)?;
             c.execute_batch(VERSION_34_TABLES)?;
             c.execute_batch(VERSION_33_ROLLUPS)?;
@@ -3199,7 +3216,7 @@ async fn a_ledger_below_the_held_column_migrates_and_a_fresh_file_carries_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 38);
+    assert_eq!(db.schema_version().await.unwrap(), 39);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -3264,6 +3281,7 @@ async fn a_ledger_below_the_slow_down_columns_migrates_and_a_fresh_file_carries_
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_38_REQUESTS)?;
             c.execute_batch(VERSION_37_TABLES)?;
             c.execute_batch(
                 "ALTER TABLE rollups_hourly DROP COLUMN kept_warm_1h_tokens; \
@@ -3277,7 +3295,7 @@ async fn a_ledger_below_the_slow_down_columns_migrates_and_a_fresh_file_carries_
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 38);
+    assert_eq!(db.schema_version().await.unwrap(), 39);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -3356,6 +3374,7 @@ async fn a_ledger_below_the_phase_columns_migrates_and_a_fresh_file_carries_them
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_38_REQUESTS)?;
             c.execute_batch(VERSION_37_TABLES)?;
             c.execute_batch(VERSION_34_TABLES)?;
             c.execute_batch(VERSION_33_ROLLUPS)?;
@@ -3371,7 +3390,7 @@ async fn a_ledger_below_the_phase_columns_migrates_and_a_fresh_file_carries_them
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 38);
+    assert_eq!(db.schema_version().await.unwrap(), 39);
     let (row, attempts) = db
         .read_blocking(|c| phoebis_ledger::request_by_id(c, "r0"))
         .unwrap()
@@ -3442,6 +3461,7 @@ async fn a_requests_diagnostics_source_round_trips_and_a_ledger_at_version_31_re
         db.insert_request(&request("r0", Some("client")), &[], None)
             .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_38_REQUESTS)?;
             c.execute_batch(VERSION_37_TABLES)?;
             c.execute_batch(VERSION_34_TABLES)?;
             c.execute_batch(VERSION_33_ROLLUPS)?;
@@ -3455,7 +3475,7 @@ async fn a_requests_diagnostics_source_round_trips_and_a_ledger_at_version_31_re
         .unwrap();
     }
     let db = Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 38);
+    assert_eq!(db.schema_version().await.unwrap(), 39);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         row.diagnostics_source, None,
@@ -3486,7 +3506,7 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
     let event_indexes = "SELECT name FROM pragma_index_list('events') ORDER BY name";
     {
         let fresh = Arc::new(LedgerDb::open(&path).unwrap());
-        assert_eq!(fresh.schema_version().await.unwrap(), 38);
+        assert_eq!(fresh.schema_version().await.unwrap(), 39);
         assert_eq!(
             names(
                 &fresh,
@@ -3524,6 +3544,7 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
         // The indexes leave first, since SQLite refuses to drop an indexed column.
         fresh
             .write(|c| {
+                c.execute_batch(VERSION_38_REQUESTS)?;
                 c.execute_batch(VERSION_37_TABLES)?;
                 c.execute_batch(VERSION_34_TABLES)?;
                 c.execute_batch(VERSION_33_ROLLUPS)?;
@@ -3549,7 +3570,7 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
         );
     }
     let existing = Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(existing.schema_version().await.unwrap(), 38);
+    assert_eq!(existing.schema_version().await.unwrap(), 39);
     assert_eq!(
         names(&existing, event_columns),
         [

@@ -1538,6 +1538,7 @@ dependencies = [
  "jiff",
  "phoebis-attention",
  "phoebis-bus",
+ "phoebis-guardrails",
  "phoebis-keepalive",
  "phoebis-ledger",
  "phoebis-oauth",
@@ -1603,6 +1604,18 @@ dependencies = [
  "serde_json",
  "thiserror",
  "xxhash-rust",
+]
+
+[[package]]
+name = "phoebis-guardrails"
+version = "0.1.0"
+dependencies = [
+ "phoebis-cch",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]
@@ -1716,6 +1729,7 @@ dependencies = [
  "jiff",
  "phoebis-bus",
  "phoebis-cch",
+ "phoebis-guardrails",
  "phoebis-ledger",
  "phoebis-oauth",
  "phoebis-profile",
@@ -1790,6 +1804,7 @@ version = "0.1.0"
 dependencies = [
  "fake-upstream",
  "jiff",
+ "phoebis-guardrails",
  "phoebis-oauth",
  "phoebis-profile",
  "phoebis-routing",
@@ -1816,6 +1831,7 @@ dependencies = [
  "hmac",
  "jiff",
  "libc",
+ "phoebis-guardrails",
  "phoebis-relay",
  "phoebis-routing",
  "phoebis-store",

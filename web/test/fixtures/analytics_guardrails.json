@@ -1,0 +1,23 @@
+{
+  "route": "GET /admin/analytics/guardrails?range=24h",
+  "body": {
+    "from": 1791634600000,
+    "to": 1791721000000,
+    "guardrails": [
+      {
+        "id": "large-auxiliary",
+        "name": "Large auxiliary requests",
+        "observed": 0,
+        "blocked": 1,
+        "blocked_bytes": 48213
+      },
+      {
+        "id": "subagent-status-summary",
+        "name": "Subagent status summary",
+        "observed": 2,
+        "blocked": 0,
+        "blocked_bytes": 0
+      }
+    ]
+  }
+}
