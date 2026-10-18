@@ -69,7 +69,8 @@ use crate::facts::{BodyFacts, ClientHints};
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 use crate::identity::{
-    client_class, climb, identify, waits_on, PendingReports, RequestIdentity, PENDING_REPORT_WAIT,
+    client_class, climb, contract_gap, identify, waits_on, PendingReports, RequestIdentity,
+    PENDING_REPORT_WAIT,
 };
 use crate::memory::{
     uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP, MEMORY_IDLE_MS,
@@ -178,6 +179,8 @@ pub struct RelayOutcome {
     /// `cc_version` suffix does not reproduce from the prompt and the user agent; in either case nothing was
     /// sent upstream.
     pub client_drift: Option<String>,
+    /// The item a `client_contract` refusal named, `None` for every other request.
+    pub client_contract: Option<String>,
     pub client_version: Option<String>,
     pub error_code: Option<String>,
     pub pin_epoch: Option<u64>,
@@ -696,7 +699,7 @@ impl Trace {
             ttfc_ms,
             error_code,
             client_drift: outcome.client_drift.clone(),
-            client_contract: None,
+            client_contract: outcome.client_contract.clone(),
             client_version: outcome.client_version.clone(),
             response_bytes,
             response_chunks,
@@ -813,8 +816,9 @@ fn outcome_of(outcome: &RelayOutcome) -> Outcome {
         // A key or policy refusal is conclusive whether it is caught at admission or at the reselect after an
         // attempt, so the ledger row reads rejected rather than failed. A guardrail's block is conclusive too: it
         // is answered at attempt 0, and naming it here keeps a later change to the attempt-count rule below from
-        // moving it.
+        // moving it. The contract's refusal is answered at attempt 0 and named here for the same reason.
         Some("auth_unknown")
+        | Some("client_contract")
         | Some("client_not_allowed")
         | Some("guardrail_blocked")
         | Some("model_not_allowed") => Outcome::Rejected,
@@ -1599,6 +1603,34 @@ impl Relay {
                     .await
             }
         };
+        // The contract: a Claude Code inference request carries what the router reads of it, or is refused before
+        // an account is chosen. After resolve, so a refused model is answered first, and
+        // before the drift checks, so a missing line is never a drift.
+        if identity.class == ClientClass::ClaudeCode && trace.kind == Kind::Inference {
+            if let Some(item) =
+                contract_gap(&parts.headers, &identity, &facts, request_class.as_deref())
+            {
+                let refusal = self.contract_refusal(
+                    item,
+                    &parts.headers,
+                    &trace,
+                    &key,
+                    &identity,
+                    request_class.as_deref(),
+                    client_version.as_deref(),
+                );
+                return self
+                    .refused(
+                        &trace,
+                        0,
+                        refusal,
+                        Some(&key),
+                        Some(&identity),
+                        client_version.as_deref(),
+                    )
+                    .await;
+            }
+        }
         // A separate field from `restore`: every client inference request of a conversation gets one,
         // because the diagnostics member the option forces names the previous answer in
         // that conversation whoever sent it. A probe reads under the same key, since it replays the session's own
@@ -2193,6 +2225,7 @@ impl Relay {
             attempt,
             false,
             None,
+            None,
             admitted.client_version.clone(),
             Some(code),
             None,
@@ -2273,6 +2306,7 @@ impl Relay {
                 0,
                 *attempt,
                 false,
+                None,
                 None,
                 admitted.client_version.clone(),
                 Some("accounts_unavailable"),
@@ -2702,6 +2736,7 @@ impl Relay {
                         *attempt,
                         false,
                         None,
+                        None,
                         admitted.client_version.clone(),
                         Some("account_cancelled"),
                         pin_epoch,
@@ -2732,6 +2767,7 @@ impl Relay {
                         0,
                         *attempt,
                         written,
+                        None,
                         None,
                         admitted.client_version.clone(),
                         Some("upstream_unreachable"),
@@ -2787,6 +2823,7 @@ impl Relay {
                             0,
                             *attempt,
                             true,
+                            None,
                             None,
                             admitted.client_version.clone(),
                             Some("account_cancelled"),
@@ -2876,6 +2913,7 @@ impl Relay {
             head.status,
             ctx.attempt,
             true,
+            None,
             None,
             ctx.client_version.clone(),
             None,
@@ -3813,6 +3851,7 @@ impl Relay {
         let LocalRefusal {
             failure,
             client_drift,
+            client_contract,
         } = refusal.into();
         let outcome = self.outcome(
             trace,
@@ -3823,6 +3862,7 @@ impl Relay {
             attempt,
             false,
             client_drift.map(str::to_string),
+            client_contract.map(str::to_string),
             client_version.map(str::to_string),
             Some(failure.code),
             None,
@@ -3888,6 +3928,61 @@ impl Relay {
         LocalRefusal {
             failure: relay_failure(&RelayError::ClientDrift { kind }),
             client_drift: Some(kind),
+            client_contract: None,
+        }
+    }
+
+    /// A contract refusal with its item, the warn that tells the operator which environment line the client lacks,
+    /// and the refusal's record as the request's one decision. The record keeps the class the request named, so
+    /// the routing log shows it, and is try-sent as the drift's is.
+    #[allow(clippy::too_many_arguments)]
+    fn contract_refusal(
+        &self,
+        item: &'static str,
+        headers: &HeaderMap,
+        trace: &Trace,
+        key: &ApiKeyRow,
+        identity: &RequestIdentity,
+        request_class: Option<&str>,
+        client_version: Option<&str>,
+    ) -> LocalRefusal {
+        tracing::warn!(
+            item = %item,
+            user_agent = %user_agent(headers),
+            key = %key.id,
+            "a Claude Code client sent a request without the {item} the router requires. Read the client page for the environment block",
+        );
+        self.router.record_refusal(
+            RefusedRequest {
+                request_id: trace.request_id.clone(),
+                attempt: 1,
+                seq: 1,
+                at: (self.clock)(),
+                key_id: key.id.clone(),
+                key_generation: key.created_at,
+                agent_id: identity.agent_id.clone(),
+                parent_agent_id: None,
+                session_id: identity.session_id.clone(),
+                request_class: request_class.map(str::to_string),
+                canonical_model: identity.canonical_model.clone(),
+                lane: LaneFacts::default(),
+                flags: RequestFlags::default(),
+                chain: ChainFacts::default(),
+                attempted: Vec::new(),
+                holds: Vec::new(),
+                client: identity.class,
+                client_version: client_version.map(str::to_string),
+            },
+            RefusalFacts {
+                kind: "client",
+                code: "contract",
+                reason: item.to_string(),
+            },
+        );
+        LocalRefusal {
+            failure: relay_failure(&RelayError::ClientContract { item }),
+            client_drift: None,
+            client_contract: Some(item),
         }
     }
 
@@ -4022,6 +4117,7 @@ impl Relay {
             ctx.attempt,
             true,
             None,
+            None,
             ctx.client_version.clone(),
             Some("account_cancelled"),
             ctx.pin_epoch,
@@ -4053,6 +4149,7 @@ impl Relay {
         attempt: u8,
         written: bool,
         client_drift: Option<String>,
+        client_contract: Option<String>,
         client_version: Option<String>,
         error_code: Option<&str>,
         pin_epoch: Option<u64>,
@@ -4071,6 +4168,7 @@ impl Relay {
             attempt,
             written,
             client_drift,
+            client_contract,
             client_version,
             error_code: error_code.map(str::to_string),
             pin_epoch,
@@ -4781,11 +4879,13 @@ enum Next {
     Strip(Vec<Injected>),
 }
 
-/// What a local refusal answers and files: the failure the caller is told, and the client-drift trigger the
-/// request row carries and the attention reader raises its condition from, `None` for every other refusal.
+/// What a local refusal answers and files: the failure the caller is told, the client-drift trigger the request row
+/// carries and the attention reader raises its condition from, and the contract's item the request row names, each
+/// `None` for every other refusal.
 struct LocalRefusal {
     failure: Failure,
     client_drift: Option<&'static str>,
+    client_contract: Option<&'static str>,
 }
 
 impl From<Failure> for LocalRefusal {
@@ -4793,6 +4893,7 @@ impl From<Failure> for LocalRefusal {
         LocalRefusal {
             failure,
             client_drift: None,
+            client_contract: None,
         }
     }
 }
@@ -5216,6 +5317,7 @@ mod tests {
             attempt,
             written: false,
             client_drift: None,
+            client_contract: None,
             client_version: None,
             error_code: Some("guardrail_blocked".into()),
             pin_epoch: None,

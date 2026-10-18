@@ -149,25 +149,6 @@ fn assert_diagnosed_shape(r: &fake_upstream::RecordedRequest, previous: Option<&
     assert!(d_at < s_at, "diagnostics precedes stream: {text}");
 }
 
-/// The reduced billing line stripped so `cch`, `cc_prompt_id`, and the whole line's insertion are genuinely
-/// restored rather than already present, so a strip test has something of its own to name.
-fn without_billing_line(session: &str) -> Request<Body> {
-    let mut value: serde_json::Value =
-        serde_json::from_slice(body(BodyFixture::Oauth)).expect("the fixture body is valid JSON");
-    value["system"]
-        .as_array_mut()
-        .expect("the fixture carries a system array")
-        .remove(0);
-    let native = serde_json::to_vec(&value).expect("a Value always re-encodes");
-    let mut req = request_from_fixture(
-        inference_head(FixtureKind::OauthNonFirstParty),
-        &native,
-        KEY,
-    );
-    set_header(&mut req, "x-claude-code-session-id", session);
-    req
-}
-
 const SONNET: &str = "claude-sonnet-4-5";
 
 /// Forces a round trip through the router's command queue: a report reaches the affinity map only when the router
@@ -1193,7 +1174,7 @@ async fn a_400_naming_the_diagnostics_member_strips_the_member_and_a_second_400_
     let resp = h
         .app
         .clone()
-        .oneshot(without_billing_line("s1"))
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
         .await
         .unwrap();
     assert_eq!(

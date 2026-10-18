@@ -984,6 +984,19 @@ pub fn request_from_fixture(head: &[u8], body: &[u8], key: &str) -> Request<Body
     }
     let mut req = req.body(Body::from(body.to_vec())).unwrap();
     req.extensions_mut().insert(original);
+    // The recorded heads predate the hint gate, and the client now sends the class header on every inference
+    // request, so a fixture request carries it as the client would.
+    let claude_code = req
+        .headers()
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|agent| agent.starts_with("claude-cli/"));
+    if claude_code
+        && target.split('?').next() == Some("/v1/messages")
+        && !req.headers().contains_key("x-claude-code-request-class")
+    {
+        set_header(&mut req, "x-claude-code-request-class", "main");
+    }
     req
 }
 

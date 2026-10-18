@@ -173,6 +173,19 @@ async fn observe_classed(r: &mut Rig, class: &str, body: &str) {
     r.pump(Some(&id)).await;
 }
 
+/// A real request on main through the relay from a raw Messages caller, which names no request class, so the guard
+/// reads the request's own chain: a Claude Code request always names its class.
+async fn observe_unclassed(r: &mut Rig, body: &str) {
+    let mut request = r.request_with("main", body);
+    relay_common::set_header(&mut request, "user-agent", relay_common::SDK_USER_AGENT);
+    relay_common::remove_header(&mut request, "x-claude-code-request-class");
+    let response = r.h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let id = relay_common::outcome(&response).request_id;
+    let _ = response.into_body().collect().await.unwrap();
+    r.pump(Some(&id)).await;
+}
+
 #[tokio::test]
 async fn an_idle_window_raises_reached_at_each_bucket_it_crosses() {
     let mut r = rig(RigSpec::default()).await;
@@ -305,7 +318,7 @@ async fn a_request_on_a_new_prefix_a_session_end_and_a_lapse_count_as_no_return(
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 12).await;
-    r.observe_with("main", &fresh_chain()).await;
+    observe_unclassed(&mut r, &fresh_chain()).await;
     assert_eq!(last_guard(&r), Some(Guard::Restart));
     tick_to(&mut r, start, 40).await;
     assert_eq!((reached(&r), returned(&r)), (counted, [0; 10]), "restart");

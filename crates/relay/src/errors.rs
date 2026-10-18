@@ -27,7 +27,7 @@ pub(crate) struct Failure {
     /// The `Retry-After` the answer carries, in seconds.
     pub retry_after: Option<u64>,
     /// Writes `x-should-retry: false`, so a client that retries its 4xx answers does not resend what a guardrail
-    /// refused.
+    /// or the contract refused.
     pub no_retry: bool,
 }
 
@@ -191,6 +191,18 @@ const REPEATED_STREAM: &str =
 const REPEATED_SYSTEM: &str =
     "the request body carries the top-level member \"system\" more than once";
 
+/// The item's own message: what is missing, and the environment line that sends it.
+fn contract_message(item: &str) -> &'static str {
+    match item {
+        "session_header" => "the request carries no x-claude-code-session-id header the router requires of a Claude Code client. Send the requests as Claude Code sends them",
+        "class_header" => "the request carries no x-claude-code-request-class header the router requires of a Claude Code client. Set CLAUDE_CODE_GATEWAY_HINT_HEADERS=1",
+        "attribution_line" => "the request carries no attribution line at system[0] the router requires of a Claude Code client. Leave CLAUDE_CODE_ATTRIBUTION_HEADER unset",
+        "metadata_user_id" => "the request body has no metadata.user_id the router requires of a Claude Code client. Send the body as Claude Code sends it",
+        "agent_id_header" => "the request names a subagent class and carries no x-claude-code-agent-id header the router requires of a Claude Code client. Send the requests as Claude Code sends them",
+        _ => "the request names the compaction class and carries no x-claude-code-compaction header the router requires of a Claude Code client. Set CLAUDE_CODE_GATEWAY_HINT_HEADERS=1",
+    }
+}
+
 pub(crate) fn relay_failure(error: &RelayError) -> Failure {
     match error {
         RelayError::AccountUuid => Failure {
@@ -287,6 +299,15 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             message: Cow::Borrowed("the request body is not a valid Messages request"),
             retry_after: None,
             no_retry: false,
+        },
+        RelayError::ClientContract { item } => Failure {
+            status: StatusCode::BAD_REQUEST,
+            error_type: "invalid_request_error",
+            code: "client_contract",
+            message: Cow::Borrowed(contract_message(item)),
+            retry_after: None,
+            // The fix is the client's environment, so a retry resends what was refused.
+            no_retry: true,
         },
         // Fail closed: a hash or a version suffix the pinned rules cannot reproduce means the client moved past
         // the profile. A stamp the router cannot verify never travels under an account's credential, so the
@@ -491,6 +512,54 @@ mod tests {
         assert_ne!(hash.message, suffix.message);
     }
 
+    /// A contract refusal's fix is the client's environment, so each message names the item the request lacks and
+    /// the answer tells the client not to resend it unchanged. The words are the identity's own, so a word the
+    /// message table spells differently answers the wrong message here.
+    #[test]
+    fn every_contract_message_names_its_item_and_ends_without_a_semicolon() {
+        use crate::identity::{
+            ITEM_AGENT_ID_HEADER, ITEM_ATTRIBUTION_LINE, ITEM_CLASS_HEADER, ITEM_COMPACTION_HEADER,
+            ITEM_METADATA_USER_ID, ITEM_SESSION_HEADER,
+        };
+        for (item, name) in [
+            (ITEM_SESSION_HEADER, "x-claude-code-session-id"),
+            (ITEM_CLASS_HEADER, "x-claude-code-request-class"),
+            (ITEM_ATTRIBUTION_LINE, "system[0]"),
+            (ITEM_METADATA_USER_ID, "metadata.user_id"),
+            (ITEM_AGENT_ID_HEADER, "x-claude-code-agent-id"),
+            (ITEM_COMPACTION_HEADER, "x-claude-code-compaction"),
+        ] {
+            let failure = relay_failure(&RelayError::ClientContract { item });
+            assert_eq!(
+                (
+                    failure.status,
+                    failure.error_type,
+                    failure.code,
+                    failure.retry_after,
+                    failure.no_retry
+                ),
+                (
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request_error",
+                    "client_contract",
+                    None,
+                    true
+                ),
+                "{item}"
+            );
+            assert!(
+                failure.message.contains(name),
+                "{item}: {}",
+                failure.message
+            );
+            assert!(
+                !failure.message.contains(';'),
+                "{item}: {}",
+                failure.message
+            );
+        }
+    }
+
     #[test]
     fn every_body_shape_refusal_carries_the_code_the_ledger_reads_as_a_standing() {
         for member in [
@@ -552,8 +621,8 @@ mod tests {
         );
     }
 
-    /// A client that retries its 4xx answers would send a blocked request again unchanged, and no other refusal
-    /// asks the client to stop, so the header rides the guardrail's answer alone.
+    /// A client that retries its 4xx answers would send a blocked request or one the contract refused again
+    /// unchanged, and no other refusal asks the client to stop, so the header rides those two answers alone.
     #[test]
     fn no_retry_writes_the_header_and_no_other_arm_does() {
         let errors = [
@@ -616,6 +685,12 @@ mod tests {
         .response("r-1");
         assert_eq!(blocked.headers()[SHOULD_RETRY_HEADER], "false");
         assert_eq!(blocked.headers()[ERROR_CODE_HEADER], "guardrail_blocked");
+        let contract = relay_failure(&RelayError::ClientContract {
+            item: "class_header",
+        })
+        .response("r-1");
+        assert_eq!(contract.headers()[SHOULD_RETRY_HEADER], "false");
+        assert_eq!(contract.headers()[ERROR_CODE_HEADER], "client_contract");
     }
 
     /// The routing log's exhausted row records the routing crate's status as its `answer`, so the builder the

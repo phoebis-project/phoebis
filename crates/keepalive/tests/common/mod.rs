@@ -41,8 +41,9 @@ pub const A: &str = "sk-ant-api03-AAAA";
 pub const B: &str = "sk-ant-api03-BBBB";
 pub const MINUTE: i64 = 60_000;
 
-/// The request body the Go rig replayed: adaptive thinking, one five-minute marker, one message.
-pub const BODY: &str = r#"{"model":"claude-sonnet-4-5","max_tokens":1024,"stream":true,"thinking":{"type":"adaptive"},"system":[{"type":"text","text":"private prompt","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hello"}],"metadata":{"user_id":"{\"device_id\":\"d\",\"account_uuid\":\"\",\"session_id\":\"session\"}"}}"#;
+/// The request body the Go rig replayed: adaptive thinking, one five-minute marker, one message, behind the
+/// attribution line the client sends at `system[0]`.
+pub const BODY: &str = r#"{"model":"claude-sonnet-4-5","max_tokens":1024,"stream":true,"thinking":{"type":"adaptive"},"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli;"},{"type":"text","text":"private prompt","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hello"}],"metadata":{"user_id":"{\"device_id\":\"d\",\"account_uuid\":\"\",\"session_id\":\"session\"}"}}"#;
 
 pub fn probe_answer(read: u64, write: u64) -> Respond {
     Respond::Json {

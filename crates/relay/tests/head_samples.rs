@@ -314,32 +314,21 @@ async fn a_finished_answer_reports_its_usage_to_the_router() {
     wait_for_async(Duration::from_secs(2), || read(FIVE_HOUR, 0.52)).await;
     wait_for_async(Duration::from_secs(2), || read(SEVEN_DAY, 0.23)).await;
 
-    // A request no rung names places no pin, and its usage still counts: no session header, no session in its
-    // metadata, and another model, so its messages match no conversation the key holds.
-    let pins = h.router.pins().await.unwrap();
-    let mut bare: serde_json::Value = serde_json::from_slice(body(BodyFixture::Oauth)).unwrap();
-    bare["model"] = "claude-opus-5".into();
-    let user = &mut bare["metadata"]["user_id"];
-    let mut user_id: serde_json::Value = serde_json::from_str(user.as_str().unwrap()).unwrap();
-    user_id.as_object_mut().unwrap().remove("session_id");
-    *user = serde_json::Value::String(user_id.to_string());
-    let mut unpinned = request_from_fixture(
+    // Another session's answer on another model adds its usage to the same account's windows.
+    let mut other: serde_json::Value = serde_json::from_slice(body(BodyFixture::Oauth)).unwrap();
+    other["model"] = "claude-opus-5".into();
+    let mut second = request_from_fixture(
         inference_head(FixtureKind::OauthNonFirstParty),
-        &serde_json::to_vec(&bare).unwrap(),
+        &serde_json::to_vec(&other).unwrap(),
         KEY,
     );
-    remove_header(&mut unpinned, "x-claude-code-session-id");
-    let response = h.app.clone().oneshot(unpinned).await.unwrap();
+    set_header(&mut second, "x-claude-code-session-id", "s2");
+    let response = h.app.clone().oneshot(second).await.unwrap();
     assert_eq!(response.status(), 200);
     axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
     wait_for_async(Duration::from_secs(2), || read(FIVE_HOUR, 0.62)).await;
     wait_for_async(Duration::from_secs(2), || read(SEVEN_DAY, 0.33)).await;
-    assert_eq!(
-        h.router.pins().await.unwrap(),
-        pins,
-        "the second request placed no pin"
-    );
     up.shutdown().await;
 }

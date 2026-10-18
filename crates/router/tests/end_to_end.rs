@@ -192,11 +192,13 @@ fn fixture_request(
         }
     }
     req.header("x-claude-code-session-id", session)
+        .header("x-claude-code-request-class", "main")
 }
 
 /// Replays a fixture's head and body to the binary byte for byte: the fixture's request line, then every header
 /// line in the fixture's order and spelling, with only the credential, the session id, the host, and the framing
-/// replaced. Answers the response's status.
+/// replaced, and an inference head ending in the class header the recorded heads predate and the client now sends.
+/// Answers the response's status.
 async fn replay_fixture(
     proxy_port: u16,
     head: &[u8],
@@ -219,6 +221,14 @@ async fn replay_fixture(
         };
         wire.push_str(&line);
         wire.push_str("\r\n");
+    }
+    if request_line
+        .split(' ')
+        .nth(1)
+        .and_then(|target| target.split('?').next())
+        == Some("/v1/messages")
+    {
+        wire.push_str("x-claude-code-request-class: main\r\n");
     }
     wire.push_str("\r\n");
     let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", proxy_port))
@@ -2540,6 +2550,7 @@ fn request_on(
         }
     }
     req.header("x-claude-code-session-id", session)
+        .header("x-claude-code-request-class", "main")
 }
 
 #[tokio::test]

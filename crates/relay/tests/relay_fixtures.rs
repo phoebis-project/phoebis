@@ -36,10 +36,14 @@ async fn oauth_first_party_request_is_byte_identical_except_the_two_edits() {
             .as_bytes(),
     )
     .unwrap();
-    let expected_head = String::from_utf8(head.to_vec()).unwrap().replace(
+    let mut expected_head = String::from_utf8(head.to_vec()).unwrap().replace(
         &format!("Content-Length: {}", native.len()),
         &format!("Content-Length: {}", expected_body.len()),
     );
+    // The recorded head predates the class header, so the one line the harness adds as the client sends it rides
+    // at the head's end, where the caller's own head put it.
+    let end = expected_head.rfind("\r\n\r\n").unwrap();
+    expected_head.insert_str(end + 2, "x-claude-code-request-class: main\r\n");
     let mut expected = expected_head.into_bytes();
     expected.extend_from_slice(&expected_body);
     assert_eq!(got, expected);
@@ -106,10 +110,14 @@ async fn api_key_request_emits_the_measured_api_key_shape() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let got = wire_of(&up.requests()[0]);
-    let expected_head = String::from_utf8(head.to_vec()).unwrap().replace(
+    let mut expected_head = String::from_utf8(head.to_vec()).unwrap().replace(
         "User-Agent: claude-cli/2.1.269 (external, sdk-cli)",
         "User-Agent: anthropic-sdk-python/0.40.0",
     );
+    // The request was built from the client's head, which the harness ends with the class header the recorded
+    // head predates, and swapping the user agent afterward leaves that line where it was.
+    let end = expected_head.rfind("\r\n\r\n").unwrap();
+    expected_head.insert_str(end + 2, "x-claude-code-request-class: main\r\n");
     let mut expected = expected_head.into_bytes();
     expected.extend_from_slice(native);
     assert_eq!(
@@ -534,7 +542,9 @@ async fn a_drifted_stamp_is_refused(drifted: Vec<u8>, kind: &str) {
 }
 
 /// A body the account identity cannot be written into would be billed against whatever the caller wrote, so
-/// it is refused before any account is tried rather than relayed as it stands.
+/// it is refused before any account is tried rather than relayed as it stands. The body carries the
+/// `metadata.user_id` member the contract requires of a Claude Code request, with no `account_uuid` inside it for
+/// the splice to find.
 #[tokio::test]
 async fn a_body_with_no_account_uuid_target_is_refused_with_body_shape() {
     let up = FakeUpstream::start(vec![Rule {
@@ -552,7 +562,11 @@ async fn a_body_with_no_account_uuid_target_is_refused_with_body_shape() {
         .uri("/v1/messages")
         .header("Authorization", "Bearer phoebis-testkey")
         .header("User-Agent", CLAUDE_CLI_USER_AGENT)
-        .body(Body::from(r#"{"model":"claude-sonnet-4-5","messages":[]}"#))
+        .header("x-claude-code-session-id", "s-1")
+        .header("x-claude-code-request-class", "main")
+        .body(Body::from(
+            r#"{"model":"claude-sonnet-4-5","messages":[],"metadata":{"user_id":"{\"session_id\":\"s-1\"}"}}"#,
+        ))
         .unwrap();
     let resp = app.oneshot(request).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);

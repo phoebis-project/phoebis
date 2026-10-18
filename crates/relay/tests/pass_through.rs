@@ -175,6 +175,7 @@ async fn an_oauth_account_adds_the_oauth_beta_once_and_an_api_key_account_strips
         &[
             "Authorization: Bearer sk-ant-oat01-PLACEHOLDER",
             &format!("User-Agent: {CLAUDE_CLI_USER_AGENT}"),
+            "X-Claude-Code-Session-Id: s-1",
             &format!("anthropic-beta: {caller}"),
             "anthropic-version: 2023-06-01",
         ],
@@ -405,6 +406,7 @@ async fn a_duplicated_caller_line_fills_a_relay_owned_slot_once() {
     let mut raw = format!(
         "POST /v1/messages?beta=true HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {KEY}\r\n\
          User-Agent: {CLAUDE_CLI_USER_AGENT}\r\n\
+         X-Claude-Code-Session-Id: s-1\r\nx-claude-code-request-class: main\r\n\
          anthropic-beta: claude-code-20250219\r\nanthropic-beta: claude-code-20250219\r\n\
          anthropic-version: 2023-06-01\r\nContent-Length: {length}\r\nContent-Length: {length}\r\n\r\n",
         length = native.len()
@@ -532,6 +534,7 @@ async fn two_beta_lines_reach_the_upstream_as_one_list() {
     let mut raw = format!(
         "POST /v1/messages?beta=true HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {KEY}\r\n\
          User-Agent: {CLAUDE_CLI_USER_AGENT}\r\n\
+         X-Claude-Code-Session-Id: s-1\r\nx-claude-code-request-class: main\r\n\
          anthropic-beta: claude-code-20250219\r\nanthropic-beta: interleaved-thinking-2025-05-14\r\n\
          anthropic-version: 2023-06-01\r\nContent-Length: {length}\r\n\r\n",
         length = native.len()

@@ -17,11 +17,19 @@ fn body(messages: Vec<Value>) -> Value {
     json!({"model": MODEL, "messages": messages})
 }
 
+/// A raw Messages caller's request carrying `value`, with neither the session nor the class header, since
+/// the contract refuses a Claude Code request that names no session.
 fn req(value: &Value) -> Request<Body> {
+    req_under(value, KEY)
+}
+
+fn req_under(value: &Value, key: &str) -> Request<Body> {
     use phoebis_profile::fixtures::{inference_head, FixtureKind};
     let bytes = serde_json::to_vec(value).unwrap();
-    let mut request = request_from_fixture(inference_head(FixtureKind::ApiKey), &bytes, KEY);
+    let mut request = request_from_fixture(inference_head(FixtureKind::ApiKey), &bytes, key);
+    set_header(&mut request, "user-agent", SDK_USER_AGENT);
     remove_header(&mut request, "x-claude-code-session-id");
+    remove_header(&mut request, "x-claude-code-request-class");
     request
 }
 

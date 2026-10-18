@@ -114,9 +114,7 @@ fn carrying_prompt_id(session: &str, id: &str) -> Request<Body> {
 }
 
 /// The opt-out shape: `CLAUDE_CODE_ATTRIBUTION_HEADER=false` drops the billing line but leaves the rest of
-/// `system` in place, so `system[0]` becomes whatever followed it. `metadata.user_id` is seeded with the
-/// account `relay_with` selects, so a test that wants the wire bytes untouched does not have `edit_body`'s own
-/// account-identity splice rewrite the fixture's empty one out from under it.
+/// `system` in place, so `system[0]` becomes whatever followed it.
 fn bytes_without_billing_line() -> Vec<u8> {
     let mut value: serde_json::Value =
         serde_json::from_slice(body(BodyFixture::Oauth)).expect("the fixture body is valid JSON");
@@ -124,9 +122,6 @@ fn bytes_without_billing_line() -> Vec<u8> {
         .as_array_mut()
         .expect("the fixture carries a system array")
         .remove(0);
-    value["metadata"]["user_id"] = serde_json::Value::String(format!(
-        r#"{{"account_uuid":"{ACCOUNT_UUID}","session_id":"s-1"}}"#
-    ));
     serde_json::to_vec(&value).expect("a Value always re-encodes")
 }
 
@@ -471,10 +466,29 @@ async fn a_carried_prompt_id_past_the_bound_is_retained_by_nothing_and_travels_a
     up.shutdown().await;
 }
 
+/// The answer to a body that carries no attribution line under a `claude-cli/` agent: the contract's refusal for
+/// the line, naming its slot, with nothing sent upstream.
+async fn assert_refused_for_the_line(resp: axum::http::Response<Body>, up: &FakeUpstream) {
+    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.headers()["x-phoebis-error-code"], "client_contract");
+    assert_eq!(
+        outcome(&resp).client_contract.as_deref(),
+        Some("attribution_line")
+    );
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let refusal: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let message = refusal["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("system[0]") && !message.contains(';'),
+        "{message}"
+    );
+    assert!(up.requests().is_empty(), "nothing was sent upstream");
+}
+
 /// A forged `claude-cli/` agent buys nothing on a body that carries no attribution line: the relay never
-/// writes a line the client did not, so there is nothing for the agent to unlock.
+/// writes a line the client did not, and the contract refuses the body before any account is chosen.
 #[tokio::test]
-async fn a_forged_claude_code_user_agent_on_a_body_without_the_block_restores_nothing() {
+async fn a_forged_claude_code_user_agent_on_a_body_without_the_block_is_refused_for_the_contract() {
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let app = relay_with(AccountKind::Oauth, &up).await;
     let mut req = without_billing_line("s-1");
@@ -483,18 +497,7 @@ async fn a_forged_claude_code_user_agent_on_a_body_without_the_block_restores_no
         "user-agent",
         "claude-cli/2.1.269;cc_prev_req=forged (external, cli)",
     );
-    assert_eq!(app.clone().oneshot(req).await.unwrap().status(), 200);
-    let sent = &up.requests()[0];
-    let line = billing_line(&sent.body);
-    assert!(
-        !line.starts_with("x-anthropic-billing-header:"),
-        "no line was inserted: {line}"
-    );
-    assert_eq!(
-        header(sent, "x-client-request-id"),
-        None,
-        "and nothing else of the first-party shape is presented either"
-    );
+    assert_refused_for_the_line(app.clone().oneshot(req).await.unwrap(), &up).await;
     up.shutdown().await;
 }
 
@@ -553,31 +556,18 @@ async fn a_prerelease_client_version_keeps_the_first_party_restoration() {
     up.shutdown().await;
 }
 
-/// With the account identity already the one `relay_with` seeds and the model already one the pool serves as
-/// it is, `edit_body` finds nothing else to write either, so the body a client without the block sends reaches
-/// the upstream byte for byte.
+/// The client's attribution opt-out under its own agent: the line the router requires of a Claude Code client is
+/// missing, so the body is refused rather than relayed as sent.
 #[tokio::test]
-async fn a_body_without_the_block_relays_byte_identical_under_a_claude_code_user_agent() {
+async fn a_body_without_the_block_under_a_claude_code_user_agent_is_refused_and_nothing_is_sent() {
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let app = relay_with(AccountKind::Oauth, &up).await;
-    let sent = bytes_without_billing_line();
     let resp = app
         .clone()
         .oneshot(without_billing_line("s-1"))
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200);
-    let recorded = &up.requests()[0];
-    assert_eq!(
-        recorded.body, sent,
-        "the body reaches the upstream exactly as sent"
-    );
-    assert!(
-        !String::from_utf8_lossy(&recorded.body).contains("x-anthropic-billing-header"),
-        "no line was inserted, the reason the bytes are identical: {}",
-        String::from_utf8_lossy(&recorded.body)
-    );
-    assert_eq!(header(recorded, "x-client-request-id"), None);
+    assert_refused_for_the_line(resp, &up).await;
     up.shutdown().await;
 }
 
