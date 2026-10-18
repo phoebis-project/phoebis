@@ -2435,6 +2435,16 @@ fn same_cycle(announced: (Option<i64>, i64), reset: Option<i64>, now: i64, windo
     }
 }
 
+/// The reset `reading` stands under: its own, or where it names none and was taken before `stored`'s reset passed,
+/// the stored one's, since such a reading is of the stored reset's cycle. A reading with none taken past the stored
+/// reset is another cycle, as `window_edges` reads that reset passed.
+fn reset_under(stored: Option<&WindowReading>, reading: &WindowReading) -> Option<i64> {
+    match (reading.reset, stored.and_then(|stored| stored.reset)) {
+        (None, Some(stored_reset)) if reading.observed_at < stored_reset => Some(stored_reset),
+        (reset, _) => reset,
+    }
+}
+
 /// A pin event as the decision names it: a move with its reason, an expiry with the first reason the task read
 /// against the pin.
 fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
@@ -4450,11 +4460,13 @@ impl Task {
                 });
             }
         }
-        // The prediction may have announced this wall already: the reading then names the reset it did.
+        // The prediction may have announced this wall already: the reading then names the reset it did, or names none
+        // before the stored reset passed and stands under that one.
+        let reset = reset_under(stored.as_ref(), &reading);
         let announced = self
             .spent_announced
             .get(&(account_id.to_string(), window.to_string()))
-            .is_some_and(|announced| same_cycle(*announced, reading.reset, now, window));
+            .is_some_and(|announced| same_cycle(*announced, reset, now, window));
         if stored.is_none_or(|stored| stored.utilization < 1.0)
             && reading.utilization >= 1.0
             && !announced
@@ -4481,9 +4493,10 @@ impl Task {
     /// reading at the wall under the same reset cycle is raised to the stored utilization, with its own instant,
     /// reset and source, so a head after a poll at 1.0 neither clears the window nor lets the next poll announce the
     /// wall again. A reading under the margin is a real clear and lands as read, so `window_edges` reads the window
-    /// cleared and forgets the announcement, and the next crossing announces anew. A reading of another cycle lands
-    /// as read. Only a reading newer than the stored one counts, since the fold drops any other: an older reading, or
-    /// one of the stored instant, goes to the fold as read.
+    /// cleared and forgets the announcement, and the next crossing announces anew. A reading that names no reset, taken
+    /// before the stored reset passed, is of that reset's cycle, and a reading of another cycle lands as read. Only a
+    /// reading newer than the stored one counts, since the fold drops any other: an older reading, or one of the stored
+    /// instant, goes to the fold as read.
     fn held_at_the_wall(
         &self,
         mut sample: UtilizationSample,
@@ -4503,7 +4516,7 @@ impl Task {
             if reading.utilization >= 1.0 - SPENT_MARGIN
                 && same_cycle(
                     (stored.reset, stored.observed_at),
-                    reading.reset,
+                    reset_under(Some(stored), reading),
                     now,
                     window,
                 )
