@@ -48,7 +48,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::billing::{restorable_version, Restore};
-use crate::body::{tier_ttls, uniform_ttl, VersionCheck, BILLING_LINE_PATH};
+use crate::body::{tier_ttls, uniform_ttl, AccountUuidEdit, VersionCheck, BILLING_LINE_PATH};
 use crate::budget::{BodyBudget, BodyReads};
 use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
@@ -2343,11 +2343,22 @@ impl Relay {
         // Stable across a same-account replay: an OAuth refresh replaces the token, never the account identity
         // it names, so this is read once rather than through the closure below.
         let account_uuid = match admitted.trace.kind {
+            Kind::CountTokens => None,
+            Kind::Inference | Kind::Probe => credential.account_uuid.clone(),
+        };
+        let uuid_edit = match admitted.trace.kind {
             // The public `count_tokens` schema carries no `metadata` member and the upstream refuses unknown
             // top-level ones, so there is no slot the account identity could go in. It is not billed either, so
             // nothing is lost by leaving the body without it.
-            Kind::CountTokens => None,
-            Kind::Inference | Kind::Probe => credential.account_uuid.clone(),
+            Kind::CountTokens => AccountUuidEdit::Keep,
+            // An API-key leg carries the empty uuid the native client writes on an API key. An OAuth leg carries
+            // the account's own, and one whose credential names none leaves the member as sent.
+            Kind::Inference | Kind::Probe if account.kind == AccountKind::ApiKey => {
+                AccountUuidEdit::Blank
+            }
+            Kind::Inference | Kind::Probe => account_uuid
+                .as_deref()
+                .map_or(AccountUuidEdit::Keep, AccountUuidEdit::Splice),
         };
         let memory_key = admitted.memory_key.as_ref();
         let canonical_model = &admitted.identity.canonical_model;
@@ -2472,7 +2483,7 @@ impl Relay {
             let edits = edit_body(
                 &mut edited,
                 &NativeEdit {
-                    account_uuid: account_uuid.as_deref(),
+                    account_uuid: uuid_edit,
                     upstream_model: &selection.upstream_model,
                     restore: restore_with(&admitted.restore, &previous, skip),
                     diagnostics,
@@ -2491,6 +2502,7 @@ impl Relay {
                 tracing::debug!(
                     account = %account.id,
                     re_signed = edits.cch_restamped,
+                    blanked = matches!(uuid_edit, AccountUuidEdit::Blank),
                     "set the client's previous message id to null"
                 );
             }

@@ -683,6 +683,87 @@ async fn an_api_key_account_toward_api_anthropic_com_is_restored_too() {
     up.shutdown().await;
 }
 
+/// The stamped first-party body naming `u-1` in its identity slot and signed again, as a client signed in to an
+/// account sends it, so the admission's hash check reads a current stamp.
+fn naming_an_account() -> Vec<u8> {
+    let spliced = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+        .unwrap()
+        .replacen(r#"\"account_uuid\":\"\""#, r#"\"account_uuid\":\"u-1\""#, 1);
+    assert!(
+        spliced.contains(r#"\"account_uuid\":\"u-1\""#),
+        "the splice landed"
+    );
+    phoebis_cch::sign(spliced.as_bytes()).unwrap()
+}
+
+/// The members of `metadata.user_id`, decoded from the string the client escapes them in.
+fn user_id_of(wire: &[u8]) -> serde_json::Value {
+    let root: serde_json::Value = serde_json::from_slice(wire).expect("the body parses");
+    serde_json::from_str(
+        root["metadata"]["user_id"]
+            .as_str()
+            .expect("user_id is a string"),
+    )
+    .expect("user_id holds JSON")
+}
+
+/// The upstream saw the empty uuid with the client's other identity members, under a stamp current over the
+/// bytes it received.
+fn assert_blanked(sent: &fake_upstream::RecordedRequest, native: &[u8]) {
+    let (before, after) = (user_id_of(native), user_id_of(&sent.body));
+    assert_eq!(after["account_uuid"], "", "the uuid is blanked");
+    assert_eq!(after["device_id"], before["device_id"]);
+    assert_eq!(after["session_id"], before["session_id"]);
+    assert!(
+        phoebis_cch::sign(&sent.body).unwrap() == sent.body,
+        "the stamp is current over the sent bytes"
+    );
+}
+
+#[tokio::test]
+async fn an_api_key_leg_blanks_a_stamped_bodys_account_uuid_and_re_signs_it() {
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let app = relay_with(AccountKind::ApiKey, &up).await;
+    let native = naming_an_account();
+    let resp = app
+        .oneshot(request_from_fixture(
+            inference_head(FixtureKind::ApiKey),
+            &native,
+            KEY,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_blanked(&up.requests()[0], &native);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_probe_on_an_api_key_account_carries_the_empty_uuid_too() {
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let h = harness(
+        &up,
+        &[api_key("acct", "sk-ant-api03-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let native = naming_an_account();
+    let probe = phoebis_relay::Probe {
+        key_id: "desktop".into(),
+        key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+    };
+    let resp = h
+        .relay
+        .probe(
+            probe,
+            request_from_fixture(inference_head(FixtureKind::ApiKey), &native, KEY),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_blanked(&up.requests()[0], &native);
+    up.shutdown().await;
+}
+
 /// Closes the open item from the response-id capture's review: the `message_start` id path only ever ran
 /// through a unit test of the SSE parser, never through a real relayed stream. A streamed commit and a
 /// buffered JSON commit both have to leave the upstream's `request-id` behind for the next request's

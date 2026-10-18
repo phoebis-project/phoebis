@@ -27,11 +27,11 @@ pub enum Markerless {
     GoesAsSent,
 }
 
-/// The native edit's inputs: the account identity and model every request needs, the restoration a
-/// `claude-cli/` inference request carries, the diagnostics member the pool's `cache_diagnostics` switch forces,
-/// and the pool's cache TTL policy.
+/// The native edit's inputs: the account uuid spliced in, blanked or kept as sent, the model every request needs,
+/// the restoration a `claude-cli/` inference request carries, the diagnostics member the pool's
+/// `cache_diagnostics` switch forces, and the pool's cache TTL policy.
 pub struct NativeEdit<'a> {
-    pub account_uuid: Option<&'a str>,
+    pub account_uuid: AccountUuidEdit<'a>,
     pub upstream_model: &'a str,
     pub restore: Option<Restore<'a>>,
     /// Outer `None` leaves the body alone; the inner option is the previous `message_start` id on this account,
@@ -60,6 +60,15 @@ pub enum SafeguardsEdit {
     /// The setting is off: the member is cut with one comma, and a member the raw walk cannot reach refuses the
     /// request rather than travelling.
     Drop,
+}
+
+/// What the edit does to the account uuid inside `metadata.user_id`: the selected account's on an OAuth leg, the
+/// empty string on an API-key leg (the shape the native client writes on an API key), or the member as sent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccountUuidEdit<'a> {
+    Splice(&'a str),
+    Blank,
+    Keep,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -190,10 +199,9 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
             return Err(RelayError::BodyShape(BodyMember::Safeguards));
         }
     }
-    // An API-key account has no identity to splice: the measured client never carried one for it.
     let account_uuid_replaced = match edit.account_uuid {
-        None => false,
-        Some(uuid) => {
+        AccountUuidEdit::Keep => false,
+        AccountUuidEdit::Splice(uuid) => {
             // The uuid is spliced into an escaped JSON string, so a value needing escaping would corrupt the
             // body rather than identify the account.
             if !is_valid_id(uuid) {
@@ -207,6 +215,8 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
                 Spliced::Unchanged => false,
             }
         }
+        // An API-key account binds no identity, so a body without the member (an SDK caller's) goes as sent.
+        AccountUuidEdit::Blank => matches!(replace_account_uuid(body, ""), Spliced::Replaced),
     };
     let model_replaced = match replace_model(body, edit.upstream_model) {
         Spliced::Absent => return Err(RelayError::BodyShape(BodyMember::Model)),
@@ -653,7 +663,7 @@ mod tests {
         let edits = edit_body(
             &mut body,
             &NativeEdit {
-                account_uuid: Some(UUID),
+                account_uuid: AccountUuidEdit::Splice(UUID),
                 upstream_model: "claude-sonnet-4-5",
                 restore: None,
                 diagnostics: None,
@@ -678,7 +688,7 @@ mod tests {
             edit_body(
                 &mut body,
                 &NativeEdit {
-                    account_uuid: Some(UUID),
+                    account_uuid: AccountUuidEdit::Splice(UUID),
                     upstream_model: "claude-sonnet-4-5",
                     restore: None,
                     diagnostics: None,
@@ -700,7 +710,7 @@ mod tests {
             edit_body(
                 &mut body,
                 &NativeEdit {
-                    account_uuid: None,
+                    account_uuid: AccountUuidEdit::Keep,
                     upstream_model: "claude-sonnet-4-5",
                     restore: None,
                     diagnostics: None,
@@ -721,7 +731,7 @@ mod tests {
             edit_body(
                 &mut oauth,
                 &NativeEdit {
-                    account_uuid: Some(UUID),
+                    account_uuid: AccountUuidEdit::Splice(UUID),
                     upstream_model: "claude-sonnet-4-5",
                     restore: None,
                     diagnostics: None,
@@ -742,7 +752,7 @@ mod tests {
         let edits = edit_body(
             &mut body,
             &NativeEdit {
-                account_uuid: None,
+                account_uuid: AccountUuidEdit::Keep,
                 upstream_model: "claude-sonnet-4-5",
                 restore: None,
                 diagnostics: None,
@@ -763,7 +773,7 @@ mod tests {
         let edits = edit_body(
             &mut body,
             &NativeEdit {
-                account_uuid: Some("acct-uuid"),
+                account_uuid: AccountUuidEdit::Splice("acct-uuid"),
                 upstream_model: "claude-sonnet-4-5",
                 restore: None,
                 diagnostics: None,
@@ -789,7 +799,7 @@ mod tests {
             edit_body(
                 &mut body,
                 &NativeEdit {
-                    account_uuid: None,
+                    account_uuid: AccountUuidEdit::Keep,
                     upstream_model: "claude-sonnet-4-5",
                     restore: None,
                     diagnostics: None,
@@ -1175,7 +1185,7 @@ mod tests {
 
     fn drop_edit(safeguards: SafeguardsEdit) -> NativeEdit<'static> {
         NativeEdit {
-            account_uuid: None,
+            account_uuid: AccountUuidEdit::Keep,
             upstream_model: "claude-sonnet-4-5",
             restore: None,
             diagnostics: None,
@@ -1209,6 +1219,84 @@ mod tests {
             body == fixture_body(BodyFixture::FirstParty9b244),
             "one comma went with the member, so the body is the recording again"
         );
+    }
+
+    /// The recorded first-party body naming `u-1` in its identity slot and signed again, as a client signed in to
+    /// an account sends it. The raw splice signs nothing, and a stale stamp would stop the drift assertion before
+    /// the edit runs.
+    fn stamped_with_a_uuid() -> Vec<u8> {
+        let mut body = fixture_body(BodyFixture::FirstParty9b244).to_vec();
+        assert_eq!(replace_account_uuid(&mut body, "u-1"), Spliced::Replaced);
+        phoebis_cch::sign(&body).unwrap()
+    }
+
+    /// The members of `metadata.user_id`, decoded from the string the client escapes them in.
+    fn user_id_of(body: &[u8]) -> serde_json::Value {
+        let root: serde_json::Value = serde_json::from_slice(body).expect("the body parses");
+        serde_json::from_str(
+            root["metadata"]["user_id"]
+                .as_str()
+                .expect("user_id is a string"),
+        )
+        .expect("user_id holds JSON")
+    }
+
+    fn blank_edit() -> NativeEdit<'static> {
+        NativeEdit {
+            account_uuid: AccountUuidEdit::Blank,
+            ..drop_edit(SafeguardsEdit::Keep)
+        }
+    }
+
+    #[test]
+    fn blank_empties_the_uuid_keeps_the_other_members_and_re_signs() {
+        let sent = stamped_with_a_uuid();
+        let mut body = sent.clone();
+        let edits = edit_body(&mut body, &blank_edit()).expect("a signed body is editable");
+        let (before, after) = (user_id_of(&sent), user_id_of(&body));
+        assert_eq!(after["account_uuid"], "", "the uuid is blanked");
+        assert_eq!(after["device_id"], before["device_id"]);
+        assert_eq!(after["session_id"], before["session_id"]);
+        assert!(edits.account_uuid_replaced);
+        assert!(edits.cch_restamped);
+        assert_eq!(
+            phoebis_cch::sign(&body).unwrap(),
+            body,
+            "the stamp covers the blank"
+        );
+        assert!(
+            body == fixture_body(BodyFixture::FirstParty9b244),
+            "blanked and signed again, the body is the recording again"
+        );
+    }
+
+    #[test]
+    fn blank_on_an_empty_uuid_moves_no_byte_and_re_signs_nothing() {
+        let sent = fixture_body(BodyFixture::ApiKey);
+        assert_eq!(
+            user_id_of(sent)["account_uuid"],
+            "",
+            "the recording names no account"
+        );
+        let mut body = sent.to_vec();
+        let edits = edit_body(&mut body, &blank_edit()).expect("an unsigned body is editable");
+        assert!(!edits.account_uuid_replaced);
+        assert!(!edits.cch_restamped);
+        assert!(body == sent, "no byte moved");
+    }
+
+    #[test]
+    fn blank_on_a_body_without_metadata_and_on_a_user_id_without_the_key_leaves_the_body_as_sent() {
+        for sent in [
+            br#"{"model":"claude-sonnet-4-5","messages":[]}"#.as_slice(),
+            br#"{"model":"claude-sonnet-4-5","metadata":{"user_id":"{\"device_id\":\"d-1\",\"session_id\":\"s-1\"}"},"messages":[]}"#.as_slice(),
+        ] {
+            let mut body = sent.to_vec();
+            let edits = edit_body(&mut body, &blank_edit())
+                .expect("an API-key leg sends a body without the member");
+            assert!(!edits.account_uuid_replaced);
+            assert_eq!(body, sent);
+        }
     }
 
     #[test]

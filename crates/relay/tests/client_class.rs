@@ -20,10 +20,18 @@ fn ok() -> Rule {
     }
 }
 
+/// The API-key fixture's body without its `metadata` member, as a raw Messages caller sends it.
+fn identity_less_body() -> Vec<u8> {
+    let mut native = body(BodyFixture::ApiKey).to_vec();
+    phoebis_cch::remove_top_level_member(&mut native, "metadata")
+        .expect("the recording carries the member");
+    native
+}
+
 fn identity_less_request(agent: &str) -> Request<Body> {
     let mut req = request_from_fixture(
         inference_head(FixtureKind::ApiKey),
-        body(BodyFixture::ApiKey),
+        &identity_less_body(),
         KEY,
     );
     set_header(&mut req, "user-agent", agent);
