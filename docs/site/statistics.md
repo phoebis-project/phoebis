@@ -256,10 +256,10 @@ share of a Max 20x window one million input tokens spend outside the band, deriv
 | `claude-haiku-4-5` | 1 | 2026-10-05 | 0.667% | 0.111% |
 
 `claude-sonnet-5` is not measured: its row takes Sonnet 5.5's weight, the model at the same list price, and stays
-unmeasured since the client sends Sonnet 5 for its classifier alone, whose calls the router prices at no share, so the
-ledger holds no Sonnet 5 main turn to measure. The priced models the plan meter has not measured and the file leaves out
-(`claude-fable-5`, `claude-opus-5`, `claude-opus-4-8`) have no weight row and read the weight of the latest weighed
-model of their model tier as an estimate, Fable 5 that of Fable 5.1 and the two Opus models that of Opus 5.5.
+unmeasured since the client sends Sonnet 5 for its classifier alone, so the ledger holds no Sonnet 5 main turn to
+measure against the meter. The priced models the plan meter has not measured and the file leaves out (`claude-fable-5`,
+`claude-opus-5`, `claude-opus-4-8`) have no weight row and read the weight of the latest weighed model of their model
+tier as an estimate, Fable 5 that of Fable 5.1 and the two Opus models that of Opus 5.5.
 
 Under the interactive regime a request spends half the table's 5-hour share and 0.8 of its 7-day share, since the regime
 doubles the 5-hour capacity and raises the 7-day by a quarter while the weights stay the same.

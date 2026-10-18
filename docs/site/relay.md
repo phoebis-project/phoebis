@@ -162,12 +162,13 @@ restart ([sessions](installation.md#sessions)). It is filled on the conversation
 conversation-shaped forks, never on a side query, since the client's own builder writes the field on its conversation
 sites alone. The prompt id comes from the `x-claude-code-prompt-id` header, which the client sets from the same id it
 writes into the line, so a request without the header gets no `cc_prompt_id`, as the native client writes none. The auto
-mode classifier requests are side queries, so they get `cch` alone and are recorded as the client's classifier calls,
-which take no share of a plan window ([Auto mode behind the router](#auto-mode-behind-the-router)). Three things are not
-restored, because the router cannot: the `advanced-tool-use-2025-11-20` beta, since the client has to run its tool
-search (`ENABLE_TOOL_SEARCH=true` selects it), the global cache scope on the static system block, and `cc_turn_origin`
-with the five fields after it in the client's order (the turn position, the gateway and the project fields), which the
-router never writes and whose turn origin it records when the line carries it.
+mode classifier requests are side queries, so they get `cch` alone, and the router records the ones that carry the
+classifier marker as the client's classifier calls, which take no share of a plan window ([Auto mode behind the
+router](#auto-mode-behind-the-router)). Three things are not restored, because the router cannot: the
+`advanced-tool-use-2025-11-20` beta, since the client has to run its tool search (`ENABLE_TOOL_SEARCH=true` selects it),
+the global cache scope on the static system block, and `cc_turn_origin` with the five fields after it in the client's
+order (the turn position, the gateway and the project fields), which the router never writes and whose turn origin it
+records when the line carries it.
 
 ## Client drift
 
@@ -177,10 +178,9 @@ inference request, a `cc_version` suffix that does not reproduce from the first 
 agent names. The hash goes first. A body carrying only the placeholder `cch=00000` passes, and a line with no
 `cc_version`, a bare version with no suffix, or a version other than the agent's is not the suffix drift: the first two
 carry nothing to check, and the third is the hash check's to judge. Both run once per request, after the key's client
-and model checks and before any account is chosen, so the refusal names no account and no leg ever meets a drift.
-
-The contract check runs before both, so a body without the line is a contract refusal and never a drift, and a request
-that fails both is refused for the contract ([The required set](client.md#the-required-set)).
+and model checks and before any account is chosen, so the refusal names no account and no leg ever meets a drift. The
+contract check runs before both, so a body without the line is a contract refusal and never a drift, and a request that
+fails the contract and a drift check is refused for the contract ([The required set](client.md#the-required-set)).
 
 Either refuses the request as `400` `invalid_request_error` with the code `client_drift`, the header
 `x-phoebis-error-code: client_drift` and the message of its kind ([refusal codes](client.md#refusal-codes)):
@@ -232,13 +232,14 @@ dialog's Access group ([Pools](routing.md#pools)).
   hash. The upstream then evaluates nothing, and one completed answer without a verdict latches the client for the rest
   of its process, subagents included, across `/clear` and `/compact`: from then on it sends one classifier request of
   its own per reviewed tool use, on its Sonnet default rather than the session's model, which the router records with
-  the standing `client` under Classifier and prices at no share of a plan window on a subscription account, as the
-  client's documentation says a Pro, Max or Team plan is never charged for them, and at its model's price in the
-  account's overage and on an API-key account ([Requests](console.md#requests), [Statistics](statistics.md#plan-meter)),
-  while the beta stays in its header and the router keeps dropping it. The first session post under the off state still
-  asks, so a session that starts there costs one asking round. The request log records each request whose member the
-  router dropped as `stripped`, and the client's classifier requests under Classifier `client` ([The
-  console](console.md)).
+  the standing `client` under Classifier where it carries the classifier marker, the `auxiliary` class with the beta
+  `auto-mode-classifier-2026-07-16` the client sends under the first-party assumption with experimental betas allowed,
+  and prices at no share of a plan window on a subscription account, as the client's documentation says a Pro, Max or
+  Team plan is never charged for them, and at its model's price in the account's overage and on an API-key account
+  ([Requests](console.md#requests), [Statistics](statistics.md#plan-meter)), while the beta stays in its header and the
+  router keeps dropping it. The first session post under the off state still asks, so a session that starts there costs
+  one asking round. The request log records each request whose member the router dropped as `stripped`, and the client's
+  marked classifier requests under Classifier `client` ([The console](console.md)).
 
 `CLAUDE_CODE_AUTO_MODE_SERVER=0` in the client's environment is the client-side equivalent of the off state, with no
 first asking round, and `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` does the same in first-party mode.
@@ -248,15 +249,15 @@ The client's own classifier runs in two stages: a stage-1 request that stops at 
 `<thinking>` before its `<block>` answer, with an optional `<reason>` and `<category>`. A stage-1 block followed by a
 refused stage 2 stands as a block. On Sonnet 5 the first stage answers `<severity>N` under the stop sequence
 `</severity>`, where Sonnet 5.5 answers the older `<block>` shape, so a first-stage call ends after a few output tokens
-either way. Behind a plain base URL without the hint gate they carry neither the beta nor the class header, and the
-router refuses them for the missing header. Under the first-party assumption with experimental betas allowed
-(`CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` unset) they carry `auto-mode-classifier-2026-07-16` and the `auxiliary`
-request class on both stages, the pair the router reads as the marker. A call that carries the class without the beta,
-as under the hint gate alone or under `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`, is an ordinary auxiliary request to
-the router and takes its model's share. Their bodies carry no `stream` and no `tools`, a security-monitor system block,
-and `stop_sequences` at stage 1. They carry the session's own id and pin like any request, on the Sonnet default, so a
-session on another model takes a second pin beside its own. The client also sends them under the on setting for a tool
-input a PreToolUse hook rewrote, since the server's verdict is bound to the input the model wrote.
+either way. Behind a plain base URL without the hint gate the classifier requests carry neither the beta nor the class
+header, and the router refuses them for the missing header. Under the first-party assumption with experimental betas
+allowed (`CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` unset) they carry `auto-mode-classifier-2026-07-16` and the
+`auxiliary` request class on both stages, the pair the router reads as the marker. A call that carries the class without
+the beta, as under the hint gate alone or under `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`, is an ordinary auxiliary
+request to the router and takes its model's share. Their bodies carry no `stream` and no `tools`, a security-monitor
+system block, and `stop_sequences` at stage 1. They carry the session's own id and pin like any request, on the Sonnet
+default, so a session on another model takes a second pin beside its own. The client also sends them under the on
+setting for a tool input a PreToolUse hook rewrote, since the server's verdict is bound to the input the model wrote.
 
 **The notice.** The client can show a one-line notice that its classifier requests are billed because the gateway does
 not support the server-side check. A Pro, Max or Team login never sees it. A key or token login sees it once per process

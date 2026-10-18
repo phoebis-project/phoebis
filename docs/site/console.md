@@ -1004,15 +1004,15 @@ the rule that fired (`spent rule`), the rung that placed it (`static rung`), the
 (`Pace P0`, whose hover is the Pace hint), where a hold waited (`cohort`, `session pin`), `slow-down` for a request the
 slow-down held and for the renewal after its hold, `rewrite in flight` for a request that waited for a moved pin's first
 head and for the renewal after it, what exhausted the pool (`budget`, `cooldown`, `fast lane`), the refusal
-(`client drift`, `key revoked`), `no rule fired` for a renewal, or an event's reason (`window spent`,
+(`client contract`, `client drift`, `key revoked`), `no rule fired` for a renewal, or an event's reason (`window spent`,
 `429 on 5h`, `slow-down` for a slow-down's start and end). Fact gives the value that made it so as a muted label with
-its value, `gap`, `idle`, `prefix`, `until`, a held request's `until 18:20` and `speed 0.5x`, the renewal's
-`held 42 s`, a slow-down start's `speed 0.5x` and an end's `slowest 0.35x`, a move's `runway` on its destination (a
-span such as `2 h 10 min`, `none` or `unbounded`) followed by `least bad` or `rewrite only` where the destination did
-not fit, or a renewal's window utilization, such as `5h 96%`, where that window's projection reached the ceiling. A
-verdict reads in one color across the rows, the card and the strip: good when it served the request, warning when it
-changed its course, critical for a refusal or an exhaustion, and neutral for none and no. Every account, key, pool,
-model, session and request a row names is a link.
+its value, `gap`, `idle`, `prefix`, `until`, a held request's `until 18:20` and `speed 0.5x`, the renewal's `held 42 s`,
+a slow-down start's `speed 0.5x` and an end's `slowest 0.35x`, a move's `runway` on its destination (a span such as `2 h
+10 min`, `none` or `unbounded`) followed by `least bad` or `rewrite only` where the destination did not fit, or a
+renewal's window utilization, such as `5h 96%`, where that window's projection reached the ceiling. A verdict reads in
+one color across the rows, the card and the strip: good when it served the request, warning when it changed its course,
+critical for a refusal or an exhaustion, and neutral for none and no. Every account, key, pool, model, session and
+request a row names is a link.
 
 Every row opens beneath itself. A decision row loads its record and draws the decision card. Its verdict line names the
 decision with its accounts and its pool as links ("Moved secondary to primary", "Attempt 2 of 2: placed on primary",

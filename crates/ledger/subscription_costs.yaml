@@ -32,8 +32,7 @@ revisions:
       claude-fable-5-1:   10    # 2026-09-30, Max 20x out of band, 6.647 +/- 0.012 percent per 1M input
       claude-opus-5-5:    2.2   # 2026-10-04, Max 20x out of band, 1.467 +/- 0.0027 percent per 1M input
       claude-sonnet-5-5:  1.5   # 2026-09-30, Max 20x out of band, 0.9998 +/- 0.0013 percent per 1M input
-      # The client sends Sonnet 5 for its classifier alone, whose calls take no share, so no main turn exists to
-      # measure.
+      # The client sends Sonnet 5 for its classifier alone, so no main turn exists to measure.
       claude-sonnet-5:    1.5   # assumed 2026-10-11, unmeasured: Sonnet 5.5's weight at the same list price
       claude-haiku-5-5:   0.1   # 2026-10-08, Max 20x out of band, 0.06654 +/- 0.00051 percent per 1M input
       claude-haiku-4-5:   1     # 2026-10-05, Max 20x out of band, 0.6658 +/- 0.001 percent per 1M input

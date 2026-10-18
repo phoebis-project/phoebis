@@ -178,7 +178,7 @@ The other headers stay optional: the agent type, the context-compacted mark, the
 the tool durations and `x-client-request-id`. A request without one is relayed the same way.
 
 `CLAUDE_CODE_ATTRIBUTION_HEADER=0` meets the refusal, since the line is required where `system` is an array. A token
-count and the quota probe (no `system`) are outside the set.
+count is outside the set, the quota probe (no `system`) is outside the line's item alone.
 
 ## The first request
 
@@ -409,9 +409,10 @@ its facts, and the cut character travels as the client sent it.
 Claude Code in auto mode asks the upstream to review each tool use on the model's own turn, and what the router does
 with that request is the pool's `auto_mode_server` (on by default), which a key can override. The mechanism, the latch,
 the classifier's two stages and the client's notice are on [Auto mode behind the
-router](relay.md#auto-mode-behind-the-router). The client's classifier calls take no share of a plan window on a
-subscription account, and the Requests view lists them under Classifier `client`
-([Statistics](statistics.md#plan-meter)).
+router](relay.md#auto-mode-behind-the-router). The client's classifier calls that carry the classifier marker, the
+`auxiliary` class with the beta `auto-mode-classifier-2026-07-16` sent under the first-party assumption with
+experimental betas allowed, take no share of a plan window on a subscription account, and the Requests view lists them
+under Classifier `client` ([Statistics](statistics.md#plan-meter)).
 
 ## Headers and transport
 
