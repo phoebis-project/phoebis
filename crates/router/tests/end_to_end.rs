@@ -3007,6 +3007,7 @@ async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expi
                 burn_at: None,
                 burn_banded: phoebis_store::PinBurn::default(),
                 burn_fast: phoebis_store::PinBurn::default(),
+                burn_unmetered: phoebis_store::PinBurn::default(),
                 last_input_tokens: 0,
                 last_refresh_at: 0,
                 cache_ttl_ms: 300_000,

@@ -50,6 +50,9 @@ pub struct PinRow {
     /// The pin's fast usage as typed tokens per second over the same window, decayed from `burn_at` as `burn` is,
     /// and zero for a pin never renewed fast.
     pub burn_fast: PinBurn,
+    /// The usage of the client's own classifier calls, typed tokens per second over the same window, decayed from
+    /// `burn_at` as `burn` is. Priced in dollars alone, so a plan account's projection never reads it.
+    pub burn_unmetered: PinBurn,
     pub last_input_tokens: u64,
     /// The last main, subagent or compaction turn, or a keepalive probe's renewal; `last_used_at` moves on every
     /// request, this does not.
@@ -297,9 +300,9 @@ impl Store {
                     last_refresh_at: r.get(12)?, cache_ttl_ms: r.get(13)?,
                     shed_from: r.get(14)?, shed_at: r.get(15)?, static_hash: r.get(16)?, tail_hash: r.get(17)?,
                     lane: r.get(18)?, burn: burn_from(r, 19)?, burn_banded: burn_from(r, 24)?,
-                    burn_fast: burn_from(r, 29)?,
-                    marked_at: r.get(34)?, marked_on: r.get(35)?, marked_window: r.get(36)?,
-                    entrypoint: r.get(37)?,
+                    burn_fast: burn_from(r, 29)?, burn_unmetered: burn_from(r, 34)?,
+                    marked_at: r.get(39)?, marked_on: r.get(40)?, marked_window: r.get(41)?,
+                    entrypoint: r.get(42)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             resolutions: tx.prepare("SELECT spelling, dated_id, resolved_at FROM model_resolutions ORDER BY spelling")?
@@ -572,7 +575,9 @@ fn in_transaction<T>(
 // `burn_from` reads each copy's five columns in this order, the plain copy first.
 const BURN_COLUMNS: &str = "burn_cache_read, burn_input, burn_output, burn_write_1h, burn_write_5m, \
      burn_banded_cache_read, burn_banded_input, burn_banded_output, burn_banded_write_1h, burn_banded_write_5m, \
-     burn_fast_cache_read, burn_fast_input, burn_fast_output, burn_fast_write_1h, burn_fast_write_5m";
+     burn_fast_cache_read, burn_fast_input, burn_fast_output, burn_fast_write_1h, burn_fast_write_5m, \
+     burn_unmetered_cache_read, burn_unmetered_input, burn_unmetered_output, burn_unmetered_write_1h, \
+     burn_unmetered_write_5m";
 
 fn burn_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<PinBurn> {
     Ok(PinBurn {
@@ -588,7 +593,7 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
     conn.execute(
         &format!(
             "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS}, marked_at, marked_on, marked_window, entrypoint) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43) \
              ON CONFLICT(key_id, session_id, agent_id, model) DO UPDATE SET \
                account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, \
                last_used_at = excluded.last_used_at, key_generation = excluded.key_generation, \
@@ -603,7 +608,12 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
                burn_banded_write_1h = excluded.burn_banded_write_1h, burn_banded_write_5m = excluded.burn_banded_write_5m, \
                burn_fast_cache_read = excluded.burn_fast_cache_read, burn_fast_input = excluded.burn_fast_input, \
                burn_fast_output = excluded.burn_fast_output, burn_fast_write_1h = excluded.burn_fast_write_1h, \
-               burn_fast_write_5m = excluded.burn_fast_write_5m, marked_at = excluded.marked_at, \
+               burn_fast_write_5m = excluded.burn_fast_write_5m, \
+               burn_unmetered_cache_read = excluded.burn_unmetered_cache_read, \
+               burn_unmetered_input = excluded.burn_unmetered_input, \
+               burn_unmetered_output = excluded.burn_unmetered_output, \
+               burn_unmetered_write_1h = excluded.burn_unmetered_write_1h, \
+               burn_unmetered_write_5m = excluded.burn_unmetered_write_5m, marked_at = excluded.marked_at, \
                marked_on = excluded.marked_on, marked_window = excluded.marked_window, \
                entrypoint = excluded.entrypoint"
         ),
@@ -642,6 +652,11 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
             pin.burn_fast.output,
             pin.burn_fast.write_1h,
             pin.burn_fast.write_5m,
+            pin.burn_unmetered.cache_read,
+            pin.burn_unmetered.input,
+            pin.burn_unmetered.output,
+            pin.burn_unmetered.write_1h,
+            pin.burn_unmetered.write_5m,
             pin.marked_at,
             pin.marked_on,
             pin.marked_window,

@@ -176,6 +176,8 @@ pub(crate) struct Renewal {
     pub cache_ttl_ms: i64,
     /// Whether this request created the pin rather than renewing one that already served.
     pub fresh: bool,
+    /// The request is the client's own classifier call, so the renewal enters the unmetered copy.
+    pub classifier: bool,
     /// False for a token count: it writes no cache, so its answer renews nothing, though a client error on a
     /// pin it created still releases that pin.
     pub renews: bool,
@@ -227,6 +229,7 @@ impl Renewal {
                 origin: self.origin,
                 cache_ttl_ms: self.cache_ttl_ms,
                 fast,
+                classifier: self.classifier,
             },
         );
     }
@@ -250,6 +253,8 @@ pub(crate) struct AffinityFacts {
     /// The request's entrypoint as the identity read it, what the usage report's charge prices under: `None` for a
     /// client that is not Claude Code.
     pub entrypoint: Option<String>,
+    /// The request is the client's own classifier call, so its usage report charges no plan window.
+    pub classifier: bool,
     pub lane: String,
     /// The identity's session id, `None` for a request with no identity.
     pub root: Option<String>,
@@ -301,6 +306,7 @@ impl AffinityFacts {
                     incarnation: self.incarnation,
                     usage: pin_usage(counted),
                     fast,
+                    classifier: self.classifier,
                     request_id: self.request_id.clone(),
                     attempt: self.attempt,
                     entrypoint: self.entrypoint.clone(),

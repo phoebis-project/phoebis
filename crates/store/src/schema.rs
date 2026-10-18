@@ -87,11 +87,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (55, V55),
     (56, V56),
     (57, V57),
+    (58, V58),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 57;
+pub const SCHEMA_VERSION: u32 = 58;
 
 /// The version that bounds an account to one pool; a file below it is read for overlaps before it migrates.
 pub const ONE_POOL_VERSION: u32 = 47;
@@ -831,4 +832,14 @@ CREATE TABLE IF NOT EXISTS guardrail_attachments (
   PRIMARY KEY (guardrail_id, subject_kind, subject_id)
 );
 CREATE INDEX IF NOT EXISTS guardrail_attachments_subject ON guardrail_attachments (subject_kind, subject_id, position);
+"#;
+
+// The pin's unmetered burn: the usage of the client's own classifier calls, priced in dollars alone and never under
+// a window share, as five columns beside the fast copy's. Zero on every standing pin, which the default gives.
+const V58: &str = r#"
+ALTER TABLE pins ADD COLUMN burn_unmetered_cache_read REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_unmetered_input REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_unmetered_output REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_unmetered_write_1h REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_unmetered_write_5m REAL NOT NULL DEFAULT 0;
 "#;

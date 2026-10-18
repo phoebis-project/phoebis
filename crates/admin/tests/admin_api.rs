@@ -2771,6 +2771,7 @@ fn burning_opus_pin(
         burn_at: Some(now),
         burn_banded: input(banded),
         burn_fast: phoebis_store::PinBurn::default(),
+        burn_unmetered: phoebis_store::PinBurn::default(),
         last_input_tokens: 1_000,
         last_refresh_at: now - 5,
         cache_ttl_ms: 300_000,
@@ -3109,6 +3110,7 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
         origin: "client",
         cache_ttl_ms: 300_000,
         fast,
+        classifier: false,
     };
     parts.router.report(renewal(true, 60_000)).await;
     parts.router.report(renewal(false, 600)).await;
@@ -3168,6 +3170,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
             origin: "client",
             cache_ttl_ms: 300_000,
             fast: false,
+            classifier: false,
         })
         .await;
     let window = 600.0;
@@ -3703,6 +3706,7 @@ async fn main_turn(
             held_out: false,
             lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
             fast: false,
+            classifier: false,
             body_tokens: 0,
         })
         .await
@@ -4096,6 +4100,7 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
                 ..phoebis_store::PinBurn::default()
             },
             burn_fast: phoebis_store::PinBurn::default(),
+            burn_unmetered: phoebis_store::PinBurn::default(),
             last_input_tokens: 100,
             last_refresh_at: now - 1_000,
             cache_ttl_ms: 300_000,
@@ -4135,6 +4140,7 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
                 ..phoebis_store::PinBurn::default()
             },
             burn_fast: phoebis_store::PinBurn::default(),
+            burn_unmetered: phoebis_store::PinBurn::default(),
             last_input_tokens: 100,
             last_refresh_at: now - 1_000,
             cache_ttl_ms: 300_000,
@@ -4285,6 +4291,7 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin_and_relea
                 ..phoebis_store::PinBurn::default()
             },
             burn_fast: phoebis_store::PinBurn::default(),
+            burn_unmetered: phoebis_store::PinBurn::default(),
             last_input_tokens: 100,
             last_refresh_at: now - 1_000,
             cache_ttl_ms: 300_000,

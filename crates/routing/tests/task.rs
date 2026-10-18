@@ -173,6 +173,7 @@ fn request(
         held_out: false,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         fast: false,
+        classifier: false,
         body_tokens: 0,
     }
 }
@@ -1142,6 +1143,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             held_out: false,
             lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
             fast: false,
+            classifier: false,
             body_tokens: 0,
         }
     };
@@ -1281,6 +1283,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             held_out: false,
             lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
             fast: false,
+            classifier: false,
             body_tokens: 0,
         })
         .await
@@ -2783,6 +2786,7 @@ fn a_million_input_served(account: &str, at: i64, fast: bool) -> Report {
             ..PinUsage::default()
         },
         fast,
+        classifier: false,
         request_id: "r-1".into(),
         attempt: 1,
         entrypoint: None,
@@ -2917,6 +2921,44 @@ async fn a_fast_completion_charges_no_window() {
 }
 
 #[tokio::test]
+async fn a_classifier_completion_charges_no_window_and_releases_its_booking() {
+    let now = Arc::new(AtomicI64::new(2_000));
+    let (handle, _events) = priced_router(&now).await;
+    // A booking under the request's id, as a selection that books leaves one: the usage releases it whatever the
+    // request was.
+    handle
+        .select(placement(&handle, "r-1", "s1", 2_000))
+        .await
+        .unwrap();
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.52),
+        "the booking's rewrite joins the reading"
+    );
+    handle
+        .report(Report::Usage {
+            account_id: "a".into(),
+            at: 2_500,
+            canonical_model: "claude-sonnet-5".into(),
+            incarnation: 1,
+            usage: PinUsage {
+                input: 1_000_000,
+                ..PinUsage::default()
+            },
+            fast: false,
+            classifier: true,
+            request_id: "r-1".into(),
+            attempt: 1,
+            entrypoint: None,
+        })
+        .await;
+    let reading = read(&handle, "a", FIVE_HOUR).await;
+    assert!(
+        close(reading, 0.5),
+        "the classifier call's usage releases the booking and charges no plan window: {reading:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week_for_a_fable_model()
 {
     let store = seeded_oauth(&["a"]);
@@ -2970,6 +3012,7 @@ async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week
             ..PinUsage::default()
         },
         fast: false,
+        classifier: false,
         request_id: "r-1".into(),
         attempt: 1,
         entrypoint: None,
@@ -5568,6 +5611,7 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
             origin: "keepalive",
             cache_ttl_ms: 300_000,
             fast: false,
+            classifier: false,
         })
         .await;
     let pin = handle.pins().await.unwrap().remove(0);
@@ -5618,6 +5662,7 @@ fn renewal(
         origin,
         cache_ttl_ms,
         fast: false,
+        classifier: false,
     }
 }
 
@@ -5773,6 +5818,7 @@ async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_pr
             origin: "client",
             cache_ttl_ms: 3_600_000,
             fast: false,
+            classifier: false,
         })
         .await;
     let pins = handle.pins().await.unwrap();
@@ -5878,6 +5924,7 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
             origin: "client",
             cache_ttl_ms: 300_000,
             fast: true,
+            classifier: false,
         })
         .await;
     handle
@@ -5901,7 +5948,9 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
         "the thousand fast tokens land in the pin's fast usage, unweighed: {fast:?}"
     );
     assert_eq!((s1.burn_at, s1.last_input_tokens), (Some(62_000), 1_000));
-    let priced = rates.price_pin(BurnUnit::Usd, s1, &fast).unwrap();
+    let priced = rates
+        .price_pin(BurnUnit::Usd, s1, &fast, &s1.burn_unmetered)
+        .unwrap();
     assert!(
         (priced - (decayed * 0.25 + 1_000.0 / window * 0.5)).abs() < 1e-9,
         "priced, the row's tokens at the quarter and the fast tokens at the half: {priced}"
@@ -5967,6 +6016,164 @@ async fn a_fast_renewal_is_written_with_the_pin_and_a_restart_reads_its_fast_usa
     );
 }
 
+#[tokio::test]
+async fn a_classifier_renewal_lands_in_the_pins_unmetered_copy_priced_in_dollars_alone() {
+    let store = averaged(seeded(&["a"]));
+    let now = Arc::new(AtomicI64::new(1_000));
+    let rates = quarter_dollar_rates();
+    let config = RouterConfig {
+        rates: rates.clone(),
+        ..RouterConfig::default()
+    };
+    let handle = spawn(store, clock(&now), config).unwrap();
+    let classified = selected_pin(
+        handle
+            .select(request(&handle, Some("s1"), 1_000))
+            .await
+            .unwrap(),
+    );
+    let standard = selected_pin(
+        handle
+            .select(request(&handle, Some("s2"), 1_000))
+            .await
+            .unwrap(),
+    );
+    handle
+        .report(speed_renewal(classified.clone(), 2_000, false, 600))
+        .await;
+    handle
+        .report(classifier_renewal(classified.clone(), 62_000, 1_000))
+        .await;
+    handle
+        .report(speed_renewal(standard, 62_000, false, 1_000))
+        .await;
+    let pins = handle.pins().await.unwrap();
+    // The pool's burn average is 600 s, and the classifier's fold lands 60 s after the standard one.
+    let window = 600.0_f64;
+    let decay = (-60.0_f64 / window).exp();
+    let decayed = 600.0 / window * decay;
+    let s1 = pins.iter().find(|p| p.session_id == "s1").unwrap();
+    assert!(
+        (s1.burn.input - decayed).abs() < 1e-9 && (s1.burn_banded.input - decayed).abs() < 1e-9,
+        "the row's plain and banded copies only decay at a classifier renewal: {:?} and {:?}",
+        s1.burn,
+        s1.burn_banded
+    );
+    assert_eq!(
+        s1.burn_fast,
+        PinBurn::default(),
+        "and the fast copy holds nothing"
+    );
+    assert!(
+        (s1.burn_unmetered.input - 1_000.0 / window).abs() < 1e-9,
+        "the thousand classifier tokens land in the pin's unmetered copy, unweighed: {:?}",
+        s1.burn_unmetered
+    );
+    let share = rates
+        .price_pin(BurnUnit::WindowShare, s1, &s1.burn_fast, &s1.burn_unmetered)
+        .unwrap();
+    assert!(
+        (share - decayed).abs() < 1e-9,
+        "under the window share the row's banded copy alone, so the renewal adds nothing to the plan's figure: {share}"
+    );
+    let dollars = rates
+        .price_pin(BurnUnit::Usd, s1, &s1.burn_fast, &s1.burn_unmetered)
+        .unwrap();
+    assert!(
+        (dollars - (decayed + 1_000.0 / window) * 0.25).abs() < 1e-9,
+        "in dollars the classifier tokens price at the standard quarter beside the row's: {dollars}"
+    );
+    let s2 = pins.iter().find(|p| p.session_id == "s2").unwrap();
+    assert_eq!(
+        (s2.burn.input, s2.burn_unmetered),
+        (1_000.0 / window, PinBurn::default()),
+        "a standard renewal folds into the row and leaves no unmetered usage behind"
+    );
+    handle
+        .report(speed_renewal(classified, 122_000, false, 600))
+        .await;
+    let (s1, _) = pin_and_fast_usage(&handle).await;
+    assert!(
+        (s1.burn_unmetered.input - 1_000.0 / window * decay).abs() < 1e-9,
+        "a standard renewal folds nothing into the unmetered copy, which decays with the row: {:?}",
+        s1.burn_unmetered
+    );
+}
+
+#[tokio::test]
+async fn a_classifier_renewal_is_written_with_the_pin_and_a_restart_reads_its_unmetered_usage_as_saved(
+) {
+    let store = averaged(seeded(&["a"]));
+    let now = Arc::new(AtomicI64::new(1_000));
+    let (key, saved) = {
+        let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+        let pin = selected_pin(
+            handle
+                .select(request(&handle, Some("s1"), 1_000))
+                .await
+                .unwrap(),
+        );
+        handle.report(classifier_renewal(pin, 2_000, 600)).await;
+        // The renewal's `burn_at` reaches the store in the same row as its unmetered copy, so the wait keys on it.
+        wait_for(WRITTEN, || {
+            store
+                .load_routing()
+                .unwrap()
+                .pins
+                .into_iter()
+                .find(|p| p.burn_at == Some(2_000))
+        })
+        .await;
+        let (held, _) = pin_and_fast_usage(&handle).await;
+        assert!(
+            (held.burn_unmetered.input - 1.0).abs() < 1e-9,
+            "the 600 classifier tokens over the pool's 600 s burn average: {:?}",
+            held.burn_unmetered
+        );
+        (held.key(), held.burn_unmetered)
+    };
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    assert_eq!(
+        handle
+            .pins()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|p| p.key() == key)
+            .map(|p| p.burn_unmetered),
+        Some(saved),
+        "a restart reads the pin's unmetered usage as saved"
+    );
+    assert_eq!(
+        store
+            .load_routing()
+            .unwrap()
+            .pins
+            .into_iter()
+            .map(|p| p.burn_unmetered)
+            .collect::<Vec<_>>(),
+        vec![saved],
+        "the stored row carries the unmetered usage the state held, never a fold behind it"
+    );
+}
+
+/// A client renewal of `pin` at `now` by the client's own classifier call, with `input` uncached tokens as its whole
+/// prompt.
+fn classifier_renewal(pin: PinRef, now: i64, input: u64) -> Report {
+    Report::PinRenewed {
+        pin,
+        now,
+        usage: Some(PinUsage {
+            input,
+            ..PinUsage::default()
+        }),
+        origin: "client",
+        cache_ttl_ms: 300_000,
+        fast: false,
+        classifier: true,
+    }
+}
+
 /// Every token of every model at `rate`, with Sonnet 5's own row at `rate` and its long-context rates at `long`
 /// over 1,000 prompt tokens.
 fn long_context_rates(rate: f64, long: f64) -> RateTable {
@@ -6016,7 +6223,9 @@ async fn a_fast_renewal_over_the_threshold_lands_in_the_fast_usage_and_prices_at
         "the fast tokens land in the fast usage, unweighed: {fast:?}"
     );
     assert_eq!(s1.last_input_tokens, 1_001);
-    let priced = rates.price_pin(BurnUnit::Usd, &s1, &fast).unwrap();
+    let priced = rates
+        .price_pin(BurnUnit::Usd, &s1, &fast, &s1.burn_unmetered)
+        .unwrap();
     assert!(
         (priced - 1_001.0 * 0.5 / window).abs() < 1e-9,
         "priced through the fast table, the burn reads the fast dollars whatever the pin's last prompt: {priced}"
@@ -6044,7 +6253,9 @@ async fn a_fast_renewal_over_the_threshold_on_a_row_without_fast_cells_prices_at
         (fast.input - 1_001.0 / window).abs() < 1e-9,
         "the fast tokens land in the fast usage: {fast:?}"
     );
-    let priced = rates.price_pin(BurnUnit::Usd, &s1, &fast).unwrap();
+    let priced = rates
+        .price_pin(BurnUnit::Usd, &s1, &fast, &s1.burn_unmetered)
+        .unwrap();
     assert!(
         (priced - 1_001.0 / window).abs() < 1e-9,
         "priced at the long-context rates the pin's last prompt selects: {priced}"
@@ -6076,6 +6287,7 @@ fn speed_renewal(pin: PinRef, now: i64, fast: bool, input: u64) -> Report {
         origin: "client",
         cache_ttl_ms: 300_000,
         fast,
+        classifier: false,
     }
 }
 
@@ -6118,7 +6330,9 @@ async fn pin_and_fast_usage(handle: &RouterHandle) -> (PinRow, PinBurn) {
 /// selects plus its fast usage through the fast table.
 async fn dollar_burn(handle: &RouterHandle, rates: &BurnRates) -> f64 {
     let (pin, fast) = pin_and_fast_usage(handle).await;
-    rates.price_pin(BurnUnit::Usd, &pin, &fast).unwrap()
+    rates
+        .price_pin(BurnUnit::Usd, &pin, &fast, &pin.burn_unmetered)
+        .unwrap()
 }
 
 /// `tokens` folded at `now` onto an average last folded at `at`, over the pool's 600 s burn average, as
@@ -7179,6 +7393,7 @@ fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64
         burn_at: Some(AT),
         burn_banded: rates,
         burn_fast: PinBurn::default(),
+        burn_unmetered: PinBurn::default(),
         last_input_tokens: 1_000,
         last_refresh_at: AT - HOUR,
         cache_ttl_ms: 300_000,
@@ -8703,6 +8918,7 @@ fn usage_of(request_id: &str, attempt: u32, at: i64) -> Report {
             ..PinUsage::default()
         },
         fast: false,
+        classifier: false,
         request_id: request_id.into(),
         attempt,
         entrypoint: None,
@@ -8722,6 +8938,7 @@ fn usage_under(request_id: &str, at: i64, entrypoint: Option<&str>) -> Report {
             ..PinUsage::default()
         },
         fast: false,
+        classifier: false,
         request_id: request_id.into(),
         attempt: 1,
         entrypoint: entrypoint.map(String::from),
@@ -9143,6 +9360,7 @@ async fn a_charge_or_a_reservation_that_predicts_a_spent_window_emits_window_spe
                 ..PinUsage::default()
             },
             fast: false,
+            classifier: false,
             request_id: "r-3".into(),
             attempt: 1,
             entrypoint: None,
@@ -9287,6 +9505,7 @@ async fn a_predicted_wall_with_no_reset_holds_back_a_sample_whose_reset_lands_wi
                 ..PinUsage::default()
             },
             fast: false,
+            classifier: false,
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,
@@ -9359,6 +9578,7 @@ async fn a_predicted_wall_with_no_reset_holds_back_the_samples_of_its_own_window
                 ..PinUsage::default()
             },
             fast: false,
+            classifier: false,
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,

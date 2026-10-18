@@ -1526,6 +1526,7 @@ impl Relay {
             .collect();
         let guardrail_id = evaluation.blocked.map(|i| guardrails[i].id.clone());
         let client = client_facts(&parts.headers, Some(&identity), Some(&facts));
+        let classifier = client.classifier.is_some();
         trace
             .observed(
                 Some(&key),
@@ -1757,6 +1758,7 @@ impl Relay {
             cache_ttl_policy,
             caller: &parts.headers,
             chains: facts.chains.as_ref(),
+            classifier,
             client_diagnostics,
             client_gzip,
             client_version,
@@ -1899,6 +1901,7 @@ impl Relay {
                     held_out,
                     lane: admitted.lane.clone(),
                     fast: admitted.fast,
+                    classifier: admitted.classifier,
                     body_tokens,
                 })
                 .await
@@ -2624,6 +2627,7 @@ impl Relay {
                 can_strip: !stripped_once,
                 cancel,
                 chains: admitted.chains,
+                classifier: admitted.classifier,
                 client_version: admitted.client_version.clone(),
                 credential_generation: credential.generation,
                 deadline: admitted.deadline,
@@ -3506,6 +3510,7 @@ impl Relay {
                 .or(ctx.markers_ttl_ms)
                 .unwrap_or(DEFAULT_CACHE_TTL_MS),
             fresh: ctx.fresh_pin,
+            classifier: ctx.classifier,
             renews: ctx.trace.kind != Kind::CountTokens,
             generations: (
                 ctx.account.incarnation,
@@ -3544,6 +3549,7 @@ impl Relay {
             key_generation: ctx.key.created_at,
             canonical_model: ctx.identity.canonical_model.clone(),
             entrypoint: ctx.identity.entrypoint.clone(),
+            classifier: ctx.classifier,
             lane: ctx.lane.to_string(),
             root,
             static_boundaries: ctx
@@ -4451,6 +4457,8 @@ struct Responding<'a> {
     /// The two boundary chains the client's body hashed, for the affinity report; `None` for a body with no
     /// chain.
     chains: Option<&'a Chains>,
+    /// The request is the client's own classifier call, carried to its renewal and its affinity report.
+    classifier: bool,
     client_version: Option<String>,
     credential_generation: u64,
     /// `Admitted::deadline`, which ends the refresh ladder's wait.
@@ -4817,6 +4825,9 @@ struct Admitted<'a> {
     /// The two boundary chains the client's body hashed, for the affinity report; `None` for a body with no
     /// chain.
     chains: Option<&'a Chains>,
+    /// The request is the client's own auto-mode classifier call (`ClientFacts.classifier`), read once at admission
+    /// and shared by every leg: its usage reports and its selection carry the flag.
+    classifier: bool,
     /// The client's body carries its own top-level `diagnostics` member, which the edit never rewrites.
     client_diagnostics: bool,
     /// The client sent its body gzip, which `upstream_gzip: auto` mirrors toward the upstream.

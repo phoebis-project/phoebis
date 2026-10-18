@@ -120,6 +120,7 @@ fn request(s: &RegistrySnapshot, model: &str, now: i64) -> SelectRequest {
         held_out: false,
         lane: lane_key(model, "standard", "none", "-"),
         fast: false,
+        classifier: false,
         body_tokens: 0,
     }
 }

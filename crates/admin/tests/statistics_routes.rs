@@ -1318,6 +1318,7 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
                 burn_at: None,
                 burn_banded: phoebis_store::PinBurn::default(),
                 burn_fast: phoebis_store::PinBurn::default(),
+                burn_unmetered: phoebis_store::PinBurn::default(),
                 last_input_tokens: 0,
                 last_refresh_at: 0,
                 cache_ttl_ms: 300_000,
@@ -1412,6 +1413,7 @@ async fn the_sessions_route_answers_500_when_an_accounts_tier_cannot_be_read() {
             burn_at: None,
             burn_banded: phoebis_store::PinBurn::default(),
             burn_fast: phoebis_store::PinBurn::default(),
+            burn_unmetered: phoebis_store::PinBurn::default(),
             last_input_tokens: 0,
             last_refresh_at: 0,
             cache_ttl_ms: 300_000,
@@ -3976,6 +3978,7 @@ async fn decide(parts: &common::Full, request_id: &str, seq: u32, attempt: u32, 
             held_out: false,
             lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
             fast: false,
+            classifier: false,
             body_tokens: 0,
         })
         .await
@@ -4506,6 +4509,7 @@ async fn select_s1(
             held_out: false,
             lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
             fast: false,
+            classifier: false,
             body_tokens: 0,
         })
         .await

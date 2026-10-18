@@ -261,7 +261,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             });
         let fast = p.burn_fast;
         let equivalent = (unit == Some(BurnUnit::WindowShare))
-            .then(|| rates.price_pin(BurnUnit::WindowShare, p, &fast))
+            .then(|| rates.price_pin(BurnUnit::WindowShare, p, &fast, &p.burn_unmetered))
             .flatten()
             .map(|b| b * 3_600.0);
         // The mark is the equivalent's alone: a dollar burn reads the price table's own cells.
@@ -272,7 +272,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         let burn = match unit {
             None => None,
             Some(BurnUnit::Usd) => rates
-                .price_pin(BurnUnit::Usd, p, &fast)
+                .price_pin(BurnUnit::Usd, p, &fast, &p.burn_unmetered)
                 .map(|b| b * 3_600.0),
             Some(BurnUnit::WindowShare) => {
                 if !tiers.contains_key(&p.account_id) {

@@ -509,6 +509,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             held_out: false,
             lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
             fast: false,
+            classifier: false,
             body_tokens: 0,
         })
         .await
@@ -607,6 +608,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             held_out: false,
             lane: lane_key("claude-sonnet-5-5", "standard", "none", "-"),
             fast: false,
+            classifier: false,
             body_tokens: 0,
         })
         .await
@@ -1739,6 +1741,7 @@ fn asked(
         held_out: false,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         fast: false,
+        classifier: false,
         body_tokens: 0,
     }
 }
