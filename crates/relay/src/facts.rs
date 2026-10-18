@@ -636,7 +636,16 @@ mod tests {
             None,
             "the 32 digits without hyphens"
         );
-        assert_eq!(read(&format!("{ID};")), None, "a trailing field separator");
+        assert_eq!(
+            read(&format!("{};", &ID[..35])),
+            None,
+            "a field separator in the last of the 36 bytes"
+        );
+        assert_eq!(
+            read("aaaaaaaaa-aaa-4aaa-8aaa-aaaaaaaaaaaa"),
+            None,
+            "36 bytes with a hyphen out of place"
+        );
         assert_eq!(read(&format!("{ID}0")), None, "a value past 36 bytes");
         assert_eq!(header_prompt_id(&HeaderMap::new()), None);
         assert_eq!(ClientHints::read(&HeaderMap::new()).prompt_id, None);
