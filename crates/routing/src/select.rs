@@ -716,13 +716,13 @@ pub(crate) fn pin_figures<'a>(
         // the source's speed, which the pin runs at there until the destination's own factor says otherwise.
         let rate = match figures {
             Figures::Pin(pin) => priced(window, regime, pin)
-                .map(|rate| rate / state.slow_down_speed(pool, &pin.account_id)),
+                .map(|rate| rate / state.slow_down_speed(pool, &pin.account_id, now)),
             // A failover's landing knows the session's own burn, while the destination's cache is cold, so the
             // rewrite above stays the body's.
             Figures::Fresh(_) if request.failed_over.is_some() => {
                 request.failed_over.as_ref().and_then(|failed_over| {
                     priced(window, regime, &failed_over.row).map(|rate| {
-                        rate / state.slow_down_speed(pool, &failed_over.from_account_id)
+                        rate / state.slow_down_speed(pool, &failed_over.from_account_id, now)
                     })
                 })
             }
@@ -737,7 +737,7 @@ pub(crate) fn pin_figures<'a>(
                     .filter(|p| plan_windows(&p.model).any(|w| w == window))
                     .filter_map(|p| {
                         priced(window, regime, p)
-                            .map(|rate| rate / state.slow_down_speed(pool, &p.account_id))
+                            .map(|rate| rate / state.slow_down_speed(pool, &p.account_id, now))
                     })
                     .collect(),
             ),
@@ -2308,7 +2308,7 @@ fn projections_of(
     let average_ms = burn_average_ms(pool);
     let speed = match read {
         BurnRead::Achieved => 1.0,
-        BurnRead::Demand => state.slow_down_speed(pool, account_id),
+        BurnRead::Demand => state.slow_down_speed(pool, account_id, now),
     };
     let burn = match read {
         BurnRead::Achieved => state.burn_shares(account_id, &keep, tier, now, average_ms),
@@ -2556,7 +2556,7 @@ pub(crate) fn slow_down_of(
     let reading = state.predicted(account_id, FIVE_HOUR, now)?;
     let utilization = reading.utilization;
     let horizon = horizon_of(snapshot, account_id, FIVE_HOUR, &reading, now);
-    let speed = state.slow_down_speed(pool, account_id);
+    let speed = state.slow_down_speed(pool, account_id, now);
     let demand = state
         .demand_shares(
             account_id,
@@ -5372,7 +5372,7 @@ pub(crate) fn pace_of(
                     tier,
                     now,
                     burn_average_ms(pool),
-                    state.slow_down_speed(pool, &candidate.account_id),
+                    state.slow_down_speed(pool, &candidate.account_id, now),
                 )
                 .get(window)
                 .copied()
@@ -6133,7 +6133,9 @@ fn candidate_facts(
         fit: None,
         binding: None,
         burn,
-        factor: state.slow_down_in_force(pool, id).map(|entry| entry.factor),
+        factor: state
+            .slow_down_in_force(pool, id, now)
+            .map(|entry| entry.factor),
     }
 }
 
@@ -6148,7 +6150,7 @@ fn five_hour_demand(
     burn: &BTreeMap<String, f64>,
     now: i64,
 ) -> f64 {
-    let speed = state.slow_down_speed(pool, account_id);
+    let speed = state.slow_down_speed(pool, account_id, now);
     let demand = match snapshot.tier(account_id) {
         Some(tier) if speed != 1.0 => state
             .demand_shares(

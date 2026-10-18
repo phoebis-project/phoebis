@@ -9663,6 +9663,16 @@ async fn a_purge_that_drops_a_slowed_entry_ends_its_span() {
     use phoebis_routing::RouterEvent;
     let now = Arc::new(AtomicI64::new(AT));
     let handle = slowed_router(&now).await;
+    // A reading whose reset lies two hours out, past the purge below: the router's own reset passes forty minutes in,
+    // and the entry read before it would leave at that reset with its span ending there. The drop this case reads is
+    // the quiet account's, whose span ends at the entry's last read.
+    handle
+        .report(observed(
+            "a",
+            sample_with(AT + 1, FIVE_HOUR, 0.9, Some(AT + 2 * HOUR)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
     let mut events = handle.subscribe_events();
     handle
         .select(slowed_turn(&handle, "r-1", AT))
@@ -9701,6 +9711,61 @@ async fn a_purge_that_drops_a_slowed_entry_ends_its_span() {
             .iter()
             .any(|event| matches!(event, RouterEvent::SlowDownEnded { .. })),
         "the dropped entry's span ends once"
+    );
+}
+
+#[tokio::test]
+async fn a_purge_after_the_reset_drops_the_slowed_entry_and_ends_its_span_at_the_reset() {
+    use phoebis_routing::RouterEvent;
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = slowed_router(&now).await;
+    let mut events = handle.subscribe_events();
+    handle
+        .select(slowed_turn(&handle, "r-1", AT))
+        .await
+        .unwrap();
+    let factor = drained(&mut events)
+        .await
+        .into_iter()
+        .find_map(|event| match event {
+            RouterEvent::SlowDownStarted { factor, .. } => Some(factor),
+            _ => None,
+        })
+        .expect("the read under 1 opened a span");
+    // The window's reset passes with the session still pinned and no selection after it: the purge tick drops the
+    // entry of the old window, and its span ends at the reset.
+    now.store(SLOWED_RESET + 60_000, Ordering::SeqCst);
+    let ended = loop {
+        if let RouterEvent::SlowDownEnded {
+            account_id,
+            pool_id,
+            since,
+            duration_ms,
+            factor_min,
+            held_ms,
+            ..
+        } = next_event(&mut events).await
+        {
+            break (account_id, pool_id, since, duration_ms, factor_min, held_ms);
+        }
+    };
+    assert_eq!(
+        ended,
+        ("a".into(), "p".into(), AT, SLOWED_RESET - AT, factor, 0)
+    );
+    assert!(
+        !drained(&mut events)
+            .await
+            .iter()
+            .any(|event| matches!(event, RouterEvent::SlowDownEnded { .. })),
+        "the dropped entry's span ends once"
+    );
+    let a = projection_of_account(&handle.projections("p").await.unwrap(), "a");
+    assert_eq!(a.slow_down, None, "no entry answers after the reset");
+    let five_hour = a.windows[FIVE_HOUR];
+    assert_eq!(
+        five_hour.demand, five_hour.burn,
+        "the demand is the achieved burn: {five_hour:?}"
     );
 }
 

@@ -233,9 +233,10 @@ pub enum RouterEvent {
         reset: Option<i64>,
         at: i64,
     },
-    /// The factor read 1 for the safety wait, or the purge dropped the entry: the span from `since` to the instant the
-    /// factor returned to 1 (or the entry's last read, where it never did), with the lowest factor read in it and the
-    /// time its new holds waited.
+    /// The factor read 1 for the safety wait, the window's reset cleared the entry, or the purge dropped it: the span
+    /// from `since` to the instant the factor returned to 1, to the passed reset of the window it slowed for where the
+    /// reset cleared the entry, or to the entry's last read where the purge dropped the entry before either, with the
+    /// lowest factor read in it and the time its new holds waited.
     SlowDownEnded {
         account_id: String,
         pool_id: String,
@@ -1010,7 +1011,8 @@ pub struct AccountProjection {
     pub pace_score: f64,
     /// The slow-down entry in force for the account at the ask's instant, read through `slow_down_in_force`: `None`
     /// where the pool's switch is off, the account is an api_key one, an untiered one or one with no 5-hour reading,
-    /// or no pinned selection has read it since the last purge or restart.
+    /// the entry was read before its window's passed reset, or no pinned selection has read it since the last purge or
+    /// restart.
     pub slow_down: Option<AccountSlowDown>,
 }
 
@@ -2469,16 +2471,16 @@ fn projections(
                 account_id: account_id.to_string(),
                 windows,
                 pace_score: pace_of(state, snapshot, pool, &candidate, SEVEN_DAY, now).score,
-                slow_down: state.slow_down_in_force(pool, account_id).map(|entry| {
-                    AccountSlowDown {
+                slow_down: state
+                    .slow_down_in_force(pool, account_id, now)
+                    .map(|entry| AccountSlowDown {
                         factor: entry.factor,
                         speed: entry.speed,
                         since: entry.slowed_since,
                         stretch_ms: entry.stretch_ms,
                         threshold_ms: entry.threshold_ms,
                         hold_ms: slow_down_hold_ms(pool),
-                    }
-                }),
+                    }),
             }
         })
         .collect()
@@ -2517,7 +2519,7 @@ fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) ->
                 Some((runway_ms, binding)) => (runway_ms, Some(runway_ms.is_some()), binding),
             };
             let speed = pool
-                .and_then(|pool| state.slow_down_in_force(pool, &pin.account_id))
+                .and_then(|pool| state.slow_down_in_force(pool, &pin.account_id, now))
                 .map(|entry| entry.factor);
             let cycle_ms = state.pin_pace(&pin.key()).and_then(|pace| pace.cycle_ms);
             PinStanding {

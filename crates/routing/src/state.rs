@@ -712,6 +712,17 @@ fn full_speed_unless_positive(realized: f64) -> f64 {
     }
 }
 
+/// Where a dropped or replaced entry's open span ends: the factor's return where it returned before `reset`, the
+/// passed reset of the window it slowed for where that reset is what dropped it, else the entry's last read.
+fn span_end(entry: &SlowDownState, reset: Option<i64>) -> i64 {
+    match (entry.clear_since, reset) {
+        (Some(clear), Some(reset)) => clear.min(reset),
+        (Some(clear), None) => clear,
+        (None, Some(reset)) => reset,
+        (None, None) => entry.read_at,
+    }
+}
+
 /// The fold a renewal with usage applies at `now`: the average decayed to `now`, plus `tokens` spread over the
 /// window, so the average is tokens per second.
 pub(crate) fn burn_folded(
@@ -792,6 +803,9 @@ pub struct SlowDownState {
     pub stretch_ms: i64,
     /// The threshold the read compared the stretch to, the pool's `slow_down_stretch_seconds` at the read.
     pub threshold_ms: i64,
+    /// The 5-hour reading's reset at the read, `None` where the reading named none or its reset had passed: the
+    /// window the entry was read in, which the stale test compares `read_at` against once the reset has passed.
+    pub reset: Option<i64>,
 }
 
 /// One edge of an account's slow-down span, which the task announces as an event.
@@ -806,8 +820,9 @@ pub enum SlowDownEdge {
         demand: f64,
         reset: Option<i64>,
     },
-    /// The span closed, its length running from `since` to the instant the factor returned to 1, or to the entry's
-    /// last read where the purge dropped the entry before it did: the wait that closes a span is not slowed time.
+    /// The span closed, its length running from `since` to the instant the factor returned to 1, to the passed reset
+    /// of the window it slowed for where the reset cleared the entry, or to the entry's last read where the purge
+    /// dropped the entry before either: the wait that closes a span is not slowed time.
     Ended {
         since: i64,
         duration_ms: i64,
@@ -2037,7 +2052,8 @@ impl RoutingState {
         on.into_iter().map(|(_, reservation)| reservation).collect()
     }
 
-    /// The account's slow-down entry on the pool as written, whatever the pool's switch reads now.
+    /// The account's slow-down entry on the pool as written, whatever the pool's switch or the window's reset reads
+    /// now.
     pub fn slow_down_state(&self, pool_id: &str, account_id: &str) -> Option<&SlowDownState> {
         self.slow_downs
             .get(&(pool_id.to_string(), account_id.to_string()))
@@ -2049,8 +2065,9 @@ impl RoutingState {
     /// under it, and the span the factor reads under 1 for opened and tracked. A read of 1 stamps `clear_since` and
     /// leaves the span open, so a dip back under 1 inside `SLOW_DOWN_WAIT_MS` continues it and
     /// `take_slow_down_edges` closes it once the factor has read 1 for the wait. A span that opens records its start
-    /// from this read, after the end of a span whose wait ran out before any drain closed it. Answers the entry as
-    /// written, the read's stretch and threshold beside its factor.
+    /// from this read, after the end of a span whose wait ran out before any drain closed it. An entry read before its
+    /// window's passed reset is replaced: its open span ends by that reset, and this read writes the entry afresh as a
+    /// first write does. Answers the entry as written, the read's stretch and threshold beside its factor.
     pub fn write_slow_down(
         &mut self,
         pool_id: &str,
@@ -2068,6 +2085,30 @@ impl RoutingState {
         let over = read.stretch_ms > read.threshold_ms;
         let slowed = read.factor < 1.0;
         let key = (pool_id.to_string(), account_id.to_string());
+        // An entry read before its window's passed reset is the old window's: its span ends by that reset, and no speed
+        // or stamp of it carries into the window this read opens.
+        if let Some(reset) = self
+            .slow_downs
+            .get(&key)
+            .and_then(|entry| self.stale_reset(account_id, entry, now))
+        {
+            let stale = self
+                .slow_downs
+                .remove(&key)
+                .expect("the entry was just read");
+            if let Some(since) = stale.slowed_since {
+                self.slow_down_edges.push((
+                    pool_id.to_string(),
+                    account_id.to_string(),
+                    SlowDownEdge::Ended {
+                        since,
+                        duration_ms: span_end(&stale, Some(reset)) - since,
+                        factor_min: stale.factor_min,
+                        held_ms: stale.held_ms,
+                    },
+                ));
+            }
+        }
         let mut opened = !self.slow_downs.contains_key(&key) && slowed;
         let mut ended = None;
         self.slow_downs
@@ -2079,6 +2120,7 @@ impl RoutingState {
                 entry.stretch_ms = read.stretch_ms;
                 entry.threshold_ms = read.threshold_ms;
                 entry.read_at = now;
+                entry.reset = read.reset;
                 entry.over_since = over.then(|| entry.over_since.unwrap_or(now));
                 // A span whose factor has read 1 for the wait ended at the return, though no drain has closed it yet: a
                 // selection can land before the purge tick that would, and the dip it reads opens a span of its own.
@@ -2117,6 +2159,7 @@ impl RoutingState {
                 factor: read.factor,
                 speed: realized,
                 read_at: now,
+                reset: read.reset,
                 over_since: over.then_some(now),
                 slowed_since: slowed.then_some(now),
                 clear_since: None,
@@ -2193,19 +2236,50 @@ impl RoutingState {
         }
     }
 
-    /// The entry in force for the account on the pool: `None` at once for a pool whose switch is off, whatever lingers
-    /// until the purge tick drops it, and `None` where no entry stands, an api_key account, an untiered account or one
-    /// with no 5-hour reading (which writes no entry) and an account no pinned selection has read since the last purge
-    /// or restart.
-    pub fn slow_down_in_force(&self, pool: &PoolRow, account_id: &str) -> Option<&SlowDownState> {
+    /// The passed reset the entry was read before, where there is one: the later of the stored 5-hour reading's
+    /// reset and the entry's own among those at or before `now`. A head's whole seconds and a poll's milliseconds
+    /// spell one reset two ways under a second apart, and whichever spelling has passed answers, since an entry
+    /// read before either was read in the old window. `None` while neither has passed, where the reading names no
+    /// reset, and with no reading: a reset more than a window's length ahead is not a reading of a fresh window.
+    fn stale_reset(&self, account_id: &str, entry: &SlowDownState, now: i64) -> Option<i64> {
+        let reading = self.samples.get(account_id)?.reading(FIVE_HOUR)?.reset?;
+        let passed = [Some(reading), entry.reset]
+            .into_iter()
+            .flatten()
+            .filter(|reset| *reset <= now)
+            .max()?;
+        (entry.read_at < passed).then_some(passed)
+    }
+
+    /// Whether the entry was read before the passed reset of the window it was read in, so it is the old window's.
+    pub fn slow_down_stale(&self, account_id: &str, entry: &SlowDownState, now: i64) -> bool {
+        self.stale_reset(account_id, entry, now).is_some()
+    }
+
+    /// The entry in force for the account on the pool at `now`: `None` at once for a pool whose switch is off, whatever
+    /// lingers until the purge tick drops it, `None` for an entry read before its window's passed reset, so every
+    /// reader sees the window's reset clear the account at once, and `None` where no entry stands, an api_key account,
+    /// an untiered account or one with no 5-hour reading (which writes no entry) and an account no pinned selection has
+    /// read since the last purge or restart. The test reads the reset and not the window's start: `window_started`
+    /// opens the new window with the account's next request, so after an idle gap past the reset the start is that
+    /// request's upstream receipt, which falls just after the `read_at` of the selection that sent it, and a test on
+    /// the start would clear that entry again at the next read.
+    pub fn slow_down_in_force(
+        &self,
+        pool: &PoolRow,
+        account_id: &str,
+        now: i64,
+    ) -> Option<&SlowDownState> {
         slow_down(pool)
             .then(|| self.slow_down_state(&pool.id, account_id))
             .flatten()
+            .filter(|entry| !self.slow_down_stale(account_id, entry, now))
     }
 
-    /// The speed the demand divides the account's pins' burn by on `pool`: the entry's realized speed, 1 with none.
-    pub(crate) fn slow_down_speed(&self, pool: &PoolRow, account_id: &str) -> f64 {
-        self.slow_down_in_force(pool, account_id)
+    /// The speed the demand divides the account's pins' burn by on `pool` at `now`: the realized speed of the entry in
+    /// force, and 1 where none is, as for a stale entry.
+    pub(crate) fn slow_down_speed(&self, pool: &PoolRow, account_id: &str, now: i64) -> f64 {
+        self.slow_down_in_force(pool, account_id, now)
             .map_or(1.0, |entry| entry.speed)
     }
 
@@ -3013,10 +3087,11 @@ impl RoutingState {
         }
     }
 
-    /// The slow-down entries a quiet account or a switched-off pool leaves, removed and answered in key order: an
-    /// entry whose account holds no pin of the pool, one no selection wrote for `IN_FLIGHT_RECLAIM_MS`, the backstop
-    /// the reservations use, and every entry of a pool whose slow-down is off or that left the registry, so a quiet
-    /// account reads unslowed again without a selection.
+    /// The slow-down entries a quiet account, a switched-off pool or a passed reset leaves, removed and answered in key
+    /// order: an entry whose account holds no pin of the pool, one no selection wrote for `IN_FLIGHT_RECLAIM_MS`, the
+    /// backstop the reservations use, one read before its window's passed reset, which every reader already reads as
+    /// cleared, and every entry of a pool whose slow-down is off or that left the registry, so a quiet account reads
+    /// unslowed again without a selection.
     fn purge_slow_downs(
         &mut self,
         snapshot: &RegistrySnapshot,
@@ -3034,7 +3109,10 @@ impl RoutingState {
                             .key(&pin.key_id)
                             .is_some_and(|key| key.pool_id == *pool_id)
                 });
-                pool.is_none() || !pinned || now - entry.read_at >= IN_FLIGHT_RECLAIM_MS
+                pool.is_none()
+                    || !pinned
+                    || now - entry.read_at >= IN_FLIGHT_RECLAIM_MS
+                    || self.slow_down_stale(account_id, entry, now)
             })
             .map(|(key, _)| key.clone())
             .collect();
@@ -3043,16 +3121,17 @@ impl RoutingState {
             .into_iter()
             .filter_map(|key| self.slow_downs.remove(&key).map(|entry| (key, entry)))
             .collect();
-        // No start stands without its end: a dropped span ends at the factor's return, or at the last read where the
-        // factor never returned.
+        // No start stands without its end: a dropped span ends at the factor's return, at the passed reset of the
+        // window it slowed for where that reset dropped it, or at the last read where the factor never returned.
         for ((pool_id, account_id), entry) in &dropped {
             if let Some(since) = entry.slowed_since {
+                let end = span_end(entry, self.stale_reset(account_id, entry, now));
                 self.slow_down_edges.push((
                     pool_id.clone(),
                     account_id.clone(),
                     SlowDownEdge::Ended {
                         since,
-                        duration_ms: entry.clear_since.unwrap_or(entry.read_at) - since,
+                        duration_ms: end - since,
                         factor_min: entry.factor_min,
                         held_ms: entry.held_ms,
                     },
@@ -4787,6 +4866,108 @@ mod tests {
                 held_ms: 0,
             }],
             "the factor never returned, so the span ends at the entry's last read"
+        );
+    }
+
+    #[test]
+    fn slow_down_stale_reads_the_passed_reset_of_the_entrys_window() {
+        const MINUTE: i64 = 60_000;
+        const R: i64 = 10 * HOUR_MS;
+        let fresh = || RoutingState::from_load(RoutingLoad::default());
+        let write = |state: &mut RoutingState, reset: Option<i64>, read_at: i64| {
+            state
+                .write_slow_down(
+                    "p",
+                    "a",
+                    &SlowDownRead {
+                        reset,
+                        ..read_of(0.5)
+                    },
+                    1.0,
+                    read_at,
+                    1_800_000,
+                )
+                .clone()
+        };
+
+        let mut state = fresh();
+        read(&mut state, FIVE_HOUR, 0.5, Some(R), R - HOUR_MS);
+        let entry = write(&mut state, Some(R), R - 30 * MINUTE);
+        assert_eq!(entry.reset, Some(R));
+        assert!(
+            !state.slow_down_stale("a", &entry, R - MINUTE),
+            "its own reset lies ahead under a reading naming it"
+        );
+        assert!(
+            state.slow_down_stale("a", &entry, R + MINUTE),
+            "its own reset passed under the reading still naming it"
+        );
+        read(
+            &mut state,
+            FIVE_HOUR,
+            0.1,
+            Some(R + 5 * HOUR_MS),
+            R + 2 * MINUTE,
+        );
+        assert!(
+            state.slow_down_stale("a", &entry, R + 3 * MINUTE),
+            "its own reset passed under a reading naming the next one ahead"
+        );
+
+        // Read in the gap after the reset, before any reading of the new window.
+        let mut state = fresh();
+        read(&mut state, FIVE_HOUR, 0.5, Some(R), R - HOUR_MS);
+        let entry = write(&mut state, None, R + 10 * MINUTE);
+        assert_eq!(entry.reset, None);
+        assert!(
+            !state.slow_down_stale("a", &entry, R + 11 * MINUTE),
+            "read after the passed reset the reading names"
+        );
+        let next = R + 10 * MINUTE + 5 * HOUR_MS;
+        read(
+            &mut state,
+            FIVE_HOUR,
+            0.1,
+            Some(next),
+            R + 10 * MINUTE + 200,
+        );
+        assert!(
+            !state.slow_down_stale("a", &entry, R + 11 * MINUTE),
+            "read before the new window's reset, which lies ahead"
+        );
+        assert!(
+            state.slow_down_stale("a", &entry, next),
+            "the reading names a later reset that has passed"
+        );
+
+        let mut state = fresh();
+        let entry = write(&mut state, Some(R), R - 30 * MINUTE);
+        assert!(
+            !state.slow_down_stale("a", &entry, R + MINUTE),
+            "no reading, whatever the entry's own reset"
+        );
+
+        // A head's whole seconds and a poll's milliseconds spell one reset half a second apart: whichever has passed
+        // answers.
+        let mut state = fresh();
+        read(&mut state, FIVE_HOUR, 0.5, Some(R), R - HOUR_MS);
+        let entry = write(&mut state, Some(R + 500), R - MINUTE);
+        assert_eq!(entry.reset, Some(R + 500));
+        assert!(
+            state.slow_down_stale("a", &entry, R + 200),
+            "the reading's spelling has passed"
+        );
+        assert!(
+            state.slow_down_stale("a", &entry, R + 1_000),
+            "both spellings have passed"
+        );
+        let mut state = fresh();
+        read(&mut state, FIVE_HOUR, 0.5, Some(R + 500), R - HOUR_MS);
+        let entry = write(&mut state, Some(R), R - MINUTE);
+        assert_eq!(entry.reset, Some(R));
+        assert!(
+            state.slow_down_stale("a", &entry, R + 200),
+            "the entry's own spelling has passed"
         );
     }
 

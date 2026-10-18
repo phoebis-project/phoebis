@@ -7,10 +7,10 @@ use phoebis_routing::{
     LaneFacts, LongContextRates, MemberSpend, MigrateReason, MoveCause, OverageEvidence,
     PinKeyFacts, PinRef, Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegimeRates,
     RegistrySnapshot, RequestFlags, Reservation, RoutingState, SelectRequest, SelectResult,
-    SharePricer, SlowDownRead, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause,
-    WindowReading, WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
-    IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS,
-    WEEK_MS,
+    SharePricer, SlowDownEdge, SlowDownRead, SlowDownState, StateWrite, UtilizationSample,
+    WalkStep, Warmth, WarmthCause, WindowReading, WindowSource, FAST_CREDITS_REASON,
+    FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY,
+    SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -21839,6 +21839,249 @@ fn a_held_decision_records_its_hold_and_the_row_names_it() {
         ]
     );
     assert_eq!(d.summary.hold, Some(outcome));
+}
+
+/// `s1` pinned on `a` burning `burn` and `b` at 0.1 two hours from its reset, `a`'s readings the case's own.
+fn s1_on_a(burn: f64) -> RoutingState {
+    let mut st = rounding(vec![burning("s1", "a", burn, true, T)]);
+    reading(&mut st, "b", 0.1, 2 * HOUR, T);
+    st
+}
+
+/// Writes `a`'s entry as a slowed selection at `at` leaves it, a factor of 0.38 at a speed of 0.52, under the 5-hour
+/// reset `reset`, and answers it.
+fn slowed_at(st: &mut RoutingState, reset: i64, at: i64) -> SlowDownState {
+    st.write_slow_down(
+        "p",
+        "a",
+        &SlowDownRead {
+            reset: Some(reset),
+            ..seeded_read(0.38, at)
+        },
+        0.52,
+        at,
+        AVERAGE_MS,
+    )
+    .clone()
+}
+
+/// The end of the span `slowed_at` opened at `T`, `duration_ms` long.
+fn slowed_span_ended(duration_ms: i64) -> (String, String, SlowDownEdge) {
+    (
+        "p".into(),
+        "a".into(),
+        SlowDownEdge::Ended {
+            since: T,
+            duration_ms,
+            factor_min: 0.38,
+            held_ms: 0,
+        },
+    )
+}
+
+#[test]
+fn a_selection_on_an_entry_read_before_its_windows_passed_reset_replaces_it_and_ends_its_span_at_the_reset(
+) {
+    let (_, on) = held_pools(120);
+    let pool = on.pool("p").expect("the pool");
+    // s1 burns 0.4 of a's 5-hour window an hour. Decayed over the 31 minutes to the fresh session below, five hours of
+    // it over the stale speed of 0.52 pass the ceiling, and over a speed of 1 they stay under it.
+    let mut st = s1_on_a(40.0);
+    reading(&mut st, "a", 0.93, 30 * MINUTE, T);
+    slowed_at(&mut st, T + 30 * MINUTE, T);
+    st.take_slow_down_edges(T);
+    assert!(
+        st.slow_down_in_force(pool, "a", T + 29 * MINUTE).is_some(),
+        "the window the entry was read in stands"
+    );
+    assert!(
+        st.slow_down_in_force(pool, "a", T + 31 * MINUTE).is_none(),
+        "the entry is stale from the reset"
+    );
+    assert!(
+        st.slow_down_state("p", "a").is_some(),
+        "the stale entry stands unpurged"
+    );
+    let d = decide(
+        &mut st,
+        &on,
+        &main_turn(&on, "s2", T + 31 * MINUTE),
+        &mut rng(),
+    );
+    let a = candidate(&d.record, "a");
+    assert_eq!(
+        (landed(d.result.clone()), a.partition, a.fit, a.factor),
+        (("a".into(), None), None, Some("fits"), None),
+        "the demand reads the pins' burn over a speed of 1, where the stale speed read the account past the ceiling"
+    );
+
+    // s1's next turn lands inside the pool's affinity, under the new window's reading.
+    reading(&mut st, "a", 0.0, 5 * HOUR, T + 50 * MINUTE);
+    let d = decide(
+        &mut st,
+        &on,
+        &main_turn(&on, "s1", T + 50 * MINUTE),
+        &mut rng(),
+    );
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let entry = st
+        .slow_down_state("p", "a")
+        .cloned()
+        .expect("the turn wrote a's entry");
+    assert_eq!(
+        (
+            entry.read_at,
+            entry.reset,
+            entry.speed,
+            entry.over_since,
+            entry.slowed_since
+        ),
+        (
+            T + 50 * MINUTE,
+            Some(T + 50 * MINUTE + 5 * HOUR),
+            1.0,
+            None,
+            None
+        ),
+        "a fresh entry: the plan's realized speed whole with no cycle on the pin, and no stamp of the old window"
+    );
+    assert_eq!(
+        st.take_slow_down_edges(T + 50 * MINUTE),
+        vec![slowed_span_ended(30 * MINUTE)],
+        "the old window's span ends at its reset"
+    );
+    assert!(
+        line(&d.record, "move:shed")
+            .facts
+            .iter()
+            .all(|f| f.key != "over_since"),
+        "no stretch of the old window carries over"
+    );
+}
+
+#[test]
+fn a_stale_entry_whose_factor_returned_before_the_reset_ends_its_span_at_the_return() {
+    let (_, on) = held_pools(120);
+    let mut st = s1_on_a(15.0);
+    reading(&mut st, "a", 0.93, 30 * MINUTE, T);
+    slowed_at(&mut st, T + 30 * MINUTE, T);
+    st.take_slow_down_edges(T);
+    // The factor returns to 1 a minute before the reset.
+    st.write_slow_down(
+        "p",
+        "a",
+        &SlowDownRead {
+            reset: Some(T + 30 * MINUTE),
+            ..seeded_read(1.0, T + 29 * MINUTE)
+        },
+        1.0,
+        T + 29 * MINUTE,
+        AVERAGE_MS,
+    );
+    // A second past the reset the session still holds its pin, the entry was read inside the hour and the safety wait
+    // of the return has not run out, so the reset is what drops the entry.
+    let at = T + 30 * MINUTE + SECOND;
+    st.purge(&on, at);
+    assert!(
+        st.slow_down_state("p", "a").is_none(),
+        "the purge drops the stale entry"
+    );
+    assert_eq!(
+        st.take_slow_down_edges(at),
+        vec![slowed_span_ended(29 * MINUTE)],
+        "the span ends at the return, the earlier of the return and the reset"
+    );
+}
+
+#[test]
+fn a_reading_past_its_reset_with_no_new_one_answers_the_passed_reset() {
+    let (_, on) = held_pools(120);
+    let pool = on.pool("p").expect("the pool");
+    let mut st = s1_on_a(15.0);
+    reading(&mut st, "a", 0.93, 30 * MINUTE, T);
+    let entry = slowed_at(&mut st, T + 30 * MINUTE, T + 10 * MINUTE);
+    assert!(
+        st.slow_down_in_force(pool, "a", T + 29 * MINUTE).is_some(),
+        "the reset lies ahead"
+    );
+    // No reading of the new window has landed, so the stored reading still names the reset that passed.
+    assert!(
+        st.slow_down_in_force(pool, "a", T + 31 * MINUTE).is_none(),
+        "the passed reset clears the entry"
+    );
+    assert!(st.slow_down_stale("a", &entry, T + 31 * MINUTE));
+}
+
+#[test]
+fn a_reading_whose_reset_lies_six_hours_ahead_clears_nothing() {
+    let (_, on) = held_pools(120);
+    let pool = on.pool("p").expect("the pool");
+    let mut st = s1_on_a(15.0);
+    // A reset more than a window's length ahead reads no fresh window, and nothing of it has passed.
+    reading(&mut st, "a", 0.5, 6 * HOUR, T);
+    let entry = slowed_at(&mut st, T + 6 * HOUR, T);
+    assert!(
+        st.slow_down_in_force(pool, "a", T + HOUR).is_some(),
+        "the entry stands"
+    );
+    assert!(!st.slow_down_stale("a", &entry, T + HOUR));
+}
+
+#[test]
+fn the_selection_that_opens_a_window_after_an_idle_gap_writes_an_entry_the_next_read_keeps() {
+    let (_, on) = held_pools(120);
+    let pool = on.pool("p").expect("the pool");
+    let mut st = s1_on_a(15.0);
+    reading(&mut st, "a", 0.93, 30 * MINUTE, T);
+    slowed_at(&mut st, T + 30 * MINUTE, T);
+    st.take_slow_down_edges(T);
+    // The session idles past the reset and its turn selects before any reading of the new window: the stored reading
+    // still names the passed reset, so the read predicts nothing used under no reset, a factor of 1.
+    decide(
+        &mut st,
+        &on,
+        &main_turn(&on, "s1", T + 50 * MINUTE),
+        &mut rng(),
+    );
+    let entry = st
+        .slow_down_state("p", "a")
+        .cloned()
+        .expect("the turn wrote a's entry");
+    assert_eq!(
+        (entry.read_at, entry.reset, entry.factor, entry.slowed_since),
+        (T + 50 * MINUTE, None, 1.0, None),
+        "the write replaced the old window's entry, and no span opens at a factor of 1"
+    );
+    // The turn's upstream receipt opens the window a moment later, and its head names the reset five hours on.
+    reading(&mut st, "a", 0.93, 5 * HOUR, T + 50 * MINUTE + 200);
+    assert_eq!(
+        st.slow_down_in_force(pool, "a", T + 51 * MINUTE)
+            .map(|entry| entry.read_at),
+        Some(T + 50 * MINUTE),
+        "the reading's reset is ahead and the entry's own is none, so nothing has passed"
+    );
+    let d = decide(
+        &mut st,
+        &on,
+        &main_turn(&on, "s1", T + 51 * MINUTE),
+        &mut rng(),
+    );
+    let factor = number(fact(line(&d.record, "move:shed"), "factor"));
+    assert!(
+        factor < 1.0,
+        "0.02 of room under the ceiling against five hours of s1's burn: {factor}"
+    );
+    let edges = st.take_slow_down_edges(T + 51 * MINUTE);
+    assert_eq!(edges.len(), 2, "{edges:?}");
+    assert_eq!(
+        edges[0],
+        slowed_span_ended(30 * MINUTE),
+        "the old window's span ends at its reset"
+    );
+    assert!(
+        matches!(&edges[1], (_, _, SlowDownEdge::Started { factor: started, .. }) if *started == factor),
+        "the new window's span opens at this read: {edges:?}"
+    );
 }
 
 /// The round cases' Pace pools over `a` and `b` under the stretch: `on` with the shedding round and the slow-down on at
