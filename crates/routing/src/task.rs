@@ -1057,7 +1057,8 @@ pub struct PinStanding {
     pub binding: Option<String>,
     /// The account's factor from the slow-down entry in force, `None` without one.
     pub speed: Option<f64>,
-    /// The pin's cycle from its pace, `None` until two requests of the pin have arrived after its placement.
+    /// The pin's cycle from its pace, `None` until two requests of the pin after its placement have measured a gap
+    /// under the pool's burn average.
     pub cycle_ms: Option<f64>,
 }
 

@@ -736,7 +736,7 @@ pub fn warm(pin: &PinRow, now: i64) -> bool {
 pub const IN_FLIGHT_RECLAIM_MS: i64 = 3_600_000;
 
 /// The gaps a cycle averages over. Eight arrivals read a change of pace within a few minutes of 30 s turns, under
-/// any burn average, and keep one long gap under the span from standing in the cycle for more than eight turns.
+/// any burn average, and let one long gap under the span fade from the cycle by an eighth with each later turn.
 pub const CYCLE_GAPS: u32 = 8;
 
 /// A move's or a placement's booking on its destination: the rewrite and the burn the request will land there,
@@ -823,7 +823,8 @@ pub struct PinPace {
     /// wait never counts as the pin's own gap.
     pub dispatched_at: i64,
     /// The count-weighted mean of the gaps between a dispatch and the next arrival: the first gap whole, then each gap
-    /// under the pool's burn average moves it by one over `min(gaps + 1, CYCLE_GAPS)`. `None` before the first gap.
+    /// under the pool's burn average moves it by one over `min(gaps + 1, CYCLE_GAPS)`. `None` until a gap under the
+    /// pool's burn average has been measured.
     pub cycle_ms: Option<f64>,
     /// The gaps folded so far, at most `CYCLE_GAPS`: the next fold's share is one over this count plus one, held at
     /// one over `CYCLE_GAPS` once the count is there.
@@ -2221,9 +2222,9 @@ impl RoutingState {
     /// session runs at, and a hold sized from such a gap would hold the resumed session at the cap while the
     /// water-filling counts it almost unslowed. The arrival still becomes the last dispatch, so the next gap is
     /// measured from it. An arrival at or before the last dispatch folds nothing: a re-selection of the same request
-    /// would plant a cycle of zero, a request queued behind a later one has no gap to give, and an arrival before a
-    /// standing deadline, which a hold made the last dispatch, rejoins the deadline. The pin's first arrival starts
-    /// its pace with no gap.
+    /// (after a failover or a refused hold) carries the arrival already folded, whose gap of zero would plant a cycle
+    /// of zero, a request queued behind a later one has no gap to give, and an arrival before a standing deadline,
+    /// which a hold made the last dispatch, rejoins the deadline. The pin's first arrival starts its pace with no gap.
     pub fn fold_pace(&mut self, key: &PinKey, received_at: i64, average_ms: i64) {
         let Some(pace) = self.pin_paces.get_mut(key) else {
             self.pin_paces.insert(

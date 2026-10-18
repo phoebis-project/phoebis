@@ -1618,7 +1618,8 @@ export interface Session {
   /** When the companion last reported; set only while `companion` is `silent`. */
   companionSince: string | null;
   createdAt: string | null;
-  /** The pin's cycle, null until two requests of the pin have arrived after its placement and on a row with no pin. */
+  /** The pin's cycle, null until two requests of the pin after its placement have measured a gap under the pool's
+   *  burn average, and on a row with no pin. */
   cycleMs: number | null;
   epoch: number | null;
   /** True when the pin's burn priced through the model tier's fallback weight. */

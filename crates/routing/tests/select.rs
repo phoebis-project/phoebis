@@ -19948,7 +19948,7 @@ fn seeded_read(factor: f64, at: i64) -> SlowDownRead {
     }
 }
 
-/// The pool's burn average, which the speed and the cycle fold over.
+/// The pool's burn average, which the speed folds over and a cycle's pause is measured against.
 const AVERAGE_MS: i64 = 1_800_000;
 
 /// The keys the slow-down adds to the shed line.
@@ -23320,6 +23320,18 @@ fn the_cedar_window_replay_ends_at_a_zero_factor_with_the_subagent_held_and_no_r
         );
         decisions.push((request_id, d));
     }
+    let (_, r101) = decisions
+        .iter()
+        .find(|(request_id, _)| *request_id == "r-101")
+        .expect("r-101's decision");
+    assert_eq!(
+        (
+            r101.record.outcome.kind,
+            r101.record.pin.as_ref().and_then(|pin| pin.cycle_ms)
+        ),
+        ("renewed", None),
+        "the subagent's 31 minutes since r-70 are a pause, so r-101 goes out unheld on no cycle"
+    );
     charge(&mut st, 101, 201);
     for session in HEAVY {
         st.release_session("k", session);
@@ -23353,9 +23365,9 @@ fn the_cedar_window_replay_ends_at_a_zero_factor_with_the_subagent_held_and_no_r
 
     // The window near the reset: cedar at 0.96 with 27 minutes to its reset, where the subagent's turns read a
     // stretch far over the threshold, past the safety wait at the second, and the reset less the threshold already
-    // behind them. No round fires: the slow-down holds the subagent to the reset. Both of its gaps before r-273 run
-    // past the burn average, so they are pauses and r-273 goes out on no cycle. r-276's three minutes are its first
-    // gap, held at the pool's cap under a factor of zero.
+    // behind them. No round fires. The subagent's gaps before r-101 and before r-273 run past the burn average, so
+    // both are pauses that leave it no cycle and both turns go out unheld. r-276's three minutes are its first short
+    // gap, held at the pool's cap under a factor of zero, and the slow-down holds the subagent to the reset from there.
     for (request_id, at, over_ms, cycle_ms) in [
         ("r-273", T + 273 * MINUTE, Some(0), None),
         ("r-276", T + 276 * MINUTE, None, Some(3 * MINUTE)),
