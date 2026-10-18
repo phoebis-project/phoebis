@@ -186,9 +186,10 @@ what the router answered, beside the Guardrails card that counts the same reques
 The dialog's Test group runs the form's current conditions, saved or not, against the bodies the ledger captured.
 "Sample from" picks a pool or a key and Sample the size, 50, 200 or 500, and "Run test" asks the router for the most
 recent requests of that pool or key that have a captured body, newest first, no further back than the longest capture
-window (`stats.body_capture_max_hours`), since no older body exists. A keepalive probe is never sampled. The router
-evaluates the definition over the bodies in pages of 50 and keeps the verdicts alone, so no body leaves the ledger and a
-console read waits for at most one page. The route is `POST /admin/guardrails/test`, which a script calls with a saved
+window (`stats.body_capture_max_hours`), since no older body exists. A body past its own key's capture window is left
+out of the sample, even before the ledger's purge removes it. A keepalive probe is never sampled. The router evaluates
+the definition over the bodies in pages of 50 and keeps the verdicts alone, so no body leaves the ledger and a console
+read waits for at most one page. The route is `POST /admin/guardrails/test`, which a script calls with a saved
 guardrail's id or an unsaved list of conditions ([API reference](api-reference.md)).
 
 The verdicts read `{matched} matched, {unmatched} unmatched, {indeterminate} indeterminate of {sampled} sampled` over a
