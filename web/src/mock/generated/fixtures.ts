@@ -938,13 +938,17 @@ export const FIXTURES: Record<string, Fixture> = {
           "kept_warm": {
             "requests": 0,
             "tokens_5m": 0,
-            "tokens_1h": 0
+            "tokens_1h": 0,
+            "plan_requests": 0,
+            "plan_tokens_5m": 0,
+            "plan_tokens_1h": 0
           },
           "probes": {
             "failed": 0,
             "held": 0,
             "migrated": 0,
             "ok": 0,
+            "plan_ok": 0,
             "skipped": 0
           },
           "probe_cost_usd": 0,
@@ -960,6 +964,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.0000393625,
             "seven_day": 0.000010496666666666667
           },
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          },
           "cache_equivalent": {
             "five_hour": {
               "read": 2.7916666666666666e-7,
@@ -971,6 +979,10 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           },
           "probe_equivalent": {},
+          "probe_unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          },
           "saving_usd": 0,
           "saving_shares": null,
           "saving_equivalent": {},
@@ -987,7 +999,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "cache_write": 0.000001488888888888889,
             "output": 0.000002977777777777778
           },
-          "estimated": true
+          "estimated": true,
+          "probe_estimated": false
         },
         {
           "key": "desktop@1791720940000",
@@ -1323,13 +1336,17 @@ export const FIXTURES: Record<string, Fixture> = {
           "kept_warm": {
             "requests": 0,
             "tokens_5m": 0,
-            "tokens_1h": 0
+            "tokens_1h": 0,
+            "plan_requests": 0,
+            "plan_tokens_5m": 0,
+            "plan_tokens_1h": 0
           },
           "probes": {
             "failed": 0,
             "held": 0,
             "migrated": 0,
             "ok": 0,
+            "plan_ok": 0,
             "skipped": 0
           },
           "probe_cost_usd": 0,
@@ -1345,6 +1362,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.0000088125,
             "seven_day": 0.00000235
           },
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          },
           "cache_equivalent": {
             "five_hour": {
               "read": 6.25e-8,
@@ -1356,6 +1377,10 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           },
           "probe_equivalent": {},
+          "probe_unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          },
           "saving_usd": 0,
           "saving_shares": null,
           "saving_equivalent": {},
@@ -1372,7 +1397,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "cache_write": 3.3333333333333335e-7,
             "output": 6.666666666666667e-7
           },
-          "estimated": false
+          "estimated": false,
+          "probe_estimated": false
         }
       ]
     }
@@ -1720,13 +1746,17 @@ export const FIXTURES: Record<string, Fixture> = {
           "kept_warm": {
             "requests": 0,
             "tokens_5m": 0,
-            "tokens_1h": 0
+            "tokens_1h": 0,
+            "plan_requests": 0,
+            "plan_tokens_5m": 0,
+            "plan_tokens_1h": 0
           },
           "probes": {
             "failed": 0,
             "held": 0,
             "migrated": 0,
             "ok": 0,
+            "plan_ok": 0,
             "skipped": 0
           },
           "probe_cost_usd": 0,
@@ -1754,6 +1784,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000048175000000000005,
             "seven_day": 0.000012846666666666667
           },
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          },
           "cache_equivalent": {
             "five_hour": {
               "read": 3.4166666666666664e-7,
@@ -1765,6 +1799,10 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           },
           "probe_equivalent": {},
+          "probe_unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          },
           "saving_usd": 0,
           "saving_shares": {},
           "saving_equivalent": {},
@@ -1781,7 +1819,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "cache_write": 0.0000018222222222222223,
             "output": 0.0000036444444444444446
           },
-          "estimated": true
+          "estimated": true,
+          "probe_estimated": false
         },
         {
           "key": "direct",
@@ -2115,13 +2154,17 @@ export const FIXTURES: Record<string, Fixture> = {
           "kept_warm": {
             "requests": 0,
             "tokens_5m": 0,
-            "tokens_1h": 0
+            "tokens_1h": 0,
+            "plan_requests": 0,
+            "plan_tokens_5m": 0,
+            "plan_tokens_1h": 0
           },
           "probes": {
             "failed": 0,
             "held": 0,
             "migrated": 0,
             "ok": 0,
+            "plan_ok": 0,
             "skipped": 0
           },
           "probe_cost_usd": 0,
@@ -2134,8 +2177,16 @@ export const FIXTURES: Record<string, Fixture> = {
           "plan_requests": 0,
           "plan_output_tokens": 0,
           "cost_equivalent": {},
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          },
           "cache_equivalent": {},
           "probe_equivalent": {},
+          "probe_unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          },
           "saving_usd": 0,
           "saving_shares": null,
           "saving_equivalent": {},
@@ -2147,7 +2198,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "output": 0.001
           },
           "equivalent_split": {},
-          "estimated": false
+          "estimated": false,
+          "probe_estimated": false
         }
       ]
     }
@@ -2491,13 +2543,17 @@ export const FIXTURES: Record<string, Fixture> = {
           "kept_warm": {
             "requests": 0,
             "tokens_5m": 0,
-            "tokens_1h": 0
+            "tokens_1h": 0,
+            "plan_requests": 0,
+            "plan_tokens_5m": 0,
+            "plan_tokens_1h": 0
           },
           "probes": {
             "failed": 0,
             "held": 0,
             "migrated": 0,
             "ok": 0,
+            "plan_ok": 0,
             "skipped": 0
           },
           "probe_cost_usd": 0,
@@ -2510,8 +2566,16 @@ export const FIXTURES: Record<string, Fixture> = {
           "plan_requests": 0,
           "plan_output_tokens": 0,
           "cost_equivalent": {},
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          },
           "cache_equivalent": {},
           "probe_equivalent": {},
+          "probe_unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          },
           "saving_usd": 0,
           "saving_shares": null,
           "saving_equivalent": {},
@@ -2523,7 +2587,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "output": 0.001
           },
           "equivalent_split": {},
-          "estimated": false
+          "estimated": false,
+          "probe_estimated": false
         },
         {
           "key": "standard",
@@ -2861,13 +2926,17 @@ export const FIXTURES: Record<string, Fixture> = {
           "kept_warm": {
             "requests": 0,
             "tokens_5m": 0,
-            "tokens_1h": 0
+            "tokens_1h": 0,
+            "plan_requests": 0,
+            "plan_tokens_5m": 0,
+            "plan_tokens_1h": 0
           },
           "probes": {
             "failed": 0,
             "held": 0,
             "migrated": 0,
             "ok": 0,
+            "plan_ok": 0,
             "skipped": 0
           },
           "probe_cost_usd": 0,
@@ -2883,6 +2952,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000048175000000000005,
             "seven_day": 0.000012846666666666667
           },
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          },
           "cache_equivalent": {
             "five_hour": {
               "read": 3.4166666666666664e-7,
@@ -2894,6 +2967,10 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           },
           "probe_equivalent": {},
+          "probe_unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          },
           "saving_usd": 0,
           "saving_shares": null,
           "saving_equivalent": {},
@@ -2910,7 +2987,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "cache_write": 0.0000018222222222222223,
             "output": 0.0000036444444444444446
           },
-          "estimated": true
+          "estimated": true,
+          "probe_estimated": false
         }
       ]
     }
@@ -2960,6 +3038,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2976,6 +3057,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2992,6 +3076,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3008,6 +3095,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3024,6 +3114,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3040,6 +3133,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3056,6 +3152,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3072,6 +3171,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3088,6 +3190,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3104,6 +3209,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3120,6 +3228,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3136,6 +3247,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3152,6 +3266,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3168,6 +3285,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3184,6 +3304,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3200,6 +3323,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3216,6 +3342,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3232,6 +3361,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3248,6 +3380,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3264,6 +3399,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3280,6 +3418,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3296,6 +3437,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3312,6 +3456,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3328,6 +3475,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": 0.0000047,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 2000,
           "tokens": 7200,
           "uncached_tokens": 4000
@@ -3344,6 +3494,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": 0.000008146666666666666,
           "model_week_equivalent": null,
           "estimated": true,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 1500,
           "tokens": 5400,
           "uncached_tokens": 3000
@@ -3360,6 +3513,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3376,6 +3532,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3392,6 +3551,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3408,6 +3570,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3424,6 +3589,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3440,6 +3608,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3456,6 +3627,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3472,6 +3646,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3488,6 +3665,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3504,6 +3684,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3520,6 +3703,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3536,6 +3722,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3552,6 +3741,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3568,6 +3760,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3584,6 +3779,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3600,6 +3798,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3616,6 +3817,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3632,6 +3836,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3648,6 +3855,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3664,6 +3874,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3680,6 +3893,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3696,6 +3912,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3712,6 +3931,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3728,6 +3950,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": null,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -3744,6 +3969,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_equivalent": 0,
           "model_week_equivalent": null,
           "estimated": false,
+          "five_hour_unpriced": false,
+          "seven_day_unpriced": false,
+          "model_week_unpriced": false,
           "cached_tokens": 500,
           "tokens": 1800,
           "uncached_tokens": 1000
@@ -4472,13 +4700,17 @@ export const FIXTURES: Record<string, Fixture> = {
               "kept_warm": {
                 "requests": 0,
                 "tokens_5m": 0,
-                "tokens_1h": 0
+                "tokens_1h": 0,
+                "plan_requests": 0,
+                "plan_tokens_5m": 0,
+                "plan_tokens_1h": 0
               },
               "probes": {
                 "failed": 0,
                 "held": 0,
                 "migrated": 0,
                 "ok": 0,
+                "plan_ok": 0,
                 "skipped": 0
               },
               "probe_cost_usd": 0,
@@ -4494,6 +4726,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "five_hour": 0.0000088125,
                 "seven_day": 0.00000235
               },
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              },
               "cache_equivalent": {
                 "five_hour": {
                   "read": 6.25e-8,
@@ -4505,6 +4741,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "probe_equivalent": {},
+              "probe_unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              },
               "saving_usd": 0,
               "saving_shares": null,
               "saving_equivalent": {},
@@ -4521,7 +4761,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "cache_write": 3.3333333333333335e-7,
                 "output": 6.666666666666667e-7
               },
-              "estimated": false
+              "estimated": false,
+              "probe_estimated": false
             },
             {
               "key": "desktop@1791720940000",
@@ -4857,13 +5098,17 @@ export const FIXTURES: Record<string, Fixture> = {
               "kept_warm": {
                 "requests": 0,
                 "tokens_5m": 0,
-                "tokens_1h": 0
+                "tokens_1h": 0,
+                "plan_requests": 0,
+                "plan_tokens_5m": 0,
+                "plan_tokens_1h": 0
               },
               "probes": {
                 "failed": 0,
                 "held": 0,
                 "migrated": 0,
                 "ok": 0,
+                "plan_ok": 0,
                 "skipped": 0
               },
               "probe_cost_usd": 0,
@@ -4879,6 +5124,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "five_hour": 0.0000088125,
                 "seven_day": 0.00000235
               },
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              },
               "cache_equivalent": {
                 "five_hour": {
                   "read": 6.25e-8,
@@ -4890,6 +5139,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "probe_equivalent": {},
+              "probe_unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              },
               "saving_usd": 0,
               "saving_shares": null,
               "saving_equivalent": {},
@@ -4906,7 +5159,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "cache_write": 3.3333333333333335e-7,
                 "output": 6.666666666666667e-7
               },
-              "estimated": false
+              "estimated": false,
+              "probe_estimated": false
             }
           ]
         },
@@ -5249,13 +5503,17 @@ export const FIXTURES: Record<string, Fixture> = {
               "kept_warm": {
                 "requests": 0,
                 "tokens_5m": 0,
-                "tokens_1h": 0
+                "tokens_1h": 0,
+                "plan_requests": 0,
+                "plan_tokens_5m": 0,
+                "plan_tokens_1h": 0
               },
               "probes": {
                 "failed": 0,
                 "held": 0,
                 "migrated": 0,
                 "ok": 0,
+                "plan_ok": 0,
                 "skipped": 0
               },
               "probe_cost_usd": 0,
@@ -5271,6 +5529,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "five_hour": 0.000030550000000000004,
                 "seven_day": 0.000008146666666666666
               },
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              },
               "cache_equivalent": {
                 "five_hour": {
                   "read": 2.1666666666666667e-7,
@@ -5282,6 +5544,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "probe_equivalent": {},
+              "probe_unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              },
               "saving_usd": 0,
               "saving_shares": null,
               "saving_equivalent": {},
@@ -5298,7 +5564,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "cache_write": 0.0000011555555555555556,
                 "output": 0.000002311111111111111
               },
-              "estimated": true
+              "estimated": true,
+              "probe_estimated": false
             }
           ]
         }
@@ -5742,13 +6009,17 @@ export const FIXTURES: Record<string, Fixture> = {
               "kept_warm": {
                 "requests": 0,
                 "tokens_5m": 0,
-                "tokens_1h": 0
+                "tokens_1h": 0,
+                "plan_requests": 0,
+                "plan_tokens_5m": 0,
+                "plan_tokens_1h": 0
               },
               "probes": {
                 "failed": 0,
                 "held": 0,
                 "migrated": 0,
                 "ok": 0,
+                "plan_ok": 0,
                 "skipped": 0
               },
               "probe_cost_usd": 0,
@@ -5776,6 +6047,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "five_hour": 0.000017625,
                 "seven_day": 0.0000047
               },
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              },
               "cache_equivalent": {
                 "five_hour": {
                   "read": 1.25e-7,
@@ -5787,6 +6062,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "probe_equivalent": {},
+              "probe_unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              },
               "saving_usd": 0,
               "saving_shares": {},
               "saving_equivalent": {},
@@ -5803,7 +6082,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "cache_write": 6.666666666666667e-7,
                 "output": 0.0000013333333333333334
               },
-              "estimated": false
+              "estimated": false,
+              "probe_estimated": false
             }
           ]
         },
@@ -6145,13 +6425,17 @@ export const FIXTURES: Record<string, Fixture> = {
               "kept_warm": {
                 "requests": 0,
                 "tokens_5m": 0,
-                "tokens_1h": 0
+                "tokens_1h": 0,
+                "plan_requests": 0,
+                "plan_tokens_5m": 0,
+                "plan_tokens_1h": 0
               },
               "probes": {
                 "failed": 0,
                 "held": 0,
                 "migrated": 0,
                 "ok": 0,
+                "plan_ok": 0,
                 "skipped": 0
               },
               "probe_cost_usd": 0,
@@ -6179,6 +6463,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "five_hour": 0.000030550000000000004,
                 "seven_day": 0.000008146666666666666
               },
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              },
               "cache_equivalent": {
                 "five_hour": {
                   "read": 2.1666666666666667e-7,
@@ -6190,6 +6478,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "probe_equivalent": {},
+              "probe_unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              },
               "saving_usd": 0,
               "saving_shares": {},
               "saving_equivalent": {},
@@ -6206,7 +6498,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "cache_write": 0.0000011555555555555556,
                 "output": 0.000002311111111111111
               },
-              "estimated": true
+              "estimated": true,
+              "probe_estimated": false
             },
             {
               "key": "direct",
@@ -6540,13 +6833,17 @@ export const FIXTURES: Record<string, Fixture> = {
               "kept_warm": {
                 "requests": 0,
                 "tokens_5m": 0,
-                "tokens_1h": 0
+                "tokens_1h": 0,
+                "plan_requests": 0,
+                "plan_tokens_5m": 0,
+                "plan_tokens_1h": 0
               },
               "probes": {
                 "failed": 0,
                 "held": 0,
                 "migrated": 0,
                 "ok": 0,
+                "plan_ok": 0,
                 "skipped": 0
               },
               "probe_cost_usd": 0,
@@ -6559,8 +6856,16 @@ export const FIXTURES: Record<string, Fixture> = {
               "plan_requests": 0,
               "plan_output_tokens": 0,
               "cost_equivalent": {},
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              },
               "cache_equivalent": {},
               "probe_equivalent": {},
+              "probe_unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              },
               "saving_usd": 0,
               "saving_shares": null,
               "saving_equivalent": {},
@@ -6572,7 +6877,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "output": 0.001
               },
               "equivalent_split": {},
-              "estimated": false
+              "estimated": false,
+              "probe_estimated": false
             }
           ]
         }
@@ -7121,7 +7427,11 @@ export const FIXTURES: Record<string, Fixture> = {
       "billed_24h": 0.010700000000000001,
       "equivalent_24h": {
         "five_hour": 0.000048175000000000005,
-        "seven_day": 0.000012846666666666667
+        "seven_day": 0.000012846666666666667,
+        "unpriced": {
+          "five_hour": false,
+          "seven_day": false
+        }
       },
       "estimated_24h": true,
       "error_rate_24h": 0.2857142857142857,
@@ -7133,7 +7443,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7145,7 +7459,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7157,7 +7475,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7169,7 +7491,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7181,7 +7507,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7193,7 +7523,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7205,7 +7539,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7217,7 +7555,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7229,7 +7571,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7241,7 +7587,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7253,7 +7603,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7265,7 +7619,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7277,7 +7635,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7289,7 +7651,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7301,7 +7667,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7313,7 +7683,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7325,7 +7699,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7337,7 +7715,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7349,7 +7731,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7361,7 +7747,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7373,7 +7763,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7385,7 +7779,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 0,
           "requests": 0,
@@ -7397,7 +7795,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0.0142,
           "equivalent": {
             "five_hour": 0.000017625,
-            "seven_day": 0.0000047
+            "seven_day": 0.0000047,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 1,
           "requests": 3,
@@ -7409,7 +7811,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost": 0.010700000000000001,
           "equivalent": {
             "five_hour": 0.000030550000000000004,
-            "seven_day": 0.000008146666666666666
+            "seven_day": 0.000008146666666666666,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "errors": 1,
           "requests": 4,
@@ -9020,6 +9426,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "held": 0,
         "migrated": 0,
         "ok": 0,
+        "plan_ok": 0,
         "skipped": 0
       }
     }
@@ -9088,7 +9495,11 @@ export const FIXTURES: Record<string, Fixture> = {
         "cost_usd": 0,
         "equivalent": {
           "five_hour": 0,
-          "seven_day": 0
+          "seven_day": 0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false,
         "requests": 0,
@@ -9099,7 +9510,11 @@ export const FIXTURES: Record<string, Fixture> = {
         "cost_usd": 0,
         "equivalent": {
           "five_hour": 0,
-          "seven_day": 0
+          "seven_day": 0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false,
         "requests": 0
@@ -9168,7 +9583,11 @@ export const FIXTURES: Record<string, Fixture> = {
             "cost_usd": 0.02135,
             "equivalent": {
               "five_hour": 0.0000393625,
-              "seven_day": 0.000010496666666666667
+              "seven_day": 0.000010496666666666667,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": true,
             "requests": 6,
@@ -9179,7 +9598,11 @@ export const FIXTURES: Record<string, Fixture> = {
             "cost_usd": 0.02135,
             "equivalent": {
               "five_hour": 0.0000393625,
-              "seven_day": 0.000010496666666666667
+              "seven_day": 0.000010496666666666667,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": true,
             "requests": 6
@@ -9261,7 +9684,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9274,7 +9701,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9287,7 +9718,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9300,7 +9735,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9313,7 +9752,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9326,7 +9769,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9339,7 +9786,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9352,7 +9803,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9365,7 +9820,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9378,7 +9837,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9391,7 +9854,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9404,7 +9871,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9417,7 +9888,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9430,7 +9905,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9443,7 +9922,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9456,7 +9939,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9469,7 +9956,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9482,7 +9973,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9495,7 +9990,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9508,7 +10007,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9521,7 +10024,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9534,7 +10041,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9547,7 +10058,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0,
           "equivalent": {
             "five_hour": 0,
-            "seven_day": 0
+            "seven_day": 0,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9560,7 +10075,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0.0071,
           "equivalent": {
             "five_hour": 0.000017625,
-            "seven_day": 0.0000047
+            "seven_day": 0.0000047,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": false
         },
@@ -9573,7 +10092,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_usd": 0.0036,
           "equivalent": {
             "five_hour": 0.000030550000000000004,
-            "seven_day": 0.000008146666666666666
+            "seven_day": 0.000008146666666666666,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": true
         }
@@ -9725,7 +10248,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "billed_24h": 0.010700000000000001,
           "equivalent_24h": {
             "five_hour": 0.000048175000000000005,
-            "seven_day": 0.000012846666666666667
+            "seven_day": 0.000012846666666666667,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated_24h": true,
           "active_pins": 1,
@@ -9739,7 +10266,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9752,7 +10283,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9765,7 +10300,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9778,7 +10317,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9791,7 +10334,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9804,7 +10351,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9817,7 +10368,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9830,7 +10385,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9843,7 +10402,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9856,7 +10419,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9869,7 +10436,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9882,7 +10453,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9895,7 +10470,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9908,7 +10487,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9921,7 +10504,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9934,7 +10521,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9947,7 +10538,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9960,7 +10555,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9973,7 +10572,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9986,7 +10589,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -9999,7 +10606,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -10012,7 +10623,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -10025,7 +10640,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0,
               "equivalent": {
                 "five_hour": 0,
-                "seven_day": 0
+                "seven_day": 0,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -10038,7 +10657,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0.0071,
               "equivalent": {
                 "five_hour": 0.000017625,
-                "seven_day": 0.0000047
+                "seven_day": 0.0000047,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": false
             },
@@ -10051,7 +10674,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "billed_usd": 0.0036,
               "equivalent": {
                 "five_hour": 0.000030550000000000004,
-                "seven_day": 0.000008146666666666666
+                "seven_day": 0.000008146666666666666,
+                "unpriced": {
+                  "five_hour": false,
+                  "seven_day": false
+                }
               },
               "estimated": true
             }

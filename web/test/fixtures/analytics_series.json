@@ -436,13 +436,17 @@
             "kept_warm": {
               "requests": 0,
               "tokens_5m": 0,
-              "tokens_1h": 0
+              "tokens_1h": 0,
+              "plan_requests": 0,
+              "plan_tokens_5m": 0,
+              "plan_tokens_1h": 0
             },
             "probes": {
               "failed": 0,
               "held": 0,
               "migrated": 0,
               "ok": 0,
+              "plan_ok": 0,
               "skipped": 0
             },
             "probe_cost_usd": 0.0,
@@ -458,6 +462,10 @@
               "five_hour": 8.8125e-6,
               "seven_day": 2.35e-6
             },
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            },
             "cache_equivalent": {
               "five_hour": {
                 "read": 6.25e-8,
@@ -469,6 +477,10 @@
               }
             },
             "probe_equivalent": {},
+            "probe_unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            },
             "saving_usd": 0.0,
             "saving_shares": null,
             "saving_equivalent": {},
@@ -485,7 +497,8 @@
               "cache_write": 3.3333333333333335e-7,
               "output": 6.666666666666667e-7
             },
-            "estimated": false
+            "estimated": false,
+            "probe_estimated": false
           },
           {
             "key": "desktop@1791720940000",
@@ -821,13 +834,17 @@
             "kept_warm": {
               "requests": 0,
               "tokens_5m": 0,
-              "tokens_1h": 0
+              "tokens_1h": 0,
+              "plan_requests": 0,
+              "plan_tokens_5m": 0,
+              "plan_tokens_1h": 0
             },
             "probes": {
               "failed": 0,
               "held": 0,
               "migrated": 0,
               "ok": 0,
+              "plan_ok": 0,
               "skipped": 0
             },
             "probe_cost_usd": 0.0,
@@ -843,6 +860,10 @@
               "five_hour": 8.8125e-6,
               "seven_day": 2.35e-6
             },
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            },
             "cache_equivalent": {
               "five_hour": {
                 "read": 6.25e-8,
@@ -854,6 +875,10 @@
               }
             },
             "probe_equivalent": {},
+            "probe_unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            },
             "saving_usd": 0.0,
             "saving_shares": null,
             "saving_equivalent": {},
@@ -870,7 +895,8 @@
               "cache_write": 3.3333333333333335e-7,
               "output": 6.666666666666667e-7
             },
-            "estimated": false
+            "estimated": false,
+            "probe_estimated": false
           }
         ]
       },
@@ -1213,13 +1239,17 @@
             "kept_warm": {
               "requests": 0,
               "tokens_5m": 0,
-              "tokens_1h": 0
+              "tokens_1h": 0,
+              "plan_requests": 0,
+              "plan_tokens_5m": 0,
+              "plan_tokens_1h": 0
             },
             "probes": {
               "failed": 0,
               "held": 0,
               "migrated": 0,
               "ok": 0,
+              "plan_ok": 0,
               "skipped": 0
             },
             "probe_cost_usd": 0.0,
@@ -1235,6 +1265,10 @@
               "five_hour": 0.000030550000000000004,
               "seven_day": 8.146666666666666e-6
             },
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            },
             "cache_equivalent": {
               "five_hour": {
                 "read": 2.1666666666666667e-7,
@@ -1246,6 +1280,10 @@
               }
             },
             "probe_equivalent": {},
+            "probe_unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            },
             "saving_usd": 0.0,
             "saving_shares": null,
             "saving_equivalent": {},
@@ -1262,7 +1300,8 @@
               "cache_write": 1.1555555555555556e-6,
               "output": 2.311111111111111e-6
             },
-            "estimated": true
+            "estimated": true,
+            "probe_estimated": false
           }
         ]
       }

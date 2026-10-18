@@ -8,7 +8,11 @@
     "billed_24h": 0.010700000000000001,
     "equivalent_24h": {
       "five_hour": 0.000048175000000000005,
-      "seven_day": 0.000012846666666666667
+      "seven_day": 0.000012846666666666667,
+      "unpriced": {
+        "five_hour": false,
+        "seven_day": false
+      }
     },
     "estimated_24h": true,
     "error_rate_24h": 0.2857142857142857,
@@ -20,7 +24,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -32,7 +40,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -44,7 +56,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -56,7 +72,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -68,7 +88,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -80,7 +104,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -92,7 +120,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -104,7 +136,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -116,7 +152,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -128,7 +168,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -140,7 +184,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -152,7 +200,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -164,7 +216,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -176,7 +232,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -188,7 +248,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -200,7 +264,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -212,7 +280,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -224,7 +296,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -236,7 +312,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -248,7 +328,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -260,7 +344,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -272,7 +360,11 @@
         "cost": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 0,
         "requests": 0,
@@ -284,7 +376,11 @@
         "cost": 0.0142,
         "equivalent": {
           "five_hour": 0.000017625,
-          "seven_day": 4.7e-6
+          "seven_day": 4.7e-6,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 1,
         "requests": 3,
@@ -296,7 +392,11 @@
         "cost": 0.010700000000000001,
         "equivalent": {
           "five_hour": 0.000030550000000000004,
-          "seven_day": 8.146666666666666e-6
+          "seven_day": 8.146666666666666e-6,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "errors": 1,
         "requests": 4,

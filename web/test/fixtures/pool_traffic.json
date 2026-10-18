@@ -15,7 +15,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -28,7 +32,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -41,7 +49,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -54,7 +66,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -67,7 +83,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -80,7 +100,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -93,7 +117,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -106,7 +134,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -119,7 +151,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -132,7 +168,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -145,7 +185,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -158,7 +202,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -171,7 +219,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -184,7 +236,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -197,7 +253,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -210,7 +270,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -223,7 +287,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -236,7 +304,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -249,7 +321,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -262,7 +338,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -275,7 +355,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -288,7 +372,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -301,7 +389,11 @@
         "billed_usd": 0.0,
         "equivalent": {
           "five_hour": 0.0,
-          "seven_day": 0.0
+          "seven_day": 0.0,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -314,7 +406,11 @@
         "billed_usd": 0.0071,
         "equivalent": {
           "five_hour": 0.000017625,
-          "seven_day": 4.7e-6
+          "seven_day": 4.7e-6,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": false
       },
@@ -327,7 +423,11 @@
         "billed_usd": 0.0036,
         "equivalent": {
           "five_hour": 0.000030550000000000004,
-          "seven_day": 8.146666666666666e-6
+          "seven_day": 8.146666666666666e-6,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated": true
       }

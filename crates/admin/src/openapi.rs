@@ -177,6 +177,9 @@ pub(crate) struct ProbeCountsView {
     pub held: u64,
     pub migrated: u64,
     pub ok: u64,
+    /// The plan-funded answered probes, a part of `ok`, so a reader tells a zero plan saving from an unavailable
+    /// price.
+    pub plan_ok: u64,
     pub skipped: u64,
 }
 
@@ -316,6 +319,18 @@ pub(crate) struct TrafficBucketView {
 pub(crate) struct SharedEquivalentView {
     pub five_hour: f64,
     pub seven_day: f64,
+    /// Per window, whether a plan-funded row with tokens priced nothing on it, so a reader tells "nothing priced"
+    /// from "no plan-funded rows" with no count beside the figure. A window stays unpriced only for a model with no
+    /// tier, or a tier with no weighted model.
+    pub unpriced: SharedUnpricedView,
+}
+
+/// Whether a plan-funded row with tokens priced nothing on each of the two shared windows.
+#[derive(Default, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SharedUnpricedView {
+    pub five_hour: bool,
+    pub seven_day: bool,
 }
 
 impl From<&phoebis_ledger::SharedEquivalent> for SharedEquivalentView {
@@ -323,6 +338,10 @@ impl From<&phoebis_ledger::SharedEquivalent> for SharedEquivalentView {
         SharedEquivalentView {
             five_hour: equivalent.five_hour,
             seven_day: equivalent.seven_day,
+            unpriced: SharedUnpricedView {
+                five_hour: equivalent.unpriced.five_hour,
+                seven_day: equivalent.unpriced.seven_day,
+            },
         }
     }
 }
@@ -547,8 +566,8 @@ pub(crate) struct BreakdownRow {
     pub histograms: HistogramsView,
     pub percentiles: PercentilesView,
     pub kept_warm: KeptWarmView,
-    /// `ok`, `failed`, `held`, `migrated`, and `skipped`, where `held` counts the probes the router refused with
-    /// `503 ledger_behind` while its ledger caught up, outside `failed`, the row's `requests` and its error codes.
+    /// `ok`, `plan_ok`, `failed`, `held`, `migrated`, and `skipped`, where `held` counts the probes the router refused
+    /// with `503 ledger_behind` while its ledger caught up, outside `failed`, the row's `requests` and its error codes.
     pub probes: ProbeCountsView,
     pub probe_cost_usd: f64,
     pub wasted_probes: u64,
@@ -576,10 +595,18 @@ pub(crate) struct BreakdownRow {
     /// `cost_shares` and summed under every grouping, the probe rows joining under the `include_probes` rule, and a
     /// window absent where a row could not be priced on it.
     pub cost_equivalent: BTreeMap<String, f64>,
+    /// Keyed `five_hour`, `seven_day` and the model's own week where a plan-funded row's model has one: true for a
+    /// window a plan-funded row of the group with tokens could not be priced on, false otherwise, so a window absent
+    /// from `cost_equivalent` and `cache_equivalent` with the flag false is one no plan-funded row reached. A window
+    /// stays unpriced only for a model with no tier, or a tier with no weighted model.
+    pub unpriced: BTreeMap<String, bool>,
     /// Each `read` and `write`, keyed and summed as `cost_equivalent`.
     pub cache_equivalent: BTreeMap<String, CacheEquivalentView>,
     /// Each `cost` and `wasted`, keyed and summed as `cost_equivalent`, the probe rows always joining.
     pub probe_equivalent: BTreeMap<String, ProbeEquivalentView>,
+    /// The same as `unpriced` for the group's plan-funded probe rows and their wasted counts, the window absent from
+    /// `probe_equivalent`.
+    pub probe_unpriced: BTreeMap<String, bool>,
     /// The kept-warm requests' saving, gross of the probes: the write each count avoided at its TTL's rate less the
     /// read it paid, summed over the group's rows.
     pub saving_usd: f64,
@@ -599,6 +626,9 @@ pub(crate) struct BreakdownRow {
     /// Whether a plan-funded row of the group priced at its model tier's latest weight, for a model the cost model
     /// does not weight.
     pub estimated: bool,
+    /// Whether a plan-funded probe row of the group did, its own counts or its wasted counts, so a probe figure is
+    /// marked apart from the request rows'. `estimated` covers the probe rows too.
+    pub probe_estimated: bool,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -661,6 +691,13 @@ pub(crate) struct KeptWarmView {
     pub tokens_5m: u64,
     /// The kept-warm requests' cache reads booked under an hour's TTL.
     pub tokens_1h: u64,
+    /// The plan-funded kept-warm requests, a part of `requests`, so a reader tells an unpriced plan-funded credit from
+    /// billed ones.
+    pub plan_requests: u64,
+    /// Their cache reads, a part of `tokens_5m`.
+    pub plan_tokens_5m: u64,
+    /// Their cache reads, a part of `tokens_1h`.
+    pub plan_tokens_1h: u64,
 }
 
 /// The read and write halves of a window's cache share, as fractions of the window.

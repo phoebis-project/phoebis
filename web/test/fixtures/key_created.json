@@ -34,7 +34,11 @@
       "cost_usd": 0.0,
       "equivalent": {
         "five_hour": 0.0,
-        "seven_day": 0.0
+        "seven_day": 0.0,
+        "unpriced": {
+          "five_hour": false,
+          "seven_day": false
+        }
       },
       "estimated": false,
       "requests": 0,
@@ -45,7 +49,11 @@
       "cost_usd": 0.0,
       "equivalent": {
         "five_hour": 0.0,
-        "seven_day": 0.0
+        "seven_day": 0.0,
+        "unpriced": {
+          "five_hour": false,
+          "seven_day": false
+        }
       },
       "estimated": false,
       "requests": 0

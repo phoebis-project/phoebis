@@ -252,7 +252,7 @@ pub(crate) fn ledger_failure(error: phoebis_ledger::LedgerError) -> Response {
 /// The series bucketed to the range. Under `group_by=key` a point's `groups` entries carry `key` in the same form
 /// as the breakdown route's key row. Each entry carries the breakdown row's `cost_shares`, `cache_shares`,
 /// `probe_shares`, `saving_shares`, `plan_requests` and `plan_output_tokens` under the same rules, summed over the
-/// bucket's rows.
+/// bucket's rows, and its `unpriced` and `probe_unpriced` read off the bucket's rows alone.
 // `GroupRow` serializes alone, so the series does too and the test-only `SeriesTwin` carries the round trip.
 #[derive(serde::Serialize, ToSchema)]
 pub(crate) struct Series {
@@ -836,6 +836,14 @@ pub(crate) struct BurnPoint {
     /// Whether a plan-funded row of the bucket priced at its model tier's latest weight, for a model the cost model
     /// does not weight.
     pub estimated: bool,
+    /// True for a bucket holding a plan-funded row with tokens the cost model could not price on the 5-hour window,
+    /// false for an idle bucket, so a null `five_hour_equivalent` with the flag false is an idle bucket. A window
+    /// stays unpriced only for a model with no tier, or a tier with no weighted model.
+    pub five_hour_unpriced: bool,
+    /// The same on the 7-day window.
+    pub seven_day_unpriced: bool,
+    /// The same on the model's own week, false where no row of the bucket is on a model with a week of its own.
+    pub model_week_unpriced: bool,
     pub cached_tokens: u64,
     /// Every token of the bucket, uncached input, cache reads, both cache writes and output. Zero for a bucket
     /// with no traffic the ledger can attribute.
@@ -956,6 +964,11 @@ pub(crate) async fn burn(
                 seven_day_equivalent: p.seven_day_equivalent,
                 model_week_equivalent: p.model_week_equivalent,
                 estimated: p.estimated,
+                // The equivalents' latches, never the shares' `five_hour_unpriced` and `seven_day_unpriced`, which
+                // latch only where the read prices shares.
+                five_hour_unpriced: p.five_hour_equivalent_unpriced,
+                seven_day_unpriced: p.seven_day_equivalent_unpriced,
+                model_week_unpriced: p.model_week_equivalent_unpriced,
                 cached_tokens: p.cached_tokens,
                 tokens: p.tokens,
                 uncached_tokens: p.uncached_tokens,

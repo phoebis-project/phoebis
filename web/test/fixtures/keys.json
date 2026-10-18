@@ -36,7 +36,11 @@
           "cost_usd": 0.02135,
           "equivalent": {
             "five_hour": 0.0000393625,
-            "seven_day": 0.000010496666666666667
+            "seven_day": 0.000010496666666666667,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": true,
           "requests": 6,
@@ -47,7 +51,11 @@
           "cost_usd": 0.02135,
           "equivalent": {
             "five_hour": 0.0000393625,
-            "seven_day": 0.000010496666666666667
+            "seven_day": 0.000010496666666666667,
+            "unpriced": {
+              "five_hour": false,
+              "seven_day": false
+            }
           },
           "estimated": true,
           "requests": 6
